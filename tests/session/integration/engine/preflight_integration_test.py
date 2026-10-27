@@ -11,8 +11,10 @@ from unittest import mock
 
 from ensemble.session import Access, ConfigError, Effort, Host, Mode, SessionError, Spec
 from ensemble.session.engine.config import read_config
-from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import PaneStatus
+from ensemble.session.engine.types import Liveness
+from ensemble.session.hosts.base import GUARD_WAIT
+from ensemble.session.hosts.tmux import TmuxHost
+from tests.session import harnesses
 from tests.session.case import HOSTS, PY, REPO, SPAWNS, Case, child_env
 from tests.session.fakes.preflight import PreflightClient
 from tests.session.hosted_support import SID, fake_tmux, listed
@@ -27,7 +29,7 @@ class Preflight(Case):
 
     def configure(self, *, client=PreflightClient, tmux_settings=None, **settings):
         PreflightClient.prepared, PreflightClient.committed, PreflightClient.ran = [], [], []
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients={
                 "fake": {
                     "implementation": f"{client.__module__}:{client.__qualname__}",
@@ -57,18 +59,24 @@ class Preflight(Case):
         )
 
     def tree(self):
-        return sorted(
+        """HOME's paths but the harness root a refused tui start leaves empty."""
+        found = (
             os.path.relpath(os.path.join(root, name), self.home)
             for root, dirs, files in os.walk(self.home)
             for name in (*dirs, *files)
         )
+        return sorted(path for path in found if path != os.path.join(".ensemble", "harness"))
 
     @contextlib.contextmanager
-    def no_client(self):
+    def no_client(self, *, harness=False):
+        """No process spawned; nor a thread, unless `harness`: a tui start's own harness thread
+        (tests/session/harnesses.py), whose checks refuse it.
+        """
+        threads = () if harness else ("threading.Thread.start",)
         with contextlib.ExitStack() as stack:
             calls = [
                 stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in (*SPAWNS, "threading.Thread.start")
+                for target in (*SPAWNS, *threads)
             ]
             yield
         for call in calls:
@@ -83,8 +91,9 @@ class Preflight(Case):
         before = self.tree()
         diagnostics = []
         for method in (self.session.preflight, self.session.start):
+            harness = method == self.session.start and spec.mode == Mode.TUI
             with self.subTest(method=method.__name__):
-                with self.no_client(), self.assertRaises(ConfigError) as caught:
+                with self.no_client(harness=harness), self.assertRaises(ConfigError) as caught:
                     method(spec, **placement)
                 self.assertIn(message, str(caught.exception))
                 diagnostics.append(str(caught.exception))
@@ -93,7 +102,7 @@ class Preflight(Case):
         self.assertEqual(diagnostics[0], diagnostics[1])
 
     def test_missing_claude_binary_is_config_error_for_preflight_and_driver_error_for_start(self):
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients=read_config(local=os.devnull)["clients"],
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
             host_factory=self._host_factory,
@@ -110,11 +119,11 @@ class Preflight(Case):
                 env={"PATH": os.path.join(self.home, "missing-bin")},
             )
             before = self.tree()
-            with self.subTest(name=name), self.no_client():
-                with self.assertRaises(ConfigError) as refusal:
+            with self.subTest(name=name):
+                with self.no_client(), self.assertRaises(ConfigError) as refusal:
                     self.session.preflight(spec)
                 self.assertEqual(str(refusal.exception), "command not found: claude")
-                with self.assertRaises(SessionError) as failure:
+                with self.no_client(harness=True), self.assertRaises(SessionError) as failure:
                     self.session.start(spec)
                 session_name = name if name is not None else f"claude-{SID[:8]}"
                 self.assertEqual(
@@ -137,8 +146,12 @@ class Preflight(Case):
 
         with self.no_client(), mock.patch("os.open", side_effect=refused):
             self.assertIsNone(self.session.preflight(spec))
-            with self.assertRaises(SessionError) as failure:
-                self.session.start(spec)
+        with (
+            self.no_client(harness=True),
+            mock.patch("os.open", side_effect=refused),
+            self.assertRaises(SessionError) as failure,
+        ):
+            self.session.start(spec)
         self.assertEqual(
             str(failure.exception), f"cannot start tui session event-worker: {message}"
         )
@@ -311,25 +324,59 @@ print(json.dumps(result))
             self.spec(Mode.TUI, events=self.events, flags=("--resume",)), "picks the session"
         )
 
-    def test_tui_preflight_refuses_a_live_same_named_session_and_passes_a_dead_one(self):
+    def test_tui_preflight_refuses_a_live_same_named_worker_and_passes_an_ended_one(self):
+        liveness = [Liveness.LIVE]
+
+        class Workers(TmuxHost):
+            def worker_liveness(self, name, generation):
+                return liveness[0]
+
+        self.session = harnesses.Threaded.configured(
+            clients={"fake": {"implementation": "tests.session.fakes.preflight:PreflightClient"}},
+            hosts=Host.parse_hosts({**HOSTS, "default": "tmux"}),
+            host_factory=lambda _kind, name, settings: Workers(name, settings, tmux=self.tmux),
+        )
         self.tmux.listing.return_value = [listed("worker")]
-        self.tmux.status.return_value = PaneStatus.RUNNING
+        owner = os.path.join(self.ensemble, "harness", "a" * 32)
+        os.makedirs(owner, 0o700)
+        worker = os.path.join(self.ensemble, "tui", "worker")
+        os.makedirs(worker, 0o700)
+        with open(os.path.join(worker, "session.json"), "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "client": "fake",
+                    "sid": SID,
+                    "workdir": self.work,
+                    "cwd": self.work,
+                    "project": False,
+                    "transcript": "",
+                    "resume": "",
+                    "events": None,
+                    "words": {},
+                    "generation": "b" * 32,
+                    "host": "tmux",
+                    "display": None,
+                    "owner": owner,
+                },
+                f,
+            )
         spec = self.spec(Mode.TUI, name="worker", events=self.events)
-        message = "tui session worker is running; tmux attach -t '=worker'"
         before = self.tree()
-        with self.no_client(), self.assertRaises(ConfigError) as refusal:
+        with (
+            self.no_client(),
+            mock.patch("time.monotonic", side_effect=itertools.count(0, GUARD_WAIT)),
+            self.assertRaises(ConfigError) as refusal,
+        ):  # LIVE past the guard's reaping wait
             self.session.preflight(spec)
-        self.assertEqual(str(refusal.exception), message)
+        self.assertEqual(
+            str(refusal.exception), "tui session worker is running; tmux attach -t '=worker'"
+        )
         self.unchanged(before)
-        self.tmux.status.return_value = 0
+        liveness[0] = Liveness.ABSENT
         with self.no_client():
             self.assertIsNone(self.session.preflight(spec))
         self.unchanged(before)
         self.tmux.kill.assert_not_called()
-        self.tmux.status.return_value = PaneStatus.RUNNING
-        with self.no_client(), self.assertRaises(SessionError) as failure:
-            self.session.start(spec)
-        self.assertEqual(str(failure.exception), message)
 
     def test_tui_settings_are_validated_before_state(self):
         self.configure(tmux_settings={"status_line": "invalid"})
@@ -341,7 +388,7 @@ print(json.dumps(result))
         self.home = os.path.realpath(root.name)
         self.work = os.path.join(self.home, "absent-work")
         settings = read_config(local=os.devnull)
-        self.session = HostedSession.configured(
+        self.session = harnesses.Threaded.configured(
             clients=settings["clients"], hosts=Host.parse_hosts(settings["hosts"])
         )
         spec = Spec(

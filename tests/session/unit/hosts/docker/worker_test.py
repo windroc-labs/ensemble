@@ -11,15 +11,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.engine.types import (
-    HookCall,
-    HookError,
     Liveness,
     SessionError,
-    StatusState,
     WorkerHook,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.docker import guard_hook, worker
+from ensemble.session.hosts.docker import worker
 from ensemble.session.hosts.docker.maintenance import Maintenance
 from ensemble.session.hosts.docker.mounts import state_dir
 from tests.session.case import Case
@@ -71,7 +68,6 @@ class Base(Case):
         self.events = os.path.join(self.home, "events")
         open(self.events, "w").close()
         self.removed, self.remove_errors = [], []
-        self.record = {"generation": GEN, "sid": "sid-1", "display": None}
         self.broker = Broker()
         self.reports = []
 
@@ -109,8 +105,6 @@ class Base(Case):
             owner=self.owner,
             maintenance=factory,
             report=lambda word, text: self.reports.append((word, text)),
-            load=lambda: self.record,
-            store=self.record.update,
             start_reader=False,
         )
         found.accept(b"s", b'{"pid":1}')
@@ -122,6 +116,11 @@ class Base(Case):
                 return [json.loads(line)["reason"] for line in f]
         except FileNotFoundError:
             return []
+
+    def ended(self, channel):
+        """Its container's removal confirmed within WAIT: the worker ABSENT."""
+        with channel.condition:
+            return channel.condition.wait_for(lambda: channel.state() is Liveness.ABSENT, WAIT)
 
     def owner_open(self):
         try:
@@ -174,7 +173,7 @@ class HookFrameTest(Base):
                 channel.pump()
                 self.assertIsNotNone(channel.failure)
                 self.assertEqual(channel.proc.stdout.read.call_count, 3)
-                self.assertTrue(channel.wait_exit(5))
+                self.assertTrue(self.ended(channel))
                 self.assertEqual(channel.returncode(), None)
 
     def test_the_rejected_log_stops_at_its_cap(self):
@@ -344,7 +343,7 @@ class HookTest(Base):
         channel.accept(b"h", hook(delivery="a" * 32))
         channel.accept(b"h", hook(delivery="b" * 32))
         channel.fail("guard channel ended without confirmed worker exit")
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual(hooks.calls, [])
         self.assertEqual(self.rejected(), ["hook", "hook"])
         self.assertFalse(channel._hooks_pending())
@@ -364,7 +363,7 @@ class HookTest(Base):
         channel.accept(b"h", hook(delivery="a" * 32))
         channel.accept(b"x", b'{"returncode":0}')
         channel.begin()
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual(hooks.calls, [("Stop", {"sid": "s"}, "a" * 32)])
         self.assertEqual(self.rejected(), [])
 
@@ -407,7 +406,7 @@ class HookTest(Base):
         self.assertIsNone(channel.returncode())
         gate.set()
         self.deliver(channel)
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual([label for label, _, _ in hooks.calls], ["H0", "H1", "H2"])
         self.assertEqual(channel.returncode(), 4)
         self.assertTrue(hooks.stopped)
@@ -458,7 +457,7 @@ class MaintenanceTest(Base):
         ):
             self.assertEqual(channel.maintenance.tick(NOW), NOW + 30)
             self.assertIsNone(channel.maintenance.tick(NOW + 30))
-            self.assertTrue(channel.wait_exit(5))
+            self.assertTrue(self.ended(channel))
         self.assertEqual(channel.state(), Liveness.ABSENT)
         self.assertEqual(
             self.reports,
@@ -482,20 +481,20 @@ class EndTest(Base):
         self.assertIsNone(channel.returncode())
         self.assertEqual(channel.state(), Liveness.LIVE)
         gate.set()
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 5))
 
     def test_a_report_after_removal_is_dropped(self):
         channel = self.make()
         channel.fail("broken")
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         channel._report("credential_maintenance_failed", "transport")
         self.assertEqual(self.reports, [])
 
     def test_exit_frame_then_removal_then_absent(self):
         channel = self.make()
         channel.accept(b"x", b'{"returncode":3}')
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual(
             (channel.state(), channel.returncode(), channel.read(0)), (Liveness.ABSENT, 3, [])
         )
@@ -521,7 +520,7 @@ class EndTest(Base):
         self.assertEqual(channel.state(), Liveness.UNKNOWN)
         self.assertTrue(self.owner_open())
         gate.set()
-        self.assertTrue(channel.wait_exit(5))
+        self.assertTrue(self.ended(channel))
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, None))
 
     def test_a_release_still_writing_at_its_end_keeps_a_clean_exit(self):
@@ -543,7 +542,7 @@ class EndTest(Base):
             channel.release_hook()
             self.assertTrue(writing.wait(WAIT))
             channel.accept(b"x", b'{"returncode":0}')
-            self.assertTrue(channel.wait_exit(WAIT))
+            self.assertTrue(self.ended(channel))
             assert channel.releaser is not None
             channel.releaser.join(WAIT)
         self.assertIsNone(channel.failure)
@@ -578,58 +577,3 @@ class EndTest(Base):
         channel.close()
         self.assertEqual(channel.state(), Liveness.ABSENT)
         self.assertFalse(self.owner_open())
-
-
-class TerminalTest(Base):
-    def test_record_identity_and_activity(self):
-        channel = self.make()
-        self.assertEqual(channel.session_identity(), ("sid-1", GEN))
-        self.assertIsNone(channel.activity())
-        channel.mark(StatusState.DONE, self.events)
-        self.assertEqual(channel.activity(), StatusState.DONE)
-        with open(self.events) as f:
-            self.assertTrue(f.read().rstrip().endswith("worker_1 done"))
-        self.record["generation"] = "other"
-        self.assertEqual(channel.session_identity(), (None, None))
-
-    def test_guarded_view_reaches_only_record_and_liveness(self):
-        view = worker.GuardedView(
-            "worker_1",
-            GEN,
-            state=self.state,
-            load=lambda: self.record,
-            liveness=lambda: Liveness.LIVE,
-            remove=self.remove,
-        )
-        self.assertEqual((view.state(), view.session_identity()), (Liveness.LIVE, ("sid-1", GEN)))
-        for call in (lambda: view.send(mock.Mock()), lambda: view.press(()), view.screen):
-            with self.assertRaisesRegex(SessionError, "owned by its harness"):
-                call()
-        view.close()
-        self.assertEqual(self.removed, [GEN])
-
-
-class GuardHookTest(Base):
-    def call(self, **state):
-        return HookCall("Stop", {}, "sid-1", self.home, self.events, state)
-
-    def test_writes_its_generations_activity_and_the_events_line(self):
-        with mock.patch("subprocess.run") as ran, mock.patch("subprocess.Popen") as opened:
-            guard_hook.on_hook("working", self.call(target="worker_1", generation=GEN))
-            guard_hook.on_hook("done", self.call(target="worker_1", generation=GEN))
-        ran.assert_not_called()
-        opened.assert_not_called()
-        self.assertEqual(worker.activity(self.state, GEN), StatusState.DONE)
-        with open(self.events) as f:
-            lines = f.read().splitlines()
-        self.assertEqual(len(lines), 1)
-        self.assertTrue(lines[0].endswith("worker_1 done"))
-
-    def test_bad_target_or_generation_is_a_hook_error(self):
-        for state in (
-            {"target": "../x", "generation": GEN},
-            {"target": "worker_1", "generation": "../x"},
-            {"generation": GEN},
-        ):
-            with self.subTest(state=state), self.assertRaises(HookError):
-                guard_hook.on_hook("done", self.call(**state))

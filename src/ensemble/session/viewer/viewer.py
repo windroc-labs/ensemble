@@ -18,7 +18,7 @@ from ensemble.session.engine.types import (
     SessionError,
     Unanswered,
 )
-from ensemble.session.hosts.base import Host
+from ensemble.session.hosts.base import Host, worker_state
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.session.viewer.grid import Grid
@@ -164,8 +164,8 @@ class Viewer:
         self, name: str, host: Host, display: Display
     ) -> tuple[SessionView | CommandView, Display]:
         target = self._target(name, host)
-        if display is None:
-            display = host.attach(name).display()
+        if display is None and (state := worker_state(name)) is not None:
+            display = state.display
         if isinstance(target, CommandView):
             self._view(name, target)
         elif self._tmux.status(target.session) is None:
@@ -183,7 +183,6 @@ class Viewer:
             return
         try:
             if if_closed:
-                # the judged pane is gone: kill nothing, and forget it only while still recorded
                 closed = self._placement.closed(name)
                 if closed is None or not self._placement.forget(name, closed):
                     return
@@ -223,11 +222,11 @@ class Viewer:
             raise SessionError(f"view {name}: {error}") from None
 
     def _mark(self, name: str, host: Host, *, hidden: bool) -> None:
-        """Only a session with a sid (no harness) keeps it."""
-        sid = host.attach(name).session_identity()[0]
-        if sid is not None:
+        """Only a session whose worker state names a sid keeps it."""
+        state = worker_state(name)
+        if state is not None and state.sid is not None:
             try:
-                hidden_store.write(name, sid, hidden=hidden, live=self._live(host))
+                hidden_store.write(name, state.sid, hidden=hidden, live=self._live(host))
             except OSError as error:
                 raise SessionError(
                     f"tmux session {name}: hidden state: {error.strerror or error}"

@@ -6,14 +6,14 @@ import json
 import sys
 import time
 
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Access, HookCallback, Mode, Spec
 from ensemble.session.hosts.base import Host
+from tests.session import harnesses
 
 
 def main(argument: str) -> None:
     args = json.loads(argument)
-    session_cls = HostedSession.configured(
+    session_cls = harnesses.Threaded.configured(
         clients=args["clients"], hosts=Host.parse_hosts(args["hosts"])
     )
     module, state, roots = args["handler"]

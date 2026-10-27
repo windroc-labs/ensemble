@@ -136,8 +136,8 @@ DIALOG_SCREENS = {
 
 
 class TuiTest(Base):
-    def test_a_codex_tui_session_is_owned_by_a_session_harness(self):
-        self.assertTrue(CodexTui._owned)
+    def test_a_codex_tui_runs_remote_under_its_session_harness(self):
+        self.assertTrue(CodexTui._remote_owned)
 
     def test_container_runtime_projects_only_this_identity_without_host_executable(self):
         host = MemoryHost()
@@ -171,8 +171,8 @@ class TuiTest(Base):
                 record=lambda _: None,
                 host=host,
             )
-        _, launch = host.calls.terminal.call_args.args
-        metadata = host.calls.terminal.call_args.kwargs["metadata"]
+        _, launch = host.calls.worker.call_args.args
+        metadata = host.calls.worker.call_args.kwargs["metadata"]
         plan = tui.decode(json.loads(launch.argv[-1]))
         self.assertEqual(launch.argv[0], "/opt/ensemble/venv/bin/python")
         self.assertEqual(plan.executable, "/opt/ensemble/bin/codex")

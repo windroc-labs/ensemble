@@ -908,7 +908,8 @@ class TuiRecoveryIntegrationTest(Live):
         self.scene([[{"kind": "pause", "file": str(release)}, "done"]])
         handle = self.start()
         live_tmux.wait(lambda: self.bound().native_id, WAIT, what="durable root binding")
-        self.assertEqual([r["kind"] for r in RunLog(str(self.work)).read()], ["session"])
+        # its harness, not the caller, reads the hooks: no events() call is needed
+        self.assertEqual(RunLog(str(self.work)).read()[0]["kind"], "session")
         native = self.bound().native_id
         handle.stop()
         self.scene([["recovered"]])
@@ -1103,7 +1104,7 @@ class TuiRecoveryIntegrationTest(Live):
         self.assertEqual(len(list(self.record().parent.glob("*.json"))), 1)
 
     def test_resume_missing_binding_native_fifo_and_malformed_record_fail_before_spawn(self):
-        with self.assertRaisesRegex(ConfigError, "missing.*state"):
+        with self.assertRaisesRegex(ConfigError, "no transcript to resume"):
             self.start(resume=True)
         self.assertEqual(self.logged(), [])
         handle = self.start()

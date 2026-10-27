@@ -7,20 +7,13 @@ import stat
 import subprocess
 import sys
 import unittest
-import unittest.mock
 from contextlib import redirect_stderr
 
 from ensemble.session.modes import tui_hook
 from tests.session.case import SRC
 from tests.session.tui_hook_support import (
     COMMAND,
-    LINE,
-    LOOKUP,
-    PANE,
-    PROCESS,
-    TMUX,
     HookBase,
-    MarkingCases,
     PayloadCases,
     RecordCases,
     descriptor,
@@ -45,7 +38,7 @@ def python(case, argv, **kwargs):
     return subprocess.run(argv, capture_output=True, env=env, **kwargs)
 
 
-class MarkingTest(MarkingCases, HookBase):
+class ClientErrorTest(HookBase):
     def test_disabled_logging_reports_exactly_one_error_line_and_exits_zero(self):
         script = RUN_HOOK + "import logging\nlogging.disable(logging.CRITICAL)\nrun_hook()\n"
         result = python(self, [sys.executable, "-P", "-s", "-c", script], input=b"{}", check=True)
@@ -53,7 +46,7 @@ class MarkingTest(MarkingCases, HookBase):
         self.assertEqual(len(result.stderr.splitlines()), 1)
         self.assertTrue(result.stderr.startswith(b"tui_hook: usage: ensemble-session hook "))
 
-    def test_client_error_is_one_stderr_line_without_a_record_or_mark(self):
+    def test_client_error_is_one_stderr_line_without_a_record(self):
         callback = os.path.join(self.root, "client.py")
         with open(callback, "w") as file:
             file.write('def on_hook(call):\n    raise RuntimeError("first\\nsecond")\n')
@@ -85,7 +78,7 @@ class ErrorLoggingTest(HookBase):
         self.assertIn("RuntimeError: first\nsecond\n", trace)
         self.assertNothingWritten()
 
-    def test_client_failures_append_full_tracebacks_without_a_record_or_mark(self):
+    def test_client_failures_append_full_tracebacks_without_a_record(self):
         callback = os.path.join(self.root, "client.py")
         with open(callback, "w") as file:
             file.write('def on_hook(call):\n    raise RuntimeError("first\\nsecond")\n')
@@ -145,12 +138,10 @@ with mock.patch("builtins.open", side_effect=open_file):
         self.assertError(result.stderr.decode(), "session.json")
         self.assertNothingWritten()
 
-    def test_success_keeps_the_journal_and_mark_without_an_error_log(self):
+    def test_success_keeps_the_journal_without_an_error_log(self):
         self.assertEqual(self.hook("stop", {"text": "success"}), "")
         self.assertFalse(os.path.lexists(os.path.join(self.dir, "hook.log")))
         self.assertEqual(self.records()[0]["payload"], {"text": "success"})
-        self.assertEqual(self.calls()[:2], [LOOKUP, ["set-option", "-t", PANE, "@state", "done"]])
-        self.assertRegex(self.lines(), LINE % "done")
 
 
 class PayloadTest(PayloadCases, HookBase):
@@ -169,20 +160,15 @@ class PayloadTest(PayloadCases, HookBase):
             [r["payload"] for r in self.records()], [{"a": "x" * 4096, "length": (64 << 20) - 9}]
         )
 
-    def test_overflow_drains_stdin_and_still_journals_and_marks(self):
+    def test_overflow_drains_stdin_and_still_journals(self):
         stream = io.BytesIO(b"x" * (tui_hook.PAYLOAD_MAX + 1))
-        with (
-            unittest.mock.patch.dict(os.environ, self.env),
-            redirect_stderr(io.StringIO()) as stderr,
-        ):
+        with redirect_stderr(io.StringIO()) as stderr:
             tui_hook.main([self.dir, "stop"], stream, roots=ROOTS)
         self.assertEqual(
             stderr.getvalue(), f"tui_hook: payload: over {tui_hook.PAYLOAD_MAX} bytes\n"
         )
         self.assertEqual(stream.read(), b"")
         self.assertEqual(self.records()[0]["payload"], {})
-        self.assertNotEqual(self.calls(), [])
-        self.assertRegex(self.lines(), LINE % "done")
 
     def test_client_callback_receives_full_payload_before_truncation_and_can_skip(self):
         callback = os.path.join(self.root, "client.py")
@@ -199,62 +185,29 @@ class PayloadTest(PayloadCases, HookBase):
         self.assertEqual(self.hook("tool", {"text": "x" * 5000}), "")
         record = self.records()[0]
         self.assertEqual(record["payload"], {"text": "x" * 4096, "original_length": 5000})
-        marked = self.calls()
         self.assertEqual(self.hook("ask", {"text": "skip"}), "")
         self.assertEqual(len(self.records()), 1)
-        self.assertEqual(self.calls(), marked)
 
     def test_callback_module_requires_regular_file_with_on_hook(self):
         callback = os.path.join(self.root, "client.py")
         with open(callback, "w") as file:
             file.write("value = 1\n")
         os.mkdir(os.path.join(self.root, "namespace"))
-        for kind in ("client_hook", "host_hook"):
-            for name in (
-                "relative.py/",
-                callback,
-                "absent",
-                "namespace",
-                "sys",
-                "client",
-            ):
-                with self.subTest(kind=kind, module=name):
-                    write_state(self.dir, {**self.state, kind: self.callback(name)})
-                    self.assertError(self.hook("stop"), kind.split("_")[0])
+        for name in (
+            "relative.py/",
+            callback,
+            "absent",
+            "namespace",
+            "sys",
+            "client",
+        ):
+            with self.subTest(module=name):
+                write_state(self.dir, {**self.state, "client_hook": self.callback(name)})
+                self.assertError(self.hook("stop"), "client")
         self.assertNothingWritten()
 
 
 class RecordsTest(RecordCases, HookBase):
-    def test_host_callback_observes_the_journal_and_receives_the_mode_payload(self):
-        callback = os.path.join(self.root, "host_callback.py")
-        seen = os.path.join(self.root, "seen.jsonl")
-        with open(callback, "w") as file:
-            file.write(f"""import json
-def on_hook(word, call):
-    with open({self.hooks!r}) as journal:
-        record = json.loads(journal.readlines()[-1])
-    assert record["payload"] == call.payload
-    with open({seen!r}, "a") as output:
-        output.write(json.dumps([word, call.payload, dict(call.state)]) + "\\n")
-""")
-        write_state(
-            self.dir, {**self.state, "host_hook": self.callback("host_callback", {"key": 3})}
-        )
-        payload = {"text": "x" * 5000}
-        for label in ("tool", "stop", "other"):
-            self.assertEqual(self.hook(label, payload), "")
-        with open(seen) as file:
-            observed = [json.loads(line) for line in file]
-        self.assertEqual(
-            observed,
-            [
-                ["working", {"text": "x" * 4096}, {"key": 3}],
-                ["done", payload, {"key": 3}],
-            ],
-        )
-        self.assertEqual(len(self.records()), 3)
-        self.assertEqual(self.calls(), [])
-
     def test_two_synchronized_writers_keep_every_complete_journal_record(self):
         script = """import json, subprocess, sys
 folder, writer = sys.argv[1:]
@@ -300,20 +253,6 @@ if any(codes):
             {(writer, number) for writer in ("first", "second") for number in range(20)},
         )
         self.assertEqual(self.calls(), [])
-
-    def test_a_tmux_that_is_no_regular_executable_file_is_one_stderr_line_after_the_record(self):
-        plain = os.path.join(self.root, "plain")
-        with open(plain, "w") as f:
-            f.write(TMUX.format(python=sys.executable, process=PROCESS))
-        os.chmod(plain, 0o644)
-        for tmux in (plain, os.path.join(self.root, "bin"), os.path.join(self.root, "missing")):
-            with self.subTest(tmux):
-                host = {**self.state["host_hook"], "state": {"executable": tmux}}
-                write_state(self.dir, {**self.state, "host_hook": host})
-                self.assertError(self.hook("stop"), tmux)
-        self.assertEqual([r["label"] for r in self.records()], ["stop"] * 3)
-        self.assertEqual((self.calls(), self.lines()), ([], ""))
-        self.assertFalse(os.path.exists(self.decoy))
 
     def test_valid_edge_states_are_accepted(self):
         write_state(
@@ -381,20 +320,18 @@ with unittest.mock.patch("os.stat", non_regular):
     run_hook(folder, "stop")
 """
         )
-        for kind in ("client_hook", "host_hook"):
-            with self.subTest(kind=kind):
-                write_state(self.dir, {**self.state, kind: self.callback("ensemble.callback")})
-                result = python(
-                    self,
-                    [sys.executable, "-P", "-s", "-c", script, callback, self.dir],
-                    input=b"{}",
-                    timeout=10,
-                    check=True,
-                )
-                self.assertEqual(result.stdout, b"")
-                self.assertError(result.stderr.decode(), "not a regular file")
-                self.assertFalse(os.path.exists(marker))
-                self.assertNothingWritten()
+        write_state(self.dir, {**self.state, "client_hook": self.callback("ensemble.callback")})
+        result = python(
+            self,
+            [sys.executable, "-P", "-s", "-c", script, callback, self.dir],
+            input=b"{}",
+            timeout=10,
+            check=True,
+        )
+        self.assertEqual(result.stdout, b"")
+        self.assertError(result.stderr.decode(), "not a regular file")
+        self.assertFalse(os.path.exists(marker))
+        self.assertNothingWritten()
 
     def callback_package(self):
         folder = os.path.join(self.root, "callback_package", "nested")
@@ -596,7 +533,7 @@ assert "callback_package" not in sys.modules
                 self.assertError(self.hook("stop"), "session.json")
         self.assertNothingWritten()
 
-    def test_hooks_jsonl_that_is_no_regular_file_is_refused_and_nothing_marked(self):
+    def test_hooks_jsonl_that_is_no_regular_file_is_refused(self):
         for make in (lambda: os.mkfifo(self.hooks), lambda: os.mkdir(self.hooks)):
             make()
             with self.subTest(stat.filemode(os.lstat(self.hooks).st_mode)):

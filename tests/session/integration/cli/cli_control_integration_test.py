@@ -2,9 +2,10 @@
 answers each name or stdin Record in order (Q11), using answer_keys batch rules;
 show, hide, close and attach-command by name and by stdin Record, show placing a
 session by its own display or by a Record's, close repeatable and only for the named (Q12), show
-and close checking private session identity; on a
-Host that cannot show (tests.session.fakes.host:FakeHost, the module entry) show, hide, attach-command,
-read and tile exit 1 saying so, status giving no attach command.
+and close checking private session identity; on a Host that cannot show
+(tests.session.fakes.host:FakeHost, the module entry) show, hide, attach-command and tile exit 1
+saying so, while read and status, which read workers through their harness and worker dir, find no
+session in its process outside a harness.
 """
 
 import dataclasses
@@ -51,20 +52,16 @@ def gone(name: str) -> Status:
     return Status(name=name, alive=False, state="gone", outcome=None, attach=None, hidden=False)
 
 
-def live(
-    name: str,
-    state: str,
-    *,
-    showable: bool = True,
-    cwd: str | None = None,
-    hidden: bool = False,
-) -> Status:
-    """A live session's Status: its tmux attach command, none when its Host cannot show; a
-    worker's cwd.
-    """
-    command = attach(name) if showable else None
+def live(name: str, state: str, *, cwd: str | None = None, hidden: bool = False) -> Status:
+    """A live session's Status: its tmux attach command; a worker's cwd."""
     return Status(
-        name=name, alive=True, state=state, outcome=None, attach=command, cwd=cwd, hidden=hidden
+        name=name,
+        alive=True,
+        state=state,
+        outcome=None,
+        attach=attach(name),
+        cwd=cwd,
+        hidden=hidden,
     )
 
 
@@ -297,7 +294,7 @@ class NotShowableTest(ControlCase):
         super().setUp()
         host = FakeHost("fake", {"root": self.fake_host(default="fake")})
         self.f1 = dataclasses.replace(absent("f1"), display=MANAGER)
-        process = host.terminal(
+        process = host.run_terminal(
             "f1",
             Launch((sys.executable, "-I", "-c", SLEEP), cwd=self.cwd),
             display=MANAGER,
@@ -305,7 +302,7 @@ class NotShowableTest(ControlCase):
         )
         self.addCleanup(process.close)
 
-    def test_show_attach_command_read_and_tile_exit_1_saying_the_host_cannot_show(self):
+    def test_show_hide_attach_command_and_tile_exit_1_saying_the_host_cannot_show(self):
         refused = "session f1: host fake cannot show\n"
         batch_refused = f"{PROG}: f1: {refused}"
         for argv, stdin, stderr in (
@@ -314,21 +311,22 @@ class NotShowableTest(ControlCase):
             (("hide", "f1"), None, batch_refused),
             (("attach-command", "f1"), None, batch_refused),
             (("attach-command",), lines(self.f1), batch_refused),
-            (("read", "f1"), None, refused),
-            (("read", "f1", "--lines", "5"), None, refused),
             (("tile", MANAGER), None, f"session {MANAGER}: host fake cannot show\n"),
         ):
             with self.subTest(argv=argv, stdin=stdin):
                 result = self.session(*argv, stdin=stdin, module=True)
                 self.assertEqual((result.returncode, result.stdout, result.stderr), (1, "", stderr))
-        self.assertEqual(self.status("f1", module=True), [live("f1", "working", showable=False)])
 
-    def test_status_on_a_host_that_cannot_show_gives_no_attach_command(self):
-        self.assertEqual(
-            self.status("f1", "nope", module=True),
-            [live("f1", "working", showable=False), gone("nope")],
-        )
+    def test_read_and_status_find_no_session_in_a_host_process_outside_a_harness(self):
+        for argv in (("read", "f1"), ("read", "f1", "--lines", "5")):
+            with self.subTest(argv=argv):
+                result = self.session(*argv, module=True)
+                self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
+                self.assertTrue(
+                    result.stderr.startswith(f"{PROG}: no tui session f1: "), result.stderr
+                )
+        self.assertEqual(self.status("f1", "nope", module=True), [gone("f1"), gone("nope")])
         self.assertEqual(
             self.status(stdin=lines(absent("nope"), self.f1), module=True),
-            [gone("nope"), live("f1", "working", showable=False)],
+            [gone("nope"), gone("f1")],
         )

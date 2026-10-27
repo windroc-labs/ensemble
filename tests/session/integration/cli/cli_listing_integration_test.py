@@ -1,8 +1,9 @@
 """ensemble-session ls through bin/ensemble-session on a private tmux server (Q13): plain ls is its
 header and Session.list's rows; --match fullmatches, a bad RE exits 2; --display D lists the
 sessions opened from D's opener whatever their placement, --here the caller's, nothing outside
-tmux; --records prints the stored Records alone; --descendants adds the workers opened from inside
-a listed one; a second, non-default Host's sessions and Records are listed too (the module entry).
+tmux; --records prints the Records stored in worker dirs alone; --descendants adds the workers
+opened from inside a listed one; a second, non-default Host's sessions are listed too (the module
+entry), a Record only its Host holds never.
 """
 
 import os
@@ -13,9 +14,9 @@ from unittest import mock
 from ensemble.session import Host
 from ensemble.session.clients.registry import settings
 from ensemble.session.engine.config import read_config
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Launch
 from ensemble.utils import Record
+from tests.session import harnesses
 from tests.session.cli_support import MANAGER, CliCase
 from tests.session.fakes.host import FakeHost
 
@@ -47,7 +48,7 @@ class ListingCase(CliCase):
         """
         config = read_config()
         hosts = Host.parse_hosts(config.get("hosts"))
-        own = HostedSession.configured(**settings(config, hosts=hosts))
+        own = harnesses.Threaded.configured(**settings(config, hosts=hosts))
         with mock.patch.dict(os.environ, self.server.env()):
             rows = own.list(match)
         values = ((r.name, r.state, r.client, r.sid, r.display) for r in rows)
@@ -118,7 +119,7 @@ class ListingTest(ListingCase):
 
 
 class SecondHostTest(ListingCase):
-    def test_a_session_on_a_second_host_is_listed_with_its_record(self):
+    def test_a_session_on_a_second_host_is_listed_without_its_hosts_record(self):
         w1 = self.done("w1")
         host = FakeHost("fake", {"root": self.fake_host()})
         f1 = Record(
@@ -133,14 +134,14 @@ class SecondHostTest(ListingCase):
             display=MANAGER,
             detail="claude",
         )
-        process = host.terminal(
+        process = host.run_terminal(
             "f1",
             Launch((sys.executable, "-I", "-c", SLEEP), cwd=self.cwd),
             display=MANAGER,
             record=f1,
         )
         self.addCleanup(process.close)
-        bare = host.terminal(
+        bare = host.run_terminal(
             "f2", Launch((sys.executable, "-I", "-c", SLEEP), cwd=self.cwd), display=MANAGER
         )
         self.addCleanup(bare.close)
@@ -151,7 +152,7 @@ class SecondHostTest(ListingCase):
         self.assertEqual([rows[1][i] for i in (1, 3, 4)], ["working", f1.sid, MANAGER])
         self.assertEqual([rows[2][i] for i in (1, 3, 4)], ["working", "-", MANAGER])
         self.assertEqual(rows[4], row(w1).split("\t"))
-        self.assertEqual(self.ls("--records", module=True), lines(f1, w1))
-        self.assertEqual(self.ls("--display", MANAGER, "--records", module=True), lines(f1, w1))
-        self.assertEqual(self.ls("--match", "f.*", "--records", module=True), lines(f1))
+        self.assertEqual(self.ls("--records", module=True), lines(w1))
+        self.assertEqual(self.ls("--display", MANAGER, "--records", module=True), lines(w1))
+        self.assertEqual(self.ls("--match", "f.*", "--records", module=True), "")
         self.assertEqual(self.ls("--here", "--records", module=True), lines(w1))

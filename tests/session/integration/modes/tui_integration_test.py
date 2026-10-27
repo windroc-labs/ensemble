@@ -1,4 +1,4 @@
-"""Tui cleanup retires hook paths and closes arbitrary Host processes."""
+"""Tui cleanup retires hook paths and leaves a session it does not own to its Host."""
 
 import json
 import os
@@ -65,7 +65,8 @@ class CloseTest(Case):
 
 
 class RawSessionCloseTest(Live):
-    def test_legacy_close_removes_an_untagged_session_and_its_mode_state(self):
+    def test_a_close_without_an_owned_record_removes_its_mode_state_not_the_session(self):
+        """No owned record: no worker of its own to end, so its untagged tmux session stays."""
         name = "untagged"
         created = self.server.tmux("new-session", "-d", "-s", name, "cat", "-")
         self.assertEqual(created.returncode, 0, created.stderr)
@@ -74,13 +75,14 @@ class RawSessionCloseTest(Live):
         folder.mkdir(parents=True)
         (folder / "session.json").write_text("{}")
         tui.TuiStore.attach(name, host=self.session_cls.host()).close()
-        self.assertNotEqual(self.server.tmux("has-session", "-t", f"={name}").returncode, 0)
+        self.assertEqual(self.server.tmux("has-session", "-t", f"={name}").returncode, 0)
         self.assertFalse(folder.exists())
         tui.TuiStore.attach(name, host=self.session_cls.host()).close()
 
 
 class PollCostTest(Live):
-    def test_a_quiet_poll_of_a_live_terminal_runs_five_tmux_commands(self):
+    def test_a_quiet_poll_of_a_live_worker_runs_no_tmux_command(self):
+        """Its guard answers: tmux shows the worker, never polled."""
         commands = []
 
         def counted(argv, **kwargs):
@@ -112,16 +114,7 @@ class PollCostTest(Live):
             pass
         commands.clear()
         self.assertEqual(mode.poll(0), ([], False))
-        self.assertEqual(
-            commands,
-            [
-                "display-message",
-                "display-message",
-                "display-message",
-                "capture-pane",
-                "display-message",
-            ],
-        )
+        self.assertEqual(commands, [])
 
 
 class LongPromptTest(Live):

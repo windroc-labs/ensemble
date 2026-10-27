@@ -2,6 +2,7 @@
 status.
 """
 
+import json
 import os
 from unittest import mock
 
@@ -370,6 +371,10 @@ class OpenerTest(Base):
 
 
 class StatusTest(Base):
+    """A live session's Status from its sid and activity word (its view's), hidden and attach
+    from the Viewer.
+    """
+
     def status(self, **fields):
         return Status(
             **{
@@ -383,45 +388,46 @@ class StatusTest(Base):
             }
         )
 
+    def test_its_state_is_its_activity_else_working(self):
+        for word in (None, StatusState.DONE, StatusState.BLOCKED):
+            with self.subTest(word=word):
+                self.assertEqual(
+                    displays.status(self.viewer, _plain_host(), "w1", SID, word),
+                    self.status(state=word or StatusState.WORKING),
+                )
+
     def test_hidden_and_attach_come_from_the_viewer(self):
-        process = mock.Mock(name="w1")
-        process.name = "w1"
-        process.session_identity.return_value = (SID, "g1")
         hidden.write("w1", SID, hidden=True, live=None)
-        for found, want in (
-            (self.status(), self.status(hidden=True, attach="tmux attach -t '=w1'")),
-            (
-                self.status(alive=False, state=StatusState.DEAD),
-                self.status(alive=False, state=StatusState.DEAD, hidden=True),
-            ),
-            (self.status(alive=False, state=StatusState.UNKNOWN), None),
-        ):
-            with self.subTest(found=found):
-                process.status.return_value = found
-                got = displays.status(self.viewer, self.host, process)
-                self.assertEqual(got, found if want is None else want)
-        process.status.return_value = self.status()
-        self.assertIsNone(displays.status(self.viewer, _plain_host(), process).attach)
+        self.assertEqual(
+            displays.status(self.viewer, self.host, "w1", SID, None),
+            self.status(hidden=True, attach="tmux attach -t '=w1'"),
+        )
+        for sid in (OTHER, None):
+            self.assertFalse(displays.status(self.viewer, self.host, "w1", sid, None).hidden)
+        self.assertIsNone(displays.status(self.viewer, _plain_host(), "w1", SID, None).attach)
 
     def test_a_session_error_is_the_unknown_status(self):
-        process = mock.Mock()
-        process.name = "w1"
-        process.status.return_value = self.status()
-        process.session_identity.side_effect = SessionError("tmux session w1: tmux failed")
+        host = mock.create_autospec(Host, instance=True)
+        host.name, host.attachable = "docker", True
+        host.attach_target.side_effect = SessionError("no docker session w1")
         self.assertEqual(
-            displays.status(self.viewer, self.host, process),
+            displays.status(self.viewer, host, "w1", SID, StatusState.DONE),
             self.status(alive=False, state=StatusState.UNKNOWN),
         )
 
 
 class StartedTest(Base):
+    """The sid of its worker state: SID unless set."""
+
     def setUp(self):
         super().setUp()
-        self.sid = SID
-        recorded = self.tmux.option.side_effect
-        self.tmux.option.side_effect = lambda pane, key: (
-            self.sid if key == "@sid" else recorded(pane, key)
-        )
+        self.worker(SID)
+
+    def worker(self, sid) -> None:
+        folder = os.path.join(self.ensemble, "tui", "t1")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "session.json"), "w", encoding="utf-8") as f:
+            json.dump({"sid": sid, "generation": "g1"}, f)
 
     def test_a_none_display_marks_a_new_sid_hidden_only(self):
         displays.started(self.viewer, "t1", self.host, "mgr///hidden")
@@ -433,8 +439,10 @@ class StartedTest(Base):
     def test_a_shown_display_a_sidless_session_or_a_plain_host_writes_no_entry(self):
         displays.started(self.viewer, "t1", self.host, "mgr")
         displays.started(self.viewer, "t1", _plain_host(), "none")
-        self.sid = None
+        self.worker(None)
         displays.started(self.viewer, "t1", self.host, "mgr///hidden")
+        os.unlink(os.path.join(self.ensemble, "tui", "t1", "session.json"))
+        displays.started(self.viewer, "t1", self.host, "mgr///hidden")  # no worker state
         self.assertFalse(os.path.exists(os.path.join(self.ensemble, "hidden")))
 
     def test_a_failed_hidden_write_is_a_session_error(self):

@@ -60,10 +60,6 @@ def child_env(
     *,
     inherit: bool = True,
 ) -> dict[str, str]:
-    """The environment (inherit; else none) less drop and unset, then the launch env, PWD,
-    AGENT_SESSION_ENV and CLIENT_ENV (client, when given), never ACCOUNT_ENV; PATH led by the
-    running plugin's bin/, where PATH finds COMMAND (FR-32), when it does.
-    """
     source = os.environ if inherit else {}
     env = {k: v for k, v in source.items() if k not in drop and k not in launch.unset}
     env = {**env, **launch.env, "PWD": cwd, AGENT_SESSION_ENV: "1"}
@@ -80,11 +76,6 @@ def child_env(
 
 
 def identity_drop(registry: Registry) -> frozenset[str]:
-    """SID_ENV and EVENTS_ENV (a caller's start token and events file, never a nested start's),
-    LEASE_ENV (a manager's roster lease), a managed worker's guard lease and hook socket, each
-    configured Client class's identity_env, and its child_defaults at their value inside it;
-    builds no Client.
-    """
     kinds = [registry.client_class(name) for name in registry.configured()]
     drop = {
         SID_ENV,

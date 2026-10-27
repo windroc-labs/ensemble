@@ -153,7 +153,6 @@ class InProcessMode(BaseMode):
         raise SessionError("screen: tui mode only")
 
     def stop(self) -> None:
-        # A run blocked in a call goes on until its next yield or the process exits.
         with self.lock:
             if self.stopped:
                 return

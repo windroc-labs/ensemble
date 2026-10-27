@@ -61,7 +61,6 @@ from tests.delegate.fakes.harness_session import (
     LockingSession,
     RecordingHost,
     RecordingProcess,
-    ShowingHost,
     harness_launches,
 )
 from tests.delegate.harness import SID, HarnessCase
@@ -1131,18 +1130,15 @@ class CheckTuiTest(HarnessCase):
     def check(self, **kw):
         DrivenDelegate.check_tui(session_cls=HarnessSession, **kw)
 
-    def test_the_agents_host_places_the_display_and_takes_the_events(self):
+    def test_the_agents_host_places_the_display_and_the_events_file_is_checked_not_made(self):
         with (
             mock.patch.object(FakeViewer, "layout", autospec=True) as layout,
-            mock.patch.object(ShowingHost, "events_path", autospec=True) as events_path,
         ):
             self.check(display="opener/right", events=self.events)
         [(_, host)] = [call.args for call in layout.call_args_list]
         self.assertEqual(
             (host.name, layout.call_args.kwargs), ("agent", {"display": "opener/right"})
         )
-        [(host, path)] = [call.args for call in events_path.call_args_list]
-        self.assertEqual((host.name, path), ("agent", self.events))
         self.assertFalse(os.path.exists(self.events))
 
     def test_a_host_refusing_the_display_or_the_events_is_a_config_error(self):
@@ -1154,11 +1150,6 @@ class CheckTuiTest(HarnessCase):
                 "layout",
                 SessionConfigError("display 'a/sideways': not <opener>[/<split>]"),
             ),
-            (
-                ShowingHost,
-                "events_path",
-                SessionConfigError(f"events file {self.events}: Permission denied"),
-            ),
         ):
             with (
                 self.subTest(method=method, error=error),
@@ -1167,6 +1158,10 @@ class CheckTuiTest(HarnessCase):
             ):
                 self.check(display="d", events=self.events)
             self.assertEqual(str(caught.exception), str(error))
+        missing = os.path.join(self.home, "missing", "events")
+        with self.assertRaises(ConfigError) as caught:
+            self.check(display="d", events=missing)
+        self.assertEqual(str(caught.exception), f"events file {missing}: No such file or directory")
         self.assertEqual((RecordingHost.launches, harness_launches()), ([], []))
 
 
@@ -2115,7 +2110,7 @@ class StartedTest(HarnessCase):
             json.dump(data, file)
 
     def published(self):
-        return HarnessSession.host(self.host).attach(AGENT).record()
+        return HarnessSession.host(self.host).process(AGENT).record()
 
     def test_a_started_agent_session_carries_the_runs_record(self):
         record = self.detach(self.tui(), live_at=5)

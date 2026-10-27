@@ -11,6 +11,13 @@ from ensemble.utils import Record
 from tests.manager.case import Case
 
 
+def mark(roster: Roster, name: str, state: State) -> None:
+    """Roster entry `name` moved to `state` by the roster's own transition rule (a test's setup)."""
+    with roster._locked() as data:
+        roster._lease(data)
+        roster._mark(data, name, State(state))
+
+
 class RosterCase(Case):
     def setUp(self):
         self.directory = os.path.join(self.ensemble, "managers", "manager")
@@ -43,6 +50,6 @@ class RosterCase(Case):
         self.begin(note="keep")
         if state == State.RESUMING:
             self.roster.commit("x", self.record)
-            self.roster.mark("x", State.GONE)
+            mark(self.roster, "x", State.GONE)
             self.roster.claim_resume("x")
         self.assertIs(self.roster.entries()["x"].state, state)

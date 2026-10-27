@@ -3,13 +3,13 @@
 import contextlib
 import json
 import os
+import threading
 import unittest
 import uuid
 from unittest import mock
 
-from ensemble.session import NotShowable
+from ensemble.session import NotShowable, Session
 from ensemble.session.clients.base import Client
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import (
     Access,
     Exited,
@@ -28,8 +28,8 @@ from tests.session.hosted_support import (
     PYTHONPATH,
     Base,
     EnvBase,
+    HostedTuiBase,
     ProbeClient,
-    TuiBase,
 )
 
 
@@ -56,7 +56,7 @@ class SessionTest(Base):
         cwd = os.path.join(self.dir, "cwd")
         os.mkdir(cwd)
         session = self.start(spec=self.spec(access=Access(cwd=cwd, project=True)), sid="s1")
-        self.assertIsInstance(session, HostedSession)
+        self.assertIsInstance(session, Session)
         self.assertEqual((session.sid, session.client, session.mode), ("s1", "fake", "headless"))
         self.assertIs(session.mode, Mode.HEADLESS)
         info = SessionInfo(
@@ -131,8 +131,11 @@ class SessionTest(Base):
         self.assertFalse(session.alive())
 
 
-class TuiStartTest(TuiBase):
-    def test_a_start_builds_only_its_client_once(self):
+class TuiStartTest(HostedTuiBase):
+    def test_a_start_builds_only_its_client_once_in_its_harness(self):
+        """The harness (here a thread, tests/session/harnesses.py) builds the client it runs once;
+        the caller's checks build their own.
+        """
         built, load = [], self.session_dependencies["class_loader"]
 
         def counted(path, base):
@@ -142,14 +145,15 @@ class TuiStartTest(TuiBase):
 
             class Counted(found):
                 def __init__(self, config):
-                    built.append(path)
+                    if threading.current_thread().name.startswith("harness "):
+                        built.append(path)
                     super().__init__(config)
 
             return Counted
 
         self.session_dependencies = {**self.session_dependencies, "class_loader": counted}
         self.configure(tui=True)
-        for start in (self.run_once, lambda: self.tui(name="w1")):
+        for start in (lambda: self.drain(self.start()), lambda: self.tui(name="w1")):
             with self.subTest(start=start):
                 built.clear()
                 start()

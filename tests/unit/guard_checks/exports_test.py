@@ -565,10 +565,10 @@ class SessionInterfaceSnapshot(Sample):
             SESSION_INTERFACE_MODULES, ("ensemble.session", "ensemble.session.extension")
         )
         self.assertEqual(
-            snapshot["ensemble.session.extension.Host.terminal"],
+            snapshot["ensemble.session.extension.Host.worker"],
             "def(self:POSITIONAL_OR_KEYWORD, name:POSITIONAL_OR_KEYWORD, "
-            "launch:POSITIONAL_OR_KEYWORD, display:KEYWORD_ONLY=None, events:KEYWORD_ONLY=None, "
-            "record:KEYWORD_ONLY=None, metadata:KEYWORD_ONLY=None)",
+            "launch:POSITIONAL_OR_KEYWORD, terminal:KEYWORD_ONLY, display:KEYWORD_ONLY=None, "
+            "events:KEYWORD_ONLY=None, metadata:KEYWORD_ONLY=None)",
         )
         self.assertIn("ensemble.session.Session.show", snapshot)
 

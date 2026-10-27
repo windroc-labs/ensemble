@@ -25,7 +25,7 @@ from ensemble.manager.engine.types import (
 )
 from ensemble.utils import append_line
 from tests.manager.case import with_ctl
-from tests.manager.roster_case import RosterCase
+from tests.manager.roster_case import RosterCase, mark
 
 
 class RosterTest(RosterCase):
@@ -44,7 +44,7 @@ class RosterTest(RosterCase):
         for operation in (
             lambda: self.roster.note("missing", "note"),
             lambda: self.roster.remove("missing"),
-            lambda: self.roster.mark("missing", State.GONE),
+            lambda: mark(self.roster, "missing", State.GONE),
             lambda: self.roster.claim_resume("missing"),
             lambda: self.roster.commit("missing", self.record),
             lambda: self.roster.receipt_record("missing"),
@@ -107,7 +107,7 @@ class RosterTest(RosterCase):
             lambda: self.roster.commit("missing", self.record),
             lambda: self.roster.remove("missing"),
             lambda: self.roster.note("missing", "note"),
-            lambda: self.roster.mark("missing", State.GONE),
+            lambda: mark(self.roster, "missing", State.GONE),
         ):
             with self.assertRaisesRegex(RosterError, "not in roster"):
                 operation()
@@ -116,33 +116,31 @@ class RosterTest(RosterCase):
         for target in (State.DONE, State.WAITING, State.GONE):
             with self.subTest(target=target):
                 self.live()
-                self.roster.mark("x", target)
+                mark(self.roster, "x", target)
                 self.assertIs(self.roster.entries()["x"].state, target)
                 self.roster.remove("x")
         self.live()
-        self.roster.mark("x", State.GONE)
-        self.roster.mark("x", State.LIVE)
-        self.roster.mark("x", State.GONE)
-        self.roster.mark("x", State.RESUMING)
-        self.roster.mark("x", State.GONE)
-        self.roster.mark("x", State.RESUMING)
+        mark(self.roster, "x", State.GONE)
+        mark(self.roster, "x", State.LIVE)
+        mark(self.roster, "x", State.GONE)
+        mark(self.roster, "x", State.RESUMING)
+        mark(self.roster, "x", State.GONE)
+        mark(self.roster, "x", State.RESUMING)
         self.roster.commit("x", self.record)
         self.assertIs(self.roster.entries()["x"].state, State.LIVE)
 
     def test_invalid_transitions_are_atomic(self):
         self.live()
-        self.roster.mark("x", State.DONE)
+        mark(self.roster, "x", State.DONE)
         before = Path(self.roster.path).read_bytes()
         for state in State:
             if state == State.DONE:
                 continue
             with self.subTest(state=state), self.assertRaises(RosterError):
-                self.roster.mark("x", state)
+                mark(self.roster, "x", state)
         self.assertEqual(Path(self.roster.path).read_bytes(), before)
         with self.assertRaises(RosterError):
             self.roster.commit("x", self.record)
-        with self.assertRaises(RosterError):
-            self.roster.mark("x", "unknown")
 
     def test_adopt_rejects_noncanonical_sid_before_creating_files(self):
         for sid in (
@@ -182,7 +180,7 @@ class RosterTest(RosterCase):
 
     def test_resume_preflight_rejects_invalid_sid_without_receipt_or_write(self):
         self.live()
-        self.roster.mark("x", State.GONE)
+        mark(self.roster, "x", State.GONE)
         data = self.content()
         data["entries"]["x"]["sid"] = None
         data["entries"]["x"]["record"]["sid"] = None
@@ -190,7 +188,7 @@ class RosterTest(RosterCase):
         before = Path(self.roster.path).read_bytes()
         for operation in (
             lambda: self.roster.claim_resume("x"),
-            lambda: self.roster.mark("x", State.RESUMING),
+            lambda: mark(self.roster, "x", State.RESUMING),
         ):
             warning = io.StringIO()
             with (
@@ -205,7 +203,7 @@ class RosterTest(RosterCase):
 
     def test_lost_adoption_retains_note_and_started(self):
         self.begin(note="keep")
-        self.roster.mark("x", State.LOST)
+        mark(self.roster, "x", State.LOST)
         old = self.roster.entries()["x"]
         self.assertEqual(self.roster.adopt(self.record), "x")
         adopted = self.roster.entries()["x"]
@@ -301,7 +299,7 @@ class RosterTest(RosterCase):
     def test_mark_if_ignores_missing_or_changed_state(self):
         self.live()
         expected = self.roster.entries()["x"]
-        self.roster.mark("x", State.DONE)
+        mark(self.roster, "x", State.DONE)
         before = Path(self.roster.path).read_bytes()
         self.assertFalse(self.roster.mark_if("x", expected, State.GONE))
         self.assertEqual(Path(self.roster.path).read_bytes(), before)
@@ -342,7 +340,7 @@ class RosterTest(RosterCase):
 
     def atomic_claim(self, state):
         self.live()
-        self.roster.mark("x", state)
+        mark(self.roster, "x", state)
         claims = []
         barrier = threading.Barrier(2)
 
@@ -386,7 +384,7 @@ class RosterTest(RosterCase):
                 for operation in (
                     lambda: self.roster.begin(Spec("y", ("fake",)), sid=str(uuid4())),
                     lambda: self.roster.commit("x", self.record),
-                    lambda: self.roster.mark("x", State.GONE),
+                    lambda: mark(self.roster, "x", State.GONE),
                     lambda: self.roster.claim_resume("x"),
                     lambda: self.roster.remove("x"),
                     lambda: self.roster.note("x", "note"),
@@ -940,7 +938,7 @@ class RosterTest(RosterCase):
         old = "2020-01-01T00:00:00+00:00"
         data["entries"]["x"]["started"] = old
         Path(self.roster.path).write_text(json.dumps(data))
-        self.roster.mark("x", State.GONE)
+        mark(self.roster, "x", State.GONE)
         self.roster.claim_resume("x")
         started = self.roster.entries()["x"].started
         self.assertGreater(
@@ -1012,7 +1010,7 @@ class RosterTest(RosterCase):
 
     def test_lost_adoption_matches_sid_not_name_or_sessions(self):
         self.begin("alias", "keep")
-        self.roster.mark("alias", State.LOST)
+        mark(self.roster, "alias", State.LOST)
         before = self.roster.entries()["alias"]
         record = replace(self.record, name="other", sessions=("unrelated",))
         self.assertEqual(self.roster.adopt(record), "alias")
@@ -1025,7 +1023,7 @@ class RosterTest(RosterCase):
 
     def test_unmatched_sid_leaves_a_lost_entry_unchanged(self):
         self.begin()
-        self.roster.mark("x", State.LOST)
+        mark(self.roster, "x", State.LOST)
         before = Path(self.roster.path).read_bytes()
         self.assertIsNone(self.roster.adopt(replace(self.record, sid=str(uuid4()))))
         self.assertEqual(Path(self.roster.path).read_bytes(), before)
@@ -1045,7 +1043,7 @@ class RosterTest(RosterCase):
         self.live("owner", "owner note")
         sid = str(uuid4())
         self.roster.begin(Spec("lost alias", ("fake-ctl", "start"), "lost note"), sid=sid)
-        self.roster.mark("lost alias", State.LOST)
+        mark(self.roster, "lost alias", State.LOST)
         before = Path(self.roster.path).read_bytes()
         entries = self.roster.entries()
         with self.assertRaisesRegex(RosterError, "already owned by owner"):
@@ -1098,7 +1096,7 @@ class RosterTest(RosterCase):
 
     def test_ambiguous_or_already_owned_sid_is_refused_without_writes(self):
         self.begin("alias")
-        self.roster.mark("alias", State.LOST)
+        mark(self.roster, "alias", State.LOST)
         data = self.content()
         data["entries"]["duplicate"] = data["entries"]["alias"]
         Path(self.roster.path).write_text(json.dumps(data))
@@ -1122,7 +1120,7 @@ class RosterTest(RosterCase):
                 entry = self.roster.entries()["alias"]
                 receipt = Path(self.directory, entry.receipt)
                 receipt.write_bytes(contents)
-                self.roster.mark("alias", State.LOST)
+                mark(self.roster, "alias", State.LOST)
                 self.roster.adopt(self.record)
                 self.assertIsNone(self.roster.entries()["alias"].receipt)
                 self.assertFalse(receipt.exists())
@@ -1132,7 +1130,7 @@ class RosterTest(RosterCase):
         self.begin("alias")
         entry = self.roster.entries()["alias"]
         receipt = Path(self.directory, entry.receipt)
-        self.roster.mark("alias", State.LOST)
+        mark(self.roster, "alias", State.LOST)
         with self.roster.open_receipt("alias") as output:
             self.roster.adopt(self.record)
             self.assertEqual(self.roster.entries()["alias"].receipt, entry.receipt)
@@ -1152,7 +1150,7 @@ class RosterTest(RosterCase):
             with self.subTest(sid=sid):
                 self.begin("alias")
                 entry = self.roster.entries()["alias"]
-                self.roster.mark("alias", State.LOST)
+                mark(self.roster, "alias", State.LOST)
                 wrong = replace(self.record, sid=sid)
                 with self.roster.open_receipt("alias") as output:
                     self.roster.adopt(self.record)
@@ -1175,7 +1173,7 @@ class RosterTest(RosterCase):
                 entry = self.roster.entries()["x"]
                 receipt = Path(self.directory, entry.receipt)
                 if state == State.LOST:
-                    self.roster.mark("x", state)
+                    mark(self.roster, "x", state)
                 elif state in {State.LIVE, State.GONE}:
                     data = self.content()
                     data["entries"]["x"].update(
@@ -1208,7 +1206,7 @@ class RosterTest(RosterCase):
         self.begin()
         entry = self.roster.entries()["x"]
         receipt = Path(self.directory, entry.receipt)
-        self.roster.mark("x", State.LOST)
+        mark(self.roster, "x", State.LOST)
         self.assertTrue(receipt.exists())
         orphan = Path(self.directory, "receipt-orphan.stdout")
         orphan.write_bytes(b"abandoned")

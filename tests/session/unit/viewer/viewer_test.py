@@ -1,14 +1,18 @@
 """Viewer show, hide and attach_command over a TmuxHost on recorded tmux calls."""
 
+import contextlib
+import json
 import logging
 import os
+import threading
 import time
+from collections.abc import Iterator
 from unittest import mock
 
 from ensemble.session import ConfigError, NotShowable, SessionError
 from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.types import PaneStatus, Unanswered
-from ensemble.session.hosts.base import Host
+from ensemble.session.hosts.base import TUI_DIR, Host
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.viewer import display as displays
 from ensemble.session.viewer import hidden
@@ -21,6 +25,31 @@ from tests.session.tmux_host_support import PROCESS, Base
 TuiError = tmux_cli.TuiError
 NO_PANE = "no anchor pane: not in tmux, no iTerm2 pane ($ITERM_SESSION_ID)"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
+
+
+@contextlib.contextmanager
+def sleeps() -> Iterator[list[float]]:
+    """time.sleep patched: this thread's calls recorded, not slept; another thread's (a harness an
+    earlier test left running) sleeps as before.
+    """
+    caller, real, slept = threading.current_thread(), time.sleep, []
+
+    def sleep(seconds):
+        if threading.current_thread() is caller:
+            slept.append(seconds)
+        else:
+            real(seconds)
+
+    with mock.patch("time.sleep", side_effect=sleep):
+        yield slept
+
+
+def worker(name: str, sid: str | None) -> None:
+    """Worker `name`'s worker state naming `sid` (None: none)."""
+    folder = os.path.join(os.path.expanduser(TUI_DIR), name)
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "session.json"), "w", encoding="utf-8") as f:
+        json.dump({"sid": sid, "generation": "g1"}, f)
 
 
 class ShowTest(Base):
@@ -157,6 +186,12 @@ class MarkerTest(Base):
 
 
 class HideTest(Base):
+    """Over w1, whose worker state names SID: the sid of its hidden entry."""
+
+    def setUp(self):
+        super().setUp()
+        worker("w1", SID)
+
     def options(self, **found):
         recorded = self.tmux.option.side_effect
         self.tmux.option.return_value = None
@@ -172,24 +207,26 @@ class HideTest(Base):
         for entry, want in (((SID, True), True), ((SID, False), False), ((OTHER, True), False)):
             with self.subTest(entry=entry):
                 hidden.write("w1", entry[0], hidden=entry[1], live=None)
-                self.options(sid=SID)
-                process = self.host.attach("w1")
-                self.assertIs(displays.status(self.viewer, self.host, process).hidden, want)
+                self.assertIs(displays.status(self.viewer, self.host, "w1", SID, None).hidden, want)
 
     def test_a_sidless_or_unentered_session_is_not_hidden(self):
         hidden.write("w1", SID, hidden=True, live=None)
-        process = self.host.attach("w1")
-        self.assertFalse(displays.status(self.viewer, self.host, process).hidden)
-        self.options(sid=OTHER)
-        process = self.host.attach("w1")
-        self.assertFalse(displays.status(self.viewer, self.host, process).hidden)
+        for sid in (None, OTHER):
+            self.assertFalse(displays.status(self.viewer, self.host, "w1", sid, None).hidden)
+        worker("w1", None)
+        self.viewer.hide("w1", self.host)
+        self.assertTrue(hidden.read("w1", SID))  # no sid in its worker state: no mark
+
+    def test_no_worker_state_marks_nothing(self):
+        os.unlink(os.path.join(os.path.expanduser(TUI_DIR), "w1", "session.json"))
+        self.viewer.hide("w1", self.host)
+        self.assertFalse(os.path.exists(os.path.join(self.ensemble, "hidden")))
 
     def test_show_clears_hidden(self):
         hidden.write("w1", SID, hidden=True, live=None)
         self.options(sid=SID)
         self.assertIsNone(self.viewer.show("w1", self.host, command="true"))
         self.assertFalse(hidden.read("w1", SID))
-        self.tmux.set_option.assert_not_called()
 
     def test_hide_leaves_an_iterm2_or_closed_pane_and_still_marks_it_hidden(self):
         for pane, process in (("w0t0p0:ABC", PROCESS), ("%9", None), (None, PROCESS)):
@@ -205,6 +242,7 @@ class HideTest(Base):
                 self.assertTrue(hidden.read("w1", SID))
 
     def test_hide_kills_the_pane_of_a_sidless_session_and_marks_nothing(self):
+        worker("w1", None)
         self.options(pane="%9")
         self.tmux.process.return_value = PROCESS
         self.tmux.process.side_effect = None
@@ -390,8 +428,7 @@ class CommandViewTest(Base):
         self.docker = mock.create_autospec(Host, instance=True)
         self.docker.name, self.docker.attachable = "docker", True
         self.docker.attach_target.return_value = self.target
-        self.docker.attach.return_value.display.return_value = None
-        self.docker.attach.return_value.session_identity.return_value = (SID, "g1")
+        worker("d1", SID)
         self.docker.list.return_value = ["d1"]
         self.view = None
         self.tmux.option.side_effect = lambda _target, key: self.view if key == "@view" else None
@@ -453,50 +490,33 @@ class CommandViewTest(Base):
         self.tmux.status.return_value = None
         self.runner.results["new-session"] = (0,)
         self.docker.attach_target.side_effect = targets
-        with mock.patch("time.sleep") as slept, self.assertLogs("session", logging.WARNING):
-            try:
-                return self.viewer.show("d1", self.docker, **show)
-            finally:
-                self.slept = [c.args for c in slept.call_args_list]
+        with sleeps() as self.slept, self.assertLogs("session", logging.WARNING):
+            return self.viewer.show("d1", self.docker, **show)
 
     def test_an_unanswered_target_is_retried_then_shown(self):
         late = Unanswered("docker ps: timed out")
         self.assertEqual(self.retried(late, self.target), self.target.printed)
         self.assertEqual(self.docker.attach_target.call_count, 2)
-        self.assertEqual(self.slept, [(1,)])
+        self.assertEqual(self.slept, [1])
 
     def test_three_unanswered_targets_raise_the_last(self):
         errors = [Unanswered(f"docker ps: timed out {n}") for n in range(3)]
         with self.assertRaisesRegex(Unanswered, "^docker ps: timed out 2$"):
             self.docker.attach_target.side_effect = errors
-            with mock.patch("time.sleep") as slept:
+            with sleeps() as slept:
                 self.viewer.show("d1", self.docker)
         self.assertEqual(self.docker.attach_target.call_count, 3)
-        self.assertEqual(slept.call_count, 2)
+        self.assertEqual(len(slept), 2)
 
     def test_other_errors_are_not_retried(self):
         for error in (SessionError("no docker session d1"), ConfigError("bad display")):
             with self.subTest(error=error):
                 self.docker.attach_target.reset_mock()
                 self.docker.attach_target.side_effect = error
-                with mock.patch("time.sleep") as slept, self.assertRaises(type(error)):
+                with sleeps() as slept, self.assertRaises(type(error)):
                     self.viewer.show("d1", self.docker)
                 self.assertEqual(self.docker.attach_target.call_count, 1)
-                self.assertEqual(slept.call_count, 0)
-
-    def test_an_unanswered_mark_after_a_command_runs_it_once(self):
-        self.tmux.status.return_value = None
-        self.runner.results["new-session"] = (0,)
-        self.docker.attach.return_value.session_identity.side_effect = Unanswered("docker ps")
-        with (
-            mock.patch("time.sleep") as slept,
-            self.assertRaisesRegex(Unanswered, "^docker ps$"),
-        ):
-            self.viewer.show("d1", self.docker, command="open -a T {{session}}")
-        self.assertEqual(
-            [c for c in self.runner.calls if c[0] == "/bin/sh"], [["/bin/sh", "-c", "open -a T d1"]]
-        )
-        self.assertEqual(slept.call_count, 0)
+                self.assertEqual(slept, [])
 
 
 class SessionViewCloseTest(Base):

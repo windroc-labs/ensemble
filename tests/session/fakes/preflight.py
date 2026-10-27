@@ -31,9 +31,6 @@ class PreflightClient(Client):
         return None if self.config.get("unsupported") == "in_process" else PreflightInProcess(self)
 
     def note(self, kind: str, value) -> None:
-        """Appends value to the class list `kind`; with config "log", also a JSON line to that
-        file: [kind, value's sid or value].
-        """
         getattr(self, kind).append(value)
         if log := self.config.get("log"):
             with open(log, "a") as f:

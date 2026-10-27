@@ -21,7 +21,6 @@ from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.clients.opencode import OpenCodeClient
 from ensemble.session.engine.records import RunLog
-from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -31,7 +30,6 @@ from ensemble.session.engine.types import (
     ClientHome,
     ConfigError,
     Container,
-    HookCallback,
     HookKind,
     Key,
     KeyPress,
@@ -56,7 +54,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.engine.worker import WorkerState
 from ensemble.session.hosts import base as host_base
-from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess, Process
+from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess
 from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui, tui_hook
 from ensemble.session.modes.base import POINTER
@@ -179,7 +177,7 @@ class Base(Case):
         self.addCleanup(tmp.cleanup)
         self.tmp = os.path.realpath(tmp.name)
         self.events = os.path.join(self.home, "events")
-        self.host = ScreenHost(hook=HookCallback("fake_host_hook", {"selected": True}))
+        self.host = ScreenHost()
         self.log = []
         self.clock = Clock(self.log)
         for patch in (
@@ -190,11 +188,22 @@ class Base(Case):
             self.addCleanup(patch.stop)
         self.client = TuiClient({"tui": True})
         self.run, self.recorded = self.client.run, []
+        self.live = Liveness.LIVE  # a view's worker, as its liveness source says
 
-    def start(self, run=None, record=None, **fields) -> tui.TuiMode:
-        """A TuiMode started with self.client (its tui `run` if given) on Spec(workdir self.tmp,
-        name NAME, client fake, sid SID, events self.events, **fields), its Prepared in
-        self.prepared; its session line given to record, else kept in self.recorded.
+    def liveness(self) -> Liveness:
+        return self.live
+
+    def owner(self, name: str = "a" * 32) -> str:
+        """A session harness's dir `name` under HARNESS_ROOT, made if missing."""
+        path = os.path.join(self.ensemble, "harness", name)
+        os.makedirs(path, 0o700, exist_ok=True)
+        return path
+
+    def start(self, run=None, record=None, *, display=None, **fields) -> tui.TuiMode:
+        """A TuiMode its owner (the session harness of owner()) started with self.client (its tui
+        `run` if given) on Spec(workdir self.tmp, name NAME, client fake, sid SID, events
+        self.events, **fields), its Prepared in self.prepared; its session line given to record,
+        else kept in self.recorded.
         """
         if run is not None:
             self.client.run = run
@@ -215,6 +224,8 @@ class Base(Case):
             registry=self.session_cls._config().registry,
             record=record or self.recorded.append,
             host=self.host,
+            display=display,
+            owner=self.owner(),
         )
         self.prepared = mode.prepared
         return mode
@@ -251,7 +262,7 @@ class Base(Case):
             "words": WORDS,
             "generation": generation,
             "host": self.host.name,
-            "host_hook": {"module": "fake_host_hook", "state": {"selected": True}, "roots": []},
+            "display": None,
             **changes,
         }
 
@@ -315,15 +326,6 @@ class AttachTest(Base):
         super().setUp()
         self.process = self.host.create(NAME, SID)
 
-    def test_a_nonterminal_host_process_cannot_be_attached_as_tui(self):
-        state = self.state()
-        process = mock.create_autospec(Process, instance=True)
-        process.record.return_value = self.process.record()
-        self.host.processes[NAME] = process
-        with self.assertRaisesRegex(SessionError, "session w1 has no terminal"):
-            tui.TuiMode.attach(NAME, state, self.client, host=self.host)
-        process.close.assert_not_called()
-
     def test_opencode_attach_filters_permissions_using_the_hosts_mode(self):
         client = OpenCodeClient({"modes": {"auto": [], "yolo": ["--auto"]}})
         state = self.state(
@@ -346,7 +348,9 @@ class AttachTest(Base):
                 self.subTest(isolated=isolated),
                 mock.patch.object(self.host, "_isolated", new=isolated),
             ):
-                mode = tui.TuiMode.attach(NAME, state, client, host=self.host)
+                mode = tui.TuiMode.attach(
+                    NAME, state, client, host=self.host, liveness=self.liveness
+                )
                 expected = [] if isolated else [Blocked("custom_tool")]
                 expected.append(Blocked("question: Database"))
                 self.assertEqual(mode.replayed, (ClientBound(native), *expected))
@@ -367,6 +371,7 @@ class AttachTest(Base):
             tui.TuiMode.snapshot(NAME),
             client or self.client,
             host=self.host,
+            liveness=self.liveness,
         )
 
     def test_its_replay_bound_and_the_next_record_from_the_files_end(self):
@@ -394,7 +399,7 @@ class AttachTest(Base):
                 Blocked(""),
             ),
         )
-        self.assertEqual(self.host.calls.mock_calls, [mock.call.list(), mock.call.attach(NAME)])
+        self.assertEqual(self.host.calls.mock_calls, [])  # it holds no handle of the worker
         self.append(partial[7:], record("stop", session_id="n2", last_message="r3"))
         self.assertEqual(mode.poll(0), ([Activity("next"), TurnEnd("r3", 0)], False))
 
@@ -429,7 +434,9 @@ class AttachTest(Base):
 
     def test_a_session_json_without_a_valid_identity_is_no_tui_session_before_host_access(self):
         with self.assertRaises(SessionError) as caught:
-            tui.TuiMode.attach(NAME, self.state(cwd=""), self.client, host=self.host)
+            tui.TuiMode.attach(
+                NAME, self.state(cwd=""), self.client, host=self.host, liveness=self.liveness
+            )
         path = os.path.join(self.dir, "session.json")
         self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad cwd")
         self.assertEqual(self.host.calls.mock_calls, [])
@@ -454,7 +461,11 @@ class AttachTest(Base):
                 for call in (
                     lambda: tui.TuiMode.snapshot(NAME),
                     lambda *, field=field, value=value: tui.TuiMode.attach(
-                        NAME, self.state(**{field: value}), self.client, host=self.host
+                        NAME,
+                        self.state(**{field: value}),
+                        self.client,
+                        host=self.host,
+                        liveness=self.liveness,
                     ),
                 ):
                     with self.assertRaises(SessionError) as caught:
@@ -483,7 +494,9 @@ class AttachTest(Base):
         self.append(*lines)
         polled, _ = live.poll(0)
         fresh = FreshClient({"tui": True})
-        attached = tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), fresh, host=self.host)
+        attached = tui.TuiMode.attach(
+            NAME, tui.TuiMode.snapshot(NAME), fresh, host=self.host, liveness=self.liveness
+        )
         self.assertEqual(attached.replayed, tuple(polled))
         self.assertEqual(len(polled), 6)
 
@@ -494,7 +507,9 @@ class AttachTest(Base):
                 client = FreshClient({"tui": True})
                 self.write_state(self.state(**extra))
                 self.append(record("tool"), record("stop"))
-                mode = tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), client, host=self.host)
+                mode = tui.TuiMode.attach(
+                    NAME, tui.TuiMode.snapshot(NAME), client, host=self.host, liveness=self.liveness
+                )
                 self.assertEqual(client.made, [mode.run])
                 self.assertEqual(
                     client.calls,
@@ -515,67 +530,73 @@ class AttachTest(Base):
         with self.assertRaises(SessionError) as caught:
             self.attach(record("tool"))
         self.assertEqual(str(caught.exception), "no tui session w1: no recovery state")
-        self.assertEqual(self.host.calls.mock_calls, [mock.call.list(), mock.call.attach(NAME)])
+        self.assertEqual(self.host.calls.mock_calls, [])
         self.client.run = None
         with self.assertRaises(SessionError) as caught:
             self.attach()
         self.assertEqual(str(caught.exception), "no tui session w1: client 'fake' has no tui mode")
         self.assertEqual(self.host.calls.mock_calls, [])
 
-    def test_marked_blocked_is_its_terminals_activity(self):
+    def test_marked_blocked_is_its_workers_activity(self):
         mode = self.attach()
-        for state, blocked in (
-            (StatusState.BLOCKED, True),
-            (StatusState.WORKING, False),
+        activity = os.path.join(self.dir, "activity")
+        for line, blocked in (
+            (f"{mode.generation} blocked\n", True),
+            (f"{mode.generation} working\n", False),
+            ("another blocked\n", False),
             (None, False),
         ):
-            with self.subTest(state=state):
-                self.process.calls.activity.return_value = state
+            with self.subTest(line=line):
+                if line is None:
+                    os.unlink(activity)
+                else:
+                    with open(activity, "w") as f:
+                        f.write(line)
                 self.assertIs(mode.marked_blocked(), blocked)
-        self.assertEqual(self.process.calls.activity.call_count, 3)
 
-    def test_a_terminal_that_cannot_tell_is_not_marked_blocked(self):
-        mode = self.attach()
-        self.process.calls.activity.side_effect = SessionError("tmux: docker exec in c: timed out")
-        self.assertFalse(mode.marked_blocked())
+    def test_another_sid_is_no_tui_session(self):
+        self.write_state(self.state())
+        with self.assertRaisesRegex(SessionError, f"expected sid 'other', found '{SID}'"):
+            tui.TuiMode.attach(
+                NAME,
+                tui.TuiMode.snapshot(NAME),
+                self.client,
+                host=self.host,
+                liveness=self.liveness,
+                sid="other",
+            )
 
-    def test_another_sid_absent_or_unknown_is_no_tui_session(self):
-        for sid in ("other", None):
-            with self.subTest(sid=sid):
-                self.host.create(NAME, sid)
-                with self.assertRaisesRegex(SessionError, r"\Ano tui session w1\Z"):
-                    self.attach()
-        self.host.processes.clear()
-        with self.assertRaisesRegex(SessionError, r"\Ano tui session w1\Z"):
-            self.attach()
-        self.host.calls.attach.assert_not_called()
-        self.host.create(NAME, SID).calls.session_identity.return_value = (None, None)
-        with self.assertRaisesRegex(SessionError, r"\Ano tui session w1\Z"):
-            self.attach()
-
-    def test_attach_checks_the_private_identity_of_its_captured_terminal(self):
-        old = self.process
-        old.calls.session_identity.side_effect = lambda: self.host.create(
-            NAME, "other"
-        ).session_identity()
-        with self.assertRaisesRegex(SessionError, r"\Ano tui session w1\Z"):
-            self.attach()
-        self.host.calls.attach.assert_called_once_with(NAME)
-
-    def test_an_attached_session_is_live_and_marks_dialogs_on_its_events_file(self):
+    def test_an_attached_session_is_live_and_never_marks_or_reads_a_screen(self):
+        """Its owner alone marks and scans; a view only reads its records, and has no terminal:
+        its input and screen are its harness's.
+        """
         mode = self.attach()
         self.host.calls.screen.return_value = "Sign in"
-        self.assertEqual(mode.poll(0), ([Blocked("Sign in")], False))
-        self.process.calls.mark.assert_called_once_with(StatusState.BLOCKED, self.events)
-        mode.stop()
-        self.process.calls.close.assert_called_once_with()
+        self.assertEqual(mode.poll(0), ([], False))
+        self.host.calls.screen.assert_not_called()
+        for call in (lambda: mode.send("hi"), lambda: mode.press(()), mode.screen):
+            with self.assertRaisesRegex(SessionError, "session w1: its harness is gone"):
+                call()
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "activity")))
+        self.assertFalse(os.path.exists(self.events) and os.path.getsize(self.events))
+        mode.stop()  # no owner named: no worker to end, only its dir
+        self.process.calls.close.assert_not_called()
+        self.assertNoSessionDir()
 
-    def test_an_attached_session_ends_once_another_terminal_holds_its_name(self):
+    def test_an_attached_session_ends_once_its_liveness_says_absent(self):
         mode = self.attach()
-        self.host.create(NAME, SID)
-        self.host.calls.screen.return_value = "Sign in"
+        self.live = Liveness.UNKNOWN
+        self.assertEqual((mode.state(), mode.poll(0)), (Liveness.UNKNOWN, ([], False)))
+        self.live = Liveness.ABSENT
         self.assertEqual(mode.poll(0), ([], True))
         self.assertEqual((self.run.screens, mode.returncode(0)), ([], -signal.SIGHUP))
+
+    def test_an_attached_session_ends_once_session_json_is_another_generations(self):
+        mode = self.attach()
+        self.write_state(self.state(generation="another"))
+        self.append(record("tool"))
+        self.assertEqual(mode.poll(0), ([], True))
+        self.assertEqual(mode.returncode(0), -signal.SIGHUP)
 
 
 class StartTest(Base):
@@ -588,7 +609,7 @@ class StartTest(Base):
             self.start(run=Conflict(self.client))
         self.assertNoSessionDir()
         self.assertEqual(self.recorded, [])
-        self.host.calls.terminal.assert_not_called()
+        self.host.calls.worker.assert_not_called()
 
     def test_without_ensemble_session_on_path_nothing_starts(self):
         with (
@@ -601,30 +622,23 @@ class StartTest(Base):
         self.nothing_hosted()
 
     def nothing_hosted(self):
-        self.host.calls.terminal.assert_not_called()
-        self.host.calls.attach.assert_not_called()
+        self.host.calls.worker.assert_not_called()
         self.assertFalse(os.path.lexists(self.root))
         self.assertEqual(self.recorded, [])
 
-    def test_display_and_private_identity_are_separate_from_the_host_receipt(self):
-        mode = tui.TuiMode.start(
-            Spec(workdir=self.tmp, access=Access(cwd=self.tmp), name=NAME, client="fake", sid=SID),
-            self.client,
-            registry=self.session_cls._config().registry,
-            record=self.recorded.append,
-            host=self.host,
-            display="opaque-location",
+    def test_display_and_private_identity_reach_the_hosts_worker(self):
+        mode = self.start(events=None, display="opaque-location")
+        call = self.host.calls.worker.call_args
+        self.assertEqual(
+            (call.kwargs["display"], call.kwargs["terminal"]), ("opaque-location", True)
         )
-        call = self.host.calls.terminal.call_args
-        self.assertEqual(call.kwargs["display"], "opaque-location")
-        self.assertIsNone(call.kwargs["record"])
         self.assertEqual(call.kwargs["metadata"]["sid"], SID)
         self.assertEqual(call.kwargs["metadata"]["client"], "fake")
         self.assertEqual(mode._terminal.display(), "opaque-location")
 
     def test_the_selected_host_receives_the_launch_and_identity_receipt(self):
         mode = self.start()
-        call = self.host.calls.terminal.call_args
+        call = self.host.calls.worker.call_args
         self.assertEqual(
             call.args,
             (
@@ -645,7 +659,7 @@ class StartTest(Base):
         self.assertEqual(stat.S_IMODE(os.stat(self.events).st_mode), 0o600)
         mode.stop()
         self.start(events=None)
-        self.assertIsNone(self.host.calls.terminal.call_args.kwargs["events"])
+        self.assertIsNone(self.host.calls.worker.call_args.kwargs["events"])
 
     def test_one_session_line_between_session_json_and_terminal_launch_under_the_names_lock(self):
         lines = []
@@ -655,14 +669,14 @@ class StartTest(Base):
                 (
                     info,
                     tui.TuiMode.snapshot(NAME)["sid"],
-                    self.host.calls.terminal.called,
+                    self.host.calls.worker.called,
                     self.locked(),
                 )
             )
 
         self.start(record=record)
         self.assertEqual(lines, [(self.prepared.info, SID, False, True)])
-        self.host.calls.terminal.assert_called_once()
+        self.host.calls.worker.assert_called_once()
         self.assertEqual(
             self.prepared.info,
             SessionInfo(sid=SID, cwd=self.tmp, project=False, transcript="", resume=""),
@@ -670,20 +684,24 @@ class StartTest(Base):
 
     def test_the_names_lock_is_held_from_session_dir_to_terminal_launch(self):
         held = []
-        self.host.calls.list.side_effect = lambda: held.append(self.locked()) or []
-        self.host.calls.terminal.side_effect = lambda *_args, **_kwargs: held.append(self.locked())
+
+        def launch(*_args, **_kwargs):
+            held.append(self.locked())
+            if len(held) > 1:
+                raise SessionError("host launch failed")
+
+        self.host.calls.worker.side_effect = launch
         self.start()
-        self.host.calls.terminal.side_effect = SessionError("host launch failed")
         with self.assertRaisesRegex(SessionError, "host launch failed"):
             self.start()
-        self.assertEqual((held, self.locked()), ([True, True, True], False))
+        self.assertEqual((held, self.locked()), ([True, True], False))
 
     def test_the_spec_as_started_names_the_session(self):
         self.start()
         self.assertEqual(self.prepared.spec.name, NAME)
         mode = self.start(name=None, events=None)
         self.assertEqual((mode.name, self.prepared.spec.name), ("fake-0f8fad5b", "fake-0f8fad5b"))
-        self.assertEqual(self.host.calls.terminal.call_args.args[0], "fake-0f8fad5b")
+        self.assertEqual(self.host.calls.worker.call_args.args[0], "fake-0f8fad5b")
 
     def test_host_client_env_reaches_launch_and_names_the_home_in_metadata(self):
         class Homed(ScanTui):
@@ -721,7 +739,7 @@ class StartTest(Base):
                     ],
                 )
                 self.assertEqual(dict(run.spec.env), {"OTHER": "1", "FAKE_HOME": "/home/fake"})
-                args, kwargs = self.host.calls.terminal.call_args
+                args, kwargs = self.host.calls.worker.call_args
                 metadata = kwargs["metadata"]
                 self.assertEqual(
                     (metadata["home_field"], metadata["home_dir"], metadata["resume"]),
@@ -759,8 +777,8 @@ class StartTest(Base):
                 self.start(
                     run=run, **{k: getattr(spec, k) for k in ("workdir", "access", "env", "resume")}
                 )
-                launch = self.host.calls.terminal.call_args.args[1]
-                metadata = self.host.calls.terminal.call_args.kwargs["metadata"]
+                launch = self.host.calls.worker.call_args.args[1]
+                metadata = self.host.calls.worker.call_args.kwargs["metadata"]
                 self.assertEqual(metadata.get("home_account"), account)
                 self.assertEqual(dict(run.spec.env), {"FAKE_HOME": "/h"})
                 self.assertNotIn(ACCOUNT, launch.env)
@@ -794,7 +812,7 @@ class StartTest(Base):
             self.start(run=Projected(self.client))
         self.assertEqual(len(seen), 1)
         self.assertIs(seen[0], context)
-        metadata = self.host.calls.terminal.call_args.kwargs["metadata"]
+        metadata = self.host.calls.worker.call_args.kwargs["metadata"]
         self.assertEqual(json.loads(metadata["runtime_files"]), projection)
         self.assertEqual(json.loads(metadata["home_persistent"]), ["sessions"])
 
@@ -829,7 +847,7 @@ class StartTest(Base):
         self.host._inherit_env = False
         with mock.patch.dict(os.environ, {"HOST_ONLY": "1"}):
             self.start()
-        launch = self.host.calls.terminal.call_args.args[1]
+        launch = self.host.calls.worker.call_args.args[1]
         self.assertNotIn("HOST_ONLY", launch.env)
         self.assertEqual(launch.env["PWD"], launch.cwd)
 
@@ -837,8 +855,8 @@ class StartTest(Base):
         self.assertEqual(self.host._client_env(NAME, "fake", None, resume=True), {})
         self.start(env={"OTHER": "1"})
         self.assertEqual(dict(self.prepared.spec.env), {"OTHER": "1"})
-        metadata = self.host.calls.terminal.call_args.kwargs["metadata"]
-        self.assertEqual(set(metadata), {"sid", "client", "generation"})
+        metadata = self.host.calls.worker.call_args.kwargs["metadata"]
+        self.assertEqual(set(metadata), {"sid", "client", "generation", "owner"})
 
     def test_cwd_and_grants_over_the_hook_paths_launch(self):
         for hook_path, field in itertools.product((self.events, self.root), ("cwd", "dirs")):
@@ -848,12 +866,7 @@ class StartTest(Base):
                     self.host.processes.clear()
                     self.start(access=access)
                     self.assertEqual(self.prepared.spec.access, access)
-        self.assertEqual(self.host.calls.terminal.call_count, 12)
-
-    def test_a_cwd_inside_a_declared_hook_callback_root_launches(self):
-        self.host.hook = HookCallback("fake_host_hook", {}, roots=("/declared/root",))
-        self.start(access=Access(cwd="/declared/root/child"))
-        self.host.calls.terminal.assert_called_once()
+        self.assertEqual(self.host.calls.worker.call_count, 12)
 
     def test_its_child_env_drops_client_identities_then_takes_the_launch_env(self):
         self.session_dependencies = {"class_loader": lambda _path, _base: IdentityClient}
@@ -874,7 +887,7 @@ class StartTest(Base):
         ):
             self.start()
         self.assertEqual(
-            self.host.calls.terminal.call_args.args[1].env,
+            self.host.calls.worker.call_args.args[1].env,
             {
                 "HOME": os.environ["HOME"],
                 "PATH": PLUGIN_BIN,
@@ -954,14 +967,13 @@ class StartTest(Base):
         self,
     ):
         os.makedirs(os.path.join(self.root, "w2"))
-        self.host.calls.terminal.side_effect = SessionError("tmux: boom")
+        self.host.calls.worker.side_effect = SessionError("tmux: boom")
         with self.assertRaises(SessionError) as caught:
             self.start()
         self.assertEqual(str(caught.exception), "cannot start tui session w1: tmux: boom")
         self.assertEqual(len(self.recorded), 1)
         self.assertNoSessionDir()
         self.assertEqual(sorted(os.listdir(self.root)), ["w1.lock", "w2"])
-        self.host.calls.attach.assert_not_called()
 
     def test_a_failed_start_keeps_a_dir_it_did_not_make(self):
         def swap(_info):
@@ -969,7 +981,7 @@ class StartTest(Base):
             os.mkdir(self.dir)
             open(os.path.join(self.dir, "theirs"), "w").close()
 
-        self.host.calls.terminal.side_effect = SessionError("tmux: boom")
+        self.host.calls.worker.side_effect = SessionError("tmux: boom")
         with self.assertRaises(SessionError):
             self.start(record=swap)
         self.assertEqual(os.listdir(self.dir), ["theirs"])
@@ -981,18 +993,18 @@ class StartTest(Base):
         for record, failure in ((fail, None), (None, ValueError("boom"))):
             with self.subTest(failure=failure):
                 self.host.calls.reset_mock()
-                self.host.calls.terminal.side_effect = failure
+                self.host.calls.worker.side_effect = failure
                 with self.assertRaises(OSError if failure is None else ValueError):
                     self.start(record=record)
                 self.assertEqual(os.listdir(self.dir), ["session.json"])
                 self.assertEqual(
-                    len(self.host.calls.terminal.mock_calls), 0 if failure is None else 1
+                    len(self.host.calls.worker.mock_calls), 0 if failure is None else 1
                 )
                 self.assertFalse(self.locked())
 
     def test_terminal_acquisition_failure_does_not_wait_for_its_held_lock(self):
         caught = []
-        self.host.calls.terminal.side_effect = SessionError("terminal could not be acquired")
+        self.host.calls.worker.side_effect = SessionError("terminal could not be acquired")
 
         def start():
             try:
@@ -1110,7 +1122,7 @@ class SweepTest(Base):
     def test_nothing_idle_lists_no_sessions_for_the_sweep(self):
         self.leftover("young", days=29)
         self.start()
-        self.assertEqual(len(self.host.calls.list.mock_calls), 1)
+        self.host.calls.list.assert_not_called()
 
     def test_a_symlinked_name_and_its_target_stay(self):
         self.leftover("a")
@@ -1157,7 +1169,7 @@ class SweepTest(Base):
             self.age(31, self.dir, *(os.path.join(self.dir, f) for f in os.listdir(self.dir)))
             self.age(31, os.path.join(self.root, f"{NAME}.lock"))
 
-        self.host.calls.terminal.side_effect = launched
+        self.host.calls.worker.side_effect = launched
         self.host.calls.list.return_value = []
         self.start()
         self.assertEqual(self.names(), [NAME, f"{NAME}.lock"])
@@ -1168,15 +1180,7 @@ class SweepTest(Base):
         self.leftover("b")
         for failure in (SessionError("tmux failed"), PermissionError("denied")):
             with self.subTest(failure=failure):
-                listings = iter(([], failure))
-
-                def listed(listings=listings):
-                    found = next(listings)
-                    if isinstance(found, Exception):
-                        raise found
-                    return found
-
-                self.host.calls.list.side_effect = listed
+                self.host.calls.list.side_effect = failure
                 with self.assertLogs("session") as logs:
                     mode = self.start()
                 self.host.processes.clear()
@@ -1188,7 +1192,7 @@ class SweepTest(Base):
 class SnapshotTest(Base):
     def test_a_valid_state(self):
         self.start()
-        self.assertEqual(tui.TuiMode.snapshot(NAME), self.state())
+        self.assertEqual(tui.TuiMode.snapshot(NAME), self.state(owner=self.owner()))
         self.write_state(
             self.state(events=None, transcript="/t", project=True, resume="r", words={}, later=1)
         )
@@ -1288,36 +1292,7 @@ class SnapshotTest(Base):
 
 
 class BoundTest(Base):
-    """A mode keeps its InteractiveProcess generation when the Host reuses a name."""
-
-    def test_another_terminal_under_the_name_ends_it_at_once_unscanned_unmarked_and_unread(self):
-        for code in (None, 3):
-            with self.subTest(code=code):
-                mode = self.started()
-                process = mode._terminal
-                process.calls.returncode.return_value = code
-                self.host.create(NAME, SID)
-                self.host.calls.screen.return_value = "Sign in LIMIT 9"
-                self.assertEqual(mode.poll(0), ([], True))
-                self.assertEqual((self.run.screens, mode.returncode(0)), ([], -signal.SIGHUP))
-                process.calls.mark.assert_not_called()
-                self.host.calls.screen.assert_not_called()
-                self.append(record("tool"))
-                self.assertEqual(mode.poll(0), ([], True))
-
-    def test_records_under_another_terminal_are_never_read(self):
-        mode = self.started()
-        self.host.create(NAME, SID)
-        self.append(record("stop", last_message="theirs"))
-        self.assertEqual(mode.poll(5), ([], True))
-        mode = self.started()
-
-        def theirs():
-            self.host.create(NAME, SID)
-            self.append(record("stop", last_message="theirs"))
-
-        self.clock.actions.append((self.clock.now + 0.25, theirs))
-        self.assertEqual((mode.poll(5), mode.returncode(0)), (([], True), -signal.SIGHUP))
+    """An owned mode's handle alone ends it."""
 
     def test_stop_ends_it_at_once_its_code_the_one_seen_else_sighup(self):
         mode = self.started()
@@ -1333,67 +1308,21 @@ class BoundTest(Base):
         mode.stop()
         self.assertEqual(mode.returncode(0), 3)
 
-    def test_stop_closes_only_the_generation_still_holding_its_name(self):
-        for replacement in (False, True):
-            with self.subTest(replacement=replacement):
-                mode = self.started()
-                original = mode._terminal
-                if replacement:
-                    current = self.host.create(NAME, SID)
-                mode.stop()
-                self.assertEqual(original.calls.close.call_count, int(not replacement))
-                self.assertEqual(os.path.isdir(self.dir), replacement)
-                self.assertEqual(mode.poll(0), ([], True))
-                if replacement:
-                    self.assertIs(self.host.processes[NAME], current)
-                    current.calls.close.assert_not_called()
-
-    def test_stop_with_the_name_absent_never_closes_a_stale_terminal(self):
+    def test_stop_closes_its_handle_under_the_names_lock(self):
         mode = self.started()
-        self.host.processes.clear()
+        held = []
+        mode._terminal.calls.close.side_effect = lambda: held.append(self.locked())
         mode.stop()
-        self.assertEqual(self.host.calls.mock_calls, [mock.call.list()])
-        mode._terminal.calls.close.assert_not_called()
+        self.assertEqual((held, self.locked()), ([True], False))
         self.assertNoSessionDir()
-        self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
 
-    def test_stop_checks_the_holder_and_closes_under_the_names_lock(self):
-        for replacement in (False, True):
-            with self.subTest(replacement=replacement):
-                mode = self.started()
-                if replacement:
-                    self.host.create(NAME, SID)
-                held = []
-                self.host.calls.list.side_effect = lambda *, held=held: (
-                    held.append(self.locked()) or [NAME]
-                )
-                mode._terminal.calls.close.side_effect = lambda *, held=held: held.append(
-                    self.locked()
-                )
-                mode.stop()
-                self.assertEqual(
-                    (held, self.locked()), ([True] * (1 + 2 * int(not replacement)), False)
-                )
-                self.host.calls.list.side_effect = None
-
-    def test_another_terminal_under_the_name_is_absent_to_state_send_and_screen(self):
-        mode = self.started()
-        self.host.create(NAME, SID)
-        self.assertEqual(mode.state(), Liveness.ABSENT)
-        for call in (lambda: mode.send("hi"), mode.screen):
-            with self.assertRaisesRegex(SessionError, r"\Atui session w1 is not running\Z"):
-                call()
-        mode._terminal.calls.send.assert_not_called()
-        self.host.calls.screen.assert_not_called()
-        self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
-
-    def test_an_absent_terminal_is_not_scanned_or_closed(self):
+    def test_an_absent_handle_is_not_scanned_and_stop_still_closes_it(self):
         mode = self.started()
         self.host.processes.clear()
         self.assertEqual(mode.poll(0), ([], True))
         mode.stop()
         self.host.calls.screen.assert_not_called()
-        mode._terminal.calls.close.assert_not_called()
+        mode._terminal.calls.close.assert_called_once_with()
         self.assertNoSessionDir()
 
     def test_an_unknown_terminal_is_not_scanned_or_ended(self):
@@ -1415,9 +1344,9 @@ class SwapTest(Base):
 
         def replace():
             self.host.create(NAME, SID)
-            return True
+            return Liveness.LIVE
 
-        original.calls.alive.side_effect = replace
+        original.calls.state.side_effect = replace
         with self.assertRaisesRegex(SessionError, "terminal w1 is not running"):
             mode.send("hi")
         self.host.processes[NAME].calls.send.assert_not_called()
@@ -1428,26 +1357,12 @@ class SwapTest(Base):
 
         def replace():
             self.host.create(NAME, SID)
-            return True
+            return Liveness.LIVE
 
-        mode._terminal.calls.alive.side_effect = replace
+        mode._terminal.calls.state.side_effect = replace
         with self.assertRaises(SessionError):
             mode.screen()
         self.host.calls.screen.assert_not_called()
-
-    def test_a_screen_callback_replacement_never_receives_the_old_mark(self):
-        mode = self.started()
-        original = mode._terminal
-
-        def replace(_name, _lines):
-            self.host.create(NAME, SID)
-            return "Sign in"
-
-        self.host.calls.screen.side_effect = replace
-        self.assertEqual((mode.poll(0), mode.poll(0)), (([], True), ([], True)))
-        self.assertEqual(self.run.screens, [])
-        original.calls.mark.assert_not_called()
-        self.host.processes[NAME].calls.mark.assert_not_called()
 
     def test_stop_never_kills_the_new_session(self):
         mode = self.started()
@@ -1505,7 +1420,7 @@ class SendScreenTest(Base):
 
     def test_send_or_screen_to_a_session_not_running_is_refused(self):
         mode = self.started()
-        mode._terminal.calls.alive.return_value = False
+        mode._terminal.calls.state.return_value = Liveness.ABSENT
         for call in (lambda: mode.send("hi"), mode.screen):
             with self.assertRaisesRegex(SessionError, r"\Atui session w1 is not running\Z"):
                 call()
@@ -1535,14 +1450,6 @@ class SendScreenTest(Base):
 
 
 class CloseStopTest(Base):
-    def test_close_accepts_a_nonterminal_host_process_and_removes_mode_state(self):
-        self.write_state(self.state())
-        process = mock.create_autospec(Process, instance=True)
-        self.host.processes[NAME] = process
-        tui.TuiStore.attach(NAME, host=self.host).close()
-        process.close.assert_called_once_with()
-        self.assertNoSessionDir()
-
     def test_close_kills_the_session_and_removes_its_dir(self):
         mode = self.started()
         self.append(record("tool"))
@@ -1565,12 +1472,17 @@ class CloseStopTest(Base):
         self.assertEqual((held, self.locked()), ([True, True], False))
         self.assertNoSessionDir()
 
-    def test_close_of_a_host_terminal_without_its_dir_closes_it(self):
-        terminal = mock.create_autospec(InteractiveProcess, instance=True)
-        self.host.processes[NAME] = terminal
-        tui.TuiStore.attach(NAME, host=self.host).close()
-        terminal.close.assert_called_once_with()
-        self.assertNoSessionDir()
+    def test_close_without_an_owned_record_removes_only_its_dir(self):
+        """No owner named: no worker to end; a host session of its name is not its to close."""
+        for state in (None, self.state()):
+            with self.subTest(state=state):
+                terminal = mock.create_autospec(InteractiveProcess, instance=True)
+                self.host.processes[NAME] = terminal
+                if state is not None:
+                    self.write_state(state)
+                tui.TuiStore.attach(NAME, host=self.host).close()
+                terminal.close.assert_not_called()
+                self.assertNoSessionDir()
 
     def test_close_of_an_absent_session_removes_its_dir(self):
         mode = self.started()
@@ -1610,56 +1522,16 @@ class CloseStopTest(Base):
         mode._terminal.calls.close.assert_called_once_with()
         self.assertNoSessionDir()
 
-    def test_a_stop_whose_holder_lookup_fails_closes_its_own_pane_while_it_has_its_sid(self):
-        lock = os.path.join(self.root, f"{NAME}.lock")
-        for pane in ("this session's", "another sid", "not owned"):
-            with self.subTest(pane=pane):
-                mode = self.started()
-                terminal = mode._terminal
-                if pane == "another sid":
-                    terminal.calls.session_identity.return_value = ("other", "g")
-                elif pane == "not owned":
-                    self.host.processes.clear()
-                self.host.calls.list.side_effect = SessionError("tmux sessions unknown: failed")
-                mode.stop()
-                self.host.calls.list.side_effect = None
-                ours = pane == "this session's"
-                self.assertEqual(terminal.calls.close.call_count, int(ours))
-                self.assertEqual(
-                    (os.path.isdir(self.dir), os.path.lexists(lock)), (not ours, not ours)
-                )
-                self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
-
-    def test_a_stop_whose_holder_lookup_and_sid_read_fail_raises_and_a_later_stop_closes_it(self):
+    def test_a_stop_whose_display_lookup_fails_still_closes_its_handle(self):
         mode = self.started()
-        terminal = mode._terminal
         self.host.calls.list.side_effect = SessionError("tmux sessions unknown: failed")
-        terminal.calls.session_identity.side_effect = SessionError("tmux session w1: failed")
-        with self.assertRaisesRegex(SessionError, r"\Atmux session w1: failed\Z"):
-            mode.stop()
-        terminal.calls.close.assert_not_called()
-        self.assertTrue(os.path.isdir(self.dir))
-        self.host.calls.list.side_effect = terminal.calls.session_identity.side_effect = None
         mode.stop()
-        terminal.calls.close.assert_called_once_with()
+        mode._terminal.calls.close.assert_called_once_with()
         self.assertNoSessionDir()
+        self.assertFalse(os.path.lexists(os.path.join(self.root, f"{NAME}.lock")))
+        self.assertEqual((mode.poll(0), mode.returncode(0)), (([], True), -signal.SIGHUP))
 
-    def test_a_sid_bound_stop_whose_sid_read_fails_raises_and_a_later_stop_closes_it(self):
-        terminal = self.started()._terminal
-        mode = tui.TuiMode.attach(
-            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host, sid=SID
-        )
-        terminal.calls.session_identity.side_effect = SessionError("tmux session w1: tmux failed")
-        with self.assertRaisesRegex(SessionError, r"\Atmux session w1: tmux failed\Z"):
-            mode.stop()
-        terminal.calls.close.assert_not_called()
-        self.assertTrue(os.path.isdir(self.dir))
-        terminal.calls.session_identity.side_effect = None
-        mode.stop()
-        terminal.calls.close.assert_called_once_with()
-        self.assertNoSessionDir()
-
-    def test_close_and_stop_remove_the_names_lock_unless_another_holds_the_name(self):
+    def test_close_and_stop_remove_the_names_lock(self):
         lock = os.path.join(self.root, f"{NAME}.lock")
         self.started()
         tui.TuiStore.attach(NAME, host=self.host).close()
@@ -1670,10 +1542,6 @@ class CloseStopTest(Base):
         self.host.processes.clear()
         mode.stop()
         self.assertFalse(os.path.lexists(lock))
-        mode = self.started()
-        self.host.create(NAME, SID)
-        mode.stop()
-        self.assertTrue(os.path.exists(lock))
 
     def test_a_failed_close_keeps_the_names_lock(self):
         mode = self.started()
@@ -1749,7 +1617,7 @@ class PollTest(Base):
         self.assertEqual(self.host.calls.mock_calls, [mock.call.screen(mode._terminal, None)])
         mode._terminal.calls.returncode.assert_called_once_with()
         self.assertEqual(
-            {call[0] for call in mode._terminal.calls.mock_calls}, {"state", "returncode"}
+            {call[0] for call in mode._terminal.calls.mock_calls}, {"read", "state", "returncode"}
         )
         self.assertTrue(all(0 < seconds <= 0.1 for _, seconds in self.log), self.log)
         self.assertAlmostEqual(self.clock.now, 0.5)
@@ -1764,13 +1632,13 @@ class PollTest(Base):
                 )
                 self.assertEqual(
                     sorted(call[0] for call in mode._terminal.calls.mock_calls),
-                    ["returncode", "state", "state"],
+                    ["read", "returncode", "state"],
                 )
         mode = self.started()
         late = self.clock.now + 2.05
         self.clock.actions.append((late, lambda: self.append(record("tool", tool="late"))))
         self.assertEqual(mode.poll(5), ([Activity("late")], False))
-        self.assertEqual(mode._terminal.calls.state.call_count, 3)
+        self.assertEqual(mode._terminal.calls.state.call_count, 1)
 
     def test_a_record_while_waiting_returns_at_once(self):
         mode = self.started()
@@ -1834,14 +1702,11 @@ class PollTest(Base):
 
 
 class SendLockTest(Base):
-    """Two TuiModes of one session (the started one and an attach) share one terminal."""
+    """Sends from two threads (its session harness's handlers, say) share its one terminal."""
 
     def setUp(self):
         super().setUp()
-        self.mode = self.started()
-        self.other = tui.TuiMode.attach(
-            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host
-        )
+        self.mode = self.other = self.started()
         self.calls = self.mode._terminal.calls
         self.order = []
         self.calls.send.side_effect = lambda action: self.order.append(action)
@@ -1991,15 +1856,15 @@ class OpeningTest(Base):
         mode = self.opened()
         fresh = [False]
 
-        def alive():
+        def state():
             fresh[0] = True
-            return True
+            return Liveness.LIVE
 
-        def screen(_terminal, _lines):  # a cached capture until alive() renews it
+        def screen(_terminal, _lines):  # a cached capture until state() renews it
             shown, fresh[0] = ("Trust this folder?" if fresh[0] else ""), False
             return shown
 
-        mode._terminal.calls.alive.side_effect = alive
+        mode._terminal.calls.state.side_effect = state
         self.host.calls.screen.side_effect = screen
         self.append(record("ready"))
         mode.poll(0)
@@ -2011,9 +1876,9 @@ class OpeningTest(Base):
         mode.poll(0.6)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
 
-    def test_a_process_not_alive_at_the_confirm_holds_the_opening(self):
+    def test_a_process_not_live_at_the_confirm_holds_the_opening(self):
         mode = self.opened()
-        mode._terminal.calls.alive.return_value = False
+        mode._terminal.calls.state.return_value = Liveness.UNKNOWN
         self.append(record("ready"))
         mode.poll(0)
         mode.poll(1.2)
@@ -2033,7 +1898,9 @@ class OpeningTest(Base):
 
     def test_attached_never_sends(self):
         mode = self.opened()
-        attached = tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host)
+        attached = tui.TuiMode.attach(
+            NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host, liveness=self.liveness
+        )
         self.assertIsNone(attached.opening_pending)
         self.append(record("ready"))
         attached.poll(0)
@@ -2087,12 +1954,13 @@ class OpeningTest(Base):
         self.client.run = run or Opening(self.client)
         self.client.run.hooks = {**self.client.run.hooks, "start": HookKind.TURN_STARTED}
         self.host.processes.clear()
-        mode = self.start(**fields)
+        mode = self.mode = self.start(**fields)
         mode._terminal.calls.reset_mock()
         return mode
 
     def other(self) -> tui.TuiMode:
-        return tui.TuiMode.attach(NAME, tui.TuiMode.snapshot(NAME), self.client, host=self.host)
+        """Another sender: its owner serving a send request on a handler's thread."""
+        return self.mode
 
     def test_another_senders_prompt_defers_the_opening_past_its_turn(self):
         mode = self.launched()
@@ -2293,33 +2161,13 @@ class ScanTest(Base):
                 mode = self.started()
                 self.assertEqual(self.scans(mode, *screens), expected)
 
-    def test_a_dialog_marks_the_terminal_blocked_unless_it_is(self):
-        mode = self.started()
-        mode._terminal.calls.activity.return_value = StatusState.DONE
-        self.scans(mode, "Sign in Trust this folder?")
-        mode._terminal.calls.mark.assert_called_once_with(StatusState.BLOCKED, self.events)
-        mode._terminal.calls.mark.reset_mock()
-        mode._terminal.calls.activity.return_value = StatusState.BLOCKED
-        self.scans(mode, "", "Sign in")
-        mode._terminal.calls.mark.assert_not_called()
-
     def test_an_absent_name_is_not_scanned(self):
         mode = self.started()
         self.host.processes.clear()
         self.host.calls.screen.return_value = "Sign in"
         self.assertEqual(mode.poll(0), ([], True))
         self.assertEqual((self.run.screens, mode.returncode(0)), ([], -signal.SIGHUP))
-        mode._terminal.calls.mark.assert_not_called()
-
-    def test_a_failed_mark_still_yields_the_dialog(self):
-        mode = self.started()
-        for method in (mode._terminal.calls.activity, mode._terminal.calls.mark):
-            with self.subTest(method=method):
-                method.side_effect = SessionError("host mark failed")
-                self.assertEqual(
-                    self.scans(mode, "Sign in", ""), [[Blocked("Sign in")], [Activity("")]]
-                )
-                method.side_effect = None
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "activity")))
 
     def test_quoted_claude_limit_or_dialog_text_is_no_event_and_the_native_dialog_is(self):
         for screens, expected in (
@@ -2393,7 +2241,7 @@ class PathsTest(Base):
     def test_its_hook_argv_runs_the_plugins_ensemble_session_hook_on_its_dir(self):
         self.start()
         self.assertEqual(
-            self.host.calls.terminal.call_args.args[1].argv,
+            self.host.calls.worker.call_args.args[1].argv,
             ("/bin/run", os.path.join(PLUGIN_BIN, "ensemble-session"), "hook", self.dir),
         )
 
@@ -2407,7 +2255,7 @@ class PathsTest(Base):
         with mock.patch.dict(os.environ, {"PATH": other + os.pathsep + os.environ["PATH"]}):
             self.start()
         self.assertEqual(
-            self.host.calls.terminal.call_args.args[1].argv,
+            self.host.calls.worker.call_args.args[1].argv,
             ("/bin/run", command, "hook", self.dir),
         )
 
@@ -2427,6 +2275,7 @@ class PrepareTest(Base):
             self.assertEqual(
                 json.load(f),
                 self.state(
+                    owner=self.owner(),
                     workdir="/work",
                     cwd="/cwd",
                     project=True,
@@ -2470,6 +2319,7 @@ class PrepareTest(Base):
         self.assertEqual(
             tui.TuiMode.snapshot(NAME),
             self.state(
+                owner=self.owner(),
                 events=None,
                 words={
                     "end": "done",
@@ -2493,20 +2343,6 @@ class PrepareTest(Base):
                 self.start()
                 self.assertTrue(os.path.isfile(os.path.join(self.dir, "session.json")))
 
-    def test_a_running_or_unknown_session_is_refused_with_nothing_made(self):
-        for failure, message in (
-            (None, "tui session w1 is running"),
-            (SessionError("host state unknown"), "host state unknown"),
-        ):
-            with self.subTest(failure=failure):
-                process = self.host.create(NAME, SID)
-                process.calls.alive.side_effect = failure
-                with self.assertRaisesRegex(SessionError, message):
-                    self.start()
-                self.assertNoSessionDir()
-        self.assertEqual(self.recorded, [])
-        self.host.calls.terminal.assert_not_called()
-
     def test_a_bad_session_state_is_refused_before_host_launch_or_a_path(self):
         class BadLabel(ScanTui):
             hooks = {"a b": HookKind.TURN_END}
@@ -2525,7 +2361,7 @@ class PrepareTest(Base):
                 self.client.run.launched = launched
                 self.start(**fields)
         self.assertEqual(
-            [c for c in self.host.calls.mock_calls if c[0] not in ("hook_callback", "validate")],
+            [c for c in self.host.calls.mock_calls if c[0] != "validate"],
             [],
         )
         self.assertFalse(os.path.lexists(self.root))
@@ -2541,7 +2377,7 @@ class PrepareTest(Base):
         with self.assertRaisesRegex(SessionError, re.escape(self.root)):
             self.start(events=None)
         self.assertTrue(os.path.isfile(self.root))
-        self.host.calls.terminal.assert_not_called()
+        self.host.calls.worker.assert_not_called()
 
     def test_an_old_session_dir_is_replaced(self):
         os.makedirs(os.path.join(self.dir, "sub"))
@@ -2550,7 +2386,7 @@ class PrepareTest(Base):
                 f.write("old")
         self.start()
         self.assertEqual(os.listdir(self.dir), ["session.json"])
-        self.assertEqual(tui.TuiMode.snapshot(NAME), self.state())
+        self.assertEqual(tui.TuiMode.snapshot(NAME), self.state(owner=self.owner()))
 
     def test_an_old_entry_that_is_no_real_directory_is_refused(self):
         os.mkdir(self.root, 0o700)
@@ -2696,7 +2532,7 @@ class StoreTest(Base):
 
 class TmuxErrorTest(TmuxBase):
     def test_real_host_launch_keeps_the_modes_exact_error_prefix(self):
-        self.tmux.start.side_effect = TuiError("tmux: boom")
+        os.makedirs(owner := os.path.join(self.ensemble, "harness", "a" * 32), 0o700)
         workdir = os.path.join(self.dir, "work")
         os.mkdir(workdir)
 
@@ -2706,7 +2542,10 @@ class TmuxErrorTest(TmuxBase):
 
         client = TuiClient({"tui": True})
         client.run = Launchable(client)
-        with self.assertRaises(SessionError) as caught:
+        with (
+            mock.patch("subprocess.Popen", side_effect=OSError("boom")),  # its guard's spawn
+            self.assertRaises(SessionError) as caught,
+        ):
             tui.TuiMode.start(
                 Spec(
                     workdir=workdir, access=Access(cwd=workdir), name=NAME, client="fake", sid=SID
@@ -2715,16 +2554,12 @@ class TmuxErrorTest(TmuxBase):
                 registry=self.session_cls._config().registry,
                 record=lambda _info: None,
                 host=self.host,
+                owner=owner,
             )
-        self.assertEqual(str(caught.exception), "cannot start tui session w1: tmux: boom")
-
-    def test_real_host_close_keeps_the_modes_exact_error_prefix(self):
-        self.controlled, self.kind = False, None
-        self.tmux.listing.return_value = [{"name": NAME, "display": None}]
-        self.tmux.kill.side_effect = TuiError("tmux: boom")
-        with self.assertRaises(SessionError) as caught:
-            tui.TuiStore.attach(NAME, host=self.host).close()
-        self.assertEqual(str(caught.exception), "cannot close tui session w1: tmux: boom")
+        self.assertEqual(
+            str(caught.exception),
+            "cannot start tui session w1: worker w1: cannot start guard: boom",
+        )
 
 
 class TmuxAccountTest(TmuxBase):
@@ -2808,7 +2643,7 @@ class PromptFileTest(Base):
             self.assertEqual(f.read(), BIG)
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(self.path)).st_mode), 0o700)
-        self.assertNotIn("prompt_file", self.host.calls.terminal.call_args.kwargs["metadata"])
+        self.assertNotIn("prompt_file", self.host.calls.worker.call_args.kwargs["metadata"])
 
     def test_a_resume_s_over_budget_prompt_is_a_pointer_too(self):
         self.start(run=self.seen, prompt=BIG, resume=True)
@@ -2824,7 +2659,7 @@ class PromptFileTest(Base):
         )
         with mock.patch.object(self.host, "_client_context", return_value=context):
             self.start(run=self.seen, prompt=BIG)
-        metadata = self.host.calls.terminal.call_args.kwargs["metadata"]
+        metadata = self.host.calls.worker.call_args.kwargs["metadata"]
         path = "/run/state/prompt/prompt.md"
         self.assertEqual((metadata["prompt_file"], metadata["prompt"]), (path, BIG))
         self.assertEqual(self.seen.spec.prompt, self.pointer(path))
@@ -2873,59 +2708,19 @@ class PromptFileTest(Base):
             ),
         ):
             self.start(run=self.seen, prompt=BIG)
-        self.host.calls.terminal.assert_not_called()
+        self.host.calls.worker.assert_not_called()
 
 
 class OwnerTest(Base):
     """A start a session harness performs names its harness dir in session.json."""
 
-    def owner(self, name: str = "a" * 32) -> str:
-        path = os.path.join(self.ensemble, "harness", name)
-        os.makedirs(path, 0o700, exist_ok=True)
-        return path
-
     def test_an_owned_start_writes_its_owner(self):
-        owner = self.owner()
-        tui.TuiMode.start(
-            Spec(
-                workdir=self.tmp,
-                access=Access(cwd=self.tmp),
-                name=NAME,
-                client="fake",
-                sid=SID,
-                events=self.events,
-            ),
-            self.client,
-            registry=self.session_cls._config().registry,
-            record=self.recorded.append,
-            host=self.host,
-            owner=owner,
-        )
-        self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], owner)
-
-    def test_an_unowned_start_writes_no_owner(self):
         self.start()
-        self.assertNotIn("owner", tui.TuiMode.snapshot(NAME))
-        self.assertNotIn("owner", self.host.calls.terminal.call_args.kwargs["metadata"])
+        self.assertEqual(tui.TuiMode.snapshot(NAME)["owner"], self.owner())
 
     def test_an_owned_start_tells_its_host_the_owner_and_follows_a_remote_or_up_terminal(self):
-        owner = self.owner()
-        running = tui.TuiMode.start(
-            Spec(
-                workdir=self.tmp,
-                access=Access(cwd=self.tmp),
-                name=NAME,
-                client="fake",
-                sid=SID,
-                events=self.events,
-            ),
-            self.client,
-            registry=self.session_cls._config().registry,
-            record=self.recorded.append,
-            host=self.host,
-            owner=owner,
-        )
-        self.assertEqual(self.host.calls.worker.call_args.kwargs["metadata"]["owner"], owner)
+        running = self.start()
+        self.assertEqual(self.host.calls.worker.call_args.kwargs["metadata"]["owner"], self.owner())
         self.assertFalse(running.remote)
         running._terminal.remote = True
         self.assertTrue(running.remote)
@@ -2933,12 +2728,16 @@ class OwnerTest(Base):
         running._terminal.up = True
         self.assertTrue(running.client_up)
 
-    def test_client_alive_probes_its_terminal_afresh_not_its_last_state(self):
+    def test_client_alive_asks_its_handles_liveness(self):
         mode = self.start()
-        mode._terminal.calls.state.return_value = Liveness.LIVE  # a reused probe, a kept terminal
-        mode._terminal.calls.alive.return_value = False
-        self.assertEqual((mode.client_alive(), mode.state()), (False, Liveness.LIVE))
-        mode._terminal.calls.alive.side_effect = Unanswered("its tmux did not tell")
+        for state, alive in (
+            (Liveness.LIVE, True),
+            (Liveness.ABSENT, False),
+            (Liveness.UNKNOWN, False),
+        ):
+            mode._terminal.calls.state.return_value = state
+            self.assertIs(mode.client_alive(), alive)
+        mode._terminal.calls.state.side_effect = Unanswered("its tmux did not tell")
         self.assertFalse(mode.client_alive())
 
     def test_an_owner_outside_the_harness_root_is_refused(self):
@@ -2989,7 +2788,8 @@ class RecordRuleTest(Base):
         return state
 
     def handle(self, state: Liveness = Liveness.LIVE) -> mock.Mock:
-        handle = mock.create_autospec(InteractiveProcess, instance=True)
+        """Its owner's handle, which closes its own display."""
+        handle = mock.create_autospec(ManagedProcess, instance=True)
         handle.state.return_value = state
         return handle
 
@@ -3014,7 +2814,7 @@ class RecordRuleTest(Base):
         self.start()
         self.assertEqual(self.log.count(("sleep", tui.RECHECK)), 2)
         self.display.calls.close.assert_called_once_with()
-        self.assertNotIn("owner", self.saved())
+        self.assertNotEqual(self.saved()["generation"], "g1")
 
     def test_owned_stale_live_refused_after_wait_untouched(self):
         state = self.owned()
@@ -3028,6 +2828,7 @@ class RecordRuleTest(Base):
     def test_owned_stale_absent_closes_the_display(self):
         self.owned()
         self.start()
+        self.host.calls.release.assert_called_once_with(NAME, "g1")
         self.display.calls.close.assert_called_once_with()
         self.assertIsNot(self.host.processes[NAME], self.display)
 
@@ -3045,7 +2846,7 @@ class RecordRuleTest(Base):
         order = mock.Mock()
         handle = self.handle()
         handle.close.side_effect = lambda: order("handle")
-        self.display.calls.close.side_effect = lambda: order("display")
+        handle.close_display.side_effect = lambda: order("display")
         self.assertTrue(self.store.close(handle, "g1"))
         self.assertEqual(order.call_args_list, [mock.call("display"), mock.call("handle")])
         self.assertNoSessionDir()
@@ -3054,7 +2855,7 @@ class RecordRuleTest(Base):
     def test_owned_stop_closes_the_handle(self):
         self.owned()
         handle = self.handle()
-        self.store.stop(handle, SID, owned=True, generation="g1")
+        self.store.stop(handle, generation="g1")
         handle.close.assert_called_once_with()
         self.assertNoSessionDir()
 
@@ -3067,7 +2868,7 @@ class RecordRuleTest(Base):
                 with self.assertRaisesRegex(Unanswered, "^worker w1: exit unconfirmed$"):
                     self.store.close(handle, "g1")
                 self.assertEqual(handle.close.call_count, 0 if failure == "unknown" else 1)
-                self.display.calls.close.assert_called_once_with()
+                handle.close_display.assert_called_once_with()
                 self.assertEqual(self.saved(), state)
 
     def test_owned_close_of_an_old_generation_keeps_the_new_record_and_display(self):
@@ -3084,9 +2885,20 @@ class RecordRuleTest(Base):
             with self.subTest(generation=generation):
                 self.owned()
                 self.assertTrue(self.store.close(None, generation))
+                self.host.calls.release.assert_called_with(NAME, "g1")
                 self.display.calls.close.assert_called_once_with()
                 self.assertNoSessionDir()
                 self.liveness.assert_called_with(NAME, "g1")
+
+    def test_non_owner_close_whose_release_fails_keeps_the_record(self):
+        state = self.owned()
+        self.host.calls.release.side_effect = SessionError("tmux session w1: boom")
+        with self.assertRaisesRegex(
+            SessionError, r"\Acannot close tui session w1: tmux session w1: boom\Z"
+        ):
+            self.store.close()
+        self.assertEqual(self.saved(), state)
+        self.assertTrue(os.path.exists(os.path.join(self.root, f"{NAME}.lock")))
 
     def test_non_owner_close_live_or_unknown_is_busy_untouched(self):
         for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
@@ -3127,12 +2939,12 @@ class RecordRuleTest(Base):
         state = self.owned()
         self.liveness.return_value = Liveness.UNKNOWN
         with self.assertRaises(SessionBusy):
-            self.store.stop(self.display, SID, generation="g1")
-        self.store.stop(self.display, SID, generation="g0")  # another generation's: untouched
+            self.store.stop(generation="g1")
+        self.store.stop(generation="g0")  # another generation's: untouched
         self.display.calls.close.assert_not_called()
         self.assertEqual(self.saved(), state)
         self.liveness.return_value = Liveness.ABSENT
-        self.store.stop(self.display, SID, generation="g1")
+        self.store.stop(generation="g1")
         self.assertNoSessionDir()
 
     def test_expire_keeps_a_live_owned_record(self):
@@ -3149,19 +2961,17 @@ class RecordRuleTest(Base):
         self.assertNoSessionDir()
         self.assertNotIn(("sleep", tui.RECHECK), self.log)
 
-    def test_unowned_close_unchanged(self):
+    def test_unowned_close_removes_only_its_dir(self):
         self.write_state(self.state())
         display = self.host.create(NAME, metadata={"sid": SID, "generation": "fixture-generation"})
         self.assertTrue(self.store.close())
-        display.calls.close.assert_called_once_with()
+        display.calls.close.assert_not_called()
         self.assertNoSessionDir()
         self.liveness.assert_not_called()
 
 
-class ManagedStartTest(Base):
-    """An owned start (inside a session harness) launches its client under the guard; its TuiMode
-    drives that owner handle and only the handle ends it.
-    """
+class OwnedBase(Base):
+    """A TuiMode started by its owner (inside a session harness) on a mock guard handle."""
 
     def setUp(self):
         super().setUp()
@@ -3169,27 +2979,16 @@ class ManagedStartTest(Base):
         self.handle.state.return_value = Liveness.LIVE
         self.handle.returncode.return_value = None
         self.handle.read.return_value = []
-        self.handle.activity.return_value = None
         self.host.worker = mock.Mock(return_value=self.handle)
 
     def owned_start(self) -> tui.TuiMode:
-        owner = os.path.join(self.ensemble, "harness", "a" * 32)
-        os.makedirs(owner, 0o700, exist_ok=True)
-        return tui.TuiMode.start(
-            Spec(
-                workdir=self.tmp,
-                access=Access(cwd=self.tmp),
-                name=NAME,
-                client="fake",
-                sid=SID,
-                events=self.events,
-            ),
-            self.client,
-            registry=self.session_cls._config().registry,
-            record=self.recorded.append,
-            host=self.host,
-            owner=owner,
-        )
+        return self.start()
+
+
+class ManagedStartTest(OwnedBase):
+    """An owned start (inside a session harness) launches its client under the guard; its TuiMode
+    drives that owner handle and only the handle ends it.
+    """
 
     def test_owned_start_launches_a_managed_worker(self):
         mode = self.owned_start()
@@ -3201,7 +3000,6 @@ class ManagedStartTest(Base):
         self.assertEqual(kwargs["events"], self.events)
         self.assertIsNone(kwargs["display"])
         self.assertEqual(kwargs["metadata"]["generation"], tui.TuiMode.snapshot(NAME)["generation"])
-        self.host.calls.terminal.assert_not_called()
         self.assertIs(mode._terminal, self.handle)
 
     def test_owned_redisplay_asks_its_managed_handle(self):
@@ -3215,11 +3013,6 @@ class ManagedStartTest(Base):
 
     def test_redisplay_of_a_plain_terminal_opens_nothing(self):
         self.assertFalse(self.owned_start().redisplay())
-
-    def test_unowned_start_launches_a_terminal(self):
-        self.start()
-        self.host.calls.terminal.assert_called_once()
-        self.host.worker.assert_not_called()
 
     def test_owned_poll_takes_worker_exit_code(self):
         mode = self.owned_start()
@@ -3260,3 +3053,70 @@ class ManagedStartTest(Base):
         self.write_state({**state, "generation": "another"})
         self.assertEqual(mode.poll(0), ([], False))
         self.assertIsNone(mode.returncode(0))
+
+
+class ActivityTest(OwnedBase):
+    """The owner writes its worker's activity word, and for done and blocked one events line, per
+    newly read hook record or newly shown dialog.
+    """
+
+    def activity(self) -> str:
+        with open(os.path.join(self.dir, "activity"), encoding="utf-8") as f:
+            return f.read()
+
+    def lines(self) -> list[str]:
+        try:
+            with open(self.events, encoding="utf-8") as f:
+                return [line.split(" ", 1)[1] for line in f.read().splitlines()]
+        except FileNotFoundError:
+            return []
+
+    def test_mapped_hook_sets_activity_and_line(self):
+        mode = self.owned_start()
+        generation = mode.generation
+        self.append(record("tool", tool="x"))
+        mode.poll(0)
+        self.assertEqual((self.activity(), self.lines()), (f"{generation} working\n", []))
+        self.append(record("stop"))
+        mode.poll(0)
+        self.assertEqual(
+            (self.activity(), self.lines()), (f"{generation} done\n", [f"{NAME} done"])
+        )
+        self.assertEqual(host_base.activity(NAME, generation), StatusState.DONE)
+        self.assertIsNone(host_base.activity(NAME, "another"))
+
+    def test_each_record_marks_once(self):
+        mode = self.owned_start()
+        self.append(record("ask", why="y"))
+        mode.poll(0)
+        mode.poll(0)
+        self.assertEqual(self.lines(), [f"{NAME} blocked"])
+
+    def test_without_an_events_file_only_the_word(self):
+        self.events = None
+        mode = self.owned_start()
+        self.append(record("stop"))
+        mode.poll(0)
+        self.assertEqual(self.activity(), f"{mode.generation} done\n")
+
+    def test_dialog_marks_blocked_once(self):
+        mode = self.owned_start()
+        self.handle.screen.return_value = "Sign in"
+        mode.poll(0)
+        mode.poll(0)
+        self.assertEqual(self.activity(), f"{mode.generation} blocked\n")
+        self.assertEqual(self.lines(), [f"{NAME} blocked"])
+        self.assertTrue(mode.marked_blocked())
+
+    def test_no_host_hook_in_session_json(self):
+        self.owned_start()
+        state = tui.TuiMode.snapshot(NAME)
+        self.assertNotIn("host_hook", state)
+        self.assertIn("display", state)
+
+    def test_a_failed_mark_still_yields_the_dialog(self):
+        mode = self.owned_start()
+        self.handle.screen.return_value = "Sign in"
+        os.mkdir(os.path.join(self.dir, "activity"))  # its mark cannot replace a directory
+        with self.assertLogs("session", "WARNING"):
+            self.assertEqual(mode.poll(0), ([Blocked("Sign in")], False))

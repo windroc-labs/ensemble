@@ -1,10 +1,9 @@
 """Worker, a plain tui session started by name (FR-20): WorkerState in
-~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record on its Host once
-its early watch passes. A worker its session harness owns resumes through its running owner, which
+~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record in its worker dir
+(~/.ensemble/tui/<name>/record, for its current generation) once its early watch passes, whatever
+its Host can store. Its session harness owns it: it resumes through its running owner, which
 reopens its display if gone, else starts a new harness through the tui gate, closing nothing;
-restart closes it through that owner.
-Other workers' restart and resume close the old session and wait for its group (FR-36).
-Callers hold locked() around start, resume and restart.
+restart closes it through that owner. Callers hold locked() around start, resume and restart.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ import stat
 import sys
 import time
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
@@ -41,8 +40,8 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
-from ensemble.session.hosts.base import Process
-from ensemble.session.modes.tui import TuiMode
+from ensemble.session.hosts.base import worker_state
+from ensemble.session.modes.tui import TuiMode, TuiStore
 from ensemble.utils import (
     CONFIG_NAME,
     STALE_AGE,
@@ -103,8 +102,8 @@ def _text(value) -> bool:
 
 @dataclass(frozen=True)
 class WorkerState:
-    """What a worker's resume replays; token: its last launch's Process.token; environment: its
-    start's, absent from a pre-upgrade worker.json.
+    """What a worker's resume replays; environment: its start's, absent from a pre-upgrade
+    worker.json.
     """
 
     name: str
@@ -116,7 +115,6 @@ class WorkerState:
     env: Mapping[str, str] = field(default_factory=dict)
     events: str | None = None
     display: Display = None
-    token: str | None = None
     environment: EnvironmentSpec | None = None
 
     def __post_init__(self):
@@ -140,7 +138,6 @@ class WorkerState:
             ),
             "events": self.events is None or printable_abs(self.events),
             "display": self.display is None or _text(self.display),
-            "token": self.token is None or _text(self.token),
             "environment": self.environment is None
             or isinstance(self.environment, EnvironmentSpec),
         }
@@ -315,7 +312,7 @@ class Worker:
 
     def start(self, *, prompt: str, resume: bool, hidden: bool | None = None) -> Record:
         """hidden: True hides, False shows, None keeps its Host's. Watches until its client is up
-        (and its opening sent, up to COLOR_CAP s), then publishes and returns its Record. A failed
+        (and its opening sent, up to COLOR_CAP s), then stores and returns its Record. A failed
         save or start puts its files back; its client exiting first: SessionError with its last
         lines, its terminal kept, no Record.
         """
@@ -323,7 +320,6 @@ class Worker:
         self._drop_stale()
         self._claim()
         before = self._saved()
-        self.state = replace(self.state, token=None)
         try:
             self._save()
         except (SessionError, OSError) as error:
@@ -339,53 +335,22 @@ class Worker:
         except (SessionError, ConfigError):
             self._put_back(before)
             raise
-        host = self.session_cls.host(self.state.host)
-        try:
-            handle = host.attach(name)
-        except SessionError:  # it exited already: the watch reports it
-            handle = None
-        self.state = replace(self.state, token=None if handle is None else handle.token)
-        try:
-            self._save()
-        except (SessionError, OSError) as error:
-            with contextlib.suppress(SessionError, ConfigError):
-                session.close()
-            self._put_back(before)
-            raise SessionError(f"{name}: {_detail(error)}; start undone") from None
         if session.showable:
             self._show(session, hidden=hidden)
         self._watch(session)
         record = self.state.record()
-        (host.attach(name) if handle is None else handle).publish(record)
+        self._store(record)
         return record
 
     def resume(self) -> Record:
-        """Its Record, starting nothing, while its session lives; else a resumed start."""
-        owned, owner = self._owner()
-        if owned:
-            return self._resume_owned(owner)
-        session = self._session()
-        if session is not None and session.alive():
-            record = session.record()
-            if record is None or record.sid != self.state.sid:
-                record = self.state.record()
-                session.publish(record)
-            return record
-        self.check(prompt="", resume=True)
-        self.replace(session or self._group())
-        return self._start_again()
+        """Its Record, starting nothing, while its owner runs it; else a resumed start."""
+        return self._resume_owned(self._owner()[1])
 
     def restart(self) -> Record:
-        owned, owner = self._owner()
-        if owned:
-            if owner is None:
-                raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
-            self.session_cls.retire(self.state.name, host=self.state.host)
-            return self._start_again()
-        session = self._session()
-        if session is None:
+        owner = self._owner()[1]
+        if owner is None:
             raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
-        self.replace(session)
+        self.session_cls.retire(self.state.name, host=self.state.host)
         return self._start_again()
 
     def _owner(self) -> tuple[bool, Channel | None]:
@@ -401,7 +366,7 @@ class Worker:
         return True, channel.running(self.state.name, snapshot)
 
     def _resume_owned(self, owner: Channel | None) -> Record:
-        """Its running owner's: its Record, published on its display, which that owner reopens if
+        """Its running owner's: its Record, stored again, its display reopened by that owner if
         gone (shown then as a resumed start's); else a new harness through the gate (it waits out a
         reaping guard, refuses a live or unknown one).
         """
@@ -416,9 +381,7 @@ class Worker:
             self.say(f"session {name}: display not reopened: {error}")
             reopened = False
         with contextlib.suppress(SessionError):
-            handle = self.session_cls.host(self.state.host).attach(name)
-            if handle.session_identity()[0] == self.state.sid:
-                handle.publish(record)
+            self._store(record)
         if reopened:
             try:
                 session = self.session_cls.attach(name, sid=self.state.sid, host=self.state.host)
@@ -429,6 +392,15 @@ class Worker:
                     self._show(session, hidden=None)
         return record
 
+    def _store(self, record: Record) -> None:
+        """record in its worker dir, for the generation its session.json names while of its sid."""
+        name = self.state.name
+        found = worker_state(name)
+        if found is None or found.sid != self.state.sid or found.generation is None:
+            raise SessionError(f"session {name} is gone")
+        store = TuiStore.attach(name, host=self.session_cls.host(self.state.host))
+        store.store_record(found.generation, record)
+
     def _start_again(self) -> Record:
         try:
             return self.start(prompt="", resume=True)
@@ -436,37 +408,6 @@ class Worker:
             raise SessionError(
                 f"{self.state.name}: old session closed, none started: {error}"
             ) from None
-
-    def replace(self, handle: Process | None) -> None:
-        """Close its session by name, close `handle`, wait WAIT s, else kill and wait again."""
-        name = self.state.name
-        self.session_cls.retire(name, host=self.state.host)
-        if handle is None:
-            return
-        handle.close()
-        if handle.wait_exit(WAIT):
-            return
-        handle.kill()
-        if not handle.wait_exit(WAIT):
-            raise SessionError(f"{name}: its old client did not exit; nothing started")
-
-    def _session(self) -> Process | None:
-        """Its Host's session of its name, refused if another's; None when absent."""
-        host = self.session_cls.host(self.state.host)
-        name = self.state.name
-        if name not in host.list():
-            return None
-        handle = host.attach(name)
-        sid, _ = handle.session_identity()
-        if sid != self.state.sid:
-            raise SessionError(f"session {name} is not worker {self.state.sid} (its sid: {sid})")
-        return handle
-
-    def _group(self) -> Process | None:
-        """Its last launch's process group, while it outlives its session."""
-        if self.state.token is None:
-            return None
-        return self.session_cls.host(self.state.host).reclaim(self.state.token)
 
     def _drop_stale(self) -> None:
         """Removes each workers/<sid>/ no by-name/ entry names, whose worker.json is over STALE_AGE
@@ -573,7 +514,7 @@ class Worker:
         began, turned = self.clock(), False  # turned: its opening follows that turn
         for event in session.events():
             if isinstance(event, Exited):
-                raise SessionError(self._died(event.returncode))
+                raise SessionError(self._died(session, event.returncode))
             turned = turned or isinstance(event, TurnStarted)
             if isinstance(event, Blocked):
                 self._waits(session, event.reason, turned=turned)
@@ -583,7 +524,6 @@ class Worker:
                 continue
             if elapsed < COLOR_CAP and _pending(session) is not None:
                 continue
-            # after its state: a dialog found by then, its Blocked maybe unread
             if (dialog := _dialog(session)) is not None:
                 self._waits(session, dialog, turned=turned)
             elif elapsed >= COLOR_CAP and not turned:
@@ -603,12 +543,23 @@ class Worker:
                 f"session {name}: color not set: {reason}; {COMMAND} send {name} {_quoted(text)}"
             )
 
-    def _died(self, code: int) -> str:
+    def _died(self, session: Session, code: int) -> str:
+        """Its last screen lines, read through its view while its harness can still show them,
+        else its Host row's (a harness refuses a screen once its worker exited).
+        """
         head = f"{self.state.name}: {self.state.client} exited {code} at once"
-        host = self.session_cls.host(self.state.host)
         try:
-            screen = host.attach(self.state.name).screen(SCREEN_LINES)
+            screen = session.screen(SCREEN_LINES)
         except SessionError:
-            return head
+            screen = self._row_lines()
         lines = [line for line in screen.splitlines() if line.strip()][-REPORT_LINES:]
         return "\n".join([f"{head}; its last lines:", *lines]) if lines else head
+
+    def _row_lines(self) -> str:
+        """The last lines its Host lists for its name and sid, else ""."""
+        try:
+            rows = self.session_cls.host(self.state.host).rows()
+        except (SessionError, ConfigError):
+            return ""
+        key = (self.state.name, self.state.sid)
+        return next((row.last_lines or "" for row in rows if (row.name, row.sid) == key), "")

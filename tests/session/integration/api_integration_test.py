@@ -228,7 +228,8 @@ class AcceptanceTest(Base):
             {"exit": 0},
         )
         handle = self.start()
-        self.assertIsNone(handle.reply)
+        replies = ["one", marker, "three", "done"]
+        self.assertIn(handle.reply, [None, *replies])  # its harness reads ahead of events()
         seen = []
 
         def bindings() -> int:
@@ -250,7 +251,8 @@ class AcceptanceTest(Base):
         self.assertEqual(found[-1], Exited(0))
         for event, reply, bound in seen:
             if isinstance(event, Reply):
-                self.assertEqual((reply, bound), (event.text, 1))
+                self.assertIn(reply, replies[replies.index(event.text) :])
+                self.assertEqual(bound, 1)
         self.assertEqual(handle.reply, "done")
 
         written = self.written()
@@ -428,25 +430,31 @@ class ProcessGroupTest(Base):
 
 
 class FailureTest(Base):
-    def test_a_raising_parse_stops_the_process_and_propagates(self):
+    def test_a_raising_parse_stops_the_process_and_fails_its_harness(self):
         self.steps(out("session"), {"sleep": 60})
-        handle = self.start()
-        with self.assertRaises(KeyError):
-            self.drain(handle)
+        with self.assertLogs("session", "ERROR") as logs:
+            handle = self.start()
+            found = self.drain(handle)
+        self.assertIn("KeyError: 'id'", logs.output[0])
+        self.assertEqual(found[0], TurnFailed("interrupted"))
+        self.assertIsInstance(found[-1], Exited)
         self.assertFalse(running(self.logged()[0]["pid"]))
         self.assertFalse(handle.alive())
         self.assertEqual(list(handle.events()), [])
 
-    def test_a_failed_client_session_line_stops_the_process_and_propagates(self):
-        self.steps(out("session", id="native-1"), {"sleep": 60})
-        handle = self.start()
-        self.unwritable()
-        with self.assertRaises(OSError):
-            self.drain(handle)
+    def test_a_failed_client_session_line_stops_the_process_and_fails_its_harness(self):
+        # the sleep: its harness reads the session line once the run log is unwritable
+        self.steps({"sleep": 1}, out("session", id="native-1"), {"sleep": 60})
+        with self.assertLogs("session", "ERROR") as logs:
+            handle = self.start()
+            self.unwritable()
+            found = self.drain(handle)
+        self.assertIn("IsADirectoryError", logs.output[0])
+        self.assertEqual(found[0], TurnFailed("interrupted"))
         self.assertFalse(running(self.logged()[0]["pid"]))
 
     def test_a_failed_stderr_record_loses_the_line_not_the_run(self):
-        self.steps({"err": "lost"})
+        self.steps({"sleep": 1}, {"err": "lost"})  # read once the run log is unwritable
         handle = self.start()
         self.unwritable()
         with mock.patch("sys.stderr", io.StringIO()) as printed:

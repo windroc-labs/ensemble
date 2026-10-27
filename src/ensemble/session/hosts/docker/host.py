@@ -35,7 +35,6 @@ from ensemble.session.engine.types import (
     ConfigError,
     Container,
     EnvironmentSpec,
-    HookCallback,
     Launch,
     Liveness,
     SessionBusy,
@@ -49,12 +48,11 @@ from ensemble.session.hosts.base import (
     TUI_DIR,
     TUI_STATE,
     Host,
-    InteractiveProcess,
-    Process,
+    created_events,
     tui_lock,
 )
-from ensemble.session.hosts.docker import guard_hook, maintenance
-from ensemble.session.hosts.docker.activity import activity
+from ensemble.session.hosts.base import activity as worker_activity
+from ensemble.session.hosts.docker import maintenance
 from ensemble.session.hosts.docker.broker import (
     Broker,
     BrokerError,
@@ -79,12 +77,11 @@ from ensemble.session.hosts.docker.mounts import (
     workspace_volume,
 )
 from ensemble.session.hosts.docker.types import GEN, Started
-from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker, GuardedView
+from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     DOCKER_STATE,
     Display,
-    Record,
     command_path,
     docker_home,
     inode_lock,
@@ -103,7 +100,6 @@ BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 STATE_ROOT = "/run/ensemble"  # the client context's Container.state_root
 _ARG_STRLEN_MAX = 131072  # Linux exec's limit on one argument, its NUL included
-# modes/base.py BaseMode._write_prompt in the container: keep the two alike
 PROMPT_STAGE = """import os, sys
 os.makedirs(os.path.dirname(sys.argv[1]), 0o700, exist_ok=True)
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
@@ -382,9 +378,7 @@ class DockerHost(Host):
     _inherit_env = False  # the container gets only the launch's own env (D10)
     attachable = True
     _environments = True
-    _harnessed = True
     _remote_tui = True  # as DockerWorker.remote
-    _unowned = False
     _named_headless = True
 
     def __init__(
@@ -430,7 +424,6 @@ class DockerHost(Host):
         if app and not permissions:
             raise ConfigError(f"[hosts.{name}.github] permissions: want at least one with app set")
         self.github = app
-        # The broker validates the names and levels.
         self.github_permissions: dict[str, str] = dict(permissions)
         self.run = run
         self.broker = Broker() if broker is None else broker
@@ -529,7 +522,7 @@ class DockerHost(Host):
         except OSError as error:
             LOG.warning("docker reclaim: %s", error)
 
-    def reclaim(self) -> None:
+    def reclaim_volumes(self) -> None:
         """Background close pass: removes all run workspace volumes whose workdir is gone, after
         the broker's check. One with unsaved work is kept for good, one whose check
         failed for KEPT_RETRY; each is warned about once and marked. Listed before the lock, so no
@@ -726,21 +719,6 @@ class DockerHost(Host):
                 ) from error
             raise
 
-    def detach(self, name, launch, *, display=None, events=None, record=None) -> Process:
-        raise SessionError(f"detach {name}: runs only under a session harness")
-
-    def terminal(
-        self,
-        name: str,
-        launch: Launch,
-        *,
-        display: Display = None,
-        events: str | None = None,
-        record: Record | None = None,
-        metadata: Mapping[str, str] | None = None,
-    ) -> InteractiveProcess:
-        raise SessionError(f"docker session {name}: terminal: runs only under a session harness")
-
     def _container(
         self,
         name: str,
@@ -919,7 +897,7 @@ class DockerHost(Host):
                     f"docker session {name}: env {key} would reconfigure the docker CLI"
                 )
         self._check_cwd(name, launch)
-        events = self.prepare_events(self.events_path(events))
+        events = created_events(events)
         metadata = metadata or {}
         environment = self._environment(name, metadata)
         owner = _take_owner(name)
@@ -1034,8 +1012,6 @@ class DockerHost(Host):
                     root=hook_root(hook),
                 ),
                 report=self._reporter(name, events),
-                load=lambda: _record(name),
-                store=lambda data: _save_record(name, data),
                 terminal=terminal,
             )
             made.append(handle)
@@ -1082,6 +1058,14 @@ class DockerHost(Host):
         if not _lock_free(_owner_path(name)):
             return Liveness.LIVE
         return self._row_liveness(name, generation)
+
+    def _release(self, name: str, generation: str) -> None:
+        """Its container of `generation`, once its owner lock is free."""
+        if not any(r.name == name and r.generation == generation for r in self._rows()):
+            return
+        if not _lock_free(_owner_path(name)):
+            raise SessionError(f"docker session {name}: owned by its harness")
+        self._remove(container_name(name, generation))
 
     def _row_liveness(self, name: str, generation: str) -> Liveness:
         """The container of `generation` and its guard's lease, by docker; ABSENT permits only that
@@ -1178,40 +1162,6 @@ class DockerHost(Host):
             return f"; close {container}: {error}"
         return ""
 
-    def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback:
-        return HookCallback(
-            guard_hook.__name__, {"target": name, "generation": metadata["generation"]}
-        )
-
-    def attach(self, name: str) -> InteractiveProcess:
-        found = self._containers().get(name)
-        if found is None:
-            raise SessionError(f"no docker session {name}")
-        return self._guarded_process(found)
-
-    def _guarded_process(self, row: Row) -> InteractiveProcess:
-        """The handle this process holds, else a view of the worker its owner holds."""
-        handle = self._workers.get(row.name)
-        if handle is not None and handle.removed:
-            del self._workers[row.name]
-        elif handle is not None and handle.generation == row.generation:
-            return handle
-        name, generation = row.name, row.generation
-
-        def remove() -> None:
-            if not _lock_free(_owner_path(name)):
-                raise SessionError(f"docker session {name}: owned by its harness")
-            self._remove(row.container)
-
-        return GuardedView(
-            name,
-            generation,
-            state=state_dir(name),
-            load=lambda: _record(name),
-            liveness=lambda: self.worker_liveness(name, generation),
-            remove=remove,
-        )
-
     def list(self) -> list[str]:
         return sorted(self._containers())
 
@@ -1237,7 +1187,7 @@ class DockerHost(Host):
         name, generation = row.name, row.generation
         record = _record(name)
         record = record if record.get("generation") == generation else {}
-        word = activity(state_dir(name), generation)
+        word = worker_activity(name, generation)
         state = StatusState.WORKING
         if _lock_free(_owner_path(name)):
             exited = (
@@ -1273,4 +1223,4 @@ class DockerHost(Host):
 
 
 if __name__ == "__main__":
-    DockerHost("docker", {"docker": sys.argv[1]}).reclaim()
+    DockerHost("docker", {"docker": sys.argv[1]}).reclaim_volumes()

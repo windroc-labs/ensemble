@@ -1,10 +1,11 @@
-"""utils/files.py: read_regular, read_beneath, open_beneath, append_line, holds, file_lock, save, drop_stale and
-remove_tree.
+"""utils/files.py: read_regular, read_beneath, open_beneath, append_line, holds, file_lock, save, drop_stale,
+remove_tree and the events file checks (validate_events, events_file).
 """
 
 import errno
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
@@ -678,3 +679,85 @@ class ConfinedRead(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EventsFileTest(Case):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = os.path.realpath(tmp.name)
+
+    def test_created_0600_and_made_absolute(self):
+        here = os.getcwd()
+        os.chdir(self.root)
+        self.addCleanup(os.chdir, here)
+        path = os.path.join(self.root, "e")
+        self.assertEqual(files.events_file("e"), path)
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        with open(path, "a") as f:
+            f.write("x\n")
+        self.assertEqual(files.events_file(path), path)
+        with open(path) as f:
+            self.assertEqual(f.read(), "x\n")
+
+    def test_refused(self):
+        target = os.path.join(self.root, "target")
+        open(target, "w").close()
+        for path in (self.root, os.path.join(self.root, "missing", "e")):
+            with (
+                self.subTest(path=path),
+                self.assertRaisesRegex(ValueError, f"^events file {re.escape(path)}: "),
+            ):
+                files.events_file(path)
+        fifo = unittest.mock.Mock(st_mode=stat.S_IFIFO | 0o600)
+        with (
+            unittest.mock.patch("os.fstat", return_value=fifo),
+            self.assertRaisesRegex(ValueError, "not a regular file$"),
+        ):
+            files.events_file(target)
+
+    def test_a_fifo_without_a_reader_is_refused_at_once(self):
+        fifo = os.path.join(self.root, "fifo")
+        os.mkfifo(fifo, 0o600)
+        caught = []
+
+        def run():
+            for check in (files.validate_events, files.events_file):
+                try:
+                    check(fifo)
+                except ValueError as e:
+                    caught.append(str(e))
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        thread.join(5)
+        if thread.is_alive():
+            reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)  # lets the blocked open return
+            thread.join()
+            os.close(reader)
+            self.fail("blocked on a FIFO without a reader")
+        self.assertEqual(caught, [f"events file {fifo}: not a regular file"] * 2)
+
+    def test_a_parent_that_is_a_file_is_refused_with_nothing_made(self):
+        parent = os.path.join(self.root, "file")
+        open(parent, "w").close()
+        path = os.path.join(parent, "e")
+        for check in (files.validate_events, files.events_file):
+            with self.subTest(check=check.__name__):
+                with self.assertRaises(ValueError) as caught:
+                    check(path)
+                self.assertEqual(str(caught.exception), f"events file {path}: Not a directory")
+        self.assertEqual(os.listdir(self.root), ["file"])
+        self.assertEqual(os.path.getsize(parent), 0)
+
+    def test_refuses_a_path_tmux_would_misread(self):
+        for name in ("a#b", "e;"):
+            path = os.path.join(self.root, name)
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(
+                    ValueError, f"^events file {re.escape(path)}: tmux would misread"
+                ),
+            ):
+                files.events_file(path)
+            self.assertFalse(os.path.exists(path))

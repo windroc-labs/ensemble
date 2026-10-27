@@ -167,11 +167,6 @@ def grid_read(pane):
 
 
 def grid_set(window, manager, n=3, *, hooks=True, retile="all", command=COMMAND):
-    """The one tmux call setting a grid window's options, unsetting @grid-busy, then per grid hook
-    in order: with hooks, setting each of retile's MODE_HOOKS (each starts a no-wait tile unless
-    @grid-busy is the window, under open-close only when the pane set changed); unsetting each other
-    one.
-    """
     flags = "--no-wait --if-panes-changed" if retile == "open-close" else "--no-wait"
     hook = (
         f"if-shell -F '#{{==:#{{@grid-busy}},{window}}}' '' "
@@ -695,10 +690,6 @@ class TileFixture(Case):
         message=(0,),
         **results,
     ):
-        """A tmux printing these for @3, its socket `sock` (default self.sock), `message` the result
-        of another display-message; rows: (session id, name, @opener, @pane) besides mgr's;
-        recorded: @grid-panes (None: panes' pane set, kept as self.set).
-        """
         rows = [("$1", "mgr", "", ""), *rows]
         self.set = " ".join(sorted(panes, key=lambda p: int(p[1:])))
         recorded = self.set if recorded is None else recorded

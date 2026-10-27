@@ -1,22 +1,23 @@
-"""TmuxHost preserves literal launch data and terminal paste bytes on a private server, and
-submits input to a pane in copy-mode.
+"""TmuxHost's workers, under their guard on a private server, get literal launch data and paste
+bytes; a display scrolled into copy-mode takes no input from them; a closed worker's handle never
+reaches a same-name replacement.
 """
 
+import contextlib
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from unittest import mock
 
 from ensemble.session import Launch, SessionError
 from ensemble.session.engine.tmux_cli import TmuxCli
-from ensemble.session.engine.types import Key, KeyPress, Paste
+from ensemble.session.engine.types import Key, KeyPress, Liveness, Paste, Unanswered, WorkerExit
 from ensemble.session.hosts.tmux import TmuxHost
 from tests.session import live_tmux
 from tests.session.case import Case
 
-WAIT = 10
+BRACKETS = (b"\x1b[200~", b"\x1b[201~")
 
 
 class LaunchTest(Case):
@@ -25,27 +26,27 @@ class LaunchTest(Case):
         self.server.start("manager")
         self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
         self.host = TmuxHost("tmux")
-        self.handles = []
-        self.addCleanup(self.close_all)
 
-    def close_all(self):
-        for process in self.handles:
-            process.close()
+    def worker(self, name, launch, *, terminal=True):
+        handle = self.host.worker(name, launch, terminal=terminal)
+        self.addCleanup(self.close, handle)
+        return handle
 
-    def poll(self, check):
-        deadline = time.monotonic() + WAIT
-        while not (found := check()):
-            if time.monotonic() >= deadline:
-                self.fail("launch observation timed out")
-            time.sleep(0.02)
-        return found
+    def close(self, handle):
+        with contextlib.suppress(Unanswered):
+            handle.close()
 
-    def launch(self, kind, name, launch):
-        process = getattr(self.host, kind)(name, launch)
-        self.handles.append(process)
-        return process
+    def exited(self, handle):
+        messages = []
 
-    def test_literal_argv_path_cwd_and_env_reach_both_kinds_terminals_keep_their_identity(self):
+        def found():
+            messages.extend(handle.read(0.1))
+            return any(isinstance(message, WorkerExit) for message in messages)
+
+        live_tmux.wait(found, what=f"worker {handle.name} exit")
+        return [message for message in messages if isinstance(message, WorkerExit)]
+
+    def test_literal_argv_path_cwd_and_env_reach_both_kinds_of_worker(self):
         bindir = Path(self.home, "bin with spaces")
         bindir.mkdir()
         script = bindir / "literal-program"
@@ -58,8 +59,9 @@ class LaunchTest(Case):
         )
         script.chmod(0o700)
         data = ["a b", "雪", "two\nlines", "-leading", ";", "$(echo literal)", "--"]
-        for kind in ("detach", "terminal"):
-            with self.subTest(kind=kind):
+        for terminal in (False, True):
+            with self.subTest(terminal=terminal):
+                kind = "terminal" if terminal else "headless"
                 out, gate = Path(self.home, kind + ".json"), Path(self.home, kind + ".gate")
                 env = {
                     "PATH": str(bindir),
@@ -70,24 +72,21 @@ class LaunchTest(Case):
                     "TERM": "supplied-term",
                     "LC_ALL": "C",
                 }
-                process = self.launch(
-                    kind,
+                handle = self.worker(
                     kind,
                     Launch((script.name, str(out), str(gate), *data), cwd=self.home, env=env),
+                    terminal=terminal,
                 )
-                self.poll(lambda out=out: out.exists() and out.stat().st_size)
+                live_tmux.wait(lambda out=out: out.exists() and out.stat().st_size, what="launch")
                 got = json.loads(out.read_text())
                 self.assertEqual(got["argv"], data)
                 self.assertTrue(os.path.samefile(got["cwd"], self.home))
-                given = {key: value for key, value in env.items() if key not in ("TMUX", "TERM")}
-                self.assertEqual({key: got["env"][key] for key in given}, given)
-                self.assertEqual(
-                    {key: got["env"][key] == env[key] for key in ("TMUX", "TERM")},
-                    {"TMUX": kind == "detach", "TERM": kind == "detach"},
-                )
-                self.assertTrue(process.alive())
+                given = {key: value for key, value in env.items() if key != "TMUX"}
+                self.assertEqual({key: got["env"].get(key) for key in given}, given)
+                self.assertNotIn("TMUX", got["env"])
+                self.assertEqual(handle.state(), Liveness.LIVE)
                 gate.touch()
-                self.assertTrue(process.wait_exit(WAIT))
+                self.assertEqual(self.exited(handle), [WorkerExit(0)])
 
     def test_start_hands_a_long_argv_and_env_over_in_cwd_and_views_are_not_listed(self):
         out = os.path.join(self.home, "launched.json")
@@ -102,7 +101,7 @@ class LaunchTest(Case):
             tags={"@view": "docker"},
         )
         self.addCleanup(tmux.kill, "v1")
-        self.poll(lambda: os.path.exists(out) and os.path.getsize(out))
+        live_tmux.wait(lambda: os.path.exists(out) and os.path.getsize(out), what="launch")
         with open(out) as f:
             self.assertEqual(json.load(f), [[out, prompt], os.path.realpath(self.home), "x y"])
         self.assertEqual(tmux.sessions(), ["manager"])
@@ -110,7 +109,7 @@ class LaunchTest(Case):
 
     def test_long_unicode_multiline_paste_is_literal_and_does_not_submit(self):
         text = ("雪 a b\n" * 3000) + "literal ; $(echo x)"
-        payload = text.encode()
+        payload = BRACKETS[0] + text.encode() + BRACKETS[1]
         ready, output = Path(self.home, "ready"), Path(self.home, "paste")
         code = (
             "import os, sys, tty\n"
@@ -121,23 +120,22 @@ class LaunchTest(Case):
             "with open(sys.argv[2], 'wb') as f: f.write(data)\n"
             "while True: os.read(0, 1)\n"
         )
-        terminal = self.launch(
-            "terminal",
+        worker = self.worker(
             "paste",
             Launch(
                 (sys.executable, "-I", "-c", code, str(ready), str(output), str(len(payload))),
                 cwd=self.home,
             ),
         )
-        self.poll(ready.exists)
-        before = self.server.tmux("list-buffers").stdout
-        terminal.send(Paste(text))
-        self.poll(lambda: output.exists() and output.stat().st_size == len(payload))
+        live_tmux.wait(ready.exists, what="raw tty")
+        worker.send(Paste(text))
+        live_tmux.wait(
+            lambda: output.exists() and output.stat().st_size == len(payload), what="paste"
+        )
         self.assertEqual(output.read_bytes(), payload)
-        self.assertTrue(terminal.alive())
-        self.assertEqual(self.server.tmux("list-buffers").stdout, before)
+        self.assertEqual(worker.state(), Liveness.LIVE)
 
-    def test_a_pane_scrolled_into_copy_mode_still_gets_and_submits_pastes_and_keys(self):
+    def test_a_display_scrolled_into_copy_mode_does_not_hold_back_pastes_or_keys(self):
         ready, lines = Path(self.home, "ready"), Path(self.home, "lines")
         code = (
             "import sys\n"
@@ -145,86 +143,33 @@ class LaunchTest(Case):
             "for line in sys.stdin:\n"
             "    with open(sys.argv[2], 'a') as f: f.write(line)\n"
         )
-        terminal = self.launch(
-            "terminal",
+        worker = self.worker(
             "scrolled",
             Launch((sys.executable, "-I", "-c", code, str(ready), str(lines)), cwd=self.home),
         )
-        self.poll(ready.exists)
-        pane = terminal.identity.split(" ")[2]
+        live_tmux.wait(ready.exists, what="line reader")
+        shown = self.server.tmux("display-message", "-p", "-t", "=scrolled:", "#{pane_id}")
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        pane = shown.stdout.strip()
+        res = self.server.tmux("copy-mode", "-u", "-t", pane)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        mode = self.server.tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}")
+        self.assertEqual(mode.stdout.strip(), "1", mode.stderr)
+        pasted = "\x1b[200~nudge\x1b[201~\n"
+        worker.send(Paste("nudge"))
+        worker.send(Key("Enter"))
+        live_tmux.wait(lambda: lines.exists() and lines.read_text() == pasted, what="paste")
+        worker.press([KeyPress("o"), KeyPress("k"), KeyPress("Enter")])
+        live_tmux.wait(lambda: lines.read_text() == pasted + "ok\n", what="keys")
+        self.assertEqual(worker.state(), Liveness.LIVE)
 
-        def in_mode():
-            res = self.server.tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}")
-            self.assertEqual(res.returncode, 0, res.stderr)
-            return res.stdout.strip()
-
-        def scroll():
-            res = self.server.tmux("copy-mode", "-u", "-t", pane)
-            self.assertEqual(res.returncode, 0, res.stderr)
-            self.assertEqual(in_mode(), "1")
-
-        scroll()
-        terminal.send(Paste("nudge"))
-        scroll()
-        terminal.send(Key("Enter"))
-        self.poll(lambda: lines.exists() and lines.read_text() == "nudge\n")
-        scroll()
-        terminal.press([KeyPress("o"), KeyPress("k"), KeyPress("Enter")])
-        self.poll(lambda: lines.read_text() == "nudge\nok\n")
-        self.assertEqual(in_mode(), "0")
-        self.assertTrue(terminal.alive())
-
-    def test_a_split_and_refocused_session_is_reached_through_its_launched_pane(self):
-        ready, received = Path(self.home, "ready"), Path(self.home, "received")
-        code = (
-            "import os, sys, tty\n"
-            "tty.setraw(0)\n"
-            "open(sys.argv[1], 'w').close()\n"
-            "data = b''\n"
-            "while len(data) < 4: data += os.read(0, 4 - len(data))\n"
-            "with open(sys.argv[2], 'wb') as f: f.write(data)\n"
-            "while True: os.read(0, 1)\n"
-        )
-        launched = self.host.terminal(
-            "split",
-            Launch((sys.executable, "-I", "-c", code, str(ready), str(received)), cwd=self.home),
-            metadata={"sid": "sid-1", "client": "tool", "generation": "generation-1"},
-        )
-        self.handles.append(launched)
-        self.poll(ready.exists)
-        pane = launched.identity.split(" ")[2]
-        added = self.server.tmux(
-            "split-window", "-P", "-F", "#{pane_id}", "-t", "=split:", *live_tmux.IDLE
-        )
-        self.assertEqual(added.returncode, 0, added.stderr)
-        other = added.stdout.strip()
-        active = self.server.tmux("display-message", "-p", "-t", "=split:", "#{pane_id}")
-        self.assertEqual(active.stdout.strip(), other)
-
-        attached = self.host.attach("split")
-        self.assertEqual(attached.identity, launched.identity)
-        self.assertEqual(attached.session_identity(), ("sid-1", "generation-1"))
-        self.assertTrue(attached.alive())
-        attached.send(Paste("ping"))
-        self.poll(lambda: received.exists() and received.stat().st_size == 4)
-        self.assertEqual(received.read_bytes(), b"ping")
-        self.assertNotIn("ping", self.server.tmux("capture-pane", "-p", "-t", other).stdout)
-
-        attached.close()
-        panes = self.server.tmux("list-panes", "-s", "-t", "=split:", "-F", "#{pane_id}")
-        self.assertEqual(panes.returncode, 0, panes.stderr)
-        self.assertEqual(panes.stdout.split(), [other])
-        self.assertNotEqual(pane, other)
-        self.assertFalse(attached.alive())
-
-    def test_stale_terminal_cannot_send_to_a_same_name_replacement(self):
+    def test_a_closed_worker_cannot_send_to_a_same_name_replacement(self):
         launch = Launch((sys.executable, "-I", "-c", "import time; time.sleep(30)"), cwd=self.home)
-        old = self.launch("terminal", "same", launch)
+        old = self.worker("same", launch)
         old.close()
-        new = self.launch("terminal", "same", launch)
+        new = self.worker("same", launch)
+        self.assertNotEqual(new.generation, old.generation)
         with self.assertRaises(SessionError):
             old.send(Paste("old input"))
-        old.kill()
-        old.close()
-        self.assertTrue(old.wait_exit(0))
-        self.assertTrue(new.alive())
+        self.assertEqual(old.state(), Liveness.ABSENT)
+        self.assertEqual(new.state(), Liveness.LIVE)

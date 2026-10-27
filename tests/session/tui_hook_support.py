@@ -32,26 +32,12 @@ def state(root: str, events) -> dict:
         "resume": "",
         "events": events,
         "words": dict(WORDS),
-        "host_hook": {
-            "module": "ensemble.session.hosts.tmux.hook",
-            "state": {
-                "executable": os.path.join(root, "bin", "tmux"),
-                "target": "w1",
-                "generation": uuid.uuid4().hex,
-                "environment": {"TMUX_TMPDIR": root},
-            },
-            "roots": [],
-        },
     }
 
 
 def descriptor(module: str, state: dict | None = None, roots: tuple[str, ...] = ()) -> dict:
     """A session.json callback descriptor, as HookCallback.fields() writes it."""
     return {"module": module, "state": {} if state is None else state, "roots": list(roots)}
-
-
-def identity(value: dict) -> str:
-    return f"{value['sid']}\t{value['host_hook']['state']['generation']}"
 
 
 def write_state(folder: str, value) -> None:
@@ -62,24 +48,11 @@ def write_state(folder: str, value) -> None:
 
 
 PANE = "%3"
-PROCESS = "4242 $3 %3 4343"  # its launch's @process: PANE
-LINE = r"\A[0-9]{2}:[0-9]{2}:[0-9]{2} w1 %s\n\Z"  # one event line
 TS = r"\A\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}[+-]\d\d:\d\d\Z"
-LOOKUP = ["display-message", "-p", "-t", "=w1:", "#{@process}\t#{@sid}\t#{@generation}"]
 TMUX = """#!{python} -I
 import json, os, sys
 with open(os.environ["TMUX_LOG"], "a") as f:
     f.write(json.dumps(sys.argv[1:]) + "\\n")
-if os.environ.get("TMUX_FAIL"):
-    sys.exit("boom\\nagain")
-if sys.argv[1] == "display-message":
-    if "@process" in sys.argv[-1]:
-        print("" if os.environ.get("TMUX_TARGET_ABSENT") else "{process}\\t" + os.environ["TMUX_TARGET_IDENTITY"])
-    else:
-        print("w1")
-"""
-DECOY = """#!{python} -I
-open({log!r}, "a").close()
 """
 
 
@@ -93,13 +66,7 @@ class HookBase(Case):
         self.hooks = os.path.join(self.dir, "hooks.jsonl")
         self.events = os.path.join(self.root, "events")
         os.close(os.open(self.events, os.O_WRONLY | os.O_CREAT, 0o600))
-        self.tmux = install(
-            os.path.join(self.root, "bin"), TMUX.format(python=sys.executable, process=PROCESS)
-        )
-        self.decoy = os.path.join(self.root, "decoy.log")
-        install(
-            os.path.join(self.root, "path"), DECOY.format(python=sys.executable, log=self.decoy)
-        )
+        install(os.path.join(self.root, "path"), TMUX.format(python=sys.executable))
         self.log = os.path.join(self.root, "tmux.log")
         self.env = {
             "PATH": os.path.join(self.root, "path"),
@@ -109,7 +76,6 @@ class HookBase(Case):
             "HOME": self.root,
         }
         self.state = state(self.root, self.events)
-        self.env["TMUX_TARGET_IDENTITY"] = identity(self.state)
         write_state(self.dir, self.state)
 
     def hook(self, label, payload=None, args=None, **env):
@@ -166,20 +132,6 @@ class HookBase(Case):
         with open(self.events) as f:
             return f.read()
 
-    def reset(self):
-        open(self.events, "w").close()
-        if os.path.exists(self.log):
-            os.unlink(self.log)
-
-
-class MarkingCases:
-    def test_a_failed_mark_is_one_stderr_line_after_the_record(self):
-        self.assertError(self.hook("stop", TMUX_FAIL="1"), "tmux: boom again")
-        os.unlink(self.events)
-        self.assertError(self.hook("ask"), "events file")
-        self.assertFalse(os.path.exists(self.events))
-        self.assertEqual([r["label"] for r in self.records()], ["stop", "ask"])
-
 
 class PayloadCases:
     def test_strs_over_4096_chars_are_cut_unless_the_word_is_done(self):
@@ -221,32 +173,13 @@ class RecordCases:
             self.assertRegex(record["ts"], TS)
         self.assertEqual(stat.S_IMODE(os.stat(self.hooks).st_mode), 0o600)
 
-    def test_each_word_marks_the_pane_done_and_blocked_with_an_event_line(self):
-        for label, word in WORDS.items():
+    def test_a_done_or_blocked_hook_runs_no_tmux_and_writes_no_event_line(self):
+        """The hook command starts no process: its session harness marks the word (E3)."""
+        for label in ("stop", "ask"):
             with self.subTest(label):
-                self.reset()
                 self.assertEqual(self.hook(label), "")
-                calls = [LOOKUP, ["set-option", "-t", PANE, "@state", word]]
-                if word == "working":
-                    self.assertEqual(self.lines(), "")
-                else:
-                    calls.append(["display-message", "-p", "-t", PANE, "#S"])
-                    self.assertRegex(self.lines(), LINE % word)
-                self.assertEqual(self.calls(), calls)
-        self.assertEqual([r["label"] for r in self.records()], list(WORDS))
-
-    def test_the_tmux_session_json_names_runs_never_one_on_path(self):
-        self.assertEqual(self.hook("ask"), "")
-        self.assertEqual(
-            self.calls(),
-            [
-                LOOKUP,
-                ["set-option", "-t", PANE, "@state", "blocked"],
-                ["display-message", "-p", "-t", PANE, "#S"],
-            ],
-        )
-        self.assertRegex(self.lines(), LINE % "blocked")
-        self.assertFalse(os.path.exists(self.decoy))
+        self.assertEqual([r["label"] for r in self.records()], ["stop", "ask"])
+        self.assertEqual((self.calls(), self.lines()), ([], ""))
 
     def test_a_label_without_a_word_is_recorded_and_marks_nothing(self):
         self.assertEqual(self.hook("other", {"x": 1}), "")
@@ -255,31 +188,9 @@ class RecordCases:
         )
         self.assertEqual(self.calls(), [])
 
-    def test_no_events_file_marks_the_state_with_no_line(self):
+    def test_no_events_file_journals_each_word(self):
         write_state(self.dir, {**self.state, "events": None})
-        for label, word in WORDS.items():
-            with self.subTest(label):
-                self.reset()
-                self.assertEqual(self.hook(label), "")
-                self.assertEqual(self.calls(), [LOOKUP, ["set-option", "-t", PANE, "@state", word]])
-        self.assertEqual(self.lines(), "")
-        self.assertEqual(len(self.records()), 3)
-
-    def test_target_lookup_works_without_client_pane_environment(self):
-        for pane in (None, ""):
-            self.assertEqual(self.hook("stop", TMUX_PANE=pane), "")
-        self.assertEqual(len(self.records()), 2)
-        self.assertEqual(
-            self.calls(),
-            [
-                LOOKUP,
-                ["set-option", "-t", PANE, "@state", "done"],
-                ["display-message", "-p", "-t", PANE, "#S"],
-            ]
-            * 2,
-        )
-
-    def test_missing_target_journals_without_marking(self):
-        self.assertEqual(self.hook("stop", TMUX_TARGET_ABSENT="1"), "")
-        self.assertEqual(len(self.records()), 1)
-        self.assertEqual((self.calls(), self.lines()), ([LOOKUP], ""))
+        for label in WORDS:
+            self.assertEqual(self.hook(label), "")
+        self.assertEqual([r["label"] for r in self.records()], list(WORDS))
+        self.assertEqual((self.calls(), self.lines()), ([], ""))

@@ -17,6 +17,7 @@ from typing import BinaryIO, Self
 
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.registry import Registry
+from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import (
     COMMAND,
     PROCESS_EXIT,
@@ -51,17 +52,21 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.hosts.base import (
+    ACTIVITY,
     GUARD_WAIT,
     HARNESS_ROOT,
     PROMPTED,
+    RECORD,
     TUI_DIR,
     TUI_STATE,
     Host,
     InteractiveProcess,
-    Process,
-    check_sid,
+    activity,
+    checked_events,
+    created_events,
     sent,
     tui_lock,
+    worker_state,
 )
 from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui_hook
@@ -77,7 +82,9 @@ from ensemble.utils import (
     inode_lock,
     json_records,
     read_regular,
+    save,
 )
+from ensemble.utils import Record as ControlRecord
 
 WORDS = {
     HookKind.TURN_END: StatusState.DONE,
@@ -106,7 +113,13 @@ def checked_name(name) -> str:
 
 
 def _state(
-    prepared: Prepared, run: Tui, host: Host, metadata: Mapping[str, str], owner: str | None
+    prepared: Prepared,
+    run: Tui,
+    host: Host,
+    metadata: Mapping[str, str],
+    owner: str | None,
+    *,
+    display: Display,
 ) -> dict:
     spec = prepared.spec
     return {
@@ -117,14 +130,8 @@ def _state(
         "words": {label: WORDS[kind] for label, kind in run.hooks.items() if kind in WORDS},
         "host": host.name,
         "generation": metadata["generation"],
-        **{
-            key: callback.fields()
-            for key, callback in (
-                ("client_hook", run.hook_callback()),
-                ("host_hook", host.hook_callback(spec.name or "", metadata)),
-            )
-            if callback is not None
-        },
+        "display": display,
+        **({"client_hook": hook.fields()} if (hook := run.hook_callback()) is not None else {}),
         **({"owner": owner} if owner is not None else {}),
     }
 
@@ -175,12 +182,39 @@ def _read_state(name: str, path: str) -> dict:
     return state
 
 
+def store_record(name: str, generation: str, record: ControlRecord) -> None:
+    """Worker `name`'s Record, for `generation` while session.json names it; else SessionError.
+    Only the process owning that Record (a crew Worker, a delegate) calls it.
+    """
+    found = worker_state(name)
+    if found is None or found.generation != generation:
+        raise SessionError(f"session {name} is gone")
+    folder = os.path.join(os.path.expanduser(TUI_DIR), name)
+    path = os.path.join(folder, RECORD)
+    try:
+        fd, temporary = tempfile.mkstemp(dir=folder, prefix=f".{RECORD}-")  # 0600, O_NOFOLLOW
+    except FileNotFoundError:
+        raise SessionError(f"session {name} is gone") from None
+    except OSError as e:
+        raise SessionError(f"{path}: {e.strerror or e}") from None
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(f"{generation}\t{record.to_line()}\n".encode())
+        os.replace(temporary, path)
+    except OSError as e:
+        raise SessionError(f"{path}: {e.strerror or e}") from None
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)  # left only when not replaced
+
+
 class TuiStore:
     """Tui session `name`'s dir and lock under TUI_DIR; what changes them takes the lock.
     attach(name, host=...) takes by name whatever is there: a tui session, a half-gone one (its dir
-    or its host session alone), a non-tui host session or nothing. close: under its lock, closes the
-    host's session of that name and removes the dir; absent is fine. An owned record goes only
-    with its own worker generation.
+    alone) or nothing. close: under its lock, removes the dir; absent is fine. An owned record goes
+    only with its own worker generation: by its owner's handle, else once that generation's
+    worker_liveness is ABSENT, its leftovers released through Host._release. With no owned record
+    there is no worker: only its dir goes.
     """
 
     def __init__(self, name: str, *, host: Host, sid: str | None = None) -> None:
@@ -204,6 +238,16 @@ class TuiStore:
                 f"tui session {self.name}: {COMMAND} is not on PATH (its hooks run it)"
             )
         return (command, "hook", self.dir)
+
+    def set_activity(self, generation: str, word: StatusState, events: str | None) -> None:
+        """Its owner's mark: the activity file, then for done and blocked one events line."""
+        save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
+        if word in (StatusState.DONE, StatusState.BLOCKED) and events:
+            SessionStatusLog(events).write(self.name, word)
+
+    def store_record(self, generation: str, record: ControlRecord) -> None:
+        """Its crew Record, for `generation` while session.json names it; else SessionError."""
+        store_record(self.name, generation, record)
 
     def read(self) -> dict:
         return _read_state(self.name, self.state_file)
@@ -240,14 +284,6 @@ class TuiStore:
         new, end = _parsed(data)
         return found + new, (ino, start + end)
 
-    def process(self) -> Process | None:
-        process = self._lookup()
-        check_sid(self.name, process, self._sid)
-        return process
-
-    def _lookup(self) -> Process | None:
-        return self.host.attach(self.name) if self.name in self.host.list() else None
-
     @contextlib.contextmanager
     def sending(self, *, wait: bool = True) -> Iterator[bool]:
         """Holds the send lock; wait False yields False while another holds it."""
@@ -280,9 +316,12 @@ class TuiStore:
             LOG.warning("tui session %s: %s: %s", self.name, path, e.strerror or e)
 
     def check(self) -> None:
-        """A terminal of another sid raises; none does not."""
-        if self._sid is not None and (process := self._lookup()) is not None:
-            check_sid(self.name, process, self._sid)
+        """Worker state of another sid raises; none does not."""
+        found = worker_state(self.name)
+        if self._sid is not None and found is not None and found.sid != self._sid:
+            raise SessionError(
+                f"session {self.name}: expected sid {self._sid!r}, found {found.sid!r}"
+            )
 
     def start(
         self,
@@ -305,7 +344,9 @@ class TuiStore:
                 self._unmake(made)
                 raise
 
-    def close(self, handle: Process | None = None, generation: str | None = None) -> bool:
+    def close(
+        self, handle: InteractiveProcess | None = None, generation: str | None = None
+    ) -> bool:
         """generation: the owner `handle`'s, else the caller's (None: the name's). Whether the dir
         went.
         """
@@ -315,7 +356,7 @@ class TuiStore:
                 return self._close_own(handle, generation, record)
             if record is not None:
                 return self._close_other(record, generation)
-            self._close()
+            self._drop()
             self._forget()
             return True
 
@@ -342,38 +383,19 @@ class TuiStore:
             os.unlink(lock)
 
     def stop(
-        self,
-        terminal: Process,
-        sid: str | None,
-        *,
-        owned: bool = False,
-        generation: str | None = None,
+        self, handle: InteractiveProcess | None = None, *, generation: str | None = None
     ) -> None:
-        """Closes `terminal` while it holds the name or, unlisted, its @sid is sid."""
-        if owned:
-            self.close(terminal, generation)
+        """handle: its owner's, closed. Else an owned record goes by the record rule; with none,
+        there is no worker to end: only its dir goes.
+        """
+        if handle is not None:
+            self.close(handle, generation)
             return
         with self._locked():
             if (record := _owned_record(self)) is not None:
                 self._close_other(record, generation)
                 return
-            try:
-                process = self._lookup()
-            except SessionError:
-                if sid is None or terminal.session_identity()[0] != sid:
-                    return
-                self._shut(terminal)
-                self._forget()
-                return
-            actual = None if process is None else process.session_identity()[0]
-            if self._sid is not None and actual != self._sid:
-                return
-            if process is None:
-                self._drop()
-            elif process.identity == terminal.identity:
-                self._close()
-            else:
-                return
+            self._drop()
             self._forget()
 
     @contextlib.contextmanager
@@ -401,7 +423,7 @@ class TuiStore:
         """A fresh dir with session.json, unless the session runs or is unknown; the dir's stat."""
         stale = _stale(self)
         if stale is not None:
-            stale.close()
+            self.host._release(self.name, stale)
         folder = self.dir
         try:
             if os.path.lexists(folder):
@@ -424,8 +446,11 @@ class TuiStore:
             raise SessionError(f"{folder}: {e.strerror or e}") from None
         return made
 
-    def _close_own(self, handle: Process, generation: str | None, record: dict | None) -> bool:
-        self._close_display(generation, handle)  # first: its pane dying is no exit to report
+    def _close_own(
+        self, handle: InteractiveProcess, generation: str | None, record: dict | None
+    ) -> bool:
+        if isinstance(handle, ManagedProcess):
+            handle.close_display()  # first: its pane dying is no exit to report
         failed = handle.state() == Liveness.UNKNOWN
         if not failed:
             try:
@@ -442,42 +467,19 @@ class TuiStore:
         self._forget()
         return True
 
-    def _close_display(self, generation: str | None, handle: Process) -> None:
-        try:
-            process = self._lookup()
-            if process in (None, handle) or process.session_identity()[1] != generation:
-                return
-        except SessionError:
-            return
-        try:
-            process.close()
-        except SessionError as error:
-            raise SessionError(f"cannot close tui session {self.name}: {error}") from error
-
     def _close_other(self, record: dict, generation: str | None) -> bool:
         if generation is not None and record.get("generation") != generation:
             return False
         if _generation(self, record, wait=True) != Liveness.ABSENT:
             raise SessionBusy(self.name, CLOSE_BUSY)
-        try:
-            process = self._lookup()
-        except SessionError as error:
-            raise SessionError(f"cannot close tui session {self.name}: {error}") from error
-        self._shut(process)
+        self._shut(record["generation"])
         self._forget()
         return True
 
-    def _close(self) -> None:
+    def _shut(self, generation: str) -> None:
+        """Its ABSENT worker generation's leftovers released through its host; then its dir."""
         try:
-            process = self.process()
-        except SessionError as error:
-            raise SessionError(f"cannot close tui session {self.name}: {error}") from error
-        self._shut(process)
-
-    def _shut(self, process: Process | None) -> None:
-        try:
-            if process is not None:
-                process.close()
+            self.host._release(self.name, generation)
         except SessionError as error:
             raise SessionError(f"cannot close tui session {self.name}: {error}") from error
         self._drop()
@@ -494,7 +496,6 @@ class TuiStore:
         except FileNotFoundError:
             return
         if stat.S_ISDIR(st.st_mode) and (made is None or os.path.samestat(st, made)):
-            # A hook may outlive its terminal; retire its public path before deleting files.
             with tempfile.TemporaryDirectory(dir=self.root, prefix=".closed-") as retired:
                 os.rename(self.dir, retired)
 
@@ -593,25 +594,16 @@ def _running(name: str, host: Host) -> SessionError:
     return SessionError(f"tui session {name} is running{hint}")
 
 
-def _stale(store: TuiStore) -> Process | None:
-    """Tui session `store.name`'s dead process, else None; SessionError while it runs (an owned
-    record's generation, never its display).
-    """
+def _stale(store: TuiStore) -> str | None:
     record = _owned_record(store)
     if record is None:
-        process = store.process()
-        if process is not None and process.alive():
-            raise _running(store.name, store.host)
-        return process
+        return None
     liveness = _generation(store, record, wait=True)
     if liveness == Liveness.UNKNOWN:
         raise SessionBusy(store.name, GATE_BUSY)
     if liveness == Liveness.LIVE:
         raise _running(store.name, store.host)
-    try:
-        return store._lookup()
-    except SessionError:
-        return None
+    return record["generation"]
 
 
 @dataclass(frozen=True)
@@ -638,7 +630,9 @@ class _Start:
 
 
 class TuiMode(BaseMode):
-    """One tui session holding its terminal generation."""
+    """One tui session generation: its owner's (start: holds its worker's handle) or a read-only
+    view's (attach: a liveness source, no terminal).
+    """
 
     kind = Mode.TUI
 
@@ -652,18 +646,26 @@ class TuiMode(BaseMode):
         self,
         prepared: Prepared,
         run: Tui,
-        terminal: InteractiveProcess,
+        terminal: InteractiveProcess | None,
         store: TuiStore,
         generation: str,
         *,
+        liveness: Callable[[], Liveness] | None = None,
         cursor: Cursor = (None, 0),
         replayed: tuple[SessionEvent | Stderr | ClientBound, ...] = (),
         opening: tuple[str, str] | None = None,
-        owned: bool = False,
     ) -> None:
-        """cursor: its next hook record (TuiStore.records); owned: `terminal` is the owner's."""
+        """terminal: its owner's handle (its harness's start), which alone marks its worker's
+        activity; None: a view, whose `liveness` answers for its worker. cursor: its next hook
+        record (TuiStore.records).
+        """
         super().__init__(prepared)
         self.name, self.run, self.host, self._terminal = store.name, run, store.host, terminal
+        if terminal is not None:
+            liveness = terminal.state
+        if liveness is None:
+            raise ValueError("liveness: required for a view")
+        self._liveness = liveness
         self._store, self._replayed, self._generation = store, replayed, generation
         self._cursor, self._dialogs, self._limit, self._code = cursor, frozenset(), None, None
         self._live, self._gone = True, False
@@ -672,7 +674,7 @@ class TuiMode(BaseMode):
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
         self._absorbed, self._launching = 0, bool(prepared.spec.prompt) and not run._opening_prompt
-        self._owned, self._hook_logged = owned, False
+        self._owned, self._hook_logged = terminal is not None, False
 
     @classmethod
     def preflight(
@@ -710,7 +712,7 @@ class TuiMode(BaseMode):
             raise cls._unsupported(spec)
         name = cls.resolve_name(spec)
         spec, account = cls._selected(spec, client)
-        events = host.events_path(spec.events)
+        events = checked_events(spec.events)
         drop = identity_drop(registry)
         store = TuiStore.attach(name, host=host)
         spec, metadata = cls._hosted(
@@ -731,7 +733,7 @@ class TuiMode(BaseMode):
             metadata = {**metadata, "runtime_files": json.dumps(dict(run._runtime_files))}
         if owner is not None:
             metadata = {**metadata, "owner": owner}
-        state = _state(prepared, run, host, metadata, owner)
+        state = _state(prepared, run, host, metadata, owner, display=display)
         if field := _bad(state):
             raise SessionError(f"tui session {name}: bad {field} {state.get(field)!r:.80}")
         return _Start(prepared, run, store, state, metadata, prompt_file)
@@ -758,7 +760,7 @@ class TuiMode(BaseMode):
         prepared, run, store = pending.prepared, pending.run, pending.store
         try:
             pending.validate()
-            host.prepare_events(prepared.spec.events)
+            created_events(prepared.spec.events)
         except SessionBusy:
             raise
         except SessionError as error:
@@ -768,18 +770,10 @@ class TuiMode(BaseMode):
             try:
                 if pending.prompt_file:
                     cls._write_prompt(*pending.prompt_file)
-                if owner is not None:
-                    return host.worker(
-                        store.name,
-                        pending.launch,
-                        terminal=True,
-                        display=display,
-                        events=prepared.spec.events,
-                        metadata=pending.metadata,
-                    )
-                return host.terminal(
+                return host.worker(
                     store.name,
                     pending.launch,
+                    terminal=True,
                     display=display,
                     events=prepared.spec.events,
                     metadata=pending.metadata,
@@ -797,7 +791,12 @@ class TuiMode(BaseMode):
         _sweep(store)
         generation = pending.state["generation"]
         return cls(
-            prepared, run, terminal, store, generation, opening=run.opening, owned=owner is not None
+            prepared,
+            run,
+            terminal,
+            store,
+            generation,
+            opening=run.opening,
         )
 
     @classmethod
@@ -813,10 +812,18 @@ class TuiMode(BaseMode):
 
     @classmethod
     def attach(
-        cls, name: str, state: Mapping, client: Client, *, host: Host, sid: str | None = None
+        cls,
+        name: str,
+        state: Mapping,
+        client: Client,
+        *,
+        host: Host,
+        liveness: Callable[[], Liveness],
+        sid: str | None = None,
     ) -> Self:
-        """Tui session `name` from its snapshot() if its terminal is tagged with its sid; a fresh Tui
-        restored replays its client's record, then its hook log; events from the next record.
+        """Tui session `name`'s generation from its snapshot(), read-only: `liveness` answers for
+        its worker, which it never drives. A fresh Tui restored replays its client's record, then
+        its hook log; events from the next record.
         """
         store = TuiStore.attach(name, host=host, sid=sid)
         if sid is not None and state.get("sid") != sid:
@@ -832,11 +839,6 @@ class TuiMode(BaseMode):
             raise SessionError(f"no tui session {name}: {e}") from None
         if run is None:
             raise SessionError(f"no tui session {name}: client {state['client']!r} has no tui mode")
-        terminal = store.process()
-        if terminal is not None and not isinstance(terminal, InteractiveProcess):
-            raise SessionError(f"session {name} has no terminal")
-        if terminal is None or terminal.session_identity() != (info.sid, state["generation"]):
-            raise SessionError(f"no tui session {name}")
         spec = Spec(
             workdir=state["workdir"],
             access=Access(cwd=info.cwd),
@@ -856,9 +858,10 @@ class TuiMode(BaseMode):
         return cls(
             Prepared(spec, info),
             run,
-            terminal,
+            None,
             store,
             state["generation"],
+            liveness=liveness,
             cursor=cursor,
             replayed=(*replayed,),
         )
@@ -875,6 +878,12 @@ class TuiMode(BaseMode):
     def client_up(self) -> bool:
         return getattr(self._terminal, "up", False) is True
 
+    def _owner(self) -> InteractiveProcess:
+        """Its owner's handle; a view has none: its input and screen are its harness's."""
+        if self._terminal is None:
+            raise SessionError(f"session {self.name}: its harness is gone")
+        return self._terminal
+
     @property
     def replayed(self) -> tuple[SessionEvent | Stderr | ClientBound, ...]:
         """Attached: its client record's, then its hook log's events so far."""
@@ -886,19 +895,16 @@ class TuiMode(BaseMode):
 
     def marked_blocked(self) -> bool:
         """False, too, when its terminal cannot tell."""
-        try:
-            return self._terminal.activity() == StatusState.BLOCKED
-        except SessionError:
-            return False
+        return activity(self.name, self._generation) == StatusState.BLOCKED
 
     def poll(self, timeout: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
         self._drain()
         found = self._read()
         if not found and not self._gone:
-            state = self._terminal.state()
-            if not self._replaced(state) and state != Liveness.UNKNOWN:
-                code = self._terminal.returncode()
-                if state == Liveness.ABSENT and code is None:  # an owner's: removed unconfirmed
+            state = self._liveness()
+            if not self._replaced() and state != Liveness.UNKNOWN:
+                code = None if self._terminal is None else self._terminal.returncode()
+                if state == Liveness.ABSENT and code is None:  # removed unconfirmed, or a view's
                     code = -signal.SIGHUP
                 if code is not None:
                     self._code = code
@@ -913,11 +919,12 @@ class TuiMode(BaseMode):
                         self._active_turn = False
                     self._end()
                     return final, True
-                with contextlib.suppress(SessionError):
-                    screen = self._terminal.screen()
-                    found = self._read()
-                    if not found and not self._gone and not self._replaced(self._terminal.state()):
-                        found = self._scan(screen)
+                if self._terminal is not None:
+                    with contextlib.suppress(SessionError):
+                        screen = self._terminal.screen()
+                        found = self._read()
+                        if not found and not self._gone:
+                            found = self._scan(screen)
         self._open()
         deadline = time.monotonic() + timeout
         while not found and not self._gone and (left := deadline - time.monotonic()) > 0:
@@ -927,7 +934,7 @@ class TuiMode(BaseMode):
         return found, self._gone
 
     def _drain(self) -> None:
-        if not self._owned:
+        if self._terminal is None:
             return
         for message in self._terminal.read(0):  # its exit code: the handle's returncode()
             if isinstance(message, WorkerHook) and not self._hook_logged:
@@ -948,11 +955,11 @@ class TuiMode(BaseMode):
         if self._held or self._active_turn or self._launching or now < self._checked + POLL_SCREEN:
             return
         self._checked = now
+        terminal = self._owner()
         try:
-            if self._shown(self._terminal.screen()):
+            if self._shown(terminal.screen()):
                 return
-            # may be cached until alive()
-            if not self._terminal.alive() or self._shown(self._terminal.screen()):
+            if terminal.state() != Liveness.LIVE or self._shown(terminal.screen()):
                 return
         except NotShowable:
             pass
@@ -986,13 +993,16 @@ class TuiMode(BaseMode):
             return []
         records, end = self._store.stamped(self._cursor)
         observed = self.run.observe()
-        if end == self._cursor and not observed or self._replaced(self._terminal.state()):
+        if end == self._cursor and not observed or self._replaced():
             return []
         self._cursor = end
         if self._opening is not None and any(label == self._opening[0] for label, *_ in records):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
         for label, payload, marker in records:
+            kind = self.run.hooks.get(label)
+            if kind is not None and (word := WORDS.get(kind)) is not None:
+                self._mark(word)
             events = self.run.hook_events(label, payload)
             if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):
                 self._absorbed = max(self._absorbed, _sends(marker, self._generation)[1])
@@ -1000,19 +1010,12 @@ class TuiMode(BaseMode):
         self._track(found)
         return found
 
-    def _replaced(self, state: Liveness) -> bool:
-        """Ended once another terminal holds its name or session.json is another generation's."""
+    def _replaced(self) -> bool:
+        """A view ended once session.json is gone or another generation's (its liveness saying
+        ABSENT ends it in poll).
+        """
         if self._owned:
             return False
-        if state == Liveness.ABSENT:
-            try:
-                replacement = self._store.process()
-            except SessionError:
-                self._end()
-                return True
-            if replacement is not None and replacement.identity != self._terminal.identity:
-                self._end()
-                return True
         try:
             current = self._store.read()
         except SessionError:
@@ -1037,7 +1040,7 @@ class TuiMode(BaseMode):
         if limit is not None and self._limit is None:
             found.append(limit)
         if shown - self._dialogs:
-            self._mark_blocked()
+            self._mark(StatusState.BLOCKED, again=False)
         self._dialogs, self._limit = shown, limit
         self._track(found)
         return found
@@ -1045,17 +1048,20 @@ class TuiMode(BaseMode):
     def _shown(self, screen: str) -> frozenset[str]:
         return frozenset(d for d in self.run.dialogs if self.run.shows(d, screen))
 
-    def _mark_blocked(self) -> None:
-        with contextlib.suppress(SessionError):
-            if self._terminal.activity() != StatusState.BLOCKED:
-                self._terminal.mark(StatusState.BLOCKED, self.prepared.spec.events)
+    def _mark(self, word: StatusState, *, again: bool = True) -> None:
+        """Its owner's alone (a view never marks); not again: only when its word differs."""
+        if self._owned and (again or activity(self.name, self._generation) != word):
+            try:
+                self._store.set_activity(self._generation, word, self.prepared.spec.events)
+            except (OSError, ValueError) as error:
+                LOG.warning("tui session %s: mark %s: %s", self.name, word, error)
 
     def returncode(self, timeout: float) -> int | None:
         deadline = time.monotonic() + timeout
         while self._code is None:
             self._drain()
-            self._code = self._terminal.returncode()
-            if self._code is None and self._terminal.state() == Liveness.ABSENT:
+            self._code = None if self._terminal is None else self._terminal.returncode()
+            if self._code is None and self._liveness() == Liveness.ABSENT:
                 self._code = -signal.SIGHUP
             if self._code is None:
                 if (left := deadline - time.monotonic()) <= 0:
@@ -1065,15 +1071,13 @@ class TuiMode(BaseMode):
 
     def state(self) -> Liveness:
         self._store.check()
-        return self._terminal.state()
+        return self._liveness()
 
     def client_alive(self) -> bool:
-        """Its client runs, its terminal probed afresh: state() may reuse a probe and stays LIVE
-        while its ended client's terminal is kept.
-        """
+        """Its client runs, its worker's liveness asked afresh."""
         self._store.check()
         try:
-            return self._terminal.alive()
+            return self._liveness() == Liveness.LIVE
         except SessionError:  # it cannot tell
             return False
 
@@ -1084,9 +1088,10 @@ class TuiMode(BaseMode):
 
     def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:
         """Failing after the first action: Unanswered. prompted: marks it begun, then submitted."""
+        terminal = self._owner()
         for index, action in enumerate(actions):
             try:
-                self._terminal.send(action)
+                terminal.send(action)
             except SessionError as error:
                 if index == 0:
                     raise
@@ -1101,12 +1106,12 @@ class TuiMode(BaseMode):
     def press(self, keys: Sequence[KeyPress]) -> None:
         with self._store.sending():
             self._running()
-            self._terminal.press(keys)
+            self._owner().press(keys)
 
     def screen(self, lines: int | None = None) -> str:
         self._running()
         try:
-            return self._terminal.screen(lines)
+            return self._owner().screen(lines)
         except NotShowable:
             raise SessionError(f"host {self.host.name} cannot show") from None
 
@@ -1115,21 +1120,17 @@ class TuiMode(BaseMode):
         return isinstance(self._terminal, ManagedProcess) and self._terminal.redisplay()
 
     def _running(self) -> None:
+        """A view has no input or screen of its own; an owner's worker must run."""
         self._store.check()
-        if not self._terminal.alive():
+        if self._owner().state() != Liveness.LIVE:
             raise SessionError(f"tui session {self.name} is not running")
 
     def close(self) -> bool:
-        return self._store.close(self._terminal if self._owned else None, self._generation)
+        return self._store.close(self._terminal, self._generation)
 
     def stop(self) -> None:
         """Once, unless it raises; then ends (returncode: the code seen, else -SIGHUP)."""
         if self._live:
-            self._store.stop(
-                self._terminal,
-                self.prepared.spec.sid,
-                owned=self._owned,
-                generation=self._generation,
-            )
+            self._store.stop(self._terminal, generation=self._generation)
             self._live = False
         self._end()

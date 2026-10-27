@@ -2,10 +2,9 @@
 
 import json
 import os
-import sys
 from pathlib import Path
 
-from ensemble.session import Exited, Launch, SessionStatusLog, TurnEnd
+from ensemble.session import Exited, SessionStatusLog, TurnEnd
 from ensemble.session.engine.types import Activity, Blocked
 from ensemble.session.modes import tui
 from tests.session import live_tmux
@@ -47,7 +46,7 @@ class HookLifecycleTest(Live):
         )
         stream = Stream(self, session)
         self.assertEqual(stream.next(idle=False), Activity(""))
-        live_tmux.wait(lambda: self.server.option(name, "@state") == "working", what="working mark")
+        live_tmux.wait(lambda: live_tmux.activity(name) == "working", what="working mark")
         self.assert_events(self.events, name)
 
         session.send("done")
@@ -91,26 +90,3 @@ class HookLifecycleTest(Live):
         tui.TuiStore.attach(name, host=self.session_cls.host()).close()
         self.assertEqual(self.session_cls.list(name), [])
         self.assert_events(self.events, name, "dead")
-
-    def test_successful_detach_writes_one_exit_event_before_its_session_is_forgotten(self):
-        name = "successful-detach"
-        host = self.session_cls.host()
-        process = host.detach(
-            name,
-            Launch((sys.executable, "-I", "-c", "pass"), env=self.server.env(), cwd=self.home),
-            events=self.events,
-        )
-        self.addCleanup(process.close)
-
-        def forgotten():
-            self.poke()
-            if name in host.list():
-                return False
-            self.assert_events(self.events, name, "exited 0")
-            return True
-
-        live_tmux.wait(forgotten, what="successful detach removed after its exit event")
-        self.assertTrue(process.wait_exit(0))
-        self.assertFalse(process.alive())
-        self.poke()
-        self.assert_events(self.events, name, "exited 0")

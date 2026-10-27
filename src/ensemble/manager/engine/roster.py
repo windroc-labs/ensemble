@@ -572,15 +572,6 @@ class Roster:
         data["entries"][name] = asdict(updated)
         return updated
 
-    def mark(self, name: str, state: State) -> None:
-        with self._locked() as data:
-            self._lease(data)
-            try:
-                target = State(state)
-            except ValueError as error:
-                raise RosterError(f"{name}: unknown state {state!r}") from error
-            self._mark(data, name, target)
-
     def mark_if(self, name: str, expected: Entry, state: State) -> bool:
         with self._locked() as data:
             self._lease(data)

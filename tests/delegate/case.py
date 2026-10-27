@@ -45,7 +45,8 @@ def packaged(**dependencies) -> type[Session]:
 class Case(unittest.TestCase):
     """Fails a test whose ensemble is not exactly this tree's, else runs it (whatever its setUp) in
     a fresh temp HOME, self.home (self.ensemble: its .ensemble), a fresh session class
-    (self.session_cls) and its FakeDriver, minus CALLER_SESSION.
+    (self.session_cls) and its FakeDriver, minus CALLER_SESSION; a start of a class with injected
+    callables runs its session harness on a thread (harnesses.Threaded), joined at its end.
     """
 
     def run(self, result=None):
@@ -61,6 +62,7 @@ class Case(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as self.home,
             mock.patch.dict(os.environ, {"HOME": self.home, "ENSEMBLE_CONTROL_ROOT": self.home}),
+            harnesses.joined(),
         ):
             for key in CALLER_SESSION:
                 os.environ.pop(key, None)

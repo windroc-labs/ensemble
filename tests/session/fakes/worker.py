@@ -50,23 +50,8 @@ class ScriptedWorker(InteractiveProcess):
             return None
         return self.codes.popleft() if self.codes else self.code
 
-    def alive(self):
-        return self.state() == Liveness.LIVE
-
-    def wait_exit(self, timeout):
-        return not self.alive()
-
-    def kill(self):
-        self.close()
-
     def send(self, action):
         raise NotShowable(f"worker {self.name}: headless")
 
     def press(self, keys):
         raise NotShowable(f"worker {self.name}: headless")
-
-    def record(self):
-        return None
-
-    def display(self):
-        return None

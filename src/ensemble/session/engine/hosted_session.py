@@ -66,7 +66,7 @@ from ensemble.session.harness.channel import running as channel_running
 from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, dialog, fold
-from ensemble.session.hosts.base import SIGNALS, Host, host_resume
+from ensemble.session.hosts.base import SIGNALS, Host, activity, host_resume, stored_record
 from ensemble.session.modes import headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env
 from ensemble.session.viewer import display as displays
@@ -264,32 +264,49 @@ def _reconstructible(setup: _Setup) -> bool:
     )
 
 
-def _owned(setup: _Setup, mode: Mode, client: Client, on: Host) -> bool:
-    """An in_process start, or an owned client's tui or headless start on a harnessed Host; a
-    remote tui only for a client owned there.
+def _check_owned(mode: Mode, client: Client, on: Host, client_name: str) -> None:
+    """Every start runs under a session harness: refuses one no harness can run (a Host without
+    managed workers, a remote tui its client cannot be).
     """
-    if not _reconstructible(setup):
-        return False
     if mode == Mode.IN_PROCESS:
-        return client.in_process() is not None
-    if not on._harnessed:
-        return False
-    run = {Mode.TUI: client.tui, Mode.HEADLESS: client.headless}.get(mode, lambda: None)()
-    if run is None or not run._owned:
-        return False
-    return mode != Mode.TUI or not on._remote_tui or run._remote_owned
+        return
+    if type(on).worker is Host.worker:
+        raise _harness_only(client_name, mode, on)
+    run = client.tui() if mode == Mode.TUI and on._remote_tui else None
+    if run is not None and not run._remote_owned:
+        raise _harness_only(client_name, mode, on)
 
 
 def _terminal_less(mode: Mode) -> bool:
     return mode != Mode.TUI
 
 
+def _liveness(name: str, generation: str, on: Host) -> Callable[[], Liveness]:
+    """A read-only attach's liveness source for tui worker `name`'s `generation`: LIVE while its
+    bound owner runs it; else (its harness gone or done) its Host's worker_liveness.
+    """
+
+    def liveness() -> Liveness:
+        try:
+            state = tui.TuiMode.snapshot(name)
+        except SessionError:
+            state = None
+        try:
+            if (
+                state is not None
+                and state.get("generation") == generation
+                and channel_running(name, state) is not None
+            ):
+                return Liveness.LIVE
+            return on.worker_liveness(name, generation)
+        except SessionError:
+            return Liveness.UNKNOWN
+
+    return liveness
+
+
 def _harness_only(client: str, mode: Mode, on: Host) -> ConfigError:
     return ConfigError(f"{client} {mode} on host {on.name}: runs only under a session harness")
-
-
-def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
-    return ConfigError(f"handlers: {client} {mode} on host {on.name} has no session harness yet")
 
 
 def _refuse_running(name: str, on: Host) -> None:
@@ -306,11 +323,16 @@ def _refuse_running(name: str, on: Host) -> None:
 
 def _resume_check(spec: Spec, client: Client, name: str, on: Host) -> None:
     """An owned resume of a conversation its client keeps no transcript of is refused, never
-    started as a new empty one (FR-18); unknown goes on. A container Host checks its own.
+    started as a new empty one (FR-18); unknown goes on. A container Host checks its own. Its run
+    log's record of the conversation is checked, as inspect does, else the spec's cwd.
     """
     if not spec.resume or spec.sid is None or on._client_context().container:
         return
-    info = SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", "")
+    try:
+        recorded = RunLog(spec.workdir).session(spec.sid)
+    except OSError:
+        recorded = None
+    info = recorded or SessionInfo(spec.sid, spec.access.cwd, spec.access.project, "", "")
     if _resumable(lambda: client, info, spec).resumable == Resumable.NO:
         raise ConfigError(f"session {name}: conversation {spec.sid} has no transcript to resume")
 
@@ -431,14 +453,10 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
-        owned = _owned(setup, mode, client, on)
-        if not owned and not on._unowned:
-            raise _harness_only(client_name, mode, on)
-        if spec.handlers and not owned:
-            raise _unharnessed(client_name, mode, on)
+        _check_owned(mode, client, on, client_name)
         cls.viewer()
         displays.validate_display(display, on)
-        if mode == Mode.TUI and owned:
+        if mode == Mode.TUI:
             name = tui.TuiMode.resolve_name(spec)
             _refuse_running(name, on)
             _resume_check(spec, client, name, on)
@@ -460,28 +478,21 @@ class HostedSession(Session):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
-        """spec.sid: its id, else a new one; display: kept by its Host. An owned start runs under a
+        """spec.sid: its id, else a new one; display: kept by its Host. Every start runs under a
         session harness of its own and returns its control view.
         """
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
         on, client = cls.host(host), setup.registry.client(client_name)
         _environment_check(spec, on, mode)
-        if not _owned(setup, mode, client, on):
-            if not on._unowned:
-                raise _harness_only(client_name, mode, on)
-            if spec.handlers:
-                raise _unharnessed(client_name, mode, on)
-            return cls._begin(
-                spec, display=display, host=host, idle_timeout=idle_timeout, client=client
-            )
+        _check_owned(mode, client, on, client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         if mode == Mode.TUI:
             spec = replace(spec, name=tui.TuiMode.resolve_name(spec))
             assert spec.name is not None
             _refuse_running(spec.name, on)
             _resume_check(spec, client, spec.name, on)
-        else:  # an unowned start's refusals, before any harness
+        else:  # its refusals before any harness
             cls.preflight(spec, display=display, host=host, idle_timeout=idle_timeout)
         return cls._spawn(spec, mode, display=display, host=host, idle_timeout=idle_timeout)
 
@@ -495,8 +506,15 @@ class HostedSession(Session):
         host: str | None,
         idle_timeout: float | None,
     ) -> Session:
-        """Its view once a new harness runs it; else the start error or stop, nothing left."""
+        """Its view once a new harness runs it; else the start error or stop, nothing left. The
+        harness process builds its session class from configuration: injected callables are refused.
+        """
         assert spec.client is not None and spec.sid is not None
+        if not _reconstructible(cls._config()):
+            raise ConfigError(
+                f"{spec.client} {mode}: runs only under a session harness, which builds its "
+                "session class from configuration, not injected callables"
+            )
         roots = cls._roots(spec.client)
         request = cls.harness_request(spec, display=display, host=host, roots=roots)
         channel = Channel.create()
@@ -699,12 +717,11 @@ class HostedSession(Session):
         display: Display = None,
         host: str | None = None,
         idle_timeout: float | None = None,
-        owner: str | None = None,
-        client: Client | None = None,
+        owner: str,
     ) -> HostedSession:
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
-        client = client or setup.registry.client(client_name)
+        client = setup.registry.client(client_name)
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
@@ -795,14 +812,16 @@ class HostedSession(Session):
         idle_timeout: float | None = None,
     ) -> Session:
         """Tui session `name`, from any process; its client record and hook log replayed into its
-        reply and blocked, blocked too while its terminal is marked so. A worker its session
-        harness owns: that owner's control view.
+        reply and blocked, blocked too while its activity says so. A worker its session harness
+        runs: that owner's control view; else the read-only attach of its worker state.
         """
         cls._config()
         tui.checked_name(name)
         _idle(idle_timeout)
-        cls.host(host)
+        on = cls.host(host)
         state = tui.TuiMode.snapshot(name)
+        if state.get("host") != on.name and name not in on.list():  # another table's, no alias
+            raise SessionError(f"no tui session {name} on host {on.name}")
         if sid is not None and state.get("sid") != sid:
             raise SessionError(
                 f"session {name}: expected sid {sid!r}, found {state.get('sid')!r} in session.json"
@@ -833,7 +852,9 @@ class HostedSession(Session):
         idle_timeout: float | None = None,
         generation: str | None = None,
     ) -> HostedSession:
-        """With `generation` (a view's): read-only, that generation only."""
+        """Holds no handle of its worker: its liveness from its owner, else its Host's
+        worker_liveness. With `generation` (a view's): read-only, that generation only.
+        """
         setup = cls._config()
         tui.checked_name(name)
         _idle(idle_timeout)
@@ -845,7 +866,14 @@ class HostedSession(Session):
             client = setup.registry.client(state["client"])
         except ConfigError as e:
             raise SessionError(f"no tui session {name}: {e}") from None
-        running = tui.TuiMode.attach(name, state, client, host=on, sid=sid)
+        running = tui.TuiMode.attach(
+            name,
+            state,
+            client,
+            host=on,
+            liveness=_liveness(name, state["generation"], on),
+            sid=sid,
+        )
         session = cls(
             state["client"],
             Mode.TUI,
@@ -915,6 +943,7 @@ class HostedSession(Session):
             replay=replay,
             mode=mode,
             tie=tie,
+            clock=cls._config().clock,
         )
 
     @classmethod
@@ -1201,14 +1230,15 @@ class HostedSession(Session):
         return self._running.client_alive()
 
     def status(self) -> Status:
-        """Its run's; a live tui one's activity, attach and hidden from its terminal."""
+        """Its run's; a live tui one's state from its worker dir's activity, attach and hidden
+        from its Viewer.
+        """
         liveness, name = self._running.state(), self._tui()
         if liveness == Liveness.LIVE and name is not None:
-            try:
-                found = displays.status(self._viewer, self._host, self._host.attach(name))
-                return replace(found, cwd=self._info.cwd)
-            except SessionError:
-                liveness = Liveness.ABSENT
+            generation = self._running.generation
+            word = None if generation is None else activity(name, generation)
+            found = displays.status(self._viewer, self._host, name, self.sid, word)
+            return replace(found, cwd=self._info.cwd) if found.alive else found
         return Status(
             name=self.name or self.sid,
             alive=liveness == Liveness.LIVE,
@@ -1285,9 +1315,10 @@ class HostedSession(Session):
         return host_resume(self._host, self.name, cwd)
 
     def record(self) -> Record | None:
+        """Its crew Record, stored in its worker dir for its generation."""
         self._running.state()
-        name = self._tui()
-        return None if name is None else self._host.attach(name).record()
+        name, generation = self._tui(), self._running.generation
+        return None if name is None or generation is None else stored_record(name, generation)
 
     @property
     def showable(self) -> bool:

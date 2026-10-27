@@ -19,7 +19,6 @@ from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
-# Installed by src/broker/install.sh.
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 PROTOCOL = "30"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
@@ -540,11 +539,6 @@ def write_manifest(
     lock_owner: str | None = None,
     prefetch: Mapping[str, str] | None = None,
 ) -> None:
-    """The start manifest, 0600; home: (its manifest field, the client home's path); github: the
-    App whose tokens the container gets, "": none; permissions: each token's repository
-    permissions; providers: those whose API keys it gets; account: the one whose credential it
-    gets, "": the default. An environment's gateway, secrets, lock and prefetch go in when set.
-    """
     field, home_path = home
     client = field.removesuffix("_dir")
     manifest = {

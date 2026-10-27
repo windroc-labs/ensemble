@@ -10,22 +10,10 @@ from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import PaneStatus
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer.viewer import Viewer
-from ensemble.utils import ProcessControl, Record
+from ensemble.utils import ProcessControl
 from tests.session.case import Case
 from tests.session.tmux_fixtures import FakeTmux, which
 
-LINE = Record(
-    1,
-    "role",
-    "r1",
-    ("r1",),
-    None,
-    "/w",
-    ("ensemble-delegate",),
-    ("ensemble-delegate", "resume", "/w"),
-    None,
-    None,
-)
 PROCESS = "4242 $3 %7 4343"
 
 
@@ -38,10 +26,9 @@ def fake_tmux(runner: FakeTmux) -> mock.Mock:
     tmux.checked.side_effect = TmuxCli(runner).checked
     tmux.sessions.side_effect = TmuxCli(runner).sessions
     tmux.status.return_value = PaneStatus.RUNNING
-    tmux.process_status.side_effect = lambda target: (tmux.process(target), tmux.status(target))
     tmux.listing.return_value = []
     tmux.option.return_value = None
-    tmux.detach.return_value = tmux.process.return_value = PROCESS
+    tmux.process.return_value = PROCESS
     return tmux
 
 
@@ -75,8 +62,6 @@ class Base(Case):
             if key == "@process"
             else self.tmux.option.return_value
         )
-        self.tmux.detach.side_effect = self.detached
-        self.tmux.start.side_effect = self.terminal_started
         self.socket = self.enterContext(mock.patch("socket.socket"))
         self.connection = self.socket.return_value.__enter__.return_value
         self.connection.makefile.return_value.__enter__.return_value.readline.return_value = (
@@ -103,21 +88,3 @@ class Base(Case):
     @staticmethod
     def completed(path):
         Path(path, "state.json").write_text(json.dumps({"started": {"started": True}, "done": 0}))
-
-    def detached(self, *_args, **kw):
-        self.control = ProcessControl(kw["control"])
-        self.addCleanup(self.control.remove)
-        Path(self.control.path, "state.json").write_text('{"started": {"started": true}}')
-        return PROCESS
-
-    def terminal_started(self, *_args, **kw):
-        self.kind = "terminal"
-        return self.detached(control=kw["tags"]["@control"])
-
-    def active(self, *responses):
-        self.controlled = True
-        Path(self.control.path, "state.json").write_text('{"started": {"started": true}}')
-        stream = self.connection.makefile.return_value.__enter__.return_value
-        stream.readline.side_effect = [
-            json.dumps(response).encode() + b"\n" for response in responses
-        ]

@@ -9,7 +9,7 @@ from unittest import mock
 from ensemble.session import Host, SessionError, Viewer
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, Liveness, SessionRow, StatusState
-from ensemble.session.hosts.base import InteractiveProcess
+from ensemble.session.hosts.base import InteractiveProcess, worker_state
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.session.viewer.placement import Placement
@@ -122,12 +122,11 @@ class ScreenTerminal(MemoryTerminal):
 class MemoryHost(Host):
     terminal_class = MemoryTerminal
 
-    def __init__(self, name="memory", *, hook=None):
+    def __init__(self, name="memory"):
         super().__init__(name)
         self.calls = mock.Mock()
         self.processes = {}
         self.serial = 0
-        self.hook = hook
         self.calls.list.return_value = None
         self.calls.worker_liveness.return_value = Liveness.ABSENT
 
@@ -145,21 +144,6 @@ class MemoryHost(Host):
     def validate(self, name, launch: Launch):
         self.calls.validate(name, launch)
         super().validate(name, launch)
-
-    def hook_callback(self, name, metadata):
-        self.calls.hook_callback(name, metadata)
-        return self.hook
-
-    def terminal(
-        self, name, launch: Launch, *, display=None, events=None, record=None, metadata=None
-    ):
-        self.calls.terminal(
-            name, launch, display=display, events=events, record=record, metadata=metadata
-        )
-        if events:
-            fd = os.open(events, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            os.close(fd)
-        return self.create(name, receipt=record, metadata=metadata, display=display)
 
     def worker(self, name, launch: Launch, *, terminal, display=None, events=None, metadata=None):
         """A managed worker: one MemoryTerminal is both its owner handle and its display."""
@@ -181,14 +165,16 @@ class MemoryHost(Host):
         """calls.worker_liveness's answer: ABSENT unless a test sets it."""
         return self.calls.worker_liveness(name, generation)
 
-    def detach(self, name, launch: Launch, *, display=None, events=None, record=None):
-        self.calls.detach(name, launch, display=display, events=events, record=record)
-        return self.create(
-            name, sid=None if record is None else record.sid, receipt=record, display=display
-        )
+    def _release(self, name, generation):
+        """calls.release; its session of `name` closed while it is `generation`'s (a display)."""
+        self.calls.release(name, generation)
+        process = self.processes.get(name)
+        if process is not None and process.session_identity()[1] == generation:
+            process.close()
 
-    def attach(self, name):
-        self.calls.attach(name)
+    def process(self, name):
+        """Its terminal of `name` (calls.process first: a test's race), else SessionError."""
+        self.calls.process(name)
         if name not in self.processes:
             raise SessionError(f"no {self.name} session {name}")
         return self.processes[name]
@@ -196,6 +182,16 @@ class MemoryHost(Host):
     def list(self):
         listed = self.calls.list()
         return sorted(self.processes) if listed is None else listed
+
+    def rows(self):
+        rows = []
+        for name in self.list():
+            try:
+                rows.append(self.process(name).row())
+            except SessionError:
+                if name in self.list():
+                    raise
+        return rows
 
 
 class ScreenHost(MemoryHost):
@@ -227,8 +223,8 @@ class MemoryViewer(Viewer):
         self.placement = self._placement = mock.create_autospec(Placement, instance=True)
 
     def show(self, name, host, *, display=None, command=None):
-        if display is None:
-            display = host.attach(name).display()
+        if display is None and (state := worker_state(name)) is not None:
+            display = state.display
         return host.calls.show(name, display=display, command=command)
 
     def hide(self, name, host, *, if_closed=False):

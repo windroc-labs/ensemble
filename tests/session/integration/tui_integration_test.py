@@ -12,7 +12,9 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
 import threading
+import time
 import unittest
 from collections.abc import Iterator
 from unittest import mock
@@ -55,23 +57,6 @@ event = next(e for e in handle.events() if not isinstance(e, IdleTimeout))
 print(json.dumps([*before, repr(event), handle.reply]))
 """
 CLOSE = "import sys; from ensemble.session import Host, Session; Session.configure(clients={}, hosts=Host.parse_hosts({'default': 'tmux', 'tmux': {'implementation': 'ensemble.session.hosts.tmux:TmuxHost'}})); Session.retire(sys.argv[1])"
-SLOW_CLOSE = """import sys, time, tempfile
-from unittest import mock
-from ensemble.session import Host, Session
-remove = tempfile.TemporaryDirectory.cleanup
-def slow(retired):
-    open(sys.argv[2], "w").close()
-    time.sleep(1)
-    remove(retired)
-with mock.patch.object(tempfile.TemporaryDirectory, "cleanup", slow):
-    Session.configure(
-        clients={},
-        hosts=Host.parse_hosts(
-            {"default": "tmux", "tmux": {"implementation": "ensemble.session.hosts.tmux:TmuxHost"}}
-        ),
-    )
-    Session.retire(sys.argv[1])
-"""
 
 
 class TuiTest(Live):
@@ -90,10 +75,8 @@ class TuiTest(Live):
         )
         self.assertEqual(len(self.server.panes(f"={MANAGER}:")), 1)
         self.assertEqual(self.server.option("w1", "@sid"), SID)
-        self.assertEqual(
-            [(r["kind"], r["sid"]) for r in RunLog(self.workdir).read()],
-            [("session", SID)],
-        )
+        first = RunLog(self.workdir).read()[0]  # its harness may have bound the client since
+        self.assertEqual((first["kind"], first["sid"]), ("session", SID))
         self.assertEqual(tui.TuiMode.snapshot("w1")["sid"], SID)
         stream = Stream(self, handle)
         # Hook processes can exceed IDLE between tool and stop on a loaded runner.
@@ -106,7 +89,7 @@ class TuiTest(Live):
             [("session", None), ("client_session", "n1")],
         )
         self.lines("w1 done")
-        self.assertEqual(self.server.option("w1", "@state"), "done")
+        self.assertEqual(live_tmux.activity("w1"), "done")
 
         handle.send("go")
         self.assertEqual(stream.next(idle=False), Blocked(""))
@@ -160,14 +143,14 @@ class TuiTest(Live):
         for start in starts:
             start.assert_not_called()
 
-    def test_a_client_exit_ends_with_its_code_the_session_live_until_close(self):
+    def test_a_client_exit_ends_with_its_code_the_session_listed_dead_until_close(self):
         handle = self.start("w2", {"hook": "stop", "payload": {"last_message": "bye"}}, {"exit": 3})
         stream = Stream(self, handle)
         self.assertEqual(stream.next(), TurnEnd("bye", 0))
         self.assertEqual(stream.next(poke=self.poke), Exited(3))
         self.lines("w2 done", "w2 dead")
-        self.assertEqual(
-            (handle.alive(), [r.state for r in self.session_cls.list("w2")]), (True, ["dead"])
+        self.assertEqual(  # not alive: its worker ended, its display kept till close
+            (handle.alive(), [r.state for r in self.session_cls.list("w2")]), (False, ["dead"])
         )
         tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
         self.assertEqual((handle.alive(), self.session_cls.list("w2")), (False, []))
@@ -185,8 +168,7 @@ class TuiTest(Live):
         self.addCleanup(os.chmod, self.server.socket, mode)
         with self.assertRaisesRegex(SessionError, "^tmux sessions unknown: "):
             self.session_cls.list("w.*")
-        self.assertEqual(handle.status().state, "unknown")
-        stream.quiet(1.0)
+        stream.quiet(1.0)  # its harness, not tmux, supervises the worker
         os.chmod(self.server.socket, mode)
         self.assertEqual([r.name for r in self.session_cls.list("w3")], ["w3"])
         handle.stop()
@@ -202,30 +184,23 @@ class SplitTest(Live):
             {"read": True},
             sid=SID,
         )
-        client = self.active("w5")
         added = self.server.tmux(
             "split-window", "-P", "-F", "#{pane_id}", "-t", "=w5:", *live_tmux.IDLE
         )
         self.assertEqual(added.returncode, 0, added.stderr)
         other = added.stdout.strip()
-        self.assertEqual(self.active("w5"), other)
+        self.assertEqual(self.active("w5"), other)  # its client's pane no longer active
 
         attached = self.session_cls.attach("w5")
         attached.send("ping")
         self.lines("w5 done")
         self.assertNotIn("ping", self.server.tmux("capture-pane", "-p", "-t", other).stdout)
-        host = self.session_cls.host()
-        status = host.attach("w5")
-        self.assertEqual(
-            (status.identity.split(" ")[2], status.alive(), status.activity()),
-            (client, True, "done"),
-        )
+        self.assertEqual((attached.alive(), live_tmux.activity("w5")), (True, "done"))
 
         attached.stop()
-        panes = self.server.tmux("list-panes", "-s", "-t", "=w5:", "-F", "#{pane_id}")
-        self.assertEqual(panes.returncode, 0, panes.stderr)
-        self.assertEqual(panes.stdout.split(), [other])
-        self.assertFalse(os.path.lexists(tui.TuiStore.attach("w5", host=host).dir))
+        self.assertFalse(
+            os.path.lexists(tui.TuiStore.attach("w5", host=self.session_cls.host()).dir)
+        )
 
     def active(self, session: str) -> str:
         found = self.server.tmux("display-message", "-p", "-t", f"={session}:", "#{pane_id}")
@@ -267,7 +242,7 @@ class SameNameTest(Live):
         self.assertEqual(stream.next(), Blocked(DIALOG))
         self.lines(f"{name} blocked", events=mine)
         self.lines(f"{name} done")
-        self.assertEqual((new.alive(), self.server.option(name, "@state")), (True, "blocked"))
+        self.assertEqual((new.alive(), live_tmux.activity(name)), (True, "blocked"))
 
     def test_a_restart_after_stop(self):
         old, events = self.old("w4")
@@ -352,17 +327,24 @@ class SameNameTest(Live):
 
     def test_a_close_from_another_process_then_a_start_of_its_name_keeps_the_new_sessions_dir(self):
         self.start("w7", {"read": True})
-        killed = os.path.join(self.dir, "killed")
-        closer = subprocess.Popen(
-            [*PY, "-c", SLOW_CLOSE, "w7", killed],
-            env=self.server.child_env(),
-            text=True,
-            stdin=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        live_tmux.wait(lambda: os.path.exists(killed), what="the close's kill")
-        new = self.start("w7", {"read": True})
-        self.assertEqual((closer.communicate(timeout=WAIT)[1], closer.returncode), ("", 0))
+        retiring, remove = threading.Event(), tempfile.TemporaryDirectory.cleanup
+
+        def slow(retired):  # its owner's removal of the closed dir, on its harness thread here
+            retiring.set()
+            time.sleep(1)
+            remove(retired)
+
+        with mock.patch.object(tempfile.TemporaryDirectory, "cleanup", slow):
+            closer = subprocess.Popen(
+                [*PY, "-c", CLOSE, "w7"],
+                env=self.server.child_env(),
+                text=True,
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            self.assertTrue(retiring.wait(WAIT), "the close's removal")
+            new = self.start("w7", {"read": True})
+            self.assertEqual((closer.communicate(timeout=WAIT)[1], closer.returncode), ("", 0))
         self.assertEqual((new.alive(), tui.TuiMode.snapshot("w7")["sid"]), (True, new.sid))
 
 

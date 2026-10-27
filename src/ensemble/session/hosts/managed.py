@@ -54,8 +54,8 @@ KEYS = {
 def key_bytes(key: KeyPress) -> bytes:
     if len(key.key) == 1:
         text = key.key.upper() if key.shift else key.key
-        if key.ctrl and text in (" ", "?"):
-            value = b"\x00" if text == " " else b"\x7f"
+        if key.ctrl and text in (" ", "/", "?"):
+            value = {" ": b"\x00", "/": b"\x1f", "?": b"\x7f"}[text]
         else:
             value = (
                 bytes([ord(text.upper()) & 31])
@@ -112,7 +112,6 @@ class ManagedProcess(InteractiveProcess):
                 self.failure = reason
                 self.messages.clear()
                 self.size = 0
-                # Unbuffered FileIO.close never waits for a consumer or a buffered flush.
                 self.proc.stdin.close()
                 self.condition.notify_all()
                 self._ended()
@@ -235,9 +234,6 @@ class ManagedProcess(InteractiveProcess):
             return found
 
     def release_hook(self) -> None:
-        """The h just taken: its guard may ack its hook, so the client goes on only after
-        accept_hook. Its k is written on a thread of its own: this reader never waits on `sending`.
-        """
         with self.condition:
             self.releases += 1
             if self.releaser is None:
@@ -342,7 +338,6 @@ class ManagedProcess(InteractiveProcess):
         request = json.dumps({"lines": lines}).encode()
         with self.query:
             with self.condition:
-                # A timed-out query still owns the next reply on this ordered channel.
                 self.condition.wait_for(
                     lambda: not self.view_pending or self.failure is not None, GUARD_WAIT
                 )
@@ -410,23 +405,3 @@ class ManagedProcess(InteractiveProcess):
             thread.join(timeout=GUARD_WAIT)
             if thread.is_alive():
                 raise Unanswered(f"worker {self.name}: channel still open")
-
-    # These legacy members disappear in WDRC-211 after all callers migrate.
-    def alive(self) -> bool:
-        return self.state() == Liveness.LIVE
-
-    def wait_exit(self, timeout: float) -> bool:
-        with self.condition:
-            self.condition.wait_for(
-                lambda: self.code is not None or self.failure is not None, timeout
-            )
-            return self.state() == Liveness.ABSENT
-
-    def kill(self) -> None:
-        self.close()
-
-    def record(self):
-        return None
-
-    def display(self):
-        return None

@@ -12,11 +12,10 @@ from unittest import mock
 
 from ensemble.session.clients.codex.common import SessionStore
 from ensemble.session.clients.codex.tui import replies
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Access, Mode, Spec
 from ensemble.session.hosts.base import Host
 from ensemble.utils import file_lock, read_reply
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.integration.clients.codex import fake_tui
 
@@ -49,7 +48,7 @@ class RepliesTest(Case):
             }
         }
         hosts = Host.parse_hosts({**HOSTS, "default": "tmux"})
-        self.session_cls = HostedSession.configured(clients=clients, hosts=hosts)
+        self.session_cls = harnesses.Threaded.configured(clients=clients, hosts=hosts)
         self.release = self.root / "release"
         steps = [{"kind": "steer", "answer": ANSWER}, {"kind": "pause", "file": str(self.release)}]
         self.scenario.write_text(json.dumps({"tui_turns": [[*steps, "final"]]}))

@@ -1,5 +1,6 @@
-"""OwnedSession, the control view of an owned worker: never its owner. stop and close are
-requests, and so are a remote worker's send, press and screen; the rest goes to a read-only attach.
+"""OwnedSession, the control view of an owned worker: never its owner. stop, close, send, press
+and screen are requests to its harness; record reads its worker dir; the rest goes to a read-only
+attach, which holds no handle of the worker.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, Tie
 from ensemble.session.harness.types import Logged, Op
+from ensemble.session.hosts.base import stored_record
+from ensemble.session.modes.tui import store_record
 from ensemble.utils import Display, Record, Status
 
 POLL = 0.1
@@ -96,7 +99,8 @@ class OwnedSession(Session):
     """attach: the read-only attach, bound to sid and generation (attached: one made already);
     retire: a tui view's non-owner close of that generation; replay: start past the log. A headless
     view's events() stops its worker on an interrupt, as a headless HostedSession does; tie: a
-    headless start's caller pipe, its harness closing the worker once the view is gone.
+    headless start's caller pipe, its harness closing the worker once the view is gone; clock: its
+    session class's, timing its idle timeouts.
     """
 
     def __init__(
@@ -114,13 +118,14 @@ class OwnedSession(Session):
         replay: bool = False,
         mode: Mode = Mode.TUI,
         tie: Tie | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if (mode == Mode.TUI) != (retire is not None):
             raise ValueError(
                 "retire: required for a tui view" if retire is None else "retire: a tui view's only"
             )
         self.sid, self.client, self.mode, self.name = sid, client, mode, name
-        self._tie = tie
+        self._tie, self._clock = tie, clock
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
         self._retire = retire
@@ -145,7 +150,7 @@ class OwnedSession(Session):
             raise
 
     def _read(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
-        reader, last = self._events, time.monotonic()
+        reader, last = self._events, self._clock()
         while not reader.exited:
             taken = reader.read()
             if not taken and not self._channel.alive():
@@ -156,15 +161,15 @@ class OwnedSession(Session):
                     )
             for logged in taken:
                 if not isinstance(logged.event, ClientBound):
-                    last = time.monotonic()
+                    last = self._clock()
                     yield logged.event
             if taken:
                 continue
             wait = POLL
             if self._idle is not None and not reader.blocked:
-                wait = min(POLL, last + self._idle - time.monotonic())
+                wait = min(POLL, last + self._idle - self._clock())
                 if wait <= 0:
-                    last = time.monotonic()
+                    last = self._clock()
                     yield IdleTimeout(self._idle)
                     continue
             time.sleep(wait)
@@ -250,9 +255,6 @@ class OwnedSession(Session):
         found = self._channel.status().get("dialog")
         return found if isinstance(found, str) else None
 
-    def _remote(self) -> bool:
-        return self._channel.status().get("remote") is True
-
     def _ask(self, op: Op, data: Mapping) -> dict:
         if not self._channel.alive():
             raise SessionError(f"session {self.name}: its harness is gone")
@@ -264,16 +266,16 @@ class OwnedSession(Session):
             raise
 
     def send(self, text: str) -> None:
-        if self._remote():
-            self._ask(Op.SEND, {"text": text})
+        if self.mode != Mode.TUI:  # refused: tui mode only
+            self._call(lambda session: session.send(text))
             return
-        self._call(lambda session: session.send(text))
+        self._ask(Op.SEND, {"text": text})
 
     def press(self, keys: Sequence[KeyPress]) -> None:
-        if self._remote():
-            self._ask(Op.PRESS, {"keys": [str(key) for key in keys]})
+        if self.mode != Mode.TUI:
+            self._call(lambda session: session.press(keys))
             return
-        self._call(lambda session: session.press(keys))
+        self._ask(Op.PRESS, {"keys": [str(key) for key in keys]})
 
     def alive(self) -> bool:
         """A held attach that says not alive is asked once more of a new one."""
@@ -292,8 +294,7 @@ class OwnedSession(Session):
         return self._call(lambda session: session.status())
 
     def content(self) -> str:
-        if not self._remote():
-            return self._call(lambda session: session.content())
+        """Its done turn's reply, else its screen."""
         if self.status().state == StatusState.DONE and (reply := self.reply):
             return reply
         return self.screen()
@@ -304,14 +305,32 @@ class OwnedSession(Session):
     def session_status(self) -> SessionStatus:
         return self._call(lambda session: session.session_status())
 
+    def publish(self, record: Record) -> None:
+        """Its Record, stored in its worker dir for its generation (a tui worker's)."""
+        if self.mode != Mode.TUI or self.name is None:
+            raise SessionError(f"session {self.name or self.sid}: no worker dir for a Record")
+        store_record(self.name, self.generation, record)
+
     def record(self) -> Record | None:
-        return self._call(lambda session: session.record())
+        """Its crew Record, stored in its worker dir for its generation."""
+        if self.mode != Mode.TUI or self.name is None:
+            return None
+        return stored_record(self.name, self.generation)
 
     @property
     def showable(self) -> bool:
         return self._call(lambda session: session.showable)
 
     def show(self, *, display: Display = None, command: str | None = None) -> str | None:
+        """Its running harness reopens its display where gone, then the Viewer shows it; a worker
+        that ended meanwhile (its harness refusing or gone) is shown as its display was left.
+        """
+        if self.mode == Mode.TUI and self._channel.alive():
+            try:
+                self._ask(Op.DISPLAY, {})
+            except SessionError:
+                if self.alive():
+                    raise
         return self._call(lambda session: session.show(display=display, command=command))
 
     def hide(self) -> None:
@@ -321,9 +340,9 @@ class OwnedSession(Session):
         return self._call(lambda session: session.attach_command())
 
     def screen(self, lines: int | None = None) -> str:
-        if self._remote():
-            text = self._ask(Op.SCREEN, {"lines": lines}).get("text")
-            if not isinstance(text, str):
-                raise SessionError(f"session {self.name}: bad screen from its harness")
-            return text
-        return self._call(lambda session: session.screen(lines))
+        if self.mode != Mode.TUI:
+            return self._call(lambda session: session.screen(lines))
+        text = self._ask(Op.SCREEN, {"lines": lines}).get("text")
+        if not isinstance(text, str):
+            raise SessionError(f"session {self.name}: bad screen from its harness")
+        return text

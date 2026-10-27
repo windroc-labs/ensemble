@@ -221,9 +221,7 @@ class Harness:
             self._write()
 
     def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> None:
-        """A remote worker's input or screen, or its display; any failure is a refusal that leaves
-        it up.
-        """
+        """Its worker's input, screen or display; any failure is a refusal that leaves it up."""
         try:
             found = _served(worker, op, data)
         except (ConfigError, SessionError, ValueError) as error:

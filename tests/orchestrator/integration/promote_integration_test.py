@@ -5,6 +5,7 @@ agent dir and archives it.
 """
 
 import os
+import subprocess
 import unittest
 from datetime import UTC, datetime, timedelta
 
@@ -13,8 +14,10 @@ from ensemble.delegate.engine.config import read_config
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.session import Session
+from ensemble.utils import SID_ENV
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
+from tests.orchestrator.case import REPO
 from tests.orchestrator.config_fixtures import HARNESS_DELEGATE
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.flow_fixtures import (
@@ -34,6 +37,7 @@ WRITES = ["promote.M_CREATE", "promote.M_RELATE", "linear.M_STATE", "linear.M_CO
 DONE, OPEN = "TASK-20", "TASK-21"
 TUI = f"engineer-{DONE}-0123abcd"
 CLONE = ("acme", "widgets")
+SESSION_CLI = os.path.join(REPO, "bin", "ensemble-session")
 
 
 class Tick(Flow):
@@ -191,7 +195,7 @@ class PruneSessionDelegate(FakeDelegate):
 
     def close(self):
         Session.configure_from(read_config())
-        Session.host().attach(self.status().name).close()
+        Session.attach(self.status().name).close()
         super().close()
 
 
@@ -231,10 +235,19 @@ class Prune(Tick, TmuxFlow):
         kept = checkout_path(os.path.join(self.workdirs, OPEN), *CLONE, OPEN)
         for path in (checkout_path(workdir, *CLONE, DONE), kept):
             self.git_init(path)
-        made = self.server.tmux("new-session", "-d", "-s", TUI, "cat", "-")
+        sid = "0123abcd-1234-4567-89ab-0123456789ab"
+        self.scene([])  # its TUI waits for a first prompt
+        made = subprocess.run(
+            [SESSION_CLI, "start", TUI, "--client", "claude", "--cwd", workdir],
+            cwd=self.root,
+            env={**self.env(), SID_ENV: sid},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT,
+        )
         self.assertEqual(made.returncode, 0, made.stderr)
         self.assertTrue(self.live(TUI))
-        sid = "0123abcd-1234-4567-89ab-0123456789ab"
         PruneSessionDelegate("engineer", delegate.Spec("", workdir, sid=sid, name=TUI)).detach()
         runs.note(
             os.path.join(self.logs, "runs.jsonl"),

@@ -9,12 +9,11 @@ import os
 import signal
 from unittest import mock
 
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Access, Exited, HookCallback, Mode, Reply, Spec, TurnEnd
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import HARNESS_ROOT, Host
-from tests.session import live_tmux
+from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.cli_support import WorkerCase, logged
 
@@ -73,7 +72,7 @@ class HandlerTest(HarnessCase):
         steps = [PERMISSION, "Done."]
         env = {**self.env(), **self.scene("w1", steps), "ENSEMBLE_EVENTS": self.events}
         self.enterContext(mock.patch.dict(os.environ, env, clear=True))
-        cls = HostedSession.configured(
+        cls = harnesses.Threaded.configured(
             clients={"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}},
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
         )
@@ -123,7 +122,7 @@ class InProcessOwnerTest(Case):
         os.mkdir(self.workdir)
         self.scenario = os.path.join(self.home, "scenario.json")
         self.log = os.path.join(self.home, "fake.log")
-        self.session_cls = HostedSession.configured(
+        self.session_cls = harnesses.Threaded.configured(
             clients={
                 "fake": {
                     "implementation": "tests.session.fake_client:InProcessFakeClient",

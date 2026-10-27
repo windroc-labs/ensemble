@@ -28,6 +28,7 @@ from ensemble.utils.files import (
     ConfinedReason,
     append_line,
     drop_stale,
+    events_file,
     file_lock,
     holds,
     idle,
@@ -39,6 +40,7 @@ from ensemble.utils.files import (
     remove_tree,
     save,
     sync_directory,
+    validate_events,
 )
 from ensemble.utils.git import (
     GUARD,
@@ -166,6 +168,7 @@ __all__ = [
     "drop_stale",
     "environment_ok",
     "err_text",
+    "events_file",
     "exhausted",
     "fenced",
     "file_lock",
@@ -219,4 +222,5 @@ __all__ = [
     "under",
     "unfenced",
     "unset",
+    "validate_events",
 ]

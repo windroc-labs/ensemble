@@ -12,7 +12,15 @@ from unittest import mock
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.registry import Registry
-from ensemble.session.engine.types import Access, ConfigError, Launch, Liveness, Mode, Spec
+from ensemble.session.engine.types import (
+    Access,
+    ConfigError,
+    Launch,
+    Liveness,
+    Mode,
+    SessionError,
+    Spec,
+)
 from ensemble.session.hosts.base import Host
 from ensemble.session.modes import base, headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env, identity_drop
@@ -436,8 +444,8 @@ class OwnerTest(Case):
         for mode in (tui.TuiMode, headless.HeadlessMode, in_process.InProcessMode):
             self.assertIsNot(mode.generation, BaseMode.generation)
 
-    def test_only_a_tmux_host_is_harnessed(self):
-        self.assertFalse(Host._harnessed)
-        self.assertFalse(MemoryHost._harnessed)
+    def test_the_tmux_host_runs_managed_workers_the_base_none(self):
         tmux = Host.parse_hosts({**HOSTS, "default": "tmux"}).tables["tmux"]["implementation"]
-        self.assertTrue(load_class(tmux, Host)._harnessed)
+        self.assertIsNot(load_class(tmux, Host).worker, Host.worker)
+        with self.assertRaisesRegex(SessionError, "runs no managed worker"):
+            Host.worker(MemoryHost(), "w", Launch(("x",), cwd="/"), terminal=True)

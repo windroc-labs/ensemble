@@ -20,14 +20,7 @@ from ensemble.session.hosts.base import PROMPTED
 from ensemble.session.modes import tui_hook
 from ensemble.utils import StatusState
 from tests.session.case import SRC, Case
-from tests.session.tui_hook_support import (
-    PROCESS,
-    identity,
-    install,
-    state,
-    write_state,
-)
-from tests.utils.process_fixtures import DEVNULL
+from tests.session.tui_hook_support import state, write_state
 
 CLIENT = re.compile(r"claude|codex", re.I)
 HOOK = os.path.join(SRC["session"], "ensemble", "session", "modes", "tui_hook.py")
@@ -84,107 +77,28 @@ class InProcess(Case):
         self.dir = os.path.join(self.root, "s1")
         os.mkdir(self.dir, 0o700)
         self.events = os.path.join(self.root, "events")
-        self.tmux = install(os.path.join(self.root, "bin"), "")
         self.state = state(self.root, self.events)
         write_state(self.dir, self.state)
-        self.lookup = f"{PROCESS}\t{identity(self.state)}\n"
-        self.mark = unittest.mock.Mock(
-            side_effect=[
-                unittest.mock.Mock(returncode=0, stdout=self.lookup, stderr=""),
-                unittest.mock.Mock(returncode=0, stdout="", stderr=""),
-            ]
-        )
 
-    def faked(self, mode=None, *, executable=True):
-        real_stat, real_access = os.stat, os.access
-
-        def fake_stat(path, *args, **kwargs):
-            st = real_stat(path, *args, **kwargs)
-            if path != self.tmux:
-                return st
-            return types.SimpleNamespace(st_mode=st.st_mode if mode is None else mode)
-
-        def fake_access(path, how, *args, **kwargs):
-            return executable if path == self.tmux else real_access(path, how, *args, **kwargs)
-
-        with (
-            unittest.mock.patch("os.stat", fake_stat),
-            unittest.mock.patch("os.access", fake_access),
-            unittest.mock.patch("subprocess.run", self.mark),
-        ):
-            tui_hook.main([self.dir, "tool"], io.BytesIO(b"{}"), roots=ROOTS)
-
-    def test_a_non_regular_or_non_executable_tmux_is_refused_after_the_record(self):
-        for case, kwargs in (
-            ("directory", {"mode": stat.S_IFDIR | 0o755}),
-            ("not executable", {"executable": False}),
-        ):
-            with (
-                self.subTest(case),
-                self.assertRaisesRegex(tui_hook.HookError, re.escape(self.tmux)),
-            ):
-                self.faked(**kwargs)
-        self.mark.assert_not_called()
-        with open(os.path.join(self.dir, "hooks.jsonl"), "rb") as f:
-            self.assertEqual(len(f.read().splitlines()), 2)
-
-    def test_one_write_under_an_exclusive_flock_then_the_mark(self):
+    def test_one_write_under_an_exclusive_flock_and_no_process(self):
         calls = unittest.mock.Mock()
         with (
             unittest.mock.patch("fcntl.flock", wraps=fcntl.flock) as flock,
             unittest.mock.patch("os.write", wraps=os.write) as write,
-            unittest.mock.patch("subprocess.run", self.mark),
+            unittest.mock.patch(
+                "subprocess.Popen", side_effect=AssertionError("a process")
+            ) as popen,
         ):
             calls.attach_mock(flock, "flock")
             calls.attach_mock(write, "write")
-            calls.attach_mock(self.mark, "mark")
-            tui_hook.main([self.dir, "tool"], io.BytesIO(b'{"tool_name": "Bash"}'), roots=ROOTS)
+            calls.attach_mock(popen, "popen")
+            tui_hook.main([self.dir, "stop"], io.BytesIO(b'{"tool_name": "Bash"}'), roots=ROOTS)
         with open(os.path.join(self.dir, "hooks.jsonl"), "rb") as f:
             data = f.read()
         fd = calls.mock_calls[0].args[0]
         self.assertEqual(
             calls.mock_calls,
-            [
-                unittest.mock.call.flock(fd, fcntl.LOCK_EX),
-                unittest.mock.call.write(fd, data),
-                unittest.mock.call.mark(
-                    [
-                        self.tmux,
-                        "display-message",
-                        "-p",
-                        "-t",
-                        "=w1:",
-                        "#{@process}\t#{@sid}\t#{@generation}",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    stdin=DEVNULL,
-                    timeout=5,
-                    env={
-                        **{
-                            key: value
-                            for key, value in os.environ.items()
-                            if key not in ("TMUX", "TMUX_TMPDIR")
-                        },
-                        "TMUX_TMPDIR": self.root,
-                    },
-                ),
-                unittest.mock.call.mark(
-                    [self.tmux, "set-option", "-t", "%3", "@state", "working"],
-                    capture_output=True,
-                    text=True,
-                    stdin=DEVNULL,
-                    timeout=5,
-                    env={
-                        **{
-                            key: value
-                            for key, value in os.environ.items()
-                            if key not in ("TMUX", "TMUX_TMPDIR")
-                        },
-                        "TMUX_TMPDIR": self.root,
-                    },
-                ),
-            ],
+            [unittest.mock.call.flock(fd, fcntl.LOCK_EX), unittest.mock.call.write(fd, data)],
         )
         self.assertEqual(json.loads(data)["payload"], {"tool_name": "Bash"})
 
@@ -214,7 +128,6 @@ class DeclaredRootCallback(Case):
 
     def run_hook(self, module, roots):
         state_ = {**state(self.root, None), "words": {}}
-        del state_["host_hook"]
         write_state(
             self.dir, {**state_, "client_hook": {"module": module, "state": {}, "roots": roots}}
         )
@@ -239,26 +152,6 @@ class DeclaredRootCallback(Case):
         module = f"{top}.nested.callback"
         self.assertEqual(self.run_hook(module, roots), ("", [{"loaded": module}]))
 
-    def test_a_callback_is_found_over_another_callbacks_roots(self):
-        module, host = f"client_{uuid.uuid4().hex}", f"host_{uuid.uuid4().hex}"
-        self.write("other", f"{module}.py")
-        self.write("other", f"{host}.py", text="def on_hook(call):\n    pass\n")
-        other = os.path.join(self.root, "other")
-        state_ = {
-            **state(self.root, None),
-            "words": {},
-            "client_hook": {"module": module, "state": {}, "roots": []},
-            "host_hook": {"module": host, "state": {}, "roots": [other]},
-        }
-        write_state(self.dir, state_)
-        with redirect_stderr(io.StringIO()) as stderr:
-            tui_hook.run(
-                [self.dir, "stop"], types.SimpleNamespace(buffer=io.BytesIO(b"{}")), roots=ROOTS
-            )
-        with open(os.path.join(self.dir, "hooks.jsonl"), encoding="utf-8") as f:
-            payloads = [json.loads(line)["payload"] for line in f]
-        self.assertEqual((stderr.getvalue(), payloads), ("", [{"loaded": module}]))
-
     def test_a_callback_loads_by_its_named_entry(self):
         module = f"entry_{uuid.uuid4().hex}"
         self.write(f"{module}.py", text="def on_event(call):\n    return None\n")
@@ -270,20 +163,13 @@ class DeclaredRootCallback(Case):
 
 
 class Callbacks(Case):
-    """A session dir whose client callback tags the payload and whose Host callback fails once."""
+    """A session dir whose client callback tags the payload."""
 
     CLIENT = (
         "calls = []\n"
         "def on_hook(call):\n"
         "    calls.append(call)\n"
         "    return {**call.payload, 'seen': 1}\n"
-    )
-    HOST = (
-        "calls, fail = [], [RuntimeError('host down')]\n"
-        "def on_hook(word, call):\n"
-        "    calls.append((word, call.payload))\n"
-        "    if fail:\n"
-        "        raise fail.pop()\n"
     )
 
     def setUp(self):
@@ -292,17 +178,18 @@ class Callbacks(Case):
         self.root = os.path.realpath(tmp.name)
         self.dir = os.path.join(self.root, "s1")
         os.mkdir(self.dir, 0o700)
-        saved = {**state(self.root, None), "words": {"stop": "done"}}
-        self.names = {}
-        for kind, text in (("client", self.CLIENT), ("host", self.HOST)):
-            name = self.names[kind] = f"{kind}_{uuid.uuid4().hex}"
-            with open(os.path.join(self.root, f"{name}.py"), "w", encoding="utf-8") as f:
-                f.write(text)
-            saved[f"{kind}_hook"] = {"module": name, "state": {}, "roots": [self.root]}
+        self.name = f"client_{uuid.uuid4().hex}"
+        with open(os.path.join(self.root, f"{self.name}.py"), "w", encoding="utf-8") as f:
+            f.write(self.CLIENT)
+        saved = {
+            **state(self.root, None),
+            "words": {"stop": "done"},
+            "client_hook": {"module": self.name, "state": {}, "roots": [self.root]},
+        }
         write_state(self.dir, saved)
 
-    def calls(self, kind):
-        return sys.modules[self.names[kind]].calls
+    def calls(self):
+        return sys.modules[self.name].calls
 
     def run_hook(self, event, body=b'{"n": 1}'):
         stdin = types.SimpleNamespace(buffer=io.BytesIO(body))
@@ -315,25 +202,23 @@ class Callbacks(Case):
 
 
 class RelayEvent(Callbacks):
-    """A relay event's retry after its Host callback failed reruns only that callback."""
+    """A relay event's retry, already journaled, journals nothing and runs no callback."""
 
-    def test_a_retried_event_journals_once_and_reruns_only_the_host(self):
-        self.assertFalse(self.run_hook("g1.1"))
+    def test_a_retried_event_journals_once_and_runs_nothing_again(self):
+        self.assertTrue(self.run_hook("g1.1"))
         self.assertTrue(self.run_hook("g1.1"))
         records = self.records()
         self.assertEqual(
             [(r["label"], r["payload"], r["event"]) for r in records],
             [("stop", {"n": 1, "seen": 1}, "g1.1")],
         )
-        self.assertEqual(len(self.calls("client")), 1)
-        self.assertEqual(self.calls("host"), [("done", {"n": 1, "seen": 1})] * 2)
+        self.assertEqual(len(self.calls()), 1)
 
-    def test_another_event_or_none_journals_and_runs_both_callbacks(self):
-        self.assertFalse(self.run_hook(None))
-        for event in ("g1.1", "g1.2", None):
+    def test_another_event_or_none_journals_and_runs_the_client_callback(self):
+        for event in (None, "g1.1", "g1.2", None):
             self.assertTrue(self.run_hook(event))
         self.assertEqual([r.get("event") for r in self.records()], [None, "g1.1", "g1.2", None])
-        self.assertEqual((len(self.calls("client")), len(self.calls("host"))), (4, 4))
+        self.assertEqual(len(self.calls()), 4)
 
     def test_a_record_carries_the_send_marker_read_before_it(self):
         self.run_hook(None)
@@ -346,7 +231,7 @@ class RelayEvent(Callbacks):
         for event in ("", "a b", "x" * 65):
             with self.subTest(event=event), self.assertRaisesRegex(tui_hook.HookError, "usage"):
                 tui_hook.main([self.dir, "stop"], io.BytesIO(b"{}"), roots=ROOTS, event=event)
-        self.assertNotIn(self.names["client"], sys.modules)
+        self.assertNotIn(self.name, sys.modules)
         self.assertFalse(os.path.exists(os.path.join(self.dir, tui_hook.HOOKS)))
 
 
@@ -378,20 +263,16 @@ class Serve(Callbacks):
         with open(os.path.join(self.dir, PROMPTED), "w", encoding="utf-8") as f:
             f.write("g1 2 2")
         line = b'{"label": "stop", "event": null, "payload": {"n": 1}}\n'
-        first = self.request("g1.1")  # the Host's one failure
-        self.assertEqual(self.serve(first, line), [{"ok": False}, {"ok": True}])
+        self.assertEqual(self.serve(self.request("g1.1"), line), [{"ok": True}, {"ok": True}])
         self.assertEqual([r.get("sent") for r in self.records()], [None, "g1 2 2"])
 
     def test_each_request_gets_its_reply_in_order_and_a_retry_journals_once(self):
         replies = self.serve(self.request("g1.1"), self.request("g1.1"), self.request(None))
-        self.assertEqual(replies, [{"ok": False}, {"ok": True}, {"ok": True}])
+        self.assertEqual(replies, [{"ok": True}] * 3)
         self.assertEqual([r.get("event") for r in self.records()], ["g1.1", None])
-        self.assertEqual((len(self.calls("client")), len(self.calls("host"))), (2, 3))
+        self.assertEqual(len(self.calls()), 2)
 
     def test_a_malformed_request_replies_false_and_serving_goes_on(self):
-        self.assertEqual(
-            self.serve(self.request("g1.1")), [{"ok": False}]
-        )  # the Host's one failure
         good = self.request("g1.2")
         for line in (
             b"junk\n",

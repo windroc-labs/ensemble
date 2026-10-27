@@ -3,17 +3,22 @@
 import contextlib
 import fcntl
 import os
+import shutil
 import signal
+import threading
 import time
 
-from ensemble.session.engine.hosted_session import HARNESS
-from ensemble.session.engine.types import SessionError
+from ensemble.session.engine import hosted_session
+from ensemble.session.engine.hosted_session import HARNESS, START_WAIT, HostedSession
+from ensemble.session.engine.types import Mode, SessionError
 from ensemble.session.harness import process
-from ensemble.session.harness.channel import HEX, SLICE, Channel
+from ensemble.session.harness.channel import HEX, SLICE, Channel, Tie
+from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 
 WAIT = 60  # s, past process.DRAIN
 KILL_WAIT = 10  # s, FR-13's reap bound
+_clock, _pause = time.monotonic, time.sleep  # the real ones, past a test's fake clock
 
 
 def _let_go(channel: Channel, timeout: float) -> bool:
@@ -103,3 +108,89 @@ class Inline:
         pass
 
     kill = terminate
+
+
+def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
+    roots = cls._roots(spec.client)
+    channel = Channel.create()
+    channel.write_request(cls.harness_request(spec, display=display, host=host, roots=roots))
+    tie = None if mode in (Mode.TUI, Mode.IN_PROCESS) else Tie()
+    caller = None if tie is None else os.dup(tie.far)
+
+    def begin(_request):
+        modules = load_handlers(spec.handlers, roots, load=True)
+        worker = cls.own(spec, display=display, host=host, owner=channel.directory)
+        return worker, modules, [handler.state for handler in spec.handlers]
+
+    def run():
+        channel.hold()
+        try:
+            process.Harness(channel, caller=caller).run(begin)
+        finally:
+            channel.release()
+            if caller is not None:
+                with contextlib.suppress(OSError):
+                    os.close(caller)
+
+    thread = threading.Thread(target=run, daemon=True, name=f"harness {channel.directory}")
+    thread.start()
+    _RUNNING.append((channel, thread))
+    deadline = _clock() + START_WAIT
+    while True:
+        alive = thread.is_alive()  # before its status: an ended thread's status is final
+        status = channel.status()
+        if status.get("state") in ("running", "draining", "exited"):
+            break
+        if status.get("state") == "failed" or not alive or _clock() > deadline:
+            error = hosted_session._start_error(channel, status)
+            thread.join(WAIT)
+            if tie is not None:
+                tie.close()
+            shutil.rmtree(channel.directory, ignore_errors=True)
+            raise error
+        _pause(SLICE)
+    if tie is not None:
+        tie.handed()
+    return cls._view(
+        channel,
+        name=spec.name,
+        client=spec.client,
+        sid=spec.sid,
+        generation=status["generation"],
+        host=host,
+        idle_timeout=idle_timeout,
+        mode=mode,
+        spec=spec,
+        tie=tie,
+    )
+
+
+class Threaded(HostedSession):
+    """The test session class: a start of a class with injected callables runs its harness on a
+    thread (threaded_spawn); any other, a harness process.
+    """
+
+    @classmethod
+    def _spawn(cls, spec, mode, **options):
+        if hosted_session._reconstructible(cls._config()):
+            return super()._spawn(spec, mode, **options)
+        return threaded_spawn(cls, spec, mode, **options)
+
+
+_RUNNING: list[tuple[Channel, threading.Thread]] = []
+
+
+@contextlib.contextmanager
+def joined():
+    """On exit each threaded harness still running is closed and its thread joined, so none
+    outlives its test.
+    """
+    try:
+        yield
+    finally:
+        running, _RUNNING[:] = list(_RUNNING), []
+        for channel, thread in running:
+            if thread.is_alive() and channel.alive():
+                with contextlib.suppress(SessionError):
+                    channel.request(Op.CLOSE, timeout=WAIT)
+            thread.join(WAIT)

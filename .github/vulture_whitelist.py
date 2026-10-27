@@ -41,6 +41,8 @@ _ = (
     NamedKey.LEFT,
     NamedKey.RIGHT,
     NamedKey.HOME,
+    NamedKey.PAGE_UP,
+    NamedKey.PAGE_DOWN,
     NamedKey.F1,
     NamedKey.F2,
     NamedKey.F3,

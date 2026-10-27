@@ -23,8 +23,6 @@ ABCS = {
     "Tui": tui,
     "InProcess": in_process,
     "Host": hosts_base,
-    "Process": hosts_base,
-    "Interactive": hosts_base,
     "InteractiveProcess": hosts_base,
 }
 TYPES = {

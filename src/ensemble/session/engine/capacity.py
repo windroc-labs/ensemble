@@ -125,7 +125,6 @@ def _locked(directory: str, client: str) -> Iterator[None]:
                 for path in (directory, os.path.dirname(directory)):
                     with contextlib.suppress(OSError):
                         os.rmdir(path)
-                # Waiters verify the inode again, so the lock may be removed after cleanup.
                 os.unlink(gate)
     finally:
         if not existed:

@@ -159,9 +159,12 @@ class Attended(Segment):
 
     def test_killing_its_drive_and_tui_interrupts_the_run_and_the_next_router_run_resumes(self):
         def kill(ident, sid):
-            # the drive's SIGKILL leaves its owned TUI: the TUI's kill interrupts the attempt
+            # the drive's SIGKILL leaves its owned TUI: the TUI's kill interrupts the attempt, its
+            # session harness's kill -9 ending its worker (its display alone ends none)
             os.killpg(self.drive_group(ident), signal.SIGKILL)
-            res = self.server.tmux("kill-session", "-t", f"={config.tui_name('pm', ident, sid)}")
+            tui = config.tui_name("pm", ident, sid)
+            live_tmux.crash_owner(self.ensemble, tui)
+            res = self.server.tmux("kill-session", "-t", f"={tui}")
             self.assertEqual(res.returncode, 0, res.stderr)
 
         self.interrupted(kill)

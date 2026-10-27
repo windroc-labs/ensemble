@@ -52,7 +52,6 @@ def git(wt: str, *args: str, run: Runner, timeout: int = SHORT, pre: tuple[str, 
 
 
 def common_dir(wt: str) -> str | None:
-    # never runs git: reads the files as git does (whole file, trailing CR/LF dropped)
     def read(path):
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         try:

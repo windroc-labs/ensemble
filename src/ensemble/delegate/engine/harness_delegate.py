@@ -16,6 +16,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from enum import Enum, auto
+from typing import Protocol, runtime_checkable
 
 import ensemble.utils as utils_package
 from ensemble.delegate import config
@@ -89,7 +90,13 @@ from ensemble.utils import (
     source_path,
     thaw,
     under,
+    validate_events,
 )
+
+
+@runtime_checkable
+class _Publishes(Protocol):
+    def publish(self, record: Record) -> None: ...
 
 
 class _Ended(Enum):
@@ -215,7 +222,7 @@ class HarnessDelegate(Delegate):
             display = session_cls.display(
                 "none" if run.show == "none" else display, host=agent_host.name
             )
-            events = agent_host.events_path(spec.events)
+            events = None if spec.events is None else validate_events(spec.events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
         self.driver = driver or AgentDriver(
@@ -515,14 +522,15 @@ class HarnessDelegate(Delegate):
         events: str | None = None,
         session_cls: type[Session] = Session,
     ) -> None:
-        """The display and the events file on the agent's Host."""
+        """The display on the agent's Host; the events file."""
         settings = thaw(Composer().config.values)
         try:
             session_cls.configure_from(settings)
             config.delegates(settings)
-            agent = session_cls.host()
+            session_cls.host()
             session_cls.layout(display=display)
-            agent.events_path(events)
+            if events is not None:
+                validate_events(events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 
@@ -1252,8 +1260,12 @@ class HarnessDelegate(Delegate):
         raise SessionError(message)
 
     def _publish_record(self, state: DelegateState) -> None:
+        """Its Record in its agent session's worker dir, through that session's view."""
         try:
-            self.session_cls.host(state.host).attach(state.agent_name).publish(self._record(state))
+            agent = self.session_cls.attach(state.agent_name, sid=state.plan.sid, host=state.host)
+            if not isinstance(agent, _Publishes):
+                raise SessionError(f"session {state.agent_name}: stores no Record")
+            agent.publish(self._record(state))
         except SessionError as error:
             say(f"delegate: Record not published: {error}")
 

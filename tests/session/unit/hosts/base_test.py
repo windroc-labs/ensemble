@@ -1,21 +1,25 @@
-"""Host process interfaces and defaults, attach targets, SIGNALS; Host.parse_hosts, the one [hosts]
+"""Host and InteractiveProcess interfaces and defaults, attach targets, SIGNALS; Host.parse_hosts, the one [hosts]
 parser.
 """
 
+import abc
 import dataclasses
 import inspect
+import json
 import operator
+import os
 import signal
 import tomllib
 from types import MappingProxyType
 from unittest import mock
 
+import ensemble.session as session_package
+import ensemble.session.extension as extension
 from ensemble.session import (
     SIGNALS,
     ConfigError,
     Host,
     NotShowable,
-    Process,
     SessionError,
 )
 from ensemble.session.engine.types import (
@@ -23,13 +27,13 @@ from ensemble.session.engine.types import (
     ClientContext,
     Hosts,
     Launch,
-    Liveness,
     SessionRow,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import Interactive, InteractiveProcess
+from ensemble.session.hosts import base as host_base
+from ensemble.session.hosts.base import InteractiveProcess
 from ensemble.session.hosts.types import CommandView, SessionView
-from ensemble.utils import Status, StatusState
+from ensemble.utils import Record, StatusState
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryHost
 
@@ -45,21 +49,46 @@ implementation = "pkg.b:BHost"
 """
 NAMES = "a, b_2"
 
-PROCESS = {"alive", "close", "wait_exit", "kill", "record", "display"}
-
 ABSTRACT = {
-    Host: {"detach", "terminal", "attach", "list"},
-    Process: PROCESS,
-    Interactive: {"send", "press"},
-    InteractiveProcess: PROCESS | {"send", "press"},
+    Host: {"list"},
+    InteractiveProcess: {"send", "press", "state", "close", "returncode"},
+}
+HANDLE = {
+    "name",
+    "generation",
+    "send",
+    "press",
+    "screen",
+    "state",
+    "close",
+    "returncode",
+    "read",
+    "write",
+    "tick",
+}
+REMOVED_HOST = {
+    "terminal",
+    "detach",
+    "attach",
+    "reclaim",
+    "events_path",
+    "prepare_events",
+    "hook_callback",
 }
 
 
 class MinimalHost(Host):
-    def detach(self, *args, **kwargs):
+    def list(self):
         raise AssertionError("not called")
 
-    terminal = attach = list = detach
+
+class MinimalHandle(InteractiveProcess):
+    name, generation = "p", "g"
+
+    def send(self, action):
+        raise AssertionError("not called")
+
+    press = state = close = returncode = send
 
 
 class Abstract(Case):
@@ -68,10 +97,6 @@ class Abstract(Case):
             with self.subTest(cls=cls.__name__):
                 self.assertTrue(inspect.isabstract(cls))
                 self.assertEqual(cls.__abstractmethods__, methods)
-
-    def test_an_interactive_process_is_a_process_and_interactive(self):
-        self.assertTrue(issubclass(InteractiveProcess, Process))
-        self.assertTrue(issubclass(InteractiveProcess, Interactive))
 
     def test_list_rows_and_validate_take_no_display(self):
         for method, parameters in (
@@ -93,59 +118,11 @@ class HostDefaults(Case):
         self.assertIsNone(MinimalHost("m")._client_context().container)
         self.assertIsNone(LOCAL_CONTEXT.container)
 
-    def test_a_host_reclaims_nothing_and_a_process_neither_publishes_nor_has_a_token(self):
-        self.assertIsNone(MinimalHost("m").reclaim("/tmp/apm-group-x"))
-        process = mock.create_autospec(Process, instance=True)
-        process.name = "p"
-        self.assertIsNone(Process.token.fget(process))
-        with self.assertRaisesRegex(SessionError, "^session p: its host cannot store a Record"):
-            Process.publish(process, mock.sentinel.record)
-
-    def test_a_process_cannot_show_its_screen_unless_its_terminal_reads_one(self):
-        process = mock.create_autospec(Process, instance=True)
-        process.name = "p"
+    def test_a_handle_cannot_show_its_screen_unless_its_host_reads_one(self):
         for lines in (None, 5):
             with self.subTest(lines=lines), self.assertRaises(NotShowable) as caught:
-                Process.screen(process, lines)
+                MinimalHandle().screen(lines)
             self.assertEqual(str(caught.exception), "session p: its host cannot show")
-
-    def test_a_process_status_is_its_liveness_and_activity(self):
-        process = mock.create_autospec(Process, instance=True)
-        process.name = "p"
-        for liveness, alive, activity, state in (
-            (Liveness.LIVE, True, None, StatusState.WORKING),
-            (Liveness.LIVE, True, StatusState.BLOCKED, StatusState.BLOCKED),
-            (Liveness.LIVE, False, None, StatusState.DEAD),
-            (Liveness.ABSENT, False, None, StatusState.DEAD),
-            (Liveness.UNKNOWN, False, None, StatusState.UNKNOWN),
-        ):
-            with self.subTest(liveness=liveness, alive=alive, activity=activity):
-                process.state.return_value, process.alive.return_value = liveness, alive
-                process.activity.return_value = activity
-                self.assertEqual(
-                    Process.status(process),
-                    Status(
-                        name="p",
-                        alive=alive,
-                        state=state,
-                        outcome=None,
-                        attach=None,
-                        hidden=False,
-                    ),
-                )
-
-    def test_a_host_failing_after_telling_liveness_is_unknown(self):
-        process = mock.create_autospec(Process, instance=True)
-        process.name, process.state.return_value = "p", Liveness.LIVE
-        for failing in (process.alive, process.activity):
-            with self.subTest(failing=failing):
-                process.reset_mock()
-                process.state.return_value, process.alive.return_value = Liveness.LIVE, True
-                failing.side_effect = SessionError("tmux failed")
-                found = Process.status(process)
-                self.assertEqual(
-                    (found.alive, found.state, found.hidden), (False, "unknown", False)
-                )
 
     def test_a_host_is_not_attachable_and_names_no_attach_target(self):
         host = MinimalHost("m")
@@ -189,6 +166,28 @@ class HostDefaults(Case):
         self.assertEqual(SIGNALS, (signal.SIGHUP, signal.SIGTERM, signal.SIGINT))
 
 
+class InteractiveProcessShape(Case):
+    """AC8: InteractiveProcess is the one managed handle, a standalone ABC; Process, Interactive
+    and the in-session Host members are gone from both session surfaces.
+    """
+
+    def test_interactive_process_is_a_standalone_abc_of_exactly_the_kept_members(self):
+        self.assertEqual(InteractiveProcess.__bases__, (abc.ABC,))
+        members = {n for n in vars(InteractiveProcess) if not n.startswith("_")}
+        self.assertEqual(members | set(InteractiveProcess.__annotations__), HANDLE)
+
+    def test_neither_surface_exports_process_or_interactive(self):
+        for module in (session_package, extension, host_base):
+            for name in ("Process", "Interactive", "check_sid"):
+                with self.subTest(module=module.__name__, name=name):
+                    self.assertFalse(hasattr(module, name))
+                    self.assertNotIn(name, getattr(module, "__all__", ()))
+
+    def test_host_has_none_of_the_removed_members(self):
+        for host in (Host, extension.Host):
+            self.assertEqual({n for n in REMOVED_HOST if hasattr(host, n)}, set())
+
+
 class CapacityRows(Case):
     """Admission's inventory: a row for every session listed before and after rows()."""
 
@@ -212,38 +211,32 @@ class CapacityRows(Case):
         host = self.host([["a", "b"]], ["b", "a"])
         self.assertEqual([row.name for row in host._capacity_rows()], ["b", "a"])
 
-    def test_default_rows_tolerate_a_session_ending_before_attach_or_row(self):
-        for boundary in ("attach", "row"):
-            with self.subTest(boundary=boundary):
-                host = MinimalHost("m")
-                host.list = mock.Mock(
-                    side_effect=[["ended", "live"], ["ended", "live"], ["live"], ["live"]]
-                )
-                live = SessionRow(
-                    "live", None, "c", StatusState.WORKING, None, None, None, own=False
-                )
-                process = mock.Mock()
-                process.row.return_value = live
-                ended = mock.Mock()
-                ended.row.side_effect = SessionError("ended")
-                host.attach = mock.Mock(
-                    side_effect=[SessionError("ended") if boundary == "attach" else ended, process]
-                )
-                self.assertEqual(host._capacity_rows(), [live])
-
-    def test_default_rows_preserve_read_failures_for_sessions_still_listed(self):
+    def test_default_rows_are_each_listed_names_worker_state_and_activity(self):
+        """sid, client and display from its session.json (none: None), state from its activity
+        of that generation (none, or another generation's: working).
+        """
+        root = os.path.join(self.home, ".ensemble", "tui")
+        for name, state, word in (
+            ("w1", {"sid": "s1", "client": "c", "display": "mgr", "generation": "g1"}, "g1 done"),
+            ("w2", {"sid": "s2", "client": "c", "generation": "g2"}, "g1 blocked"),
+            ("w3", None, None),
+        ):
+            if state is not None:
+                os.makedirs(os.path.join(root, name))
+                with open(os.path.join(root, name, "session.json"), "w") as f:
+                    json.dump(state, f)
+                with open(os.path.join(root, name, "activity"), "w") as f:
+                    f.write(word + "\n")
         host = MinimalHost("m")
-        host.list = mock.Mock(return_value=["live"])
-        host.attach = mock.Mock(side_effect=SessionError("cannot read"))
-        with self.assertRaisesRegex(SessionError, "cannot read"):
-            host._capacity_rows()
-
-    def test_default_rows_fail_closed_when_absence_cannot_be_confirmed(self):
-        host = MinimalHost("m")
-        host.list = mock.Mock(side_effect=[["live"], ["live"], SessionError("cannot list")])
-        host.attach = mock.Mock(side_effect=SessionError("cannot read"))
-        with self.assertRaisesRegex(SessionError, "cannot list"):
-            host._capacity_rows()
+        host.list = mock.Mock(return_value=["w1", "w2", "w3"])
+        self.assertEqual(
+            host._capacity_rows(),
+            [
+                SessionRow("w1", "s1", "c", StatusState.DONE, "mgr", None, None, own=False),
+                SessionRow("w2", "s2", "c", StatusState.WORKING, None, None, None, own=False),
+                SessionRow("w3", None, None, StatusState.WORKING, None, None, None, own=False),
+            ],
+        )
 
 
 def table(base: str = TWO, text: str = ""):
@@ -346,13 +339,87 @@ class ManagedWorkerTest(Case):
             with self.subTest(operation=operation), self.assertRaises(NotImplementedError):
                 operation()
 
-    def test_managed_workers_reuse_existing_input_and_lifecycle_members(self):
-        for name in ("send", "press"):
-            self.assertIs(getattr(InteractiveProcess, name), getattr(Interactive, name))
-        for name in ("screen", "state", "close", "returncode"):
-            self.assertIs(getattr(InteractiveProcess, name), getattr(Process, name))
-
     def test_the_guard_requires_an_explicit_client_command(self):
         with self.assertRaises(SystemExit) as caught:
             guard.main([])
         self.assertEqual(caught.exception.code, 2)
+
+
+class WorkerStateFilesTest(Case):
+    """worker_state, activity and stored_record read a worker dir's files only when regular, the
+    user's, not a link and small; anything else reads as absent.
+    """
+
+    def setUp(self):
+        self.dir = os.path.join(self.ensemble, "tui", "w1")
+        os.makedirs(self.dir, 0o700)
+
+    def put(self, name: str, data: bytes) -> str:
+        path = os.path.join(self.dir, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def test_worker_state_from_session_json(self):
+        self.put(
+            "session.json",
+            json.dumps(
+                {"sid": "s", "generation": "g", "client": "fake", "display": "d", "owner": "/o"}
+            ).encode(),
+        )
+        self.assertEqual(
+            host_base.worker_state("w1"), host_base.WorkerState("s", "g", "fake", "d", "/o")
+        )
+        self.assertIsNone(host_base.worker_state("absent"))
+
+    def test_activity_of_its_generation_only(self):
+        self.put("activity", b"g done\n")
+        self.assertEqual(host_base.activity("w1", "g"), StatusState.DONE)
+        self.assertIsNone(host_base.activity("w1", "other"))
+        self.put("activity", b"g dead\n")
+        self.assertIsNone(host_base.activity("w1", "g"))
+
+    def test_a_link_another_owner_or_a_large_file_reads_as_absent(self):
+        target = self.put("elsewhere", b"g done\n")
+        os.symlink(target, os.path.join(self.dir, "activity"))
+        self.assertIsNone(host_base.activity("w1", "g"))
+        os.unlink(os.path.join(self.dir, "activity"))
+        self.put("activity", b"g done\n")
+        with mock.patch("os.getuid", return_value=os.getuid() + 1):
+            self.assertIsNone(host_base.activity("w1", "g"))
+        self.put("activity", b"g done" + b" " * 300 + b"\n")
+        self.assertIsNone(host_base.activity("w1", "g"))
+        self.put("session.json", b"{" + b" " * (1 << 16) + b"}")
+        self.assertIsNone(host_base.worker_state("w1"))
+
+    def test_stored_record_of_its_generation_only_and_checked(self):
+        record = Record(
+            v=1,
+            kind="worker",
+            name="w1",
+            sessions=("w1",),
+            sid="s",
+            workdir=None,
+            ctl=("ensemble-session",),
+            resume=("ensemble-session", "resume", "w1"),
+            display=None,
+            detail=None,
+        )
+        line = f"g\t{record.to_line()}\n".encode()
+        self.put("record", line)
+        self.assertEqual(host_base.stored_record("w1", "g"), record)
+        self.assertIsNone(host_base.stored_record("w1", "other"))
+        self.assertIsNone(host_base.stored_record("absent", "g"))
+        for bad in (b"g " + line[2:], b"g\t{}\n", b"g\n"):
+            self.put("record", bad)
+            self.assertIsNone(host_base.stored_record("w1", "g"))
+        target = self.put("elsewhere", line)
+        os.unlink(os.path.join(self.dir, "record"))
+        os.symlink(target, os.path.join(self.dir, "record"))
+        self.assertIsNone(host_base.stored_record("w1", "g"))
+        os.unlink(os.path.join(self.dir, "record"))
+        self.put("record", line)
+        with mock.patch("os.getuid", return_value=os.getuid() + 1):
+            self.assertIsNone(host_base.stored_record("w1", "g"))
+        self.put("record", line[:-1] + b" " * (1 << 16) + b"\n")
+        self.assertIsNone(host_base.stored_record("w1", "g"))

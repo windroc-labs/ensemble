@@ -55,7 +55,7 @@ The agent program a session runs (Claude Code, Codex, OpenCode, a test fake), an
 _Avoid_: adapter, runtime (a Mode's class), agent (a role's run), backend, vehicle
 
 **Mode**:
-How the session layer hosts a client: headless (e.g. `claude -p`, under the guard, ends when it exits), tui (its interactive command in a terminal on its Host, ends when its caller stops it) or in_process (the Client's run on a thread of its session harness, no client process started, ends when the run returns). In code: `Mode` (`mode = headless/tui/in_process`), the Delegate CLI's `--mode`; its mode class runs it.
+How the session layer hosts a client: headless (e.g. `claude -p`, under the guard, ends when it exits), tui (its interactive command under the guard in a terminal on its Host, ends when its caller stops it) or in_process (the Client's run on a thread of its session harness, no client process started, ends when the run returns). In code: `Mode` (`mode = headless/tui/in_process`), the Delegate CLI's `--mode`; its mode class runs it.
 _Avoid_: runtime (the class that runs it)
 
 **Mode class**:
@@ -70,7 +70,7 @@ _Avoid_: agent run (a role's run, in a session)
 What a caller asks the session layer to run: workdir, Access, tier, effort, flags, env, the sid to resume. In code: `src/ensemble/session/engine/types.py`.
 
 **Host**:
-Where the session layer runs processes by name (e.g. in tmux sessions, or each in its own Docker container). It only runs them: an attachable Host names an attach target (`SessionView`, `CommandView`) the Viewer shows a session through; a process on it reads its own screen (`Process.screen`). In code: `src/ensemble/session/hosts/`.
+Where the session layer runs workers by name, each launched by its session harness through `Host.worker` (e.g. local processes with a tmux display, or each in its own Docker container). It only runs them: an attachable Host names an attach target (`SessionView`, `CommandView`) the Viewer shows a session through; a worker's handle reads its screen (`InteractiveProcess.screen`). In code: `src/ensemble/session/hosts/`.
 
 **Viewer**:
 The one display of every Host's sessions, on the host tmux: show, hide, layout, tile, the `--display` grammar, hidden state, opener relations and the grid settings (`[viewer]`). In code: `Viewer` (`src/ensemble/session/viewer/viewer.py`, reached through `ensemble.session.get_viewer()`) and the session layer's display functions (`viewer/display.py`).
@@ -131,5 +131,5 @@ A manager's command executor. It owns a Roster, starts opaque argv and uses each
 A manager's ledger of launch intents and Records, entry states, holder lease and events cursor: `~/.ensemble/managers/<name>/roster.json`. It alone writes the ledger and manages event rotation. In code: `src/ensemble/manager/engine/roster.py` and `events.py`.
 
 **Worker**:
-A Session-owned plain tui session, with its state in `~/.ensemble/workers/<sid>/worker.json`; no role, no task. Started, restarted and resumed by `ensemble-session`, which prints its Record. In code: `src/ensemble/session/engine/worker.py`.
+A Session-owned plain tui session, with its state in `~/.ensemble/workers/<sid>/worker.json` and its Record in `~/.ensemble/tui/<name>/record`; no role, no task. Started, restarted and resumed by `ensemble-session`, which prints its Record. In code: `src/ensemble/session/engine/worker.py`.
 _Avoid_: subagent

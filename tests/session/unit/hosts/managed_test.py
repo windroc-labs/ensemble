@@ -37,6 +37,7 @@ class ManagedProcessTest(Case):
             (KeyPress("BSpace", ctrl=True), b"\x08"),
             (KeyPress("Enter", ctrl=True), b"\r"),
             (KeyPress(" ", ctrl=True), b"\x00"),
+            (KeyPress("/", ctrl=True), b"\x1f"),
             (KeyPress("?", ctrl=True), b"\x7f"),
         ):
             with self.subTest(key=key):
@@ -78,9 +79,7 @@ class ManagedProcessTest(Case):
                 WorkerExit(7),
             ],
         )
-        self.assertEqual(channel.returncode(), 7)
-        self.assertFalse(channel.alive())
-        self.assertTrue(channel.wait_exit(0))
+        self.assertEqual((channel.returncode(), channel.state()), (7, Liveness.ABSENT))
 
     def test_each_hook_is_released_to_its_guard_only_after_it_was_taken(self):
         channel = self.channel()

@@ -211,7 +211,6 @@ class Planning(HarnessCase):
                 self.assertEqual(harness_launches(), [])
 
     def test_the_events_path_is_checked_at_construction_and_given_to_the_harness(self):
-        HarnessSession.hosts["agent"] = RefusedEvents("agent")
         spec = Spec("input", self.work, client="fake", sid=SID, events="ev#1")
         with self.assertRaises(ConfigError) as caught:
             self.make(spec=spec)
@@ -580,11 +579,6 @@ class CountingDisplay(HarnessSession):
     def display(cls, value=None, *, host=None):
         cls.calls.append((value, host))
         return f"completed:{value}"
-
-
-class RefusedEvents(RecordingHost):
-    def events_path(self, events):
-        raise SessionConfigError(f"events file {events}: tmux would misread it")
 
 
 class RootedSession(HarnessSession):

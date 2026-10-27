@@ -142,7 +142,6 @@ class GuardedDockerTest(Case):
         )
         assert proc.stdin is not None
         os.set_blocking(proc.stdin.fileno(), False)
-        record = {"generation": "g1"}
         worker = DockerWorker(
             "w1",
             "g1",
@@ -156,8 +155,6 @@ class GuardedDockerTest(Case):
                 "w1", self.home, "g1", Broker(), report=report, root="/", close=close
             ),
             report=lambda *_: None,
-            load=lambda: record,
-            store=record.update,
             terminal=False,
         )
         self.addCleanup(worker.close)
@@ -199,7 +196,6 @@ class SameEventsTest(Case):
         folder = os.path.join(self.home, name)
         os.mkdir(folder)
         saved = state(self.home, None)
-        saved.pop("host_hook")
         saved["words"] = {"begin": "working", "work": "working", "wait": "blocked", "end": "done"}
         write_state(folder, saved)
         return folder
@@ -226,7 +222,6 @@ class SameEventsTest(Case):
         self.enterContext(mock.patch.dict(os.environ, child_env(), clear=True))
         hooks = HookWorker([COMMAND, "hook", "--serve", guarded])
         self.addCleanup(hooks.stop)
-        record = {"generation": "g1"}
         worker = DockerWorker(
             "w1",
             "g1",
@@ -240,8 +235,6 @@ class SameEventsTest(Case):
                 "w1", self.home, "g1", Broker(), report=report, root="/", close=close
             ),
             report=lambda *_: None,
-            load=lambda: record,
-            store=record.update,
             start_reader=False,
         )
         worker.accept(b"s", b'{"pid": 1}')

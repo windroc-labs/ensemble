@@ -12,12 +12,11 @@ from unittest import mock
 
 from ensemble.session import Host, Session
 from ensemble.session.engine import types as engine_types
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Access, ConfigError, Exited, Launch, Spec, TurnFailed
 from ensemble.session.modes.in_process import RUN_THREAD
-from tests.session import fake_client
+from tests.session import fake_client, harnesses
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryViewer, ScreenHost
 from tests.session.modules import client_loader
@@ -323,11 +322,10 @@ def fake_tmux(case=None) -> mock.Mock:
     host.PAUSE = 0
     host.runner = mock.Mock(side_effect=AssertionError("a direct runner call"))
     host.status.return_value = None
-    host.process_status.side_effect = lambda target: (host.process(target), host.status(target))
     host.listing.return_value = []
     tags = {}
     host.option.side_effect = lambda _target, key: tags.get(key)
-    host.detach.return_value = host.process.return_value = "1 $1 %1 4242"
+    host.process.return_value = "1 $1 %1 4242"
 
     def started(_name, _launch, **kw):
         tags.update(kw["tags"], **{"@process": host.process.return_value})
@@ -417,7 +415,7 @@ class HostedTuiBase(TuiBase):
             }
         )
         chosen = self.host
-        self.session_cls = self.session = HostedSession.configured(
+        self.session_cls = self.session = harnesses.Threaded.configured(
             clients=clients,
             hosts=hosts,
             host_factory=lambda _kind, _name, _settings: chosen,

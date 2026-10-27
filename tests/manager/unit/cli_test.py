@@ -20,6 +20,7 @@ from ensemble.manager.engine.pr import VIEW_FIELDS
 from ensemble.utils import Record, Status, StatusState, append_line
 from tests.manager.case import Case
 from tests.manager.cli_case import CliCase
+from tests.manager.roster_case import mark
 from tests.manager.starters import answered, finished
 from tests.utils.cli_help import examples, parse_only
 from tests.utils.fakes import ctl
@@ -652,7 +653,7 @@ class ResumeInput(CliCase):
         record = self.fake_record("r1")
         self.roster.begin(Spec("r1", ("start",)), sid=record.sid)
         self.roster.commit("r1", record)
-        self.roster.mark("r1", State.WAITING)
+        mark(self.roster, "r1", State.WAITING)
         with mock.patch("subprocess.Popen", return_value=finished(2, "refused")):
             code, stdout, stderr = self.invoke("resume", "--manager", "mgr", "r1", "--input", "")
         self.assertEqual((code, stdout), (2, ""))

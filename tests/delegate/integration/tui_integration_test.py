@@ -143,12 +143,13 @@ class TuiRun(tui_live.Live):
         return [e["kind"] for e in self.records()]
 
     def turn_1_then(self, *rest: str) -> None:
-        """run.jsonl's kinds: turn 1's, its client binding and its progress in either order (the
-        transcript and the hooks are read apart), then `rest`.
+        """run.jsonl's kinds: turn 1's session, its input and progress, its client binding anywhere
+        among those two (its session harness reads the transcript apart from the run), then `rest`.
         """
         kinds = self.kinds()
-        self.assertEqual(sorted(kinds[2:4]), ["client_session", "progress"], kinds)
-        self.assertEqual([*kinds[:2], *kinds[4:]], ["session", "input", *rest])
+        self.assertEqual(sorted(kinds[1:4]), ["client_session", "input", "progress"], kinds)
+        others = [kind for kind in kinds if kind != "client_session"]
+        self.assertEqual(others, ["session", "input", "progress", *rest], kinds)
 
     def last(self, kind: str) -> dict:
         return [e for e in self.records() if e["kind"] == kind][-1]
