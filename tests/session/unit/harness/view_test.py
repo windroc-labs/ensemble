@@ -353,7 +353,7 @@ class ReattachTest(Base):
         self.assertEqual(self.attaches, 2)
         self.fresh.send.assert_called_once_with("hi")
 
-    def test_a_fresh_attachs_failure_is_not_retried(self):
+    def test_a_new_attach_that_fails_is_not_retried(self):
         view = self.view()
         self.stale.send.side_effect = SessionError("not running")
         with self.assertRaisesRegex(SessionError, "not running"):
