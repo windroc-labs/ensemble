@@ -147,11 +147,11 @@ class CliCase(Case):
         steps=None,
         turns=(),
         prompt: str = "hi",
-        trust: str | None = None,
+        dialog: str | None = None,
         **extra,
     ) -> subprocess.CompletedProcess:
         """A fake claude worker, its events self.events."""
-        scene = self.scene(name, steps, turns, **({} if trust is None else {"trust": trust}))
+        scene = self.scene(name, steps, turns, **({} if dialog is None else {"dialog": dialog}))
         env = {"ENSEMBLE_EVENTS": self.events, **scene, **extra}
         return self.session(
             "start",

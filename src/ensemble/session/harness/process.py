@@ -55,6 +55,8 @@ class Worker(Protocol):
     def opening_pending(self) -> str | None: ...
     @property
     def remote(self) -> bool: ...
+    @property
+    def up(self) -> bool: ...
 
     def pump(self, wait: float) -> tuple[list[Event], bool]: ...
     def record(self, event: Event) -> None: ...
@@ -190,9 +192,13 @@ class Harness:
                     return code
                 self._signal = None
             found, ended = worker.pump(self._poll)
+            # before its events: a view acting on one reads the status it came with
             if (opening := worker.opening_pending) != self._status.get("opening"):
                 self._status["opening"] = opening
-                self._write()  # before the events it explains: a Blocked's reader reads it
+                self._write()
+            if worker.up and "up" not in self._status:
+                self._status["up"] = True
+                self._write()
             self._log(found)
             self._write_pending()
             if ended:

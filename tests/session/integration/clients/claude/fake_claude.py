@@ -25,6 +25,8 @@ queues (an enqueue record) and joins to the turn once the tool returns (PostTool
 queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist;
 {"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
+- dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
+trust dialog), awaiting its answer as a dialog step does.
 - background: interactive background_tasks per Stop.
 - resume: print steps run instead of `steps` on --resume.
 - rate_limit: print a rate_limit_info after init.
@@ -36,8 +38,6 @@ queued_command attachment), then answers A; {"kind": "pause", "file": F} waits f
 - gate: a file a --session-id or --resume run waits for after its log line, as hang does.
 - commands: a file each local command appends {"pid", "line", "time", "dialog"} to; dialog: read
 while a dialog step waited.
-- trust: a dialog S printed and answered by a line before its first SessionStart (Claude's trust
-prompt).
 """
 
 import argparse
@@ -62,6 +62,7 @@ DEFAULTS = {
     "steps": [],
     "resume": None,
     "turns": [],
+    "dialog": None,
     "background": 0,
     "rate_limit": None,
     "usage": "Current session: 0% used\n",
@@ -70,7 +71,6 @@ DEFAULTS = {
     "log": None,
     "gate": None,
     "commands": None,
-    "trust": None,
 }
 LIMIT = "You've hit your usage limit."
 
@@ -135,6 +135,7 @@ CHECKS = {
         v is None or isinstance(v, list) and all(_step(step, tui=False) for step in v)
     ),
     "turns": lambda v: isinstance(v, list) and all(isinstance(t, list) for t in v),
+    "dialog": lambda v: v is None or _text(v),
     "background": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
     "rate_limit": lambda v: v is None or isinstance(v, dict),
     "usage": lambda v: (
@@ -147,7 +148,6 @@ CHECKS = {
     "log": lambda v: v is None or isinstance(v, str),
     "gate": lambda v: v is None or isinstance(v, str),
     "commands": lambda v: v is None or isinstance(v, str),
-    "trust": lambda v: v is None or isinstance(v, str),
 }
 
 
@@ -443,11 +443,11 @@ class InteractiveSession:
 
     def run(self):
         try:
-            if (trust := self.request.scenario["trust"]) is None:
+            if self.request.scenario["dialog"] is None:
                 self.ready()
             else:
-                print(trust, flush=True)
-                self.answer()
+                print(self.request.scenario["dialog"], flush=True)
+                self.answer()  # SessionStart follows its answer
             prompt = self.request.prompt or self.request.stdin.line()
             for k in itertools.count():
                 self.turn(prompt, self.request.turns[k] if k < len(self.request.turns) else [])

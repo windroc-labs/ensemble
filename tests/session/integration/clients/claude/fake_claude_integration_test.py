@@ -781,6 +781,17 @@ class Readiness(Case):
         proc.stdin.write(text)
         proc.stdin.flush()
 
+    def test_a_startup_dialog_shows_before_session_start_which_follows_its_answer(self):
+        self.scene(steps=["Hi."], dialog=TRUST)
+        events = ("SessionStart", "UserPromptSubmit", "Stop")
+        proc = self.popen(*SESSION, "--settings", self.settings(*events), "--", "hello")
+        self.assertEqual(proc.stdout.readline(), TRUST + "\n")
+        self.assertEqual(self.names(), [])
+        out, err = proc.communicate("yes\n", timeout=30)
+        self.assertEqual((proc.returncode, out), (0, "Hi.\n"), err)
+        self.assertEqual(self.names(), ["SessionStart", "UserPromptSubmit", "Stop"])
+        self.assertEqual(self.fired()[0]["source"], "startup")
+
     def test_session_start_and_local_commands(self):
         self.scene(
             steps=[{"kind": "dialog", "text": TRUST}, "Hi."],
