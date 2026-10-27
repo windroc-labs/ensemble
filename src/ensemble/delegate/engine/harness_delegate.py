@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import os
+import signal
 import stat
+import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping, Sequence
@@ -19,7 +23,6 @@ from ensemble.delegate.composer import Composer, DelegateConfig, RunConfig, Team
 from ensemble.delegate.engine.base import Delegate
 from ensemble.delegate.engine.callback import EventCallback, sweep
 from ensemble.delegate.engine.config import module_roots, packaged_environments, read_config
-from ensemble.delegate.engine.container import on_docker
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
 from ensemble.delegate.engine.environment import resolve
 from ensemble.delegate.engine.handler import finish
@@ -57,7 +60,6 @@ from ensemble.session import (
     Mode,
     NoRecordedSession,
     NotShowable,
-    Process,
     Resumable,
     RunLog,
     Session,
@@ -77,6 +79,7 @@ from ensemble.utils import (
     SID_ENV,
     Display,
     OutcomeStatus,
+    ProcessControl,
     Record,
     Status,
     StatusState,
@@ -128,9 +131,13 @@ DRAIN_WAIT = (
 )
 GONE_EVERY = 1.0  # seconds between the drive's worker checks
 WIND_DOWN_WAIT = 30.0  # seconds
+DRIVE_STOP_WAIT = 5.0  # seconds after SIGTERM, then SIGKILL
 
 
 class HarnessDelegate(Delegate):
+    _controls: type[ProcessControl] = ProcessControl  # the drive's
+    _stop_wait = DRIVE_STOP_WAIT
+
     def __init__(self, role: str, spec: Spec, **placement) -> None:
         self._accept(role, spec, **placement)
         self._persist_new()
@@ -156,9 +163,7 @@ class HarnessDelegate(Delegate):
         return Preview(
             state.plan,
             state.agent_name if view._named(state.plan.spec.mode) else None,
-            state.harness_name,
             state.host,
-            state.harness_host,
             state.callback,
         )
 
@@ -185,7 +190,6 @@ class HarnessDelegate(Delegate):
         *,
         host: str | None = None,
         display: Display = None,
-        harness_host: str | Host | None = None,
         callback: Sequence[str] | None = None,
         overlays: Sequence[Mapping] = (),
         session_cls: type[Session] = Session,
@@ -203,38 +207,20 @@ class HarnessDelegate(Delegate):
             self._settings = thaw(self.composer.config.values)
             self.session_cls = session_cls
             self._configure()
-            hosts = Host.parse_hosts(self._settings.get("hosts")).tables
+            config.delegates(self._settings)
             agent_host = session_cls.host(host)
             environment = resolve(
                 self._settings, role=role, host=agent_host.name, packaged=packaged_environments()
             )
-            self._harness_override = harness_host if isinstance(harness_host, Host) else None
-            harness = (
-                harness_host
-                if isinstance(harness_host, Host)
-                else session_cls.host(
-                    harness_host or config.harness_host(self._settings, hosts) or agent_host.name
-                )
-            )
             display = session_cls.display(
                 "none" if run.show == "none" else display, host=agent_host.name
             )
-            events = harness.events_path(spec.events)
+            events = agent_host.events_path(spec.events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
-        if harness.name not in hosts:
-            raise ConfigError(
-                f"harness_host {harness.name}: want one of {', '.join(sorted(hosts))}"
-            )
         self.driver = driver or AgentDriver(
             session_cls, settings=self._settings, display=display, host=agent_host.name
         )
-        if self.driver.docker and on_docker(self._settings, harness.name):
-            other = next((n for n in hosts if not on_docker(self._settings, n)), "<a host Host>")
-            raise ConfigError(
-                f"harness_host: an agent on the Docker Host needs its harness on another Host; "
-                f'set [delegate.delegates] harness_host = "{other}"'
-            )
         tui = spec.mode == Mode.TUI
         accepted = plan(
             run,
@@ -266,7 +252,6 @@ class HarnessDelegate(Delegate):
             if session_cls is Session
             else f"{session_cls.__module__}:{session_cls.__qualname__}",
             agent_host.name,
-            harness.name,
             display,
             None if callback is None else tuple(callback),
             name,
@@ -276,10 +261,7 @@ class HarnessDelegate(Delegate):
             tuple(thaw(overlay) for overlay in overlays),
             events=events,
         )
-        try:
-            harness.validate(self._state.harness_name, self._harness_launch(self._state))
-        except (SessionConfigError, SessionError) as error:
-            raise ConfigError(str(error)) from None
+        self._harness_launch(self._state)
 
     def _persist_new(self) -> None:
         """Every refusal precedes every write: a fresh workdir's session preflight runs before its
@@ -397,27 +379,16 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _live(self, payload: bytes | None) -> bool:
-        """Whether the run `payload` records is live: a readable record's per _alive; a corrupt
-        one's while its run lock is held or the harness it names lives; none: while the run lock
-        is held.
+        """Whether the run `payload` records is live: a readable record's per _alive; else while
+        its run lock is held or a corrupt one's drive runs.
         """
         if payload is None:
             return self.store.running()
         try:
             return self._alive(self._parse(payload))
         except ConfigError:
-            data = _loaded(payload)
-        host, name = data.get("harness_host"), data.get("harness_name")
-        return self.store.running() or (
-            isinstance(host, str)
-            and isinstance(name, str)
-            and (process := self._process(host, name)) is not None
-            and process.alive()
-        )
-
-    @property
-    def _harness_host(self) -> Host:
-        return self._harness_override or self.session_cls.host(self._state.harness_host)
+            drive = _loaded(payload).get("drive")
+        return self.store.running() or self._running(drive if isinstance(drive, str) else None)
 
     def _configure(self) -> None:
         try:
@@ -471,8 +442,6 @@ class HarnessDelegate(Delegate):
             )
             view._configure()
             view.session_cls.host(view._state.host)
-            view.session_cls.host(view._state.harness_host)
-            view._harness_override = None
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
         view.driver = AgentDriver(
@@ -502,7 +471,7 @@ class HarnessDelegate(Delegate):
         """A view of layout's run with no state loaded: enough for _live."""
         view = cls.__new__(cls)
         view.layout, view.workdir, view.store = layout, layout.workdir, RunState(layout)
-        view.session_cls, view._harness_override, view._viewer = Session, None, None
+        view.session_cls, view._viewer = Session, None
         return view
 
     @classmethod
@@ -546,15 +515,14 @@ class HarnessDelegate(Delegate):
         events: str | None = None,
         session_cls: type[Session] = Session,
     ) -> None:
-        """The display on the agent's Host, the events file on the harness's."""
+        """The display and the events file on the agent's Host."""
         settings = thaw(Composer().config.values)
         try:
             session_cls.configure_from(settings)
-            hosts = Host.parse_hosts(settings.get("hosts")).tables
+            config.delegates(settings)
             agent = session_cls.host()
             session_cls.layout(display=display)
-            harness = session_cls.host(config.harness_host(settings, hosts) or agent.name)
-            harness.events_path(events)
+            agent.events_path(events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
             raise ConfigError(str(error)) from None
 
@@ -610,27 +578,6 @@ class HarnessDelegate(Delegate):
         except Unanswered as error:
             raise ConfigError(f"{self.workdir}: agent session liveness unknown: {error}") from None
 
-    def _harness(self, state: DelegateState) -> Process | None:
-        return (
-            self._process(state.harness_host, state.harness_name, sid=state.plan.sid)
-            if state.detached
-            else None
-        )
-
-    def _process(self, host_name: str, name: str, *, sid: str | None = None) -> Process | None:
-        try:
-            host = (
-                self._harness_override
-                if self._harness_override is not None and self._harness_override.name == host_name
-                else self.session_cls.host(host_name)
-            )
-            process = host.attach(name)
-            return process if sid is None or process.session_identity()[0] == sid else None
-        except SessionError:
-            return None
-        except SessionConfigError as error:
-            raise ConfigError(str(error)) from None
-
     def _alive(self, state: DelegateState) -> bool:
         if owned(state.plan):
             if state.completed:
@@ -640,8 +587,7 @@ class HarnessDelegate(Delegate):
             agent = self._answered_agent(state) if state.bound else None
             return agent is not None and agent.alive()
         if state.detached:
-            process = self._harness(state)
-            return process is not None and process.alive() or self.store.running()
+            return self._running(state.drive) or self.store.running()
         return not state.completed and self.store.running()
 
     def alive(self) -> bool:
@@ -655,9 +601,7 @@ class HarnessDelegate(Delegate):
         return mode == Mode.TUI or (self.driver.docker and mode == Mode.HEADLESS)
 
     def _record(self, state: DelegateState) -> Record:
-        sessions = (state.harness_name,) if state.detached else ()
-        if state.plan.spec.mode == "tui":
-            sessions += (state.agent_name,)
+        sessions = (state.agent_name,) if state.plan.spec.mode == "tui" else ()
         return Record(
             1,
             state.outer.get("kind", "role"),
@@ -732,18 +676,13 @@ class HarnessDelegate(Delegate):
         return agent if agent is not None and agent.alive() and agent.showable else None
 
     def _views(self, state: DelegateState) -> tuple[list[tuple[str, Host]], Unanswered | None]:
-        """Its live showable sessions and their Hosts, agent first; why its agent's Host could not
-        tell, if so.
-        """
+        """Its live showable agent session and Host; why its Host could not tell, if so."""
         views, unanswered = [], None
         try:
             if self._shown_agent(state) is not None:
                 views.append((state.agent_name, self._session_host(state.host)))
         except Unanswered as error:
             unanswered = error
-        process = self._harness(state)
-        if process is not None and process.alive() and self._harness_host.attachable:
-            views.append((state.harness_name, self._harness_host))
         return views, unanswered
 
     def _shown_by(self) -> Viewer:
@@ -783,7 +722,7 @@ class HarnessDelegate(Delegate):
             raise _unknown(unanswered)
 
     def close(self) -> None:
-        """Unanswered after closing the harness when the agent's Host could not tell."""
+        """Unanswered, once the drive stops, if the agent's Host could not tell."""
         state = self._read()
         claim = self.store.closing_claim() if owned(state.plan) else contextlib.nullcontext()
         with claim:
@@ -801,17 +740,73 @@ class HarnessDelegate(Delegate):
             if unanswered is None
             else f"close {state.agent_name}: agent session not checked: {unanswered}"
         )
-        process = self._harness(state)
-        if process is not None:
-            try:
-                process.close()
-                if self._harness_host.attachable:
-                    self._shown_by().close(state.harness_name, self._harness_host)
-            except SessionError as error:
-                also = "" if unchecked is None else f"; {unchecked}"
-                raise SessionError(f"close {state.harness_name}: {error}{also}") from error
+        try:
+            self._stop_drive(state)
+        except SessionError as error:
+            also = "" if unchecked is None else f"; {unchecked}"
+            raise SessionError(f"{error}{also}") from error
         if unchecked is not None:
             raise Unanswered(unchecked)
+
+    def _control(self, path: str | None) -> ProcessControl | None:
+        if path is None:
+            return None
+        try:
+            return self._controls.attach(path)
+        except OSError:
+            return None
+
+    def _running(self, path: str | None) -> bool:
+        control = self._control(path)
+        try:
+            return control is not None and control.running()
+        except OSError:
+            return False
+
+    @staticmethod
+    def _spawn(control: ProcessControl, launch: Launch, log: str) -> None:
+        """`control`'s command in a new session, SIGNALS blocked, appending to regular file `log`."""
+        fd = os.open(
+            log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+        )
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "not a regular file", log)
+            mask = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
+            try:
+                process = subprocess.Popen(
+                    control.command(),
+                    cwd=launch.cwd,
+                    env=dict(launch.env),
+                    stdin=subprocess.DEVNULL,
+                    stdout=fd,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        finally:
+            os.close(fd)
+        threading.Thread(target=process.wait, daemon=True).start()
+
+    def _stop_drive(self, state: DelegateState) -> None:
+        """SIGTERM to its drive's group, then SIGKILL; SessionError if it outlives both."""
+        control = self._control(state.drive) if state.detached else None
+        if control is None:
+            return
+        try:
+            for stop in (control.terminate, control.kill):
+                stop()
+                deadline = time.monotonic() + self._stop_wait
+                while control.live():
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(TUI_POLL)
+                else:
+                    return
+        except OSError as error:
+            raise SessionError(f"close {state.harness_name}: {error.strerror or error}") from error
+        raise SessionError(f"close {state.harness_name}: did not exit")
 
     def _stop_owned(self, *, closed: bool) -> None:
         """Once an owned run's worker is closed or gone: delegate.json `closing`, and its still
@@ -1122,6 +1117,9 @@ class HarnessDelegate(Delegate):
         if not owned(self._state.plan):
             RunRecord.announce(self._state, result)
 
+    def _exited(self, rc: int) -> None:
+        RunRecord.exited(self._state, rc)
+
     def _current(self) -> DelegateState:
         state = self._read()
         if (state.plan.sid, state.attempt) != (self._state.plan.sid, self._state.attempt):
@@ -1154,23 +1152,26 @@ class HarnessDelegate(Delegate):
         )
 
     def _launch(self, previous: DelegateState, state: DelegateState) -> Record:
-        """`state` saved detached before its harness starts; `previous` again when it cannot."""
-        state = replace(state, detached=True, start_failure=None)
-        record = self._record(state)
+        """`state` saved with its drive before it starts; `previous` if it cannot."""
         launch = self._harness_launch(state)
-        self._save(state)
         try:
-            self._harness_host.detach(
-                state.harness_name,
-                launch,
-                display=state.display,
-                events=state.events,
-                record=record,
+            control = self._controls.prepare(
+                launch.argv, launch.cwd, env=launch.env, blocked_signals=SIGNALS
             )
+        except OSError as error:
+            raise SessionError(f"detach {state.harness_name}: {_why(error)}") from None
+        state = replace(state, detached=True, start_failure=None, drive=control.path)
+        record = self._record(state)
+        try:
+            self._save(state)
+            self._spawn(control, launch, self.layout.drive_log)
+            control.wait_started()
         except BaseException as error:
+            with contextlib.suppress(OSError):
+                control.cancel()
             self._save(previous)
-            if isinstance(error, SessionConfigError):
-                raise ConfigError(str(error)) from None
+            if isinstance(error, OSError):
+                raise SessionError(f"detach {state.harness_name}: {_why(error)}") from None
             raise
         self._state = state
         return record
@@ -1203,16 +1204,14 @@ class HarnessDelegate(Delegate):
 
     def _started(self, state: DelegateState) -> None:
         """Tui: waits, outside the mutex, until this run's agent session has its client running;
-        else SessionError naming why (a held lock names its holder), its harness and
-        agent session closed. A Host failure or the passed start limit is saved as the attempt's
-        start_failure before the close, and the harness then ends with it; a harness that ended
-        first is not. A same-named session of another sid is not this run's.
+        else SessionError naming why, its drive and agent closed; a Host failure or the start
+        limit is first saved as start_failure, unless the drive ended.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
         limit = DOCKER_START_TIMEOUT if self.driver.docker else TUI_START_TIMEOUT
         deadline = time.monotonic() + limit
-        harness = agent = unanswered = None
+        agent = unanswered = None
         ended = False
         try:
             while True:
@@ -1222,8 +1221,7 @@ class HarnessDelegate(Delegate):
                         return
                 except Unanswered as error:
                     unanswered = error
-                harness = self._harness(state)
-                ended = harness is None or not harness.alive()
+                ended = not self._running(state.drive)
                 if ended:
                     why = f": its harness ended{self._ended()}"
                     break
@@ -1241,12 +1239,10 @@ class HarnessDelegate(Delegate):
         message = " ".join(message.split())
         if not ended:
             self._start_failed(message)
-        if harness is not None:
             try:
-                harness.close()
+                self._stop_drive(state)
             except SessionError:
-                if not ended:
-                    self._start_failed(None)
+                self._start_failed(None)
         if agent is not None:
             with contextlib.suppress(SessionError):
                 agent.close()
@@ -1416,6 +1412,10 @@ class HarnessDelegate(Delegate):
             record = self._launch(previous, state)
         self._started(self._state)
         return record
+
+
+def _why(error: OSError) -> str:
+    return error.strerror or str(error)
 
 
 def _remove(path: str) -> None:

@@ -41,7 +41,7 @@ The component that turns a role, an optional task and free-text input into an ag
 The Delegate interface for starting a prompt: `AgentDriver` starts a Session through its configured class; `InstructionDriver` returns an Instruction file directly. In code: `src/ensemble/delegate/engine/drivers.py`.
 
 **Harness**:
-The process that runs one detached Delegate run to its end as session `<name>-drive` on its harness Host, the run's state kept in its run dir, `<workdir>/run/`. In code: `src/ensemble/delegate/engine/harness.py`; the run dir: `engine/state.py`.
+The process that runs one detached Delegate run to its end, `<name>-drive`: a local process the Delegate starts itself through `ProcessControl` (its control path in `delegate.json` `drive`, its output in `run/drive.log`), the run's state kept in its run dir, `<workdir>/run/`. In code: `src/ensemble/delegate/engine/harness.py`; the run dir: `engine/state.py`.
 
 **Composer**:
 The component that assembles principles, role and input into a prompt (no task text: the agent run reads its task file) and resolves the role's run config.

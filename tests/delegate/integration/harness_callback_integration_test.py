@@ -10,14 +10,13 @@ from dataclasses import asdict
 from unittest import mock
 
 from ensemble.delegate import ConfigError, DelegateEvent, Progress, Spec
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Exited, LimitHit, Reply
 from ensemble.utils import Stopped
 from tests.delegate.fakes import callback_recorder
-from tests.delegate.fakes.harness_session import FailingSession, HarnessSession
+from tests.delegate.fakes.harness_session import DrivenDelegate, FailingSession, HarnessSession
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block, mark
 from tests.delegate.unit.runs import DONE
@@ -106,7 +105,7 @@ class Callbacks(CallbackCase):
 
     def test_the_harness_side_attach_delivers_to_the_persisted_argv(self):
         self.make(callback=self.callback())
-        HarnessDelegate.attach(self.work, session_cls=HarnessSession).run()
+        DrivenDelegate.attach(self.work, session_cls=HarnessSession).run()
         self.assertEqual([event.kind for event in self.events()], ["begun", "progress", "finished"])
 
     def test_a_replacing_run_stamps_its_own_attempt(self):
@@ -241,7 +240,7 @@ class OneFinished(CallbackCase):
 
     def test_a_refused_start_sends_one_stopped_finished(self):
         spec = Spec("input", self.work, client="fake")
-        delegate = HarnessDelegate(
+        delegate = DrivenDelegate(
             "dummy-tester", spec, session_cls=RefusedSession, callback=self.callback()
         )
         with self.assertRaises(ConfigError):

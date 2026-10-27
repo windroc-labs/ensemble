@@ -1,9 +1,10 @@
 """router.py --tui end to end (Segment): run from MANAGER's pane with $ENSEMBLE_EVENTS, an --issue
 claim or a tick prints the run's one pipeline Record and its sessions and attach command
-(FR-28); its harness and TUI live, the TUI in MANAGER's grid, the harness listed by MANAGER's
-`ensemble-session ls --here`; written back as a headless run is; the events file gets the TUI's
-turn ends, one outcome and the harness's exit; an idle tick prints nothing. Killing the harness and
-TUI sessions, or `ensemble-orchestrator close ID`, ends the run and leaves the issue In Progress for the
+(FR-28); its drive (a local process, no session, so not in MANAGER's `ensemble-session ls
+--here`) and TUI live, the TUI in MANAGER's grid; written back as a headless run is; the events file
+gets the TUI's turn ends, one outcome and the drive's exit; an idle tick prints nothing. A SIGKILL
+of the drive's process group and a kill of the TUI session, or `ensemble-orchestrator close ID`,
+ends the run and leaves the issue In Progress for the
 next router.py --issue to resume. `ensemble-orchestrator resume ID` brings a closed TUI's run back attended
 at its display, its Record unchanged. No place for the TUI, a bad display or events file, or none:
 exit 2 before any Linear request, starting nothing.
@@ -11,6 +12,7 @@ exit 2 before any Linear request, starting nothing.
 
 import functools
 import os
+import signal
 import subprocess
 import unittest
 
@@ -73,12 +75,12 @@ class Attended(Segment):
         sid = self.claim(ident, "pm", self.agent_script("pm", "done", ident), tui=True)
         harness, tui = self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)
         with self.step("attended: shown and listed"):
-            self.assertEqual((self.live(harness), self.live(tui)), (True, True))
+            self.assertEqual((self.drive_running(ident), self.live(tui)), (True, True))
             live_tmux.wait(
                 functools.partial(live_tmux.assert_grid, self, self.server, MANAGER, [[tui]]),
                 what=f"the grid [[{tui!r}]]",
             )
-            self.assertIn(harness, self.here())
+            self.assertNotIn(harness, self.here())
         self.agent_run()
         ended = (f"{harness} outcome done", f"{harness} exited 0")
         live_tmux.wait(lambda: ended[1] in self.event_lines(), TIMEOUT, f"`{ended[1]}`")
@@ -94,10 +96,25 @@ class Attended(Segment):
             res = self.router("--tui", ENSEMBLE_EVENTS=self.events, **self.in_manager())
             self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
 
+    def drive_group(self, ident):
+        """The process group of ident's drive (its harness process), never this test's."""
+        workdir = os.path.join(self.workdirs, ident)
+        ps = subprocess.run(
+            ["ps", "-A", "-ww", "-o", "pid=,pgid=,args="],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        rows = [line.split(None, 2) for line in ps.stdout.splitlines()]
+        tail = f"-m ensemble.delegate.engine.harness {workdir}"
+        [group] = [int(row[1]) for row in rows if row[2:] and row[2].endswith(tail)]
+        self.assertNotEqual(group, os.getpgrp())
+        return group
+
     def run_processes(self, ident):
-        """Whether ident's run still has a harness or write-back process: the session list can drop
-        a stopped harness before its process ends, and its last callback, in its own process group,
-        outlives it.
+        """Whether ident's run still has a drive or write-back process: its control can report a
+        stopped drive ended before its process is reaped, and its last callback, in its own process
+        group, outlives it.
         """
         workdir = os.path.join(self.workdirs, ident)
         marks = (
@@ -127,9 +144,9 @@ class Attended(Segment):
             self.expect_problem(lookup(app))
         with self.step("harness stopped"):
             stop(ident, sid)
-            harness, tui = self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)
-            for name in (harness, tui):
-                live_tmux.wait(lambda name=name: not self.live(name), TIMEOUT, f"{name} gone")
+            tui = config.tui_name("pm", ident, sid)
+            live_tmux.wait(lambda: not self.drive_running(ident), TIMEOUT, "its drive ended")
+            live_tmux.wait(lambda: not self.live(tui), TIMEOUT, f"{tui} gone")
             live_tmux.wait(lambda: not self.run_processes(ident), TIMEOUT, "its processes ended")
             self.pending = None
             self.assertEqual(self.state(ident), "in_progress")
@@ -140,12 +157,12 @@ class Attended(Segment):
         self.resume(ident, "pm", sid, script, tui=True, after_stop=True)
         self.agent_run()
 
-    def test_killing_its_sessions_interrupts_the_run_and_the_next_router_run_resumes(self):
+    def test_killing_its_drive_and_tui_interrupts_the_run_and_the_next_router_run_resumes(self):
         def kill(ident, sid):
-            # the harness's kill leaves its owned TUI: the TUI's kill interrupts the attempt
-            for name in (self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)):
-                res = self.server.tmux("kill-session", "-t", f"={name}")
-                self.assertEqual(res.returncode, 0, res.stderr)
+            # the drive's SIGKILL leaves its owned TUI: the TUI's kill interrupts the attempt
+            os.killpg(self.drive_group(ident), signal.SIGKILL)
+            res = self.server.tmux("kill-session", "-t", f"={config.tui_name('pm', ident, sid)}")
+            self.assertEqual(res.returncode, 0, res.stderr)
 
         self.interrupted(kill)
 

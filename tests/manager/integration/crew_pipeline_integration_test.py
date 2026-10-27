@@ -29,12 +29,13 @@ DONE = block(
 class PipelineTest(LivePipeline):
     def test_a_pipeline_is_recorded_and_its_events_reach_the_managers_file(self):
         record = self.pipeline("p", [f"{START}\n{DONE}"])
-        harness, tui = record.sessions
-        self.wait_event(harness, "exited")
+        (tui,) = record.sessions
+        drive = f"{tui}-drive"
+        self.wait_event(drive, "exited")
         self.assertEqual(self.words(tui), [["done"]])
-        self.assertEqual(self.words(harness), [["outcome", "done"], ["exited", "0"]])
+        self.assertEqual(self.words(drive), [["outcome", "done"], ["exited", "0"]])
         self.until(lambda: self.state(ID) == "in_review", f"{ID} written back")
-        self.until(lambda: self.gone(harness), f"{harness} gone")
+        self.until(lambda: not self.drive_running(record), f"{drive} ended")
         self.ok(self.crew("attach"))
         self.assertEqual(self.roster()["p"].state, State.DONE)
 
@@ -49,7 +50,8 @@ class PipelineTest(LivePipeline):
 
     def test_b8_a_killed_pipeline_comes_back_attended_at_its_display(self):
         record = self.pipeline("p", [START])
-        harness, tui = record.sessions
+        (tui,) = record.sessions
+        drive = f"{tui}-drive"
         self.assertTrue(record.display.startswith(MANAGER), record.display)
         self.killed("p", record)
         self.assertEqual(self.state(ID), "in_progress")
@@ -60,9 +62,9 @@ class PipelineTest(LivePipeline):
             f"the grid [[{tui}]]",
         )
         self.assertTrue(has_pair(logged(self.log("p"))[-1]["argv"], "--resume", record.sid))
-        self.until(lambda: ["outcome", "done"] in self.words(harness), "the resumed outcome")
+        self.until(lambda: ["outcome", "done"] in self.words(drive), "the resumed outcome")
         self.until(lambda: self.state(ID) == "in_review", f"{ID} written back")
-        self.until(lambda: self.gone(harness), f"{harness} gone")
+        self.until(lambda: not self.drive_running(record), f"{drive} ended")
         self.ok(self.crew("attach"))
         entry = self.roster()["p"]
         self.assertEqual((entry.state, entry.record), (State.DONE, record))

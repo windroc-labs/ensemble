@@ -13,12 +13,11 @@ from unittest import mock
 from ensemble.delegate import ConfigError, Spec, cli
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.drivers import AgentDriver
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import SessionError
 from tests.delegate.case import REPO, child_env
-from tests.delegate.fakes.harness_session import HarnessSession, harness_launches
+from tests.delegate.fakes.harness_session import DrivenDelegate, HarnessSession, harness_launches
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.runner import executed
 
@@ -50,17 +49,20 @@ class MissingTmuxSession(HarnessSession):
 class Refusals(HarnessCase):
     def construct(self, *, session_cls=HarnessSession, **placement):
         spec = Spec("input", self.work, task="echo", client="fake")
-        return HarnessDelegate("dummy-tester", spec, session_cls=session_cls, **placement)
+        return DrivenDelegate("dummy-tester", spec, session_cls=session_cls, **placement)
 
-    def test_host_display_and_harness_configuration_refusals_are_delegate_errors(self):
+    def test_host_display_and_delegates_configuration_refusals_are_delegate_errors(self):
         for placement in ({"host": "unknown"}, {"display": "invalid"}):
             with self.subTest(placement=placement), self.assertRaises(ConfigError):
                 self.construct(session_cls=PlacementSession, **placement)
             self.assertFalse(os.path.exists(self.work))
         with open(self.local, "a", encoding="utf-8") as file:
             file.write('[delegate.delegates]\nharness_host = "unknown"\n')
-        with self.assertRaisesRegex(ConfigError, "harness_host"):
+        with self.assertRaises(ConfigError) as caught:
             self.make()
+        self.assertEqual(
+            str(caught.exception), "[delegates] harness_host: the delegate takes no keys"
+        )
         self.assertFalse(os.path.exists(self.work))
 
     def test_client_preflight_driver_failure_is_a_constructor_refusal_without_metadata(self):
@@ -74,7 +76,7 @@ class Refusals(HarnessCase):
         for error in (OSError("cannot read configuration"), ValueError("bad configuration")):
             for action in (
                 self.make,
-                lambda: HarnessDelegate.attach(self.work, session_cls=HarnessSession),
+                lambda: DrivenDelegate.attach(self.work, session_cls=HarnessSession),
             ):
                 with (
                     self.subTest(error=error, action=action),
@@ -136,7 +138,7 @@ class Refusals(HarnessCase):
         self.assertFalse(os.path.exists(os.path.join(Layout(self.work).run, "delegate.json")))
 
 
-class BoundDelegate(HarnessDelegate):
+class BoundDelegate(DrivenDelegate):
     def __init__(self, role, spec, **placement):
         super().__init__(role, spec, session_cls=HarnessSession, **placement)
 
@@ -173,7 +175,7 @@ class LiveRun(HarnessCase):
             before = self.metadata()
             launches = len(harness_launches())
             seen.append(self.cli())
-            view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+            view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
             self.assertEqual(view.resume().sid, SID)
             with self.assertRaises(ConfigError) as caught:
                 view.detach()

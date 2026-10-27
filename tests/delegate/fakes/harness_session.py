@@ -1,12 +1,16 @@
-"""Process-free Session, Hosts and Viewer for HarnessDelegate's ownership and view contracts. A
-RecordingHost given a tui run's harness starts its agent session as the harness would, unless
-harness_starts_agent is False.
+"""Process-free Session, Hosts, drive control and Viewer for HarnessDelegate's ownership and view
+contracts. DrivenDelegate's drive is a FakeControl: a tui run's spawned drive starts its agent
+session as the drive would, unless harness_starts_agent is False.
 """
 
+import contextlib
 import json
 import os
+import shutil
+import tempfile
 from dataclasses import replace
 
+from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import (
     Access,
@@ -62,26 +66,11 @@ class RecordingProcess(Process):
 class RecordingHost(Host):
     processes: dict[tuple[str, str], RecordingProcess] = {}
     launches: list[dict] = []
-    harness_starts_agent = True
 
     def detach(self, name, launch, *, display=None, events=None, record=None):
         process = RecordingProcess(name, display=display, record=record)
         self.processes[self.name, name] = process
-        self.launches.append(
-            {
-                "host": self.name,
-                "name": name,
-                "argv": list(launch.argv),
-                "cwd": launch.cwd,
-                "env": dict(launch.env),
-                "blocked_signals": launch.blocked_signals,
-                "display": display,
-                "events": events,
-                "record": record,
-            }
-        )
-        if RecordingHost.harness_starts_agent and record is not None and len(record.sessions) == 2:
-            _start_agent(record, display)
+        self.launches.append({"host": self.name, "name": name, "argv": list(launch.argv)})
         return process
 
     def terminal(self, name, launch, *, display=None, events=None, record=None, metadata=None):
@@ -100,12 +89,138 @@ class RecordingHost(Host):
         ]
 
 
-def _start_agent(record, display):
+class FakeControl:
+    """ProcessControl's drive surface, on disk under HOME so other processes see it: each control
+    a ~/.ensemble/control-fake/apm-group-* dir holding state.json, {"alive", "launch", ...}. spawn
+    stands in for HarnessDelegate._spawn: it records the launch (spawn_error raises instead) and
+    starts the drive (ends_at_start: one that ends as it starts, after calling `ending`). stubborn: "term" outlives SIGTERM,
+    "kill" SIGKILL too.
+    """
+
+    harness_starts_agent = True
+    ends_at_start = False
+    ending = None
+    spawn_error: BaseException | None = None
+    stubborn: str | None = None
+
+    def __init__(self, path):
+        self.path = path
+
+    @staticmethod
+    def root():
+        return os.path.expanduser("~/.ensemble/control-fake")
+
+    @classmethod
+    def reset(cls):
+        shutil.rmtree(cls.root(), ignore_errors=True)
+        cls.harness_starts_agent, cls.spawn_error, cls.stubborn = True, None, None
+        cls.ends_at_start, cls.ending = False, None
+
+    @classmethod
+    def prepare(cls, argv, cwd, *, env=None, blocked_signals=()):
+        os.makedirs(cls.root(), exist_ok=True)
+        control = cls(tempfile.mkdtemp(prefix="apm-group-", dir=cls.root()))
+        launch = {"argv": list(argv), "cwd": cwd, "env": dict(env or {})}
+        control._save(alive=False, launch={**launch, "blocked_signals": tuple(blocked_signals)})
+        return control
+
+    @classmethod
+    def attach(cls, path):
+        return cls(path)
+
+    @classmethod
+    def spawn(cls, control, launch, log):
+        if cls.spawn_error is not None:
+            raise cls.spawn_error
+        workdir = os.path.dirname(launch.cwd)
+        with open(os.path.join(launch.cwd, "delegate.json"), encoding="utf-8") as file:
+            state = json.load(file)
+        control._save(
+            alive=True,
+            launch={
+                **control.data()["launch"],
+                "name": state["harness_name"],
+                "display": state["display"],
+                "events": state["events"],
+                "log": log,
+            },
+        )
+        append_line(os.path.join(cls.root(), "launches.jsonl"), json.dumps(control.path) + "\n")
+        if cls.harness_starts_agent and state["spec"]["mode"] == Mode.TUI:
+            _start_agent(workdir, state)
+        if cls.ends_at_start:
+            if cls.ending is not None:
+                cls.ending()
+            control.close()
+
+    @classmethod
+    def launches(cls) -> list[dict]:
+        """Each spawned drive's launch, in order."""
+        try:
+            with open(os.path.join(cls.root(), "launches.jsonl"), encoding="utf-8") as file:
+                paths = [json.loads(line) for line in file]
+        except FileNotFoundError:
+            return []
+        return [cls(path).data()["launch"] for path in paths]
+
+    @classmethod
+    def named(cls, name) -> "FakeControl":
+        """The last spawned drive named `name`."""
+        with open(os.path.join(cls.root(), "launches.jsonl"), encoding="utf-8") as file:
+            paths = [json.loads(line) for line in file]
+        return next(cls(p) for p in reversed(paths) if cls(p).data()["launch"]["name"] == name)
+
+    def data(self) -> dict:
+        with contextlib.suppress(FileNotFoundError):
+            return json.loads(read_regular(os.path.join(self.path, "state.json")) or b"{}")
+        return {}
+
+    def _save(self, **fields):
+        save(os.path.join(self.path, "state.json"), json.dumps({**self.data(), **fields}))
+
+    def command(self):
+        return ["fake-drive", self.path]
+
+    def wait_started(self):
+        pass
+
+    def cancel(self):
+        if os.path.isdir(self.path):
+            self._save(alive=False, cancelled=True)
+
+    def running(self):
+        return self.data().get("alive", False)
+
+    def live(self):
+        return self.running()
+
+    def terminate(self):
+        self._signal("terminate", self.stubborn is None)
+
+    def kill(self):
+        self._signal("kill", self.stubborn != "kill")
+
+    def _signal(self, word, ends):
+        if os.path.isdir(self.path):
+            data = self.data()
+            self._save(signals=[*data.get("signals", []), word], alive=data["alive"] and not ends)
+
+    def close(self):
+        """The drive ending."""
+        if os.path.isdir(self.path):
+            self._save(alive=False)
+
+
+class DrivenDelegate(HarnessDelegate):
+    _controls = FakeControl
+    _spawn = staticmethod(FakeControl.spawn)
+    _stop_wait = 0.05
+
+
+def _start_agent(workdir, state):
     """The run's agent session on its agent Host, through its stored session class, in its stored
     environment."""
-    layout = Layout(record.workdir)
-    with open(os.path.join(layout.run, "delegate.json"), encoding="utf-8") as file:
-        state = json.load(file)
+    layout = Layout(workdir)
     session_cls = (
         Session if state["session_cls"] is None else load_class(state["session_cls"], Session)
     )
@@ -115,15 +230,15 @@ def _start_agent(record, display):
         access=Access(cwd=layout.agent),
         client=state["plan"]["session"]["client"],
         mode=Mode.TUI,
-        sid=record.sid,
-        name=record.sessions[1],
+        sid=state["spec"]["sid"],
+        name=state["agent_name"],
         environment=None if environment is None else EnvironmentSpec.from_fields(environment),
     )
-    session_cls.start(spec, host=state["host"], display=display)
+    session_cls.start(spec, host=state["host"], display=state["display"])
 
 
 def harness_launches():
-    return [launch for launch in RecordingHost.launches if launch["argv"] != ["fake-agent"]]
+    return FakeControl.launches()
 
 
 class ShowingHost(RecordingHost):
@@ -174,7 +289,6 @@ class HarnessSession(SessionClass):
         cls.host_names = {}
         RecordingHost.processes, RecordingHost.launches = {}, []
         FakeViewer.shown, FakeViewer.hidden, FakeViewer.closed = [], [], []
-        RecordingHost.harness_starts_agent = True
         kind = ShowingHost if showable else RecordingHost
         cls.hosts = {name: kind(name) for name in ("agent", "harness", "changed")}
         cls.script = ()

@@ -6,9 +6,13 @@ import sys
 import time
 
 from ensemble.delegate import ConfigError
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from tests.delegate.case import REPO, child_env
-from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
+from tests.delegate.fakes.harness_session import (
+    DrivenDelegate,
+    HarnessSession,
+    RecordingHost,
+    harness_launches,
+)
 from tests.delegate.harness import SID, HarnessCase
 
 RUN = """import os, sys
@@ -66,13 +70,13 @@ class ForegroundOwner(HarnessCase):
     def test_fresh_headless_view_sees_foreground_owner_and_resume_starts_nothing(self):
         child = self.start_owner()
         before = self.metadata()
-        view = HarnessDelegate.attach(self.work, session_cls=HarnessSession)
+        view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
         self.assertTrue(view.alive())
         self.assertTrue(view.status().alive)
         record = view.resume()
         self.assertEqual(record.sid, SID)
         self.assertEqual(self.metadata(), before)
-        self.assertEqual(RecordingHost.launches, [])
+        self.assertEqual((RecordingHost.launches, harness_launches()), ([], []))
         self.finish_owner(child)
         self.assertFalse(view.alive())
 
@@ -90,6 +94,6 @@ class ForegroundOwner(HarnessCase):
         child = self.start_owner()
         child.kill()
         child.communicate(timeout=10)
-        self.assertFalse(HarnessDelegate.attach(self.work, session_cls=HarnessSession).alive())
+        self.assertFalse(DrivenDelegate.attach(self.work, session_cls=HarnessSession).alive())
         self.make()
         self.assertEqual(self.metadata()["attempt"], 2)

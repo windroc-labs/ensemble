@@ -150,7 +150,7 @@ class Flows(Case):
         self.assertIn("before", launch)
         self.assertIn("exit 2", launch)
         self.assertIn("--mode headless", launch)
-        self.assertIn("the tui `<name>` and its harness `<name>-drive`", launch)
+        self.assertIn("the tui `<name>`; its harness `<name>-drive` is a local process", launch)
         self.assertIn("--display D", launch)
         self.assertIn("`--display none`", launch)
         self.assertIn("ensemble-session --help", launch)
@@ -186,7 +186,6 @@ class Flows(Case):
             "`ensemble-crew hide <name>…`",
             "`ensemble-crew show <name>…`",
             "`--all`",
-            "`ensemble-session show <name>-drive`",
             "`ensemble-crew note <name> '<text>'`",
             "`''` clears",
             "`ensemble-crew status [<name>…]`",

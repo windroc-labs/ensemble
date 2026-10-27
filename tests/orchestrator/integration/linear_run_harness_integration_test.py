@@ -2,23 +2,25 @@
 
 import os
 
-from ensemble.delegate import Delegate
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import Config, Docs, LinearSettings, TrackerKind
-from ensemble.utils import load_class
-from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost, harness_launches
+from tests.delegate.fakes.harness_session import (
+    DrivenDelegate,
+    FakeControl,
+    HarnessSession,
+    RecordingHost,
+    harness_launches,
+)
 from tests.delegate.harness import SID, HarnessCase
 from tests.orchestrator.unit.board_ids import HARNESS_IDENTITY, NO_MANAGER
 
-HARNESS_DELEGATE = load_class("ensemble.delegate.engine.harness_delegate:HarnessDelegate", Delegate)
+HARNESS_DELEGATE = DrivenDelegate
 
 
 class HarnessProvider(HARNESS_DELEGATE):
     def __init__(self, role, spec, **options):
-        super().__init__(
-            role, spec, session_cls=HarnessSession, host="agent", harness_host="harness", **options
-        )
+        super().__init__(role, spec, session_cls=HarnessSession, host="agent", **options)
 
 
 class HarnessRun(HarnessCase):
@@ -89,6 +91,7 @@ class HarnessRun(HarnessCase):
         view.delegate.close()
         self.assertFalse(view.delegate.alive())
         self.assertTrue(all(not process.alive() for process in RecordingHost.processes.values()))
+        self.assertFalse(FakeControl(self.metadata()["drive"]).running())
         resumed = view.resume()
         self.assertEqual((resumed.sid, resumed.sessions), (record.sid, record.sessions))
         self.assertEqual(view.resume(), resumed)

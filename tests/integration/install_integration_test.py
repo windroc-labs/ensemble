@@ -974,20 +974,17 @@ class InstallTest(Case):
             self.config().read_text(),
             "# Written by install.sh. Keys and defaults: each layer's packaged config.toml "
             "(its `# local:` lines);\n# the Linear board: docs/architecture.md#board-setup.\n"
-            '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n\n'
-            '[delegate.delegates]\nharness_host = "tmux"\n',
+            '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n',
         )
         cases = (
             (
                 '# mine\n[session.hosts]\ndefault = "tmux" # x\n\n[other]\nx = 1\n',
                 '# mine\n[session.hosts]\ndefault = "docker"\n\n[other]\nx = 1\n\n'
-                '[delegate]\nclient = "codex"\n\n'
-                '[delegate.delegates]\nharness_host = "tmux"\n',
+                '[delegate]\nclient = "codex"\n',
             ),
             (
-                '[delegate.delegates]\n\n[session.hosts]\ndefault = "docker"\n[delegate]\nclient = "codex"\n',
-                '[delegate.delegates]\nharness_host = "tmux"\n\n[session.hosts]\ndefault = "docker"\n'
-                '[delegate]\nclient = "codex"\n',
+                '[delegate]\n\n[session.hosts]\ndefault = "docker"\n',
+                '[delegate]\nclient = "codex"\n\n[session.hosts]\ndefault = "docker"\n',
             ),
         )
         for before, after in cases:

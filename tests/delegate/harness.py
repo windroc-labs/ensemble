@@ -4,12 +4,17 @@ import json
 import os
 
 from ensemble.delegate import Spec
-from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import Exited, Reply
 from tests.delegate.case import REPO, Case
-from tests.delegate.fakes.harness_session import FakeViewer, HarnessSession, RecordingHost
+from tests.delegate.fakes.harness_session import (
+    DrivenDelegate,
+    FakeControl,
+    FakeViewer,
+    HarnessSession,
+    RecordingHost,
+)
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE
 from tests.utils.sandbox import owned_directory
@@ -17,7 +22,7 @@ from tests.utils.sandbox import owned_directory
 SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
-class ViewedHarnessDelegate(HarnessDelegate):
+class ViewedHarnessDelegate(DrivenDelegate):
     """A HarnessDelegate whose views show through a FakeViewer unless given a Viewer."""
 
     def __init__(self, role, spec, **placement):
@@ -30,6 +35,7 @@ class ViewedHarnessDelegate(HarnessDelegate):
 
 class HarnessCase(Case):
     def setUp(self):
+        FakeControl.reset()
         HarnessSession.reset()
         HarnessSession.script = (Reply(block(DONE)), Exited(0))
         self.work = os.path.join(self.home, "run")
@@ -45,7 +51,6 @@ class HarnessCase(Case):
         team_dirs=(),
         trusted_dirs=(),
         hosts=("agent", "harness", "changed"),
-        harness_host=None,
     ):
         with open(self.local, "w", encoding="utf-8") as file:
             file.write(
@@ -57,8 +62,6 @@ class HarnessCase(Case):
                 "[session.clients.fake]\n"
                 'implementation = "tests.session.fake_client:FakeClient"\n'
             )
-            if harness_host is not None:
-                file.write(f'[delegate.delegates]\nharness_host = "{harness_host}"\n')
             for host in hosts:
                 file.write(
                     f"[session.hosts.{host}]\n"
@@ -79,7 +82,7 @@ class HarnessCase(Case):
         spec = spec or Spec(
             "Hello.\nLiteral input.", self.work, task="echo", sid=SID, client="fake"
         )
-        return HarnessDelegate(role, spec, session_cls=session_cls, **kw)
+        return DrivenDelegate(role, spec, session_cls=session_cls, **kw)
 
     def state_record(self) -> str:
         return RunState(Layout(self.work)).record
@@ -92,3 +95,7 @@ class HarnessCase(Case):
         for (_host, name), process in RecordingHost.processes.items():
             if name in record.sessions:
                 process.close()
+        with open(RunState(Layout(record.workdir)).record, encoding="utf-8") as file:
+            drive = json.load(file).get("drive")
+        if drive is not None:
+            FakeControl(drive).close()

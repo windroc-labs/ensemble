@@ -20,7 +20,7 @@ from dataclasses import replace
 from unittest import mock
 
 from tests.delegate.harness import HarnessCase
-from tests.delegate.fakes.harness_session import RecordingHost
+from tests.delegate.fakes.harness_session import harness_launches
 
 home, installed = sys.argv[1:]
 os.environ.pop("PYTHONPATH", None)
@@ -34,9 +34,9 @@ layout = (
     if installed else contextlib.nullcontext()
 )
 with layout:
-    delegate = case.make(host="agent", harness_host="harness")
+    delegate = case.make(host="agent")
     delegate.detach()
-    (launch,) = RecordingHost.launches
+    (launch,) = harness_launches()
     harness_env = {key: value for key, value in launch["env"].items() if key == "PYTHONPATH"}
     composer = delegate.composer
     base = composer.resolve("dummy-tester", "echo")
