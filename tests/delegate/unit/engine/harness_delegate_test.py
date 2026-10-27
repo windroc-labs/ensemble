@@ -2665,3 +2665,36 @@ class OwnedRun(HarnessCase):
             (2, False, None),
         )
         self.assertEqual(data["plan"]["session"]["handlers"][0]["state"]["worker"], 2)
+
+    def test_resume_follows_a_draining_harness_out_of_the_mutex_before_its_sweep(self):
+        """Its handler still delivers the gone worker's Finished (both callback locks held); the
+        agent's close, answered once that harness drained, lets them go.
+        """
+        view = self.owned()
+        stopped = Result(129, None, "stopped: Stopped: 129")
+        _seen, on = self.at_begun(
+            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
+        )
+        view.run(on)
+        view.driver.session.liveness = Liveness.ABSENT
+        store = RunState(Layout(self.work))
+        held = []
+        for lock in (store.callback_lock, store.callback_parent_lock):
+            fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held.append(fd)
+        os.write(held[0], f"4321 {os.getpid()}\n".encode())
+        close, mutexed = HarnessSession.close, []
+
+        def drained(session):
+            mutexed.append(store.held(os.path.join(Layout(self.work).run, "delegate.lock")))
+            for fd in held:
+                os.close(fd)
+            held.clear()
+            close(session)
+
+        self.addCleanup(lambda: [os.close(fd) for fd in held])
+        with mock.patch.object(HarnessSession, "close", drained):
+            HarnessDelegate.attach(self.work, session_cls=HarnessSession).resume()
+        self.assertEqual(mutexed, [False])
+        self.assertEqual(self.metadata()["attempt"], 2)

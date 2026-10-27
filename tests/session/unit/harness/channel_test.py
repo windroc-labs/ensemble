@@ -178,13 +178,18 @@ class LockTest(Base):
 
 
 class RequestTest(Base):
-    def serve(self, *, ok=True, error=None, unanswered=False):
+    def serve(self, *, ok=True, error=None, unanswered=False, let_go=None):
+        """let_go: the lock fd it then unlocks, as a harness does once it answered an end."""
+
         def answer():
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 for request_id, op in self.channel.requests():
                     self.served.append(op)
                     self.channel.reply(request_id, ok=ok, error=error, unanswered=unanswered)
+                    if let_go is not None:
+                        time.sleep(0.2)
+                        fcntl.flock(let_go, fcntl.LOCK_UN)
                     return
                 time.sleep(0.01)
 
@@ -193,12 +198,21 @@ class RequestTest(Base):
         thread.start()
         self.addCleanup(thread.join)
 
-    def test_an_answered_request_is_true(self):
-        self.hold_lock()
-        self.serve()
+    def test_an_answered_request_is_true_once_the_harness_let_go(self):
+        self.serve(let_go=self.hold_lock())
         self.assertTrue(self.channel.request(Op.CLOSE, timeout=5))
+        self.assertFalse(self.channel.alive())
         self.assertEqual(self.served, [Op.CLOSE])
         self.assertEqual(os.listdir(os.path.join(self.channel.directory, "replies")), [])
+
+    def test_its_holders_request_is_true_at_the_answer(self):
+        self.channel.hold()
+        self.addCleanup(self.channel.release)
+        self.serve()
+        started = time.monotonic()
+        self.assertTrue(self.channel.request(Op.CLOSE, timeout=5))
+        self.assertLess(time.monotonic() - started, 4)
+        self.assertEqual((self.channel.asked, self.served), (set(), [Op.CLOSE]))
 
     def test_a_refused_request_raises_its_error(self):
         self.hold_lock()
@@ -238,7 +252,7 @@ class RequestTest(Base):
 
                 with mock.patch.object(fcntl, "flock", side_effect=probe):
                     check()
-                self.assertEqual(len(probes), 2)
+                self.assertEqual(len(probes), 3 if ok else 2)  # ok: then its release
                 self.assertEqual(os.listdir(os.path.join(self.channel.directory, "replies")), [])
 
     def test_no_harness_is_false(self):

@@ -171,7 +171,8 @@ class EventsTest(Base):
 
 
 class CloseTest(Base):
-    def serve(self, *, ok=True, error=None, unanswered=False):
+    def serve(self, *, ok=True, error=None, unanswered=False, let_go=None):
+        """let_go: the lock fd it then unlocks, as a harness does once it answered an end."""
         self.served = []
 
         def answer():
@@ -180,6 +181,8 @@ class CloseTest(Base):
                 for ident, op in self.channel.requests():
                     self.served.append(op)
                     self.channel.reply(ident, ok=ok, error=error, unanswered=unanswered)
+                    if let_go is not None:
+                        fcntl.flock(let_go, fcntl.LOCK_UN)
                     return
                 time.sleep(0.01)
 
@@ -188,10 +191,9 @@ class CloseTest(Base):
         self.addCleanup(thread.join)
 
     def test_close_and_stop_ask_the_owner(self):
-        self.hold()
         for op, call in ((Op.CLOSE, OwnedSession.close), (Op.STOP, OwnedSession.stop)):
             with self.subTest(op=op):
-                self.serve()
+                self.serve(let_go=self.hold())
                 view = self.view()
                 call(view)
                 self.assertEqual(self.served, [op])
