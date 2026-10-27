@@ -32,7 +32,8 @@ READ_SIZE = 65536
 TICK = 0.05
 DISPLAY_GRACE = 2.0  # a client dead at once still reaches the display its Host starts at launch
 UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
-SIZE = (40, 120)  # rows, columns of a PTY no display sizes: read and events stay unwrapped
+SIZE = (24, 80)  # rows, columns of a PTY no display sizes, without --size
+SIZE_ARG = re.compile(r"([1-9][0-9]*)x([1-9][0-9]*)")
 DELIVERY = re.compile(r"[0-9a-f]{32}")
 
 
@@ -83,7 +84,7 @@ def hook_message(data: bytes) -> dict:
 class Screen:
     """Bounded VT screen; visible cells and scrollback have separate ownership."""
 
-    def __init__(self, limit=1 << 20, *, rows=40, columns=120):
+    def __init__(self, limit=1 << 20, *, rows=SIZE[0], columns=SIZE[1]):
         self.limit, self.rows, self.columns = limit, rows, columns
         self.cells = [[" "] * columns for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
@@ -245,6 +246,14 @@ def fit(cells: list[list[str]], row: int, rows: int, columns: int) -> tuple[list
     return lines + [[" "] * columns for _ in range(rows - len(lines))], row - shift
 
 
+def size(value: str) -> tuple[int, int]:
+    """--size COLUMNSxROWS, each 1 to 65535, as (rows, columns)."""
+    found = SIZE_ARG.fullmatch(value)
+    if found is None or not all(int(n) < 1 << 16 for n in found.groups()):
+        raise argparse.ArgumentTypeError(f"want COLUMNSxROWS, each 1 to 65535: {value!r}")
+    return int(found[2]), int(found[1])
+
+
 def window(data: bytes) -> tuple[int, int]:
     value = json.loads(data)
     if (
@@ -378,8 +387,9 @@ class Guard:
         self.input_end = False  # a headless client's stdin closes once input is written
         self.input_closed = False
         self.decoder = Decoder()
-        self.screen = Screen()
-        self.size = SIZE
+        self.unsized = args.size  # the PTY's (rows, columns) while no display sizes it
+        self.screen = Screen(rows=self.unsized[0], columns=self.unsized[1])
+        self.size = self.unsized
         self.sizes = {}  # display peer: its terminal's (rows, columns), the latest last
         self.known = {}
         self.closing = None
@@ -417,7 +427,7 @@ class Guard:
         try:
             if self.args.terminal:
                 self.master, slave = os.openpty()
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", *SIZE, 0, 0))
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", *self.size, 0, 0))
             self.proc = subprocess.Popen(
                 self.args.command,
                 stdin=slave if slave is not None else subprocess.PIPE,
@@ -470,8 +480,8 @@ class Guard:
             self.follow()
 
     def follow(self) -> None:
-        """The PTY at the latest sized display's size, else SIZE; a change redraws its client."""
-        size = next(reversed(self.sizes.values()), SIZE)
+        """The PTY at the latest sized display's size, else unsized; a change redraws its client."""
+        size = next(reversed(self.sizes.values()), self.unsized)
         if self.master is not None and size != self.size:
             fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", *size, 0, 0))
             self.screen.resize(*size)
@@ -855,6 +865,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hook-socket")
     parser.add_argument("--display-socket")
     parser.add_argument("--display-grace", action="store_true")
+    parser.add_argument("--size", type=size, default=SIZE)
     parser.add_argument("--lease")
     parser.add_argument("--probe")
     parser.add_argument("command", nargs=argparse.REMAINDER)
