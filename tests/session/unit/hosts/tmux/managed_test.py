@@ -9,7 +9,9 @@ from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
     Launch,
     Liveness,
+    PaneStatus,
     SessionBusy,
+    SessionError,
     StatusState,
     Unanswered,
 )
@@ -232,3 +234,121 @@ class ManagedTest(Case):
         self.assertIsNone(channel.activity())
         channel.mark(StatusState.DONE, "/events")
         channel.tmux.mark.assert_not_called()
+
+    def reopener(self, *, terminal: bool = True):
+        """A running handle of generation a…a, its tmux and display opener mocked."""
+        tmux, opener = mock.Mock(), mock.Mock()
+        channel = managed.TmuxManagedProcess(
+            "worker",
+            "a" * 32,
+            mock.Mock(),
+            terminal=terminal,
+            tmux=tmux,
+            opener=opener if terminal else None,
+            start_reader=False,
+        )
+        return channel, tmux, opener
+
+    def test_redisplay_opens_only_a_gone_or_dead_own_display(self):
+        channel, tmux, opener = self.reopener()
+        tmux.option.return_value = "a" * 32
+        tmux.status.return_value = PaneStatus.RUNNING
+        self.assertFalse(channel.redisplay())
+        opener.assert_not_called()
+        tmux.kill.assert_not_called()
+        tmux.status.return_value = -9  # its attach killed, its pane kept
+        self.assertTrue(channel.redisplay())
+        tmux.kill.assert_called_once_with("worker")
+        opener.assert_called_once_with()
+        tmux.kill.reset_mock()
+        opener.reset_mock()
+        tmux.option.return_value = None  # its session killed
+        self.assertTrue(channel.redisplay())
+        tmux.kill.assert_not_called()
+        opener.assert_called_once_with()
+
+    def test_redisplay_refuses_and_leaves_alone_what_it_cannot_tell(self):
+        channel, tmux, opener = self.reopener()
+        tmux.option.return_value = "b" * 32
+        with self.assertRaisesRegex(
+            SessionError, "^worker worker: its name shows another display$"
+        ):
+            channel.redisplay()
+        tmux.option.return_value = "a" * 32
+        tmux.status.return_value = PaneStatus.UNKNOWN
+        with self.assertRaisesRegex(Unanswered, "^worker worker: its display unknown$"):
+            channel.redisplay()
+        tmux.option.side_effect = TuiError("tmux: no server")
+        with self.assertRaisesRegex(SessionError, "^worker worker: display: tmux: no server$"):
+            channel.redisplay()
+        tmux.kill.assert_not_called()
+        opener.assert_not_called()
+        tmux.option.side_effect = None
+        tmux.option.return_value = None
+        opener.side_effect = TuiError("session worker exists")
+        with self.assertRaisesRegex(
+            SessionError, "^worker worker: display: session worker exists$"
+        ):
+            channel.redisplay()
+
+    def test_redisplay_of_an_exited_or_failed_worker_is_refused(self):
+        channel, tmux, opener = self.reopener()
+        channel.code = 0
+        with self.assertRaisesRegex(SessionError, "^worker worker: exited$"):
+            channel.redisplay()
+        channel, tmux, opener = self.reopener()
+        channel.failure = "guard channel: closed"
+        with self.assertRaisesRegex(Unanswered, "^worker worker: guard channel: closed$"):
+            channel.redisplay()
+        tmux.option.assert_not_called()
+        opener.assert_not_called()
+
+    def test_redisplay_without_a_display_opens_nothing(self):
+        channel, tmux, _ = self.reopener(terminal=False)
+        self.assertFalse(channel.redisplay())
+        tmux.option.assert_not_called()
+        tmux.start.assert_not_called()
+
+    def test_redisplay_opens_the_display_its_start_opened(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        frames = iter([guard.json_frame(b"s", {"pid": 123})])
+
+        def read(_size):
+            try:
+                return next(frames)
+            except StopIteration:
+                gate.wait(managed.WAIT)  # running until the test ends
+                return b""
+
+        proc = mock.Mock()
+        proc.stdout.read.side_effect = read
+        tmux = mock.Mock()
+        with (
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc),
+            mock.patch.object(os, "set_blocking"),
+        ):
+            channel = TmuxHost("tmux", tmux=tmux).worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                display="manager",
+                events="/events",
+                metadata={"generation": "a" * 32, "sid": "s1", "client": "claude", "x": "y"},
+            )
+        first = tmux.start.call_args
+        self.assertEqual(
+            first.kwargs["tags"],
+            {
+                "@kind": "guard",
+                "@generation": "a" * 32,
+                "@sid": "s1",
+                "@client": "claude",
+                "@display": "manager",
+            },
+        )
+        self.assertEqual(first.kwargs["events"], "/events")
+        self.assertEqual(first.args[1].argv[-2], "--attach")
+        tmux.option.return_value = None  # its display killed
+        self.assertTrue(channel.redisplay())
+        self.assertEqual(tmux.start.call_args_list, [first, first])
