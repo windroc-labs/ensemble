@@ -52,6 +52,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.engine.worker import WorkerState
 from ensemble.session.hosts.base import InteractiveProcess, Process
+from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui, tui_hook
 from ensemble.session.modes.base import POINTER
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
@@ -2929,6 +2930,18 @@ class ManagedStartTest(Base):
         self.assertEqual(kwargs["metadata"]["generation"], tui.TuiMode.snapshot(NAME)["generation"])
         self.host.calls.terminal.assert_not_called()
         self.assertIs(mode._terminal, self.handle)
+
+    def test_owned_redisplay_asks_its_managed_handle(self):
+        managed = mock.create_autospec(ManagedProcess, instance=True)
+        managed.state.return_value = Liveness.LIVE
+        managed.read.return_value = []
+        managed.redisplay.return_value = True
+        self.host.worker.return_value = managed
+        self.assertTrue(self.owned_start().redisplay())
+        managed.redisplay.assert_called_once_with()
+
+    def test_redisplay_of_a_plain_terminal_opens_nothing(self):
+        self.assertFalse(self.owned_start().redisplay())
 
     def test_unowned_start_launches_a_terminal(self):
         self.start()

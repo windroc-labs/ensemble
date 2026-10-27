@@ -44,6 +44,7 @@ class Op(StrEnum):
     SEND = "send"  # these three: a remote worker's, with data; never end it
     PRESS = "press"
     SCREEN = "screen"
+    DISPLAY = "display"  # its worker's display opened again where gone; never ends it
 
 
-SERVED = (Op.SEND, Op.PRESS, Op.SCREEN)
+SERVED = (Op.SEND, Op.PRESS, Op.SCREEN, Op.DISPLAY)

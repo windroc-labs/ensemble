@@ -57,6 +57,7 @@ from ensemble.session.hosts.base import (
     check_sid,
     tui_lock,
 )
+from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui_hook
 from ensemble.session.modes.base import BaseMode, identity_drop
 from ensemble.session.modes.client_adapters.tui import Tui
@@ -1009,6 +1010,10 @@ class TuiMode(BaseMode):
             return self._terminal.screen(lines)
         except NotShowable:
             raise SessionError(f"host {self.host.name} cannot show") from None
+
+    def redisplay(self) -> bool:
+        """Its owner handle's display opened again where gone; False: none to open."""
+        return isinstance(self._terminal, ManagedProcess) and self._terminal.redisplay()
 
     def _running(self) -> None:
         self._store.check()
