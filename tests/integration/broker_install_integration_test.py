@@ -347,7 +347,7 @@ class Install(Case):
         out = calls[0].split()[4]
         self.assertEqual(calls[0], f"go build -trimpath -o {out} .")
         self.assertEqual(calls[1], f"{SIGN}{out}")
-        self.assert_installed(calls[5:], out)
+        self.assert_installed(calls[6:], out)
 
     def test_existing_definition_is_never_overwritten(self):
         self.fake("gh", "go", "codesign", "sudo")
