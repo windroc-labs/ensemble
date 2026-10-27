@@ -226,9 +226,11 @@ class Base(Case):
         return mode
 
     def append(self, *lines) -> None:
-        """Each line to hooks.jsonl: bytes as given, else a JSON line."""
+        """Each line to hooks.jsonl: bytes as given, else a JSON line stamped as the hook does."""
         with open(self.hooks, "ab") as f:
             for line in lines:
+                if isinstance(line, dict) and (sent := tui_hook.sent(self.dir)) is not None:
+                    line = {"sent": sent, **line}
                 f.write(line if isinstance(line, bytes) else (json.dumps(line) + "\n").encode())
 
     def state(self, **changes) -> dict:
@@ -1892,21 +1894,23 @@ class SendLockTest(Base):
         with self.assertRaises(SessionError) as raised:
             self.mode.send("one")
         self.assertNotIsInstance(raised.exception, Unanswered)
-        self.assertEqual(tui.TuiStore.attach(NAME, host=self.host).prompts(self.mode.generation), 0)
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (0, 0))
 
     def test_a_failure_after_the_paste_is_unanswered(self):
         self.calls.send.side_effect = [None, SessionError("gone")]
         with self.assertRaisesRegex(Unanswered, f"send to tui session {NAME}: partly sent: gone"):
             self.mode.send("one")
-        self.assertEqual(tui.TuiStore.attach(NAME, host=self.host).prompts(self.mode.generation), 1)
+        store = tui.TuiStore.attach(NAME, host=self.host)
+        self.assertEqual(store.prompts(self.mode.generation), (1, 0))
 
     def test_each_send_counts_a_prompt_of_its_generation(self):
         store = tui.TuiStore.attach(NAME, host=self.host)
-        self.assertEqual(store.prompts(self.mode.generation), 0)
+        self.assertEqual(store.prompts(self.mode.generation), (0, 0))
         self.other.send("one")
         self.mode.send("two")
-        self.assertEqual(store.prompts(self.mode.generation), 2)
-        self.assertEqual(store.prompts("another"), 0)
+        self.assertEqual(store.prompts(self.mode.generation), (2, 2))
+        self.assertEqual(store.prompts("another"), (0, 0))
         self.mode.press([KeyPress.parse("a")])
         self.assertEqual(self.order[-1], (KeyPress.parse("a"),))
 
@@ -2145,6 +2149,42 @@ class OpeningTest(Base):
         mode.poll(1.2)
         self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
         self.assertIsNone(mode.opening_pending)
+
+    def test_a_send_after_an_unread_turn_end_waits_for_its_own_turn(self):
+        mode = self.launched(prompt="go")
+        self.append(record("ready"), record("start"))
+        mode.poll(0)
+        self.append(record("stop"))
+        self.other().send("next")  # after the turn end was written, before it is read
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("next"), Key("Enter")])
+        self.assertEqual(mode.opening_pending, "/color")
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(len(self.sends(mode)), 2)
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
+
+    def test_a_partly_sent_send_holds_the_opening(self):
+        mode = self.launched()
+        mode._terminal.calls.send.side_effect = [None, SessionError("gone")]
+        with self.assertRaises(Unanswered):
+            self.other().send("half")
+        mode._terminal.calls.send.side_effect = None
+        self.append(record("ready"), record("start"), record("stop"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("half"), Key("Enter")])  # the Enter failed
+        self.assertEqual(mode.opening_pending, "/color")
+        self.other().send("rest")  # its Enter submits the half too
+        self.append(record("start"), record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[4:], [Paste("/color"), Key("Enter")])
 
     def test_no_turn_yet_keeps_the_opening(self):
         mode = self.launched()

@@ -11,7 +11,7 @@ import signal
 import stat
 import tempfile
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import BinaryIO, Self
 
@@ -86,9 +86,10 @@ WORDS = {
 SLICE = 0.1
 OPEN_AFTER = 1.0  # keys sent before a client's input box shows are lost
 POLL_SCREEN = 0.5
-SEND_LOCK, PROMPTED = "send.lock", "prompted"
+SEND_LOCK = "send.lock"
 LOG = logging.getLogger("session")
 Cursor = tuple[int | None, int]  # inode, offset
+Record = tuple[str, dict, str | None]  # label, payload, sent
 OWNER = re.compile(r"[0-9a-f]{32}")
 RECHECK = 0.1
 GATE_BUSY = "previous worker generation (live or unknown)"
@@ -154,10 +155,11 @@ def _bad(state: Mapping) -> str | None:
     return None
 
 
-def _translated(
-    run: Tui, records: Iterable[tuple[str, dict]]
-) -> list[SessionEvent | Stderr | ClientBound]:
-    return [event for label, payload in records for event in run.hook_events(label, payload)]
+def _sends(marker: str | None, generation: str) -> tuple[int, int]:
+    held, begun, submitted = [*(marker or "").split(), "", "", ""][:3]
+    if held != generation or not begun.isdigit() or not submitted.isdigit():
+        return 0, 0
+    return int(begun), int(submitted)
 
 
 def _read_state(name: str, path: str) -> dict:
@@ -204,6 +206,10 @@ class TuiStore:
         return _read_state(self.name, self.state_file)
 
     def records(self, cursor: Cursor | None) -> tuple[list[tuple[str, dict]], Cursor]:
+        found, end = self.stamped(cursor)
+        return [(label, payload) for label, payload, _ in found], end
+
+    def stamped(self, cursor: Cursor | None) -> tuple[list[Record], Cursor]:
         """The hook log's records past `cursor` (None: ROTATED's too); the cursor past them.
         shortcut: two rotations between reads lose the middle file.
         """
@@ -212,7 +218,7 @@ class TuiStore:
         except OSError:
             return [], cursor or (None, 0)
 
-    def _records(self, cursor: Cursor | None) -> tuple[list[tuple[str, dict]], Cursor]:
+    def _records(self, cursor: Cursor | None) -> tuple[list[Record], Cursor]:
         with _opened(os.path.join(self.dir, tui_hook.HOOKS)) as (ino, current):
             older = b""
             if cursor is None or cursor[0] != ino:
@@ -252,19 +258,21 @@ class TuiStore:
                 raise SessionError(f"{path}: {e.strerror or e}") from None
             yield held
 
-    def prompts(self, generation: str) -> int:
-        """The sends to `generation` so far."""
-        found = (read_regular(os.path.join(self.dir, PROMPTED)) or b"").decode(errors="replace")
-        held, _, count = found.partition(" ")
-        return int(count) if held == generation and count.isdigit() else 0
+    def prompts(self, generation: str) -> tuple[int, int]:
+        """Sends to `generation` begun, submitted."""
+        return _sends(tui_hook.sent(self.dir), generation)
 
-    def mark_prompted(self, generation: str) -> None:
-        """One more send to `generation`; under the send lock."""
-        path, count = os.path.join(self.dir, PROMPTED), self.prompts(generation) + 1
+    def mark_prompted(self, generation: str, *, submitted: bool = False) -> None:
+        """Under the send lock: one more begun, or all begun submitted."""
+        path, (begun, done) = os.path.join(self.dir, tui_hook.PROMPTED), self.prompts(generation)
+        begun, done = (begun, begun) if submitted else (begun + 1, done)
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            fd = os.open(
+                path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+            )
             with os.fdopen(fd, "wb") as f:
-                f.write(f"{generation} {count}".encode())
+                f.write(f"{generation} {begun} {done}".encode())
+            os.replace(path + ".new", path)
         except OSError as e:
             LOG.warning("tui session %s: %s: %s", self.name, path, e.strerror or e)
 
@@ -511,13 +519,13 @@ def _opened(path: str) -> Iterator[tuple[int | None, BinaryIO | None]]:
         os.close(fd)
 
 
-def _parsed(data: bytes) -> tuple[list[tuple[str, dict]], int]:
+def _parsed(data: bytes) -> tuple[list[Record], int]:
     end = data.rfind(b"\n") + 1
     found = []
     for record in json_records(data[:end].split(b"\n")):
-        label, payload = record.get("label"), record.get("payload")
+        label, payload, sent = record.get("label"), record.get("payload"), record.get("sent")
         if isinstance(label, str) and isinstance(payload, dict):
-            found.append((label, payload))
+            found.append((label, payload, sent if isinstance(sent, str) else None))
     return found, end
 
 
@@ -928,7 +936,7 @@ class TuiMode(BaseMode):
                 )
 
     def _open(self) -> None:
-        """Submits the opening once due, no turn runs and a turn boundary took in every send,
+        """Submits the opening once due, no turn runs and a turn boundary's hook saw every send,
         unless a dialog shows, the client is blocked or the send lock is held.
         """
         now = time.monotonic()
@@ -948,7 +956,7 @@ class TuiMode(BaseMode):
         except SessionError:
             return
         with contextlib.suppress(SessionError), self._store.sending(wait=False) as held:
-            if not held or self._store.prompts(self._generation) > self._absorbed:
+            if not held or self._store.prompts(self._generation)[0] > self._absorbed:
                 return
             text, self._opening = self._opening[1], None
             self._running()
@@ -960,8 +968,6 @@ class TuiMode(BaseMode):
                 self._active_turn, self._launching = True, False
             elif isinstance(event, TurnEnd | TurnFailed):
                 self._active_turn = False
-            if self._opening is not None and isinstance(event, TurnStarted | TurnEnd | TurnFailed):
-                self._absorbed = self._store.prompts(self._generation)
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
                 self._held = isinstance(event, Blocked)
 
@@ -975,14 +981,19 @@ class TuiMode(BaseMode):
         """
         if self._gone:
             return []
-        records, end = self._store.records(self._cursor)
+        records, end = self._store.stamped(self._cursor)
         observed = self.run.observe()
         if end == self._cursor and not observed or self._replaced(self._terminal.state()):
             return []
         self._cursor = end
-        if self._opening is not None and any(label == self._opening[0] for label, _ in records):
+        if self._opening is not None and any(label == self._opening[0] for label, *_ in records):
             self._due = time.monotonic() + OPEN_AFTER
-        found = [*observed, *_translated(self.run, records)]
+        found: list[SessionEvent | Stderr | ClientBound] = [*observed]
+        for label, payload, sent in records:
+            events = self.run.hook_events(label, payload)
+            if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):
+                self._absorbed = max(self._absorbed, _sends(sent, self._generation)[1])
+            found += events
         self._track(found)
         return found
 
@@ -1069,7 +1080,7 @@ class TuiMode(BaseMode):
             self._deliver(self.run.submit(text), prompted=True)
 
     def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:
-        """Failing after the first action: Unanswered. prompted: marks its generation."""
+        """Failing after the first action: Unanswered. prompted: marks it begun, then submitted."""
         for index, action in enumerate(actions):
             try:
                 self._terminal.send(action)
@@ -1081,6 +1092,8 @@ class TuiMode(BaseMode):
                 ) from error
             if index == 0 and prompted:
                 self._store.mark_prompted(self._generation)
+        if prompted:
+            self._store.mark_prompted(self._generation, submitted=True)
 
     def press(self, keys: Sequence[KeyPress]) -> None:
         with self._store.sending():

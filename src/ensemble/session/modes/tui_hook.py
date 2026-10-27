@@ -45,6 +45,8 @@ ROTATED = HOOKS + ".1"
 
 HOOKS_MAX = 1 << 20  # bytes
 
+PROMPTED = "prompted"  # "<generation> <begun> <submitted>" sends
+
 
 def _abs(value) -> bool:
     return isinstance(value, str) and value.isprintable() and os.path.isabs(value)
@@ -108,6 +110,7 @@ def main(argv: Sequence[str], stdin, *, roots: Sequence[str], event: str | None 
 
 def _dispatch(folder, label, payload, state, specs, *, event):
     _validate_state(state, os.path.join(folder, TUI_STATE), HookError)
+    marker = sent(folder)
 
     def call(kind, given) -> HookCall:
         return HookCall(
@@ -135,9 +138,19 @@ def _dispatch(folder, label, payload, state, specs, *, event):
             payload = cut(payload)
         stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
         record = {"ts": stamp, "label": label, "payload": payload}
+        if marker is not None:
+            record["sent"] = marker
         append(os.path.join(folder, HOOKS), record if event is None else {**record, "event": event})
     if host is not None:
         host.on_hook(word, call("host_hook", payload))
+
+
+def sent(folder: str) -> str | None:
+    """PROMPTED, read as a hook begins."""
+    with suppress(OSError):
+        data = read_regular(os.path.join(folder, PROMPTED))
+        return None if data is None else data.decode(errors="replace").strip()
+    return None
 
 
 def _journaled(path: str, event: str, label: str) -> dict | None:

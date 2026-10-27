@@ -334,6 +334,13 @@ class RelayEvent(Callbacks):
         self.assertEqual([r.get("event") for r in self.records()], [None, "g1.1", "g1.2", None])
         self.assertEqual((len(self.calls("client")), len(self.calls("host"))), (4, 4))
 
+    def test_a_record_carries_the_send_marker_read_before_it(self):
+        self.run_hook(None)
+        with open(os.path.join(self.dir, tui_hook.PROMPTED), "w", encoding="utf-8") as f:
+            f.write("g1 2 1")
+        self.run_hook(None)
+        self.assertEqual([r.get("sent") for r in self.records()], [None, "g1 2 1"])
+
     def test_a_bad_event_is_a_usage_error_before_any_callback(self):
         for event in ("", "a b", "x" * 65):
             with self.subTest(event=event), self.assertRaisesRegex(tui_hook.HookError, "usage"):
