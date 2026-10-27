@@ -63,10 +63,24 @@ class LauncherTest(Case):
             self.enterContext(mock.patch(target, value))
 
     def run_with(self, child, *, prompt="Hi there") -> int:
+        """Its threads joined even when the watch's exit unwinds main before its own join."""
         self.addCleanup(child.stderr.close)
         argv = ["--timeout", "120", "--prompt", prompt, "--", "opencode", "run"]
-        with mock.patch.object(launcher.subprocess, "Popen", return_value=child) as popen:
-            code = launcher.main(argv)
+        started, thread = [], threading.Thread
+
+        def made(*args, **kwargs):
+            started.append(thread(*args, **kwargs))
+            return started[-1]
+
+        with (
+            mock.patch.object(launcher.subprocess, "Popen", return_value=child) as popen,
+            mock.patch.object(launcher.threading, "Thread", side_effect=made),
+        ):
+            try:
+                code = launcher.main(argv)
+            finally:
+                for each in started:
+                    each.join()
         popen.assert_called_once()
         self.assertEqual(popen.call_args.args[0], ["opencode", "run"])
         return code

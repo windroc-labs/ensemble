@@ -165,7 +165,7 @@ class HarnessSession(SessionClass):
     @classmethod
     def reset(cls, *, showable=False):
         cls.started, cls.live, cls.attached, cls.inspected = [], {}, [], []
-        cls.preflights, cls.preflight_error = [], None
+        cls.preflights, cls.preflight_error, cls.owns = [], None, False
         cls.host_names = {}
         RecordingHost.processes, RecordingHost.launches = {}, []
         FakeViewer.shown, FakeViewer.hidden, FakeViewer.closed = [], [], []

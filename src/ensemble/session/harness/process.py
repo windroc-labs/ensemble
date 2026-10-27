@@ -28,13 +28,11 @@ from ensemble.session.engine.types import (
     TurnStarted,
     Unanswered,
 )
-from ensemble.session.harness.channel import SLICE, Channel, encode, hung_up
+from ensemble.session.harness.channel import CLOSE_WAIT, DRAIN, SLICE, Channel, encode, hung_up
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import SERVED, Logged, Op
 
 POLL = 0.5
-CLOSE_WAIT = 10
-DRAIN = 30
 STATUS_EVERY = 1.0
 SEND_MAX = 1 << 20
 KEYS_MAX = 64
@@ -132,6 +130,8 @@ class Harness:
         self._dispatch: Dispatch | None = None
         self._turns = Turns("")
         self._leftover: list[tuple[str, Op, dict]] = []
+        self._code: int | None = None
+        self._ending: list[tuple[str, bool, str | None]] = []
 
     def signalled(self, number: int, _frame: object) -> None:
         self._signal = number
@@ -160,6 +160,7 @@ class Harness:
             name=worker.name,
             generation=worker.generation,
             remote=worker.remote,
+            opening=worker.opening_pending,
         )
         self._write()
         try:
@@ -237,26 +238,43 @@ class Harness:
             )
             return None
         self._exited(code)
-        self._answer(ident, ok=True)
+        self._answer_end(ident, ok=True)
         return code
 
+    def _answer_end(self, ident: str | None, *, ok: bool, error: str | None = None) -> None:
+        """A confirmed end's answer: to its own handlers' request at once (they are what the drain
+        waits for), to any other once the harness is done (_drain_handlers).
+        """
+        if ident is not None and ident not in self._channel.asked:
+            self._ending.append((ident, ok, error))
+        else:
+            self._answer(ident, ok=ok, error=error)
+
     def _exited(self, code: int) -> None:
-        if self._status["state"] == "exited":
+        """Exited logged for the handlers; harness.json says draining, exited once they drained."""
+        if self._code is not None:
             return
+        self._code = code
+        self._status.update(state="draining", returncode=code)
+        self._write_pending(force=True)
         for turn, event in self._turns.exited(code):
             self._append(turn, event)
         self._append(None, Exited(code))
-        self._status.update(state="exited", returncode=code)
-        self._write_pending(force=True)
 
     def _drain_handlers(self, worker: Worker) -> None:
+        """Its last writes: harness.json's exited, then the deferred answers."""
         assert self._dispatch is not None
         deadline = time.monotonic() + self._drain
-        while self._dispatch.drain(SLICE) and time.monotonic() < deadline:
+        try:
+            while self._dispatch.drain(SLICE) and time.monotonic() < deadline:
+                self._serve_ended(worker)
             self._serve_ended(worker)
-        self._serve_ended(worker)
-        self._write_pending(force=True)
-        self._dispatch.stop()
+            self._status["state"] = "exited"
+            self._write_pending(force=True)
+        finally:
+            for ident, ok, error in self._ending:
+                self._answer(ident, ok=ok, error=error)
+            self._dispatch.stop()
 
     def _serve_ended(self, worker: Worker) -> None:
         """After the exit a request ends what is left: terminal, tui dir, viewer."""
@@ -271,9 +289,9 @@ class Harness:
                 else:
                     worker.close()
             except SessionError as error:
-                self._answer(ident, ok=False, error=str(error))
+                self._answer_end(ident, ok=False, error=str(error))
             else:
-                self._answer(ident, ok=True)
+                self._answer_end(ident, ok=True)
 
     def _abandon(self, worker: Worker) -> int:
         try:

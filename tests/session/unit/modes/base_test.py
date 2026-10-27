@@ -429,27 +429,12 @@ def params(function):
 
 
 class OwnerTest(Case):
-    """A tui or headless start can be owned by a session harness; in_process refuses an owner."""
+    """A tui, headless or in_process start can be owned by a session harness."""
 
-    def test_in_process_refuses_an_owner(self):
-        spec = Spec(workdir="/w", access=Access(cwd="/w"), client="fake", sid="s1")
-        mode = in_process.InProcessMode
-        with self.assertRaisesRegex(
-            ConfigError, f"\\Aowner: {mode.kind.value} mode has no session harness\\Z"
-        ):
-            mode.start(
-                spec,
-                mock.Mock(spec=Client),
-                registry=mock.Mock(spec=Registry),
-                record=mock.Mock(),
-                host=MemoryHost(),
-                owner="/h",
-            )
-
-    def test_tui_and_headless_modes_have_a_generation(self):
+    def test_tui_headless_and_in_process_modes_have_a_generation(self):
         self.assertIsNone(BaseMode.generation.fget(mock.Mock(spec=BaseMode)))
-        self.assertIsNot(tui.TuiMode.generation, BaseMode.generation)
-        self.assertIsNot(headless.HeadlessMode.generation, BaseMode.generation)
+        for mode in (tui.TuiMode, headless.HeadlessMode, in_process.InProcessMode):
+            self.assertIsNot(mode.generation, BaseMode.generation)
 
     def test_only_a_tmux_host_is_harnessed(self):
         self.assertFalse(Host._harnessed)

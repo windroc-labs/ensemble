@@ -432,7 +432,7 @@ class DrainTest(Base):
         self.addCleanup(gate.set)
         owned = FakeOwned(([Reply("x")], True))
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=WAIT))
-        while self.channel.status().get("state") != "exited":
+        while "Exited" not in self.types():
             time.sleep(0.01)
         self.assertTrue(self.request(Op.CLOSE))
         self.assertTrue(self.request(Op.STOP))
@@ -441,18 +441,93 @@ class DrainTest(Base):
         self.assertEqual(owned.calls, ["close", "stop"])
         self.assertEqual(self.types(), ["Reply", "Exited"])
 
+    def test_a_held_close_is_answered_even_when_a_later_one_breaks_the_drain(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        owned = FakeOwned(([Reply("x")], False))
+        harness = self.harness(owned, Handler(hang=gate), drain=WAIT)  # holds the drain
+        broke = []
+
+        def run():
+            try:
+                harness.run(self.begin)
+            except RuntimeError as error:
+                broke.append(error)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        while "Reply" not in self.types():
+            time.sleep(0.01)
+        outside, done = Channel(self.channel.directory), []
+        closer = threading.Thread(
+            target=lambda: done.append(outside.request(Op.CLOSE, timeout=WAIT)), daemon=True
+        )
+        owned.close = mock.Mock(side_effect=[[], RuntimeError("bug")])
+        closer.start()
+        while "Exited" not in self.types():
+            time.sleep(0.01)
+        unanswered = []
+        breaking = threading.Thread(  # served in the drain: its RuntimeError ends the harness
+            target=lambda: unanswered.append(self.request(Op.CLOSE)), daemon=True
+        )
+        breaking.start()
+        thread.join(WAIT)
+        self.channel.release()  # the harness gone: no answer, and no harness once let go
+        closer.join(WAIT)
+        breaking.join(WAIT)
+        self.assertEqual((done, len(broke), unanswered), ([True], 1, [False]))
+
     def test_a_failed_close_during_the_drain_is_answered_with_its_error(self):
         owned = FakeOwned(([], True))
         owned.close = mock.Mock(side_effect=SessionError("cannot close w1"))
         gate = threading.Event()
         self.addCleanup(gate.set)
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=WAIT))
-        while self.channel.status().get("state") != "exited":
+        while "Exited" not in self.types():
             time.sleep(0.01)
         with self.assertRaisesRegex(SessionError, "cannot close w1"):
             self.request(Op.CLOSE)
         gate.set()
         thread.join(WAIT)
+
+    def test_a_close_from_outside_is_answered_once_its_handlers_drained(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        owned = FakeOwned(([Reply("x")], False))
+        harness = self.harness(owned, Handler(hang=gate), drain=WAIT)
+        thread = threading.Thread(  # lets go once done, as main() does
+            target=lambda: (harness.run(self.begin), self.channel.release()), daemon=True
+        )
+        thread.start()
+        self.addCleanup(thread.join, WAIT)
+        while "Reply" not in self.types():
+            time.sleep(0.01)
+        outside, done = Channel(self.channel.directory), []
+
+        def close():
+            done.append(outside.request(Op.CLOSE, timeout=WAIT))
+            done.append((self.channel.status()["state"], thread.is_alive()))
+
+        closer = threading.Thread(target=close, daemon=True)
+        closer.start()
+        while "Exited" not in self.types():
+            time.sleep(0.01)
+        time.sleep(0.1)
+        self.assertEqual((done, self.channel.status()["state"]), ([], "draining"))
+        gate.set()
+        closer.join(WAIT)
+        self.assertEqual(done, [True, ("exited", False)])
+
+    def test_its_status_says_exited_only_after_the_last_delivery(self):
+        seen = []
+
+        def on(call):
+            if isinstance(call.event, Exited):
+                seen.append(self.channel.status().get("state"))
+
+        owned = FakeOwned(([Reply("x")], True))
+        self.assertEqual(self.harness(owned, Handler(on=on), drain=WAIT).run(self.begin), 0)
+        self.assertEqual((seen, self.channel.status()["state"]), (["draining"], "exited"))
 
     def test_a_handler_closing_on_exited_returns(self):
         results = []
@@ -657,7 +732,7 @@ class RemoteTest(Base):
         self.addCleanup(gate.set)
         owned = RemoteOwned(([Reply("x")], True))
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
-        while self.channel.status().get("state") != "exited":
+        while "Exited" not in self.types():
             time.sleep(0.01)
         with self.assertRaisesRegex(SessionError, "w1: worker exited"):
             self.ask(Op.SEND, {"text": "late"})
@@ -697,7 +772,7 @@ class DisplayTest(Base):
         self.addCleanup(gate.set)
         owned = DisplayOwned(([Reply("x")], True))
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
-        while self.channel.status().get("state") != "exited":
+        while self.channel.status().get("state") != "draining":
             time.sleep(0.01)
         with self.assertRaisesRegex(SessionError, "w1: worker exited"):
             self.ask(Op.DISPLAY, {})

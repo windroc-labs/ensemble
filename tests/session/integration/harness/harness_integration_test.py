@@ -1,18 +1,21 @@
 """The session harness on a private tmux server with the fake claude: it owns each Claude tui
 worker started on tmux, keeps supervising it after the starting process exits, hands its events to
-registered handlers in order, and ends with a confirmed close.
+registered handlers in order, and ends with a confirmed close. An in_process start runs its adapter
+inside the harness, which ends it.
 """
 
+import json
 import os
+import signal
 from unittest import mock
 
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import Access, HookCallback, Spec
+from ensemble.session.engine.types import Access, Exited, HookCallback, Mode, Reply, Spec, TurnEnd
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
-from ensemble.session.hosts.base import Host
+from ensemble.session.hosts.base import HARNESS_ROOT, Host
 from tests.session import live_tmux
-from tests.session.case import HOSTS, REPO
+from tests.session.case import HOSTS, REPO, Case
 from tests.session.cli_support import WorkerCase, logged
 
 PERMISSION = {"kind": "hook", "event": "PermissionRequest", "tool_name": "Edit"}
@@ -108,3 +111,81 @@ class HandlerTest(HarnessCase):
             [r["id"] for r in logged(channel.events) if r["type"] not in ("ClientBound", "Stderr")],
             ids,
         )
+
+
+MESSAGE = {"out": {"type": "message", "text": "hi"}}
+RESULT = {"out": {"type": "result", "text": "hi"}}
+
+
+class InProcessOwnerTest(Case):
+    def setUp(self):
+        self.workdir = os.path.join(self.home, "work")
+        os.mkdir(self.workdir)
+        self.scenario = os.path.join(self.home, "scenario.json")
+        self.log = os.path.join(self.home, "fake.log")
+        self.session_cls = HostedSession.configured(
+            clients={
+                "fake": {
+                    "implementation": "tests.session.fake_client:InProcessFakeClient",
+                    "scenario": self.scenario,
+                    "log": self.log,
+                }
+            },
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
+
+    def start(self, *steps) -> OwnedSession:
+        with open(self.scenario, "w", encoding="utf-8") as f:
+            json.dump({"steps": list(steps)}, f)
+        spec = Spec(
+            workdir=self.workdir,
+            access=Access(cwd=self.workdir),
+            client="fake",
+            mode="in_process",
+            prompt="hello",
+        )
+        session = self.session_cls.start(spec)
+        assert isinstance(session, OwnedSession)
+        self.assertEqual((session.mode, session.name), (Mode.IN_PROCESS, None))
+        self.addCleanup(session.close)
+        return session
+
+    def harness(self) -> Channel:
+        root = os.path.expanduser(HARNESS_ROOT)
+        (name,) = [d for d in os.listdir(root) if not d.startswith(".")]
+        return Channel(os.path.join(root, name))
+
+    def runs(self) -> list[dict]:
+        def found():
+            try:
+                with open(self.log, encoding="utf-8") as f:
+                    return [json.loads(line) for line in f]
+            except FileNotFoundError:
+                return None
+
+        return live_tmux.wait(found, timeout=30, what=f"the run's line in {self.log}")
+
+    def test_the_adapter_runs_in_the_harness_process(self):
+        session = self.start(MESSAGE, RESULT)
+        self.assertEqual(list(session.events()), [Reply("hi"), TurnEnd("hi", 0), Exited(0)])
+        (run,) = self.runs()
+        self.assertEqual(run["pid"], self.harness().status()["pid"])
+        self.assertNotEqual(run["pid"], os.getpid())
+        self.assertFalse(session.alive())
+
+    def test_close_through_the_view_ends_the_run_and_its_harness(self):
+        session = self.start(MESSAGE, {"sleep": 60})
+        self.runs()
+        self.assertTrue(session.alive())
+        session.close()
+        live_tmux.wait(lambda: not self.harness().alive(), timeout=40, what="the harness to exit")
+        self.assertFalse(session.alive())
+
+    def test_kill_9_of_the_harness_ends_the_run_with_it(self):
+        session = self.start(MESSAGE, {"sleep": 60})
+        self.runs()
+        channel = self.harness()
+        os.kill(channel.status()["pid"], signal.SIGKILL)
+        live_tmux.wait(lambda: not channel.alive(), timeout=30, what="the harness to die")
+        self.assertFalse(session.alive())
+        self.assertEqual(session.status().state, "dead")

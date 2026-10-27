@@ -2999,6 +2999,27 @@ class OwnedTest(HostedTuiBase):
         owned = self.own()
         self.assertIsNone(owned.confirm_end(0.1))
 
+    def test_an_in_process_worker_is_owned_nameless(self):
+        self.configure(implementation="ensemble.session.clients.fake:InProcessFakeClient")
+        channel = Channel.create()
+        spec = self.spec(client="fake", mode="in_process", prompt="hello", sid=SID)
+        owned = self.session.own(spec, owner=channel.directory)
+        self.assertIsNone(owned.name)
+        self.assertTrue(owned.generation)
+        found, ended = [], False
+        deadline = time.monotonic() + 10
+        while not ended and time.monotonic() < deadline:
+            events, ended = owned.pump(0.1)
+            found += events
+        self.assertTrue(ended)
+        self.assertNotIn(Exited(0), found)
+        self.assertEqual(owned.confirm_end(1), 0)
+        view = owned.view(channel)
+        self.assertIsInstance(view, OwnedSession)
+        self.assertEqual(
+            (view.sid, view.generation, view.mode), (SID, owned.generation, Mode.IN_PROCESS)
+        )
+
     def test_confirm_end_unanswered_is_none(self):
         owned = self.own()
         self.host.processes["w1"].calls.read.side_effect = engine_types.Unanswered(
@@ -3399,6 +3420,57 @@ class OwnedStartTest(Case):
             self.session_cls.start(self.spec())
         self.assertFalse(os.path.exists(self.spawned[2].directory))
 
+    def test_an_in_process_start_runs_in_a_harness_and_gives_its_view(self):
+        self.harness_writes({"state": "running", "name": None, "sid": SID, "generation": "g7"})
+        session_cls = HostedSession.configured(
+            clients={"fake": {"implementation": "tests.session.fake_client:InProcessFakeClient"}},
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
+        spec = Spec(
+            workdir=self.workdir,
+            access=Access(cwd=self.workdir),
+            client="fake",
+            mode="in_process",
+            prompt="hi",
+            sid=SID,
+        )
+        session = session_cls.start(spec)
+        argv, _, channel = self.spawned
+        self.assertIsInstance(session, OwnedSession)
+        self.assertEqual(
+            (session.sid, session.generation, session.name, session.mode),
+            (SID, "g7", None, Mode.IN_PROCESS),
+        )
+        self.assertEqual(argv[1:], ["-P", "-s", "-m", hosted_session.HARNESS, channel.directory])
+        self.harness_writes({"state": "running", "name": None, "sid": "other", "generation": "g"})
+        with self.assertRaisesRegex(SessionError, "started another session"):
+            session_cls.start(spec)
+
+    def test_preflight_finds_handlers_without_importing_them(self):
+        root = os.path.join(self.home, "handlers")
+        os.mkdir(root)
+        with open(os.path.join(root, "never_imported_handler.py"), "w") as f:
+            f.write("raise SystemExit('imported')\n")
+        session_cls = HostedSession.configured(
+            clients={"fake": {"implementation": "tests.session.fake_client:InProcessFakeClient"}},
+            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        )
+        good = engine_types.HookCallback("never_imported_handler", roots=(root,))
+        spec = Spec(
+            workdir=self.workdir,
+            access=Access(cwd=self.workdir),
+            client="fake",
+            mode="in_process",
+            prompt="hi",
+            sid=SID,
+            handlers=(good,),
+        )
+        session_cls.preflight(spec)
+        missing = dataclasses.replace(spec, handlers=(engine_types.HookCallback("no_such_mod"),))
+        with self.assertRaisesRegex(ConfigError, "no_such_mod: cannot find"):
+            session_cls.preflight(missing)
+        self.popen.assert_not_called()
+
     def test_an_environment_is_refused_before_any_harness(self):
         with self.assertRaises(ConfigError):
             self.session_cls.harness_request(
@@ -3534,17 +3606,16 @@ class LegacyHandlersTest(HostedTuiBase):
         with self.assertRaisesRegex(ConfigError, "fake headless on host tmux has no session"):
             self.start(handlers=handlers)
 
-    def test_preflight_finds_handlers_without_importing_them(self):
-        root = os.path.join(self.dir, "handlers")
-        os.mkdir(root)
-        with open(os.path.join(root, "never_imported_handler.py"), "w") as f:
-            f.write("raise SystemExit('imported')\n")
-        good = engine_types.HookCallback("never_imported_handler", roots=(root,))
-        spec = self.spec(client="fake", mode="tui", name="w1", handlers=(good,))
+    def test_preflight_refuses_handlers_on_a_start_no_harness_owns(self):
+        spec = self.spec(client="fake", mode="tui", name="w1")
         self.session.preflight(spec)
-        missing = dataclasses.replace(spec, handlers=(engine_types.HookCallback("no_such_mod"),))
-        with self.assertRaisesRegex(ConfigError, "no_such_mod: cannot find"):
-            self.session.preflight(missing)
+        handlers = (engine_types.HookCallback("pkg.handler"),)
+        with self.assertRaisesRegex(
+            ConfigError, "^handlers: fake tui on host tmux has no session harness yet$"
+        ):
+            self.session.preflight(dataclasses.replace(spec, handlers=handlers))
+        with self.assertRaisesRegex(ConfigError, "fake headless on host tmux"):
+            self.session.preflight(dataclasses.replace(spec, mode="headless", handlers=handlers))
 
 
 class BoundOwnerTest(HostedTuiBase):
@@ -3559,7 +3630,9 @@ class BoundOwnerTest(HostedTuiBase):
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump(self.state, f)
 
-    def owner(self, **status):
+    def owner(self, **status) -> int | None:
+        """The lock fd it took, if not held already."""
+        fd = None
         if not self.channel.alive():
             fd = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -3573,8 +3646,10 @@ class BoundOwnerTest(HostedTuiBase):
                 **status,
             }
         )
+        return fd
 
-    def serve(self):
+    def serve(self, let_go=None):
+        """let_go: the lock fd it then unlocks, as a harness does once it answered an end."""
         self.served = []
 
         def answer():
@@ -3583,6 +3658,8 @@ class BoundOwnerTest(HostedTuiBase):
                 for ident, op in self.channel.requests():
                     self.served.append(op)
                     self.channel.reply(ident, ok=True)
+                    if let_go is not None:
+                        fcntl.flock(let_go, fcntl.LOCK_UN)
                     return
                 time.sleep(0.01)
 
@@ -3629,6 +3706,15 @@ class BoundOwnerTest(HostedTuiBase):
         with self.assertRaisesRegex(SessionError, "w1"):
             self.session.attach("w1")
 
+    def test_retire_of_a_running_owner_whose_terminal_is_gone_asks_it(self):
+        held = self.owner()
+        self.host.processes.pop("w1")
+        with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
+            self.session.retire("w1", sid="other")
+        self.serve(let_go=held)
+        self.session.retire("w1", sid=SID)
+        self.assertEqual(self.served, [Op.CLOSE])
+
     def test_a_failed_spawn_closes_the_worker_its_harness_launched(self):
         terminal = self.host.processes["w1"]
         harness = mock.Mock()
@@ -3664,8 +3750,7 @@ class BoundOwnerTest(HostedTuiBase):
             self.session.attach("w1", sid="other")
 
     def test_retire_asks_the_owner_and_closes_nothing_itself(self):
-        self.owner()
-        self.serve()
+        self.serve(let_go=self.owner())
         terminal = self.host.processes["w1"]
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])

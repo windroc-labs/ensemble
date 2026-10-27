@@ -20,6 +20,7 @@ from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.runner import STOP_LIMIT
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Layout, Result
+from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import NotShowable, SessionBusy, SessionError
 from ensemble.utils import Record, Status
 from tests.delegate.case import Case, committed
@@ -843,6 +844,12 @@ class InProcess(Base):
         )
 
 
+def unowned(spec):
+    """A preflight that passes all but handlers, as for a start no session harness owns."""
+    if spec.handlers:
+        raise SessionConfigError("handlers: no session harness")
+
+
 class Tui(Base):
     def setUp(self):
         super().setUp()
@@ -857,7 +864,7 @@ class Tui(Base):
                 self.work = os.path.join(self.home, f"run-{want}")
                 handle = FakeHandle(events)
                 with (
-                    mock.patch.object(self.driver, "preflight"),
+                    mock.patch.object(self.driver, "preflight", side_effect=unowned),
                     mock.patch.object(self.driver, "start", side_effect=handle.start) as start,
                 ):
                     code, out, err = self.runs("--mode", "tui")

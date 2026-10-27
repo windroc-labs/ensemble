@@ -2,8 +2,8 @@
 claim or a tick prints the run's one pipeline Record and its sessions and attach command
 (FR-28); its harness and TUI live, the TUI in MANAGER's grid, the harness listed by MANAGER's
 `ensemble-session ls --here`; written back as a headless run is; the events file gets the TUI's
-turn ends, one outcome and the harness's exit; an idle tick prints nothing. Ending the harness
-(kill-session, or `ensemble-orchestrator close ID`) ends the TUI and leaves the issue In Progress for the
+turn ends, one outcome and the harness's exit; an idle tick prints nothing. Killing the harness and
+TUI sessions, or `ensemble-orchestrator close ID`, ends the run and leaves the issue In Progress for the
 next router.py --issue to resume. `ensemble-orchestrator resume ID` brings a closed TUI's run back attended
 at its display, its Record unchanged. No place for the TUI, a bad display or events file, or none:
 exit 2 before any Linear request, starting nothing.
@@ -110,8 +110,8 @@ class Attended(Segment):
         return any(mark in c for c in ps.stdout.splitlines() for mark in marks)
 
     def interrupted(self, stop):
-        """An attended run waiting on after its start mark, its harness stopped by stop(ident, sid):
-        its TUI ends too and the issue stays In Progress; router.py --issue --tui resumes it to done.
+        """An attended run waiting on after its start mark, stopped by stop(ident, sid): its TUI
+        ends and the issue stays In Progress; router.py --issue --tui resumes it to done.
         The stopped harness's last write-back may or may not have run: its session comment says
         running or interrupted, and no write-back end of the session is counted after the stop.
         """
@@ -140,11 +140,12 @@ class Attended(Segment):
         self.resume(ident, "pm", sid, script, tui=True, after_stop=True)
         self.agent_run()
 
-    def test_killing_the_harness_session_ends_the_tui_and_the_next_router_run_resumes(self):
+    def test_killing_its_sessions_interrupts_the_run_and_the_next_router_run_resumes(self):
         def kill(ident, sid):
-            harness = self.harness("pm", ident, sid)
-            res = self.server.tmux("kill-session", "-t", f"={harness}")
-            self.assertEqual(res.returncode, 0, res.stderr)
+            # the harness's kill leaves its owned TUI: the TUI's kill interrupts the attempt
+            for name in (self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)):
+                res = self.server.tmux("kill-session", "-t", f"={name}")
+                self.assertEqual(res.returncode, 0, res.stderr)
 
         self.interrupted(kill)
 

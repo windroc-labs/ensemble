@@ -158,6 +158,8 @@ class ManagedIntegrationTest(Case):
         proc.kill()
         proc.wait(timeout=10)
         live_tmux.wait(lambda: not self.alive(pids[0]), what="PTY client hung up")
+        # its PTY's hangup can precede the release of its lease: the guard's own end frees it
+        live_tmux.wait(lambda: not self.alive(value["guard"]), what="the guard's end")
         self.assertEqual(
             self.host.worker_liveness("managed-worker", value["generation"]), Liveness.UNKNOWN
         )

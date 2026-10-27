@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 from contextlib import redirect_stderr
+from dataclasses import asdict
 from datetime import datetime
 from unittest import mock
 
@@ -16,7 +17,10 @@ from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import (
     FIX,
     NUDGE,
+    POLICIES,
     STOP_LIMIT,
+    Attempt,
+    closing,
     execute,
     report,
     say,
@@ -30,6 +34,7 @@ from ensemble.session import (
     Exited,
     IdleTimeout,
     LimitHit,
+    Mode,
     Reply,
     SessionBusy,
     SessionError,
@@ -925,3 +930,101 @@ class Stopping(Case):
         ):
             with self.subTest(error=error):
                 self.assertEqual(stopped(error), want)
+
+
+class AttemptCore(TuiPolicy):
+    """Attempt, the event-driven core: each event fed, a Result ends it; closing's fields."""
+
+    def attempt(self, *, first=True, mode="tui", sent=None) -> Attempt:
+        os.makedirs(Layout(self.work).agent, exist_ok=True)
+        composition = Composer()
+        accepted = plan(
+            composition.resolve("dummy-tester"),
+            Spec("Echo me.", self.work, task="echo", client="fake", mode=mode, out=self.out),
+            driver=self.driver,
+            composition=composition,
+        )
+        os.makedirs(accepted.session.workdir, exist_ok=True)
+        self.handle = FakeHandle([], fail=sent)
+        self.events, self.notes = [], []
+        policy = POLICIES[Mode(mode)](self.note, None)
+        return Attempt(
+            accepted,
+            policy,
+            self.handle,
+            note=self.note,
+            on_event=self.events.append,
+            first=first,
+        )
+
+    def note(self, kind: str, **_fields) -> None:
+        self.notes.append(kind)
+
+    def fed(self, attempt: Attempt, *events) -> list[Result | None]:
+        err = io.StringIO()
+        with redirect_stderr(err):
+            found = [attempt.feed(event) for event in events]
+        self.err = err.getvalue()
+        return found
+
+    def test_an_outcome_turn_end_is_the_attempts_result(self):
+        attempt = self.attempt()
+        found = self.fed(attempt, Activity("Read"), turn(START, block(DONE)))
+        self.assertIsNone(found[0])
+        self.assertEqual(found[1].outcome.status, "done")
+        self.assertEqual(self.events, [Progress("start", "go")])
+        self.assertNotIn("missing", self.notes)
+
+    def test_an_invalid_outcome_is_fixed_in_the_same_session_once(self):
+        attempt = self.attempt()
+        found = self.fed(attempt, turn(START, block(INVALID)), turn(block(DONE)))
+        self.assertIsNone(found[0])
+        self.assertEqual(self.handle.calls, [("send", FIX.format(error=INVALID_ERROR))])
+        self.assertEqual(found[1].outcome.status, "done")
+        self.assertIn("invalid", self.notes)
+
+    def test_a_failed_turn_and_a_limit_end_it(self):
+        found = self.fed(self.attempt(), TurnFailed("server_overloaded", "busy"))
+        self.assertEqual(
+            found, [Result(0, None, "the client's turn failed: server_overloaded (busy)")]
+        )
+        attempt = self.attempt()
+        found = self.fed(attempt, LimitHit(None), Exited(0))
+        self.assertIsNone(found[0])
+        self.assertEqual(found[1], Result(0, None, "usage limit; reset time unknown", Limit(None)))
+        self.assertEqual(self.handle.calls, [("stop",)])
+
+    def test_turn_ends_without_an_outcome_are_nudged_then_given_up(self):
+        attempt = self.attempt()
+        found = self.fed(attempt, *[turn("Working.")] * (STOP_LIMIT + 1))
+        self.assertEqual(found[:-1], [None] * STOP_LIMIT)
+        self.assertEqual(found[-1], GAVE_UP)
+        self.assertEqual(self.handle.calls, [("send", NUDGE)])
+        self.assertEqual(self.notes.count("give_up"), 1)
+
+    def test_idle_gives_a_tui_attempt_up(self):
+        attempt = self.attempt()
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(attempt.idle(1800), GAVE_UP)
+        self.assertIn("no event for 30 min", err.getvalue())
+        self.assertEqual(self.notes, ["idle", "give_up"])
+
+    def test_only_a_first_attempt_logs_a_missing_start_mark(self):
+        for first, want in ((True, ["missing"]), (False, [])):
+            with self.subTest(first=first):
+                self.fresh()
+                attempt = self.attempt(first=first)
+                self.fed(attempt, turn(block(DONE)))
+                self.assertEqual([n for n in self.notes if n == "missing"], want)
+
+    def test_closing_holds_the_result_note_fields(self):
+        outcome = Outcome("done", "T", "S", deliverable="# Doc\n")
+        self.assertEqual(closing(Result(1, None, "boom")), {"error": "boom"})
+        self.assertEqual(
+            closing(Result(0, outcome, "")),
+            {"outcome": {k: v for k, v in asdict(outcome).items() if k != "deliverable"}},
+        )
+        self.assertEqual(
+            closing(Result(2, outcome, "the client exited 2"))["error"], "the client exited 2"
+        )

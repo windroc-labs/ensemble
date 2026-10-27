@@ -69,21 +69,12 @@ class GiveUp:
 class Headless:
     stops_failed = True  # a failed turn's client would hold its container on
 
-    def __init__(self, note: Callable[..., None], driver: Driver):
+    def __init__(self, note: Callable[..., None], driver: Driver | None):
         self.note, self.driver = note, driver
 
-    def start(self, p: Plan) -> Session:
-        return self._start(p, p.session)
-
-    def _start(self, p: Plan, session) -> Session:
-        handle = self.driver.start(
-            replace(p.driver_spec, session=session), idle_timeout=p.run.idle_timeout
-        )
-        if isinstance(handle, Instruction):
-            raise ConfigError("session driver returned an Instruction")
-        return handle
-
     def fix(self, handle: Session, p: Plan, text: str) -> Session:
+        if self.driver is None:
+            raise ConfigError("a headless fix needs the session driver")
         resumed = self.driver.start(
             replace(p.driver_spec, session=replace(p.session, prompt=text, resume=True)),
             idle_timeout=p.run.idle_timeout,
@@ -105,29 +96,14 @@ class Headless:
 class Tui(Headless):
     """FR-23: the first turn end without an outcome block gets NUDGE, STOP_LIMIT more give up; a
     progress mark resets that count; a turn end with work pending is ignored. FR-24: an IdleTimeout
-    gives up. The session is left open unless locked (_Attempts.release). A showable session
-    started at a display is shown as the run's `show` says, unless hidden.
+    gives up. The session is left open unless locked (Attempts.release).
     """
 
     stops_failed = False
 
-    def __init__(self, note: Callable[..., None], driver: Driver):
+    def __init__(self, note: Callable[..., None], driver: Driver | None):
         super().__init__(note, driver)
         self.nudged, self.count = False, 0
-
-    def start(self, p: Plan) -> Session:
-        handle = self._start(p, replace(p.session, name=p.spec.name, events=p.spec.events))
-        name = handle.name
-        if name is None:
-            raise SessionError("tui session has no name")
-        if handle.showable:
-            say(f"delegate: tui session {name}: {handle.attach_command()}")
-            if self.driver.display is not None and not handle.status().hidden:
-                try:
-                    handle.show(command=p.run.show if p.run.show not in ("", "none") else None)
-                except (SessionConfigError, SessionError) as e:
-                    say(f"delegate: show {name}: {e}")
-        return handle
 
     def fix(self, handle: Session, p: Plan, text: str) -> Session:
         handle.send(text)
@@ -155,8 +131,12 @@ class Tui(Headless):
         self.count = 0
 
     def idle(self, seconds: float) -> str | GiveUp | None:
-        size, unit = (3600, "h") if seconds >= 3600 else (60, "min") if seconds >= 60 else (1, "s")
-        return GiveUp(f"no event for {seconds / size:g} {unit}")
+        return GiveUp(idle_reason(seconds))
+
+
+def idle_reason(seconds: float) -> str:
+    size, unit = (3600, "h") if seconds >= 3600 else (60, "min") if seconds >= 60 else (1, "s")
+    return f"no event for {seconds / size:g} {unit}"
 
 
 POLICIES = {Mode.HEADLESS: Headless, Mode.TUI: Tui, Mode.IN_PROCESS: Headless}
@@ -216,7 +196,7 @@ def execute(
             emit(Finished(result))
             return result
         raise ConfigError("instruction driver returned a Session")
-    attempts = _Attempts(p, emit, driver)
+    attempts = Attempts(p, emit, driver)
     try:
         result = attempts.result()
         attempts.release()
@@ -234,14 +214,18 @@ def execute(
                 ended = (ending or stopped)(e)
                 attempts.close({"error": ended.error}, ended.returncode)
         raise
-    closing = {"error": result.error}
-    if result.outcome is not None:
-        closing = {
-            "outcome": {k: v for k, v in asdict(result.outcome).items() if k != "deliverable"},
-            **({"error": result.error} if result.error else {}),
-        }
-    attempts.close(closing, result.returncode)
+    attempts.close(closing(result), result.returncode)
     return result
+
+
+def closing(result: Result) -> dict:
+    """The `result` note's fields."""
+    if result.outcome is None:
+        return {"error": result.error}
+    return {
+        "outcome": {k: v for k, v in asdict(result.outcome).items() if k != "deliverable"},
+        **({"error": result.error} if result.error else {}),
+    }
 
 
 def stopped(error: BaseException) -> Result:
@@ -270,15 +254,173 @@ def _resets(at: float | None) -> str:
         return "reset time unknown"
 
 
-class _Attempts:
-    def __init__(self, p: Plan, on_event: Callable[[Event], None], driver: Driver):
-        self.plan, self.on_event, self.policy = (
-            p,
-            on_event,
-            POLICIES[Mode(p.spec.mode)](self.note, driver),
-        )
-        self.run_dir = p.session.workdir
+class Attempt:
+    """One task attempt fed its session's events: a Result ends it; a headless fix replaces handle."""
+
+    def __init__(
+        self,
+        p: Plan,
+        policy: Headless,
+        handle: Session,
+        *,
+        note: Callable[..., None],
+        on_event: Callable[[Event], None],
+        first: bool,
+    ):
+        self.plan, self.policy, self.handle = p, policy, handle
+        self.note, self.on_event, self.first = note, on_event, first
+        environment = p.session.environment
+        self.lock = None if environment is None else environment.lock
         self.seen: set[str] = set()
+        self.fixed = False
+        self._pass()
+
+    def _pass(self) -> None:
+        self.rc: int | None = None
+        self.last: str | None = None
+        self.replied: str | None = None
+        self.limit: Limit | None = None
+        self.failed: TurnFailed | None = None
+
+    def feed(self, event: Event | object) -> Result | None:
+        if self.failed is not None and not isinstance(event, Exited | Stderr):
+            return None
+        answer = None
+        if isinstance(event, Reply):
+            self.last = self.replied = self.reply(event.text)
+        elif isinstance(event, TurnEnd):
+            if event.reply and event.reply != self.replied:
+                # A headless turn repeats its Reply at turn end.
+                self.last = self.reply(event.reply)
+            self.replied = None
+            if not self.limit:
+                answer = self.policy.turn_end(self.handle, self.last or "", event.pending)
+        elif isinstance(event, Stderr):
+            say(event.text)
+        elif isinstance(event, IdleTimeout):
+            return self.idle(event.seconds)
+        elif isinstance(event, TurnFailed):
+            if not self.limit:
+                self.note("turn_failed", error=event.error, detail=event.detail)
+            self.failed = event
+            if self.plan.spec.mode != Mode.HEADLESS:
+                return self.end()
+        elif isinstance(event, LimitHit):
+            self.note("limit", resets_at=event.resets_at)
+            self.limit = Limit(event.resets_at)
+            if not self.stop():
+                return self.end()
+        elif isinstance(event, Exited):
+            self.rc = event.returncode
+            return self.end()
+        return self.answered(answer)
+
+    def idle(self, seconds: float) -> Result | None:
+        self.note("idle", seconds=seconds)
+        return None if self.limit else self.answered(self.policy.idle(seconds))
+
+    def answered(self, answer: str | GiveUp | None) -> Result | None:
+        if isinstance(answer, GiveUp):
+            self.note("give_up", reason=answer.reason)
+            name = self.handle.name
+            if name is None:
+                raise SessionError("tui session has no name")
+            command = f": {self.handle.attach_command()}" if self.handle.showable else ""
+            left = "" if self.lock else f"; session {name} left open{command}"
+            say(f"delegate: {answer.reason}{left}")
+            self.rc, self.last, self.limit, self.failed = 0, None, None, None
+            return self.end()
+        return self.end() if answer == END else None
+
+    def stop(self) -> bool:
+        try:
+            self.handle.stop()
+        except SessionError as e:
+            say(f"delegate: {self.plan.spec.mode}: {e}")
+            return False
+        return True
+
+    def end(self) -> Result | None:
+        """None after a fix."""
+        p, rc = self.plan, self.rc or 0
+        diagnostic = f"the client exited {rc}" if rc else ""
+        if self.limit:
+            return Result(rc, None, f"usage limit; {_resets(self.limit.resets_at)}", self.limit)
+        if self.failed:
+            if self.policy.stops_failed:
+                self.stop()
+            if rc and self.failed.error == "process_exit":
+                return Result(rc, None, diagnostic)
+            detail = f" ({self.failed.detail})" if self.failed.detail else ""
+            return Result(rc, None, f"the client's turn failed: {self.failed.error}{detail}")
+        if (block := outcome_block(self.last or "")) is None:
+            return Result(rc, None, diagnostic or "the agent run returned no outcome")
+        if p.docker:
+            block, dropped = drop_files(block)
+            if dropped:
+                self.note("files_dropped", count=dropped)
+        try:
+            outcome, updraft = read_outcome(
+                block, p.run.output, p.params.workdir, hosts(p.run.output)
+            )
+        except InvalidOutcome as e:
+            if rc or self.fixed:
+                return Result(rc, None, diagnostic or f"invalid outcome: {e}")
+            self.note("invalid", error=str(e))
+            say(f"delegate: invalid outcome: {e}; resuming once")
+            try:
+                self.handle = self.policy.fix(self.handle, p, FIX.format(error=e))
+            except (SessionConfigError, SessionError) as failed:
+                return Result(1, None, f"invalid outcome: {e}; resume failed: {failed}")
+            self.fixed = True
+            self._pass()
+            return None
+        return self.finish(outcome, rc, updraft)
+
+    def reply(self, text: str) -> str:
+        for line in outcome_only(text).splitlines():
+            if line.strip():
+                say(line)
+        for name, said in marks(text):
+            self.note("progress", name=name, text=said)
+            say(f"Progress ({name}): {said}")
+            self.seen.add(name)
+            self.on_event(Progress(name, said))
+            self.policy.progress()
+        return text
+
+    def finish(self, outcome: Outcome, rc: int, updraft: Updraft | None) -> Result:
+        s, output = self.plan.spec, self.plan.run.output
+        kind = output["type"]
+        if outcome.deliverable and s.out:
+            if not holds(s.out, outcome.deliverable):  # else the agent run wrote it there
+                try:
+                    save(s.out, outcome.deliverable)
+                except OSError as e:
+                    if kind in SAVES_DELIVERABLE:
+                        raise
+                    say(f"delegate: cannot save the deliverable to {s.out}: {e}")
+                    self.note("save_error", error=str(e))
+            if kind == "local":
+                outcome = replace(outcome, url=s.out)
+        if kind == "pull-request":
+            gated = gate(outcome, updraft)
+            outcome = gated.outcome
+            if gated.status != GateStatus.SKIPPED:
+                self.note("ready_gate", status=gated.status, reason=gated.reason)
+            if gated.reason:
+                say(f"delegate: ready gate: {gated.reason}")
+        if self.first and outcome.status != "needs_input" and "start" not in self.seen:
+            say("delegate: missing progress mark: start")
+            self.note("missing", name="start")
+        return Result(rc, outcome, f"the client exited {rc}" if rc else "")
+
+
+class Attempts:
+    def __init__(self, p: Plan, on_event: Callable[[Event], None], driver: Driver):
+        self.plan, self.on_event, self.driver = p, on_event, driver
+        self.policy = POLICIES[Mode(p.spec.mode)](self.note, driver)
+        self.run_dir = p.session.workdir
         self.handle: Session | None = None
         self.refused = False  # the Driver refused the start: nothing to close
         environment = p.session.environment
@@ -296,11 +438,38 @@ class _Attempts:
             except OSError as e:
                 say(f"delegate: {e}")
 
-    def result(self) -> Result:
+    def start(self) -> Session:
+        """A showable tui session started at a display is shown as the run's `show` says, unless
+        hidden.
+        """
+        p = self.plan
+        tui = p.spec.mode == Mode.TUI
+        session = replace(p.session, name=p.spec.name, events=p.spec.events) if tui else p.session
+        handle = self.driver.start(
+            replace(p.driver_spec, session=session), idle_timeout=p.run.idle_timeout
+        )
+        if isinstance(handle, Instruction):
+            raise ConfigError("session driver returned an Instruction")
+        if not tui:
+            return handle
+        name = handle.name
+        if name is None:
+            raise SessionError("tui session has no name")
+        if handle.showable:
+            say(f"delegate: tui session {name}: {handle.attach_command()}")
+            if self.driver.display is not None and not handle.status().hidden:
+                try:
+                    handle.show(command=p.run.show if p.run.show not in ("", "none") else None)
+                except (SessionConfigError, SessionError) as e:
+                    say(f"delegate: show {name}: {e}")
+        return handle
+
+    def begin(self) -> Session | Result:
+        """The started session, Begun sent; a Result when it did not start."""
         p = self.plan
         aside, stale = self.set_aside_stale_out()
         try:
-            handle = self.policy.start(p)
+            handle = self.start()
             self.handle = handle
         except SessionConfigError as e:
             self.refused = True
@@ -321,42 +490,28 @@ class _Attempts:
             self.stop(handle)
             return Result(1, None, stale)
         self.on_event(Begun(p.sid))
-        fixed = False
+        return handle
+
+    def result(self) -> Result:
+        p, handle = self.plan, self.begin()
+        if isinstance(handle, Result):
+            return handle
+        attempt = Attempt(
+            p, self.policy, handle, note=self.note, on_event=self.on_event, first=not p.spec.resume
+        )
         while True:
-            rc, last, limit, failed = self.attempt(handle)
-            diagnostic = f"the client exited {rc}" if rc else ""
-            if limit:
-                return Result(rc, None, f"usage limit; {_resets(limit.resets_at)}", limit)
-            if failed:
-                if self.policy.stops_failed:
-                    self.stop(handle)
-                if rc and failed.error == "process_exit":
-                    return Result(rc, None, diagnostic)
-                detail = f" ({failed.detail})" if failed.detail else ""
-                return Result(rc, None, f"the client's turn failed: {failed.error}{detail}")
-            if (block := outcome_block(last or "")) is None:
-                return Result(rc, None, diagnostic or "the agent run returned no outcome")
-            if p.docker:
-                block, dropped = drop_files(block)
-                if dropped:
-                    self.note("files_dropped", count=dropped)
-            try:
-                outcome, updraft = read_outcome(
-                    block, p.run.output, p.params.workdir, hosts(p.run.output)
-                )
-            except InvalidOutcome as e:
-                if rc or fixed:
-                    return Result(rc, None, diagnostic or f"invalid outcome: {e}")
-                self.note("invalid", error=str(e))
-                say(f"delegate: invalid outcome: {e}; resuming once")
-                try:
-                    handle = self.policy.fix(handle, p, FIX.format(error=e))
-                    self.handle = handle
-                except (SessionConfigError, SessionError) as failed:
-                    return Result(1, None, f"invalid outcome: {e}; resume failed: {failed}")
-                fixed = True
-                continue
-            return self.finish(outcome, rc, updraft)
+            fixed = attempt.fixed
+            for event in attempt.handle.events():
+                result = attempt.feed(event)
+                self.handle = attempt.handle
+                if result is not None:
+                    return result
+                if attempt.fixed != fixed:
+                    break
+            else:
+                if (result := attempt.end()) is not None:
+                    self.handle = attempt.handle
+                    return result
 
     def release(self) -> None:
         """Closes a locked run's session once, freeing its lock (FR-61); prints a SessionError."""
@@ -406,94 +561,3 @@ class _Attempts:
                 Path(aside).unlink(missing_ok=True)
         except OSError as e:
             say(f"delegate: stale out: {e}")
-
-    def attempt(self, handle: Session) -> tuple[int, str | None, Limit | None, TurnFailed | None]:
-        """rc 0 when the policy or a failed turn ended it, the session running on."""
-        rc: int | None = None
-        last: str | None = None
-        limit: Limit | None = None
-        failed: TurnFailed | None = None
-        replied: str | None = None
-        for event in handle.events():
-            if failed is not None and not isinstance(event, Exited | Stderr):
-                continue
-            answer = None
-            if isinstance(event, Reply):
-                last = replied = self.reply(event.text)
-            elif isinstance(event, TurnEnd):
-                if event.reply and event.reply != replied:
-                    # A headless turn repeats its Reply at turn end.
-                    last = self.reply(event.reply)
-                replied = None
-                if not limit:
-                    answer = self.policy.turn_end(handle, last or "", event.pending)
-            elif isinstance(event, Stderr):
-                say(event.text)
-            elif isinstance(event, IdleTimeout):
-                self.note("idle", seconds=event.seconds)
-                if not limit:
-                    answer = self.policy.idle(event.seconds)
-            elif isinstance(event, TurnFailed):
-                if not limit:
-                    self.note("turn_failed", error=event.error, detail=event.detail)
-                failed = event
-                if self.plan.spec.mode != Mode.HEADLESS:
-                    break
-            elif isinstance(event, LimitHit):
-                self.note("limit", resets_at=event.resets_at)
-                limit = Limit(event.resets_at)
-                if not self.stop(handle):
-                    break
-            elif isinstance(event, Exited):
-                rc = event.returncode
-            if isinstance(answer, GiveUp):
-                self.note("give_up", reason=answer.reason)
-                name = handle.name
-                if name is None:
-                    raise SessionError("tui session has no name")
-                command = f": {handle.attach_command()}" if handle.showable else ""
-                left = "" if self.lock else f"; session {name} left open{command}"
-                say(f"delegate: {answer.reason}{left}")
-                return 0, None, None, None
-            if answer == END:
-                break
-        return rc or 0, last, limit, failed
-
-    def reply(self, text: str) -> str:
-        for line in outcome_only(text).splitlines():
-            if line.strip():
-                say(line)
-        for name, said in marks(text):
-            self.note("progress", name=name, text=said)
-            say(f"Progress ({name}): {said}")
-            self.seen.add(name)
-            self.on_event(Progress(name, said))
-            self.policy.progress()
-        return text
-
-    def finish(self, outcome: Outcome, rc: int, updraft: Updraft | None) -> Result:
-        s, output = self.plan.spec, self.plan.run.output
-        kind = output["type"]
-        if outcome.deliverable and s.out:
-            if not holds(s.out, outcome.deliverable):  # else the agent run wrote it there
-                try:
-                    save(s.out, outcome.deliverable)
-                except OSError as e:
-                    if kind in SAVES_DELIVERABLE:
-                        raise
-                    say(f"delegate: cannot save the deliverable to {s.out}: {e}")
-                    self.note("save_error", error=str(e))
-            if kind == "local":
-                outcome = replace(outcome, url=s.out)
-        if kind == "pull-request":
-            gated = gate(outcome, updraft)
-            outcome = gated.outcome
-            if gated.status != GateStatus.SKIPPED:
-                self.note("ready_gate", status=gated.status, reason=gated.reason)
-            if gated.reason:
-                say(f"delegate: ready gate: {gated.reason}")
-        if not s.resume and outcome.status != "needs_input" and "start" not in self.seen:
-            say("delegate: missing progress mark: start")
-            self.note("missing", name="start")
-        result = Result(rc, outcome, f"the client exited {rc}" if rc else "")
-        return result

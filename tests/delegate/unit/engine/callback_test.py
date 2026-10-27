@@ -31,6 +31,7 @@ from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 RUN = {"sid": SID, "attempt": 3}
 ARGV = ("writeback", "--issue", "A B")
 PID = 4242
+PARENT = 5151
 
 
 class Codec(Case):
@@ -274,8 +275,25 @@ class Delivery(Case):
         self.popen.side_effect = spawned
         self.callback(Begun(SID))
         self.assertEqual(seen, [(1, True), ""])
-        self.assertEqual(self.lock_text(), f"{PID}\n")
+        self.assertEqual(self.lock_text(), f"{PID} {os.getpid()}\n")
         self.assertFalse(self.store.held(self.store.callback_lock))
+
+    def test_the_parent_lock_is_held_while_delivering_and_never_passed_on(self):
+        seen, store = [], self.store
+
+        class Watched(Child):
+            def communicate(self, input=None, timeout=None):
+                seen.append(store.held(store.callback_parent_lock))
+                return super().communicate(input, timeout)
+
+        def spawned(argv, **kwargs):
+            seen.append((len(kwargs["pass_fds"]), store.held(store.callback_parent_lock)))
+            return Watched(argv, **kwargs)
+
+        self.popen.side_effect = spawned
+        self.callback(Begun(SID))
+        self.assertEqual(seen, [(1, True), True])
+        self.assertFalse(store.held(store.callback_parent_lock))
 
     def hold(self) -> int:
         holder = os.open(self.store.callback_lock, os.O_RDWR | os.O_CREAT, 0o600)
@@ -334,7 +352,7 @@ class Sweep(Case):
         self.clock = Clock(self)
         self.killpg = self.enterContext(mock.patch("os.killpg"))
 
-    def orphan(self, text: str = f"{PID}\n") -> Orphan:
+    def orphan(self, text: str = f"{PID} {PARENT}\n") -> Orphan:
         orphan = Orphan(self, self.store.callback_lock, text)
         self.killpg.side_effect = orphan.killpg
         return orphan
@@ -345,7 +363,7 @@ class Sweep(Case):
     def test_no_lock_or_a_free_one_sends_no_signal(self):
         sweep(self.store)
         with open(self.store.callback_lock, "w", encoding="utf-8") as file:
-            file.write(f"{PID}\n")
+            file.write(f"{PID} {PARENT}\n")
         sweep(self.store)
         self.killpg.assert_not_called()
         self.assertEqual(self.clock.now, 0.0)
@@ -395,8 +413,49 @@ class Sweep(Case):
                 self.assertEqual(orphan.calls, calls)
                 orphan.free()
 
+    def parent(self) -> None:
+        holder = os.open(self.store.callback_parent_lock, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+
+    def test_a_group_its_live_parent_still_delivers_is_refused_unsignalled(self):
+        orphan = self.orphan()
+        self.parent()
+        with self.assertRaises(ConfigError) as caught:
+            sweep(self.store)
+        self.assertEqual(
+            str(caught.exception),
+            f"{self.store.callback_lock}: callback still delivered by pid 5151",
+        )
+        self.killpg.assert_not_called()
+        self.assertTrue(self.held())
+        orphan.free()
+
+    def test_a_group_whose_parent_is_gone_is_killed(self):
+        orphan = self.orphan()
+        sweep(self.store)
+        self.assertEqual(orphan.calls, [(PID, 0), (PID, signal.SIGKILL), (PID, 0)])
+        self.assertFalse(self.held())
+
     def test_a_held_lock_without_a_pid_above_1_sends_no_signal(self):
-        for text in ("", "x", "1", "0", "-3", " 12a", "12 ", "١٢", "9" * 5000):
+        for text in (
+            "",
+            "x",
+            "1",
+            "0",
+            "-3",
+            " 12a",
+            "12 ",
+            "١٢",
+            "9" * 5000,
+            f"{PID}",
+            f"{PID}\n",
+            f"{PID} 1",
+            f"{PID}  5151",
+            f"{PID} x",
+            f"{PID} 5151 6",
+            "1 5151",
+        ):
             with self.subTest(text=text[:20]):
                 orphan = self.orphan(text)
                 with self.assertRaises(ConfigError) as caught:
@@ -411,14 +470,19 @@ class Sweep(Case):
     def test_a_group_it_may_not_signal_or_no_pid_at_all_is_a_config_error(self):
         huge, denied = 2**40, PermissionError(1, "Operation not permitted")
         for text, signum, error, calls in (
-            (f"{PID}\n", 0, denied, [(PID, 0)]),
-            (f"{PID}\n", signal.SIGKILL, denied, [(PID, 0), (PID, signal.SIGKILL)]),
-            (f"{huge}\n", 0, OverflowError("signed integer is greater than maximum"), [(huge, 0)]),
+            (f"{PID} {PARENT}\n", 0, denied, [(PID, 0)]),
+            (f"{PID} {PARENT}\n", signal.SIGKILL, denied, [(PID, 0), (PID, signal.SIGKILL)]),
+            (
+                f"{huge} {PARENT}\n",
+                0,
+                OverflowError("signed integer is greater than maximum"),
+                [(huge, 0)],
+            ),
         ):
             with self.subTest(signum=signum, error=error):
                 orphan = self.orphan(text)
                 orphan.errors[signum] = error
-                pid = int(text)
+                pid = int(text.split()[0])
                 with self.assertRaises(ConfigError) as caught:
                     sweep(self.store)
                 self.assertEqual(

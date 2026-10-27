@@ -237,8 +237,9 @@ class TuiStore:
         return self.host.attach(self.name) if self.name in self.host.list() else None
 
     def check(self) -> None:
-        if self._sid is not None:
-            self.process()
+        """A terminal of another sid raises; none does not."""
+        if self._sid is not None and (process := self._lookup()) is not None:
+            check_sid(self.name, process, self._sid)
 
     def start(
         self,

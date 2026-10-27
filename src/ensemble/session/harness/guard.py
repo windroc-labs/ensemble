@@ -682,7 +682,7 @@ def attach(path: str) -> int:
     previous = termios.tcgetattr(0) if os.isatty(0) else None
     try:
         if previous is not None:
-            tty.setraw(0)
+            tty.setraw(0, termios.TCSANOW)  # TCSAFLUSH would drop what was typed before it
         while True:
             ready, _, _ = select.select([0, peer], [], [])
             for descriptor in ready:

@@ -2,7 +2,7 @@
 
 import contextlib
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypedDict
@@ -12,6 +12,7 @@ from ensemble.delegate.composer.types import DELIVERABLE, TMP
 from ensemble.delegate.event.types import Outcome
 from ensemble.session import EnvironmentSpec
 from ensemble.session import Spec as SessionSpec
+from ensemble.utils import Display
 from ensemble.utils import Stopped as Stopped
 
 __all__ = [
@@ -248,3 +249,30 @@ class Resolved:
 
     spec: EnvironmentSpec
     prefetch: bool
+
+
+@dataclass(frozen=True)
+class DelegateState:
+    """delegate.json's run state (engine/record.py); previous: attempt - 1's Result once a
+    follow-up opened attempt; bound: an owned attempt's worker took it (its owner phase).
+    """
+
+    role: str
+    plan: Plan
+    session_cls: str | None
+    host: str
+    harness_host: str
+    display: Display
+    callback: tuple[str, ...] | None
+    agent_name: str
+    harness_name: str
+    attempt: int
+    outer: Outer
+    overlays: tuple[Mapping, ...]
+    detached: bool = False
+    completed: bool = False
+    result: Result | None = None
+    events: str | None = None
+    start_failure: str | None = None
+    previous: Result | None = None
+    bound: bool = False

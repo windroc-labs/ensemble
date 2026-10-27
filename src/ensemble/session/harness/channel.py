@@ -38,6 +38,9 @@ from ensemble.utils import STALE_AGE, append_line, read_regular, save
 
 HEX = re.compile(r"[0-9a-f]{32}")
 REQUEST_WAIT = 15
+CLOSE_WAIT = 10  # a harness's wait for its worker's confirmed exit
+DRAIN = 30  # a harness's wait for its handlers after that exit
+END_WAIT = CLOSE_WAIT + DRAIN + REQUEST_WAIT
 SLICE = 0.05
 DAY = 24 * 60 * 60
 SAVING = ".tmp-"  # utils.save's temp prefix
@@ -176,6 +179,7 @@ class Channel:
         self._requests = os.path.join(directory, "requests")
         self._replies = os.path.join(directory, "replies")
         self._held: int | None = None
+        self.asked: set[str] = set()  # requests in flight from its holder: its own handlers'
 
     @classmethod
     def create(cls) -> Channel:
@@ -263,13 +267,20 @@ class Channel:
             os.close(self._held)
             self._held = None
 
-    def request(self, op: Op, timeout: float = REQUEST_WAIT) -> bool:
-        """True once done; False with no harness; Unanswered unconfirmed or unanswered;
-        SessionError refused.
+    def request(self, op: Op, timeout: float = END_WAIT) -> bool:
+        """True once done: asked by its holder's handlers, at the worker's confirmed exit; else
+        once the harness answered after its handlers drained and let go of its lock (within
+        `timeout`). False with no harness; Unanswered unconfirmed or unanswered; SessionError
+        refused.
         """
         if op not in tuple(Op):
             raise ValueError(f"request {op!r}: want one of {', '.join(Op)}")
-        return self._exchange({"op": op}, timeout) is not None
+        deadline = time.monotonic() + timeout
+        if self._exchange({"op": op}, timeout) is None:
+            return False
+        while self._held is None and self.alive() and time.monotonic() < deadline:
+            time.sleep(SLICE)
+        return True
 
     def ask(self, op: Op, data: Mapping, timeout: float = REQUEST_WAIT) -> dict:
         """A remote worker's SEND, PRESS or SCREEN, or any worker's DISPLAY, its answer's data;
@@ -285,10 +296,18 @@ class Channel:
 
     def _exchange(self, body: Mapping, timeout: float) -> dict | None:
         """The answer once ok; None with no harness."""
-        op = body["op"]
         if not self.alive():
             return None
         ident = uuid.uuid4().hex
+        if self._held is not None:
+            self.asked.add(ident)
+        try:
+            return self._answered(body, ident, timeout)
+        finally:
+            self.asked.discard(ident)
+
+    def _answered(self, body: Mapping, ident: str, timeout: float) -> dict | None:
+        op = body["op"]
         reply = os.path.join(self._replies, ident + ".json")
         os.makedirs(self._requests, 0o700, exist_ok=True)
         save(os.path.join(self._requests, ident + ".json"), json.dumps(body))
@@ -384,7 +403,7 @@ def bound(name: str, state: Mapping) -> Channel | None:
         time.sleep(SLICE)
     if not channel.alive():
         return None
-    if found.get("state") in ("running", "exited") and (
+    if found.get("state") in ("running", "draining", "exited") and (
         found.get("name"),
         found.get("sid"),
         found.get("generation"),

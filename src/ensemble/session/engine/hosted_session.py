@@ -261,15 +261,23 @@ def _reconstructible(setup: _Setup) -> bool:
 
 
 def _owned(setup: _Setup, spec: Spec, mode: Mode, client: Client, on: Host) -> bool:
-    """An owned client's tui or headless start, no environment, on a harnessed Host; a remote
-    tui only for a client owned there.
+    """An in_process start, or an owned client's tui or headless start, no environment, on a
+    harnessed Host; a remote tui only for a client owned there.
     """
-    if spec.environment is not None or not on._harnessed or not _reconstructible(setup):
+    if spec.environment is not None or not _reconstructible(setup):
+        return False
+    if mode == Mode.IN_PROCESS:
+        return client.in_process() is not None
+    if not on._harnessed:
         return False
     run = {Mode.TUI: client.tui, Mode.HEADLESS: client.headless}.get(mode, lambda: None)()
     if run is None or not run._owned:
         return False
     return mode != Mode.TUI or not on._remote_tui or run._remote_owned
+
+
+def _unharnessed(client: str, mode: Mode, on: Host) -> ConfigError:
+    return ConfigError(f"handlers: {client} {mode} on host {on.name} has no session harness yet")
 
 
 def _refuse_running(name: str, on: Host) -> None:
@@ -410,6 +418,8 @@ class HostedSession(Session):
         spec = replace(spec, sid=spec.sid or str(uuid.uuid4()))
         on = cls.host(host)
         _environment_check(spec, on, mode)
+        if spec.handlers and not _owned(setup, spec, mode, client, on):
+            raise _unharnessed(client_name, mode, on)
         cls.viewer()
         displays.validate_display(display, on)
         if mode == Mode.TUI and _owned(setup, spec, mode, client, on):
@@ -443,9 +453,7 @@ class HostedSession(Session):
         _environment_check(spec, on, mode)
         if not _owned(setup, spec, mode, client, on):
             if spec.handlers:
-                raise ConfigError(
-                    f"handlers: {client_name} {mode} on host {on.name} has no session harness yet"
-                )
+                raise _unharnessed(client_name, mode, on)
             return cls._begin(
                 spec, display=display, host=host, idle_timeout=idle_timeout, client=client
             )
@@ -476,7 +484,7 @@ class HostedSession(Session):
         channel = Channel.create()
         tie = None
         try:
-            tie = None if mode == Mode.TUI else Tie()  # tui outlives its caller
+            tie = None if mode in (Mode.TUI, Mode.IN_PROCESS) else Tie()  # these outlive it
             caller = () if tie is None else ("--caller", str(tie.far))
             channel.write_request(request)
             with open(channel.log, "ab") as log:
@@ -513,7 +521,7 @@ class HostedSession(Session):
         try:  # an interrupt too: no view would close it
             while True:
                 status = channel.status()
-                if status.get("state") in ("running", "exited"):  # exited: it ended at once
+                if status.get("state") in ("running", "draining", "exited"):  # its end at once
                     break
                 if (
                     status.get("state") == "failed"
@@ -885,7 +893,9 @@ class HostedSession(Session):
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """A bound owner's confirmed close, else closed here."""
+        """A bound owner's confirmed close (its terminal gone too: sid from session.json), else
+        closed here.
+        """
         cls._retire(name, sid=sid, host=host)
 
     @classmethod
@@ -911,6 +921,10 @@ class HostedSession(Session):
             return
         if state is not None and (channel := channel_bound(name, state)) is not None:
             store.check()
+            if sid is not None and state.get("sid") != sid:
+                raise SessionError(
+                    f"session {name}: expected sid {sid!r}, found {state.get('sid')!r}"
+                )
             if channel.request(Op.CLOSE):
                 return
         try:
@@ -1342,6 +1356,8 @@ class Owned:
         """The exit code once its owner handle says its worker is gone (headless: once known)."""
         running = self._session._running
         deadline = time.monotonic() + timeout
+        if self._session.mode == Mode.IN_PROCESS:
+            return running.returncode(timeout)
         try:
             code = running.returncode(timeout)
             if self._session.mode != Mode.TUI:
@@ -1394,7 +1410,9 @@ class Owned:
 
 
 class _Unhosted(Session):
-    """A headless view's harness state and RunLog record; no terminal. stop, close: nothing."""
+    """A headless or in_process view's harness state and RunLog record; no terminal. stop, close:
+    nothing.
+    """
 
     def __init__(self, cls: type[HostedSession], channel: Channel, spec: Spec, mode: Mode):
         assert spec.client is not None and spec.sid is not None
