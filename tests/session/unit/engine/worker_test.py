@@ -3,6 +3,7 @@ FR-36 replace ladder (no process, no tmux; files only under the test's HOME).
 """
 
 import errno
+import fcntl
 import itertools
 import json
 import os
@@ -25,6 +26,7 @@ from ensemble.session import (
 from ensemble.session.engine import worker
 from ensemble.session.engine.types import Blocked, Exited, IdleTimeout, Reply
 from ensemble.session.engine.worker import Worker, WorkerState
+from ensemble.session.harness.channel import Channel
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
 from tests.session.case import Case
@@ -754,3 +756,91 @@ class RestartTest(Base):
         with self.assertRaisesRegex(SessionError, "^w1: no session to restart; resume starts it$"):
             self.worker().restart()
         self.assertEqual(self.calls(), [])
+
+
+class OwnedTest(Base):
+    """A worker its session harness owns (session.json names the harness and its sid): resume asks
+    its running owner, else starts a new harness through the gate; it never closes or reclaims.
+    """
+
+    def owned(self, status: str | None = "running", *, owner: bool = True) -> None:
+        """w1's session.json (with an owner unless `owner` is False); its harness held and in
+        `status` (None: no harness holds it).
+        """
+        channel = Channel.create()
+        if status is not None:
+            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.addCleanup(os.close, fd)
+            channel.write_status({"state": status, "name": "w1", "sid": SID, "generation": "g1"})
+        record = {
+            "client": "claude",
+            "workdir": state().workdir(),
+            "sid": SID,
+            "cwd": "/work",
+            "project": True,
+            "transcript": "",
+            "resume": "",
+            "events": "/events",
+            "words": {},
+            "host": "tmux",
+            "generation": "g1",
+            **({"owner": channel.directory} if owner else {}),
+        }
+        with open(os.path.join(self.tui, "session.json"), "w", encoding="utf-8") as f:
+            json.dump(record, f)
+
+    def test_owned_resume_with_running_owner_starts_and_closes_nothing(self):
+        self.owned()
+        self.handle.alive.return_value = False  # its display says nothing of the worker
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.calls(), ["publish"])
+        self.session_cls.retire.assert_not_called()
+        self.host.list.return_value = []  # its display killed
+        self.host.attach.side_effect = SessionError("no tmux session w1")
+        self.assertEqual(self.worker().resume(), state().record())
+        self.assertEqual(self.calls(), ["publish"])
+
+    def test_owned_resume_without_owner_starts_and_closes_nothing(self):
+        self.owned(None)
+        self.worker().resume()
+        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+        self.session_cls.retire.assert_not_called()
+        spec = self.session_cls.start.call_args.args[0]
+        self.assertEqual((spec.prompt, spec.resume, spec.sid), ("", True, SID))
+
+    def test_owned_restart_closes_through_the_owner(self):
+        self.owned()
+        self.session_cls.retire.side_effect = None  # its owner's confirmed close
+        self.worker().restart()
+        self.session_cls.retire.assert_called_once_with("w1", host="tmux")
+        self.assertEqual(self.calls(), ["start", "publish"])
+
+    def test_owned_restart_without_owner_refused(self):
+        self.owned(None)
+        with self.assertRaisesRegex(SessionError, "^w1: no session to restart; resume starts it$"):
+            self.worker().restart()
+        self.assertEqual(self.calls(), [])
+        self.session_cls.retire.assert_not_called()
+
+    def test_exited_owner_is_not_running(self):
+        self.owned("exited")
+        self.worker().resume()
+        self.assertEqual(self.calls(), ["preflight", "start", "publish"])
+
+    def test_owned_resume_never_reclaims(self):
+        self.owned(None)
+        self.host.list.return_value = []
+        self.host.reclaim.return_value = self.handle
+        self.worker(token="/tmp/apm-group-1").resume()
+        self.host.reclaim.assert_not_called()
+        self.handle.close.assert_not_called()
+        self.handle.kill.assert_not_called()
+
+    def test_unowned_resume_still_reclaims(self):
+        self.owned(None, owner=False)
+        self.host.list.return_value = []
+        self.host.reclaim.return_value = self.handle
+        self.handle.wait_exit.return_value = True
+        self.worker(token="/tmp/apm-group-1").resume()
+        self.host.reclaim.assert_called_once_with("/tmp/apm-group-1")

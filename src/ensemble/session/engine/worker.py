@@ -1,6 +1,8 @@
 """Worker, a plain tui session started by name (FR-20): WorkerState in
 ~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record on its Host once
-its early watch passes. restart and resume close the old session and wait for its group (FR-36).
+its early watch passes. A worker its session harness owns resumes through its running owner, else
+starts a new harness through the tui gate, closing nothing; restart closes it through that owner.
+Other workers' restart and resume close the old session and wait for its group (FR-36).
 Callers hold locked() around start, resume and restart.
 """
 
@@ -34,7 +36,10 @@ from ensemble.session.engine.types import (
     SessionError,
     Spec,
 )
+from ensemble.session.harness import channel
+from ensemble.session.harness.channel import Channel
 from ensemble.session.hosts.base import Process
+from ensemble.session.modes.tui import TuiMode
 from ensemble.utils import (
     CONFIG_NAME,
     STALE_AGE,
@@ -323,6 +328,9 @@ class Worker:
 
     def resume(self) -> Record:
         """Its Record, starting nothing, while its session lives; else a resumed start."""
+        owned, owner = self._owner()
+        if owned:
+            return self._resume_owned(owner)
         session = self._session()
         if session is not None and session.alive():
             record = session.record()
@@ -335,11 +343,45 @@ class Worker:
         return self._start_again()
 
     def restart(self) -> Record:
+        owned, owner = self._owner()
+        if owned:
+            if owner is None:
+                raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
+            self.session_cls.retire(self.state.name, host=self.state.host)
+            return self._start_again()
         session = self._session()
         if session is None:
             raise SessionError(f"{self.state.name}: no session to restart; resume starts it")
         self.replace(session)
         return self._start_again()
+
+    def _owner(self) -> tuple[bool, Channel | None]:
+        """Whether its session harness owns it (session.json names one and its sid), and that
+        owner while it runs it.
+        """
+        try:
+            snapshot = TuiMode.snapshot(self.state.name)
+        except SessionError:
+            return False, None
+        if "owner" not in snapshot or snapshot.get("sid") != self.state.sid:
+            return False, None
+        found = channel.bound(self.state.name, snapshot)
+        running = found is not None and found.status().get("state") == "running"
+        return True, found if running else None
+
+    def _resume_owned(self, owner: Channel | None) -> Record:
+        """Its running owner's: its Record, published on its display if one shows; else a new
+        harness through the gate (it waits out a reaping guard, refuses a live or unknown one).
+        """
+        record = self.state.record()
+        if owner is None:
+            self.check(prompt="", resume=True)
+            return self.start(prompt="", resume=True)
+        with contextlib.suppress(SessionError):
+            handle = self.session_cls.host(self.state.host).attach(self.state.name)
+            if handle.session_identity()[0] == self.state.sid:
+                handle.publish(record)
+        return record
 
     def _start_again(self) -> Record:
         try:
