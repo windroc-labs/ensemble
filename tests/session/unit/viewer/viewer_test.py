@@ -11,7 +11,7 @@ from unittest import mock
 
 from ensemble.session import ConfigError, NotShowable, SessionError
 from ensemble.session.engine import tmux_cli
-from ensemble.session.engine.types import PaneStatus, Unanswered
+from ensemble.session.engine.types import PaneStatus, TuiSettings, Unanswered
 from ensemble.session.hosts.base import TUI_DIR, Host
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.viewer import display as displays
@@ -439,6 +439,7 @@ class CommandViewTest(Base):
         self.docker = mock.create_autospec(Host, instance=True)
         self.docker.name, self.docker.attachable = "docker", True
         self.docker.attach_target.return_value = self.target
+        self.docker.tui_settings.return_value = TuiSettings()
         worker("d1", SID)
         self.docker.list.return_value = ["d1"]
         self.view = None
@@ -454,6 +455,21 @@ class CommandViewTest(Base):
             [
                 *("new-session", "-d", "-s", "d1", "-x", "120", "-y", "40", "--", *self.ARGV),
                 *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
+                *(";", "set-option", "-t", "=d1:", "status", "off"),
+            ]
+        )
+
+    def test_a_view_session_shows_a_status_line_only_when_its_host_does(self):
+        self.tmux.status.return_value = None
+        self.runner.results["new-session"] = (0,)
+        self.docker.tui_settings.return_value = TuiSettings(status_line=True)
+        with self.assertLogs("session", logging.WARNING):
+            self.viewer.show("d1", self.docker)
+        self.tmux.checked.assert_any_call(
+            [
+                *("new-session", "-d", "-s", "d1", "-x", "120", "-y", "40", "--", *self.ARGV),
+                *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
+                *(";", "set-option", "-t", "=d1:", "status", "on"),
             ]
         )
 

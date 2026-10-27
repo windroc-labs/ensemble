@@ -55,6 +55,14 @@ older release started, so before upgrading:
 Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
 listed, and the next Docker start removes its container as debris.
 
+## Broker protocol 31: output-repo token beside prefetch
+
+Broker protocol 31 adds the start manifest's optional `github.repo`: a [prefetching](architecture.md#environments) run
+whose `[output]` is `type = "github"` (the `verifier`'s, once set so) gets one GitHub App token for that repo alone,
+`contents: write`. Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker;
+the Docker Host refuses a protocol 30 broker. Install the GitHub App on that output repo, or the run's start fails
+`github_failed`.
+
 ## Broker protocol 30: Keychain rename
 
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →

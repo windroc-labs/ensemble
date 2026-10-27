@@ -347,8 +347,12 @@ def _decorations(session: str, events: str | None, *, status_line: bool) -> list
         ["set-hook", "-p", "-t", target, "pane-died", died],
         ["set-option", "-w", "-t", target, "pane-border-status", "top"],
         ["set-option", "-w", "-t", target, "pane-border-format", BORDER],
-        ["set-option", "-t", target, "status", "on" if status_line else "off"],
+        status(session, on=status_line),
     ]
+
+
+def status(session: str, *, on: bool) -> list[str]:
+    return ["set-option", "-t", f"={session}:", "status", "on" if on else "off"]
 
 
 class TmuxCli:

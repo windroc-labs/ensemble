@@ -825,6 +825,49 @@ class PrefetchTest(Docker):
         )
         self.assertIn("prefetch", message)
 
+    def test_a_github_output_is_the_containers_github_repo(self):
+        text = "Reference: T\nRepo: acme/app\n\nB"
+        for host in ("", "github.com", "GitHub.com"):
+            output = {"type": "github", "repo": "acme/private_docs", "branch": "main", "dir": "d"}
+            output |= {"host": host} if host else {}
+            with self.subTest(host=host):
+                got, _ = self.planned(input=text, environment=self.env(), keys={"output": output})
+                self.assertEqual(got.session.environment.github_repo, "acme/private_docs")
+        got, _ = self.planned(
+            input=text, environment=self.env(prefetch=False), keys={"output": output}
+        )
+        self.assertIsNone(got.session.environment.github_repo)
+
+    def test_any_other_output_gets_no_github_repo(self):
+        for output in ({"type": "orchestrator"}, {"type": "local"}, {"type": "pull-request"}):
+            with self.subTest(output=output):
+                got, _ = self.planned(
+                    input="Reference: T\nRepo: acme/app\n\nB",
+                    environment=self.env(),
+                    keys={"output": output},
+                    out=None,
+                )
+                self.assertIsNone(got.session.environment.github_repo)
+
+    def test_a_github_output_off_github_com_is_refused(self):
+        for repo, host in (
+            ("acme/docs", "ghe.example.com"),
+            ("ghe.example.com/acme/docs", ""),
+            ("not a repo!", ""),
+            ("acme/..", ""),
+            ("", ""),
+        ):
+            output = {"type": "github", "repo": repo, "branch": "main", "dir": "d", "host": host}
+            with self.subTest(repo=repo, host=host):
+                message = self.refused(
+                    input="Reference: T\nRepo: acme/app\n\nB",
+                    environment=self.env(),
+                    keys={"output": {k: v for k, v in output.items() if v}},
+                )
+                self.assertEqual(
+                    message, f"prefetch: output repo {repo} names no github.com repository"
+                )
+
     def test_without_prefetch_ref_lines_are_not_read(self):
         text = "Reference: T\nRepo: acme/app\nRef: --upload-pack=x\n\nB"
         got, _ = self.planned(input=text, environment=self.env(prefetch=False))
