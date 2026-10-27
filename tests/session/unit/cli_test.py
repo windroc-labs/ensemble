@@ -426,7 +426,8 @@ class RecordControl(HostedTuiBase):
                 self.assertIn("replacement", err)
         replacement.calls.send.assert_not_called()
         replacement.calls.press.assert_not_called()
-        self.host.calls.screen.assert_not_called()
+        read = [call.args[0] for call in self.host.calls.screen.call_args_list]
+        self.assertNotIn(replacement, read)  # w1's harness reads only its own terminal
 
     def test_read_keeps_name_only_host_terminals(self):
         self.host.create("plain")

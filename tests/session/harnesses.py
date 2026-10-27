@@ -139,6 +139,7 @@ def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
 
     thread = threading.Thread(target=run, daemon=True, name=f"harness {channel.directory}")
     thread.start()
+    _RUNNING.append((channel, thread))
     deadline = _clock() + START_WAIT
     while True:
         status = channel.status()
@@ -177,6 +178,21 @@ def _spawn(cls, spec, mode, **options):
     return threaded_spawn(cls, spec, mode, **options)
 
 
+_RUNNING: list[tuple[Channel, threading.Thread]] = []
+
+
+@contextlib.contextmanager
 def threaded():
-    """A patch: every start of a class with injected callables runs its harness on a thread."""
-    return mock.patch.object(HostedSession, "_spawn", classmethod(_spawn))
+    """Every start of a class with injected callables runs its harness on a thread; on exit each
+    such harness still running is closed and its thread joined, so none outlives its test.
+    """
+    with mock.patch.object(HostedSession, "_spawn", classmethod(_spawn)):
+        try:
+            yield
+        finally:
+            running, _RUNNING[:] = list(_RUNNING), []
+            for channel, thread in running:
+                if thread.is_alive() and channel.alive():
+                    with contextlib.suppress(SessionError):
+                        channel.request(Op.CLOSE, timeout=WAIT)
+                thread.join(WAIT)

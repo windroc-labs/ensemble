@@ -592,6 +592,6 @@ class CloseAllCapacityTest(HostedTuiBase):
             self.assertEqual(Crew(roster).close_all(), ["one", "two"])
         self.assertEqual(closed, ["one", "two"])
         self.assertEqual(roster.entries(), {})
-        self.assertEqual(self.host.list(), [])
+        self.start(mode="tui", name="next").close()  # its admission takes the inventory
+        self.assertNotIn("z-ending", self.host.list())
         ended.calls.close.assert_called_once_with()
-        self.start(mode="tui", name="next").close()

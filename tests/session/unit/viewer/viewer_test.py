@@ -1,8 +1,11 @@
 """Viewer show, hide and attach_command over a TmuxHost on recorded tmux calls."""
 
+import contextlib
 import logging
 import os
+import threading
 import time
+from collections.abc import Iterator
 from unittest import mock
 
 from ensemble.session import ConfigError, NotShowable, SessionError
@@ -21,6 +24,23 @@ from tests.session.tmux_host_support import PROCESS, Base
 TuiError = tmux_cli.TuiError
 NO_PANE = "no anchor pane: not in tmux, no iTerm2 pane ($ITERM_SESSION_ID)"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
+
+
+@contextlib.contextmanager
+def sleeps() -> Iterator[list[float]]:
+    """time.sleep patched: this thread's calls recorded, not slept; another thread's (a harness an
+    earlier test left running) sleeps as before.
+    """
+    caller, real, slept = threading.current_thread(), time.sleep, []
+
+    def sleep(seconds):
+        if threading.current_thread() is caller:
+            slept.append(seconds)
+        else:
+            real(seconds)
+
+    with mock.patch("time.sleep", side_effect=sleep):
+        yield slept
 
 
 class ShowTest(Base):
@@ -453,50 +473,47 @@ class CommandViewTest(Base):
         self.tmux.status.return_value = None
         self.runner.results["new-session"] = (0,)
         self.docker.attach_target.side_effect = targets
-        with mock.patch("time.sleep") as slept, self.assertLogs("session", logging.WARNING):
-            try:
-                return self.viewer.show("d1", self.docker, **show)
-            finally:
-                self.slept = [c.args for c in slept.call_args_list]
+        with sleeps() as self.slept, self.assertLogs("session", logging.WARNING):
+            return self.viewer.show("d1", self.docker, **show)
 
     def test_an_unanswered_target_is_retried_then_shown(self):
         late = Unanswered("docker ps: timed out")
         self.assertEqual(self.retried(late, self.target), self.target.printed)
         self.assertEqual(self.docker.attach_target.call_count, 2)
-        self.assertEqual(self.slept, [(1,)])
+        self.assertEqual(self.slept, [1])
 
     def test_three_unanswered_targets_raise_the_last(self):
         errors = [Unanswered(f"docker ps: timed out {n}") for n in range(3)]
         with self.assertRaisesRegex(Unanswered, "^docker ps: timed out 2$"):
             self.docker.attach_target.side_effect = errors
-            with mock.patch("time.sleep") as slept:
+            with sleeps() as slept:
                 self.viewer.show("d1", self.docker)
         self.assertEqual(self.docker.attach_target.call_count, 3)
-        self.assertEqual(slept.call_count, 2)
+        self.assertEqual(len(slept), 2)
 
     def test_other_errors_are_not_retried(self):
         for error in (SessionError("no docker session d1"), ConfigError("bad display")):
             with self.subTest(error=error):
                 self.docker.attach_target.reset_mock()
                 self.docker.attach_target.side_effect = error
-                with mock.patch("time.sleep") as slept, self.assertRaises(type(error)):
+                with sleeps() as slept, self.assertRaises(type(error)):
                     self.viewer.show("d1", self.docker)
                 self.assertEqual(self.docker.attach_target.call_count, 1)
-                self.assertEqual(slept.call_count, 0)
+                self.assertEqual(slept, [])
 
     def test_an_unanswered_mark_after_a_command_runs_it_once(self):
         self.tmux.status.return_value = None
         self.runner.results["new-session"] = (0,)
         self.docker.attach.return_value.session_identity.side_effect = Unanswered("docker ps")
         with (
-            mock.patch("time.sleep") as slept,
+            sleeps() as slept,
             self.assertRaisesRegex(Unanswered, "^docker ps$"),
         ):
             self.viewer.show("d1", self.docker, command="open -a T {{session}}")
         self.assertEqual(
             [c for c in self.runner.calls if c[0] == "/bin/sh"], [["/bin/sh", "-c", "open -a T d1"]]
         )
-        self.assertEqual(slept.call_count, 0)
+        self.assertEqual(slept, [])
 
 
 class SessionViewCloseTest(Base):
