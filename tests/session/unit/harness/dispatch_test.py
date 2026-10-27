@@ -10,6 +10,7 @@ import time
 import types
 import uuid
 from typing import cast
+from unittest import mock
 
 from ensemble.session.engine.base import Session
 from ensemble.session.engine.types import (
@@ -234,7 +235,7 @@ class DispatchTest(Base):
         self.assertLess(time.monotonic() - started, WAIT)
         self.assertTrue(all(thread.daemon for thread in found.threads))
 
-    def woken_after_stop(self, hung: Recorder, gate: threading.Event) -> None:
+    def woken_after_stop(self, hung: Recorder, gate: threading.Event) -> Dispatch:
         found = self.start(hung)
         found.put(Logged(1, "g:1", None, Reply("a")))
         until(lambda: len(hung.calls) == 1)
@@ -242,19 +243,20 @@ class DispatchTest(Base):
         gate.set()
         for thread in found.threads:
             thread.join(WAIT)
+        return found
 
     def test_a_hung_handler_woken_after_stop_records_nothing(self):
         gate = threading.Event()
         self.addCleanup(gate.set)
-        self.woken_after_stop(Recorder(hang=gate), gate)
-        self.assertEqual(self.deliveries(), [])
+        found = self.woken_after_stop(Recorder(hang=gate), gate)
+        self.assertEqual((self.deliveries(), found.pending()), ([], 1))
 
     def test_a_hung_handler_failing_after_stop_records_nothing(self):
         self.enterContext(self.assertLogs("session", "WARNING"))
         gate = threading.Event()
         self.addCleanup(gate.set)
-        self.woken_after_stop(Recorder(fail=1, hang=gate), gate)
-        self.assertEqual(self.deliveries(), [])
+        found = self.woken_after_stop(Recorder(fail=1, hang=gate), gate)
+        self.assertEqual((self.deliveries(), found.pending()), ([], 1))
 
     def test_a_note_being_written_ends_before_stop_returns(self):
         entered, release, stopping = threading.Event(), threading.Event(), threading.Event()
@@ -280,12 +282,22 @@ class DispatchTest(Base):
         stopper = threading.Thread(target=stop)
         stopper.start()
         self.assertTrue(stopping.wait(WAIT))
+        stopper.join(0.2)
+        self.assertTrue(stopper.is_alive())
         release.set()
         stopper.join(WAIT)
         for thread in found.threads:
             thread.join(WAIT)
         self.assertEqual(seen, [self.deliveries()])
         self.assertEqual(len(seen[0]), 1)
+
+    def test_a_note_that_cannot_be_written_is_logged(self):
+        self.channel.note = mock.Mock(side_effect=OSError("disk full"))
+        found = self.start(Recorder())
+        with self.assertLogs("session", "WARNING") as logged:
+            found.put(Logged(1, "g:1", None, Reply("a")))
+            self.assertEqual(found.drain(WAIT), 0)
+        self.assertIn("deliveries.jsonl: disk full", logged.output[0])
 
     def test_a_non_none_return_is_noted_once(self):
         handler = Recorder(returns="done")

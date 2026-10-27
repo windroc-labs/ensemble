@@ -1,4 +1,4 @@
-// ensemble's OpenCode plugin (docs/sessions.md › OpenCode commander): each skill of package.json's
+// ensemble's OpenCode plugin (docs/architecture.md › OpenCode commander): each skill of package.json's
 // `skills` as the command /ensemble:<skill>, this plugin's bin/ on the shell's PATH, and a commander's
 // SessionStart re-arm prompt (src/ensemble/manager/rearm.py --mode manual) in the system prompt
 // of a root session's turn after a start, resume or compaction. A session ensemble starts

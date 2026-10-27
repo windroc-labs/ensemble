@@ -2,7 +2,7 @@
 
 ## Session harness: close every session first
 
-This release runs every Docker worker under its [session harness](sessions.md#session-harness) and drops the Docker
+This release runs every Docker worker under its [session harness](architecture.md#session-harness) and drops the Docker
 relay and supervisor ([Docker host › Harness-owned workers](docker-host.md#harness-owned-workers)). It keeps no
 compatibility with sessions an older release started, so before upgrading:
 
@@ -103,7 +103,7 @@ Move every entry in `[orchestrator.client_max_runs]` in `~/.ensemble/config.loca
 max_runs = 1
 ```
 
-Zero or an omitted `max_runs` means unlimited. The old local table is now an unknown key: orchestrator commands refuse the configuration until it is deleted (only write-back ignores it, with a warning), and it no longer limits launches. Stop and restart headless/in-process runs started by the previous version before relying on the new limit, because they have no session-layer leases. Existing TUI sessions on configured Hosts are counted immediately. The limit now covers ad-hoc role runs, crew workers and `router --issue` too; a refused board start is a normal failed attempt. See [Session run limits](sessions.md#run-limits) for counting and reconciliation.
+Zero or an omitted `max_runs` means unlimited. The old local table is now an unknown key: orchestrator commands refuse the configuration until it is deleted (only write-back ignores it, with a warning), and it no longer limits launches. Stop and restart headless/in-process runs started by the previous version before relying on the new limit, because they have no session-layer leases. Existing TUI sessions on configured Hosts are counted immediately. The limit now covers ad-hoc role runs, crew workers and `router --issue` too; a refused board start is a normal failed attempt. See [Session run limits](architecture.md#run-limits) for counting and reconciliation.
 
 ## Egress proxy
 
@@ -238,3 +238,22 @@ With OpenCode selected, an existing stable 1.x executable on `PATH` at or above 
 Otherwise, the installer installs a private copy and offers a shell profile addition for `~/.ensemble/opencode/bin`;
 accept it, then open a new terminal to run `opencode` directly. Existing executable paths, the selected provider
 and credentials are kept on rerun.
+
+## OpenCode plugin by hand
+
+OpenCode installs the `#v<version>` tag of ensemble's `plugin` entry
+([OpenCode commander](architecture.md#opencode-commander)) once, into
+`${XDG_CACHE_HOME:-~/.cache}/opencode/packages/<spec>/node_modules/ensemble`, and never refreshes the same spec.
+Installed commands keep their selected plugin path ([Install](../README.md#install)). For a release upgrade:
+
+```mermaid
+flowchart LR
+    T[Set new #v&lt;version&gt;] --> R[Restart OpenCode]
+    R --> D[Delete old spec directory]
+    D --> C[Run an installed command]
+```
+
+When the old selected directory is gone, the next installed command selects and records the newest installed ensemble
+copy from OpenCode and reports its path on stderr; no installer rerun is needed. To select a different ref while the
+old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs
+require the installer ([With scripts/install.sh](#with-scriptsinstallsh)).

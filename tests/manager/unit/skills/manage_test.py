@@ -215,7 +215,7 @@ class Manage(Case):
             "can start no session and no container",
             "no Docker socket and no broker",
             "the same launch commands and client flags as on this machine",
-            "permission mode comes from its Host (`docs/sessions.md` › Client policy)",
+            "permission mode comes from its Host (`docs/architecture.md` › Client policy)",
         ):
             self.assertIn(phrase, docker)
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
