@@ -321,7 +321,9 @@ class FakeTmux(Case):
                     newer = plugin(os.path.join(self.codex, "0.10.0"))
                 else:
                     selected = self.opencode_install("0.5.0")
-                    newer = self.opencode_install("0.10.0")
+                    # The same ref under another spec spelling: only that ref's copies stand in.
+                    spec = "ensemble@git+ssh:/git@github.com/windroc-labs/ensemble.git#v0.5.0"
+                    newer = self.opencode_install("0.10.0", spec=spec)
                 self.install(script=os.path.join(selected, "skills/manage/scripts/ctmux"))
                 shutil.rmtree(selected)
                 if client == "claude":
@@ -367,6 +369,31 @@ class FakeTmux(Case):
                     )
                     if leftover:
                         shutil.rmtree(leftover)
+
+    def test_x1_missing_selected_path_refuses_another_ref(self):
+        selected = self.opencode_install(
+            "0.5.0", spec="ensemble@git+https:/github.com/x/e.git#WDRC-241"
+        )
+        self.install(script=os.path.join(selected, "skills/manage/scripts/ctmux"))
+        for spec in (
+            "ensemble@git+https:/github.com/x/e.git#main",
+            "ensemble@git+https:/github.com/x/e.git",
+        ):
+            self.opencode_install("0.10.0", spec=spec)
+        shutil.rmtree(selected)
+        selection = os.path.join(self.ensemble, "plugin-root")
+        with open(selection, encoding="utf-8") as f:
+            text = f.read()
+        process, out, err, calls = self.ctmux("s1", script=self.dst)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertEqual((out, calls), ("", []))
+        self.assertEqual(
+            err,
+            f"ctmux: selected plugin {selected!r} has no executable skills/manage/scripts/ctmux; "
+            "rerun install.sh or the plugin's ctmux --install\n",
+        )
+        with open(selection, encoding="utf-8") as f:
+            self.assertEqual(f.read(), text)
 
     def test_legacy_equal_versions_use_path_order_instead_of_creation_order(self):
         self.legacy_install()
