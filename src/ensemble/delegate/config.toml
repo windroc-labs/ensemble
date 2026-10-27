@@ -146,6 +146,7 @@ commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *"
 # ── Engineer ────────────────────────────────────────────
 [roles.engineer]
 effort = "xhigh"
+read = ["{{team}}"]
 commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *", "python3 -P {{team}}/tools/repo.py status --dir {{workdir}}/src *"]
 
 [roles.engineer.output]
