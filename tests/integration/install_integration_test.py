@@ -57,6 +57,7 @@ REAL = (
     "ln",
     "ls",
     "install",
+    "readlink",
 )
 FAKED = ("uname", "id", "sudo", "curl", "security", "open", "launchctl", "shasum")
 FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
@@ -5475,7 +5476,7 @@ exec /bin/rm "$@"
         self.assertIn(f"  dir {container}", result.tty)
         self.assertIn("  cask docker-desktop", result.tty)
         self.assertIn(
-            "  edits ~/.docker/config.json: drops Docker Desktop's credsStore and currentContext",
+            "  edits ~/.docker: drops Docker Desktop's credential helper, context and CLI plugin links",
             result.tty,
         )
         self.assertNotIn("nothing removed", result.stderr + result.tty)
@@ -5593,7 +5594,11 @@ exec /bin/rm "$@"
         for cask in ("docker-desktop", "codex"):
             brew = [Path(self.root, "opt/homebrew/bin/brew"), "install", "--cask", cask]
             subprocess.run(brew, env=env, check=True, capture_output=True)
+        # Docker Desktop's privileged setup, done then: its license and the packaged CLI link.
         (self.fakes / "docker_license").touch()
+        cli = Path(self.root, "usr/local/bin/docker")
+        cli.parent.mkdir(parents=True)
+        cli.symlink_to(Path(self.root, "opt/homebrew/bin/docker"))
         self.assert_ok(self.fresh("--docker", logins=list(DOCKER_LOGINS)))
         h = self.home
         children = [r for r in self.ledger() if f"{h}/.docker/" in r or f"{h}/.codex/" in r]

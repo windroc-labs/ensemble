@@ -212,8 +212,9 @@ usage: install-cleanup.sh [--yes] [--password-stdin]
 Internal, for test machines only: removes what install.sh recorded in ~/.ensemble/install/added,
 so the machine is as before install.sh ran; a parent other tools also write (~/.config, ~/.codex,
 ~/.docker, ~/Library/LaunchAgents) goes only when nothing else is left in it. Removing Docker Desktop
-also drops its credsStore and currentContext from ~/.docker/config.json. Lists it and asks first; --yes skips the question (automation only). An app or group container to remove (~/Library/Containers/<app>, ~/Library/Group
-Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup lists what it would
+also drops its credential helper and context from ~/.docker/config.json and its CLI plugin links. Lists it
+and asks first; --yes skips the question (automation only). An app or group container to remove
+(~/Library/Containers/<app>, ~/Library/Group Containers/<group>) needs the terminal's Full Disk Access: without it the cleanup lists what it would
 remove and stops before removing anything. Run by hand:
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<ref>/scripts/install-cleanup.sh | bash
 With --password-stdin (sudo password on stdin), stdin cannot carry the script; download it first:
@@ -312,7 +313,7 @@ show() {
     printf '  keeps worker images (ensemble-worker) and ensemble-ws-* volumes\n' >&3
   fi
   if grep -qxF "cask"$'\t'"docker-desktop" "$ledger"; then
-    printf "  edits ~/.docker/config.json: drops Docker Desktop's credsStore and currentContext\n" >&3
+    printf "  edits ~/.docker: drops Docker Desktop's credential helper, context and CLI plugin links\n" >&3
   fi
 }
 
@@ -818,10 +819,9 @@ docker_processes() {
   if left=$(pgrep -f "$pattern" </dev/null); then die "Docker Desktop processes still running: ${left//$'\n'/ }"; fi
 }
 
-# Once Docker Desktop is gone: drops what in ~/.docker/config.json names it (its desktop credential helper as
-# credsStore or in credHelpers, its desktop-linux context), keeping the rest, and its CLI plugin links into Docker.app.
+# Once Docker Desktop is gone: drops what names it in ~/.docker/config.json, keeping the rest, and its CLI plugin links.
 docker_config() {
-  local config=$HOME/.docker/config.json link
+  local config=$HOME/.docker/config.json link target
   if [ -f "$config" ]; then
     python3 -I -c '
 import json, os, sys, tempfile
@@ -871,7 +871,8 @@ print("    dropped Docker Desktop\x27s %s from %s" % (", ".join(dropped), path),
   fi
   for link in "$HOME/.docker/cli-plugins/"*; do
     [ -L "$link" ] || continue
-    case $(readlink "$link") in
+    target=$(readlink "$link") || die "cannot read link $link; its record stays for a rerun"
+    case $target in
       "$root/Applications/Docker.app/"*) rm -f "$link" || die "cannot remove $link; its record stays for a rerun" ;;
     esac
   done
