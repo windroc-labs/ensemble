@@ -113,7 +113,7 @@ def _credentials(lines: list[dict], *events: str) -> list[dict]:
 
 
 def _tokens(credentials: list[dict]) -> dict[tuple, dict]:
-    """Each installation's last GitHub token entry."""
+    """Each installation's last GitHub token."""
     return {
         (c.get("installation"), c.get("account")): c for c in credentials if c.get("kind") == GITHUB
     }
@@ -527,7 +527,7 @@ def containers(docker: str, *, running: bool = False, label: str = "") -> set[st
 
 
 def drained(events: tuple[str, ...], after: str) -> str:
-    """The line of the newest event already in the roster's events: a backlog is not this run's."""
+    """The newest event line already in the roster: a backlog is not this run's."""
     while True:
         try:
             after = run(*events, "--after", after, timeout=2).split()[0]
