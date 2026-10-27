@@ -1,6 +1,7 @@
 """harness/view.py: OwnedSession, the control view of a worker its session harness owns."""
 
 import fcntl
+import itertools
 import os
 import threading
 import time
@@ -539,8 +540,12 @@ class ConfirmedEndTest(Case):
 
     def test_a_live_or_unknown_worker_raises_unanswered_and_releases_nothing(self):
         for found in (Liveness.LIVE, Liveness.UNKNOWN):
-            with self.subTest(found=found), mock.patch("ensemble.session.modes.tui.GUARD_WAIT", 0):
-                host = self.host(found, found)
+            with (
+                self.subTest(found=found),
+                mock.patch("time.monotonic", side_effect=itertools.count(0, 100)),
+                mock.patch("time.sleep"),
+            ):
+                host = self.host(found)
                 with self.assertRaisesRegex(Unanswered, "^session w1: still running"):
                     confirmed_end(host, "w1", GEN)()
                 host._release.assert_not_called()

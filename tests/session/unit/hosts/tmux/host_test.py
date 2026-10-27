@@ -160,9 +160,8 @@ class ListTest(Base):
             "lost": Liveness.UNKNOWN,
             "dead": Liveness.ABSENT,
         }
-        with mock.patch(
-            "ensemble.session.hosts.tmux.managed.liveness",
-            side_effect=lambda _host, name, _generation: found[name],
+        with mock.patch.object(
+            self.host, "worker_liveness", side_effect=lambda name, _generation: found[name]
         ):
             self.assertEqual(self.host.list(), ["busy", "live", "lost", "shown"])
             rows = {row.name: row for row in self.host.rows()}
@@ -187,9 +186,7 @@ class ListTest(Base):
         old = time.time() - STALE_AGE - 60
         for path in (os.path.join(folder, TUI_STATE), folder):
             os.utime(path, (old, old))
-        with mock.patch(
-            "ensemble.session.hosts.tmux.managed.liveness", return_value=Liveness.ABSENT
-        ):
+        with mock.patch.object(self.host, "worker_liveness", return_value=Liveness.ABSENT):
             TuiStore.attach("dead", host=self.host).expire(set(self.host.list()))
         self.assertFalse(os.path.exists(folder))
 
