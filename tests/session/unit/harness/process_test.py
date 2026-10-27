@@ -50,6 +50,7 @@ class FakeOwned:
         self.calls, self.recorded = [], []
         self.ended = False
         self.opening_pending = None
+        self.up = False
 
     def pump(self, wait):
         if self.steps:
@@ -489,6 +490,32 @@ class OpeningTest(Base):
         owned.ended = True
         thread.join(WAIT)
         self.assertEqual(self.code, 0)
+
+
+class StatusFirstTest(Base):
+    def test_a_pumps_status_is_written_before_its_events_are_logged(self):
+        owned = FakeOwned(([Blocked("Trust")], False), ([], True))
+        owned.opening_pending = "/color"
+        seen = []
+        owned.record = lambda event: seen.append((event, self.channel.status().get("opening")))
+        thread = self.run_in_thread(self.harness(owned))
+        thread.join(WAIT)
+        self.assertEqual((self.code, seen[0]), (0, (Blocked("Trust"), "/color")))
+
+
+class UpTest(Base):
+    def test_its_client_up_is_in_its_status_once_its_worker_reports_it(self):
+        owned = FakeOwned(([], False))
+        thread = self.run_in_thread(self.harness(owned))
+        while self.channel.status().get("state") != "running":
+            time.sleep(0.01)
+        self.assertNotIn("up", self.channel.status())
+        owned.up = True
+        while self.channel.status().get("up") is not True:
+            time.sleep(0.01)
+        owned.ended = True
+        thread.join(WAIT)
+        self.assertEqual((self.code, self.channel.status().get("up")), (0, True))
 
 
 class BatchTest(Base):

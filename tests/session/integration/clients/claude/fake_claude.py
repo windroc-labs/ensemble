@@ -25,6 +25,8 @@ queues (an enqueue record) and joins to the turn once the tool returns (PostTool
 queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist;
 {"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
+- dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
+trust dialog), awaiting its answer as a dialog step does.
 - background: interactive background_tasks per Stop.
 - resume: print steps run instead of `steps` on --resume.
 - rate_limit: print a rate_limit_info after init.
@@ -60,6 +62,7 @@ DEFAULTS = {
     "steps": [],
     "resume": None,
     "turns": [],
+    "dialog": None,
     "background": 0,
     "rate_limit": None,
     "usage": "Current session: 0% used\n",
@@ -132,6 +135,7 @@ CHECKS = {
         v is None or isinstance(v, list) and all(_step(step, tui=False) for step in v)
     ),
     "turns": lambda v: isinstance(v, list) and all(isinstance(t, list) for t in v),
+    "dialog": lambda v: v is None or _text(v),
     "background": lambda v: isinstance(v, int) and not isinstance(v, bool) and v >= 0,
     "rate_limit": lambda v: v is None or isinstance(v, dict),
     "usage": lambda v: (
@@ -439,7 +443,11 @@ class InteractiveSession:
 
     def run(self):
         try:
-            self.ready()
+            if self.request.scenario["dialog"] is None:
+                self.ready()
+            else:
+                print(self.request.scenario["dialog"], flush=True)
+                self.answer()  # SessionStart follows its answer
             prompt = self.request.prompt or self.request.stdin.line()
             for k in itertools.count():
                 self.turn(prompt, self.request.turns[k] if k < len(self.request.turns) else [])
