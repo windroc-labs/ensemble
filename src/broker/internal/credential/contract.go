@@ -100,6 +100,9 @@ type Material struct {
 	ExpiresAt string `json:"expires_at"` // RFC 3339; one that does not parse is never confirmed expired
 	Revision  int    `json:"revision,omitempty"`
 	State     State  `json:"state,omitempty"` // "": an entry an older broker wrote; it recorded only tokens it delivered
+	// Repo is the one repository its slot reaches (GitHub, owner/name); "": every repository of the slot's
+	// installation. The issuer sets it; Acquire and Refresh keep it from the issued material.
+	Repo string `json:"repo,omitempty"`
 }
 
 // Expired is whether m's expiry is confirmed at now.
