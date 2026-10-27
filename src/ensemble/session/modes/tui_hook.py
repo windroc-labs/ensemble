@@ -1,7 +1,7 @@
 """A tui client's hook: drains stdin, checks callback sources, binds identity and journals
-hooks.jsonl before notifying the optional Host. No stdout; failures log a traceback and stderr line.
-The CLI exits 0; --serve takes many calls, where a retry of the last journaled event reruns only
-the Host. session.json declares client_hook and host_hook via HookCallback.fields().
+hooks.jsonl, where its session harness reads it. No stdout; failures log a traceback and stderr
+line. The CLI exits 0; --serve takes many calls, where a retry of the last journaled event journals
+nothing again. session.json declares client_hook via HookCallback.fields().
 Resolve modules over hook roots, all callbacks' roots, then sys.path.
 Call on_hook(HookCall); load external modules from declared roots without changing sys.path.
 """
@@ -82,9 +82,7 @@ def _prepare(argv: Sequence[str], roots: Sequence[str]):
     path = os.path.join(folder, TUI_STATE)
     state = _read_state(path, HookError)
     _check_callbacks(state, path, HookError)
-    hooks = [
-        (kind, state[kind + "_hook"]) for kind in ("client", "host") if kind + "_hook" in state
-    ]
+    hooks = [("client", state["client_hook"])] if "client_hook" in state else []
     for kind, hook in hooks:
         if missing := [root for root in hook["roots"] if not os.path.isdir(root)]:
             raise HookError(f"{kind} hook {hook['module']}: root {missing[0]} is no directory")
@@ -123,9 +121,9 @@ def _dispatch(folder, label, payload, state, specs, *, event, stamp):
         )
 
     journaled = None if event is None else _journaled(os.path.join(folder, HOOKS), event, label)
-    if journaled is not None:  # a retry reruns only the Host
-        payload = journaled
-    elif client_hook := state.get("client_hook"):
+    if journaled is not None:  # a retry: already journaled
+        return
+    if client_hook := state.get("client_hook"):
         client = load_callback(client_hook["module"], "client hook", specs)
         payload = client.on_hook(call("client_hook", payload))
         if payload is None:
@@ -135,19 +133,13 @@ def _dispatch(folder, label, payload, state, specs, *, event, stamp):
                 f"client hook {client_hook['module']}: on_hook returned "
                 f"{type(payload).__name__}, not a payload dict or None"
             )
-    word = state["words"].get(label)
-    host_hook = state.get("host_hook") if word else None
-    host = None if host_hook is None else load_callback(host_hook["module"], "host hook", specs)
-    if journaled is None:
-        if word != StatusState.DONE:
-            payload = cut(payload)
-        stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
-        record = {"ts": stamp, "label": label, "payload": payload}
-        if marker is not None:
-            record["sent"] = marker
-        append(os.path.join(folder, HOOKS), record if event is None else {**record, "event": event})
-    if host is not None:
-        host.on_hook(word, call("host_hook", payload))
+    if state["words"].get(label) != StatusState.DONE:
+        payload = cut(payload)
+    stamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+    record = {"ts": stamp, "label": label, "payload": payload}
+    if marker is not None:
+        record["sent"] = marker
+    append(os.path.join(folder, HOOKS), record if event is None else {**record, "event": event})
 
 
 def _journaled(path: str, event: str, label: str) -> dict | None:
@@ -235,7 +227,7 @@ def _validate_state(state, path, error):
 
 
 def _check_callbacks(state, path, error):
-    for hook in ("client_hook", "host_hook"):
+    for hook in ("client_hook",):
         value = state.get(hook, {})
         if hook in state and (
             not isinstance(value, dict)

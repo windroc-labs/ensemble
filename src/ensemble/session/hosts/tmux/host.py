@@ -10,7 +10,6 @@ import os
 import time
 from collections.abc import Mapping
 
-from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.tmux_cli import (
     NAME,
     POLL,
@@ -24,7 +23,6 @@ from ensemble.session.engine.tmux_cli import (
 from ensemble.session.engine.types import (
     MARKS,
     ConfigError,
-    HookCallback,
     Key,
     Launch,
     Liveness,
@@ -35,9 +33,10 @@ from ensemble.session.engine.types import (
     StatusState,
     TuiSettings,
 )
-from ensemble.session.hosts.base import Host, InteractiveProcess, Process
+from ensemble.session.hosts.base import Host, InteractiveProcess, Process, worker_state
+from ensemble.session.hosts.base import activity as worker_activity
 from ensemble.session.hosts.reclaimed import ReclaimedGroup
-from ensemble.session.hosts.tmux import hook, managed
+from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.utils import (
     CONFIG_NAME,
@@ -59,6 +58,13 @@ def _session(name) -> str:
     if not isinstance(name, str) or not NAME.fullmatch(name):
         raise SessionError(f"no tmux session {name!r:.80}")
     return name
+
+
+def _marked(row: dict) -> str | None:
+    found = worker_state(row["name"])
+    if found is not None and found.generation is not None and found.sid == row["sid"]:
+        return worker_activity(row["name"], found.generation)
+    return row["state"]
 
 
 class TmuxProcess(Process):
@@ -113,6 +119,10 @@ class TmuxProcess(Process):
         return self.pane.option("@sid"), self.pane.option("@generation")
 
     def activity(self) -> StatusState | None:
+        """Its harness's mark for a guard display's generation, else the pane's @state."""
+        generation = self.pane.option("@generation")
+        if generation is not None and (word := worker_activity(self.name, generation)) is not None:
+            return word
         value = self.pane.option("@state")
         return StatusState(value) if value in MARKS else None
 
@@ -362,27 +372,6 @@ class TmuxHost(Host):
         except ValueError as error:
             raise ConfigError(str(error)) from error
 
-    def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback:
-        return HookCallback(
-            hook.__name__,
-            {
-                "executable": self._executable(),
-                "target": name,
-                "generation": metadata["generation"],
-                "environment": {
-                    key: value
-                    for key, value in os.environ.items()
-                    if key in ("TMUX", "TMUX_TMPDIR")
-                },
-            },
-        )
-
-    def _executable(self) -> str:
-        path = tmux_cli.tmux_path()
-        if path is None:
-            raise SessionError("tmux not found")
-        return path
-
     def tui_settings(self) -> TuiSettings:
         line = self.settings.get("status_line", False)
         if not isinstance(line, bool):
@@ -443,6 +432,7 @@ class TmuxHost(Host):
         return ReclaimedGroup.reclaim(token)
 
     def rows(self) -> list[SessionRow]:
+        """A tui worker's state from its harness's mark, any other session's from its @state."""
         found = self._listing()
         return [
             SessionRow(
@@ -453,8 +443,8 @@ class TmuxHost(Host):
                 else None,
                 state=StatusState.DEAD
                 if row["dead"]
-                else StatusState(row["state"])
-                if row["state"] in (StatusState.DONE, StatusState.BLOCKED)
+                else StatusState(word)
+                if (word := _marked(row)) in (StatusState.DONE, StatusState.BLOCKED)
                 else StatusState.WORKING,
                 display=row["display"],
                 shown=None,

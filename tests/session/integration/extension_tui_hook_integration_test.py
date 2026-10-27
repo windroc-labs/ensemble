@@ -54,7 +54,6 @@ class ExternalTuiHookTest(Case):
         self.dir = os.path.join(self.root, "s1")
         os.mkdir(self.dir, 0o700)
         self.state = {**state(self.root, None), "words": {}}
-        del self.state["host_hook"]
 
     def declared(self) -> dict:
         path = os.path.join(self.installed, "external_tui", "__init__.py")

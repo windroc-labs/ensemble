@@ -236,29 +236,6 @@ class ManagedTest(Case):
         env = self.spawned_env(Launch((sys.executable,), env={}, cwd=self.home), TERM="dumb")
         self.assertEqual(env["TERM"], "xterm-256color")
 
-    def test_mark_and_activity_use_own_display(self):
-        """Status marks go to this generation's display pane; another generation's is left alone."""
-        channel = managed.TmuxManagedProcess(
-            "worker", "a" * 32, mock.Mock(), terminal=True, tmux=mock.Mock(), start_reader=False
-        )
-        process = "4242 $3 %7 5555"
-        options = {"@generation": "a" * 32, "@process": process, "@state": "working"}
-        channel.tmux.option.side_effect = lambda _target, key: options.get(key)
-        channel.tmux.process.return_value = process
-        self.assertEqual(channel.activity(), StatusState.WORKING)
-        channel.mark(StatusState.DONE, "/events")
-        channel.tmux.mark.assert_called_once_with("done", "/events", pane="%7", session=None)
-        channel.tmux.mark.reset_mock()
-        options["@generation"] = "b" * 32
-        self.assertIsNone(channel.activity())
-        channel.mark(StatusState.DONE, "/events")
-        channel.tmux.mark.assert_not_called()
-        options["@generation"] = "a" * 32
-        channel.tmux.option.side_effect = TuiError("tmux: no server")
-        self.assertIsNone(channel.activity())
-        channel.mark(StatusState.DONE, "/events")
-        channel.tmux.mark.assert_not_called()
-
     def reopener(self, *, terminal: bool = True):
         """A running handle of generation a…a, its tmux and display opener mocked."""
         tmux, opener = mock.Mock(), mock.Mock()
@@ -291,19 +268,16 @@ class ManagedTest(Case):
         tmux.kill.assert_not_called()
         opener.assert_called_once_with()
 
-    def test_redisplay_marks_a_reopened_display_with_its_last_state_and_logs_nothing(self):
+    def test_redisplay_reopens_a_dead_display_and_marks_nothing(self):
+        """Its state lives in the worker dir (its harness's mark): no tmux mark, no events line."""
         channel, tmux, opener = self.reopener()
         options = {"@generation": "a" * 32, "@process": "4242 $3 %7 5555"}
         tmux.option.side_effect = lambda _target, key: options.get(key)
-        tmux.process.return_value = options["@process"]
-        tmux.status.return_value = PaneStatus.RUNNING
-        channel.mark(StatusState.BLOCKED, "/events")
-        tmux.mark.reset_mock()
         opener.side_effect = lambda: options.update({"@process": "4243 $4 %8 5556"})
-        tmux.process.side_effect = lambda _target: options["@process"]
         tmux.status.return_value = -9
         self.assertTrue(channel.redisplay())
-        tmux.mark.assert_called_once_with("blocked", None, pane="%8", session=None)
+        opener.assert_called_once_with()
+        tmux.mark.assert_not_called()
 
     def test_redisplay_refuses_and_leaves_alone_what_it_cannot_tell(self):
         channel, tmux, opener = self.reopener()

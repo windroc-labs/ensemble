@@ -126,7 +126,7 @@ class DialogTest(WorkerCase):
         self.assertIn("session w1: waits on a dialog: Edit", res.stderr.splitlines())
         self.wait_event("w1", "blocked")
         self.assertEqual(self.words(), [["w1", "blocked"]])
-        self.assertEqual(self.server.option("w1", "@state"), "blocked")
+        live_tmux.wait(lambda: live_tmux.activity("w1") == "blocked", what="w1 marked blocked")
         self.ok(self.session("send", "w1", "yes"))
         self.wait_event("w1", "done")
         self.assertEqual(self.words(), [["w1", "blocked"], ["w1", "done"]])
@@ -170,7 +170,9 @@ class DialogTest(WorkerCase):
         self.assertEqual((record.name, record.detail, record.display), ("w1", "codex", MANAGER))
         self.assertIn("session w1: waits on a dialog: Trust this folder?", res.stderr.splitlines())
         self.wait_event("w1", "blocked", events=events)
-        self.assertEqual(self.server.option("w1", "@state"), "blocked")
+        live_tmux.wait(
+            lambda: live_tmux.activity("w1", home) == "blocked", what="w1 marked blocked"
+        )
 
 
 class ColorTest(WorkerCase):

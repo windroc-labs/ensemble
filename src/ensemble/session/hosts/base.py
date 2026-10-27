@@ -4,15 +4,19 @@ attach target the Viewer shows a session through.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
+import stat
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import ClassVar
 
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
+    MARKS,
+    SESSION_NAME,
     ClientContext,
     ClientHome,
     ConfigError,
@@ -57,6 +61,10 @@ GUARD_HOOK_SOCKET = "ENSEMBLE_GUARD_HOOK_SOCKET"
 GUARD_WAIT = 10  # s for a guard's reply, or its exit after a close (it gives up 9 s after one)
 TUI_STATE = "session.json"
 PROMPTED = "prompted"  # "<generation> <begun> <submitted>" sends
+ACTIVITY = "activity"  # "<generation> <word>": its harness's last mark
+RECORD = "record"  # "<generation>\t<Record line>": its crew Record
+STATE_MAX = 1 << 16
+ACTIVITY_MAX = 256
 
 
 def sent(folder: str) -> str | None:
@@ -83,6 +91,72 @@ def created_events(path: str | None) -> str | None:
         return None if path is None else events_file(path)
     except ValueError as error:
         raise SessionError(str(error)) from None
+
+
+@dataclass(frozen=True)
+class WorkerState:
+    """A tui worker's current generation, as its session.json says."""
+
+    sid: str | None
+    generation: str | None
+    client: str | None
+    display: str | None
+    owner: str | None
+
+
+def worker_dir(name: str) -> str:
+    return os.path.join(os.path.expanduser(TUI_DIR), name)
+
+
+def worker_file(name: str, file: str, limit: int) -> bytes | None:
+    """Worker `name`'s `file`, at most `limit` bytes, only when a regular file of this user's and no
+    link; else None.
+    """
+    if not isinstance(name, str) or not SESSION_NAME.fullmatch(name):
+        return None
+    try:
+        fd = os.open(
+            os.path.join(worker_dir(name), file), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        )
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > limit:
+            return None
+        data = os.read(fd, limit + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return None if len(data) > limit else data
+
+
+def worker_state(name: str) -> WorkerState | None:
+    data = worker_file(name, TUI_STATE, STATE_MAX)
+    try:
+        found = None if data is None else json.loads(data)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(found, dict):
+        return None
+
+    def text(key: str) -> str | None:
+        value = found.get(key)
+        return value if isinstance(value, str) else None
+
+    return WorkerState(
+        text("sid"), text("generation"), text("client"), text("display"), text("owner")
+    )
+
+
+def activity(name: str, generation: str) -> StatusState | None:
+    """Worker `name`'s last mark while it is generation `generation`'s."""
+    data = worker_file(name, ACTIVITY, ACTIVITY_MAX)
+    fields = b"".join((data or b"").split(b"\n", 1)[:1]).decode(errors="replace").split(" ")
+    if len(fields) != 2 or fields[0] != generation or fields[1] not in MARKS:
+        return None
+    return StatusState(fields[1])
 
 
 def tui_lock(name: str) -> str:

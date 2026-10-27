@@ -2170,14 +2170,6 @@ class ListTest(Base):
                     self.host.attach_target("w")
         self.assertEqual(self.docker.execs(), [])
 
-    def test_hook_callback_is_the_guards_with_or_without_an_owner(self):
-        """A tui preflight builds it before any owner exists."""
-        for metadata in ({"generation": GEN, "owner": "/h"}, {"generation": GEN}):
-            with self.subTest(metadata=metadata):
-                callback = self.host.hook_callback("w", metadata)
-                self.assertEqual(callback.module, "ensemble.session.hosts.docker.guard_hook")
-                self.assertEqual(dict(callback.state), {"target": "w", "generation": GEN})
-
 
 class AttachTargetTest(Base):
     def test_attach_target_runs_the_guard_display_with_docker_variables_cleared(self):
@@ -2356,9 +2348,10 @@ class GuardedRowTest(StartBase):
         [row] = self.host.rows()
         self.assertEqual(row.state, StatusState.UNKNOWN)
         self.owner_held()
-        os.makedirs(self.state, exist_ok=True)
-        with open(os.path.join(self.state, f"{GEN}.activity"), "w") as f:
-            f.write("blocked")
+        folder = os.path.join(os.path.expanduser("~/.ensemble/tui"), "w")
+        os.makedirs(folder, 0o700, exist_ok=True)
+        with open(os.path.join(folder, "activity"), "w") as f:
+            f.write(f"{GEN} blocked\n")
         [row] = self.host.rows()
         self.assertEqual((row.name, row.state, row.last_lines), ("w", StatusState.BLOCKED, None))
         self.assertEqual(self.host.list(), ["w"])

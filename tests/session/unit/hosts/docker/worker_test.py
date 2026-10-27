@@ -11,15 +11,13 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.engine.types import (
-    HookCall,
-    HookError,
     Liveness,
     SessionError,
     StatusState,
     WorkerHook,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.docker import guard_hook, worker
+from ensemble.session.hosts.docker import worker
 from ensemble.session.hosts.docker.maintenance import Maintenance
 from ensemble.session.hosts.docker.mounts import state_dir
 from tests.session.case import Case
@@ -585,10 +583,11 @@ class TerminalTest(Base):
         channel = self.make()
         self.assertEqual(channel.session_identity(), ("sid-1", GEN))
         self.assertIsNone(channel.activity())
-        channel.mark(StatusState.DONE, self.events)
+        folder = os.path.join(self.home, ".ensemble", "tui", "worker_1")
+        os.makedirs(folder, 0o700)
+        with open(os.path.join(folder, "activity"), "w") as f:
+            f.write(f"{GEN} done\n")
         self.assertEqual(channel.activity(), StatusState.DONE)
-        with open(self.events) as f:
-            self.assertTrue(f.read().rstrip().endswith("worker_1 done"))
         self.record["generation"] = "other"
         self.assertEqual(channel.session_identity(), (None, None))
 
@@ -607,29 +606,3 @@ class TerminalTest(Base):
                 call()
         view.close()
         self.assertEqual(self.removed, [GEN])
-
-
-class GuardHookTest(Base):
-    def call(self, **state):
-        return HookCall("Stop", {}, "sid-1", self.home, self.events, state)
-
-    def test_writes_its_generations_activity_and_the_events_line(self):
-        with mock.patch("subprocess.run") as ran, mock.patch("subprocess.Popen") as opened:
-            guard_hook.on_hook("working", self.call(target="worker_1", generation=GEN))
-            guard_hook.on_hook("done", self.call(target="worker_1", generation=GEN))
-        ran.assert_not_called()
-        opened.assert_not_called()
-        self.assertEqual(worker.activity(self.state, GEN), StatusState.DONE)
-        with open(self.events) as f:
-            lines = f.read().splitlines()
-        self.assertEqual(len(lines), 1)
-        self.assertTrue(lines[0].endswith("worker_1 done"))
-
-    def test_bad_target_or_generation_is_a_hook_error(self):
-        for state in (
-            {"target": "../x", "generation": GEN},
-            {"target": "worker_1", "generation": "../x"},
-            {"generation": GEN},
-        ):
-            with self.subTest(state=state), self.assertRaises(HookError):
-                guard_hook.on_hook("done", self.call(**state))

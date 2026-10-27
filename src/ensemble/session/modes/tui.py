@@ -17,6 +17,7 @@ from typing import BinaryIO, Self
 
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.registry import Registry
+from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import (
     COMMAND,
     PROCESS_EXIT,
@@ -51,6 +52,7 @@ from ensemble.session.engine.types import (
     WorkerHook,
 )
 from ensemble.session.hosts.base import (
+    ACTIVITY,
     GUARD_WAIT,
     HARNESS_ROOT,
     PROMPTED,
@@ -59,6 +61,7 @@ from ensemble.session.hosts.base import (
     Host,
     InteractiveProcess,
     Process,
+    activity,
     check_sid,
     checked_events,
     created_events,
@@ -79,6 +82,7 @@ from ensemble.utils import (
     inode_lock,
     json_records,
     read_regular,
+    save,
 )
 
 WORDS = {
@@ -108,7 +112,13 @@ def checked_name(name) -> str:
 
 
 def _state(
-    prepared: Prepared, run: Tui, host: Host, metadata: Mapping[str, str], owner: str | None
+    prepared: Prepared,
+    run: Tui,
+    host: Host,
+    metadata: Mapping[str, str],
+    owner: str | None,
+    *,
+    display: Display,
 ) -> dict:
     spec = prepared.spec
     return {
@@ -119,14 +129,8 @@ def _state(
         "words": {label: WORDS[kind] for label, kind in run.hooks.items() if kind in WORDS},
         "host": host.name,
         "generation": metadata["generation"],
-        **{
-            key: callback.fields()
-            for key, callback in (
-                ("client_hook", run.hook_callback()),
-                ("host_hook", host.hook_callback(spec.name or "", metadata)),
-            )
-            if callback is not None
-        },
+        "display": display,
+        **({"client_hook": hook.fields()} if (hook := run.hook_callback()) is not None else {}),
         **({"owner": owner} if owner is not None else {}),
     }
 
@@ -206,6 +210,12 @@ class TuiStore:
                 f"tui session {self.name}: {COMMAND} is not on PATH (its hooks run it)"
             )
         return (command, "hook", self.dir)
+
+    def set_activity(self, generation: str, word: StatusState, events: str | None) -> None:
+        """Its owner's mark: the activity file, then for done and blocked one events line."""
+        save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
+        if word in (StatusState.DONE, StatusState.BLOCKED) and events:
+            SessionStatusLog(events).write(self.name, word)
 
     def read(self) -> dict:
         return _read_state(self.name, self.state_file)
@@ -662,8 +672,11 @@ class TuiMode(BaseMode):
         replayed: tuple[SessionEvent | Stderr | ClientBound, ...] = (),
         opening: tuple[str, str] | None = None,
         owned: bool = False,
+        marks: bool = False,
     ) -> None:
-        """cursor: its next hook record (TuiStore.records); owned: `terminal` is the owner's."""
+        """cursor: its next hook record (TuiStore.records); owned: `terminal` is the owner's;
+        marks: it writes its worker's activity (its starter's; a view never does).
+        """
         super().__init__(prepared)
         self.name, self.run, self.host, self._terminal = store.name, run, store.host, terminal
         self._store, self._replayed, self._generation = store, replayed, generation
@@ -674,7 +687,7 @@ class TuiMode(BaseMode):
         self._held, self._checked = False, -POLL_SCREEN
         self._active_turn = run._turn_open is True
         self._absorbed, self._launching = 0, bool(prepared.spec.prompt) and not run._opening_prompt
-        self._owned, self._hook_logged = owned, False
+        self._owned, self._marks, self._hook_logged = owned, marks, False
 
     @classmethod
     def preflight(
@@ -733,7 +746,7 @@ class TuiMode(BaseMode):
             metadata = {**metadata, "runtime_files": json.dumps(dict(run._runtime_files))}
         if owner is not None:
             metadata = {**metadata, "owner": owner}
-        state = _state(prepared, run, host, metadata, owner)
+        state = _state(prepared, run, host, metadata, owner, display=display)
         if field := _bad(state):
             raise SessionError(f"tui session {name}: bad {field} {state.get(field)!r:.80}")
         return _Start(prepared, run, store, state, metadata, prompt_file)
@@ -799,7 +812,14 @@ class TuiMode(BaseMode):
         _sweep(store)
         generation = pending.state["generation"]
         return cls(
-            prepared, run, terminal, store, generation, opening=run.opening, owned=owner is not None
+            prepared,
+            run,
+            terminal,
+            store,
+            generation,
+            opening=run.opening,
+            owned=owner is not None,
+            marks=True,
         )
 
     @classmethod
@@ -888,10 +908,7 @@ class TuiMode(BaseMode):
 
     def marked_blocked(self) -> bool:
         """False, too, when its terminal cannot tell."""
-        try:
-            return self._terminal.activity() == StatusState.BLOCKED
-        except SessionError:
-            return False
+        return activity(self.name, self._generation) == StatusState.BLOCKED
 
     def poll(self, timeout: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
         self._drain()
@@ -995,6 +1012,8 @@ class TuiMode(BaseMode):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
         for label, payload, marker in records:
+            if (word := WORDS.get(self.run.hooks.get(label))) is not None:
+                self._mark(word)
             events = self.run.hook_events(label, payload)
             if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):
                 self._absorbed = max(self._absorbed, _sends(marker, self._generation)[1])
@@ -1039,7 +1058,7 @@ class TuiMode(BaseMode):
         if limit is not None and self._limit is None:
             found.append(limit)
         if shown - self._dialogs:
-            self._mark_blocked()
+            self._mark(StatusState.BLOCKED, again=False)
         self._dialogs, self._limit = shown, limit
         self._track(found)
         return found
@@ -1047,10 +1066,13 @@ class TuiMode(BaseMode):
     def _shown(self, screen: str) -> frozenset[str]:
         return frozenset(d for d in self.run.dialogs if self.run.shows(d, screen))
 
-    def _mark_blocked(self) -> None:
-        with contextlib.suppress(SessionError):
-            if self._terminal.activity() != StatusState.BLOCKED:
-                self._terminal.mark(StatusState.BLOCKED, self.prepared.spec.events)
+    def _mark(self, word: StatusState, *, again: bool = True) -> None:
+        """Its starter's alone (a view never marks); not again: only when its word differs."""
+        if self._marks and (again or activity(self.name, self._generation) != word):
+            try:
+                self._store.set_activity(self._generation, word, self.prepared.spec.events)
+            except (OSError, ValueError) as error:
+                LOG.warning("tui session %s: mark %s: %s", self.name, word, error)
 
     def returncode(self, timeout: float) -> int | None:
         deadline = time.monotonic() + timeout

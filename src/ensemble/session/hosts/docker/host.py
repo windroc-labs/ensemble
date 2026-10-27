@@ -35,7 +35,6 @@ from ensemble.session.engine.types import (
     ConfigError,
     Container,
     EnvironmentSpec,
-    HookCallback,
     Launch,
     Liveness,
     SessionBusy,
@@ -54,8 +53,8 @@ from ensemble.session.hosts.base import (
     created_events,
     tui_lock,
 )
-from ensemble.session.hosts.docker import guard_hook, maintenance
-from ensemble.session.hosts.docker.activity import activity
+from ensemble.session.hosts.base import activity as worker_activity
+from ensemble.session.hosts.docker import maintenance
 from ensemble.session.hosts.docker.broker import (
     Broker,
     BrokerError,
@@ -1175,11 +1174,6 @@ class DockerHost(Host):
             return f"; close {container}: {error}"
         return ""
 
-    def hook_callback(self, name: str, metadata: Mapping[str, str]) -> HookCallback:
-        return HookCallback(
-            guard_hook.__name__, {"target": name, "generation": metadata["generation"]}
-        )
-
     def attach(self, name: str) -> InteractiveProcess:
         found = self._containers().get(name)
         if found is None:
@@ -1233,7 +1227,7 @@ class DockerHost(Host):
     def _row(self, name: str, generation: str) -> SessionRow:
         record = _record(name)
         record = record if record.get("generation") == generation else {}
-        word = activity(state_dir(name), generation)
+        word = worker_activity(name, generation)
         state = StatusState.WORKING
         if _lock_free(_owner_path(name)):
             state = StatusState.UNKNOWN

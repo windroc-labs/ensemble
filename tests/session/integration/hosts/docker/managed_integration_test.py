@@ -199,7 +199,6 @@ class SameEventsTest(Case):
         folder = os.path.join(self.home, name)
         os.mkdir(folder)
         saved = state(self.home, None)
-        saved.pop("host_hook")
         saved["words"] = {"begin": "working", "work": "working", "wait": "blocked", "end": "done"}
         write_state(folder, saved)
         return folder

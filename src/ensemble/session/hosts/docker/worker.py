@@ -23,7 +23,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import GUARD_WAIT, InteractiveProcess, sent
-from ensemble.session.hosts.docker.activity import activity, write_activity
+from ensemble.session.hosts.base import activity as worker_activity
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import RETRY, Maintenance, run
 from ensemble.session.hosts.managed import QUEUE_MAX, ManagedProcess
@@ -349,13 +349,7 @@ class DockerWorker(ManagedProcess):
         self.close()
 
     def activity(self) -> StatusState | None:
-        return activity(self.state_dir, self.generation)
-
-    def mark(self, word: StatusState, events: str | None) -> None:
-        try:
-            write_activity(self.state_dir, self.generation, word, events, self.name)
-        except (OSError, ValueError) as error:
-            raise SessionError(f"docker session {self.name}: {error}") from None
+        return worker_activity(self.name, self.generation)
 
     def publish(self, record: Record) -> None:
         self.host_record.publish(record)
@@ -429,7 +423,7 @@ class GuardedView(InteractiveProcess):
         self.close()
 
     def activity(self) -> StatusState | None:
-        return activity(self.state_dir, self.generation)
+        return worker_activity(self.name, self.generation)
 
     def record(self) -> Record | None:
         return self.host_record.record()

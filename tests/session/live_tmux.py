@@ -15,6 +15,7 @@ import time
 from typing import NamedTuple
 from unittest import mock
 
+from ensemble.session.hosts import base as host_base
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN, child_env
 from tests.session.grid import GridCheck
@@ -338,6 +339,18 @@ def alive(pid: int) -> bool:
     except PermissionError:
         pass
     return True
+
+
+def activity(name: str, home: str | None = None) -> str | None:
+    """Tui worker `name`'s last mark by its harness, for its current generation (None: none);
+    home: the HOME it ran under, else this process's.
+    """
+    with mock.patch.dict(os.environ, {} if home is None else {"HOME": home}):
+        found = host_base.worker_state(name)
+        if found is None or found.generation is None:
+            return None
+        word = host_base.activity(name, found.generation)
+    return None if word is None else str(word)
 
 
 def events(path: str) -> list[str]:

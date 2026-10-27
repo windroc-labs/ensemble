@@ -251,7 +251,7 @@ class Base(Case):
             "words": WORDS,
             "generation": generation,
             "host": self.host.name,
-            "host_hook": {"module": "fake_host_hook", "state": {"selected": True}, "roots": []},
+            "display": None,
             **changes,
         }
 
@@ -522,22 +522,22 @@ class AttachTest(Base):
         self.assertEqual(str(caught.exception), "no tui session w1: client 'fake' has no tui mode")
         self.assertEqual(self.host.calls.mock_calls, [])
 
-    def test_marked_blocked_is_its_terminals_activity(self):
+    def test_marked_blocked_is_its_workers_activity(self):
         mode = self.attach()
-        for state, blocked in (
-            (StatusState.BLOCKED, True),
-            (StatusState.WORKING, False),
+        activity = os.path.join(self.dir, "activity")
+        for line, blocked in (
+            (f"{mode.generation} blocked\n", True),
+            (f"{mode.generation} working\n", False),
+            ("another blocked\n", False),
             (None, False),
         ):
-            with self.subTest(state=state):
-                self.process.calls.activity.return_value = state
+            with self.subTest(line=line):
+                if line is None:
+                    os.unlink(activity)
+                else:
+                    with open(activity, "w") as f:
+                        f.write(line)
                 self.assertIs(mode.marked_blocked(), blocked)
-        self.assertEqual(self.process.calls.activity.call_count, 3)
-
-    def test_a_terminal_that_cannot_tell_is_not_marked_blocked(self):
-        mode = self.attach()
-        self.process.calls.activity.side_effect = SessionError("tmux: docker exec in c: timed out")
-        self.assertFalse(mode.marked_blocked())
 
     def test_another_sid_absent_or_unknown_is_no_tui_session(self):
         for sid in ("other", None):
@@ -562,11 +562,13 @@ class AttachTest(Base):
             self.attach()
         self.host.calls.attach.assert_called_once_with(NAME)
 
-    def test_an_attached_session_is_live_and_marks_dialogs_on_its_events_file(self):
+    def test_an_attached_session_is_live_and_never_marks(self):
+        """Its owner alone marks; a view only reads."""
         mode = self.attach()
         self.host.calls.screen.return_value = "Sign in"
         self.assertEqual(mode.poll(0), ([Blocked("Sign in")], False))
-        self.process.calls.mark.assert_called_once_with(StatusState.BLOCKED, self.events)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "activity")))
+        self.assertFalse(os.path.exists(self.events) and os.path.getsize(self.events))
         mode.stop()
         self.process.calls.close.assert_called_once_with()
 
@@ -2293,16 +2295,6 @@ class ScanTest(Base):
                 mode = self.started()
                 self.assertEqual(self.scans(mode, *screens), expected)
 
-    def test_a_dialog_marks_the_terminal_blocked_unless_it_is(self):
-        mode = self.started()
-        mode._terminal.calls.activity.return_value = StatusState.DONE
-        self.scans(mode, "Sign in Trust this folder?")
-        mode._terminal.calls.mark.assert_called_once_with(StatusState.BLOCKED, self.events)
-        mode._terminal.calls.mark.reset_mock()
-        mode._terminal.calls.activity.return_value = StatusState.BLOCKED
-        self.scans(mode, "", "Sign in")
-        mode._terminal.calls.mark.assert_not_called()
-
     def test_an_absent_name_is_not_scanned(self):
         mode = self.started()
         self.host.processes.clear()
@@ -2310,16 +2302,6 @@ class ScanTest(Base):
         self.assertEqual(mode.poll(0), ([], True))
         self.assertEqual((self.run.screens, mode.returncode(0)), ([], -signal.SIGHUP))
         mode._terminal.calls.mark.assert_not_called()
-
-    def test_a_failed_mark_still_yields_the_dialog(self):
-        mode = self.started()
-        for method in (mode._terminal.calls.activity, mode._terminal.calls.mark):
-            with self.subTest(method=method):
-                method.side_effect = SessionError("host mark failed")
-                self.assertEqual(
-                    self.scans(mode, "Sign in", ""), [[Blocked("Sign in")], [Activity("")]]
-                )
-                method.side_effect = None
 
     def test_quoted_claude_limit_or_dialog_text_is_no_event_and_the_native_dialog_is(self):
         for screens, expected in (
@@ -3158,10 +3140,8 @@ class RecordRuleTest(Base):
         self.liveness.assert_not_called()
 
 
-class ManagedStartTest(Base):
-    """An owned start (inside a session harness) launches its client under the guard; its TuiMode
-    drives that owner handle and only the handle ends it.
-    """
+class OwnedBase(Base):
+    """A TuiMode started by its owner (inside a session harness) on a mock guard handle."""
 
     def setUp(self):
         super().setUp()
@@ -3190,6 +3170,12 @@ class ManagedStartTest(Base):
             host=self.host,
             owner=owner,
         )
+
+
+class ManagedStartTest(OwnedBase):
+    """An owned start (inside a session harness) launches its client under the guard; its TuiMode
+    drives that owner handle and only the handle ends it.
+    """
 
     def test_owned_start_launches_a_managed_worker(self):
         mode = self.owned_start()
@@ -3260,3 +3246,72 @@ class ManagedStartTest(Base):
         self.write_state({**state, "generation": "another"})
         self.assertEqual(mode.poll(0), ([], False))
         self.assertIsNone(mode.returncode(0))
+
+
+class ActivityTest(OwnedBase):
+    """The owner writes its worker's activity word, and for done and blocked one events line, per
+    newly read hook record or newly shown dialog.
+    """
+
+    def activity(self) -> str:
+        with open(os.path.join(self.dir, "activity"), encoding="utf-8") as f:
+            return f.read()
+
+    def lines(self) -> list[str]:
+        try:
+            with open(self.events, encoding="utf-8") as f:
+                return [line.split(" ", 1)[1] for line in f.read().splitlines()]
+        except FileNotFoundError:
+            return []
+
+    def test_mapped_hook_sets_activity_and_line(self):
+        mode = self.owned_start()
+        generation = mode.generation
+        self.append(record("tool", tool="x"))
+        mode.poll(0)
+        self.assertEqual((self.activity(), self.lines()), (f"{generation} working\n", []))
+        self.append(record("stop"))
+        mode.poll(0)
+        self.assertEqual(
+            (self.activity(), self.lines()), (f"{generation} done\n", [f"{NAME} done"])
+        )
+        self.assertEqual(host_base.activity(NAME, generation), StatusState.DONE)
+        self.assertIsNone(host_base.activity(NAME, "another"))
+
+    def test_each_record_marks_once(self):
+        mode = self.owned_start()
+        self.append(record("ask", why="y"))
+        mode.poll(0)
+        mode.poll(0)
+        self.assertEqual(self.lines(), [f"{NAME} blocked"])
+
+    def test_without_an_events_file_only_the_word(self):
+        self.events = None
+        mode = self.owned_start()
+        self.append(record("stop"))
+        mode.poll(0)
+        self.assertEqual(self.activity(), f"{mode.generation} done\n")
+
+    def test_dialog_marks_blocked_once(self):
+        mode = self.owned_start()
+        self.handle.screen.return_value = "Sign in"
+        mode.poll(0)
+        mode.poll(0)
+        self.assertEqual(self.activity(), f"{mode.generation} blocked\n")
+        self.assertEqual(self.lines(), [f"{NAME} blocked"])
+        self.assertTrue(mode.marked_blocked())
+
+    def test_no_host_hook_in_session_json(self):
+        self.owned_start()
+        state = tui.TuiMode.snapshot(NAME)
+        self.assertNotIn("host_hook", state)
+        self.assertIn("display", state)
+
+    def test_a_failed_mark_still_yields_the_dialog(self):
+        mode = self.owned_start()
+        self.handle.screen.return_value = "Sign in"
+        with (
+            mock.patch.object(tui.TuiStore, "set_activity", side_effect=OSError("disk full")),
+            self.assertLogs("session", "WARNING"),
+        ):
+            self.assertEqual(mode.poll(0), ([Blocked("Sign in")], False))

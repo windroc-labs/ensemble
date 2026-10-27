@@ -193,7 +193,7 @@ class DialogTest(LiveCrew):
         self.assertEqual(self.record(res).detail, "codex")
         self.assertIn("session w1: waits on a dialog: Trust this folder?", res.stderr.splitlines())
         self.wait_event("w1", "blocked")
-        self.assertEqual(self.server.option("w1", "@state"), "blocked")
+        live_tmux.wait(lambda: live_tmux.activity("w1") == "blocked", what="w1 marked blocked")
         self.assertIn("Trust this folder?", self.ok(self.session("read", "w1")).stdout)
 
 

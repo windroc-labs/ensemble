@@ -16,16 +16,14 @@ import time
 import uuid
 from collections.abc import Callable
 
-from ensemble.session.engine.tmux_cli import PROCESS_ID, TmuxPane, TuiError
+from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
-    MARKS,
     ConfigError,
     Launch,
     Liveness,
     PaneStatus,
     SessionBusy,
     SessionError,
-    StatusState,
     Unanswered,
 )
 from ensemble.session.harness import guard
@@ -40,7 +38,7 @@ LOG = logging.getLogger("session")
 
 class TmuxManagedProcess(ManagedProcess):
     """Its display: the host tmux session of its name, while tagged with its generation; opener
-    starts it (None: it has none); marked: its last status mark, kept for a reopened display.
+    starts it (None: it has none).
     """
 
     def __init__(
@@ -55,40 +53,8 @@ class TmuxManagedProcess(ManagedProcess):
         start_reader=True,
     ):
         self.tmux, self.opener = tmux, opener
-        self.marked: StatusState | None = None
         self.removal: Callable[[], None] | None = None  # a one-shot dir's, after its close
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
-
-    def _display(self) -> TmuxPane | None:
-        """Its own generation's display pane, else None (headless, another's, gone, or tmux
-        failed).
-        """
-        if not self.terminal:
-            return None
-        try:
-            if self.tmux.option(self.name, "@generation") != self.generation:
-                return None
-            process = self.tmux.option(self.name, "@process")
-        except TuiError:
-            return None
-        return (
-            TmuxPane(self.name, process, self.tmux) if PROCESS_ID.fullmatch(process or "") else None
-        )
-
-    def activity(self) -> StatusState | None:
-        pane = self._display()
-        try:
-            value = None if pane is None else pane.option("@state")
-        except SessionError:
-            return None
-        return StatusState(value) if value in MARKS else None
-
-    def mark(self, word: StatusState, events: str | None) -> None:
-        self.marked = word
-        pane = self._display()
-        if pane is not None:
-            with contextlib.suppress(SessionError):
-                pane.mark(word, events)
 
     def close(self) -> None:
         try:
@@ -130,8 +96,6 @@ class TmuxManagedProcess(ManagedProcess):
             self.opener()
         except TuiError as error:
             raise SessionError(f"worker {self.name}: display: {error}") from error
-        if self.marked is not None:
-            self.mark(self.marked, None)  # its state again, no second event line
         return True
 
 

@@ -4,7 +4,9 @@ parser.
 
 import dataclasses
 import inspect
+import json
 import operator
+import os
 import signal
 import tomllib
 from types import MappingProxyType
@@ -27,6 +29,7 @@ from ensemble.session.engine.types import (
     SessionRow,
 )
 from ensemble.session.harness import guard
+from ensemble.session.hosts import base as host_base
 from ensemble.session.hosts.base import Interactive, InteractiveProcess
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.utils import Status, StatusState
@@ -356,3 +359,51 @@ class ManagedWorkerTest(Case):
         with self.assertRaises(SystemExit) as caught:
             guard.main([])
         self.assertEqual(caught.exception.code, 2)
+
+
+class WorkerStateFilesTest(Case):
+    """worker_state and activity read a worker dir's files only when regular, the user's, not a
+    link and small; anything else reads as absent.
+    """
+
+    def setUp(self):
+        self.dir = os.path.join(self.ensemble, "tui", "w1")
+        os.makedirs(self.dir, 0o700)
+
+    def put(self, name: str, data: bytes) -> str:
+        path = os.path.join(self.dir, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def test_worker_state_from_session_json(self):
+        self.put(
+            "session.json",
+            json.dumps(
+                {"sid": "s", "generation": "g", "client": "fake", "display": "d", "owner": "/o"}
+            ).encode(),
+        )
+        self.assertEqual(
+            host_base.worker_state("w1"), host_base.WorkerState("s", "g", "fake", "d", "/o")
+        )
+        self.assertIsNone(host_base.worker_state("absent"))
+
+    def test_activity_of_its_generation_only(self):
+        self.put("activity", b"g done\n")
+        self.assertEqual(host_base.activity("w1", "g"), StatusState.DONE)
+        self.assertIsNone(host_base.activity("w1", "other"))
+        self.put("activity", b"g dead\n")
+        self.assertIsNone(host_base.activity("w1", "g"))
+
+    def test_a_link_another_owner_or_a_large_file_reads_as_absent(self):
+        target = self.put("elsewhere", b"g done\n")
+        os.symlink(target, os.path.join(self.dir, "activity"))
+        self.assertIsNone(host_base.activity("w1", "g"))
+        os.unlink(os.path.join(self.dir, "activity"))
+        self.put("activity", b"g done\n")
+        with mock.patch("os.getuid", return_value=os.getuid() + 1):
+            self.assertIsNone(host_base.activity("w1", "g"))
+        self.put("activity", b"g done" + b" " * 300 + b"\n")
+        self.assertIsNone(host_base.activity("w1", "g"))
+        self.put("session.json", b"{" + b" " * (1 << 16) + b"}")
+        self.assertIsNone(host_base.worker_state("w1"))

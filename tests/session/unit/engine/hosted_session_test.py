@@ -2283,7 +2283,14 @@ class AttachTest(HostedTuiBase):
             with self.subTest(hooked=hooked, state=state):
                 self.host.processes.clear()
                 self.started(*hooked)
-                self.host.processes["w1"].calls.activity.return_value = state
+                activity = os.path.join(self.root, "w1", "activity")
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(activity)
+                if state is not None:
+                    with open(os.path.join(self.root, "w1", "session.json")) as f:
+                        generation = json.load(f)["generation"]
+                    with open(activity, "w") as f:
+                        f.write(f"{generation} {state}\n")
                 self.host.calls.screen.return_value = ""
                 now[0] = 0.0
 
