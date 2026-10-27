@@ -201,6 +201,15 @@ class HideTest(Base):
         self.options(pane="%9", sid=SID)
         self.assertIsNone(self.viewer.hide("w1", self.host))
         self.tmux.kill.assert_called_once_with("%9")
+        self.tmux.unview.assert_called_once_with("w1")
+        self.assertTrue(hidden.read("w1", SID))
+
+    def test_a_failed_readable_size_still_hides(self):
+        self.options(pane="%9", sid=SID)
+        self.tmux.unview.side_effect = TuiError("tmux: boom")
+        with self.assertLogs("session", logging.WARNING) as logged:
+            self.assertIsNone(self.viewer.hide("w1", self.host))
+        self.assertEqual(logged.output, ["WARNING:session:hide w1: readable size: tmux: boom"])
         self.assertTrue(hidden.read("w1", SID))
 
     def test_hidden_and_status_read_the_store_entry_of_its_sid(self):
@@ -284,8 +293,10 @@ class HideTest(Base):
             with self.subTest(pane=pane, window=window):
                 hidden.write("w1", SID, hidden=False, live=None)
                 found = self.placed(pane=pane, window=window, sid=SID)
+                self.tmux.unview.reset_mock()
                 self.assertIsNone(self.viewer.hide("w1", self.host, if_closed=True))
                 self.assertEqual(hidden.read("w1", SID), want)
+                self.assertEqual(self.tmux.unview.call_args_list, [mock.call("w1")] * want)
                 self.assertEqual(found["pane"], None if want else pane)
         self.tmux.kill.assert_not_called()
         self.assertNotIn(mock.call("%8"), self.tmux.process.call_args_list)
@@ -441,7 +452,7 @@ class CommandViewTest(Base):
             self.assertEqual(self.viewer.show("d1", self.docker), self.target.printed)
         self.tmux.checked.assert_any_call(
             [
-                *("new-session", "-d", "-s", "d1", "--", *self.ARGV),
+                *("new-session", "-d", "-s", "d1", "-x", "120", "-y", "40", "--", *self.ARGV),
                 *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
             ]
         )
