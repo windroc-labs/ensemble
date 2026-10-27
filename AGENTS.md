@@ -28,7 +28,8 @@ squash-merges automatically when required `CI` passes; no manual branch updates 
 Queue groups run every CI project, including diff coverage against the group's base SHA.
 
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
-PR and merge-group checks contain no macOS job. The independent `Broker macOS` workflow
+The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`
+workflow with fake credentials. The independent `Broker macOS` workflow
 (`.github/workflows/broker-macos.yml`) runs on pushes to `main` and manual dispatch,
 preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
 Require `CI`, never `Broker macos-15` separately.

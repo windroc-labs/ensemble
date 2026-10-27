@@ -285,7 +285,7 @@ ledger_valid() {
     profile:3) under_home "$2" && case $3 in *$'\t'* | *$'\n'* | '') false ;; esac ;;
     docker-block:2) under_home "$2" && case ${2##*/} in .zshrc | .bashrc | .bash_profile | .zprofile) true ;; *) false ;; esac ;;
     homebrew:2) [ "$2" = "$root/opt/homebrew" ] ;;
-    clt:1 | broker:1) true ;;
+    clt:1 | broker:1 | plugin-root:1) true ;;
     agent-tree:2) [ "$2" = "$HOME/.ensemble" ] ;;
     config:2) case $2 in created | backup) true ;; *) false ;; esac ;;
     formula:2) case $2 in gh | tmux | git | python | go | node) true ;; *) false ;; esac ;;
@@ -1084,20 +1084,18 @@ version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)
 spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
 
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
-# Codex's newest version, as skills/manage/scripts/launcher looks.
+# Codex's version at the served ref, ignoring caches from other installs.
 installed_plugin() {
+  local version=${2:-}
   if [ "$1" = claude ]; then
     command -v claude >/dev/null || return 0
     claude plugin list --json </dev/null | python3 -I -c '
 import json, sys
 print(next((p.get("installPath", "") for p in json.load(sys.stdin) if p.get("id") == "ensemble@windroc"), ""))'
   else
-    python3 -I -c '
-import glob, os, sys
-def version(path):
-    return [int(part) if part.isdigit() else -1 for part in os.path.basename(path).split(".")]
-found = sorted(glob.glob(os.path.join(glob.escape(sys.argv[1]), "*")), key=version, reverse=True)
-print(found[0] if found else "")' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble"
+    if [ -z "$version" ]; then version=$(ensemble_file "$ref" .claude-plugin/plugin.json | version_of); fi
+    [ -n "$version" ] || die "Codex: no ensemble version at $ref"
+    printf '%s/%s' "${CODEX_HOME:-$HOME/.codex}/plugins/cache/windroc/ensemble" "$version"
   fi
 }
 
@@ -1172,7 +1170,7 @@ ensemble_plugin_check() {
   case $ref in
     v[0-9]*) [ "$ref" = "v$expected" ] || die "$label: ensemble at $ref reports version $expected" ;;
   esac
-  source=$(installed_plugin "$client") || die "$label: cannot locate ensemble after updating to $ref"
+  source=$(installed_plugin "$client" "$expected") || die "$label: cannot locate ensemble after updating to $ref"
   [ -n "$source" ] && [ -d "$source" ] || die "$label: no installed ensemble directory after updating to $ref"
   got=$(version_of <"$source/.claude-plugin/plugin.json" 2>/dev/null) \
     || die "$label: cannot read ensemble version at $source after updating to $ref"
@@ -1262,7 +1260,7 @@ codex_plugins() {
 }
 
 # The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, ctmux and jobs. Claude Code's
-# install first, else Codex's newest, else OpenCode's, as skills/manage/scripts/launcher looks.
+# install first, else Codex's served version, else OpenCode's. ctmux --install selects this source for launchers.
 plugin_dir() {
   step "plugin directory"
   if ! has claude && ! has codex; then
@@ -1704,13 +1702,112 @@ opencode_key() {
   fi
 }
 
+# Installer-owned adapters also support refs whose launchers predate source selection.
+command_source() {
+  if has claude; then
+    printf 'claude\n%s/plugins/installed_plugins.json\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  elif has codex; then
+    printf 'codex\n%s/plugins/cache/windroc/ensemble\n' "${CODEX_HOME:-$HOME/.codex}"
+  else
+    printf 'opencode\n%s/opencode/packages\n' "${XDG_CACHE_HOME:-$HOME/.cache}"
+  fi
+}
+
+command_selection() {
+  local client source
+  { read -r client; read -r source; } < <(command_source)
+  python3 -I -c 'import json, sys; print(json.dumps(dict(root=sys.argv[1], client=sys.argv[2], source=sys.argv[3])))' "$pkg" "$client" "$source"
+}
+
+command_launcher() {
+  printf '#!/bin/bash\ntarget=$(python3 -I - "${0##*/}" <<\x27PY\x27\n'
+  cat <<'EOF'
+import glob, json, os, sys, tempfile
+
+name = sys.argv[1]
+selection = os.path.expanduser("~/.ensemble/plugin-root")
+rel = "skills/manage/scripts/ctmux" if name == "ctmux" else "bin/" + name
+try:
+    with open(selection, encoding="utf-8") as f:
+        text = f.read().rstrip("\n")
+    data = json.loads(text)
+    if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in ("root", "client", "source")):
+        raise ValueError("expected a selection object with root, client and source strings")
+    root, client, source = data["root"], data["client"], data["source"]
+except (OSError, ValueError, TypeError, KeyError) as e:
+    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
+path = os.path.join(root, rel)
+if os.path.isabs(root) and "\n" not in root and os.access(path, os.X_OK):
+    print(path)
+    sys.exit()
+
+def version(text):
+    return [int(part) if part.isdigit() else -1 for part in text.split(".")]
+
+def package_version(path):
+    manifest = ".claude-plugin/plugin.json" if client == "claude" else "package.json"
+    try:
+        with open(os.path.join(path, manifest), encoding="utf-8") as f:
+            return version(str(json.load(f).get("version")))
+    except (OSError, ValueError, AttributeError):
+        return version(os.path.basename(path)) if client == "claude" else []
+
+roots = []
+if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
+    if client == "claude":
+        try:
+            with open(source, encoding="utf-8") as f:
+                entries = json.load(f)["plugins"]["ensemble@windroc"]
+            roots = [e.get("installPath") for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+        except (OSError, ValueError, LookupError, TypeError):
+            pass
+    elif client == "codex":
+        roots = glob.glob(os.path.join(glob.escape(source), "*"))
+    elif client == "opencode":
+        for top, dirs, _ in os.walk(source):
+            if "node_modules" in dirs:
+                dirs.remove("node_modules")
+                roots.append(os.path.join(top, "node_modules", "ensemble"))
+    roots = sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p)
+    key = (lambda p: version(os.path.basename(p))) if client == "codex" else package_version
+    for candidate in sorted(roots, key=key, reverse=True):
+        if os.access(path := os.path.join(candidate, rel), os.X_OK):
+            fd, temp = tempfile.mkstemp(prefix=".plugin-root.", dir=os.path.dirname(selection))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(dict(root=candidate, client=client, source=source), f)
+                    f.write("\n")
+                os.replace(temp, selection)
+            finally:
+                if os.path.exists(temp):
+                    os.unlink(temp)
+            print(f"{name}: re-selected plugin {candidate}", file=sys.stderr)
+            print(path)
+            sys.exit()
+sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ctmux --install")
+PY
+) || exit
+exec "$target" "$@"
+EOF
+}
+
 ctmux_install() {
   local name missing=
   step "ctmux --install"
+  [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$(command_selection)" ] || missing=1
   for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$pkg/skills/manage/scripts/launcher" "$HOME/.ensemble/bin/$name" || missing=1
+    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s <(command_launcher "$name") "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
+    if ! recorded file "$HOME/.ensemble/plugin-root" && ! recorded plugin-root; then
+      if absent "$HOME/.ensemble/plugin-root"; then
+        record_file "$HOME/.ensemble/plugin-root"
+      else
+        cp -P "$HOME/.ensemble/plugin-root" "$state_dir/plugin-root.orig.tmp"
+        mv -f "$state_dir/plugin-root.orig.tmp" "$state_dir/plugin-root.orig"
+        ledger_add plugin-root
+      fi
+    fi
     if [ -d "$HOME/.ensemble/bin" ]; then
       for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
         record_file "$HOME/.ensemble/bin/$name"
@@ -1719,6 +1816,13 @@ ctmux_install() {
       record_dir "$HOME/.ensemble/bin"
     fi
     "$pkg/skills/manage/scripts/ctmux" --install </dev/null >&2
+    for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+      command_launcher "$name" > "$state_dir/launcher.tmp"
+      install -m 755 "$state_dir/launcher.tmp" "$HOME/.ensemble/bin/$name"
+    done
+    rm -f "$state_dir/launcher.tmp"
+    command_selection > "$state_dir/plugin-root.tmp"
+    mv -f "$state_dir/plugin-root.tmp" "$HOME/.ensemble/plugin-root"
   else
     skip "launchers in ~/.ensemble/bin"
   fi
