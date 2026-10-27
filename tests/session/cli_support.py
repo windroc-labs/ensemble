@@ -14,6 +14,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 
+from ensemble.session.harness.channel import Channel
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.case import REPO, ROOTS, Case
@@ -58,6 +59,20 @@ class CliCase(Case):
         self.server.start(MANAGER)
         if self.ATTACH:
             self.server.attach(MANAGER)
+
+    def owner(self, name: str) -> Channel:
+        """Worker `name`'s session harness, as its session.json names it."""
+        path = os.path.join(self.ensemble, "tui", name, "session.json")
+        with open(path, encoding="utf-8") as f:
+            return Channel(json.load(f)["owner"])
+
+    def settled(self, channel: Channel) -> dict:
+        """Its harness.json once it no longer runs a worker (exited or failed)."""
+        return live_tmux.wait(
+            lambda: (found := channel.status()).get("state") in ("exited", "failed") and found,
+            timeout=40,
+            what=f"harness {channel.directory} to leave running",
+        )
 
     def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
         """A caller's in session `inside` (None: outside tmux); an extra None drops its key."""

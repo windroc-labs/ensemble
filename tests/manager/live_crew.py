@@ -222,6 +222,7 @@ class LiveCrew(Case):
         shown = self.server.tmux("display-message", "-p", "-t", f"={harness}:", "#{pane_pid}")
         pid = int(shown.stdout)
         self.kill(harness)
+        live_tmux.crash_owner(self.ensemble, tui)
         self.server.tmux(
             "kill-session", "-t", f"={tui}"
         )  # the harness, stopping, may close it first
@@ -271,6 +272,7 @@ class LiveCrew(Case):
 
     def kill(self, *names: str) -> None:
         for name in names:
+            live_tmux.crash_owner(self.ensemble, name)
             self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
         self.until(lambda: self.gone(*names), f"{names} gone")
 

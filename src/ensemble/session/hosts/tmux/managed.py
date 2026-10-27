@@ -12,16 +12,19 @@ import sys
 import tempfile
 import uuid
 
-from ensemble.session.engine.tmux_cli import TuiError
+from ensemble.session.engine.tmux_cli import PROCESS_ID, TmuxPane, TuiError
 from ensemble.session.engine.types import (
+    MARKS,
     ConfigError,
     Launch,
     Liveness,
     SessionBusy,
     SessionError,
+    StatusState,
     Unanswered,
 )
 from ensemble.session.harness import guard
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD
 from ensemble.session.hosts.managed import WAIT, ManagedProcess
 
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -33,6 +36,32 @@ class TmuxManagedProcess(ManagedProcess):
     def __init__(self, name, generation, proc, *, terminal, tmux, start_reader=True):
         self.tmux = tmux
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
+
+    def _display(self) -> TmuxPane | None:
+        """Its own generation's display pane, else None (another's, gone, or tmux failed)."""
+        try:
+            if self.tmux.option(self.name, "@generation") != self.generation:
+                return None
+            process = self.tmux.option(self.name, "@process")
+        except TuiError:
+            return None
+        return (
+            TmuxPane(self.name, process, self.tmux) if PROCESS_ID.fullmatch(process or "") else None
+        )
+
+    def activity(self) -> StatusState | None:
+        pane = self._display()
+        try:
+            value = None if pane is None else pane.option("@state")
+        except SessionError:
+            return None
+        return StatusState(value) if value in MARKS else None
+
+    def mark(self, word: StatusState, events: str | None) -> None:
+        pane = self._display()
+        if pane is not None:
+            with contextlib.suppress(SessionError):
+                pane.mark(word, events)
 
     def close_display(self) -> None:
         with contextlib.suppress(TuiError):
@@ -179,14 +208,15 @@ def start(
             if terminal:
                 argv += ["--terminal", "--display-socket", os.path.join(run, "display")]
             argv += ["--", *launch.argv]
+            # Launch.env passes verbatim; the PTY is no tmux pane, the display relays its bytes.
             environment = {
-                **os.environ,
                 **launch.env,
-                "ENSEMBLE_GUARD_LEASE_FD": str(lease),
-                "ENSEMBLE_GUARD_HOOK_SOCKET": os.path.join(run, "hook"),
+                GUARD_LEASE_FD: str(lease),
+                GUARD_HOOK_SOCKET: os.path.join(run, "hook"),
             }
             for key in ("TMUX", "TMUX_PANE"):
                 environment.pop(key, None)
+            environment.setdefault("TERM", "xterm-256color")
             try:
                 proc = subprocess.Popen(
                     argv,

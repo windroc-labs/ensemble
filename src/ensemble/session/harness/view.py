@@ -83,7 +83,9 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """attach: the read-only attach, bound to sid and generation; replay: start past the log."""
+    """attach: the read-only attach, bound to sid and generation; retire: the non-owner close of
+    that generation; replay: start past the log.
+    """
 
     def __init__(
         self,
@@ -95,11 +97,13 @@ class OwnedSession(Session):
         generation: str,
         idle_timeout: float | None,
         attach: Callable[[], Session],
+        retire: Callable[[], None],
         replay: bool = False,
     ) -> None:
         self.sid, self.client, self.mode, self.name = sid, client, Mode.TUI, name
         self.generation = generation
         self._channel, self._idle, self._attach = channel, idle_timeout, attach
+        self._retire = retire
         self._attached: Session | None = None
         self._events = _Reader(channel, generation)
         if replay:
@@ -143,19 +147,9 @@ class OwnedSession(Session):
         self._end(Op.CLOSE)
 
     def _end(self, op: Op) -> None:
-        """With no owner: closed through the attach, confirmed."""
-        if self._channel.request(op):
-            return
-        try:
-            session = self._attach()
-        except SessionError:
-            return  # its worker is gone
-        if op == Op.STOP:
-            session.stop()
-        else:
-            session.close()
-        if session.alive():
-            raise Unanswered(f"session {self.name}: still running after {op}")
+        """With no owner: retire, its generation only (the record rule), for either op."""
+        if not self._channel.request(op):
+            self._retire()
 
     def _session(self) -> Session:
         if self._attached is None:

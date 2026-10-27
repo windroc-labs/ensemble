@@ -37,6 +37,7 @@ class Base(Case):
         self.seq = 0
         self.attached = mock.Mock(name="attached")
         self.attaches = 0
+        self.retire = mock.Mock(name="retire")
 
     def attach(self):
         self.attaches += 1
@@ -64,6 +65,7 @@ class Base(Case):
             generation=GEN,
             idle_timeout=idle,
             attach=self.attach,
+            retire=self.retire,
             replay=replay,
         )
 
@@ -207,33 +209,18 @@ class CloseTest(Base):
         with self.assertRaises(Unanswered):
             self.view().close()
 
-    def test_no_owner_closes_directly_and_confirms(self):
-        self.attached.alive.return_value = False
+    def test_end_without_owner_retires(self):
+        """No owner answers: close and stop both go to retire (the record rule), never through
+        the read-only attach.
+        """
         for op in ("close", "stop"):
             with self.subTest(op=op):
+                self.retire.reset_mock()
                 getattr(self.view(), op)()
-                getattr(self.attached, op).assert_called_once_with()
-        self.assertEqual(self.attaches, 2)
-
-    def test_no_owner_and_no_session_is_done(self):
-        def gone():
-            raise SessionError("no tui session w1")
-
-        view = OwnedSession(
-            self.channel,
-            "w1",
-            client="claude",
-            sid="s1",
-            generation=GEN,
-            idle_timeout=None,
-            attach=gone,
-        )
-        view.close()
-        view.close()
-
-    def test_a_direct_close_left_alive_is_unanswered(self):
-        self.attached.alive.return_value = True
-        with self.assertRaises(Unanswered):
+                self.retire.assert_called_once_with()
+        self.assertEqual(self.attaches, 0)
+        self.retire.side_effect = SessionError("busy: lock w1 is held by worker generation")
+        with self.assertRaisesRegex(SessionError, "busy"):
             self.view().close()
 
 
@@ -272,6 +259,7 @@ class DelegationTest(Base):
             generation=GEN,
             idle_timeout=None,
             attach=gone,
+            retire=mock.Mock(),
         )
         self.assertFalse(view.alive())
 

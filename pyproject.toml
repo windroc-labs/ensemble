@@ -201,7 +201,7 @@ dependencies = [
     "ensemble.session.engine.config -> ensemble.utils",
     "ensemble.session.engine.hosted_session -> ensemble.session.harness ensemble.session.engine.capacity ensemble.session.engine.accounts ensemble.session.engine.config ensemble.session.engine.base ensemble.session.engine.records ensemble.session.engine.types ensemble.session.clients ensemble.session.modes ensemble.session.hosts ensemble.session.hosts.base ensemble.session.viewer ensemble.utils",
     "ensemble.session.cli -> ensemble.session.engine.base ensemble.session.engine.config ensemble.session.engine.types ensemble.session.engine.worker ensemble.session.hosts.base ensemble.session.modes ensemble.session.viewer ensemble.utils",
-    "ensemble.session.engine.worker -> ensemble.session.engine.base ensemble.session.engine.types ensemble.session.hosts.base ensemble.session.modes ensemble.utils",
+    "ensemble.session.engine.worker -> ensemble.session.engine.base ensemble.session.engine.types ensemble.session.harness ensemble.session.hosts.base ensemble.session.modes ensemble.utils",
     "ensemble.session.modes -> ensemble.session.modes.client_adapters ensemble.session.clients ensemble.session.hosts ensemble.session.hosts.base ensemble.session.engine.types ensemble.session.viewer ensemble.utils",
     "ensemble.session.modes.client_adapters -> ensemble.session.engine.types ensemble.utils",
     "ensemble.session.clients -> ensemble.session.modes.client_adapters ensemble.session.engine.status_log ensemble.session.engine.types ensemble.utils",

@@ -11,6 +11,7 @@ from ensemble.session.engine.types import (
     KeyPress,
     Liveness,
     Paste,
+    SessionError,
     Unanswered,
     WorkerExit,
     WorkerHook,
@@ -107,6 +108,7 @@ class ManagedProcessTest(Case):
                 managed.select, "select", return_value=([], [channel.proc.stdin], [])
             ),
             mock.patch.object(os, "write", side_effect=BrokenPipeError),
+            mock.patch.object(threading.Condition, "wait_for", return_value=False),
             self.assertRaises(Unanswered),
         ):
             channel.write(b"x")
@@ -116,6 +118,40 @@ class ManagedProcessTest(Case):
             self.assertRaises(Unanswered),
         ):
             channel.write(b"x")
+
+    def test_input_after_a_confirmed_exit_is_refused_without_failing(self):
+        """A guard that confirmed its client's exit and went: input fails, the exit stands."""
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+        channel.accept(b"x", b'{"returncode":0}')
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=BrokenPipeError),
+            self.assertRaisesRegex(SessionError, "exited") as caught,
+        ):
+            channel.send(Paste("/color"))
+        self.assertNotIsInstance(caught.exception, Unanswered)
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
+        self.assertEqual(channel.read(0), [WorkerExit(0)])
+
+    def test_close_racing_the_clients_own_exit_succeeds(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+
+        def gone(_fd, _data):
+            channel.accept(b"x", b'{"returncode":0}')
+            raise BrokenPipeError
+
+        with (
+            mock.patch.object(
+                managed.select, "select", return_value=([], [channel.proc.stdin], [])
+            ),
+            mock.patch.object(os, "write", side_effect=gone),
+        ):
+            channel.close()
+        self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
 
     def test_terminal_input_is_encoded(self):
         channel = self.channel(terminal=True)

@@ -29,6 +29,7 @@ BUFFER_MAX = 8 << 20
 HOOK_MAX = 1 << 20
 READ_SIZE = 65536
 TICK = 0.05
+DISPLAY_GRACE = 2.0  # a client dead at once still reaches its first display
 DELIVERY = re.compile(r"[0-9a-f]{32}")
 
 
@@ -345,6 +346,8 @@ class Guard:
         self.signalled = {}
         self.channel = True
         self.exit_sent = False
+        self.exit_at = 0.0
+        self.displayed = False
         self.children_pending = False
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
         self.directory = os.path.dirname(args.lease if lease is not None else args.hook_socket)
@@ -557,10 +560,14 @@ class Guard:
                     self.state("exited")
                     if self.channel:
                         self.emit(json_frame(b"x", {"returncode": self.proc.returncode}))
-                    self.exit_sent = True
+                    self.exit_sent, self.exit_at = True, time.monotonic()
                 self.flush()
                 if self.exit_sent and (not self.output or not self.channel):
-                    return 0
+                    if not self.lingers(time.monotonic()):
+                        return 0
+                    for server, role in self.servers.items():
+                        if role == "display":
+                            self.take_display(server)
                 # A stalled consumer must not hold an already-reclaimed guard indefinitely.
                 if ended and self.closing is not None and time.monotonic() - self.closing > 9:
                     return 1
@@ -582,16 +589,12 @@ class Guard:
                             for kind, payload in self.decoder.feed(data):
                                 self.command(kind, payload)
                     elif not isinstance(descriptor, int) and descriptor in self.servers:
-                        peer, _ = descriptor.accept()
-                        peer.settimeout(0)
-                        self.peers[peer] = (self.servers[descriptor], bytearray())
                         if self.servers[descriptor] == "display":
-                            snapshot = self.screen.snapshot()
-                            try:
-                                if peer.send(snapshot) != len(snapshot):
-                                    self.drop(peer)
-                            except OSError:
-                                self.drop(peer)
+                            self.take_display(descriptor)
+                        else:
+                            peer, _ = descriptor.accept()
+                            peer.settimeout(0)
+                            self.peers[peer] = (self.servers[descriptor], bytearray())
                     elif descriptor in self.peers:
                         self.peer_read(descriptor)
                     elif isinstance(descriptor, int) and descriptor in self.streams:
@@ -617,6 +620,26 @@ class Guard:
                     if stream is not None:
                         stream.close()
 
+    def lingers(self, now: float) -> bool:
+        """A terminal guard whose client ended before any display came waits DISPLAY_GRACE s."""
+        return self.master is not None and not self.displayed and now - self.exit_at < DISPLAY_GRACE
+
+    def take_display(self, server) -> None:
+        """A display connecting: the current screen first, then live output."""
+        try:
+            peer, _ = server.accept()
+        except BlockingIOError:
+            return
+        peer.settimeout(0)
+        self.peers[peer] = ("display", bytearray())
+        self.displayed = True
+        snapshot = self.screen.snapshot()
+        try:
+            if peer.send(snapshot) != len(snapshot):
+                self.drop(peer)
+        except OSError:
+            self.drop(peer)
+
     def final_hooks(self) -> None:
         for server, role in self.servers.items():
             if role == "hook":
@@ -635,9 +658,14 @@ class Guard:
 
 def attach(path: str) -> int:
     peer = socket.socket(socket.AF_UNIX)
-    previous = termios.tcgetattr(0) if os.isatty(0) else None
     try:
         peer.connect(path)
+    except OSError as error:
+        peer.close()
+        print(f"guard: display {path}: {error.strerror or error}", file=sys.stderr)
+        return 1
+    previous = termios.tcgetattr(0) if os.isatty(0) else None
+    try:
         if previous is not None:
             tty.setraw(0)
         while True:
