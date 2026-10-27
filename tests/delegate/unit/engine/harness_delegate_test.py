@@ -1447,6 +1447,38 @@ class StatusTest(HarnessCase):
             self.assertEqual(view.status().state, "blocked")
 
 
+class EndingHarnessTest(HarnessCase):
+    """A harness whose sessions were killed (tmux kill-session) still ends its run, under the run
+    lock, after they are gone: it is live until it lets go.
+    """
+
+    def killed(self, mode):
+        HarnessSession.reset()
+        self.work = os.path.join(self.home, f"run-{mode}")
+        spec = Spec("input", self.work, mode=mode, client="fake", sid=SID)
+        record = self.make(spec=spec).detach()
+        self.stop(record)
+        if mode == Mode.TUI:
+            HarnessSession.live[record.sessions[1]].stop()
+        return record, HarnessDelegate.attach(record)
+
+    def test_it_is_alive_and_resume_starts_nothing_until_its_run_lock_is_let_go(self):
+        for mode in (Mode.TUI, Mode.HEADLESS):
+            with self.subTest(mode=mode):
+                record, view = self.killed(mode)
+                with RunState(Layout(self.work)).run_lock():
+                    status = view.status()
+                    self.assertEqual(
+                        (view.alive(), status.alive, status.state), (True, True, "working")
+                    )
+                    launches = len(harness_launches())
+                    self.assertEqual(view.resume(), record)
+                    self.assertEqual(len(harness_launches()), launches)
+                self.assertEqual((view.alive(), view.status().alive), (False, False))
+                self.assertEqual(view.resume().sid, SID)
+                self.assertEqual(len(harness_launches()), launches + 1)
+
+
 class UnansweredTest(HarnessCase):
     """An agent attach that did not answer is no proof its run ended."""
 
