@@ -85,7 +85,7 @@ class Case(unittest.TestCase):
             result.stopTest(self)
             return result
         with (
-            tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as self.home,
+            tempfile.TemporaryDirectory() as self.home,
             mock.patch.dict(
                 os.environ,
                 {
