@@ -82,7 +82,7 @@ flowchart LR
 
 The harness holds `harness.lock` for life. It records each event in `events.jsonl` before calling each handler's `on_event`; ids are `<generation>:<seq>` and turns `<generation>:t<n>`. A turn started while one is open fails that one (`TurnFailed("superseded")`); an exit mid-turn fails it (`TurnFailed("exited")`) before the one `Exited`. A handler that raises is retried with the same ids after 1 s, doubling to 30 s, while the others go on; `deliveries.jsonl` keeps failed attempts 1, 2, 4, … and the delivered one. `Stderr` and `ClientBound` stay in the log. After the worker's exit the harness waits up to 30 s for its handlers, then exits; `harness.json` says `starting`, `running`, `exited` (with `returncode` and `pending`) or `failed` (with the start `error`), and `opening` while the client's opening line is unsent. SIGTERM and SIGHUP close the worker.
 
-The control view never owns the worker: its caller exiting, its `events()` iterator closing or a display detaching leaves the harness supervising. `events()` reads `events.jsonl`, accepting only the worker's generation in order. `stop`, `close` and `Session.retire` write a request to `requests/` and return once the harness confirms the worker ended and logged `Exited`, else raise `SessionError` (`Unanswered` when it cannot tell). `send`, `press`, `screen`, `show` and `status` still reach the tmux session directly. `Session.attach` gives a control view only while the `owner` harness holds its lock and its `harness.json` names that session, sid and generation; any other `owner` is ignored, and a worker whose harness exited or died is attached and closed the earlier way.
+The control view never owns the worker: its caller exiting, its `events()` iterator closing or a display detaching leaves the harness supervising. `events()` reads `events.jsonl`, accepting only the worker's generation in order. `stop`, `close` and `Session.retire` write a request to `requests/` and return once the harness confirms the worker ended and logged `Exited`, else raise `SessionError` (`Unanswered` when it cannot tell). `Session.retire` asks a bound owner before any Host probe, so a worker whose tmux session is gone is still closed through it. A refused or unconfirmed stop or close leaves the harness supervising and sets `harness.json` `close_failed` (`op`, `error`, `at`); `ensemble-session close` then exits 1, even for a Record that looks stale on its Host. `send`, `press`, `screen`, `show` and `status` still reach the tmux session directly. `Session.attach` gives a control view only while the `owner` harness holds its lock and its `harness.json` names that session, sid and generation; any other `owner` is ignored, and a worker whose harness exited or died is attached and closed the earlier way.
 
 An `in_process` adapter runs on a thread of the harness, so it ends with the harness; its control view has no terminal (`send`, `press`, `screen`: `SessionError`; `show`, `hide`, `attach_command`: `NotShowable`) and is alive while its harness holds its lock and has not logged `Exited`.
 
@@ -161,13 +161,13 @@ A hook invocation creates one `delivery_id` (32 lowercase hex characters) before
 
 ## Recall a closed run
 
-`ensemble-crew close <ID>` ends a board run's sessions and drops its roster entry; its conversation stays. To continue it:
+`ensemble-crew close <ID>` ends a board run's sessions and drops its roster entry once each session's owner confirmed its end; its conversation stays. A failed close keeps the entry, exits 1 and appends one JSON line (`at`, `name`, `sid`, `ctl`, `reason`) to `~/.ensemble/managers/<manager>/close-failures.jsonl`. To continue it:
 
 ```sh
 ensemble-crew reopen [--work-dir <work_dir>] <ID> [--display D]
 ```
 
-It reads the run record, `<work_dir>/work/<ID>/run/delegate.json` (`--work-dir` only when the board's `work_dir` is not `~/.ensemble`), and resumes its session id as worker `<agent name>` on the run's Host, client, cwd and Claude account: a Docker run comes back in a new container with its client history and [workspace volume](docker-host.md#workspace-volumes). The worker is tracked like any other; `ensemble-crew close <agent name>` ends it. It brings back the conversation, not the run: no harness, outcome or write-back, and the board is untouched. A conversation known only by its session id: `ensemble-crew worker <name> --resume <sid> --client <client> --cwd <cwd> [--host <host>]`.
+It reads the run record, `<work_dir>/work/<ID>/run/delegate.json` (`--work-dir` only when the board's `work_dir` is not `~/.ensemble`), and resumes its session id as worker `<agent name>` on the run's Host, client, cwd and Claude account: a Docker run comes back in a new container with its client history and [workspace volume](docker-host.md#workspace-volumes). The worker is tracked like any other; `ensemble-crew close <agent name>` ends it. It brings back the conversation, not the run: where its start is owned (a Claude tui on tmux today; other clients and Hosts as their session harness lands), it runs under a [session harness](#session-harness) of its own with no handlers, so its events are only logged: no outcome or write-back, and the board is untouched. A conversation known only by its session id: `ensemble-crew worker <name> --resume <sid> --client <client> --cwd <cwd> [--host <host>]`.
 
 These do not recall it:
 
@@ -179,7 +179,7 @@ These do not recall it:
 
 - the issue finished and prune cleaned it: prune deletes the run's agent files, its cwd among them, at once ([State cleanup](board.md#state-cleanup)), and the run record 7 days later;
 - `work/<ID>/run/delegate.json` is gone (pruned, or deleted by hand): `no run record` (exit 1);
-- the run, or a session holding its session id, is still alive: exit 2; close it first;
+- the run, or a session holding its session id, is still alive, or its liveness is unknown (a status or the session listing failed): exit 2; close it first, or `ensemble-crew forget` an entry whose work is gone;
 - its client history is gone: a Docker run's is in `~/.ensemble/docker-state/<agent name>/` (`no native history to resume`). A removed workspace volume comes back empty.
 
 `reopen` brings back the issue's latest run; an earlier run's conversation: by its session id, above.
