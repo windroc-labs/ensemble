@@ -68,6 +68,7 @@ class Dispatch:
         sleep: Callable[[float], object] | None = None,
     ) -> None:
         self._stopped = threading.Event()
+        self._noting = threading.Lock()
         self._channel, self._session = channel, session
         self._sleep = sleep or self._stopped.wait
         self._sid, self._generation = sid, generation
@@ -110,7 +111,9 @@ class Dispatch:
             return self._pending
 
     def stop(self) -> None:
-        self._stopped.set()
+        """Once it returns, no handler writes to the channel: its holder may let go."""
+        with self._noting:
+            self._stopped.set()
         for waiting in self._queues:
             waiting.put(None)
 
@@ -164,7 +167,10 @@ class Dispatch:
             "state": "ok" if error is None else "failed",
             **({"error": error} if error is not None else {}),
         }
-        try:
-            self._channel.note(record)
-        except OSError as failure:
-            LOG.warning("session harness: deliveries.jsonl: %s", failure)
+        with self._noting:
+            if self._stopped.is_set():
+                return
+            try:
+                self._channel.note(record)
+            except OSError as failure:
+                LOG.warning("session harness: deliveries.jsonl: %s", failure)

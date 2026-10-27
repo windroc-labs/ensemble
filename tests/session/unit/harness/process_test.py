@@ -461,6 +461,47 @@ class ExitTest(Base):
         status = self.channel.status()
         self.assertEqual((status["state"], status["pending"]), ("exited", 2))
 
+    def test_a_hung_handler_woken_after_the_exit_writes_nothing_more(self):
+        gate, entered = threading.Event(), threading.Event()
+        self.addCleanup(gate.set)
+        threads = []
+
+        def on(_call):
+            threads.append(threading.current_thread())
+            entered.set()
+
+        owned = FakeOwned(([Reply("x")], True))
+        harness = self.harness(owned, Handler(hang=gate, on=on), drain=0.2)
+        self.assertEqual(harness.run(self.begin), 0)
+        self.assertTrue(entered.wait(WAIT))
+        listing = sorted(os.listdir(self.channel.directory))
+        self.assertFalse(os.path.exists(self.channel.deliveries))
+        gate.set()
+        for thread in threads:
+            thread.join(WAIT)
+        self.assertEqual(sorted(os.listdir(self.channel.directory)), listing)
+        self.assertEqual(self.channel.status()["pending"], 2)
+
+    def test_a_handler_woken_once_exited_is_written_records_nothing(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        handler = Handler(hang=gate)
+        write_status = self.channel.write_status
+
+        def written(status):
+            write_status(status)
+            if status["state"] == "exited":
+                gate.set()
+                deadline = time.monotonic() + WAIT
+                while len(handler.calls) < 2 and time.monotonic() < deadline:
+                    time.sleep(0.01)  # its Reply delivery is done once its Exited is called
+
+        self.channel.write_status = written
+        owned = FakeOwned(([Reply("x")], True))
+        self.assertEqual(self.harness(owned, handler, drain=0.2).run(self.begin), 0)
+        self.assertEqual(self.channel.status()["pending"], 2)
+        self.assertFalse(os.path.exists(self.channel.deliveries))
+
 
 class HeadlessExitTest(Base):
     def test_an_end_with_its_code_not_yet_known_waits_for_the_confirmed_code(self):

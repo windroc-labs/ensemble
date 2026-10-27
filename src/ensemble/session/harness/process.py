@@ -279,6 +279,7 @@ class Harness:
             while self._dispatch.drain(SLICE) and time.monotonic() < deadline:
                 self._serve_ended(worker)
             self._serve_ended(worker)
+            self._dispatch.stop()  # before exited: its pending is final
             self._status["state"] = "exited"
             self._write_pending(force=True)
         finally:

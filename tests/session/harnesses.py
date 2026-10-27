@@ -4,13 +4,12 @@ import contextlib
 import fcntl
 import os
 import signal
-import threading
 import time
 
 from ensemble.session.engine.hosted_session import HARNESS
 from ensemble.session.engine.types import SessionError
 from ensemble.session.harness import process
-from ensemble.session.harness.channel import HEX, Channel
+from ensemble.session.harness.channel import HEX, SLICE, Channel
 from ensemble.session.harness.types import Op
 
 WAIT = 60  # seconds: past process.DRAIN
@@ -18,28 +17,24 @@ KILL_WAIT = 10  # seconds: FR-13's reap bound
 
 
 def _let_go(channel: Channel, timeout: float) -> bool:
+    """Polled here, so nothing left waiting can take the lock once this returns."""
     try:
         fd = os.open(channel.lock, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
         return True
+    deadline = time.monotonic() + timeout
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        pass
-    else:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(SLICE)
+            else:
+                return True
+    finally:
         os.close(fd)
-        return True
-    taken = threading.Event()
-
-    def take():
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        finally:
-            os.close(fd)
-            taken.set()
-
-    threading.Thread(target=take, daemon=True).start()
-    return taken.wait(timeout)
 
 
 def end(home: str, wait: float = WAIT) -> None:
