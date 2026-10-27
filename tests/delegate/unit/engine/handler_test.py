@@ -106,7 +106,7 @@ class HandlerCase(HarnessCase):
         super().setUp()
         self.events = os.path.join(self.home, "events.log")
         spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
-        self.make(spec=replace(spec, events=self.events), callback=("callback",))
+        self.delegate = self.make(spec=replace(spec, events=self.events), callback=("callback",))
         self.record = RunRecord(Layout(self.work))
         self.register(1)
         self.view, self.sent, self.seq = View(), [], 0
@@ -255,6 +255,33 @@ class FollowUpTest(HandlerCase):
         self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
 
 
+class CloseTest(HandlerCase):
+    """FR-34: a close ends the active attempt once, as a stop, whatever code its client exits with."""
+
+    def test_a_close_ends_the_active_attempt_as_a_stop_before_the_worker_exits(self):
+        for opening in (True, False):
+            with self.subTest(opening=opening):
+                if not opening:
+                    self.call(TurnStarted())
+                self.delegate.close()
+                state = self.state()
+                self.assertEqual(state.result, Result(129, None, "stopped: Stopped: 129"))
+                self.assertEqual(self.kinds_sent()[-1], ("finished", state.attempt))
+                self.assertEqual(self.kinds()[-2:], ["result", "end"])
+                sent = len(self.sent)
+                self.call(Exited(0))
+                self.assertEqual(self.state().result, state.result)
+                self.assertEqual(len(self.sent), sent)
+                self.register(state.attempt + 1, attempt=state.attempt + 1, completed=False)
+                self.record.save(replace(self.state(), result=None, bound=False))
+
+    def test_a_close_after_the_attempt_ended_sends_no_second_finished(self):
+        self.finish()
+        before = (self.state(), list(self.sent))
+        self.delegate.close()
+        self.assertEqual((self.state(), self.sent), before)
+
+
 class IgnoredTest(HandlerCase):
     def test_a_redelivered_event_changes_nothing(self):
         self.call(TurnStarted(), event_id="g:1")
@@ -320,6 +347,13 @@ class LockedTest(HandlerCase):
         self.assertIn(f"delegate: session {NAME} closed (lock dummy-lock)", self.err.getvalue())
         self.assertIn("release", self.kinds())
         self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+
+    def test_a_close_ends_the_attempt_and_claims_no_release_without_a_confirmed_close(self):
+        self.call(TurnStarted())
+        self.delegate.close()
+        self.assertEqual(self.state().result, Result(129, None, "stopped: Stopped: 129"))
+        self.assertEqual(self.kinds_sent()[-1], ("finished", 1))
+        self.assertNotIn("release", self.kinds())
 
     def test_a_close_that_fails_claims_no_release(self):
         self.view.close_fail = SessionError("not confirmed")

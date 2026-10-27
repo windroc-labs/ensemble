@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import signal
 import stat
 import sys
 import time
@@ -732,14 +733,28 @@ class HarnessDelegate(Delegate):
             raise _unknown(unanswered)
 
     def close(self) -> None:
-        """Unanswered after closing the harness when the agent's Host could not tell."""
+        """Unanswered after closing the harness when the agent's Host could not tell. An owned
+        run's active attempt ends first, as a stop (its client may exit 0 on the hangup)."""
         state = self._read()
+        ending = self._interrupt(state)
+        lock = (
+            None if state.plan.session.environment is None else state.plan.session.environment.lock
+        )
+        if ending is not None and lock is None:
+            self._send_finished(state, ending)
         try:
             agent, unanswered = self._agent(state), None
         except Unanswered as error:
             agent, unanswered = None, error
-        if agent is not None:
-            agent.close()
+        try:
+            if agent is not None:
+                agent.close()
+                if ending is not None and lock is not None:
+                    say(f"delegate: session {state.agent_name} closed (lock {lock})")
+                    RunLog(state.plan.session.workdir).note("release", lock=lock, best_effort=True)
+        finally:
+            if ending is not None and lock is not None:
+                self._send_finished(state, ending)
         unchecked = (
             None
             if unanswered is None
@@ -756,6 +771,24 @@ class HarnessDelegate(Delegate):
                 raise SessionError(f"close {state.harness_name}: {error}{also}") from error
         if unchecked is not None:
             raise Unanswered(unchecked)
+
+    def _interrupt(self, state: DelegateState) -> Result | None:
+        """None: no active attempt, or another ended it first."""
+        if not owned(state.plan) or state.completed:
+            return None
+        result = stopped(Stopped(128 + signal.SIGHUP))
+        p = state.plan
+        if not RunRecord(self.layout, self.store).complete(state.attempt, result, sid=p.sid):
+            return None
+        finish(state, result, None)
+        return result
+
+    def _send_finished(self, state: DelegateState, result: Result) -> None:
+        if state.callback is not None:
+            p = state.plan
+            EventCallback(state.callback, self.store, sid=p.sid, attempt=state.attempt)(
+                Finished(result)
+            )
 
     def session_status(self) -> SessionStatus:
         """Its own live agent session's status, else the plan's: an attached one lacks its env;
