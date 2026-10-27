@@ -1,6 +1,7 @@
-"""Reads OpenCode's opencode.db read-only: a session's last activity, and its user and assistant
-texts as JSON lines, `python3 -I transcript.py SES_ID [--db PATH] [--limit N]`, newest N oldest
-first. Standalone: the standard library only.
+"""Reads OpenCode's opencode.db read-only: a session's last activity, the newest session of a
+title, and a session's user and assistant texts as JSON lines,
+`python3 -I transcript.py SES_ID [--db PATH] [--limit N]`, newest N oldest first. Standalone: the
+standard library only.
 """
 
 import argparse
@@ -59,6 +60,23 @@ def updated(path: str, session: str) -> float | None:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise Refused(f"{path}: session {session}: time_updated is no number")
     return value / 1000
+
+
+def titled(path: str, title: str) -> str | None:
+    """The newest top-level session titled `title`; None when it has none (or a malformed id)."""
+    db = connect(path)
+    try:
+        row = db.execute(
+            "SELECT id FROM session WHERE title = ? AND parent_id IS NULL"
+            " ORDER BY time_created DESC, id DESC LIMIT 1",
+            (title,),
+        ).fetchone()
+    except sqlite3.Error as error:
+        raise Refused(f"{path}: {error}") from None
+    finally:
+        db.close()
+    found = row[0] if row is not None else None
+    return found if isinstance(found, str) and NATIVE.fullmatch(found) else None
 
 
 def _stamp(ms) -> str:

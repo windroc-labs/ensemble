@@ -1,6 +1,8 @@
 """OpenCode's headless Mode: `opencode run --format json` behind launcher.py, which feeds it the
 prompt on stdin (`run` quotes an argument holding a space). The first sessionID binds the run; text
 parts are Replies, tools Activity, an error the failed turn; the end is the turn's, its last text.
+opencode prints that sessionID only once its model streams, so a new run titles its session
+TITLE: a resume of a run whose harness died before then finds it by that title (common.py).
 """
 
 import os
@@ -8,11 +10,14 @@ import sys
 
 from ensemble.session.clients.opencode import launcher
 from ensemble.session.clients.opencode.common import (
+    HEADLESS_RESERVED,
     NATIVE,
+    TITLE,
     UNSET,
     Homed,
     OpenCodeCommon,
     image_path,
+    refuse,
 )
 from ensemble.session.engine.types import (
     Activity,
@@ -43,7 +48,13 @@ class OpenCodeHeadless(Homed, JsonHeadless):
 
     def launch(self, spec: Spec):
         context, common = self._context, self.common
-        selection = common.selection(spec, context)
+        selection = common.selection(spec, context, HEADLESS_RESERVED)
+        refuse(common.flags, HEADLESS_RESERVED, "[clients.opencode] flags")
+        refuse(
+            common.modes[context.permission],
+            HEADLESS_RESERVED,
+            f"[clients.opencode.modes] {context.permission}",
+        )
         found = context.container
         cwd, sid = spec.access.cwd, spec.sid or ""
         model, variant = common.model(spec.tier), common.variant(spec.effort)
@@ -53,7 +64,7 @@ class OpenCodeHeadless(Homed, JsonHeadless):
             "run",
             "--format",
             "json",
-            *selection,
+            *(selection or ("--title", TITLE.format(sid=sid))),
             "--model",
             model,
             *(("--variant", variant) if variant is not None else ()),
