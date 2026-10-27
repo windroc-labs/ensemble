@@ -864,7 +864,7 @@ class HostedSession(Session):
             assert name is not None
 
             def attach() -> Session:
-                return attached or cls._attached(name, sid=sid, host=host, generation=generation)
+                return cls._attached(name, sid=sid, host=host, generation=generation)
 
             def retire() -> None:
                 cls._retire(name, sid=sid, host=host, generation=generation)
@@ -887,6 +887,7 @@ class HostedSession(Session):
             generation=generation,
             idle_timeout=idle_timeout,
             attach=attach,
+            attached=attached,
             retire=retiring,
             replay=replay,
             mode=mode,
