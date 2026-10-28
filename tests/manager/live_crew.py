@@ -5,7 +5,6 @@ import json
 import os
 import signal
 import subprocess
-import tempfile
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from unittest import mock
@@ -17,6 +16,7 @@ from tests.delegate import drives
 from tests.manager.case import PY, REPO, SRC, Case
 from tests.session import live_tmux
 from tests.session.live_tmux import MANAGER, logged
+from tests.utils.sandbox import scratch
 
 OTHER = "mgr2"
 ROLE = "dummy-tester"
@@ -58,9 +58,7 @@ class LiveCrew(live_tmux.Calls, Case):
     EVENT = "{count} x `{name} {word}`"
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         self.addCleanup(drives.end, self.root)
         self.home = os.path.join(self.root, "home")
         self.ensemble = os.path.join(self.home, ".ensemble")

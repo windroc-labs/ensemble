@@ -22,6 +22,7 @@ from ensemble.utils import StatusState
 from tests.session.case import SRC, Case
 from tests.session.tui_hook_support import state, write_state
 from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import scratch
 
 CLIENT = re.compile(r"claude|codex", re.I)
 HOOK = os.path.join(SRC["session"], "ensemble", "session", "modes", "tui_hook.py")
@@ -72,9 +73,7 @@ class Append(Case):
 
 class InProcess(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.dir = os.path.join(self.root, "s1")
         os.mkdir(self.dir, 0o700)
         self.events = os.path.join(self.root, "events")
@@ -121,9 +120,7 @@ class DeclaredRootCallback(Case):
     """A callback outside sys.path loads in this process from its declared root."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.dir = os.path.join(self.root, "s1")
         os.mkdir(self.dir, 0o700)
 
@@ -174,9 +171,7 @@ class Callbacks(Case):
     )
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.dir = os.path.join(self.root, "s1")
         os.mkdir(self.dir, 0o700)
         self.name = f"client_{uuid.uuid4().hex}"

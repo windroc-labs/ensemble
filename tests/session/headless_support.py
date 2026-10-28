@@ -1,5 +1,4 @@
 import sys
-import tempfile
 
 from ensemble.session.clients.base import Client
 from ensemble.session.engine.types import Access, Launch, Prepared, Reply, Spec, Stderr
@@ -7,6 +6,7 @@ from ensemble.session.modes.client_adapters.headless import JsonHeadless
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryHost
+from tests.utils.sandbox import scratch
 
 SID = "s1"
 NOTHING = (sys.executable, "-I", "-c", "")
@@ -48,9 +48,7 @@ class StubRun(JsonHeadless):
 
 class HeadlessCase(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
         self.mode, self.recorded = None, []
         StubRun.specs = []
 

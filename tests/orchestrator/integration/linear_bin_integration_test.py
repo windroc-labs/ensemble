@@ -4,7 +4,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 
 from tests.orchestrator.case import REPO, Case
 from tests.orchestrator.config_fixtures import CORE_LOCAL, PIPELINE
@@ -12,6 +11,7 @@ from tests.orchestrator.integration.fake_python import write_shim
 from tests.orchestrator.unit.board_ids import MANAGER_LINE, TEAM
 from tests.utils.bin_fixtures import MINIMAL, minimal, probe_copy, run
 from tests.utils.case import local_section
+from tests.utils.sandbox import scratch
 
 BIN = os.path.join(REPO, "bin", "ensemble-orchestrator")
 COMMANDS = [
@@ -32,9 +32,7 @@ COMMANDS = [
 
 class Command(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
 
     def run_bin(self, path, *argv, bin_path=BIN):
         return run(bin_path, path, *argv, cwd=self.tmp, home=self.home)

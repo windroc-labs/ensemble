@@ -5,22 +5,20 @@ import io
 import json
 import os
 import sqlite3
-import tempfile
 from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.opencode import transcript
 from tests.session.case import Case
 from tests.session.unit.clients.opencode.support import SES, make_db, text, titled_session
+from tests.utils.sandbox import scratch
 
 OTHER = "ses_otherOtherOtherOther0001"
 
 
 class TranscriptTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.db = os.path.join(os.path.realpath(tmp.name), "opencode", "opencode.db")
+        self.db = os.path.join(scratch(self), "opencode", "opencode.db")
 
     def build(self, messages=(), sessions=None):
         return make_db(

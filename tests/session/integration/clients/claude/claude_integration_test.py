@@ -14,7 +14,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 import uuid
@@ -46,7 +45,7 @@ from ensemble.utils import exhausted
 from tests.session.case import PLUGIN_BIN, PY, Case, child_env
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
 from tests.session.integration.clients.claude import fake_claude
-from tests.utils.sandbox import git, kill
+from tests.utils.sandbox import git, kill, scratch
 from tests.utils.sandbox import pid_exists as running
 
 WAIT = 20  # upper bound on any wait, in seconds
@@ -93,9 +92,7 @@ except KeyboardInterrupt:
 
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.workdir = os.path.join(self.dir, "work")
         self.file = os.path.join(self.dir, "scenario.json")
         self.log = os.path.join(self.dir, "claude.log")

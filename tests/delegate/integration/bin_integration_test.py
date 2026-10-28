@@ -3,10 +3,10 @@
 import os
 import re
 import shutil
-import tempfile
 
 from tests.delegate.case import REPO, Case
 from tests.utils.bin_fixtures import MINIMAL, minimal, probe_copy, run
+from tests.utils.sandbox import scratch
 
 BIN = os.path.join(REPO, "bin", "ensemble-delegate")
 COMMANDS = [
@@ -26,9 +26,7 @@ COMMANDS = [
 
 class Command(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
 
     def run_bin(self, path, *argv, bin_path=BIN):
         return run(bin_path, path, *argv, cwd=self.tmp, home=self.home)

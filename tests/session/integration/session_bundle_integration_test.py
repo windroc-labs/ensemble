@@ -7,10 +7,9 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 
 from tests.session.case import REPO, SRC, Case
-from tests.utils.sandbox import clean_env
+from tests.utils.sandbox import clean_env, scratch
 
 IMPORT = """import json, ensemble, ensemble.session, ensemble.utils
 print(json.dumps([list(ensemble.__path__), ensemble.session.__file__, ensemble.utils.__file__]))
@@ -19,9 +18,7 @@ print(json.dumps([list(ensemble.__path__), ensemble.session.__file__, ensemble.u
 
 class SessionBundleTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.bundle = os.path.realpath(tmp.name)
+        self.bundle = scratch(self)
         for package in ("session", "utils"):
             shutil.copytree(
                 os.path.join(SRC[package], "ensemble", package),

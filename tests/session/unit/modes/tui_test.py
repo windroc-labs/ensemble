@@ -64,6 +64,7 @@ from tests.session import fake_client
 from tests.session.case import PLUGIN_BIN, Case
 from tests.session.fakes.terminal import MemoryHost, ScreenHost
 from tests.session.tmux_host_support import Base as TmuxBase
+from tests.utils.sandbox import scratch
 
 NAME = "w1"
 
@@ -173,9 +174,7 @@ class Base(Case):
         self.root = os.path.join(self.ensemble, "tui")
         self.dir = os.path.join(self.root, NAME)
         self.hooks = os.path.join(self.dir, "hooks.jsonl")
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.events = os.path.join(self.home, "events")
         self.host = ScreenHost()
         self.log = []

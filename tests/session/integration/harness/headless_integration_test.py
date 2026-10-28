@@ -8,7 +8,6 @@ import shlex
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -41,6 +40,7 @@ from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.session.integration.harness import headless_caller
 from tests.utils.sandbox import pid_exists as running
+from tests.utils.sandbox import scratch
 
 HANDLER = "tests.session.integration.harness.recording_handler"
 TURNS = ("TurnStarted", "TurnFailed", "TurnEnd", "Exited")
@@ -69,10 +69,8 @@ class Headless(Case):
     """self.root, a temp dir; the handler's records in self.out."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.addCleanup(harnesses.end, self.home)
-        self.root = Path(tmp.name).resolve()
         self.bin, self.work = self.root / "bin", self.root / "work"
         self.cwd = self.work / "project"
         for path in (self.bin, self.cwd):

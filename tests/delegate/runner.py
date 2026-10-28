@@ -4,7 +4,6 @@ import io
 import json
 import os
 import shutil
-import tempfile
 from contextlib import redirect_stderr
 from dataclasses import replace
 from unittest import mock
@@ -20,6 +19,7 @@ from tests.delegate.unit.runs import DONE, NAME, turn
 from tests.session import fake_client
 from tests.session.modules import client_loader
 from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import scratch
 
 SID = "11111111-2222-3333-4444-555555555555"
 
@@ -81,9 +81,7 @@ class Base(Case):
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.work = os.path.join(self.tmp, "work")
         self.out = os.path.join(self.work, "out.md")
         self.channel = os.path.join(Layout(self.work).run, "run.jsonl")

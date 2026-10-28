@@ -5,11 +5,11 @@ import io
 import json
 import os
 import subprocess
-import tempfile
 from unittest import mock
 
 from ensemble.delegate.composer.base import TEAM
 from tests.delegate.case import Case
+from tests.utils.sandbox import scratch
 
 LOCAL = "config.local.toml"
 
@@ -110,9 +110,7 @@ def pr(base="main", *, draft=True):
 
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
         self.wt = os.path.join(self.dir, "o", "n-TASK-1-x")
         self.none = os.devnull
         env = mock.patch.dict(os.environ)

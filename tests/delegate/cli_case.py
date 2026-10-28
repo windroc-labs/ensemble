@@ -3,7 +3,6 @@
 import io
 import json
 import os
-import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
@@ -20,6 +19,7 @@ from tests.session import fake_client
 from tests.session.modules import client_loader
 from tests.utils.case import local_section
 from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import scratch
 
 SID = "11111111-2222-3333-4444-555555555555"
 TUI = "dummy-tester-11111111"
@@ -72,9 +72,7 @@ class Base(Case):
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.work, self.scenario, self.log = (
             os.path.join(self.tmp, n) for n in ("work", "scenario.json", "fake.log")
         )

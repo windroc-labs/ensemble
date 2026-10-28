@@ -1,11 +1,11 @@
 import json
 import os
 import subprocess
-import tempfile
 import unittest
 
 from tests.orchestrator import case
 from tests.orchestrator.integration import fake_gh
+from tests.utils.sandbox import scratch
 
 REPO = {"full_name": "acme/widgets", "default_branch": "main", "permissions": {"push": True}}
 RAW = "Accept: application/vnd.github.raw+json"
@@ -27,9 +27,7 @@ CONTENTS = {
 
 class Case(case.Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.home, self.bin, self.repos = (
             os.path.join(self.root, d) for d in ("home", "bin", "repos")
         )

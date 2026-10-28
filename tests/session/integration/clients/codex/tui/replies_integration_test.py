@@ -6,7 +6,6 @@ import dataclasses
 import glob
 import json
 import os
-import tempfile
 import time
 from pathlib import Path
 from unittest import mock
@@ -17,6 +16,7 @@ from ensemble.utils import read_reply
 from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.integration.clients.codex import fake_tui
+from tests.utils.sandbox import scratch
 
 WAIT = 15
 ANSWER = "half done\nnext: tests"
@@ -24,9 +24,7 @@ ANSWER = "half done\nnext: tests"
 
 class RepliesTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home, self.work = self.root / "home", self.root / "work"
         self.cwd, self.codex_home = self.work / "project", self.home / ".codex"
         for path in (self.home, self.cwd, self.codex_home):

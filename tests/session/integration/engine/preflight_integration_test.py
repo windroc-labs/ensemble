@@ -4,7 +4,6 @@ import itertools
 import json
 import os
 import subprocess
-import tempfile
 from dataclasses import replace
 from unittest import mock
 
@@ -17,6 +16,7 @@ from tests.session import harnesses
 from tests.session.case import HOSTS, PY, REPO, SPAWNS, Case, child_env, no_spawn
 from tests.session.fakes.preflight import PreflightClient
 from tests.session.hosted_support import SID, fake_tmux, listed
+from tests.utils.sandbox import scratch
 
 
 class Preflight(Case):
@@ -175,9 +175,7 @@ with contextlib.ExitStack() as stack:
     result = Session.preflight(spec)
 print(json.dumps(result))
 """
-        logs = tempfile.TemporaryDirectory()
-        self.addCleanup(logs.cleanup)
-        log = os.path.join(logs.name, "preflight.jsonl")
+        log = os.path.join(scratch(self, real=False), "preflight.jsonl")
         before = self.tree()
         child = subprocess.run(
             [*PY, "-c", code, self.work, SID, log, json.dumps(HOSTS), json.dumps(SPAWNS)],
@@ -373,9 +371,7 @@ print(json.dumps(result))
         self.refusal(self.spec(Mode.TUI), "status_line: want true or false")
 
     def test_codex_oversized_recovery_state_is_refused_before_any_directory_is_created(self):
-        root = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(root.cleanup)
-        self.home = os.path.realpath(root.name)
+        self.home = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         self.work = os.path.join(self.home, "absent-work")
         settings = read_config(local=os.devnull)
         self.session = harnesses.Threaded.configured(

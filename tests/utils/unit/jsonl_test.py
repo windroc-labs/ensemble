@@ -1,18 +1,16 @@
 """tests/utils/jsonl.py: read_jsonl, a whole JSONL file as a list."""
 
 import json
-import tempfile
 from pathlib import Path
 
 from tests.utils.case import Case
 from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import scratch
 
 
 class ReadJsonlTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.path = Path(tmp.name, "events.jsonl")
+        self.path = Path(scratch(self, real=False), "events.jsonl")
 
     def test_reads_each_line(self):
         self.path.write_text('{"event": "start"}\n[1, "é"]\n7\n', encoding="utf-8")

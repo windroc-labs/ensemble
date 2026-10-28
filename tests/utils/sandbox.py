@@ -229,6 +229,12 @@ def kill(pid):
         os.kill(pid, signal.SIGKILL)
 
 
+def scratch(case, parent=None, *, real=True):
+    tmp = tempfile.TemporaryDirectory(dir=parent)
+    case.addCleanup(tmp.cleanup)
+    return os.path.realpath(tmp.name) if real else tmp.name
+
+
 def owned_directory(case, root, *, prefix="fixture-"):
     root = os.path.abspath(root)
     if os.path.realpath(root) != root:

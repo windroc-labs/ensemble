@@ -6,6 +6,7 @@ import os
 import signal
 import tempfile
 import threading
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -232,3 +233,18 @@ class Probes(Case):
             with self.subTest(error=error), mock.patch("os.kill", side_effect=error) as kill:
                 self.assertIsNone(sandbox.kill(7))
             kill.assert_called_once_with(7, signal.SIGKILL)
+
+
+class Scratch(Case):
+    def test_a_scratch_dir_is_real_or_raw_under_its_parent_until_cleanup(self):
+        link = os.path.join(self.home, "link")
+        os.symlink(self.home, link)
+        owner = unittest.TestCase()
+        real, raw = sandbox.scratch(owner, link), sandbox.scratch(owner, link, real=False)
+        default = sandbox.scratch(owner)
+        self.assertEqual(os.path.dirname(raw), link)
+        self.assertEqual(os.path.dirname(real), os.path.realpath(self.home))
+        self.assertEqual(os.path.dirname(default), os.path.realpath(tempfile.gettempdir()))
+        self.assertTrue(all(map(os.path.isdir, (real, raw, default))))
+        owner.doCleanups()
+        self.assertFalse(any(map(os.path.exists, (real, raw, default))))

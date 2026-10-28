@@ -3,11 +3,11 @@
 import json
 import os
 import shutil
-import tempfile
 from unittest import mock
 
 from tests.delegate import drives
 from tests.delegate.case import Case
+from tests.utils.sandbox import scratch
 
 
 class FakeControl:
@@ -31,9 +31,7 @@ class FakeControl:
 class EndTest(Case):
     def setUp(self):
         super().setUp()
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = tmp.name
+        self.root = scratch(self, real=False)
         self.controls: dict[str, object] = {}
         attach = mock.patch.object(drives.ProcessControl, "attach", side_effect=self.attach)
         attach.start()

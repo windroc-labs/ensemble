@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 import unittest
 import unittest.mock
 
@@ -12,6 +11,7 @@ from ensemble.delegate.event.types import Outcome, Updraft, UpdraftStatus
 from ensemble.utils import SHORT, OutcomeStatus, one_line
 from tests.delegate.case import Case
 from tests.delegate.repo import PROCESS_ERRORS, fail, ok
+from tests.utils.sandbox import scratch
 
 URL = "https://github.com/o/n/pull/7"
 HEAD = "a" * 40
@@ -665,9 +665,7 @@ class Skipped(Base):
 
 class Hosts(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
 
     def found(self, text=None, output=None, **env):
         if text is not None:

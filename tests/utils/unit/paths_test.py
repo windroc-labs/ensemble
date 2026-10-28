@@ -26,13 +26,12 @@ from ensemble.utils.paths import (
 )
 from tests.utils.case import REPO, Case
 from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
+from tests.utils.sandbox import scratch
 
 
 class PathsTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home = self.root / "home"
         self.home.mkdir()
         self.alias = self.root / "alias"

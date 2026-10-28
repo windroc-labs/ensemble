@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 import threading
 from datetime import UTC, datetime, timedelta, timezone
 from unittest import mock
@@ -10,6 +9,7 @@ from unittest import mock
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.types import Claim, ConfigError
 from tests.orchestrator import case
+from tests.utils.sandbox import scratch
 
 NOW = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
 
@@ -48,9 +48,7 @@ def entry(kind, issue, sid, role, client="a", **ago):
 
 class Case(case.Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.log = os.path.join(self.tmp, "runs.jsonl")
 
     def write(self, lines):

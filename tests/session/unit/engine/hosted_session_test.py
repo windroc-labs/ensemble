@@ -98,7 +98,7 @@ from tests.session.hosted_support import (
 from tests.session.threads import capture_errors
 from tests.utils.clock import FakeClock
 from tests.utils.jsonl import read_jsonl
-from tests.utils.sandbox import owned_directory
+from tests.utils.sandbox import owned_directory, scratch
 
 UNCONFIGURED = "session not configured: call Session.configure first"
 FAKE_HOSTS = {"fake": {"implementation": "tests.session.fakes.host:FakeHost"}}
@@ -1146,9 +1146,7 @@ class StubMode:
 
 class EventsOverAModeTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
         self.clock = FakeClock()
         self.configured = harnesses.Threaded.configured(
             clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock

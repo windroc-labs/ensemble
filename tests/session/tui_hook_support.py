@@ -3,11 +3,11 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import uuid
 
 from tests.session.case import PLUGIN_BIN, Case
 from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import scratch
 
 COMMAND = os.path.join(PLUGIN_BIN, "ensemble-session")
 WORDS = {"stop": "done", "ask": "blocked", "tool": "working"}
@@ -59,9 +59,7 @@ with open(os.environ["TMUX_LOG"], "a") as f:
 
 class HookBase(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.dir = os.path.join(self.root, "s1")
         os.mkdir(self.dir, 0o700)
         self.hooks = os.path.join(self.dir, "hooks.jsonl")

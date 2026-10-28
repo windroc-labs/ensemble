@@ -5,7 +5,6 @@ import json
 import os
 import shlex
 import sys
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
@@ -24,15 +23,14 @@ from ensemble.session.engine.types import (
 )
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.opencode import fake_opencode
+from tests.utils.sandbox import scratch
 
 NATIVE = fake_opencode.NATIVE
 
 
 class HeadlessSessions(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.cwd, self.bin = self.root / "project", self.root / "bin"
         for path in (self.cwd, self.bin):
             path.mkdir()

@@ -12,7 +12,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -44,7 +43,7 @@ from tests.session.integration.clients.codex import fake_codex, fake_tui
 from tests.session.unit.clients.codex.support import CHILD, NATIVE, Base
 from tests.utils import sandbox
 from tests.utils.jsonl import read_jsonl
-from tests.utils.sandbox import running
+from tests.utils.sandbox import running, scratch
 
 WAIT = 15
 
@@ -114,10 +113,7 @@ class Stream:
 
 class Live(Case):
     def setUp(self):
-        parent = os.environ.get("ENSEMBLE_TEST_TMP", REPO)
-        tmp = tempfile.TemporaryDirectory(dir=parent)
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home, self.work, self.extra = (self.root / n for n in ("home", "work", "extra"))
         self.cwd, self.codex_home = self.work / "project", self.home / ".codex"
         for path in (self.home, self.cwd, self.codex_home, self.extra):

@@ -1,13 +1,13 @@
 """Shared orchestrator scenario fixtures for unit and sandboxed integration contracts."""
 
 import os
-import tempfile
 
 from ensemble.delegate import Delegate
 from ensemble.orchestrator.engine import config
 from ensemble.utils import load_class
 from tests.orchestrator.unit.board_ids import HEADER, PACKAGED_FLOW, role, workflow_line
 from tests.utils.case import local_section
+from tests.utils.sandbox import scratch
 
 HARNESS_DELEGATE = load_class("ensemble.delegate:HarnessDelegate", Delegate)
 
@@ -69,9 +69,7 @@ STEPS = (
 class ConfigFile:
     def setUp(self):
         write(os.path.join(self.ensemble, "config.local.toml"), CORE_LOCAL)
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
 
     def local(self, text):
         """~/.ensemble/config.local.toml: `text` amid CORE_LOCAL (the delegate's keys)."""

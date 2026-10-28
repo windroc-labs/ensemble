@@ -33,7 +33,7 @@ from ensemble.session.engine.types import (
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.codex import fake_codex
 from tests.utils.jsonl import read_jsonl
-from tests.utils.sandbox import git_run
+from tests.utils.sandbox import git_run, scratch
 
 NATIVE = fake_codex.NATIVE
 
@@ -44,9 +44,7 @@ DONE = {"status": "done", "title": "echo", "summary": "Hello.", "deliverable": "
 
 class HeadlessSessions(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home, self.work, self.bin = (self.root / name for name in ("home", "work", "bin"))
         self.cwd, self.extra = self.work / "project", self.root / "extra"
         self.tasks = self.root / "team" / "tasks"

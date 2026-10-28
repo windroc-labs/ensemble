@@ -5,13 +5,12 @@ import os
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from unittest import mock
 
 from ensemble.utils import probe, resume_command
 from tests.utils.case import Case
-from tests.utils.sandbox import clean_env, gone, kill
+from tests.utils.sandbox import clean_env, gone, kill, scratch
 
 
 class ResumeEnvironment(Case):
@@ -55,9 +54,7 @@ def until(check) -> bool:
 
 class Probe(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
 
     def probe(self, argv, timeout=WAIT, env=None):
         """probe(argv) in self.dir, the Popen call's mock and the processes it made."""

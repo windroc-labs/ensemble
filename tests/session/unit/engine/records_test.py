@@ -4,7 +4,6 @@ import errno
 import io
 import json
 import os
-import tempfile
 import threading
 import unittest
 import unittest.mock
@@ -15,15 +14,14 @@ from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import SessionInfo
 from tests.session.case import Case
 from tests.session.threads import capture_errors
+from tests.utils.sandbox import scratch
 
 SID = "4f1c2b9e-0d6a-4c1e-9b7a-2e5f8a3d6c10"
 
 
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
         self.path = os.path.join(self.dir, "run.jsonl")
         self.log = RunLog(self.dir)
 

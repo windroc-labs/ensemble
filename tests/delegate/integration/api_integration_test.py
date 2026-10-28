@@ -6,7 +6,6 @@ config's Client table), HOME and CLAUDE_CONFIG_DIR temp: the callback order over
 import io
 import json
 import os
-import tempfile
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
@@ -22,15 +21,14 @@ from tests.delegate.replies import block, mark, option, prompt
 from tests.delegate.runner import executed
 from tests.session.integration.clients.claude import fake_claude
 from tests.utils.sandbox import pid_exists as running
+from tests.utils.sandbox import scratch
 
 
 class Base(Case):
     """dummy-tester's echo over the fake `claude` in workdir `work`, the cwd its agent dir."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = os.path.realpath(tmp.name)
+        root = scratch(self)
         self.work, bin_dir = os.path.join(root, "work"), os.path.join(root, "bin")
         os.mkdir(bin_dir)
         self.out = os.path.join(self.work, "out.md")

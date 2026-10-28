@@ -9,7 +9,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 from unittest import mock
 
@@ -19,7 +18,7 @@ from ensemble.session.engine.types import Access, Spec
 from tests.session import case, live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.utils.jsonl import read_jsonl
-from tests.utils.sandbox import gone
+from tests.utils.sandbox import gone, scratch
 
 FAKE = os.path.abspath(fake_claude.__file__)
 
@@ -45,9 +44,7 @@ def said(content) -> str:
 
 class Case(case.Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.proj, self.config = os.path.join(self.root, "proj"), os.path.join(self.root, "config")
         os.mkdir(self.proj)
         self.scenario, self.hooklog, self.log = (

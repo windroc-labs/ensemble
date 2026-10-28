@@ -7,7 +7,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 
 from ensemble.session.harness.channel import Channel
 from ensemble.session.hosts.base import stored_record, worker_state
@@ -16,6 +15,7 @@ from tests.session import live_tmux
 from tests.session.case import REPO, ROOTS, Case
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.live_tmux import MANAGER, logged
+from tests.utils.sandbox import scratch
 
 COMMAND = os.path.join(REPO, "bin", "ensemble-session")
 TIMEOUT = 60
@@ -36,10 +36,7 @@ class CliCase(live_tmux.Calls, Case):
     ATTACH = True
 
     def setUp(self):
-        parent = os.environ.get("ENSEMBLE_TEST_TMP")
-        tmp = tempfile.TemporaryDirectory(dir=parent)
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP"))
         self.cwd = os.path.join(self.root, "work")
         os.mkdir(self.cwd)
         self.events = os.path.join(self.root, "events")

@@ -7,7 +7,6 @@ import copy
 import importlib.util
 import operator
 import os
-import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -25,13 +24,12 @@ from ensemble.utils.config_file import (
     unset,
 )
 from tests.utils.case import REPO, Case
+from tests.utils.sandbox import scratch
 
 
 class ConfigFileTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.path = self.root / "config.toml"
 
     def test_merge_overlays_one_config_on_another(self):
@@ -106,9 +104,7 @@ class FrozenTables(Case):
 
 class Resources(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = tmp.name
+        self.root = scratch(self, real=False)
         self.package = "config_fixture_" + Path(self.root).name.replace("-", "_")
         for section, text in (
             ("session", SESSION),

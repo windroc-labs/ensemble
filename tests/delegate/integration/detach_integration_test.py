@@ -12,7 +12,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 
 from ensemble.delegate import DelegateEvent
@@ -29,6 +28,7 @@ from tests.session.case import PLUGIN_BIN
 from tests.session.integration.clients.claude import fake_claude
 from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import pid_exists as running
+from tests.utils.sandbox import scratch
 
 MANAGER = "mgr"
 ROLE = "dummy-tester"
@@ -47,9 +47,7 @@ RESUME = (*RUN[:-1], "resume")
 
 class Detach(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.server = None
         self.proj, self.work, self.bin, self.no_tmux = (
             os.path.join(self.dir, d) for d in ("proj", "work", "bin", "tmux")
