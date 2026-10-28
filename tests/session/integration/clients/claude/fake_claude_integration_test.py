@@ -18,6 +18,7 @@ from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine.types import Access, Spec
 from tests.session import case, live_tmux
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import gone
 
 FAKE = os.path.abspath(fake_claude.__file__)
@@ -357,8 +358,7 @@ class Steps(Case):
             ],
         )
         (path,) = self.transcripts()
-        with open(path, encoding="utf-8") as f:
-            error = [json.loads(line) for line in f][2]
+        error = read_jsonl(path)[2]
         self.assertEqual((error["isApiErrorMessage"], error["error"]), (True, "rate_limit"))
 
     def test_sleep(self):
@@ -370,8 +370,7 @@ class Steps(Case):
 
     def joined(self) -> list[tuple[str, str]]:
         (path,) = self.transcripts()
-        with open(path, encoding="utf-8") as f:
-            records = [json.loads(line) for line in f]
+        records = read_jsonl(path)
         return [
             ("enqueue", r["content"])
             if r["type"] == "queue-operation"

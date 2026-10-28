@@ -12,6 +12,7 @@ import tempfile
 
 from tests.session.case import SRC, Case
 from tests.session.tui_hook_support import COMMAND, state, write_state
+from tests.utils.jsonl import read_jsonl
 
 CLIENT = """import os
 
@@ -79,11 +80,7 @@ class ExternalTuiHookTest(Case):
         return res.stderr.decode()
 
     def records(self) -> list[dict]:
-        try:
-            with open(os.path.join(self.dir, "hooks.jsonl")) as f:
-                return [json.loads(line) for line in f]
-        except FileNotFoundError:
-            return []
+        return read_jsonl(os.path.join(self.dir, "hooks.jsonl"), missing_ok=True)
 
     def test_its_declared_callback_runs_from_its_own_root(self):
         declared = self.declared()

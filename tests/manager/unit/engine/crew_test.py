@@ -4,7 +4,6 @@ Crew.attach shows each live entry but a hidden one, whose view column says so.
 
 import contextlib
 import io
-import json
 import os
 import uuid
 from dataclasses import replace
@@ -19,6 +18,7 @@ from ensemble.utils import Record, Status, save_reply
 from tests.manager.roster_case import RosterCase, mark
 from tests.manager.starters import answered, finished
 from tests.session.hosted_support import HostedTuiBase
+from tests.utils.jsonl import read_jsonl
 from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
 
 ARGV = ("fake-ctl", "start", "x")
@@ -487,8 +487,7 @@ class View(Entries):
 
 class Close(Entries):
     def failures(self) -> list[dict]:
-        path = Path(self.directory, "close-failures.jsonl")
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return read_jsonl(Path(self.directory, "close-failures.jsonl"), missing_ok=True)
 
     def close(self, name):
         with mock.patch("subprocess.run", side_effect=self.answer):

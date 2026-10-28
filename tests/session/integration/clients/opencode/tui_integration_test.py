@@ -34,6 +34,7 @@ from tests.session import live_tmux
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.session.unit.clients.opencode.support import make_db
+from tests.utils.jsonl import read_jsonl
 
 WAIT = 20
 NODE = shutil.which("node")
@@ -144,9 +145,7 @@ class TuiSessions(Case):
         return handle, Stream(self, handle)
 
     def logged(self) -> list[dict]:
-        if not self.log.exists():
-            return []
-        return [json.loads(line) for line in self.log.read_text().splitlines()]
+        return read_jsonl(self.log, missing_ok=True)
 
     def calls(self) -> list[dict]:
         return [row for row in self.logged() if row.get("mode") == "tui"]

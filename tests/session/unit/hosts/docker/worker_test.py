@@ -20,6 +20,7 @@ from ensemble.session.hosts.docker import worker
 from ensemble.session.hosts.docker.maintenance import Maintenance
 from ensemble.session.hosts.docker.mounts import state_dir
 from tests.session.case import Case
+from tests.utils.jsonl import read_jsonl
 
 GEN = "0123456789abcdef0123456789abcdef"
 NOW = 1_792_238_400.0
@@ -111,11 +112,8 @@ class Base(Case):
         return found
 
     def rejected(self):
-        try:
-            with open(os.path.join(self.state, "rejected.jsonl")) as f:
-                return [json.loads(line)["reason"] for line in f]
-        except FileNotFoundError:
-            return []
+        rows = read_jsonl(os.path.join(self.state, "rejected.jsonl"), missing_ok=True)
+        return [row["reason"] for row in rows]
 
     def ended(self, channel):
         """Its container's removal confirmed within WAIT: the worker ABSENT."""

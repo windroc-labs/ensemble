@@ -43,6 +43,7 @@ from tests.session.case import PLUGIN_BIN, PY, REPO, ROOTS, Case, configured
 from tests.session.integration.clients.codex import fake_codex, fake_tui
 from tests.session.unit.clients.codex.support import CHILD, NATIVE, Base
 from tests.utils import sandbox
+from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import running
 
 WAIT = 15
@@ -184,11 +185,7 @@ class Live(Case):
         return handle
 
     def logged(self):
-        return (
-            [json.loads(line) for line in self.log.read_text().splitlines()]
-            if self.log.exists()
-            else []
-        )
+        return read_jsonl(self.log, missing_ok=True)
 
     def calls(self, mode="tui"):
         return [row for row in self.logged() if row.get("mode") == mode]

@@ -7,6 +7,7 @@ import tempfile
 import uuid
 
 from tests.session.case import PLUGIN_BIN, Case
+from tests.utils.jsonl import read_jsonl
 
 COMMAND = os.path.join(PLUGIN_BIN, "ensemble-session")
 WORDS = {"stop": "done", "ask": "blocked", "tool": "working"}
@@ -122,11 +123,7 @@ class HookBase(Case):
         return [json.loads(line) for line in lines[:-1]]
 
     def calls(self):
-        try:
-            with open(self.log) as f:
-                return [json.loads(line) for line in f]
-        except FileNotFoundError:
-            return []
+        return read_jsonl(self.log, missing_ok=True)
 
     def lines(self):
         with open(self.events) as f:

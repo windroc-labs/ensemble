@@ -71,6 +71,7 @@ from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN
 from tests.session.unit.hosts.docker import support
 from tests.utils.clock import FakeClock
+from tests.utils.jsonl import read_jsonl
 from tests.utils.process_fixtures import DEVNULL, STDOUT
 
 ORPHAN = 4242
@@ -2756,8 +2757,7 @@ class OwnedRun(HarnessCase):
         return view
 
     def kinds(self) -> list[str]:
-        with open(os.path.join(Layout(self.work).run, "run.jsonl"), encoding="utf-8") as f:
-            return [json.loads(line)["kind"] for line in f]
+        return [row["kind"] for row in read_jsonl(os.path.join(Layout(self.work).run, "run.jsonl"))]
 
     def sent(self) -> list[str]:
         return [json.loads(line)["kind"] for line in self.lines]

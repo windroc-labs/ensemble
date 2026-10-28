@@ -7,7 +7,6 @@ callback lock names, then waits for that lock.
 import contextlib
 import fcntl
 import io
-import json
 import os
 import signal
 from unittest import mock
@@ -27,6 +26,7 @@ from tests.delegate.case import Case
 from tests.delegate.harness import SID
 from tests.delegate.unit.engine.orphans import Orphan
 from tests.utils.clock import FakeClock
+from tests.utils.jsonl import read_jsonl
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 RUN = {"sid": SID, "attempt": 3}
@@ -151,11 +151,7 @@ class Delivery(Case):
         self.callback = EventCallback(ARGV, self.store, **RUN)
 
     def errors(self, work=None) -> list[dict]:
-        try:
-            with open(os.path.join(work or self.work, "run.jsonl"), encoding="utf-8") as file:
-                rows = [json.loads(line) for line in file]
-        except FileNotFoundError:
-            return []
+        rows = read_jsonl(os.path.join(work or self.work, "run.jsonl"), missing_ok=True)
         return [row for row in rows if row["kind"] == "callback_error"]
 
     def lock_text(self) -> str:

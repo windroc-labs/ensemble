@@ -32,6 +32,7 @@ from ensemble.session.engine.types import (
 )
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.codex import fake_codex
+from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import git_run
 
 NATIVE = fake_codex.NATIVE
@@ -148,11 +149,7 @@ class HeadlessSessions(Case):
         )
 
     def logged(self):
-        return (
-            [json.loads(line) for line in self.log.read_text().splitlines()]
-            if self.log.exists()
-            else []
-        )
+        return read_jsonl(self.log, missing_ok=True)
 
     def written(self):
         return RunLog(str(self.work)).read()
@@ -641,9 +638,7 @@ class HeadlessRecoveryIntegrationTest(HeadlessSessions):
             (second["cwd"], second["env"]["CODEX_HOME"], second["resume_id"], second["stdin_eof"]),
             (str(self.cwd), str(self.codex_home), NATIVE, True),
         )
-        transcript = [
-            json.loads(line) for line in fake_codex.session_path(NATIVE).read_text().splitlines()
-        ]
+        transcript = read_jsonl(fake_codex.session_path(NATIVE))
         self.assertEqual(
             [entry["text"] for entry in transcript if entry["type"] == "user"],
             [first["prompt"], second["prompt"]],

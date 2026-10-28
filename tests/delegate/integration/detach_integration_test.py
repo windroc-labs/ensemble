@@ -27,6 +27,7 @@ from tests.delegate.replies import block, mark
 from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import pid_exists as running
 
 MANAGER = "mgr"
@@ -272,11 +273,7 @@ class Detach(Case):
         return "--on-event", shlex.join(argv)
 
     def delivered(self) -> list[dict]:
-        try:
-            with open(self.callbacks, encoding="utf-8") as stream:
-                return [json.loads(line) for line in stream]
-        except FileNotFoundError:
-            return []
+        return read_jsonl(self.callbacks, missing_ok=True)
 
 
 def shape(lines: list[str]) -> list[str]:

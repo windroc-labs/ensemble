@@ -21,6 +21,7 @@ from ensemble.session.modes import tui_hook
 from ensemble.utils import StatusState
 from tests.session.case import SRC, Case
 from tests.session.tui_hook_support import state, write_state
+from tests.utils.jsonl import read_jsonl
 
 CLIENT = re.compile(r"claude|codex", re.I)
 HOOK = os.path.join(SRC["session"], "ensemble", "session", "modes", "tui_hook.py")
@@ -197,8 +198,7 @@ class Callbacks(Case):
             return tui_hook.run([self.dir, "stop"], stdin, roots=ROOTS, event=event)
 
     def records(self):
-        with open(os.path.join(self.dir, tui_hook.HOOKS), encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(os.path.join(self.dir, tui_hook.HOOKS))
 
 
 class RelayEvent(Callbacks):

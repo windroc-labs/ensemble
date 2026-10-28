@@ -20,6 +20,7 @@ from ensemble.orchestrator.trackers.linear import (
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import HEADER, STATE_NAMES, STATES, comment_id, role
 from tests.utils.case import local_section
+from tests.utils.jsonl import read_jsonl
 
 ID, UUID = "TASK-7", "11111111-2222-4333-8444-555555555555"
 
@@ -68,11 +69,7 @@ def local(work):
 
 
 def logged(logs=None):
-    try:
-        with open(os.path.join(logs or log.LOGS_DIR, "orchestrator.jsonl"), encoding="utf-8") as f:
-            lines = [json.loads(line) for line in f]
-    except FileNotFoundError:
-        return []
+    lines = read_jsonl(os.path.join(logs or log.LOGS_DIR, "orchestrator.jsonl"), missing_ok=True)
     for d in lines:
         assert (
             list(d)[:3] == ["ts", "src", "kind"]

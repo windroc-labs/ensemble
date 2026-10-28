@@ -16,6 +16,7 @@ from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import Held
 from tests.manager.case import REPO, Case
 from tests.session import live_tmux
+from tests.utils.jsonl import read_jsonl
 
 CTMUX = os.path.join(REPO, "skills", "manage", "scripts", "ctmux")
 LAUNCHER = os.path.join(REPO, "skills", "manage", "scripts", "launcher")
@@ -591,8 +592,7 @@ class PrivateServer(Case):
         )
 
     def attaches(self):
-        with open(self.attach_log, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.attach_log)
 
     def shell_report(self):
         try:

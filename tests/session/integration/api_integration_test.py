@@ -37,6 +37,7 @@ from tests.session import fake_client
 from tests.session.case import Case
 from tests.session.modules import client_loader
 from tests.session.threads import capture_errors
+from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import kill
 from tests.utils.sandbox import pid_exists as running
 
@@ -182,8 +183,7 @@ class Base(Case):
         return found
 
     def logged(self) -> list[dict]:
-        with open(self.log, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log)
 
     def forget(self):
         """Drops the client log."""

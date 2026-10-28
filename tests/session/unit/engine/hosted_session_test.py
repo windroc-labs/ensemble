@@ -97,6 +97,7 @@ from tests.session.hosted_support import (
 )
 from tests.session.threads import capture_errors
 from tests.utils.clock import FakeClock
+from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import owned_directory
 
 UNCONFIGURED = "session not configured: call Session.configure first"
@@ -938,8 +939,7 @@ class InProcessTest(Base):
         return session, found
 
     def logged(self) -> list[dict]:
-        with open(self.log, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log)
 
     def test_cleanup_joins_a_stopped_runs_thread_before_removing_its_files(self):
         self.steps({"sleep": 0.3})

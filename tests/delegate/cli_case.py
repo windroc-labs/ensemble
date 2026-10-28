@@ -19,6 +19,7 @@ from tests.delegate.verifier import VERIFIER
 from tests.session import fake_client
 from tests.session.modules import client_loader
 from tests.utils.case import local_section
+from tests.utils.jsonl import read_jsonl
 
 SID = "11111111-2222-3333-4444-555555555555"
 TUI = "dummy-tester-11111111"
@@ -112,14 +113,10 @@ class Base(Case):
             f.write(local_section(text, "delegate"))
 
     def launches(self) -> list[dict]:
-        if not os.path.exists(self.log):
-            return []
-        with open(self.log) as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log, missing_ok=True)
 
     def records(self) -> list[dict]:
-        with open(os.path.join(Layout(self.work).run, "run.jsonl")) as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(os.path.join(Layout(self.work).run, "run.jsonl"))
 
     ran = None
 

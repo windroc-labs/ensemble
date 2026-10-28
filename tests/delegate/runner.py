@@ -19,6 +19,7 @@ from tests.delegate.replies import completed_steps
 from tests.delegate.unit.runs import DONE, NAME, turn
 from tests.session import fake_client
 from tests.session.modules import client_loader
+from tests.utils.jsonl import read_jsonl
 
 SID = "11111111-2222-3333-4444-555555555555"
 
@@ -162,8 +163,7 @@ class Base(Case):
             self.err = err.getvalue()
 
     def records(self) -> list[dict]:
-        with open(self.channel) as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.channel)
 
     def kinds(self) -> list[str]:
         return [e["kind"] for e in self.records()]
@@ -172,8 +172,7 @@ class Base(Case):
         return [e for e in self.records() if e["kind"] == kind][-1]
 
     def launches(self) -> list[dict]:
-        with open(self.log) as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log)
 
     def read(self, path) -> str:
         with open(path) as f:

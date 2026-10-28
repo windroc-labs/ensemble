@@ -38,6 +38,7 @@ from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
 from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE, GAVE_UP, START
+from tests.utils.jsonl import read_jsonl
 
 NEEDS = {**DONE, "status": "needs_input", "questions": ["Which?"], "deliverable": ""}
 NAME = f"dummy-tester-{SID[:8]}"
@@ -204,10 +205,7 @@ class HandlerCase(HarnessCase):
 
     def kinds(self) -> list[str]:
         path = os.path.join(self.state().plan.session.workdir, "run.jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as f:
-            return [json.loads(line)["kind"] for line in f]
+        return [row["kind"] for row in read_jsonl(path, missing_ok=True)]
 
     def lines(self) -> list[str]:
         if not os.path.exists(self.events):
