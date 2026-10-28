@@ -60,6 +60,9 @@ func (h Host) Close(ctx context.Context, container string) (CloseResult, error) 
 	h.Audit.Begin(container, nil)
 	kind, secrets := h.held(ctx, container)
 	h.GitHub.Revoke(ctx, container, h.agentRead(container))
+	if h.Linear != nil {
+		h.Linear.Revoke(ctx, container, h.agentRead(container))
+	}
 	removed, err := h.remove(ctx, container)
 	if removed {
 		if kind != "" {

@@ -120,6 +120,14 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, err
 		}
 	}
+	if m.Linear != nil {
+		if h.Linear == nil {
+			return StartResult{}, protocol.New(protocol.StartFailed, "Linear provider unavailable.")
+		}
+		if err := h.Linear.Ready(m.Linear.App); err != nil {
+			return StartResult{}, injected(err, protocol.StartFailed, "Preparing Linear credentials failed.")
+		}
+	}
 	if err := h.checkStatic(staticRefs(m)); err != nil {
 		return StartResult{}, err
 	}
@@ -165,7 +173,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		defer func() {
 			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
 				if retErr == nil {
-					held.revokeGitHub()
+					held.revokeTokens()
 					h.rollback(ctx, c, cleanup)
 					h.dropTokens(m)
 					h.withdraw(c, m, held, cleanup)
@@ -201,7 +209,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		if !errors.As(err, &e) {
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
-		held.revokeGitHub()
+		held.revokeTokens()
 		h.rollback(ctx, c, e)
 		h.dropTokens(m)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
@@ -254,12 +262,16 @@ type holding struct {
 	client  bool
 	secrets []string
 	github  func()
+	linear  func()
 }
 
-// revokeGitHub revokes the GitHub tokens this start issued, if any: the container's removal alone leaves them live.
-func (held holding) revokeGitHub() {
+// revokeTokens revokes this start's issued tokens; removing the container leaves them live.
+func (held holding) revokeTokens() {
 	if held.github != nil {
 		held.github()
+	}
+	if held.linear != nil {
+		held.linear()
 	}
 }
 
@@ -429,6 +441,16 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		batch.step(message, nil)
 		lap("github")
 	}
+	var linearExpiry string
+	if m.Linear != nil {
+		var writes []credential.Command
+		writes, held.linear, linearExpiry, err = h.Linear.Issue(ctx, *m.Linear, c)
+		if err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the Linear credentials failed.")
+		}
+		batch.commands = append(batch.commands, writes...)
+		batch.step("Injecting the Linear credentials failed.", nil)
+	}
 	if err := h.deliverStart(ctx, c, &batch); err != nil {
 		return StartResult{}, held, err
 	}
@@ -441,7 +463,15 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if err := h.startTokens(m, codexExpiry, expiries); err != nil {
 		return StartResult{}, held, err
 	}
+	if linearExpiry != "" {
+		if err := h.recordTokens(m, credential.Linear, []string{linearExpiry}, nil); err != nil {
+			return StartResult{}, held, protocol.New(protocol.StartFailed, tokensFailed(m).Message)
+		}
+	}
 	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
+	if linearExpiry != "" {
+		delivered.Expires[credential.Linear] = []string{linearExpiry}
+	}
 	if codexExpiry != nil {
 		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
