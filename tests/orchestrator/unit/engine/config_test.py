@@ -30,7 +30,6 @@ from tests.orchestrator.config_fixtures import (
     ConfigFile,
     write,
 )
-from tests.orchestrator.process_fixtures import DEVNULL, CompletedProcess
 from tests.orchestrator.unit.board_ids import (
     HARNESS_APP,
     HARNESS_LINE,
@@ -49,6 +48,7 @@ from tests.orchestrator.unit.board_ids import (
     workflow_line,
 )
 from tests.utils.case import local_section
+from tests.utils.process_fixtures import DEVNULL, CompletedProcess
 
 LABEL1, LABEL2 = "00000000-0000-4000-8000-000000000021", "00000000-0000-4000-8000-000000000022"
 AGENT_GROUP = "00000000-0000-4000-8000-000000000023"

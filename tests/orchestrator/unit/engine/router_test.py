@@ -46,7 +46,6 @@ from ensemble.orchestrator.trackers.linear import (
 from ensemble.session import ConfigError, Session, SessionError, SessionStatus, Window
 from ensemble.session import Usage as SessionUsage
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV, OutcomeStatus, Record
-from tests.orchestrator.process_fixtures import TimeoutExpired
 from tests.orchestrator.router_fixtures import (
     AGENT,
     BOT,
@@ -115,6 +114,7 @@ from tests.orchestrator.unit.run_fixtures import (
     show,
 )
 from tests.orchestrator.unit.target_fixtures import FakeRun, ok
+from tests.utils.process_fixtures import TimeoutExpired
 
 CONFIG_ENG2 = (
     HEADER

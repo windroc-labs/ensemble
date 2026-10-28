@@ -12,8 +12,8 @@ from ensemble.orchestrator.engine.types import (
 from ensemble.orchestrator.issue.output import receipt_payload
 from ensemble.orchestrator.trackers.linear import issue_read, issue_relation
 from tests.orchestrator.case import Case
-from tests.orchestrator.process_fixtures import TimeoutExpired
 from tests.orchestrator.unit.issue_fixtures import VIEWER, RelationGql, SecondFails, uid
+from tests.utils.process_fixtures import TimeoutExpired
 
 BOARD = ("TASK-1", "TASK-2", "TASK-3")
 # the same edge, TASK-1 blocking TASK-2, named from either end
