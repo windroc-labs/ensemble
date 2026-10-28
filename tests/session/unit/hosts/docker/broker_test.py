@@ -105,7 +105,7 @@ class ResponseTest(Case):
         self.addCleanup(logger.removeHandler, handler)
         for fixture in ("start-output", "maintain-output", "close-output"):
             response = {**data(fixture), "audit_warning": "audit_write_failed"}
-            definition = fixture.removesuffix(".json").replace("-", "_")
+            definition = fixture.replace("-", "_")
             _, call = CALLS[definition]
             fake = FakeBroker((0, json.dumps(response), ""))
             result = call(Broker(fake))

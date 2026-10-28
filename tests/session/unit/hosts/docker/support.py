@@ -18,7 +18,7 @@ BETA = "beta@owner/market#" + "b" * 40
 def cases():
     """Every table's cases, with their definition."""
     found = []
-    for table in sorted(os.listdir(FIXTURES)):
+    for table in sorted(t for t in os.listdir(FIXTURES) if t.endswith(".json")):
         with open(os.path.join(FIXTURES, table)) as f:
             found += [{**c, "definition": table.removesuffix(".json")} for c in json.load(f)]
     return found
