@@ -102,12 +102,29 @@ func FileLock(path string, create bool) func() (func(), error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-			f.Close()
-			return nil, err
-		}
-		return func() { f.Close() }, nil
+		return lockFile(f)
 	}
+}
+
+func lockFile(f *os.File) (func(), error) {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	// A waiting opener may hold an inode retired by container close.
+	held, err := f.Stat()
+	if err == nil {
+		var current os.FileInfo
+		current, err = os.Stat(f.Name())
+		if err == nil && !os.SameFile(held, current) {
+			err = os.ErrNotExist
+		}
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { f.Close() }, nil
 }
 
 func apiError(err error) *protocol.Error {

@@ -2,23 +2,88 @@ package broker
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
-	"ensemble/broker/internal/audit"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/credential"
 )
 
 func containerApp(a LinearIdentity) credential.LinearApp {
 	return credential.LinearApp{Role: a.Name, ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
+}
+
+func TestLinearContainerLockCleanup(t *testing.T) {
+	for _, action := range []string{"close", "rollback", "retry", "cleanup-retry"} {
+		t.Run(action, func(t *testing.T) {
+			l, k, _, _ := linearRig(t)
+			home := t.TempDir()
+			locks := NewLinear(home, SystemKeychain{}, nil)
+			l.lock = locks.lock
+			l.removeLock = locks.removeLock
+			a := linearApp("engineer")
+			enrollLinear(t, l, k, a)
+			commands, rollback, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "cleanup")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, command := range commands {
+				command.Erase()
+			}
+			path := filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte("container/cleanup"))))
+			if _, err := os.Stat(path); err != nil {
+				t.Fatal(err)
+			}
+			if action == "retry" {
+				transport := l.http.Transport
+				l.http.Transport = linearRoundTrip(func(*http.Request) (*http.Response, error) { return nil, errors.New("offline") })
+				if err := l.Revoke(context.Background(), "cleanup"); err == nil {
+					t.Fatal("failed revocation hidden")
+				}
+				if _, err := os.Stat(path); err != nil {
+					t.Fatal("failed revocation lost its retry lock")
+				}
+				l.http.Transport = transport
+			}
+			if action == "cleanup-retry" {
+				l.removeLock = func(string) error { return os.ErrPermission }
+				if err := l.Revoke(context.Background(), "cleanup"); err == nil {
+					t.Fatal("lock cleanup failure hidden")
+				}
+				l.removeLock = locks.removeLock
+			}
+			if action == "rollback" {
+				rollback()
+			} else if err := l.Revoke(context.Background(), "cleanup"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatal("revoked container retained its lock")
+			}
+			if _, err := l.Refresh(context.Background(), credential.LinearRequest{App: containerApp(a)}, "cleanup", func([]string, []byte) error {
+				t.Fatal("closed container received a token")
+				return nil
+			}); err == nil {
+				t.Fatal("closed container refreshed")
+			}
+			if err := l.Revoke(context.Background(), "cleanup"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatal("maintenance or repeated close recreated the lock")
+			}
+		})
+	}
 }
 
 func TestLinearContainerIdentity(t *testing.T) {

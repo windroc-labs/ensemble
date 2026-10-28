@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -146,22 +147,26 @@ type linearAccount struct {
 
 // Linear owns enrolled accounts, host grants and per-container revocation records; the launcher delivers its commands.
 type Linear struct {
-	Audit    *audit.Recorder
-	keys     linearKeys
-	host     linearHost
-	http     *http.Client
-	lock     func(string, bool) func() (func(), error)
-	now      func() time.Time
-	password func() ([]byte, error)
+	Audit      *audit.Recorder
+	keys       linearKeys
+	host       linearHost
+	http       *http.Client
+	lock       func(string, bool) func() (func(), error)
+	removeLock func(string) error
+	now        func() time.Time
+	password   func() ([]byte, error)
 }
 
 // NewLinear is Linear for the account at home, its items in k.
 func NewLinear(home string, k SystemKeychain, password func() ([]byte, error)) Linear {
+	lockPath := func(id string) string {
+		return filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(id))))
+	}
 	return Linear{keys: k, host: linearHostEntries{home: home, run: runLinearSecurity, access: k.AppAccess},
 		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now, password: password,
 		lock: func(id string, create bool) func() (func(), error) {
-			return FileLock(filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(id)))), create)
-		}}
+			return FileLock(lockPath(id), create)
+		}, removeLock: func(id string) error { return os.Remove(lockPath(id)) }}
 }
 
 func (l Linear) read(account string, into any) error {

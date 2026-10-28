@@ -117,6 +117,9 @@ func (l Linear) retireContainer(ctx context.Context, c string, record *linearCon
 	var err error
 	if len(pending) == 0 {
 		err = l.keys.DeleteSecret(linearService, "container/"+c)
+		if err == nil {
+			err = l.removeLock("container/"+c)
+		}
 	} else {
 		err = l.save("container/"+c, record)
 	}
@@ -155,7 +158,7 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 }
 
 func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c string, exec func([]string, []byte) error) (string, error) {
-	unlock, err := l.lock("container/"+c, true)()
+	unlock, err := l.lock("container/"+c, false)()
 	if err != nil {
 		return "", errLinear
 	}
@@ -201,7 +204,7 @@ func (l Linear) Revoke(ctx context.Context, c string) error {
 	defer unlock()
 	var record linearContainerRecord
 	if err := l.read("container/"+c, &record); errors.Is(err, ErrNotFound) {
-		return nil
+		return l.removeLock("container/"+c)
 	} else if err != nil {
 		return errLinear
 	}
