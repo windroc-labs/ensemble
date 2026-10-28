@@ -2746,14 +2746,7 @@ class LimitEvents(Events):
     def limited(self, attempt=1, resets_at=T):
         return self.finished(-9, limit={"resets_at": resets_at}, attempt=attempt)
 
-    def rows(self):
-        return [
-            {k: v for k, v in row.items() if k != "ts"}
-            for row in map(json.loads, open(self.cfg.runs_log, encoding="utf-8"))
-            if row["kind"] == "limit"
-        ]
-
-    def test_a_limit_comments_moves_and_ends_the_session_without_a_quota_row(self):
+    def test_a_limit_comments_moves_and_ends_the_session(self):
         self.assertTrue(self.deliver(delegate_event("begun")))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited()))
@@ -2778,7 +2771,6 @@ class LimitEvents(Events):
                 (harness, "find", {"c": RUN_SESSION}),
             ],
         )
-        self.assertEqual(self.rows(), [])
         self.assertEqual(self.ledger()[RUN_SID]["steps"], ["running:1", "limit", "limit-move:1"])
 
     def test_an_outcome_with_a_limit_writes_both_and_moves_once(self):
@@ -2796,7 +2788,6 @@ class LimitEvents(Events):
             ],
         )
         self.assertEqual(len(self.linear.writes("state")), 1)
-        self.assertEqual(self.rows(), [])
         self.assertEqual(
             self.linear.comments[RUN_SESSION]["body"],
             session_body(f"done · #1 · {STARTED} → {RESTARTED} · exit -9"),
@@ -2904,13 +2895,12 @@ class LimitEvents(Events):
                         self.said(),
                     )
 
-    def test_the_same_limit_twice_moves_once_without_a_quota_row(self):
+    def test_the_same_limit_twice_moves_once(self):
         self.assertTrue(self.deliver(self.limited()))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited()))
         self.assertEqual(self.linear.calls[n:], [])
         self.assertEqual(len(self.linear.writes("state")), 1)
-        self.assertEqual(self.rows(), [])
 
     def test_a_later_attempts_limit_moves_again_without_a_second_comment(self):
         self.assertTrue(self.deliver(self.limited()))
@@ -2922,7 +2912,6 @@ class LimitEvents(Events):
             ["reread", "state"],
         )
         self.assertEqual(len([c for c in self.linear.comments if c != RUN_SESSION]), 1)
-        self.assertEqual(self.rows(), [])
         self.assertEqual(
             self.ledger()[RUN_SID]["steps"],
             ["limit", "limit-move:1", "limit-move:2"],

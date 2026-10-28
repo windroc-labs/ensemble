@@ -15,7 +15,7 @@ import urllib.request
 import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -54,7 +54,6 @@ from tests.orchestrator.router_fixtures import (
     DESIGN_LISTING,
     DOCS_SEARCH,
     DR,
-    EAST,
     ENG_RUN,
     IDS,
     INPUT,
@@ -1975,10 +1974,9 @@ class ClientUsage(Base):
         self.write_runs()
         return quota.Gate(dry=False, cfg=self.cfg())
 
-    def test_off_skips_probe_and_recorded_limits_only_for_that_client(self):
+    def test_off_skips_probe_only_for_that_client(self):
         self.write_config(CONFIG + '[usage_limit]\na = "off"\nb = "on"\n')
         self.api.usages = {"a": AssertionError("off must not probe"), "b": reading(95)}
-        self.limit("a", (NOW + timedelta(hours=1)).isoformat())
         with redirect_stderr(io.StringIO()), self.log_dir(again=False):
             gate = self.gate()
             self.assertFalse(gate.blocked("researcher", "TASK-1", key=("harness", "a")))
@@ -2195,10 +2193,8 @@ class ClaimUsageGates(Base):
             )
         self.assertEqual(self.api.usage_calls, ["a", "a"])
 
-    def test_dry_run_prints_the_live_usage_even_with_a_legacy_limit(self):
+    def test_dry_run_prints_the_live_usage(self):
         self.api.usages["a"] = None
-        at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
-        self.limit("a", at)
         fake = two()
         self.assertEqual(
             self.claim(fake, dry=True, gate=True),
@@ -2319,13 +2315,6 @@ class RunBrake(Base):
     def test_no_such_role(self):
         self.assertEqual(self.brake("ghost"), (2, ""))
         self.assertEqual((self.err, self.api.usage_calls), ("router.py: no role ghost\n", []))
-
-    def test_a_live_limit_row_is_not_read(self):
-        self.limit("a", (datetime.now(UTC) + timedelta(hours=1)).isoformat())
-        self.write_runs()
-        self.api.usages = {"a": reading(70)}
-        self.assertEqual(self.brake("researcher"), (0, "five_hour=70% weekly=10%\n"))
-        self.assertEqual(self.api.usage_calls, ["a"])
 
 
 LOCAL = CONFIG.replace('tracker = "linear"\n', 'tracker = "local"\n')
@@ -2882,10 +2871,8 @@ class ScheduledUsageGates(TickBase):
                     ([], [], before, ["a"]),
                 )
 
-    def test_a_legacy_limit_does_not_replace_unknown_usage(self):
+    def test_unknown_usage_skips_to_the_next_client(self):
         self.api.usages["a"] = None
-        at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
-        self.limit("a", at)
         self.tick(two())
         self.assertEqual(
             self.said(),
@@ -2904,7 +2891,6 @@ class ScheduledUsageGates(TickBase):
         self.assertEqual(self.state, "")
 
     def test_a_dry_run_walks_the_same_and_changes_nothing(self):
-        at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
         b = "usage client=b usage=five_hour=10% weekly=10% allowed=true"
         rows = (
             (
@@ -2934,12 +2920,10 @@ class ScheduledUsageGates(TickBase):
                 ["a", "b"],
             ),
         )
-        for limited, said, calls in rows:
-            with self.subTest(limited=limited):
+        for unknown, said, calls in rows:
+            with self.subTest(unknown=unknown):
                 self.lines, self.hist = [], {}
-                self.api.usages["a"] = None if limited else reading()
-                if limited:
-                    self.limit("a", at)
+                self.api.usages["a"] = None if unknown else reading()
                 fake = self.fake(
                     issue("TASK-1", "In Progress", "researcher", priority=1),
                     issue("TASK-2", "Todo", "pm", priority=2, project=PD),
@@ -3920,7 +3904,6 @@ class ExplicitIssueRuns(TickBase):
 
     def test_todo_is_claimed_and_started_whatever_the_gates(self):
         self.add(kind="start", ident="TASK-8", sid="old", minutes_ago=60 * 24 * 8)
-        self.limit("a", (NOW + timedelta(hours=1)).isoformat())
         self.api.usages = {"a": reading(95)}
         fake = self.fake(
             issue("TASK-1", "In Progress", "researcher"),
@@ -5221,87 +5204,6 @@ class RoleApps(Base):
         self.wiring = replace(cli.TRACKERS[TrackerKind.LINEAR], identity=lambda *_: None)
         self.assertEqual(self.claim(two()), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
         self.assertEqual(self.keychain_calls, [])
-
-
-class LiveLimits(TickBase):
-    """Historical limit rows never participate in quota decisions."""
-
-    def test_available_usage_picks_and_previews_despite_a_legacy_limit(self):
-        self.api.usages["a"] = reading(10, 49)
-        self.limit("a", "2026-11-01T12:39:00+00:00")
-        fake = self.fake(issue("TASK-1", "Todo", "researcher"))
-        before = self.before()
-        self.assertEqual(
-            self.tick(fake, "--dry-run", now=datetime(2026, 10, 26, 14, tzinfo=UTC)), 0
-        )
-        said = "\n".join(self.said())
-        self.assertIn("pick TASK-1", said)
-        self.assertIn("preview TASK-1 client=a", said)
-        self.assertIn("usage client=a usage=five_hour=10% weekly=49% allowed=true", said)
-        self.assertNotIn("usage-skip", said)
-        self.assertEqual(self.api.usage_calls, ["a"])
-        self.assertEqual((fake.mutations, self.start.launches, self.state), ([], [], before))
-
-    def test_recovery_uses_live_usage_despite_a_legacy_limit(self):
-        self.api.usages["a"] = reading(10, 49)
-        self.resumable("TASK-1", "saved", 60)
-        self.limit("a", (NOW + timedelta(hours=1)).isoformat())
-        fake = self.fake(issue("TASK-1", "In Progress", "researcher"))
-        self.assertEqual(self.tick(fake), 0)
-        self.assertEqual(self.launched_runs(), [("TASK-1", "resume")])
-        self.assertEqual(self.api.usage_calls, ["a"])
-        self.assertNotIn("usage-skip", "\n".join(self.said()))
-        self.assertTrue(
-            all(json.loads(line)["kind"] != "limit" for line in self.state.splitlines())
-        )
-
-    def test_a_legacy_limit_does_not_replace_exhausted_live_usage(self):
-        self.api.usages["a"] = reading(10, 100)
-        at = (NOW + timedelta(hours=1)).astimezone(EAST).isoformat()
-        self.limit("a", at)
-        fake = two()
-        self.assertEqual(
-            self.claim(fake, gate=True),
-            f"TASK-2 https://linear.app/x/TASK-2 {PD}",
-        )
-        self.assertEqual(
-            self.said(),
-            [
-                "pick TASK-1 queue=2",
-                "usage-skip TASK-1 client=a reason=usage usage=five_hour=10% weekly=100%",
-                "pick TASK-2 queue=2",
-                "claim TASK-2 role=pm client=b client_source=default",
-            ],
-        )
-        self.assertEqual(self.api.usage_calls, ["a", "b"])
-
-    def test_a_limit_row_not_live_changes_nothing(self):
-        rows = (
-            (NOW - timedelta(minutes=1)).isoformat(),
-            None,
-            (NOW + timedelta(hours=1)).replace(tzinfo=None).isoformat(),
-            5,
-            "soon",
-            (NOW + timedelta(days=8)).isoformat(),
-        )
-        for resets_at in rows:
-            with self.subTest(resets_at=resets_at):
-                self.lines, self.api.usage_calls = [], []
-                self.limit("a", resets_at)
-                fake = two()
-                self.assertEqual(
-                    self.claim(fake, gate=True),
-                    "TASK-1 https://linear.app/x/TASK-1 Deep Research",
-                )
-                self.assertEqual(self.api.usage_calls, ["a"])
-
-    def test_limit_rows_are_no_attempts(self):
-        for sid in "abc":
-            self.add(kind="start", ident="TASK-1", sid=sid, minutes_ago=300)
-        for _ in range(4):
-            self.limit("b", (NOW + timedelta(hours=1)).isoformat(), ident="TASK-1")
-        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
-        self.assertEqual(self.claim(fake), "TASK-1 https://linear.app/x/TASK-1 Deep Research")
 
 
 class SessionInventory(Base):

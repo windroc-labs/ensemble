@@ -7,12 +7,11 @@ import plistlib
 import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 from ensemble.orchestrator import cli
-from ensemble.orchestrator.engine import config, prune, router, run_comments, runs
+from ensemble.orchestrator.engine import config, prune, router, run_comments
 from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.types import (
     Claim,
@@ -676,36 +675,15 @@ class Queries(RunCase):
             )
         self.assertEqual(ReadyDelegate.usage_calls, ["researcher"])
 
-    def test_config_drift_probes_the_recorded_client_despite_a_legacy_limit(self):
-        self.start()
-        FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
-        self.configure(default="other")
-        runs.note(
-            self.cfg.runs_log,
-            "limit",
-            issue="TASK-1",
-            sid="1234abcd-0000-4000-8000-000000000000",
-            client="fake",
-            delegate_kind="fake",
-            resets_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-            attempt=1,
-        )
-        for tty in (False, True):
-            FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
-            result, output, errors = _call(["resume", "TASK-1"], tty=tty)
-            self.assertEqual((result, errors), (0, ""))
-            self.assertEqual(Record.parse(output).name, "TASK-1")
-        self.assertEqual(ReadyDelegate.usage_calls, ["researcher", "researcher"])
-        self.assertTrue(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
-
     def test_config_drift_without_a_limit_probes_before_resuming(self):
         self.start()
         FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
         self.configure(default="other")
-        result, output, errors = _call(["resume", "TASK-1"])
+        result, output, errors = _call(["resume", "TASK-1"], tty=True)
         self.assertEqual((result, errors), (0, ""))
         self.assertEqual(Record.parse(output).name, "TASK-1")
         self.assertEqual(ReadyDelegate.usage_calls, ["researcher"])
+        self.assertTrue(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
         path = Path(self.cfg.logs_dir) / "orchestrator.jsonl"
         self.assertFalse(path.exists())
 

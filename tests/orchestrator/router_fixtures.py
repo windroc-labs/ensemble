@@ -62,7 +62,7 @@ from tests.utils.sandbox import scratch
 NOW = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
 
 
-EAST, WEST = timezone(timedelta(hours=8)), timezone(timedelta(hours=-4))
+WEST = timezone(timedelta(hours=-4))
 
 
 AGENT, USER, MANAGER, BOT = "agent", "user", "manager", "bot"
@@ -448,21 +448,6 @@ class Base(run_fixtures.Base):
                 client,
                 task=task,
                 minutes=minutes_ago,
-            )
-        )
-
-    def limit(self, client, resets_at, ident="TASK-9"):
-        self.lines.append(
-            json.dumps(
-                {
-                    "ts": NOW.astimezone(WEST).isoformat(timespec="seconds"),
-                    "kind": "limit",
-                    "issue": ident,
-                    "sid": self.sid("limited"),
-                    "client": client,
-                    "resets_at": resets_at,
-                    "delegate_kind": "harness",
-                }
             )
         )
 
