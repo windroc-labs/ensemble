@@ -1,4 +1,78 @@
-"""Claim or resume issue work with one scheduler tick or an explicit issue.
+"""The board router: one scheduler tick, or an explicit issue (HELP)."""
+
+import contextlib
+import fcntl
+import functools
+import itertools
+import json
+import os
+import re
+import subprocess
+import sys
+import textwrap
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from traceback import format_exception
+
+from ensemble import delegate
+from ensemble.orchestrator.engine import (
+    config,
+    inputs,
+    related,
+    target,
+    writeback,
+)
+from ensemble.orchestrator.engine import log as event_log
+from ensemble.orchestrator.engine.flow.types import (
+    ISSUE_ID,
+    IssueState,
+)
+from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
+from ensemble.orchestrator.engine.linear_run import LinearRun
+from ensemble.orchestrator.engine.log import linear_error, log
+from ensemble.orchestrator.engine.runs import (
+    client_of,
+    delegate_of,
+    failures,
+    latest,
+    note,
+    parse_log,
+    role_of,
+    started_task,
+    trim,
+)
+from ensemble.orchestrator.engine.types import (
+    OWNERSHIP,
+    UNOWNED,
+    UUID_RE,
+    ClientSource,
+    ConfigError,
+    InputError,
+    Invalid,
+    KeychainError,
+    LinearError,
+    Spec,
+    TrackerFileError,
+    TrackerKind,
+    Transient,
+    Unavailable,
+    Wiring,
+)
+from ensemble.orchestrator.trackers.linear.client import has_token, linear_gql
+from ensemble.utils import (
+    CLIENT_ENV,
+    EVENTS_ENV,
+    SID_ENV,
+    exhausted,
+    nested_start,
+    one_line,
+    printable,
+    summary,
+)
+
+HELP = """Claim or resume issue work with one scheduler tick or an explicit issue.
 
 Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
                              [--tui [--display D] [--events FILE]]
@@ -73,78 +147,6 @@ Recovery and next help:
   Command discovery: ensemble-orchestrator --help
   Role discovery: ensemble-delegate run --list
 """
-
-import contextlib
-import fcntl
-import functools
-import itertools
-import json
-import os
-import re
-import subprocess
-import sys
-import textwrap
-import uuid
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
-from traceback import format_exception
-
-from ensemble import delegate
-from ensemble.orchestrator.engine import (
-    config,
-    inputs,
-    related,
-    target,
-    writeback,
-)
-from ensemble.orchestrator.engine import log as event_log
-from ensemble.orchestrator.engine.flow.types import (
-    ISSUE_ID,
-    IssueState,
-)
-from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
-from ensemble.orchestrator.engine.linear_run import LinearRun
-from ensemble.orchestrator.engine.log import linear_error, log
-from ensemble.orchestrator.engine.runs import (
-    client_of,
-    delegate_of,
-    failures,
-    latest,
-    note,
-    parse_log,
-    role_of,
-    started_task,
-    trim,
-)
-from ensemble.orchestrator.engine.types import (
-    OWNERSHIP,
-    UNOWNED,
-    UUID_RE,
-    ClientSource,
-    ConfigError,
-    InputError,
-    Invalid,
-    KeychainError,
-    LinearError,
-    Spec,
-    TrackerFileError,
-    TrackerKind,
-    Transient,
-    Unavailable,
-    Wiring,
-)
-from ensemble.orchestrator.trackers.linear.client import has_token, linear_gql
-from ensemble.utils import (
-    CLIENT_ENV,
-    EVENTS_ENV,
-    SID_ENV,
-    exhausted,
-    nested_start,
-    one_line,
-    printable,
-    summary,
-)
 
 STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
@@ -1207,7 +1209,7 @@ def _help_text():
             break_long_words=False,
             break_on_hyphens=False,
         ),
-        __doc__ or "",
+        HELP,
     )
 
 

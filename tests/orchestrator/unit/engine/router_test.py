@@ -1653,7 +1653,7 @@ class RouterArguments(Base):
             "[--tui [--display D] [--events FILE]] | --brake ROLE",
         )
         for flag in ("--gate", "--split", "--manager", "--now"):
-            self.assertNotIn(flag, router.USAGE + router.__doc__)
+            self.assertNotIn(flag, router.USAGE + router.HELP)
 
     def test_now_is_refused(self):
         for argv in (["--now"], ["--now", "--dry-run"]):
