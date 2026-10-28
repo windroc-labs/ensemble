@@ -1,127 +1,116 @@
-<div align="center">
+# Ensemble
 
-# ensemble
+[English](../../README.md) · [Français](README.fr.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Português](README.pt.md) · [简体中文](README.zh-CN.md)
 
-[English](../../README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · **Español** · [Français](README.fr.md) · [Português](README.pt.md)
+Ensemble te permite trabajar con agentes de programación como un equipo. Habla con un comandante, delega una tarea a un rol
+o deja que un tablero distribuya el trabajo entre roles. Claude Code, Codex y OpenCode comparten los mismos controles de sesión.
 
-[![CI](https://github.com/windroc-labs/ensemble/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/windroc-labs/ensemble/actions/workflows/test.yml?query=branch%3Amain) [![Worker image](https://github.com/windroc-labs/ensemble/actions/workflows/worker-image.yml/badge.svg?branch=main)](https://github.com/windroc-labs/ensemble/actions/workflows/worker-image.yml?query=branch%3Amain) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../../LICENSE)
+<a id="what"></a>
+## Qué puedes ejecutar
 
-</div>
+![Cinco disciplinas: Drive, Equip, Systematize, Orchestrate y Master](../images/levels.svg)
 
-*Esto es una traducción; la versión de referencia es el README en inglés.*
+Elige el alcance que necesitas. Un trabajador es una conversación con un cliente; un rol añade un mandato, una tarea y un resultado;
+un tablero programa ejecuciones de roles y registra sus resultados en las incidencias. El tablero puede ser Linear o Markdown local.
 
-Ejecuta agentes de programación (Claude Code, Codex y OpenCode con los modelos de Ollama del host) sin supervisión desde un tablero de Linear o un tablero local de archivos Markdown de issues. Orchestrator lee y escribe issues mediante una interfaz Tracker intercambiable; `[orchestrator] tracker` selecciona `local` (por defecto) o `linear`. Un archivo workflow define las etapas y sus roles. Cada role trabaja hasta en `max_runs` issues a la vez y te devuelve su resultado para que lo revises. Cuando lo apruebas, lo toma el siguiente role.
+<a id="why"></a>
+## Por qué trabajar en equipo
 
-Desarrolladores: [`AGENTS.md`](../../AGENTS.md).
+![Un agente, varios agentes coordinados a mano y equipos de ensemble coordinados por comandantes](../images/compare.svg)
 
-```mermaid
-flowchart LR
-    R["researcher<br>deep-research, research, light-research"] -->|"report → Approve → promote"| P["pm<br>product-design"]
-    P -->|"Linear PRD → Approve → promote"| D["engineer<br>decompose"]
-    D -->|child issues| E["engineer<br>build, light-build"] -->|pull request| Y[you]
-    P -->|"local PRD → Approve → promote"| E
-    T[ensemble-orchestrator router] -.->|claims ready issues| R & P & D & E
-```
+Las ejecuciones independientes de agentes necesitan a alguien que distribuya el trabajo y siga sus respuestas. Un comandante usa Crew para iniciar,
+inspeccionar y reanudar esas ejecuciones desde una sola conversación. Tú sigues decidiendo qué trabajo autorizar y revisar.
 
-Linear: el PRD original permanece en Handoff hasta que decompose termina correctamente.
+<a id="how-it-works"></a>
+## Cómo funciona
 
-## Arquitectura en capas
+![Límites entre capas: comandos de Manager, Orchestrator, Delegate, Session y Utils compartidos](../images/layers.svg)
 
-ensemble está construido en capas: cada una hace un solo trabajo y solo llama a la de abajo. Las dos capas de abajo, Session y Delegate, son piezas genéricas que puedes usar por separado o como base de tu propia orquestación. En Orchestrator, cambia el archivo workflow para definir las etapas o implementa la interfaz Tracker para conectar otro tablero. Para ampliarlo, un nuevo client de agente se conecta en Session, y los nuevos roles y tasks se añaden en Delegate.
+![Límites de ejecución: arnés de sesión, guardas locales y de Docker, credenciales del broker y proxy de salida](../images/system.svg)
 
-![Capas de ensemble, de arriba abajo: Manager (la interfaz de usuario), Orchestrator (orquestación; trackers Linear y local), Delegate (la capa de roles), Session (el adaptador de clients)](../images/layers.svg)
+El control, la entrega de credenciales y las rutas de red son aspectos distintos. La [visión general de la arquitectura](../architecture.md)
+explica las responsabilidades y la confianza; los detalles de implementación están en el código fuente enlazado.
 
-| Capa | Qué hace | Empieza en |
-|---|---|---|
-| Manager | Un conductor para las capas de abajo: un agente con el que hablas, que lanza workers, role runs y runs del tablero, los vigila e informa. | [Demo](#demo-un-manager-muchos-workers) |
-| Orchestrator | Ejecuta roles según un archivo workflow, con trackers intercambiables: Linear o un tablero local de Markdown. | [Tableros](../architecture.md#board) |
-| Delegate (núcleo) | Ejecuta un role sobre una task a través de una session y devuelve un resultado verificado. Un plugin de Claude Code y Codex que puedes usar por separado. | [Instalación](#instalación) |
-| Session | Inicia, vigila y reanuda un agente de programación (Claude Code, Codex, OpenCode) en tmux o en un contenedor Docker, igual para todos los clients. | [Sessions](../architecture.md#session-settings) |
-
-El workflow incluido refleja mi filosofía de cómo deberían trabajar los agentes (investigación, luego un PRD, luego un build, con revisión humana entre cada etapa). `[orchestrator] workflow` selecciona otro archivo workflow; un valor vacío usa el incluido. Los roles y las tasks también son tuyos para editar ([Personalizar roles y tasks](../customizing-roles-and-tasks.md)).
-
-## Por qué ensemble
-
-![Trabajar con agentes de programación: un agente, muchos agentes a mano, ensemble](../images/compare.svg)
-
-Un solo agente te hace esperar; con muchos agentes a mano, cada prompt, revisión y aprobación pasa por ti. Con ensemble hablas con un manager, que lanza, vigila e informa sobre los workers.
-
-## Cinco levels para dominar los AI agents
-
-Trabajar con agents de programación es una escalera: cada level suma una disciplina de ingeniería sobre las de abajo, y la habilidad está en elegir el level que pide el problema.
-
-![Cinco levels para dominar los AI agents: Drive, Equip, Systematize, Orchestrate, Master, con ensemble entre 4 y 5](../images/levels.svg)
-
-| Level | Disciplina | Qué significa |
-|---|---|---|
-| 1. Drive | prompt engineering y context engineering | Prompting conversacional, gestión del context, saber qué modelo sirve para cada trabajo. |
-| 2. Equip | tools, skills, MCP | Dar al agent herramientas para alcanzar y actuar sobre el mundo (archivos, APIs, un navegador, MCP servers), dentro de permisos y un sandbox. |
-| 3. Systematize | state engineering | Un workflow ejecutado como máquina de estados: etapas definidas, reintentos, pasos idempotentes, traspasos. |
-| 4. Orchestrate | loop engineering | Muchos agents: fan-out, planner y verifier, enrutamiento, límites de concurrencia y de cuota. |
-| 5. Master | environment engineering | Barreras de seguridad y un entorno agent-oriented: herramientas, checks y verificación hechos para agents, no para humanos, para que el camino más fácil sea el correcto (una idea de Lauren Tan). |
-
-¿Aún no llegas al level 3? Prueba [updraft](https://github.com/windroc-labs/updraft): al menos te lleva hasta ahí. Las capas de ensemble (la tabla del principio) suben más: Session lleva la conversación del agent y le da un host donde actuar (levels 1–2), Delegate ejecuta un role sobre una task como un workflow verificado (3), y el Orchestrator, con el manager encima, coordina muchos agents (entre 4 y 5). Ponte tú encima, fijando el entorno, los límites y las puertas, y eso es Master, aunque la verificación de ensemble todavía se queda un poco corta. La meta es el level 5 y más allá.
-
-## Demo: un manager, muchos workers
-
-Sin el tablero, puedes usar ensemble hablando con un solo agente, el manager. Abre su session con `ctmux <name>`, inicia Claude Code o Codex en ella e invoca `/ensemble:manage`. Le das trabajo con palabras normales; lanza un worker por cada task, vigila sus eventos, revisa sus pull requests e informa.
-
-Comandos: [Inicio rápido](#inicio-rápido).
-
+<a id="install"></a>
 ## Instalación
 
-Cada client instala el plugin por su cuenta. Antes de actualizar, consulta [Upgrading](../upgrading.md).
+En un Mac con Apple silicon, ejecuta el instalador de la versión fijada en el
+[marketplace windroc](https://github.com/windroc-labs/agent-plugins-marketplace/blob/main/.claude-plugin/marketplace.json).
+Sustituye `<tag>` por el `source.ref` de ensemble en ese archivo:
 
-| Client | Instalación |
+```sh
+curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
+```
+
+Para proporcionar la contraseña de `sudo` desde Keychain, descarga primero el script; stdin no puede transportar también el texto del script. Sustituye `<item>` por su servicio de Keychain:
+
+```bash
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
+```
+
+| Opción | Lee |
 |---|---|
-| Claude Code | `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, luego `/plugin install ensemble@windroc` |
-| Codex 0.156.0+ | `codex plugin marketplace add windroc-labs/agent-plugins-marketplace` (para refrescar uno ya añadido: `codex plugin marketplace upgrade windroc`), luego `codex plugin add ensemble@windroc`. `codex plugin list -m windroc` debe mostrarlo instalado y habilitado. |
+| `--password-stdin` | La contraseña de `sudo` desde stdin, antes de la clave del proveedor |
 
-Nada de esto se comprueba. Si falta algo, el run del agente falla.
+El instalador pregunta qué clientes usar, si los trabajadores se ejecutan localmente o en Docker y si quieres configurar un
+tablero. Instala las dependencias y los plugins seleccionados, solicita los inicios de sesión necesarios y configura `ctmux`.
+Vuelve a ejecutarlo para completar una instalación interrumpida. Para ver las opciones, usa `bash scripts/install.sh --help` en una copia del repositorio;
+si ya tienes una instalación, lee primero [Actualización](../upgrading.md).
 
-| Requisito | Para |
-|---|---|
-| CLI `claude`, Python 3.11+ | cada run de agente |
-| el plugin [`updraft`](https://github.com/windroc-labs/updraft), para workers en el host: Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, luego `/plugin install updraft@windroc`; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, luego `codex plugin add updraft@windroc`. Los workers Docker lo instalan en la imagen ([plugins](../architecture.md#plugins)). | las build tasks del engineer (`/updraft:build`, `/updraft:light-build`) y la revisión del PRD del PM (`/updraft:review`). No hace falta en otro caso. |
-| tmux 3.3–3.8 | tui runs en el Host `tmux` |
-| [Ollama](https://ollama.com) solo en `127.0.0.1`, con contexto de al menos 65536 y el modelo del tier descargado; en `tmux` también OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | solo OpenCode ([Docker host › OpenCode on Docker](../architecture.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)) |
-| `git`, `gh` con sesión iniciada | programar (checkouts, pull requests) y destinos de GitHub. No hace falta en otro caso. |
-| iTerm2 en ejecución | la división de iTerm2 por defecto |
-| Docker Desktop en ejecución; el broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), instalado con `sh <plugin dir>/src/broker/install.sh` (necesita `sudo` y `gh` con sesión iniciada); un login de cada uno: `B login claude` (pega un `claude setup-token`), `B login github ensemble-broker-bot` y, para Codex, `sudo B install-codex <version>` y luego `B login codex`; OpenCode no necesita ninguno | solo el Docker Host ([Docker host](../architecture.md#docker-host)); el host no necesita Node. Qué permite cada credencial, dónde se guarda y cómo revocarla: [Credentials](../architecture.md#credentials). |
+Usa la cuenta de modelos o el proveedor que requiera el cliente elegido. La configuración del proveedor y de la red de OpenCode se describe
+en [Personalización de roles y tareas](../customizing-roles-and-tasks.md#opencode-sessions).
+El `gh` del host necesita acceso para hacer push y gestionar PR en los repositorios de destino: los tokens clásicos necesitan `repo`, `read:org` y `gist`;
+los tokens de permisos detallados también necesitan acceso de lectura a Actions para las comprobaciones.
 
-Cómo cargan tu configuración las sessions que inicia ensemble, y por qué algunos comandos se niegan dentro de ellas: [Session settings](../architecture.md#session-settings).
+### GitHub App
 
-| Comando | Hace |
-|---|---|
-| `ctmux <name>` | Abre la session de tmux del commander: ventanas nativas en iTerm2, un tmux attach normal en otros terminales, un cambio de session desde dentro de tmux. `ctmux --install` pone ctmux y los cuatro comandos `ensemble-crew`, `ensemble-session`, `ensemble-delegate` y `ensemble-orchestrator` en `~/.ensemble/bin/`: ejecútalos con esa ruta o añádela a `PATH`. Los comandos usan el plugin seleccionado en esta instalación, aunque queden copias de otros clientes. Si una actualización elimina el directorio seleccionado, el siguiente comando guarda y ejecuta la copia instalada más reciente del mismo cliente e indica su ruta en stderr, sin volver a ejecutar el instalador. Si no queda ninguna copia de ese cliente, conserva el error de selección. Para refs antiguas, usa el instalador. |
-| `/ensemble:manage` | Lanza y dirige workers, role runs y pipeline runs, con las pautas del commander. |
-| `/ensemble:act-as <role>[:<task>] <input>` | Ejecuta un role del núcleo en esta conversación. |
-| `/ensemble:board` | Lee, busca, crea, edita, mueve y archiva issues del tablero con los comandos fijos `ensemble-orchestrator issue`. |
-| `ensemble-delegate run --list` | Lista todos los roles y tasks. |
+Los trabajadores de Docker usan una GitHub App en lugar del inicio de sesión de `gh` del host. El instalador no crea la App.
+En GitHub Settings › Developer settings › GitHub Apps, crea una App privada que solo se pueda instalar en tu cuenta,
+con los webhooks desactivados. Sus permisos de repositorio deben cubrir `github.permissions` en la
+[configuración de Session](../../src/ensemble/session/config.toml). Instálala solo en los repositorios a los que los trabajadores puedan hacer push,
+incluidos los repositorios de salida de documentos.
 
+Genera una clave privada, anota el App ID e impórtalos:
+
+```sh
+/usr/local/libexec/ensemble/ensemble-broker login github ensemble-broker-bot \
+  --key-file KEY.pem --app-id APP_ID
+```
+
+Elimina el PEM después de importarlo. [Rotación de credenciales](../upgrading.md#credential-rotation) explica la sustitución y la revocación.
+
+<a id="quick-start"></a>
 ## Inicio rápido
 
-1. [Instala](#instalación) el plugin.
-2. En una session nueva de Claude Code, compruébalo: `/ensemble:act-as dummy-tester:echo hello` devuelve `hello`.
-3. Ejecuta un role: `/ensemble:act-as researcher <question>`. Sin configuración local, el informe se guarda en `~/.ensemble/adhoc/<date>-researcher-<name>/agent/prompt.md`; para publicarlo, configura el destination del role ([Personalizar roles y tasks](../customizing-roles-and-tasks.md#change-a-roles-run-settings)).
-4. Para ejecutar roles desde un tablero de Linear o un tablero local de Markdown: [Tableros](../architecture.md#board).
+Para una sola tarea, en una conversación del cliente instalado:
 
-## Personalizar roles y tasks
+```text
+/ensemble:act-as dummy-tester:echo hello
+```
 
-- Ajustes de run por role (nivel de modelo, effort, client, destination, comandos): `[delegate.roles.<role>]` en `~/.ensemble/config.local.toml`.
-- Tus propios roles, tasks y plantillas: un directorio de team listado en `[delegate] team_dirs`. Solo añade; nunca cambia un role integrado.
-- Comprobar: `ensemble-delegate run --list`, luego `ensemble-delegate run --role <role> --input <text> --dry-run`.
+Para un equipo, abre un shell de comandante e inicia tu cliente:
 
-Formatos, reglas y los límites del tablero: [Personalizar roles y tasks](../customizing-roles-and-tasks.md).
+```sh
+ctmux work
+claude
+```
 
+Usa `codex` u `opencode` en lugar de `claude` si ese es tu cliente. En esa conversación, ejecuta:
+
+```text
+/ensemble:manage
+```
+
+Describe el trabajo y el entregable deseado. El comandante coordina los trabajadores y las ejecuciones de roles mediante Crew.
+Para trabajar con un tablero, `/ensemble:board` opera sobre las incidencias; la [personalización del flujo de trabajo](../customizing-roles-and-tasks.md#on-the-board)
+explica cómo elegir las etapas.
+
+<a id="docs"></a>
 ## Documentación
 
-Estas páginas están en inglés.
-
-| Página | Cubre |
+| Consulta lo que necesites… | Dónde |
 |---|---|
-| [Customizing roles and tasks](../customizing-roles-and-tasks.md) | ajustes de run, directorios de team, archivos de role y task, comprobaciones, sessions de OpenCode |
-| [Board](../architecture.md#board) | configuración, estados de issue y etiquetas de task, operar el router, etiquetas Agent (client por issue), tablero local (`tracker`, `ENSEMBLE_BOARD_DIR`, estructura, formato de archivo) |
-| [Upgrading](../upgrading.md) | pasos de actualización |
-| [Core architecture](../architecture.md) | capas y paquetes (desarrolladores); ajustes de session, `ensemble-session`, flags de client de los role runs |
-| [Tests](../architecture.md#tests) | lint, suites de tests, cobertura, tests en vivo que un modelo local puede validar (desarrolladores) |
+| Las capas del sistema y los límites de ejecución y confianza | [Arquitectura](../architecture.md) |
+| Modelos, proveedores, ajustes de roles, tus propias tareas o el flujo de trabajo | [Personalización de roles y tareas](../customizing-roles-and-tasks.md) |
+| Cambios necesarios en una instalación existente | [Actualización](../upgrading.md) |
+| Convenciones para colaboradores y puntos de entrada para las comprobaciones | [AGENTS.md](../../AGENTS.md) |

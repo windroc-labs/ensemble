@@ -1,6 +1,6 @@
 # Ensemble
 
-An unattended pipeline that runs role agents on tasks, in five layers (`docs/architecture.md`).
+An unattended pipeline that runs role agents on tasks, ([architecture](docs/architecture.md)).
 
 ## Language
 
@@ -109,7 +109,7 @@ The interface the Linear orchestrator's engine reads and writes issues through, 
 _Avoid_: backend
 
 **Local board**:
-A directory of Markdown issue files, `$ENSEMBLE_BOARD_DIR` (default `~/.ensemble/board/`), each file's directory its assignee and state (`<assignee>/<state>/`, or flat `archive/`), its runtime state in `<board>/.state/`; one directory is one board, never synced. The router, `writeback`, `resume`, `promote`, `prune` and `issue` run on one. `scripts/install.sh --board local --launchd` optionally schedules router and promote (which also prunes); without jobs, run them on demand. Format: `docs/architecture.md` › Board › Local board. In code: `src/ensemble/orchestrator/trackers/local/`.
+The Markdown-file Tracker. Editing and operation: [Local issue format](src/ensemble/orchestrator/trackers/local/issue_file.py). In code: `src/ensemble/orchestrator/trackers/local/`.
 
 **Workflow**:
 The board's stages, one per orchestrated role: its input layout, the role promote hands its Handoff issues to, whether a Handoff needs instructions, its title prefix and its write-back comment leads. In code: a file of `[[stage]]` tables, the packaged `src/ensemble/orchestrator/engine/flow/workflow.toml` unless `[orchestrator] workflow` names another, which `config.load()` reads into `config.TASKS` (`engine/flow/workflow.py`).

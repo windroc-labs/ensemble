@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A tmux session for the manager, attached as README's ctmux row says. Its shell runs under
+# A tmux session for the manager. Its shell runs under
 # this plugin's bin/ensemble-crew hold, which keeps the manager's lease while the shell lives; start
 # the client there.
 # --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
