@@ -354,7 +354,7 @@ def activity(name: str, home: str | None = None) -> str | None:
 def events(path: str) -> list[str]:
     try:
         with open(path) as f:
-            return f.read().splitlines()
+            return [line.removesuffix("\n") for line in f if line.endswith("\n")]
     except FileNotFoundError:
         return []
 
@@ -362,12 +362,22 @@ def events(path: str) -> list[str]:
 _events = events
 
 
+def wait_events(path: str, expected, timeout: float = TIMEOUT) -> list[str]:
+    """All (session, word) notifications, in either order; retain duplicates for assertions."""
+
+    def complete():
+        lines = events(path)
+        found = {tuple(line.split()[1:3]) for line in lines}
+        return lines if set(expected) <= found else None
+
+    return wait(complete, timeout, f"events {expected!r}")
+
+
 def logged(path: str) -> list[dict]:
     return read_jsonl(path, missing_ok=True)
 
 
 def wait(check, timeout: float = TIMEOUT, what: str = "check() to hold"):
-    """check()'s first truthy value; an AssertionError counts as falsy."""
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -392,8 +402,6 @@ def assert_grid(
 
 
 class Calls:
-    """Its host's setUp sets self.server, self.root, self.events; bins() leads PATH."""
-
     WAIT = TIMEOUT
     EVENT = "{count} x {name} {word}"
 

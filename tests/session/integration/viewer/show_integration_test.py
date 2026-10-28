@@ -113,11 +113,20 @@ class ShowTest(Case):
         self.assertEqual(self.server.option("worker", "@pane"), "")
 
     def test_a_docker_tui_view_shows_the_tmux_status_line_by_default(self):
+        name = "engineer-WDRC-281-502d679e"
+        before = self.server.tmux("show-options", "-g").stdout
+        manager = self.server.tmux("show-options", "-t", "=mgr:").stdout
         host = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
         with mock.patch.object(
             host, "attach_target", return_value=CommandView("cat -", live_tmux.IDLE)
         ):
-            self.assertIsNone(Viewer().show("docker-worker", host, command="true"))
-        status = self.server.tmux("show", "-t", "=docker-worker:", "status")
+            self.assertIsNone(Viewer().show(name, host, command="true"))
+        status = self.server.tmux("show", "-t", f"={name}:", "status")
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertEqual(status.stdout.strip(), "status on")
+        self.assertEqual(self.server.option(name, "status-left-length"), str(len(name) + 3))
+        label = self.server.tmux("display-message", "-p", "-t", f"={name}:", "#{E:status-left}")
+        self.assertEqual(label.returncode, 0, label.stderr)
+        self.assertEqual(label.stdout, f"[{name}] \n")
+        self.assertEqual(self.server.tmux("show-options", "-g").stdout, before)
+        self.assertEqual(self.server.tmux("show-options", "-t", "=mgr:").stdout, manager)

@@ -1,11 +1,4 @@
-"""A Linear pipeline through ensemble-crew on the real commands (tests/manager/live_pipeline.py):
-`crew run p -- ensemble-orchestrator router --issue ID --tui`, no --events, records its pipeline Record
-and writes its turn ends and one outcome to the manager's events file (FR-18, FR-28); a crew killed
-before the commit leaves an entry attach adopts and crew resume keeps (FR-28); a pipeline whose
-sessions were killed comes back by crew resume on its sid at its display and writes back. Ports
-main's tests/integration/orchestrator/pm_engineer_integration_test.py
-test_b8_a_managed_attended_run_is_recovered_from_the_roster.
-"""
+"""Real crew pipelines: manager events, adoption after a crew crash and attended resume."""
 
 from ensemble.manager import State
 from tests.delegate.replies import block, mark
@@ -31,9 +24,11 @@ class PipelineTest(LivePipeline):
         record = self.pipeline("p", [f"{START}\n{DONE}"])
         (tui,) = record.sessions
         drive = f"{tui}-drive"
-        self.wait_event(drive, "exited")
+        live_tmux.wait_events(
+            self.events, [(drive, word) for word in ("outcome", "exited")], self.WAIT
+        )
         self.assertEqual(self.words(tui), [["done"]])
-        self.assertEqual(self.words(drive), [["outcome", "done"], ["exited", "0"]])
+        self.assertCountEqual(self.words(drive), [["outcome", "done"], ["exited", "0"]])
         self.until(lambda: self.state(ID) == "in_review", f"{ID} written back")
         self.until(lambda: not self.drive_running(record), f"{drive} ended")
         self.ok(self.crew("attach"))

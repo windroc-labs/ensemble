@@ -1,6 +1,4 @@
-"""bin/ensemble-session run as users do: fresh cwd and HOME, private tmux (MANAGER), fake claude.
-`module=True`: `python3 -P -m ensemble.session.cli` instead, for a test Host's config.
-"""
+"""Session CLI fixtures: private HOME, tmux and fake claude."""
 
 import json
 import os
@@ -34,6 +32,16 @@ POLICY = ("--allowedTools", "--add-dir", "--dangerously-skip-permissions")
 
 class CliCase(live_tmux.Calls, Case):
     ATTACH = True
+
+    def assert_early_exit(self, result, name: str, code: int) -> list[str]:
+        """A failed start's protocol; its screen is optional and may include an opening command."""
+        self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
+        lines = result.stderr.splitlines()
+        self.assertGreaterEqual(len(lines), 2, result.stderr)
+        self.assertEqual(lines[0], f"session {name}: tmux attach -t '={name}'", result.stderr)
+        head = f"ensemble-session: {name}: claude exited {code} at once"
+        self.assertEqual(lines[1], head + ("; its last lines:" if lines[2:] else ""), result.stderr)
+        return lines[2:]
 
     def setUp(self):
         self.root = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP"))

@@ -28,7 +28,7 @@ dir = "Research/"
 - **Client and policy:** choose the client with this config or `ensemble-delegate run --client`; [Delegate configuration](../src/ensemble/delegate/config.toml) covers permissions and flag overrides.
 - **Claude account:** [Session account configuration](../src/ensemble/session/config.toml).
 - **Destination:** `[output]` (`local`, `github` or `pull-request`); a lower level's `[output]` replaces the whole table.
-- **Access:** `read`, `write` and `commands` widen what the agent run may read, write and run; `templates` inlines templates into its prompt.
+- **Access:** Delegate always grants reads of the core team directory, the role's team directory and its tasks directory, even when a role or overlay replaces `read`. `read` adds only extra directories; `write` and `commands` widen writes and commands; `templates` inlines templates into the prompt.
 - **Board runs:** the same keys under `[orchestrator.core]` (e.g. `[orchestrator.core.roles.engineer]`) apply to board runs only, after the `[delegate]` ones.
 
 ## Add roles, tasks and templates
