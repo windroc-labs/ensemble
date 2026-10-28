@@ -84,7 +84,7 @@ ROLES = {
     "engineer": (
         role_id("engineer"),
         "linear-app-engineer-token",
-        ("build", "light-build"),
+        ("build", "light-build", "decompose"),
         1,
         None,
     ),

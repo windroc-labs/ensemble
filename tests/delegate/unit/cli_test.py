@@ -1031,7 +1031,7 @@ class Usage(Base):
                 "a task off the index",
                 {"role": "engineer", "task": "deep-research"},
                 "",
-                "task 'deep-research' is not one of engineer's tasks (build, light-build)",
+                "task 'deep-research' is not one of engineer's tasks (build, light-build, decompose)",
             ),
             (
                 "a bad team_dirs",
