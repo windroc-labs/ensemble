@@ -59,8 +59,11 @@ Prerequisites and effects:
   create that next role's issue in the same project, delegated to its app,
   with an empty assignee,
   in Todo with source links and the user's instructions (comments by anyone but
-  the harness and role apps); relate the issues and move the source to
-  Done. Existing next-stage issues are reused. Required instructions absent:
+  the harness and role apps); relate the issues. On Linear, pm to engineer
+  creates a decompose-task issue and keeps the source in Handoff until that run
+  succeeds; linear.task_labels.decompose must be configured. Other promotions,
+  including local pm handoffs, move the source to Done.
+  Existing next-stage issues are reused. Required instructions absent:
   return the source to In Review with a comment.
   Every tick also prunes: close finished runs, delete agent files and archive
   finished issues (Done ones of pm/engineer only). This includes uncommitted

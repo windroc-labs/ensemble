@@ -11,11 +11,13 @@ from typing import NamedTuple
 
 from ensemble.orchestrator.engine import config, runs, writeback
 from ensemble.orchestrator.engine import router as routing
+from ensemble.orchestrator.engine.flow import handoff, workflow
 from ensemble.orchestrator.trackers.linear import ops
 from ensemble.utils import Record
 from tests.delegate.replies import block, mark, option
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.flow_fixtures import (
+    DECOMPOSE,
     HUMAN,
     MANAGER,
     PRD_DIR,
@@ -285,15 +287,23 @@ class Segment(TmuxFlow):
             "summary": f"Summary #{n}.",
         }
         if outcome == "done":
-            report["url"] = url or (
-                f"https://github.com/{REPO}/pull/{n}"
-                if config.TASKS[role].input == "build"
-                else self.doc_url(f"{DIRS[role]}{datetime.now(UTC):%Y-%m-%d}-{ident}-run-{n}.md")
-            )
+            if role == "engineer" and DECOMPOSE in self.issue(ident)["labels"]:
+                report["deliverable"] = f"| Issue | Repo |\n| TASK-99 | {REPO} |"
+            else:
+                report["url"] = url or (
+                    f"https://github.com/{REPO}/pull/{n}"
+                    if config.TASKS[role].input == "build"
+                    else self.doc_url(
+                        f"{DIRS[role]}{datetime.now(UTC):%Y-%m-%d}-{ident}-run-{n}.md"
+                    )
+                )
         if outcome == "needs_input":
             report["questions"] = [f"Question #{n}?"]
         text = report["questions"][0] if outcome == "needs_input" else report["summary"]
-        return Script(outcome, [*steps, block(report)], report, {text: TEXT_KINDS[outcome]})
+        texts = {text: TEXT_KINDS[outcome]}
+        if "deliverable" in report:
+            texts[report["deliverable"]] = "tickets"
+        return Script(outcome, [*steps, block(report)], report, texts)
 
     def launch(self, ident, role, script, *, resumed, tui=False, tick=False, after_stop=False):
         """router.py --issue ident (or a tick) with script behind a new gate, until fake_claude
@@ -396,7 +406,18 @@ class Segment(TmuxFlow):
                 self.assertTrue(self.live(config.tui_name(p.role, p.ident, p.sid)))
             want, task, app, report = (
                 self.want[p.ident],
-                config.TASKS[p.role],
+                workflow.for_task(
+                    config.TASKS,
+                    p.role,
+                    next(
+                        (
+                            r.get("task")
+                            for r in self.runs()
+                            if r["kind"] == "start" and r["sid"] == p.sid
+                        ),
+                        None,
+                    ),
+                ),
                 role_id(p.role),
                 p.script.report,
             )
@@ -413,9 +434,13 @@ class Segment(TmuxFlow):
                 scope = "" if attempt <= 1 else f"attempt:{attempt}:"
                 outcome, url = report["status"], report.get("url")
                 state = (
-                    "in_review"
-                    if outcome != "failed" or p.resumed
-                    else writeback.FIRST_FAILURE[task.first_failure]
+                    "done"
+                    if task.input == "decompose" and outcome == "done"
+                    else (
+                        "in_review"
+                        if outcome != "failed" or p.resumed
+                        else writeback.FIRST_FAILURE[task.first_failure]
+                    )
                 )
                 if outcome == "done" and task.retitle:
                     steps.append(f"{scope}retitle")
@@ -426,6 +451,10 @@ class Segment(TmuxFlow):
                     )
                 steps.append(f"{scope}comment")
                 comments += [(app, k) for k in p.script.texts.values()]
+                if outcome == "done" and task.input == "decompose":
+                    steps += [f"{scope}deliverable", f"{scope}source:done"]
+                    source = handoff.parse_handoff(self.issue(p.ident)["description"]).source
+                    self.expect(source, state="done", history=[("handoff", "done", app)])
                 if outcome == "done" and url:
                     steps.append(f"attach:{url}")
                     if all(a["url"] != url for a in want.attachments):
@@ -447,7 +476,9 @@ class Segment(TmuxFlow):
                     changes["subscribers"] = [HUMAN]
             # write-back looks each comment step up before posting it: its event may come again
             posts = [
-                s for s in steps if s not in ledgered and (s == "start" or s.endswith("comment"))
+                s
+                for s in steps
+                if s not in ledgered and (s == "start" or s.endswith(("comment", "deliverable")))
             ]
             self.expect_problem(*[lookup(app)] * len(posts))
             self.expect(p.ident, comments=comments, ledger={p.sid: steps}, **changes)
@@ -577,12 +608,16 @@ class Segment(TmuxFlow):
             res = self.promote_now()
             self.assertEqual((res.returncode, res.stderr, res.stdout), (0, "", ""))
             child, title = self.assert_child(ident, role, nxt)
-            self.expect(
-                ident,
-                state="done",
-                history=[("handoff", "done", HARNESS_USER)],
-                comments=[(HARNESS_USER, f"promoted {child}")],
-            )
+            if (role, nxt) == ("pm", "engineer"):
+                self.assertEqual(self.state(ident), "handoff")
+                self.assertEqual(self.issue(child)["labels"], [DECOMPOSE])
+            else:
+                self.expect(
+                    ident,
+                    state="done",
+                    history=[("handoff", "done", HARNESS_USER)],
+                    comments=[(HARNESS_USER, f"promoted {child}")],
+                )
             self.track(child, state="todo", title=title)
         return child
 

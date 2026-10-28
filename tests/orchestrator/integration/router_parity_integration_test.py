@@ -305,8 +305,7 @@ class Refusals(Parity):
         self.assertTrue(bounce.endswith(f"{REPO}: no push permission"), bounce)
         self.assertIn(f"router launch {ID} exit=0", self.routed())
 
-    def test_a_promoted_issue_whose_target_check_fails_returns_to_its_source(self):
-        """v1 writeback.bounce of an issue promoted from a Handoff source."""
+    def test_a_legacy_promoted_build_with_bad_target_returns_to_its_source(self):
         now, pm = datetime.now(UTC), role_id("pm")
         self.fake.issue(
             "PRD: Session registry",
@@ -319,13 +318,14 @@ class Refusals(Parity):
         self.fake.move(SOURCE, "in_review", actor=pm, at=now - timedelta(minutes=40))
         self.fake.comment(SOURCE, self.ids[HUMAN], "Build it.", at=now - timedelta(minutes=30))
         self.fake.move(SOURCE, "handoff", actor=self.ids[HUMAN], at=now - timedelta(minutes=20))
-        res = self.promote()
-        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""), self.said())
-        [child] = [
-            line.rpartition(" to=")[2]
-            for line in self.said()
-            if line.startswith(f"promote promote {SOURCE} ")
-        ]
+        self.fake.move(SOURCE, "done", actor=HARNESS_USER)
+        child = self.fake.issue(
+            "ENG: Session registry",
+            state="todo",
+            delegate=ENGINEER,
+            project=PROJECT,
+            description=f"Handoff from {SOURCE}\n\n## Instructions\nBuild it.",
+        )["identifier"]
         self.assertEqual(self.state(SOURCE), "done")
         self.gh["repos"][REPO]["permissions"]["push"] = False
         self.write_gh()

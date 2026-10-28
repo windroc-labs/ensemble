@@ -1,5 +1,3 @@
-"""The engine's board port."""
-
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Sequence
 from datetime import datetime

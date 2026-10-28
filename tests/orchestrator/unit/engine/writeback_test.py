@@ -417,6 +417,124 @@ class ProgressReporting(Base):
         self.assertIn("KeyError: 'nope'", record["traceback"])
 
 
+class DecomposeCompletion(Base):
+    TABLE = "| Issue | Repo | Requirements |\n| ENG-8 | acme/queue | FR-1 |\n"
+
+    def prepared(self):
+        port = mock.Mock()
+        port.links.return_value = set()
+        port.issue.return_value = issue(HANDOFF)
+        port.on_board.return_value = SRC_UUID
+        port.move.return_value = None
+        port.find_comment.return_value = None
+        ctx = replace(self.ctx(), task="decompose", tracker=port)
+        self.write(ctx, "run/out.md", self.TABLE)
+        return ctx, port
+
+    def test_done_posts_table_and_completes_source_before_decompose_once(self):
+        ctx, port = self.prepared()
+        done = Outcome(status="done", title="Queues", summary="Created ENG-8", url=PR)
+        self.assertTrue(writeback.finish(ctx, done))
+        self.assertEqual(
+            port.move.call_args_list,
+            [
+                mock.call(SRC_UUID, writeback.IssueState.DONE, frm=writeback.IssueState.APPROVED),
+                mock.call(UUID, writeback.IssueState.DONE, frm=writeback.IssueState.RUNNING),
+            ],
+        )
+        self.assertIn(
+            mock.call(UUID, self.TABLE, (SID, "deliverable")), port.comment.call_args_list
+        )
+        port.link.assert_not_called()
+        self.assertTrue(writeback.finish(ctx, done))
+        self.assertEqual(port.move.call_count, 2)
+        self.assertEqual(port.comment.call_count, 2)
+
+    def test_missing_table_or_source_does_not_complete(self):
+        for missing in ("table", "handoff", "source"):
+            with self.subTest(missing=missing):
+                ctx, port = self.prepared()
+                if missing == "table":
+                    os.remove(os.path.join(ctx.workdir, "run/out.md"))
+                elif missing == "handoff":
+                    port.issue.return_value = issue("No handoff")
+                else:
+                    port.on_board.return_value = None
+                self.assertFalse(
+                    writeback.finish(ctx, Outcome(status="done", title="Queues", summary="ENG-8"))
+                )
+                port.move.assert_not_called()
+                self.assertNotIn("outcome", writeback._done(ctx))
+
+    def test_source_state_change_is_preserved_and_done_is_retryable(self):
+        for state, okay in ((STATES["in_review"], False), (STATES["done"], True)):
+            with self.subTest(state=state):
+                ctx, port = self.prepared()
+                port.move.side_effect = [state, None]
+                self.assertEqual(
+                    writeback.finish(ctx, Outcome(status="done", title="Queues", summary="ENG-8")),
+                    okay,
+                )
+                self.assertEqual(port.move.call_count, 2 if okay else 1)
+                self.assertEqual("outcome" in self.steps(ctx)[SID], okay)
+
+    def test_retry_after_second_move_failure_preserves_table_and_source_step(self):
+        ctx, port = self.prepared()
+        port.move.side_effect = [None, LinearError("offline"), None]
+        done = Outcome(status="done", title="Queues", summary="ENG-8")
+        self.assertFalse(writeback.finish(ctx, done))
+        self.assertTrue(writeback.finish(ctx, done))
+        self.assertEqual(
+            port.move.call_args_list.count(
+                mock.call(SRC_UUID, writeback.IssueState.DONE, frm=writeback.IssueState.APPROVED)
+            ),
+            1,
+        )
+        self.assertEqual(port.comment.call_count, 2)
+
+    def test_stale_outcome_does_not_move_either_issue(self):
+        ctx, port = self.prepared()
+        self.assertTrue(
+            writeback.finish(
+                ctx, Outcome(status="done", title="Queues", summary="ENG-8"), move=False
+            )
+        )
+        port.move.assert_not_called()
+
+    def test_needs_input_assigns_and_failure_keeps_engineer_rules_without_source_reads(self):
+        for status, resumed, first_failure, state in (
+            ("needs_input", False, "review", "in_review"),
+            ("failed", False, "ready", "todo"),
+            ("failed", True, "ready", "in_review"),
+        ):
+            with self.subTest(status=status, resumed=resumed):
+                ctx, port = self.prepared()
+                ctx = replace(ctx, resume=resumed, assignee="human-id")
+                port.notify.return_value = ""
+                port.state_name.return_value = "Todo"
+                stage = replace(config.TASKS["engineer"], first_failure=first_failure)
+                with mock.patch.dict(config.TASKS._stages, engineer=stage):
+                    self.assertTrue(
+                        writeback.finish(
+                            ctx,
+                            Outcome(
+                                status=status,
+                                title="Queues",
+                                summary="Check",
+                                questions=("Which scope?",),
+                            ),
+                        )
+                    )
+                port.issue.assert_not_called()
+                port.on_board.assert_not_called()
+                port.move.assert_called_once_with(
+                    UUID, writeback.MOVES[state], frm=writeback.IssueState.RUNNING
+                )
+                if status == "needs_input":
+                    port.assign.assert_called_once_with(UUID, "human-id")
+                    self.assertIn("Which scope?", port.comment.call_args.args[1])
+
+
 class CompletionFailures(Base):
     def test_a_tracker_file_error_reading_links_fails_the_finish(self):
         ctx = replace(self.ctx(), tracker=Refusing(FILE_ERROR))
@@ -1901,6 +2019,14 @@ class Events(RunCase):
 
 
 class ForClaim(RunCase):
+    def test_recorded_task_selects_decompose_for_recovery(self):
+        ctx = writeback.for_claim(self.cfg, replace(CLAIM, task="decompose"), WRITERS, attempt=2)
+        self.assertEqual(ctx.task, "decompose")
+        body, state, url = writeback._completion_body(
+            ctx, Outcome(status="done", title="Queue", summary="ENG-8")
+        )
+        self.assertEqual((body, state, url), ("Decompose done: ENG-8", "done", ""))
+
     def test_writes_as_the_writers_it_is_given(self):
         ctx = writeback.for_claim(self.cfg, CLAIM, WRITERS, attempt=1)
         self.assertEqual((ctx.tracker, ctx.harness), (WRITERS.tracker, WRITERS.harness))

@@ -126,6 +126,7 @@ class LocalDocuments(Case):
         path.write_text("# Local PRD\nBuild local delivery.\n")
         ctx = SimpleNamespace(
             role="pm",
+            task=None,
             document=str(path),
             repos={},
             project=None,

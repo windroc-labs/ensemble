@@ -620,13 +620,20 @@ flowchart LR
     R -->|Approve| H[Handoff]
     R -->|Revise| T
     R -->|"resume or pane follow-up"| P
-    H -->|"promote, after 10 min: next role's Todo issue"| D[Done]
+    H -->|"promote, after 10 min; other roles or local"| D[Done]
+    H -->|"Linear PM: source stays Handoff"| E[decompose Todo]
+    E -->|router claims| EP[decompose In Progress]
+    EP -->|"done: ticket table; both issues"| D
+    EP -->|needs_input| R
+    EP -->|failed| R
     D -->|"Finish, 2 h later"| X[cleaned up]
     C[Canceled] -->|"Finish, next tick"| X
 ```
 
+Failure edges show the packaged defaults.
+
 - **New work:** a Todo issue in the product's project, delegated to a role app (Linear's Agent field); the description is the brief. Add `Repo: <owner>/<name>` unless the project's `[orchestrator.linear.project_repos]` entry names it. The router claims by priority, then later role, then oldest; a blocked issue waits for its blockers to be Done, Canceled or Duplicate. On first claim it lists possible duplicates under `## Related work` in the agent's input, and inlines linked configured documents up to 50,000 bytes.
-- **Approve:** move to Handoff and comment what's next; after 10 minutes promote creates the next role's issue and marks this one Done.
+- **Approve:** move to Handoff and comment what's next; after 10 minutes promote creates the next role's issue. Linear PM handoffs create one engineer issue with the configured `decompose` task label; the PRD stays in Handoff. Other promotions, including local PM handoffs, mark the source Done.
 - **Revise:** comment and move back to Todo; the agent resumes. An engineer issue's PR comments and reviews count too. After 4 attempts the issue goes to In Review; moving it to Todo restarts the count.
 - **Who counts as you:** every Linear user but the harness and role apps and automation; the manager's app counts as you. Your comments are instructions: keep the team's membership and guest access tight.
 - **Runs without an outcome** are written back as failures with the reason; a stopped or interrupted attempt stays In Progress for Recover.
@@ -635,6 +642,8 @@ flowchart LR
 ### Task labels
 
 A `Tasks` group label picks the role's task, mapped by `[task_labels]`; none: the agent picks and says why; a bad label sends the issue to In Review. To upgrade a report (Light Research → Research → Deep Research), set the next task's label (to Research: remove the label), comment the claims to verify, and move it back to Todo. `[orchestrator.task_tiers]` sets a task's model tier (`light-build = 3`, 1 the strongest).
+
+Engineer `decompose` receives the source handoff, linked PRD, its own comments and project-to-repo mapping without a build target or branch. Its local output saves the ticket table to `run/out.md`; the host posts it on the decompose issue and completes the source PRD, then decompose. Missing output or source, or a source moved out of Handoff (unless already Done), leaves completion retryable. `needs_input` moves only decompose to In Review with questions and the configured human assignment; failure inherits the engineer stage's `first_failure` rule. Resume and write-back use the first run's recorded task. Ordinary build input, PR delivery and review states stay unchanged.
 
 ### Operating the board
 
