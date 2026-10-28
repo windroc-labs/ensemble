@@ -17,6 +17,7 @@ from ensemble.session.engine.types import (
     Exited,
     IdleTimeout,
     KeyPress,
+    Liveness,
     Mode,
     Reply,
     SessionError,
@@ -30,8 +31,8 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel, Tie
 from ensemble.session.harness.types import Logged, Op
-from ensemble.session.hosts.base import stored_record
-from ensemble.session.modes.tui import store_record
+from ensemble.session.hosts.base import Host, stored_record
+from ensemble.session.modes.tui import settled_liveness, store_record
 from ensemble.utils import Display, Record, Status
 
 POLL = 0.1
@@ -97,7 +98,8 @@ class _Reader:
 
 class OwnedSession(Session):
     """attach: the read-only attach, bound to sid and generation (attached: one made already);
-    retire: a tui view's non-owner close of that generation; replay: start past the log. A headless
+    retire: its non-owner end of that generation, a tui view's (the record rule) or a named
+    headless one's (confirmed_end); without, the attach's stop or close; replay: start past the log. A headless
     view's events() stops its worker on an interrupt, as a headless HostedSession does; tie: a
     headless start's caller pipe, its harness closing the worker once the view is gone; clock: its
     session class's, timing its idle timeouts.
@@ -120,10 +122,8 @@ class OwnedSession(Session):
         tie: Tie | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if (mode == Mode.TUI) != (retire is not None):
-            raise ValueError(
-                "retire: required for a tui view" if retire is None else "retire: a tui view's only"
-            )
+        if mode == Mode.TUI and retire is None:
+            raise ValueError("retire: required for a tui view")
         self.sid, self.client, self.mode, self.name = sid, client, mode, name
         self._tie, self._clock = tie, clock
         self.generation = generation
@@ -188,8 +188,8 @@ class OwnedSession(Session):
         self._end(Op.CLOSE)
 
     def _end(self, op: Op) -> None:
-        """With no owner: a tui view retires, its generation only (the record rule), for either
-        op; a headless one ends through the attach, confirmed.
+        """With no owner: a view with retire retires, its generation only, for either op; any other
+        headless one ends through the attach, confirmed.
         """
         if self._channel.request(op):
             return
@@ -346,3 +346,16 @@ class OwnedSession(Session):
         if not isinstance(text, str):
             raise SessionError(f"session {self.name}: bad screen from its harness")
         return text
+
+
+def confirmed_end(host: Host, name: str, generation: str) -> Callable[[], None]:
+    """A named headless view's retire: its worker confirmed gone (a reaping guard waited for), then
+    its Host's leftovers of that generation released; else Unanswered, nothing released.
+    """
+
+    def end() -> None:
+        if settled_liveness(host, name, generation) != Liveness.ABSENT:
+            raise Unanswered(f"session {name}: still running without its harness")
+        host._release(name, generation)
+
+    return end

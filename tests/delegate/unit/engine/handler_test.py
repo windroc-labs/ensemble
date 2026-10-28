@@ -853,6 +853,7 @@ class OwnedCloseTest(HandlerCase):
         self.call(TurnStarted())
         state = self.state()
         spec = replace(state.plan.session, name=state.agent_name)
+        HarnessSession.script, HarnessSession.lingers = (), True  # its events: this test's calls
         agent = HarnessSession.start(spec, host=state.host)
         self.assertTrue(agent.alive())
         with mock.patch("os.replace", side_effect=OSError("disk full")):

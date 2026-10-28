@@ -1,34 +1,21 @@
 """What the tui clients' mid-turn replies share: a run's locked state file, its reply lines and
-its detached watcher; each client owns its state's shape, scan and hooks.
+the owning harness's settle of it each pump; each client owns its state's shape, scan and hooks.
 """
 
 import contextlib
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import time
 from collections.abc import Callable
 
-import ensemble.utils
 from ensemble.session.engine.status_log import SessionStatusLog
-from ensemble.utils import (
-    STALE_AGE,
-    file_lock,
-    module_roots,
-    read_beneath,
-    save_reply,
-    source_path,
-)
+from ensemble.utils import STALE_AGE, file_lock, read_beneath, save_reply
 
 STATE_MAX = 1 << 20
 LOCK_POLL = 0.05
-WATCH_LOCK_WAIT = 1.0
-POLL = 1.0
-IDLE_EXIT = 2.0
-LIFETIME = 6 * 3600  # a watcher's, and an open turn's before it is stale
-QUIET = 1800  # seconds the session file may stay unchanged before a watcher ends
+LIFETIME = 6 * 3600  # an open turn's before it is stale
 Clock = Callable[[], float]
 Sleep = Callable[[float], None]
 
@@ -60,7 +47,7 @@ def prune(folder: str) -> None:
             and entry.stat(follow_symlinks=False).st_mtime < cutoff
         ]
     for path in old:
-        for name in (path, path + ".lock", path + ".watch.lock"):
+        for name in (path, path + ".lock"):
             with contextlib.suppress(OSError):
                 os.unlink(name)
 
@@ -89,69 +76,15 @@ def emit(events: str, name: str, key: str, text: str) -> None:
         SessionStatusLog(events).write(name, "reply", reply_id)
 
 
-def ensure_watcher(path: str, module: str) -> None:
-    """Starts `module` (python -P -s -m) watching `path` unless a watcher holds its lock."""
-    try:
-        with file_lock(path + ".watch", wait=False):
-            pass
-    except BlockingIOError:
-        return
-    subprocess.Popen(  # detached: never waited for
-        [sys.executable, "-P", "-s", "-m", module, path],
-        start_new_session=True,
-        close_fds=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env={**os.environ, **source_path(module_roots(sys.modules[__name__], ensemble.utils))},
-        cwd="/",
-    )
-
-
-def watch(
-    path: str,
-    settle: Callable[[float], int],
-    size: Callable[[], int],
-    *,
-    clock: Clock,
-    sleep: Sleep,
-    label: str,
-) -> int:
-    """settle(lock deadline) -> pending answers, every POLL s; ends IDLE_EXIT s after none,
-    once size() stays for QUIET s, after LIFETIME s, or at once while another watcher runs.
+def pumped(path: str, settle: Callable[[float], int], label: str) -> None:
+    """settle(its deadline, now) of an existing state file, by the owning harness's pump: a held
+    lock is left to the next pump, an OSError said on stderr.
     """
+    if not os.path.isfile(path):
+        return
     try:
-        with file_lock(path + ".watch", wait=False):
-            return _watch(settle, size, clock, sleep, label)
-    except BlockingIOError:
-        return 0
-
-
-def main(argv: list[str], run: Callable[[str], int]) -> int:
-    """A watcher module's entry: run(its absolute state file)."""
-    if len(argv) != 1 or not argv[0].startswith("/"):
-        print("usage: watch <absolute state file>", file=sys.stderr)
-        return 2
-    return run(argv[0])
-
-
-def _watch(settle, size, clock: Clock, sleep: Sleep, label: str) -> int:
-    began = idle = grew = clock()
-    last = -1
-    while clock() - began < LIFETIME:
-        try:
-            pending = settle(clock() + WATCH_LOCK_WAIT)
-        except (TimeoutError, OSError) as error:
-            print(f"{label}: {error}", file=sys.stderr)
-            pending = 1
-        if pending:
-            idle = clock()
-        elif clock() - idle >= IDLE_EXIT:
-            return 0
-        found = size()
-        if found != last:
-            last, grew = found, clock()
-        elif clock() - grew >= QUIET:
-            return 0
-        sleep(POLL)
-    return 0
+        settle(time.monotonic())
+    except TimeoutError:
+        return
+    except OSError as error:
+        print(f"{label}: {error}", file=sys.stderr)

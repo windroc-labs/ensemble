@@ -23,7 +23,13 @@ from ensemble.session.engine.types import (
     StatusState,
     TuiSettings,
 )
-from ensemble.session.hosts.base import Host, InteractiveProcess, worker_state
+from ensemble.session.hosts.base import (
+    Host,
+    InteractiveProcess,
+    worker_names,
+    worker_row,
+    worker_state,
+)
 from ensemble.session.hosts.base import activity as worker_activity
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
@@ -103,7 +109,9 @@ class TmuxHost(Host):
         return TuiSettings(line)
 
     def list(self) -> list[str]:
-        return sorted(row["name"] for row in self._listing())
+        """Its tmux sessions, and its live (or unknown) workers whose display is gone."""
+        names = {row["name"] for row in self._listing()}
+        return sorted(names | {row.name for row in self._display_less(names)})
 
     def _listing(self) -> list[dict]:
         try:
@@ -111,10 +119,31 @@ class TmuxHost(Host):
         except TuiError as error:
             raise SessionError(f"tmux sessions unknown: {error}") from error
 
+    def _display_less(self, displayed: set[str]) -> list[SessionRow]:
+        """A row per worker of its own with no tmux session of its name, state from its activity
+        (unknown liveness: unknown), unless ABSENT: a dead one's dir is the tui sweep's to expire.
+        """
+        rows = []
+        for name in worker_names():
+            state = worker_state(name)
+            if name in displayed or state is None or state.host != self.name:
+                continue
+            if state.generation is None:
+                continue
+            live = self.worker_liveness(name, state.generation)
+            if live == Liveness.UNKNOWN:
+                rows.append(worker_row(name, state, StatusState.UNKNOWN))
+            elif live == Liveness.LIVE:
+                word = worker_activity(name, state.generation) or StatusState.WORKING
+                rows.append(worker_row(name, state, word))
+        return rows
+
     def rows(self) -> list[SessionRow]:
-        """A tui worker's state from its harness's mark, any other session's from its @state."""
+        """A tui worker's state from its harness's mark, any other session's from its @state; then
+        its workers whose display is gone.
+        """
         found = self._listing()
-        return [
+        displayed = [
             SessionRow(
                 name=row["name"],
                 sid=None if sid_error(row["sid"]) else row["sid"],
@@ -133,6 +162,7 @@ class TmuxHost(Host):
             )
             for row in found
         ]
+        return displayed + self._display_less({row["name"] for row in found})
 
     def _capacity_namespace(self) -> str:
         try:

@@ -1,6 +1,5 @@
-"""HostedSession's tui mode with client claude end to end on a private tmux server, as
-tui_integration_test sets it up: the real ClaudeClient runs
-tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`) interactively, its
+"""HostedSession's tui mode with client claude end to end on a private tmux server: the real
+ClaudeClient runs tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`) interactively, its
 hooks from --settings. Turns, Blocked (a hook, the trust dialog), idle timeouts, the usage-limit
 screen, deaths, resume, attach from another process, show, close by name and the launch's /color,
 typed once no turn runs (tests that send wait for it first).

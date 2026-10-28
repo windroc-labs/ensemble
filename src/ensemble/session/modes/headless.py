@@ -367,8 +367,8 @@ class HeadlessMode(BaseMode):
     def _close(self) -> None:
         with self.closing:
             if not self.closed:
-                self.closed = True
                 self.worker.close()
+                self.closed = True
 
     def state(self) -> Liveness:
         return self.worker.state()
