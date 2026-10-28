@@ -125,6 +125,19 @@ class HeadlessSessions(Case):
         self.assertEqual((first["session"], second["session"]), (None, NATIVE))
         self.assertEqual(second["prompt"], "Fix it.")
 
+    def test_a_resume_of_a_run_that_bound_no_session_starts_a_fresh_one(self):
+        """WDRC-366: a run killed before OpenCode saved its session left no binding."""
+        self.scene(unbound=True)
+        failed = TurnFailed("no_session", "opencode ended before it started a session")
+        self.assertIn(failed, self.run_session("First."))
+        self.scene()
+        self.assertIn(TurnEnd("two"), self.run_session("Fix it.", resume=True))
+        _, second = self.calls()
+        self.assertEqual(second["argv"][3:5], ["--title", "ensemble-run-1"])
+        self.assertEqual((second["session"], second["prompt"]), (None, "Fix it."))
+        common = self.session_cls._config().registry.client("opencode").common
+        self.assertEqual(common.native(str(self.cwd), "run-1"), NATIVE)
+
     def test_a_2x_opencode_is_refused(self):
         self.session_cls = configured(
             {
