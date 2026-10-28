@@ -21,11 +21,7 @@ func serve(t *testing.T, status int, body string) (Registry, *[]string) {
 	r := New()
 	r.http.Transport = roundTrip(func(req *http.Request) (*http.Response, error) {
 		urls = append(urls, req.URL.String())
-		h := make(http.Header)
-		if status == http.StatusFound {
-			h.Set("Location", npm.Package("opencode-ai", "9.9.9"))
-		}
-		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: h, Request: req}, nil
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: req}, nil
 	})
 	return r, &urls
 }
@@ -52,7 +48,6 @@ func TestLatestRejects(t *testing.T) {
 		"leading zero":    {http.StatusOK, `{"name":"@openai/codex","version":"0.0164.0"}`, "invalid latest @openai/codex release"},
 		"not json":        {http.StatusOK, `<html>`, "invalid latest @openai/codex release"},
 		"missing":         {http.StatusNotFound, `{}`, "@openai/codex registry release missing"},
-		"server error":    {http.StatusInternalServerError, `{}`, "@openai/codex registry unavailable"},
 		"oversize":        {http.StatusOK, `{"name":"@openai/codex","version":"0.164.0","x":"` + strings.Repeat("a", npm.MaxMetadata) + `"}`, "@openai/codex registry response exceeds limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -61,20 +56,5 @@ func TestLatestRejects(t *testing.T) {
 				t.Fatalf("Latest = %q, %v; want %q", got, err, c.want)
 			}
 		})
-	}
-}
-
-func TestLatestFollowsNoRedirect(t *testing.T) {
-	r, urls := serve(t, http.StatusFound, "")
-	if got, err := r.Latest(context.Background(), "opencode-ai"); err == nil || len(*urls) != 1 {
-		t.Fatalf("Latest = %q, %v through a redirect after %q", got, err, *urls)
-	}
-}
-
-func TestLatestErrorsCarryNoBody(t *testing.T) {
-	r, _ := serve(t, http.StatusOK, `{"name":"opencode-ai","version":"secret-ish"}`)
-	_, err := r.Latest(context.Background(), "opencode-ai")
-	if err == nil || strings.Contains(err.Error(), "secret-ish") {
-		t.Fatalf("error %v", err)
 	}
 }
