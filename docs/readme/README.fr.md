@@ -64,11 +64,13 @@ les jetons à permissions fines nécessitent aussi un accès en lecture à Actio
 
 ### GitHub App
 
-Les agents exécutants Docker utilisent une GitHub App plutôt que la connexion `gh` de l’hôte. L’installateur ne crée pas l’App.
+Les agents exécutants Docker ayant déclaré un identifiant `github` utilisent une GitHub App. L’installateur ne crée pas l’App.
 Dans GitHub Settings › Developer settings › GitHub Apps, créez une App privée installable uniquement sur votre compte,
-avec les webhooks désactivés. Ses permissions de dépôt doivent couvrir `github.permissions` dans la
-[configuration de Session](../../src/ensemble/session/config.toml). Installez-la uniquement sur les dépôts vers lesquels les agents exécutants peuvent pousser,
-y compris les dépôts de sortie des documents.
+avec les webhooks désactivés. Ses permissions de dépôt doivent couvrir la déclaration d’identifiants du rôle engineer,
+écrite par l’installateur dans `[orchestrator.roles.engineer.credentials.github]`. Installez-la uniquement sur les dépôts
+vers lesquels les agents exécutants peuvent pousser, y compris les dépôts de sortie des documents. Les exécutions Docker
+sans déclaration ne reçoivent aucun jeton GitHub. Pour les agents lancés directement et l’accès de sortie du verifier, voir
+[Identifiants GitHub explicites](../upgrading.md#broker-protocol-35-explicit-github-credentials).
 
 Générez une clé privée, notez l’App ID et importez-les :
 

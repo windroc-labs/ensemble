@@ -64,11 +64,13 @@ fine-grained tokens also need Actions read for checks.
 
 ### GitHub App
 
-Docker workers use a GitHub App rather than your host `gh` login. The installer does not create the App.
+Docker workers with a declared `github` credential use a GitHub App. The installer does not create the App.
 In GitHub Settings › Developer settings › GitHub Apps, create a private App installable only on your account,
-with webhooks off. Its repository permissions must cover `github.permissions` in
-[session config](src/ensemble/session/config.toml). Install it only on repositories workers may push to,
-including document output repositories.
+with webhooks off. Its repository permissions must cover the engineer role's credential declaration, written
+by the installer in `[orchestrator.roles.engineer.credentials.github]`. Install it only on repositories workers
+may push to, including document output repositories. Undeclared Docker runs receive no GitHub token; see
+[explicit GitHub credentials](docs/upgrading.md#broker-protocol-35-explicit-github-credentials) for direct workers
+and verifier output access.
 
 Generate a private key, note the App ID and import them:
 

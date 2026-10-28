@@ -64,10 +64,12 @@ Keychain에서 `sudo` 비밀번호를 전달하려면 스크립트를 먼저 다
 
 ### GitHub App
 
-Docker 워커는 호스트의 `gh` 로그인 대신 GitHub App을 사용합니다. 설치 프로그램은 App을 생성하지 않습니다.
+`github` 자격 증명을 선언한 Docker 워커는 GitHub App을 사용합니다. 설치 프로그램은 App을 생성하지 않습니다.
 GitHub Settings › Developer settings › GitHub Apps에서 자신의 계정에만 설치할 수 있는 비공개 App을 만들고
-웹훅을 끄세요. 저장소 권한은 [Session 설정](../../src/ensemble/session/config.toml)의
-`github.permissions`를 충족해야 합니다. 문서 출력 저장소를 포함해 워커가 push할 수 있는 저장소에만 설치하세요.
+웹훅을 끄세요. 저장소 권한은 설치 프로그램이 작성하는 engineer 역할의 자격 증명 선언
+`[orchestrator.roles.engineer.credentials.github]`를 충족해야 합니다. 문서 출력 저장소를 포함해 워커가 push할 수 있는 저장소에만 설치하세요.
+선언이 없는 Docker run에는 GitHub 토큰이 제공되지 않습니다. 직접 시작하는 워커와 verifier의 출력 권한 설정은
+[명시적 GitHub 자격 증명](../upgrading.md#broker-protocol-35-explicit-github-credentials)을 참조하세요.
 
 개인 키를 생성하고 App ID를 기록한 다음 가져오세요.
 

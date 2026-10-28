@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -39,7 +40,7 @@ func parseCredentials(fields map[string]json.RawMessage) (credentialRequest, err
 			switch kind {
 			case "github":
 				merged.GitHub, err = parseGitHub(value)
-				if err != nil || merged.GitHub == nil {
+				if err != nil {
 					return reject(kind)
 				}
 			case "env":
@@ -151,4 +152,33 @@ func parseEnv(raw json.RawMessage) ([]Secret, error) {
 		secrets = append(secrets, Secret{Item: item, File: file})
 	}
 	return secrets, nil
+}
+
+type githubRequest struct {
+	App         string
+	Permissions map[string]string
+	Repo        string
+}
+
+func parseGitHub(raw json.RawMessage) (*githubRequest, error) {
+	const shape = "github must be {\"app\": <name>, \"permissions\": {<permission>: <level>}, \"repo\"?: <owner/name>}"
+	var github map[string]json.RawMessage
+	if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil {
+		return nil, errors.New(shape)
+	}
+	app, ok := manifestString(github["app"])
+	rawRepo, hasRepo := github["repo"]
+	repo, okRepo := manifestString(rawRepo)
+	var permissions map[string]string
+	if raw := github["permissions"]; !ok || len(github) != 2 && !(len(github) == 3 && hasRepo) || hasRepo && !okRepo ||
+		!appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &permissions) != nil {
+		return nil, errors.New(shape)
+	}
+	if hasRepo && !githubapi.ValidRepo(repo) {
+		return nil, fmt.Errorf("invalid github repo %q", repo)
+	}
+	if err := githubapi.CheckPermissions(permissions); err != nil {
+		return nil, err
+	}
+	return &githubRequest{App: app, Permissions: permissions, Repo: repo}, nil
 }

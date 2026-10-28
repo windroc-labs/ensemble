@@ -68,7 +68,7 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 					if command == "maintain" {
 						rec.Renewing("")
 					}
-					return map[string]any{"container": container, "removed": true, "github_user_id": int64(9007199254740993)}, operationErr
+					return map[string]any{"container": container, "removed": true, "count": int64(9007199254740993)}, operationErr
 				}
 				step := func(context.Context, keys, string, io.Writer) (any, error) { return withAudit(rec, f) }
 				a := app{start: step, close: step, maintain: func(ctx context.Context, _ keys, c, _ string, _ []string, _ bool) (any, error) {
@@ -86,7 +86,7 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 					if err := json.Unmarshal([]byte(wire), &got); err != nil || got.Error != *operationErr.(*protocol.Error) {
 						t.Fatalf("operation details changed: %+v %v", got, err)
 					}
-				} else if code != 0 || errOut != "" || !strings.Contains(out, `"github_user_id":9007199254740993`) || !strings.Contains(out, container) {
+				} else if code != 0 || errOut != "" || !strings.Contains(out, `"count":9007199254740993`) || !strings.Contains(out, container) {
 					t.Fatalf("successful operation replaced: %d %s %s", code, out, errOut)
 				}
 				if calls != 1 || sink.calls != 1 || !strings.Contains(wire, `"audit_warning":"audit_write_failed"`) || strings.Contains(wire, "AUDIT_SECRET_SENTINEL") {

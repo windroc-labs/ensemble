@@ -97,7 +97,6 @@ class Direct(Case):
                 "lock": "dummy-lock",
                 "plugins": ["dummy-plugin"],
                 "prefetch": None,
-                "github_repo": None,
             },
         )
         self.assertEqual(

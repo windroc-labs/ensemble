@@ -189,7 +189,7 @@ In tmux, with a tmux client showing your session, the panes you launch form a gr
 - Only secret-store names travel in output, env, argv, logs or prompts; secrets never do.
 - Permanent deletion (comments, agents, secrets, destructive data changes) is the user's to run (prefixed with ! in the prompt). A command the user must run that asks for a password (sudo, an interactive prompt) gets no ! prefix, whose shell takes no typed input: they run it in their own terminal. Files go to the Trash, not `rm -r`.
 - A permission or classifier denial stands: take no other route around it and approve no denied prompt through a pane. Relay "the user approves" only when the user did, with its scope.
-- Docker workers' GitHub tokens hold `workflows` write by default (`[session.hosts.docker.github] permissions` in `src/ensemble/session/config.toml`), so a worker can push a `.github/workflows/` change, which can change what CI checks: read every such change before you report its PR as ready.
+- The installer's engineer GitHub declaration includes `workflows` write. Docker workers receive only declared GitHub access; with that permission they can push `.github/workflows/` changes that alter CI checks: read every such change before you report its PR as ready.
 - New projects or layers: set the mechanical checks (lint rules, guards, type checks) before code is written.
 - Tell review and audit sub-agents in their prompt: write only inside your own `mktemp -d` sandbox, disclose any write outside it, clean it up.
 - A sub-agent's live test that needs a trusted folder runs in one already trusted (e.g. under `~/.ensemble`), so it writes no user config; if it can't avoid a config write, it stops and reports.

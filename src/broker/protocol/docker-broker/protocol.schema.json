@@ -95,16 +95,6 @@
       "type": "string",
       "pattern": "^ensemble-ws-[A-Za-z0-9_-]+$"
     },
-    "github": {
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "$ref": "#/$defs/github_grant"
-        }
-      ]
-    },
     "github_grant": {
       "type": "object",
       "properties": {
@@ -244,9 +234,6 @@
         "claude_dir": {
           "$ref": "#/$defs/path"
         },
-        "github": {
-          "$ref": "#/$defs/github"
-        },
         "hook_path": {
           "$ref": "#/$defs/path"
         },
@@ -314,7 +301,9 @@
               "$ref": "#/$defs/git_ref"
             }
           },
-          "required": ["repo"],
+          "required": [
+            "repo"
+          ],
           "additionalProperties": false
         },
         "credentials": {
@@ -330,7 +319,6 @@
         "image",
         "cwd",
         "workspace",
-        "github",
         "labels",
         "client"
       ],
@@ -436,26 +424,6 @@
         "lock_owner": [
           "lock"
         ]
-      },
-      "dependentSchemas": {
-        "prefetch": {
-          "$comment": "A prefetching container gets no GitHub token (github null) or a repo grant's, which reaches one repository.",
-          "properties": {
-            "github": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "repo"
-                  ]
-                }
-              ]
-            }
-          }
-        }
       }
     },
     "version_input": {
@@ -481,7 +449,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "34"
+          "const": "35"
         }
       },
       "required": [
@@ -624,17 +592,6 @@
           ],
           "additionalProperties": false
         },
-        "github_user_id": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "integer",
-              "minimum": 1
-            }
-          ]
-        },
         "deadline": {
           "oneOf": [
             {
@@ -647,6 +604,12 @@
         },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -654,7 +617,7 @@
         "endpoint",
         "image_digest",
         "clients",
-        "github_user_id",
+        "env",
         "deadline"
       ],
       "additionalProperties": false
@@ -1950,14 +1913,20 @@
                   "type": "string",
                   "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
                   "not": {
-                    "enum": [".", ".."]
+                    "enum": [
+                      ".",
+                      ".."
+                    ]
                   }
                 },
                 "token_service": {
                   "type": "string",
                   "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
                   "not": {
-                    "enum": [".", ".."]
+                    "enum": [
+                      ".",
+                      ".."
+                    ]
                   }
                 }
               },

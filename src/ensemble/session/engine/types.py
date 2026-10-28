@@ -306,15 +306,12 @@ def _prefetch(value) -> bool:
 
 @dataclass(frozen=True, kw_only=True)
 class EnvironmentSpec:
-    """WDRC-109 FR-56; github_repo: the repo its token writes."""
-
     WORKER: ClassVar[str] = "@worker"
     image: str
     gateway: str
     plugins: tuple[str, ...] = ()
     lock: str | None = None
     prefetch: Mapping[str, str] | None = None
-    github_repo: str | None = None
 
     def __post_init__(self):
         plugins = self.plugins
@@ -333,9 +330,6 @@ class EnvironmentSpec:
             or isinstance(self.lock, str)
             and bool(LOCK_NAME.fullmatch(self.lock)),
             "prefetch": self.prefetch is None or _prefetch(self.prefetch),
-            "github_repo": self.github_repo is None
-            or isinstance(self.github_repo, str)
-            and bool(REPO.fullmatch(self.github_repo)),
         }
         if bad := next((name for name, ok in checks.items() if not ok), None):
             raise ConfigError(f"environment {bad}: {getattr(self, bad)!r:.120} is not valid")
@@ -349,7 +343,6 @@ class EnvironmentSpec:
             "plugins": list(self.plugins),
             "lock": self.lock,
             "prefetch": None if self.prefetch is None else dict(self.prefetch),
-            "github_repo": self.github_repo,
         }
 
     @classmethod

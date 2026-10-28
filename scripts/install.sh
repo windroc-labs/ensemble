@@ -870,6 +870,12 @@ if board:
         wanted += [tuple(entry) for entry in json.load(f)]
 elif only:
     want(*only)
+    if only[:2] == ["orchestrator.roles.engineer.credentials.github", "app"]:
+        table = only[0] + ".permissions"
+        for key, level in dict(contents="write", pull_requests="write", workflows="write",
+                               checks="read", actions="read", statuses="read").items():
+            if get(data, table, key) is None:
+                want(table, key, level)
 elif fresh or (get(data, "session.hosts", "default") or "tmux") != default:
     wanted.append(("session.hosts", "default", default))
 chosen = [name for name in ("claude", "codex", "opencode") if name in clients.split(",")]
@@ -2339,7 +2345,7 @@ broker_logins() {
     state_set github_app "$slug"
     state_set login_github "$sha"
   fi
-  if [ -n "$(state_get github_app)" ]; then config_file session.hosts.docker.github app "$(state_get github_app)"; fi
+  if [ -n "$(state_get github_app)" ]; then config_file orchestrator.roles.engineer.credentials.github app "$(state_get github_app)"; fi
   step "broker Codex install"
   if ! has codex; then
     skip "Codex not chosen"

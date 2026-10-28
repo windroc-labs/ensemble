@@ -579,7 +579,7 @@ func TestMutexFailureRevokesIssuedTokens(t *testing.T) {
 	h.GitHub = tokens
 	path := editedManifest(t, func(f map[string]any) {
 		f["lock"], f["lock_owner"] = "dummy", "worker_1"
-		f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]string{"contents": "read"}}
+		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]string{"contents": "read"}})
 	})
 	got, err := h.Start(ctx, path)
 	e := protoErr(t, err)

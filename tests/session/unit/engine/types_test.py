@@ -497,7 +497,6 @@ ENVIRONMENT = {
     "plugins": ["dummy-plugin", SOURCE],
     "lock": "dummy-lock",
     "prefetch": {"repo": "o/r", "ref": "main"},
-    "github_repo": "o/out",
 }
 
 
@@ -514,7 +513,7 @@ class EnvironmentSpecTest(Case):
             self.assertIs(module.SessionBusy, engine_types.SessionBusy)
 
     def test_unknown_or_role_field_is_refused(self):
-        for key in ("role", "ports", "name", "secrets"):
+        for key in ("role", "ports", "name", "github_repo", "secrets"):
             with self.subTest(key), self.assertRaisesRegex(ConfigError, key):
                 environment(**{key: "x"})
 
@@ -535,7 +534,6 @@ class EnvironmentSpecTest(Case):
         self.assertEqual(found.plugins, ("dummy-plugin", SOURCE))
         self.assertEqual(found.lock, "dummy-lock")
         self.assertEqual(dict(found.prefetch), {"repo": "o/r", "ref": "main"})
-        self.assertEqual(found.github_repo, "o/out")
         for changes in (
             {"image": session.EnvironmentSpec.WORKER},
             {"image": "sha256:" + "b" * 64},
@@ -546,8 +544,6 @@ class EnvironmentSpecTest(Case):
             {"prefetch": None},
             {"prefetch": {"repo": "o/r"}},
             {"prefetch": {"repo": "o/r", "ref": "release/1.2"}},
-            {"github_repo": None},
-            {"github_repo": "windroc-labs/private_docs.v2"},
         ):
             with self.subTest(changes):
                 environment(**changes)
@@ -578,11 +574,6 @@ class EnvironmentSpecTest(Case):
             ("prefetch", {"ref": "main"}),
             ("prefetch", {"repo": "o/r", "branch": "main"}),
             ("prefetch", "o/r"),
-            ("github_repo", "o"),
-            ("github_repo", "o/.."),
-            ("github_repo", "o/r/x"),
-            ("github_repo", ""),
-            ("github_repo", {"repo": "o/r"}),
         ):
             with self.subTest(key=key, value=value), self.assertRaisesRegex(ConfigError, key):
                 environment(**{key: value})
@@ -599,7 +590,7 @@ class EnvironmentSpecTest(Case):
     def test_persisted_round_trips(self):
         for found in (
             environment(),
-            environment(lock=None, prefetch=None, github_repo=None),
+            environment(lock=None, prefetch=None),
         ):
             with self.subTest(found):
                 data = found.persisted()
