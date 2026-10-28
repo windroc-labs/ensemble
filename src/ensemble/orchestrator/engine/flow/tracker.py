@@ -95,6 +95,7 @@ class Tracker(ABC):
         priority: int,
         title: str,
         description: str,
+        task: str | None = None,
     ) -> Ref:
         """READY."""
 
