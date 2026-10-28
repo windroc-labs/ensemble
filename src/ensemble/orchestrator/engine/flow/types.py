@@ -34,6 +34,7 @@ class Priority(StrEnum):
 PRIORITY_NUMBERS = MappingProxyType(
     {Priority.NONE: 0, Priority.URGENT: 1, Priority.HIGH: 2, Priority.MEDIUM: 3, Priority.LOW: 4}
 )
+PRIORITY_NAMES = MappingProxyType({n: p for p, n in PRIORITY_NUMBERS.items()})
 COMMENTS, COMMENT_CHARS, DESCRIPTION_CHARS, COLUMN = 5, 300, 600, 10
 
 
