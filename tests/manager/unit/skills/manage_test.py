@@ -196,13 +196,13 @@ class Manage(Case):
         self.assertNotIn("› Rules", flake)
 
     def test_docker_host_workers_start_no_sessions_or_containers(self):
-        [docker] = re.findall(r"^On the Docker Host .*$", body("manage"), re.M)
+        [docker] = re.findall(r"^On the Docker Host\b.*$", body("manage"), re.M)
         for phrase in (
             "Crew starts each worker's and role run's container through the broker",
             "can start no session and no container",
             "no Docker socket and no broker",
             "the same launch commands and client flags as on this machine",
-            "permission mode comes from its Host (`docs/architecture.md` › Client policy)",
+            "permission mode comes from its Host: yolo on the Docker Host",
         ):
             self.assertIn(phrase, docker)
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
@@ -274,7 +274,7 @@ class Manage(Case):
                 "`deliverable` for a `local` destination",
                 "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
                 "else its `url`",
-                "In Review (`docs/architecture.md` › Board › Using the board)",
+                "its normal end state, In Review:",
                 "`ensemble-orchestrator issue move <ID> review`",
             )
         ]
