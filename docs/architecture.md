@@ -405,7 +405,7 @@ Credentials in the orchestrator's `[core]` or `[core.roles.<role>]` overlays are
 
 Declarations check JSON-compatible table shape, the role's task index and the orchestrator-only `linear = "role"` shorthand;
 broker owns kind names and values. The shorthand expands to that role's app references and only the board keys
-listed below, without reading any secret. It requires `tracker = "linear"`; explicit reference objects stay opaque.
+listed below, without reading any secret. Local boards omit this shorthand; explicit reference objects stay opaque.
 For example, to declare the engineer app for `light-build` on a configured Linear board:
 
 ```toml
@@ -413,8 +413,8 @@ For example, to declare the engineer app for `light-build` on a configured Linea
 linear = "role"
 ```
 
-The packaged declarations are empty. Installer-written GitHub grants and the decompose task declaration are
-follow-up work; nonempty specs still require the broker implementation described below.
+The packaged engineer `decompose` task declares `linear = "role"`; other packaged declarations are empty.
+Installer-written GitHub grants are follow-up work; nonempty specs still require the broker implementation described below.
 
 The target contract assigns kind interpretation to the broker alone: both declarations require independent
 validation; the caller's whole value replaces an environment value of the same kind, retaining other kinds.

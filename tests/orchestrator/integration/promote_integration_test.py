@@ -184,7 +184,7 @@ class Promote(Tick):
 
 class PruneSessionDelegate(FakeDelegate):
     ROLES = {
-        "engineer": {"build": "", "light-build": ""},
+        "engineer": {"build": "", "light-build": "", "decompose": ""},
         "researcher": {"deep-research": "", "light-research": ""},
         "pm": {"product-design": ""},
     }
