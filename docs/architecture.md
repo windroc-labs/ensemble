@@ -51,9 +51,16 @@ and the worker have separate lifetimes; an outcome does not itself close a TUI.
 
 The macOS [broker](../src/broker/) builds images and provisions Docker workers. It keeps long-lived logins
 in Keychain and delivers runtime copies on container tmpfs: Claude setup-tokens, Codex access tokens,
-OpenCode provider keys, GitHub installation tokens, environment secrets and requested Linear role tokens.
+OpenCode provider keys, GitHub installation tokens, environment secrets and requested Linear tokens.
 App private keys, Codex refresh tokens and enrolled Linear client secrets stay broker-side. Docker access
 and processes running as you remain trusted; a container separates the worker from the host, not its tools from its client.
+
+Orchestrated Docker workers re-read current descriptions and comments with `ensemble-orchestrator issue read`,
+using tracker settings and each role’s existing app grant delivered through the broker.
+Tracker selection and credential specs stay in Orchestrator; existing installations need no configuration change.
+For transport-owned apps, the broker copies the current host role token and verifies its identity and expiry;
+the transport keeps renewal ownership, and closing a worker never revokes that shared token.
+Broker-owned apps keep separate container issuance and revocation.
 
 Environment credentials are declared in delegate environment `credentials` tables. Delegate serializes the
 selected declaration once; it and Session carry that JSON text separately from the caller's credential text.

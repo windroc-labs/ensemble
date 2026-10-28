@@ -19,6 +19,24 @@ func TestCredentialRequestFixtures(t *testing.T) {
 	}
 }
 
+func TestLinearCredentialRenewalRequired(t *testing.T) {
+	base := fixtureBytes(t, "credential-spec-linear.json")
+	var spec map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(base, &spec); err != nil {
+		t.Fatal(err)
+	}
+	var app map[string]json.RawMessage
+	if err := json.Unmarshal(spec["linear"]["app"], &app); err != nil {
+		t.Fatal(err)
+	}
+	delete(app, "renewal")
+	spec["linear"]["app"], _ = json.Marshal(app)
+	data, _ := json.Marshal(spec)
+	if _, err := ParseManifest(withFields(t, map[string]any{"credentials": string(data)})); err == nil {
+		t.Fatal("app without renewal accepted")
+	}
+}
+
 func TestCredentialRequestMerge(t *testing.T) {
 	environment := `{"env":[{"item":"ensemble-broker-env/old","file":"old"}],"github":{"app":"old","permissions":{"contents":"read"}}}`
 	caller := `{"env":[{"item":"ensemble-broker-env/new","file":"new"}]}`

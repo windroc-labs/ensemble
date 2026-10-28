@@ -20,7 +20,7 @@ import (
 )
 
 func containerApp(a LinearIdentity) credential.LinearApp {
-	return credential.LinearApp{Role: a.Name, ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
+	return credential.LinearApp{Role: a.Name, ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService, Renewal: "broker"}
 }
 
 func TestLinearContainerLockCleanup(t *testing.T) {

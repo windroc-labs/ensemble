@@ -86,16 +86,15 @@ this upgrade; close them before installing, as above.
 
 ### Linear container credentials
 
-Before declaring a role app in `linear`:
-
-1. Enable client credentials on the existing role app; keep the same scopes for host and container.
-2. Enroll it using [Linear broker renewal](#linear-broker-renewal), with that role's name and public app values,
-   `kind = role`, and `renewal = "broker"` for its host transport. Complete the cutover before starting callers.
-
-Changing the app's scopes invalidates its other tokens.
+Issue runs use their role app’s existing grant and board settings through the broker’s credential spec path.
+Existing installations need no new app, configuration, installation or upgrade step for issue re-reads.
+No client secret is delivered to a worker. A failed re-read reports an error; the manager sends the current
+description and comments through the run’s existing input channel.
+Transport-owned apps keep their existing host renewal; the broker copies the current role token without enrollment
+or root-secret access. Worker close does not revoke this shared token. Broker-owned apps keep separate worker tokens.
 
 For request validation, delivery paths and modes, the maintenance swap, and revocation, see
-[Broker credential implementation](../src/broker/internal/credential). Container CLI consumption ships separately.
+[Broker credential implementation](../src/broker/internal/credential). The worker CLI consumes these files directly.
 
 ## Claude account selection is the session's
 
@@ -333,7 +332,7 @@ is `client_id` in `[orchestrator.linear.roles.pm]`).
 | a `Tasks` label group, its id from `issueLabels { nodes { id name isGroup } }` | `linear.task_label_group` |
 | `decompose` under `Tasks`, required for PM promotion; other task labels (`build`, `light-build`, …) optional | `linear.task_labels.decompose`, `linear.task_labels.<task>` |
 | an `Agent` label group and one label per client, optional; both or neither | `linear.agent_label_group`, `linear.agent_labels` |
-| the harness's, the manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
+| the harness's, manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
 | the humans subscribed on In Review | `linear.human_members` |
 | the human PM and decompose questions are assigned to, optional: their Linear user id | `linear.assignee_id` |
 | the Linear project of each product repo, optional | `linear.project_repos` |

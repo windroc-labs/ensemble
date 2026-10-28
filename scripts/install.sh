@@ -2694,7 +2694,7 @@ with open(app_file, encoding="utf-8") as f:
 slots = [line.split("\t") for line in slot_lines.splitlines()]
 stages = [line.split("\t") for line in stage_lines.splitlines()]
 service = {slot: name for slot, name, _ in slots}
-roles = [slot for slot, _, _ in slots[2:]]
+roles = [role for role, _ in stages]
 data = {}
 if os.path.exists(config):
     with open(config, "rb") as f:

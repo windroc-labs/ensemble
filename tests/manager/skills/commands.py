@@ -77,9 +77,14 @@ def examples(source: str) -> list[list[str]]:
     return [command for commands in spans(source) for command in commands]
 
 
-def subcommand(command: list[str]) -> str | None:
-    word = command[1] if len(command) > 1 else ""
-    return word if re.fullmatch(r"[a-z][a-z-]*", word) else None
+def subcommand(command: list[str]) -> tuple[str, ...]:
+    depth = 3 if command[:2] == ["ensemble-orchestrator", "issue"] else 1
+    found = []
+    for word in command[1 : depth + 1]:
+        if not re.fullmatch(r"[a-z][a-z-]*", word):
+            break
+        found.append(word)
+    return tuple(found)
 
 
 def flags(command: list[str]) -> list[str]:

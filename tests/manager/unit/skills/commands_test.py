@@ -20,6 +20,7 @@ from tests.manager.skills.commands import (
     section,
     sections,
     spans,
+    subcommand,
 )
 
 RETIRED = (
@@ -39,6 +40,14 @@ REPAIRS = ("rename-session", "/rename", "@grid-busy", "@opener", "@pane", "send-
 
 
 class Commands(Case):
+    def test_nested_issue_command_selects_its_leaf_help(self):
+        self.assertEqual(
+            subcommand(["ensemble-orchestrator", "issue", "read", "<ID>", "--full"]),
+            ("issue", "read"),
+        )
+        self.assertEqual(subcommand(["ensemble-session", "send", "worker", "text"]), ("send",))
+        self.assertEqual(subcommand(["ensemble-orchestrator", "--help"]), ())
+
     def test_worker_examples_select_generic_or_codex_launch(self):
         generic = example("manage", "ensemble-crew worker", "--client <client>")
         codex = example("manage", "ensemble-crew worker", "--client codex")

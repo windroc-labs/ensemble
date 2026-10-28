@@ -21,6 +21,7 @@ import (
 // Closed blocks queued maintenance; Tokens retains every unrevoked issuance.
 type linearContainerRecord struct {
 	Closed bool           `json:"closed"`
+	Shared bool           `json:"shared,omitempty"`
 	Tokens []linearAccess `json:"tokens"`
 }
 
@@ -44,14 +45,23 @@ func (l Linear) containerAccount(app credential.LinearApp) (linearAccount, error
 }
 
 func (l Linear) Ready(app credential.LinearApp) error {
+	if app.Renewal == "transport" {
+		if _, err := l.transportToken(context.Background(), app); err != nil {
+			return protocol.New(protocol.LoginRequired, "Linear role token is missing, invalid or expired; restore the host role app's access.")
+		}
+		return nil
+	}
 	if _, err := l.containerAccount(app); err != nil {
 		return protocol.New(protocol.LoginRequired, "Linear role app is not enrolled or readable; run ensemble-broker login linear on the host.")
 	}
 	return nil
 }
 
-// containerToken issues separately from the host's shared token and never publishes it there.
+// containerToken follows the app's renewal owner without changing host credentials.
 func (l Linear) containerToken(ctx context.Context, app credential.LinearApp) (linearAccess, error) {
+	if app.Renewal == "transport" {
+		return l.transportToken(ctx, app)
+	}
 	account, err := l.containerAccount(app)
 	if err != nil {
 		return linearAccess{}, errLinear
@@ -144,7 +154,10 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 		return nil, nil, "", errLinear
 	}
 	l.noteContainer(c, audit.Issued, "", token)
-	record := linearContainerRecord{Tokens: []linearAccess{token}}
+	record := linearContainerRecord{Shared: r.App.Renewal == "transport"}
+	if !record.Shared {
+		record.Tokens = []linearAccess{token}
+	}
 	if l.save("container/"+c, record) != nil {
 		record.Closed = true
 		_ = l.retireContainer(ctx, c, &record, nil)
@@ -164,12 +177,20 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 	}
 	defer unlock()
 	var record linearContainerRecord
-	if l.read("container/"+c, &record) != nil || record.Closed {
+	if l.read("container/"+c, &record) != nil || record.Closed || record.Shared != (r.App.Renewal == "transport") {
 		return "", errLinear
 	}
 	token, err := l.containerToken(ctx, r.App)
 	if err != nil {
 		return "", errLinear
+	}
+	if record.Shared {
+		command := linearCommand(token, true)
+		defer command.Erase()
+		if err := exec(command.Argv, command.Stdin); err != nil {
+			return "", errLinear
+		}
+		return token.ExpiresAt, nil
 	}
 	l.noteContainer(c, audit.Renewed, "", token)
 	previous := record.Tokens

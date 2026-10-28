@@ -53,7 +53,13 @@ class CredentialQuery(run_fixtures.Base):
         ):
             code, out, err = _call(["credentials", "--role", "engineer", *extra])
             self.assertEqual((code, err), (0, ""))
-            self.assertEqual(json.loads(out), expected)
+            self.assertEqual(
+                json.loads(out),
+                {
+                    "linear": config.credentials(config.load(), "engineer", None)["linear"],
+                    **expected,
+                },
+            )
         self.assertFalse(os.path.exists(self.logs))
 
     def test_undeclared_role_has_no_defaults(self):

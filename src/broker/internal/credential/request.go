@@ -9,13 +9,17 @@ type LinearApp struct {
 	UserID        string `json:"user_id"`
 	SecretService string `json:"secret_service"`
 	TokenService  string `json:"token_service"`
+	Renewal       string `json:"renewal"`
 }
 
 // LinearBoard contains only the non-secret board settings a run can use.
 type LinearBoard struct {
-	Team   string            `json:"team"`
-	States map[string]string `json:"states"`
-	Labels struct {
+	RoleUsers       map[string]string `json:"role_users"`
+	TaskLabelGroup  string            `json:"task_label_group"`
+	AgentLabelGroup string            `json:"agent_label_group"`
+	Team            string            `json:"team"`
+	States          map[string]string `json:"states"`
+	Labels          struct {
 		TaskLabels  map[string]string `json:"task_labels"`
 		AgentLabels map[string]string `json:"agent_labels"`
 	} `json:"labels"`
