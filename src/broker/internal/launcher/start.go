@@ -158,31 +158,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	var held holding
 	if m.Lock != "" {
-		mutex, err := h.acquireMutex(ctx, m.Lock, info.ID)
+		unlock, err := h.startLock(m.Lock)
 		if err != nil {
 			return StartResult{}, err
 		}
-		defer func() {
-			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
-				if retErr == nil {
-					held.revokeGitHub()
-					h.rollback(ctx, c, cleanup)
-					h.dropTokens(m)
-					h.withdraw(c, m, held, cleanup)
-					result, retErr = StartResult{}, cleanup
-				} else {
-					var e *protocol.Error
-					if errors.As(retErr, &e) {
-						e.Message += " " + cleanup.Message
-						if e.Code == protocol.Busy {
-							e.Code, e.Holder = protocol.StartFailed, nil
-						}
-					} else {
-						retErr = cleanup
-					}
-				}
-			}
-		}()
+		defer unlock()
 		holder, err := h.lockHolder(ctx, m.Lock, "")
 		if err != nil {
 			return StartResult{}, err

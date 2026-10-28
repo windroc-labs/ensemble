@@ -3,11 +3,13 @@ package launcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
+	"syscall"
 
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
@@ -16,8 +18,6 @@ import (
 const (
 	lockLabel  = "windroc.lock"
 	ownerLabel = "windroc.lock.owner"
-	mutexLabel = "windroc.lock.mutex"
-	sinceLabel = "windroc.lock.since"
 )
 
 var containerIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -39,7 +39,7 @@ func busy(holder *protocol.Holder) *protocol.Error {
 	return e
 }
 
-// inspectLock inspects one immutable ID (or the mutex name on a create conflict).
+// inspectLock inspects one immutable ID.
 func (h Host) inspectLock(ctx context.Context, ref string) (lockContainer, error) {
 	out, err := h.Docker.Run(ctx, []string{"container", "inspect", ref}, nil)
 	if err != nil {
@@ -47,15 +47,14 @@ func (h Host) inspectLock(ctx context.Context, ref string) (lockContainer, error
 	}
 	var found []lockContainer
 	if json.Unmarshal(out, &found) != nil || len(found) != 1 || !containerIDPattern.MatchString(found[0].ID) ||
-		found[0].Name == "" || hasControl(found[0].Name) || found[0].State.Status == "" ||
-		containerIDPattern.MatchString(ref) && found[0].ID != ref {
+		found[0].Name == "" || hasControl(found[0].Name) || found[0].State.Status == "" || found[0].ID != ref {
 		return lockContainer{}, protocol.New(protocol.StartFailed, "Cannot decode lock container inspection.")
 	}
 	found[0].Name = strings.TrimPrefix(found[0].Name, "/")
 	return found[0], nil
 }
 
-// lockHolder observes active run containers only; the temporary mutex has a different label.
+// lockHolder observes active run containers only.
 func (h Host) lockHolder(ctx context.Context, lock, exclude string) (*protocol.Holder, error) {
 	out, err := h.Docker.Run(ctx, []string{"ps", "--all", "--quiet", "--no-trunc", "--filter", "label=" + lockLabel + "=" + lock}, nil)
 	if err != nil {
@@ -85,7 +84,7 @@ func (h Host) lockHolder(ctx context.Context, lock, exclude string) (*protocol.H
 	return nil, nil
 }
 
-// LockQuery is read-only; it does not take the mutex or check credentials.
+// LockQuery is read-only; it does not take the start lock or check credentials.
 func (h Host) LockQuery(ctx context.Context, lock string) (LockResult, error) {
 	if !ValidLock(lock) {
 		return LockResult{}, protocol.New(protocol.ManifestRejected, "Invalid lock name.")
@@ -94,63 +93,25 @@ func (h Host) LockQuery(ctx context.Context, lock string) (LockResult, error) {
 	return LockResult{Holder: holder}, err
 }
 
-// acquireMutex makes an unstarted container; only the returned ID belongs to this start.
-func (h Host) acquireMutex(ctx context.Context, lock, image string) (string, error) {
-	now := time.Now
-	if h.Now != nil {
-		now = h.Now
+// startLock takes lock's start lock without waiting, from before the holder check until the start returns; another
+// start holding it is busy. Closing the file, or this process ending, releases it.
+func (h Host) startLock(lock string) (unlock func(), err error) {
+	shown := "~/.ensemble/docker/locks/" + lock + ".lock"
+	path := h.dockerPath("locks/" + lock + ".lock")
+	failed := protocol.New(protocol.StartFailed, "Taking the start lock "+shown+" failed.")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, failed
 	}
-	name := "windroc-lock-" + lock
-	starting := func() error { return busy(&protocol.Holder{Container: name, Owner: "starting"}) }
-	create := func() (string, error) {
-		out, err := h.Docker.Run(ctx, []string{"create", "--pull", "never", "--network", "none", "--restart", "no", "--name", name,
-			"--label", mutexLabel + "=" + lock, "--label", sinceLabel + "=" + strconv.FormatInt(now().Unix(), 10), image}, nil)
-		if err != nil {
-			return "", err
-		}
-		id := strings.TrimSpace(string(out))
-		if !containerIDPattern.MatchString(id) {
-			return "", protocol.New(protocol.StartFailed, "Creating mutex "+name+" returned no container ID.")
-		}
-		return id, nil
-	}
-	id, err := create()
-	if err == nil {
-		return id, nil
-	}
-	if !docker.Conflict(err) {
-		return "", failure(err, protocol.StartFailed, "Cannot create mutex "+name+".")
-	}
-	c, err := h.inspectLock(ctx, name)
-	if docker.Absent(err) {
-		return "", starting()
-	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return "", failure(err, protocol.StartFailed, "Cannot inspect mutex "+name+".")
+		return nil, failed
 	}
-	since, err := strconv.ParseInt(c.Config.Labels[sinceLabel], 10, 64)
-	// A missing/malformed timestamp or a foreign container cannot prove expiry.
-	if err != nil || since < 0 || c.Config.Labels[mutexLabel] != lock || since >= now().Unix()-120 {
-		return "", starting()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, busy(&protocol.Holder{Container: shown, Owner: "starting"})
+		}
+		return nil, failed
 	}
-	if _, err := h.remove(ctx, c.ID); err != nil {
-		return "", failure(err, protocol.StartFailed, "Cannot remove stale mutex "+name+" ("+c.ID+").")
-	}
-	id, err = create()
-	if docker.Conflict(err) {
-		return "", starting()
-	}
-	if err != nil {
-		return "", failure(err, protocol.StartFailed, "Cannot retry mutex "+name+".")
-	}
-	return id, nil
-}
-
-func (h Host) releaseMutex(ctx context.Context, id string) *protocol.Error {
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	if _, err := h.remove(rctx, id); err != nil {
-		return failure(err, protocol.StartFailed, "Cannot remove lock mutex "+id+".")
-	}
-	return nil
+	return func() { _ = f.Close() }, nil
 }
