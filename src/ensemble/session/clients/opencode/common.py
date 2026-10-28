@@ -321,7 +321,8 @@ class OpenCodeCommon:
     def selection(
         self, spec: Spec, context: ClientContext, extra: tuple[str, ...] = ()
     ) -> tuple[str, ...]:
-        """A launch's checks and its session selection: on resume, (cwd, sid)'s session.
+        """A launch's checks and its session selection: on resume, (cwd, sid)'s session, else none
+        (a fresh one: a run killed before OpenCode saved its session bound none).
         OpenCode 1.x runs any cwd's .opencode plugins and opencode.json, so a cwd outside a
         container starts only when trusted; an isolated Host's context alone is yolo.
         """
@@ -338,9 +339,7 @@ class OpenCodeCommon:
         env = {**self.env, **spec.access.env, **spec.env}
         db = database(env if context.container is not None else {**os.environ, **env})
         native = self.session(spec.access.cwd, sid, db)
-        if native is None:
-            raise ConfigError(f"no OpenCode session bound to run ID {sid!r}")
-        return self.selector(native, resume=True)
+        return () if native is None else self.selector(native, resume=True)
 
     def home(self) -> ClientHome:
         return replace(HOME, providers=tuple(sorted(self.providers)))
@@ -545,7 +544,7 @@ class OpenCodeCommon:
         self, cwd: str, sid: str, env: Mapping[str, str], *, transcript: str = ""
     ) -> SessionStatus:
         """From the bound session's row in opencode.db: the run's `transcript`, else the db the
-        run's opencode would find.
+        run's opencode would find. Unbound: resumable as a fresh session once that db exists.
         """
         db = transcript or database({**os.environ, **self.env, **env})
         try:
@@ -553,7 +552,7 @@ class OpenCodeCommon:
         except ConfigError:
             return SessionStatus(Resumable.UNKNOWN, None, "")
         if native is None:
-            return SessionStatus(Resumable.NO, None, "")
+            return SessionStatus(Resumable.YES if os.path.isfile(db) else Resumable.NO, None, "")
         try:
             updated = session_updated(db, native)
         except Refused:

@@ -1,6 +1,6 @@
-"""OpenCode's TUI Mode: `opencode`, its first prompt by --prompt, a resume's by the opening once
-plugin.js starts. plugin.js turns OpenCode's events into hook calls carrying its root session id;
-on_hook binds a run to the first one and drops any other.
+"""OpenCode's TUI Mode: `opencode`, its first prompt by --prompt, a resumed session's by the
+opening once plugin.js starts. plugin.js turns OpenCode's events into hook calls carrying its root
+session id; on_hook binds a run to the first one and drops any other.
 """
 
 import json
@@ -99,14 +99,14 @@ class OpenCodeTui(Homed, Tui):
                 raise ConfigError(f"{where}: {PURE} would skip the opencode client's plugin")
         model = common.model(spec.tier)
         self.cwd, self.sid = os.path.realpath(spec.access.cwd), spec.sid or ""
-        self.fresh = not spec.resume
-        prompt = (f"--prompt={spec.prompt}",) if spec.prompt and not spec.resume else ()
-        self.opening = (START, spec.prompt) if spec.prompt and spec.resume else None
+        self.fresh = not selection  # a resume of a run that bound no session starts afresh
+        prompt = (f"--prompt={spec.prompt}",) if spec.prompt and self.fresh else ()
+        self.opening = (START, spec.prompt) if spec.prompt and not self.fresh else None
         found = context.container
         plugin = Path(image_path(found, PLUGIN)) if found else Path(PLUGIN).resolve()
         env = common.environment(spec, context, plugin=plugin.as_uri())
         env[HOOK_ENV] = json.dumps(list(hook))
-        env[SESSION_ENV] = (common.native(self.cwd, self.sid) or "") if spec.resume else ""
+        env[SESSION_ENV] = "" if self.fresh else (common.native(self.cwd, self.sid) or "")
         return Launch(
             (
                 common.executable_for(env, spec.access.cwd, context),

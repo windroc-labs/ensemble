@@ -33,6 +33,7 @@ from ensemble.session.engine.types import (
 from tests.session import live_tmux
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.opencode import fake_opencode
+from tests.session.unit.clients.opencode.support import make_db
 
 WAIT = 20
 NODE = shutil.which("node")
@@ -469,6 +470,21 @@ class TuiSessions(Case):
         last = self.calls()[-1]
         self.assertEqual(last["argv"], ["--session", NATIVE, "--model", "ollama/qwen3.6:35b-mlx"])
         self.assertEqual(last["env"]["session"], NATIVE)
+
+    def test_a_resume_of_a_run_that_bound_no_session_starts_a_fresh_one(self):
+        """WDRC-366: a run killed before OpenCode saved its session left no binding."""
+        handle, stream = self.start()
+        stream.until(TurnEnd)
+        handle.stop()
+        self.common.unbind(str(self.cwd), "run-1")
+        make_db(str(self.root / "data" / "opencode" / "opencode.db"))
+        self.scene([[{"text": "fresh"}]])
+        handle, stream = self.start(prompt="Fix it.", resume=True)
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("fresh"))
+        last = self.calls()[-1]
+        self.assertEqual(last["argv"], ["--model", "ollama/qwen3.6:35b-mlx", "--prompt=Fix it."])
+        self.assertEqual(last["env"]["session"], "")
+        self.assertEqual(self.common.native(str(self.cwd), "run-1"), NATIVE)
 
     def test_flags_with_c_fail_before_start(self):
         with self.assertRaises(ConfigError):
