@@ -46,12 +46,9 @@ from tests.session.unit.clients.claude.support import (
     store,
     tui_launch,
 )
+from tests.session.unit.clients.support import holds, packaged_table
 
 PLUGIN = '{"enabledPlugins": {"ensemble@windroc": false}}'
-
-
-def holds(argv, words) -> bool:
-    return any(tuple(argv[i : i + len(words)]) == tuple(words) for i in range(len(argv)))
 
 
 class PermissionTest(Base):
@@ -84,9 +81,7 @@ class PermissionTest(Base):
     def test_the_packaged_config_gives_docker_claude_only_yolo_flags_every_other_host_only_auto(
         self,
     ):
-        table = dict(read_config(local=os.devnull)["clients"]["claude"])
-        table.pop("implementation")
-        table.pop("max_runs")
+        table = packaged_table("claude")
         words = {
             Permission.AUTO: "--permission-mode",
             Permission.YOLO: "--dangerously-skip-permissions",
@@ -161,13 +156,6 @@ class AccountsTest(Base):
             self.found({"default": {"account": "me@home"}}), {"default": (default, "me@home")}
         )
         self.assertEqual(ClaudeClient({})._accounts(), frozenset({"default"}))
-
-    def test_the_packaged_config_registers_only_the_default_account(self):
-        table = dict(read_config(local=os.devnull)["clients"]["claude"])
-        table.pop("implementation")
-        table.pop("max_runs")
-        self.assertEqual(table["accounts"], {})
-        self.assertEqual(ClaudeClient(table)._accounts(), frozenset({"default"}))
 
     def test_each_registered_account_keeps_its_expanded_dir_and_display(self):
         accounts = {

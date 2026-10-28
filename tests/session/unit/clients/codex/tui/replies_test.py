@@ -15,22 +15,10 @@ from ensemble.session.clients.codex.tui import replies
 from ensemble.session.engine.types import HookCall
 from ensemble.utils import STALE_AGE, file_lock, read_reply
 from tests.session.case import SPAWNS
-from tests.session.unit.clients.codex.support import NATIVE, Base
+from tests.session.unit.clients.codex.support import NATIVE, Base, said
 from tests.utils.clock import FakeClock
 
 NAME = "w1"
-
-
-def _said(role, *texts):
-    kind = "output_text" if role == "assistant" else "input_text"
-    return {
-        "type": "response_item",
-        "payload": {
-            "type": "message",
-            "role": role,
-            "content": [{"type": kind, "text": text} for text in texts],
-        },
-    }
 
 
 class RepliesBase(Base):
@@ -84,7 +72,7 @@ class RepliesBase(Base):
         """Codex runs the prompt's hook, then records the prompt."""
         self.hook("SessionStart", source="startup")
         self.hook("UserPromptSubmit", prompt=prompt, turn_id=turn_id)
-        self.append(_said("user", prompt))
+        self.append(said("user", prompt))
 
     def pump(self):
         replies.settle_pending(SessionStore().root, str(self.work), self.sid)
@@ -93,7 +81,7 @@ class RepliesBase(Base):
 class SteerTest(RepliesBase):
     def test_turn_without_steer_writes_nothing(self):
         self.open_turn()
-        self.append(_said("assistant", "done text"))
+        self.append(said("assistant", "done text"))
         self.hook("Stop", turn_id="t1", last_assistant_message="done text")
         self.assertEqual(self.lines(), [])
 
@@ -118,9 +106,9 @@ class SteerTest(RepliesBase):
 
     def test_steer_then_answer_writes_one_reply_with_its_text(self):
         self.open_turn()
-        self.append(_said("assistant", "working on it"))
+        self.append(said("assistant", "working on it"))
         self.steer("status?")
-        self.append(_said("user", "status?"), _said("assistant", "half", "done"))
+        self.append(said("user", "status?"), said("assistant", "half", "done"))
         self.pump()
         (reply_id,) = self.reply_ids()
         self.assertRegex(reply_id, r"^[0-9a-f]{32}$")
@@ -130,18 +118,16 @@ class SteerTest(RepliesBase):
     def test_reply_precedes_done_and_stop_adds_no_second(self):
         self.open_turn()
         self.steer("status?")
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.append(said("user", "status?"), said("assistant", "answer"))
         self.pump()
-        self.append(_said("assistant", "final"))
+        self.append(said("assistant", "final"))
         self.hook("Stop", turn_id="t1", last_assistant_message="final")
         self.assertEqual(len(self.reply_ids()), 1)
 
     def test_stop_finds_answer_before_the_pump(self):
         self.open_turn()
         self.steer("status?")
-        self.append(
-            _said("user", "status?"), _said("assistant", "answer"), _said("assistant", "end")
-        )
+        self.append(said("user", "status?"), said("assistant", "answer"), said("assistant", "end"))
         self.hook("Stop", turn_id="t1", last_assistant_message="end")
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "answer")
@@ -153,7 +139,7 @@ class SteerTest(RepliesBase):
         self.open_turn()
         self.steer("status?")
         self.append(
-            _said("assistant", "before"), _said("user", "status?"), _said("assistant", "after")
+            said("assistant", "before"), said("user", "status?"), said("assistant", "after")
         )
         self.pump()
         (reply_id,) = self.reply_ids()
@@ -161,7 +147,7 @@ class SteerTest(RepliesBase):
 
     def test_steer_recorded_before_its_late_hook_still_replies(self):
         self.open_turn()
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.append(said("user", "status?"), said("assistant", "answer"))
         self.steer("status?")  # the Docker Host runs a relayed hook after Codex goes on
         self.pump()
         (reply_id,) = self.reply_ids()
@@ -169,9 +155,9 @@ class SteerTest(RepliesBase):
 
     def test_opening_record_is_not_a_steer_record(self):
         self.open_turn("same")
-        self.append(_said("assistant", "early"))
+        self.append(said("assistant", "early"))
         self.steer("same")
-        self.append(_said("user", "same"), _said("assistant", "for the steer"))
+        self.append(said("user", "same"), said("assistant", "for the steer"))
         self.pump()
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "for the steer")
@@ -179,7 +165,7 @@ class SteerTest(RepliesBase):
     def test_failed_emit_drops_its_steer_and_still_closes(self):
         self.open_turn()
         self.steer("status?")
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.append(said("user", "status?"), said("assistant", "answer"))
         with open(self.events + ".replies", "w", encoding="utf-8"):
             pass
         got = self.hook("Stop", turn_id="t1", last_assistant_message="answer")
@@ -207,10 +193,10 @@ class SteerTest(RepliesBase):
     def test_identical_prompts_match_in_order(self):
         self.open_turn()
         self.steer("same")
-        self.append(_said("user", "same"), _said("assistant", "one"))
+        self.append(said("user", "same"), said("assistant", "one"))
         self.pump()
         self.steer("same")
-        self.append(_said("user", "same"), _said("assistant", "two"))
+        self.append(said("user", "same"), said("assistant", "two"))
         self.pump()
         texts = [read_reply(self.events, reply_id) for reply_id in self.reply_ids()]
         self.assertEqual(texts, ["one", "two"])
@@ -218,7 +204,7 @@ class SteerTest(RepliesBase):
     def test_rescan_after_restart_writes_no_second_line(self):
         self.open_turn()
         self.steer("status?")
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.append(said("user", "status?"), said("assistant", "answer"))
         self.pump()
         saved = self.state()
         steer = {"n": 9, "prompt": "status?", "cursor": 0, "at": None, "skip": False}
@@ -231,7 +217,7 @@ class SteerTest(RepliesBase):
     def test_stop_falls_back_to_last_assistant_message(self):
         self.open_turn()
         self.steer("status?")
-        self.append(_said("user", "status?"))
+        self.append(said("user", "status?"))
         self.hook("Stop", turn_id="t1", last_assistant_message="the end")
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "the end")
@@ -239,7 +225,7 @@ class SteerTest(RepliesBase):
     def test_unseen_steer_yields_nothing(self):
         self.open_turn()
         self.steer("late")
-        self.append(_said("assistant", "the end"))
+        self.append(said("assistant", "the end"))
         self.hook("Stop", turn_id="t1", last_assistant_message="the end")
         self.assertEqual(self.lines(), [])
         self.assertEqual(self.state()["steers"], [])
@@ -248,7 +234,7 @@ class SteerTest(RepliesBase):
         self.open_turn()
         self.steer("a")
         self.steer("b")
-        self.append(_said("user", "a"), _said("assistant", "for a"), _said("user", "b"))
+        self.append(said("user", "a"), said("assistant", "for a"), said("user", "b"))
         self.hook("Interrupt", turn_id="t1", last_assistant_message="ignored")
         texts = [read_reply(self.events, reply_id) for reply_id in self.reply_ids()]
         self.assertEqual(texts, ["for a"])
@@ -278,9 +264,9 @@ class SteerTest(RepliesBase):
     def test_non_str_payload_fields_are_absent(self):
         self.hook("SessionStart", source="startup")
         self.hook("UserPromptSubmit", prompt=5, turn_id=["x"])
-        self.append(_said("user", "opening"))
+        self.append(said("user", "opening"))
         self.hook("UserPromptSubmit", prompt={"a": 1}, turn_id=7)
-        self.append(_said("user", "anything"), _said("assistant", "reply"))
+        self.append(said("user", "anything"), said("assistant", "reply"))
         got = self.hook("Stop", last_assistant_message=[1])
         self.assertEqual(got["hook_event_name"], "Stop")
         (reply_id,) = self.reply_ids()
@@ -311,14 +297,14 @@ class SteerTest(RepliesBase):
         self.open_turn()
         long = "word " * replies.PROMPT_MAX
         self.steer(long)
-        self.append(_said("user", long), _said("assistant", "ok"))
+        self.append(said("user", long), said("assistant", "ok"))
         self.pump()
         self.assertEqual(len(self.reply_ids()), 1)
 
     def test_on_hook_uses_only_hook_call_paths(self):
         self.open_turn()
         self.steer("status?")
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.append(said("user", "status?"), said("assistant", "answer"))
         self.hook("Stop", turn_id="t1", last_assistant_message="answer")
         self.assertEqual(self.lines()[0][:2], [NAME, "reply"])
         self.assertTrue(self.state_file.startswith(os.path.join(SessionStore().root, "replies")))
@@ -343,8 +329,8 @@ class ScanTest(RepliesBase):
     def test_scan_reads_at_most_scan_max(self):
         self.open_turn()
         self.steer("status?")
-        filler = _said("assistant", "x" * 1000)
-        self.append(*[filler] * 3000, _said("user", "status?"), _said("assistant", "answer"))
+        filler = said("assistant", "x" * 1000)
+        self.append(*[filler] * 3000, said("user", "status?"), said("assistant", "answer"))
         state = self.state()
         start = state["turn"]["start"]
         (found,) = replies.scan(state, budget=replies.HOOK_SCAN_MAX)["steers"].values()
@@ -363,9 +349,9 @@ class ScanTest(RepliesBase):
         self.steer("status?")
         other = self.root / "other.jsonl"
         other.write_text(
-            json.dumps(_said("user", "status?"))
+            json.dumps(said("user", "status?"))
             + "\n"
-            + json.dumps(_said("assistant", "leak"))
+            + json.dumps(said("assistant", "leak"))
             + "\n",
             encoding="utf-8",
         )
@@ -400,25 +386,15 @@ class PumpTest(RepliesBase):
         self.steer("status?")
         self.pump()
         self.assertEqual(self.reply_ids(), [])
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.append(said("user", "status?"), said("assistant", "answer"))
         self.pump()
-        self.pump()
-        self.assertEqual(len(self.reply_ids()), 1)
-
-    def test_a_held_lock_is_left_to_the_next_pump(self):
-        self.open_turn()
-        self.steer("status?")
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
-        with file_lock(self.state_file, wait=False):
-            self.pump()
-        self.assertEqual(self.reply_ids(), [])
         self.pump()
         self.assertEqual(len(self.reply_ids()), 1)
 
     def test_pump_claim_during_stop_scan_keeps_stop_commit(self):
         self.open_turn()
         self.steer("status?")
-        self.append(_said("user", "status?"))
+        self.append(said("user", "status?"))
         opened, rollout, ran = os.open, self.path.name, []
 
         def open_(name, *args, **kwargs):
@@ -433,7 +409,7 @@ class PumpTest(RepliesBase):
                     sleep=clock.sleep,
                 )
                 self.assertIsNotNone(self.state()["steers"][0]["at"])
-                self.append(_said("assistant", "answer"))
+                self.append(said("assistant", "answer"))
             return opened(name, *args, **kwargs)
 
         with mock.patch.object(os, "open", open_):
@@ -447,7 +423,7 @@ class PumpTest(RepliesBase):
     def test_stop_waits_behind_pump_emit(self):
         self.open_turn()
         self.steer("status?")
-        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.append(said("user", "status?"), said("assistant", "answer"))
         hook_clock, link, seen = FakeClock(1000.0), os.link, []
 
         def claimed(*args, **kwargs):

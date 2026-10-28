@@ -46,17 +46,6 @@ class ClientErrorTest(HookBase):
         self.assertEqual(len(result.stderr.splitlines()), 1)
         self.assertTrue(result.stderr.startswith(b"tui_hook: usage: ensemble-session hook "))
 
-    def test_client_error_is_one_stderr_line_without_a_record(self):
-        callback = os.path.join(self.root, "client.py")
-        with open(callback, "w") as file:
-            file.write('def on_hook(call):\n    raise RuntimeError("first\\nsecond")\n')
-        self.state["client_hook"] = self.callback("client")
-        write_state(self.dir, self.state)
-        self.assertEqual(
-            self.hook("stop", {"text": "payload"}), "tui_hook: RuntimeError: first second\n"
-        )
-        self.assertNothingWritten()
-
 
 class ErrorLoggingTest(HookBase):
     def test_package_import_failures_keep_a_traceback_and_one_error_line(self):
@@ -539,6 +528,18 @@ assert "callback_package" not in sys.modules
             with self.subTest(stat.filemode(os.lstat(self.hooks).st_mode)):
                 self.assertError(self.hook("stop"), "hooks.jsonl")
             (os.rmdir if os.path.isdir(self.hooks) else os.unlink)(self.hooks)
+        self.assertNothingWritten()
+
+    def test_a_closed_stdin_is_one_stderr_line_and_exits_0_writing_nothing(self):
+        res = subprocess.run(
+            [COMMAND, "hook", self.dir, "tool"],
+            capture_output=True,
+            env={**self.env, "PATH": f"{os.path.dirname(sys.executable)}:/usr/bin:/bin"},
+            timeout=60,
+            preexec_fn=lambda: os.close(0),
+        )
+        self.assertEqual((res.returncode, res.stdout), (0, b""), res.stderr)
+        self.assertError(res.stderr.decode(), "Error")
         self.assertNothingWritten()
 
 

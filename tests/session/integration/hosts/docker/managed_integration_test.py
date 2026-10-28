@@ -1,8 +1,5 @@
 """A guarded Docker worker whose guard is its fake container's main process, over a fake `docker
-attach` that, like Docker's, never closes the guard's stdin: SIGKILL of the harness, the attach, the
-guard or harness and guard ends the container and its client within 10 s; an idle worker outlives
-the heartbeat limit; a container hook reaches the channel as one WorkerHook; a headless worker whose
-removal failed is removed by its next close; hooks journal the same records and events as on tmux.
+attach` that, like Docker's, never closes the guard's stdin; its hooks journal as on tmux.
 """
 
 import contextlib
@@ -14,7 +11,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.engine.types import (
@@ -31,7 +27,6 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness import guard
 from ensemble.session.hosts.docker import stub
 from ensemble.session.hosts.docker.hooks import HookWorker
-from ensemble.session.hosts.docker.maintenance import Maintenance
 from ensemble.session.hosts.docker.worker import DockerWorker
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session import docker_attach_fixture, guard_fixture, live_tmux
@@ -48,14 +43,6 @@ STEPS = (
     ("end", {"session_id": "n1", "last": "Done.", "tasks": []}),
 )
 REAPED = 10.0  # s from a kill to the client's and the container's end (FR-4)
-
-
-class Broker:
-    def maintain(self, container, manifest, delivered, *, root):
-        return SimpleNamespace(next_check=None, deadline=None, results=[], notices=[])
-
-    def close(self, container):
-        return None
 
 
 class GuardedDockerTest(Case):
@@ -265,20 +252,8 @@ class SameEventsTest(Case):
         self.enterContext(mock.patch.dict(os.environ, child_env(), clear=True))
         hooks = HookWorker([COMMAND, "hook", "--serve", guarded])
         self.addCleanup(hooks.stop)
-        worker = DockerWorker(
-            "w1",
-            "g1",
-            mock.Mock(),
-            state=self.home,
-            events=None,
-            hooks=hooks,
-            remove=lambda: None,
-            owner=os.open(os.path.join(self.home, "guard.lock"), os.O_RDWR | os.O_CREAT, 0o600),
-            maintenance=lambda close, report: Maintenance(
-                "w1", self.home, "g1", Broker(), report=report, root="/", close=close
-            ),
-            report=lambda *_: None,
-            start_reader=False,
+        worker = docker_attach_fixture.docker_worker(
+            self.home, mock.Mock(), hooks=hooks, start_reader=False
         )
         worker.accept(b"s", b'{"pid": 1}')
         frames = [

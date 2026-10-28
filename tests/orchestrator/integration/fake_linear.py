@@ -13,7 +13,6 @@ import os
 import re
 import tempfile
 import threading
-import time
 import urllib.error
 import uuid
 from dataclasses import dataclass
@@ -276,6 +275,7 @@ class FakeLinear:
         self.requests, self.failures = [], []
         self.users, self.issues, self.labels, self.projects, self.relations = {}, {}, {}, {}, []
         self.clock = itertools.count()
+        self.released = threading.Event()
 
     def user(self, name, service=None, *, uid=None, email=None):
         """service: an OAuth app's token entry, its calls Bearer _token(service); without one, a
@@ -391,6 +391,10 @@ class FakeLinear:
                 )
             self.failures.append(_Failure(op, kind, caller, times, seconds))
 
+    def release(self):
+        """Answer every hang now."""
+        self.released.set()
+
     def answer(self, query, variables, authorization):
         """authorization: the Authorization header, `Bearer <token>`; anything else is a 401."""
         token = (
@@ -482,10 +486,8 @@ class FakeLinear:
         if service not in tokens:
             raise LinearError(f"fake transport: no token for {service}")
         status, body, delay = self.answer(query, variables, f"Bearer {_token(service)}")
-        if delay:
-            time.sleep(min(delay, timeout))
-            if delay >= timeout:
-                raise types.Unavailable(client.operation(query), reason="TimeoutError: timed out")
+        if delay and not self.released.wait(min(delay, timeout)) and delay >= timeout:
+            raise types.Unavailable(client.operation(query), reason="TimeoutError: timed out")
         if status >= 500:
             raise types.Unavailable(client.operation(query), status=status)
         if status != 200:
@@ -1106,8 +1108,10 @@ class _Handler(BaseHTTPRequestHandler):
         status, body, delay = self.server.fake.answer(
             req.get("query"), req.get("variables"), self.headers.get("Authorization")
         )
-        if delay and self.server.closing.wait(delay):
-            return
+        if delay:
+            self.server.fake.released.wait(delay)
+            if self.server.closing.is_set():
+                return
         self._send(status, body)
 
     def do_GET(self):
@@ -1140,6 +1144,7 @@ def serve(case, fake):
 
     def stop():
         server.closing.set()
+        fake.release()
         server.shutdown()
         server.server_close()
         thread.join()

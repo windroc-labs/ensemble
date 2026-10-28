@@ -269,7 +269,7 @@ Recovery and next help:
   Resume its saved environment: ensemble-session resume dummy-1
   Placement and Record controls: ensemble-session --help
   Commands and exits: ensemble-delegate --help
-  Environment configuration: docs/architecture.md#environments
+  Environment configuration: [delegate.environments.<name>] in ~/.ensemble/config.local.toml
 """,
     )
     ap.add_argument(

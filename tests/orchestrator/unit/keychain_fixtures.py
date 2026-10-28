@@ -1,11 +1,13 @@
-"""Fake macOS Keychain and Linear token endpoint for app identities."""
+"""Fake Keychain and Linear token endpoint."""
 
+import contextlib
 import io
 import json
 import re
 import shlex
 import urllib.error
 import urllib.parse
+import urllib.request
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
@@ -88,8 +90,8 @@ class Keychain:
 
 
 class Endpoint:
-    """urlopen: token requests get answer (dict, bytes or exception), GraphQL gets data or
-    data(query, variables); tokens, graphql: requests seen."""
+    """urlopen: token requests get answer, GraphQL gets data or data(query, variables);
+    tokens, graphql: requests seen."""
 
     def __init__(self, answer=None, data=None):
         self.answer = {"access_token": NEW, "expires_in": 30 * 86400} if answer is None else answer
@@ -116,6 +118,18 @@ def _response(body):
 
 def token_http_error(code, body=b""):
     return urllib.error.HTTPError(client.TOKEN_URL, code, "Error", {}, io.BytesIO(body))
+
+
+@contextlib.contextmanager
+def app_transport(app, days, answer=None, data=None):
+    """Keychain: app's secret, a token of days left; urlopen at Endpoint(answer, data)."""
+    keychain = Keychain({app.token_service: record(days=days), app.secret_service: SECRET})
+    endpoint = Endpoint(answer, data=data and (lambda q, v: data(q, identity=app, **v)))
+    with (
+        mock.patch("subprocess.run", keychain),
+        mock.patch.object(urllib.request, "urlopen", side_effect=endpoint),
+    ):
+        yield keychain, endpoint
 
 
 def leaks(texts):

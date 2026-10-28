@@ -4,7 +4,6 @@ import fcntl
 import itertools
 import os
 import threading
-import time
 from collections.abc import Generator
 from typing import cast
 from unittest import mock
@@ -31,6 +30,7 @@ from ensemble.session.harness.view import OwnedSession, confirmed_end, dialog, f
 from ensemble.utils import Record
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
+from tests.session.harnesses import serve
 from tests.session.hosted_support import HostedTuiBase
 
 GEN = "g1"
@@ -192,24 +192,15 @@ class EventsTest(Base):
 
 
 class CloseTest(Base):
-    def serve(self, *, ok=True, error=None, unanswered=False, let_go=None):
+    def serve(self, *, let_go=None, **reply):
         """let_go: the lock fd it then unlocks, as a harness does once it answered an end."""
-        self.served = []
 
-        def answer():
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                for ident, op in self.channel.requests():
-                    self.served.append(op)
-                    self.channel.reply(ident, ok=ok, error=error, unanswered=unanswered)
-                    if let_go is not None:
-                        fcntl.flock(let_go, fcntl.LOCK_UN)
-                    return
-                time.sleep(0.01)
+        def answer(ident, _op, _data):
+            self.channel.reply(ident, **{"ok": True, **reply})
+            if let_go is not None:
+                fcntl.flock(let_go, fcntl.LOCK_UN)
 
-        thread = threading.Thread(target=answer)
-        thread.start()
-        self.addCleanup(thread.join)
+        self.served = serve(self, self.channel, answer)
 
     def test_close_and_stop_ask_the_owner(self):
         for op, call in ((Op.CLOSE, OwnedSession.close), (Op.STOP, OwnedSession.stop)):
@@ -217,7 +208,7 @@ class CloseTest(Base):
                 self.serve(let_go=self.hold())
                 view = self.view()
                 call(view)
-                self.assertEqual(self.served, [op])
+                self.assertEqual(self.served, [(op, {})])
         self.assertEqual(self.attaches, 0)
 
     def test_a_refusal_raises_its_error(self):
@@ -596,25 +587,14 @@ class RequestTest(Base):
     """A tui view's send, press and screen are its harness's requests, whatever its worker."""
 
     def serve(self, answers):
-        self.served = []
+        def answer(ident, op, _data):
+            ok, found = answers[op]
+            if ok:
+                self.channel.reply(ident, ok=True, data=found)
+            else:
+                self.channel.reply(ident, ok=False, error=found)
 
-        def run():
-            deadline = time.monotonic() + 5
-            left = len(answers)
-            while time.monotonic() < deadline and left:
-                for ident, op, data in self.channel.pending():
-                    self.served.append((op, data))
-                    ok, found = answers[op]
-                    if ok:
-                        self.channel.reply(ident, ok=True, data=found)
-                    else:
-                        self.channel.reply(ident, ok=False, error=found)
-                    left -= 1
-                time.sleep(0.01)
-
-        thread = threading.Thread(target=run)
-        thread.start()
-        self.addCleanup(thread.join)
+        self.served = serve(self, self.channel, answer, count=len(answers))
 
     def test_input_and_screen_go_through_its_harness(self):
         self.hold()

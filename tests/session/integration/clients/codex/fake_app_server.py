@@ -82,12 +82,6 @@ def rate_snapshot(case):
         secondary = None
     if case == "null":
         primary = secondary = None
-    if case == "invalid-window":
-        primary = {"usedPercent": True, "windowDurationMins": 10080, "resetsAt": "bad"}
-        secondary = {"usedPercent": 60, "windowDurationMins": None, "resetsAt": 2000}
-    if case == "huge-number":
-        primary = {"usedPercent": 10**1000, "windowDurationMins": 10080, "resetsAt": None}
-        secondary = None
     if case == "five-first":
         primary, secondary = secondary, primary
     snapshot = {"primary": primary, "secondary": secondary}

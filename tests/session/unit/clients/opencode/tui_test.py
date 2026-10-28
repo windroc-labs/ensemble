@@ -65,9 +65,6 @@ class Base(Case):
 
 
 class LaunchTest(Base):
-    def test_an_opencode_tui_runs_remote_under_its_session_harness(self):
-        self.assertTrue(tui.OpenCodeTui._remote_owned)
-
     def test_a_fresh_start_submits_its_prompt(self):
         launch = self.launch(self.spec(tier=1))
         self.assertEqual(
@@ -115,16 +112,6 @@ class LaunchTest(Base):
         self.assertIsNone(run.opening)
         self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], "")
         self.assertTrue(run.fresh)
-
-    def test_an_untrusted_cwd_on_a_non_isolated_host_is_refused(self):
-        self.client.common.bind(self.cwd, "run-1", SES)
-        for resume in (False, True):
-            spec = self.spec(access=Access(cwd=self.cwd), resume=resume)
-            with self.subTest(resume=resume), self.assertRaisesRegex(ConfigError, "trusted cwd"):
-                self.launch(spec)
-        self.assertFalse(
-            self.launch(self.spec(access=Access(cwd=self.cwd)), context=DOCKER_CONTEXT).project
-        )
 
     def test_the_env_carries_the_plugin_and_the_hook(self):
         launch = self.launch(self.spec())

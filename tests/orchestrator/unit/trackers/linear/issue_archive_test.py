@@ -15,7 +15,7 @@ from ensemble.orchestrator.issue.output import receipt_payload, refusal
 from ensemble.orchestrator.trackers.linear import issue_archive, linear_tracker
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from tests.orchestrator.case import Case
-from tests.orchestrator.unit.issue_fixtures import VIEWER, ArchiveGql, tree
+from tests.orchestrator.unit.issue_fixtures import VIEWER, ArchiveGql, receipt_of, tree
 
 
 def many(n, prefix="SUB", kind="completed"):
@@ -54,19 +54,7 @@ class Archive(Case):
     def test_all_finished_archives_once_and_prints_the_receipt(self):
         root = tree("TASK-1", "completed", tree("TASK-2", "canceled", tree("TASK-3")))
         gql = ArchiveGql(root)
-        self.assertEqual(
-            receipt_payload(archive(gql)),
-            {
-                "issue": {
-                    "id": "id-TASK-1",
-                    "identifier": "TASK-1",
-                    "url": "https://linear.app/t/issue/TASK-1",
-                },
-                "operation": "archive",
-                "result": "changed",
-                "actor": VIEWER,
-            },
-        )
+        self.assertEqual(receipt_payload(archive(gql)), receipt_of("archive", "TASK-1"))
         self.assertEqual(gql.writes, [(linear_tracker.M_ARCHIVE, {"i": "id-TASK-1"})])
         self.assertEqual(gql.calls[0], (issue_archive.Q_ISSUE, {"i": "TASK-1"}))
 

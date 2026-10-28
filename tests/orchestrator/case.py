@@ -1,10 +1,11 @@
 """Case, every orchestrator test's base; child helpers (PY, child_env, ORCH_ROOT); SID;
-this tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
+zone(case, tz); this tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
 """
 
 import os
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 from unittest import mock
 
@@ -42,6 +43,12 @@ class Case(TreeCase):
 
 def _foreign(modules=None) -> str | None:
     return foreign(ensemble, ROOTS, SRC, RUN_WITH, modules)
+
+
+def zone(case, tz="UTC0"):
+    case.addCleanup(time.tzset)
+    case.enterContext(mock.patch.dict(os.environ, {"TZ": tz}))
+    time.tzset()
 
 
 def child_env(base=None, *extra: str) -> dict[str, str]:

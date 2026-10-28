@@ -5,13 +5,11 @@ Node) loads the real plugin.js and plays OpenCode's bus events through it to the
 import dataclasses
 import json
 import os
-import queue
 import shlex
 import shutil
 import sys
 import time
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -32,6 +30,7 @@ from ensemble.session.engine.types import (
 from tests.session import live_tmux
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.opencode import fake_opencode
+from tests.session.tui_support import Stream
 from tests.session.unit.clients.opencode.support import make_db
 from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import scratch
@@ -40,49 +39,6 @@ WAIT = 20
 NODE = shutil.which("node")
 FAKE_TUI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_tui.mjs")
 NATIVE = "ses_fakeTuiRootSession0001"
-
-
-class Stream:
-    def __init__(self, case, handle):
-        self.queue, self.server = queue.Queue(), case.server
-        self.executor = ThreadPoolExecutor(max_workers=1)
-        self.result = self.executor.submit(self.collect, handle)
-        case.addCleanup(self.close, handle)
-
-    def collect(self, handle):
-        for event in handle.events():
-            self.queue.put(event)
-
-    def close(self, handle):
-        handle.stop()
-        try:
-            self.result.result(timeout=5)
-        finally:
-            self.executor.shutdown(wait=False, cancel_futures=True)
-
-    def next(self):
-        deadline = time.monotonic() + WAIT
-        while True:
-            try:
-                return self.queue.get(timeout=live_tmux.POLL)
-            except queue.Empty:
-                if self.result.done():
-                    self.result.result()
-                self.server.tmux("run-shell", "-b", "true")
-                if time.monotonic() > deadline:
-                    raise AssertionError("no event before deadline") from None
-
-    def until(self, kind):
-        found = [self.next()]
-        while not isinstance(found[-1], kind):
-            found.append(self.next())
-        return found
-
-    def quiet(self):
-        try:
-            raise AssertionError(f"unexpected event: {self.queue.get(timeout=1.0)!r}")
-        except queue.Empty:
-            pass
 
 
 @unittest.skipIf(NODE is None, "node is not on PATH: the OpenCode TUI tests run plugin.js under it")
@@ -140,7 +96,9 @@ class TuiSessions(Case):
     def start(self, prompt="Hello", **fields):
         handle = self.session_cls.start(dataclasses.replace(self.spec, prompt=prompt, **fields))
         self.addCleanup(handle.stop)
-        return handle, Stream(self, handle)
+        return handle, Stream(
+            self, handle, poke=lambda: self.server.tmux("run-shell", "-b", "true")
+        )
 
     def logged(self) -> list[dict]:
         return read_jsonl(self.log, missing_ok=True)
@@ -285,16 +243,19 @@ class TuiSessions(Case):
         self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd(""))
         self.assertGreater(time.monotonic() - started, 3)
 
-    def test_a_bash_ask_blocks_until_answered(self):
-        self.scene([[{"bash": "rm -rf build"}, {"text": "cleaned"}]])
+    def blocked_turn(self, step, blocked, answer, text):
+        """A turn of `step` then `text` blocks as `blocked` until `answer`, then ends done."""
+        self.scene([[step, {"text": text}]])
         handle, stream = self.start()
-        self.assertEqual(stream.until(Blocked)[-1], Blocked("bash"))
+        self.assertEqual(stream.until(Blocked)[-1], blocked)
         self.assertEqual(self.words(1)[-1], "w1 blocked")
-        handle.send("allow")
+        handle.send(answer)
         found = stream.until(TurnEnd)
-        self.assertEqual(found[0], Activity(""))
-        self.assertEqual(found[-1], TurnEnd("cleaned"))
+        self.assertEqual((found[0], found[-1]), (Activity(""), TurnEnd(text)))
         self.assertEqual(self.words(2)[-1], "w1 done")
+
+    def test_a_bash_ask_blocks_until_answered(self):
+        self.blocked_turn({"bash": "rm -rf build"}, Blocked("bash"), "allow", "cleaned")
 
     def test_yolo_tools_never_report_blocked(self):
         self.session_cls = configured(self.clients, {"isolated": True})
@@ -336,31 +297,15 @@ class TuiSessions(Case):
         self.assertEqual(self.words(3), ["w1 blocked", "w1 blocked", "w1 done"])
 
     def test_a_child_sessions_ask_blocks(self):
-        self.scene([[{"bash": "make", "child": True}, {"text": "built"}]])
-        handle, stream = self.start()
-        self.assertEqual(stream.until(Blocked)[-1], Blocked("bash"))
-        handle.send("allow")
-        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("built"))
+        self.blocked_turn({"bash": "make", "child": True}, Blocked("bash"), "allow", "built")
 
     def test_a_question_blocks_until_answered(self):
-        self.scene([[{"question": "Database"}, {"text": "picked"}]])
-        handle, stream = self.start()
-        self.assertEqual(stream.until(Blocked)[-1], Blocked("question: Database"))
-        self.assertEqual(self.words(1)[-1], "w1 blocked")
-        handle.send("answer")
-        found = stream.until(TurnEnd)
-        self.assertEqual(found[0], Activity(""))
-        self.assertEqual(found[-1], TurnEnd("picked"))
-        self.assertEqual(self.words(2)[-1], "w1 done")
+        question = {"question": "Database"}
+        self.blocked_turn(question, Blocked("question: Database"), "answer", "picked")
 
     def test_a_dismissed_question_works_on(self):
-        self.scene([[{"question": "Database", "child": True}, {"text": "skipped"}]])
-        handle, stream = self.start()
-        self.assertEqual(stream.until(Blocked)[-1], Blocked("question: Database"))
-        handle.send("dismiss")
-        found = stream.until(TurnEnd)
-        self.assertEqual(found[0], Activity(""))
-        self.assertEqual(found[-1], TurnEnd("skipped"))
+        question = {"question": "Database", "child": True}
+        self.blocked_turn(question, Blocked("question: Database"), "dismiss", "skipped")
 
     def test_tool_parts_are_activity_and_foreign_sessions_are_ignored(self):
         self.scene([[{"tool": "read"}, {"foreign": True}, {"busy": True}, {"text": "ok"}]])

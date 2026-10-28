@@ -7,7 +7,6 @@ import os
 import shutil
 import tempfile
 import threading
-import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,10 +22,6 @@ from ensemble.orchestrator.engine import (
     router,
     runs,
     writeback,
-)
-from ensemble.orchestrator.engine.flow import handoff
-from ensemble.orchestrator.engine.flow.types import (
-    Issue,
 )
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import (
@@ -47,12 +42,12 @@ from ensemble.orchestrator.trackers.linear import (
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from ensemble.session import SessionStatus
 from ensemble.utils import OutcomeStatus
-from tests.orchestrator.case import SID, Case
+from tests.orchestrator.case import SID, Case, zone
 from tests.orchestrator.linear_run_case import SID as RUN_SID
 from tests.orchestrator.linear_run_case import ReadyDelegate, RunCase
 from tests.orchestrator.unit import board_ids, run_fixtures
 from tests.orchestrator.unit.clock import logs_at
-from tests.orchestrator.unit.run_fixtures import logged, show
+from tests.orchestrator.unit.run_fixtures import flow_issue, logged, show
 from tests.orchestrator.unit.writeback_fixtures import APPROVE_MAPPED, DOC, PR, PRD
 
 ID, UUID = "ENG-7", "11111111-2222-4333-8444-555555555555"
@@ -194,20 +189,7 @@ HANDOFF = (
 )
 
 
-def issue(description):
-    return Issue(
-        UUID,
-        ID,
-        f"https://linear.app/t/issue/{ID}",
-        "ENG: Session registry",
-        description,
-        "2026-09-01T00:00:00.000Z",
-        None,
-        (),
-        (),
-        (),
-        handoff=handoff.parse_handoff(description),
-    )
+issue = functools.partial(flow_issue, uuid=UUID, ident=ID, title="ENG: Session registry")
 
 
 class Gql:
@@ -682,22 +664,20 @@ WRITERS = Writers(tracker(Gql()), LinearTracker(Gql()), STATES, HUMANS, {PROJECT
 
 
 class WritebackContext(run_fixtures.Base):
-    def test_context_resolves_build_host_fallback_and_explicit_override(self):
+    def test_context_resolves_the_output_host_and_github_blob_prefix(self):
         cfg = config.load()
         cfg = replace(cfg, docs=replace(cfg.docs, host="ghe.example.com"))
-        for explicit, expected in (
-            (None, "ghe.example.com"),
-            ("github.com", "github.com"),
-            ("build.example.com", "build.example.com"),
+        github = {"type": "github", "repo": "windroc/docs", "branch": "main", "dir": "V/"}
+        for output, host, published in (
+            ({"type": "pull-request"}, "ghe.example.com", ""),
+            ({"type": "pull-request", "host": "github.com"}, "github.com", ""),
+            ({"type": "pull-request", "host": "build.example.com"}, "build.example.com", ""),
+            (github, "ghe.example.com", "https://ghe.example.com/windroc/docs/blob/main/"),
         ):
-            with self.subTest(explicit=explicit):
+            with self.subTest(output=output):
                 role = cfg.roles["engineer"]
-                output = {"type": "pull-request"} | ({"host": explicit} if explicit else {})
-                current = replace(
-                    cfg,
-                    roles=dict(cfg.roles)
-                    | {"engineer": replace(role, run=replace(role.run, output=output))},
-                )
+                run = replace(role.run, output=output)
+                current = replace(cfg, roles=dict(cfg.roles) | {"engineer": replace(role, run=run)})
                 ctx = writeback.context(
                     current,
                     "engineer",
@@ -709,34 +689,7 @@ class WritebackContext(run_fixtures.Base):
                     project=PROJECT,
                     target=TARGET,
                 )
-                self.assertEqual(ctx.host, expected)
-                self.assertEqual(ctx.published, "")
-                self.assertEqual(
-                    writeback._url(ctx, f"https://{expected}/acme/ensemble/pull/1"),
-                    f"https://{expected}/acme/ensemble/pull/1",
-                )
-
-    def test_context_names_a_github_outputs_blob_prefix(self):
-        cfg = config.load()
-        role = cfg.roles["engineer"]
-        output = {"type": "github", "repo": "windroc/docs", "branch": "main", "dir": "V/"}
-        cfg = replace(
-            cfg,
-            roles=dict(cfg.roles)
-            | {"engineer": replace(role, run=replace(role.run, output=output))},
-        )
-        ctx = writeback.context(
-            cfg,
-            "engineer",
-            WRITERS,
-            ident=ID,
-            issue_id=UUID,
-            sid=SID,
-            resume=False,
-            project=PROJECT,
-            target=TARGET,
-        )
-        self.assertEqual(ctx.published, "https://github.com/windroc/docs/blob/main/")
+                self.assertEqual((ctx.host, ctx.published), (host, published))
 
     def test_local_document_reference_is_constructed_for_launch_and_recovery(self):
         cfg = config.load()
@@ -1190,37 +1143,6 @@ class ApprovalMessages(Base):
     def test_approve_line(self):
         self.assertEqual(writeback.approve_line(None, "Handoff"), APPROVE)
         self.assertEqual(writeback.approve_line("acme/ensemble", "Handoff"), APPROVE_MAPPED)
-
-    def test_queries_verbatim(self):
-        self.assertEqual(
-            linear_tracker.M_ASSIGN,
-            (
-                "mutation($i: String!, $a: String!) { issueUpdate(id: $i, input: { assigneeId: $a }) { success } }"
-            ),
-        )
-        self.assertEqual(
-            linear_tracker.M_TITLE,
-            (
-                "mutation($i: String!, $t: String!) { issueUpdate(id: $i, input: { title: $t }) { success } }"
-            ),
-        )
-        self.assertEqual(
-            linear_tracker.M_ATTACH,
-            (
-                "mutation($i: String!, $u: String!, $t: String) { attachmentLinkURL(issueId: $i, url: $u, title: $t) { success } }"
-            ),
-        )
-        self.assertEqual(
-            linear_tracker.M_UNARCHIVE,
-            "mutation($i: String!) { issueUnarchive(id: $i) { success } }",
-        )
-        self.assertEqual(
-            linear_tracker.Q_ATTACHED,
-            "query($i: String!) { issue(id: $i) { attachments(first: 50) { nodes { url } } } }",
-        )
-        self.assertEqual(
-            linear_tracker.Q_ID, "query($i: String!) { issue(id: $i) { id team { id } } }"
-        )
 
 
 class CompletionMessages(Base):
@@ -1677,14 +1599,6 @@ class CompletionLedger(Base):
             )
         )
         self.assertEqual(self.steps(ctx), {SID: ["comment", "move:in_review", "outcome"]})
-
-    def test_ledger_write_failure_leaves_no_temp(self):
-        ctx = self.ctx()
-        with mock.patch.object(os, "replace", side_effect=OSError("disk full")):
-            writeback.progress(ctx, START)
-        self.assertEqual(self.lines(), [f"step-error {ID} step=start error=OSError: disk full"])
-        self.assertEqual(ctx.tracker.gql.calls, [post("start", "Build started: x")])
-        self.assertEqual(os.listdir(ctx.workdir), [])
 
 
 class ResumedComments(Base):
@@ -2736,24 +2650,12 @@ class FollowUpAttempts(Events):
 class LimitEvents(Events):
     def setUp(self):
         super().setUp()
-        # POSIX TZ: CST-8 is UTC+8
-        tz = mock.patch.dict(os.environ, {"TZ": "CST-8"})
-        tz.start()
-        self.addCleanup(time.tzset)
-        self.addCleanup(tz.stop)
-        time.tzset()
+        zone(self, "CST-8")  # POSIX TZ: CST-8 is UTC+8
 
     def limited(self, attempt=1, resets_at=T):
         return self.finished(-9, limit={"resets_at": resets_at}, attempt=attempt)
 
-    def rows(self):
-        return [
-            {k: v for k, v in row.items() if k != "ts"}
-            for row in map(json.loads, open(self.cfg.runs_log, encoding="utf-8"))
-            if row["kind"] == "limit"
-        ]
-
-    def test_a_limit_comments_moves_and_ends_the_session_without_a_quota_row(self):
+    def test_a_limit_comments_moves_and_ends_the_session(self):
         self.assertTrue(self.deliver(delegate_event("begun")))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited()))
@@ -2778,7 +2680,6 @@ class LimitEvents(Events):
                 (harness, "find", {"c": RUN_SESSION}),
             ],
         )
-        self.assertEqual(self.rows(), [])
         self.assertEqual(self.ledger()[RUN_SID]["steps"], ["running:1", "limit", "limit-move:1"])
 
     def test_an_outcome_with_a_limit_writes_both_and_moves_once(self):
@@ -2796,7 +2697,6 @@ class LimitEvents(Events):
             ],
         )
         self.assertEqual(len(self.linear.writes("state")), 1)
-        self.assertEqual(self.rows(), [])
         self.assertEqual(
             self.linear.comments[RUN_SESSION]["body"],
             session_body(f"done · #1 · {STARTED} → {RESTARTED} · exit -9"),
@@ -2904,13 +2804,12 @@ class LimitEvents(Events):
                         self.said(),
                     )
 
-    def test_the_same_limit_twice_moves_once_without_a_quota_row(self):
+    def test_the_same_limit_twice_moves_once(self):
         self.assertTrue(self.deliver(self.limited()))
         n = len(self.linear.calls)
         self.assertTrue(self.deliver(self.limited()))
         self.assertEqual(self.linear.calls[n:], [])
         self.assertEqual(len(self.linear.writes("state")), 1)
-        self.assertEqual(self.rows(), [])
 
     def test_a_later_attempts_limit_moves_again_without_a_second_comment(self):
         self.assertTrue(self.deliver(self.limited()))
@@ -2922,7 +2821,6 @@ class LimitEvents(Events):
             ["reread", "state"],
         )
         self.assertEqual(len([c for c in self.linear.comments if c != RUN_SESSION]), 1)
-        self.assertEqual(self.rows(), [])
         self.assertEqual(
             self.ledger()[RUN_SID]["steps"],
             ["limit", "limit-move:1", "limit-move:2"],

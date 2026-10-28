@@ -1,6 +1,6 @@
 """The act-as prompt command delivers the Composer's exact bytes for each role and destination,
-without session, outcome or event files. Session options and stdout delivery are rejected. The
-engineer prompt's team tool commands require step 4's prefix.
+without session, outcome or event files. The engineer prompt's team tool commands require step
+4's prefix.
 """
 
 import json
@@ -17,7 +17,6 @@ from tests.delegate.case import Case
 from tests.delegate.skills.act_as import argv, head, prefix
 from tests.delegate.verifier import VERIFIER
 from tests.session import harnesses
-from tests.session.case import SID
 from tests.utils.case import local_section
 from tests.utils.sandbox import scratch
 
@@ -93,7 +92,7 @@ class Instruction(Case):
             for destination in (
                 None,
                 {"type": "local"},
-                {"type": "github", "repo": "o/docs", "branch": "main", "dir": "reports"},
+                {"type": "github", "repo": "o/notes", "branch": "main", "dir": "reports"},
                 {"type": "pull-request"},
             ):
                 with self.subTest(role=role, destination=destination):
@@ -128,26 +127,6 @@ class Instruction(Case):
                 self.assertTrue(ok.stdout.startswith(f"usage: repo.py {command.split()[-1]} "))
                 self.assertNotEqual(bare.returncode, 0)
                 self.assertIn("No module named 'ensemble'", bare.stderr)
-
-    def test_session_options_exit_2_without_writes(self):
-        for extra in (
-            ("--mode", "tui"),
-            ("--client", "claude"),
-            ("--sid", SID),
-            ("--resume",),
-            ("--detach",),
-        ):
-            with self.subTest(extra=extra):
-                res = self.cli("researcher", *extra)
-                self.assertEqual((res.returncode, res.stdout), (2, ""))
-                self.assertIn(f"unrecognized arguments: {' '.join(extra)}", res.stderr)
-                self.assertFalse(os.path.exists(self.adhoc))
-
-    def test_stdout_delivery_exits_2_without_writes(self):
-        res = self.cli("researcher", out="-")
-        self.assertEqual((res.returncode, res.stdout), (2, ""))
-        self.assertEqual(res.stderr, "delegate: --out takes a PATH, not -\n")
-        self.assertFalse(os.path.exists(self.adhoc))
 
 
 if __name__ == "__main__":

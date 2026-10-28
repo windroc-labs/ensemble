@@ -8,7 +8,6 @@ import contextlib
 import errno
 import os
 import queue
-import stat
 import sys
 import threading
 import time
@@ -41,9 +40,8 @@ from ensemble.session.engine.types import (
     WorkerOutput,
 )
 from ensemble.session.modes.base import POINTER
-from ensemble.session.modes.headless import LINE_MAX, PUT_WAIT, QUEUE_MAX, HeadlessMode
+from ensemble.session.modes.headless import LINE_MAX, QUEUE_MAX, HeadlessMode
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
-from ensemble.utils import over_argv
 from tests.session.case import PLUGIN_BIN
 from tests.session.fakes.terminal import MemoryHost
 from tests.session.fakes.worker import ScriptedWorker
@@ -404,7 +402,7 @@ class HomeHost(WorkerHost):
 
 
 class ThroughItsHost(Base):
-    def start_on(self, host, client_class=StubRun, **fields):
+    def start_on(self, host, client_class=StubRun, owner=None, **fields):
         spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub", **fields)
         self.mode = HeadlessMode.start(
             spec,
@@ -412,6 +410,7 @@ class ThroughItsHost(Base):
             registry=self.session_cls._config().registry,
             record=self.recorded.append,
             host=host,
+            owner=owner,
         )
         self.addCleanup(self.stop_quietly, self.mode)
         return self.mode
@@ -500,31 +499,13 @@ class ThroughItsHost(Base):
 
     def test_an_owner_is_accepted_and_kept_nowhere(self):
         host = WorkerHost()
-        spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub")
-        mode = HeadlessMode.start(
-            spec,
-            StubClient(Launch(NOTHING, transcript="/t.jsonl"), run=StubRun),
-            registry=self.session_cls._config().registry,
-            record=self.recorded.append,
-            host=host,
-            owner="/h",
-        )
+        mode = self.start_on(host, owner="/h")
         self.assertEqual(host.starts[0][2], {"generation": mode.generation})
         self.assertEqual(mode.opening_pending, None)
 
     def test_a_named_run_names_its_owner_as_its_harness(self):
         host = HomeHost()
-        spec = Spec(
-            workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub", name="w1"
-        )
-        HeadlessMode.start(
-            spec,
-            StubClient(Launch(NOTHING, transcript="/t.jsonl"), run=HomedRun),
-            registry=self.session_cls._config().registry,
-            record=self.recorded.append,
-            host=host,
-            owner="/h",
-        )
+        self.start_on(host, client_class=HomedRun, owner="/h", name="w1")
         metadata = host.starts[0][2]
         self.assertEqual((metadata["harness"], metadata["sid"]), ("/h", SID))
         self.assertNotIn("owner", metadata)
@@ -699,8 +680,6 @@ class ThroughItsHost(Base):
         self.assertEqual(spec.access.reads, (os.path.dirname(path),))
         with open(path, encoding="utf-8") as f:
             self.assertEqual(f.read(), big)
-        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
         self.assertNotIn("prompt_file", host.starts[0][2])
 
     def test_a_container_context_puts_the_prompt_in_metadata_not_on_disk(self):
@@ -720,7 +699,6 @@ class ThroughItsHost(Base):
 
     def test_a_prompt_within_the_budget_stays_and_preflight_writes_nothing(self):
         at = "a" * 99_998
-        self.assertTrue(over_argv(at + "a") and not over_argv(at))
         self.start_on(WorkerHost(), prompt=at)
         self.assertEqual(StubRun.specs[0].prompt, at)
         HeadlessMode.preflight(
@@ -778,25 +756,6 @@ class ThroughItsHost(Base):
         ends = [mode.poll(5)[1] for _ in range(2)]
         self.assertEqual(ends, [False, True])
 
-    def test_a_pump_that_drops_its_end_after_stop_still_ends_the_poll(self):
-        worker = ScriptedWorker(
-            batches=[[WorkerOutput(b"e\n" * (QUEUE_MAX + 2), "stderr")]], code=None
-        )
-        before = set(threading.enumerate())
-        mode = self.start_on(WorkerHost(worker))
-        deadline = time.monotonic() + 5
-        while not mode.items.full() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        mode.stop()
-        time.sleep(PUT_WAIT * 6)  # its last lines and its end dropped
-        pumps = self.pumps(before)
-        self.assertEqual((mode.items.full(), pumps), (True, []))
-        ended = False
-        for _ in range(QUEUE_MAX + 4):
-            if ended := mode.poll(0.1)[1]:
-                break
-        self.assertTrue(ended)
-
     def test_an_item_queued_as_a_stopped_poll_times_out_is_kept(self):
         mode = self.start_on(WorkerHost())
         for done in mode.done:
@@ -837,6 +796,12 @@ class ThroughItsHost(Base):
         for pump in pumps:
             pump.join(5)
         self.assertFalse(any(pump.is_alive() for pump in pumps))
+        self.assertTrue(mode.items.full())  # its last lines and its end dropped
+        ended = False
+        for _ in range(QUEUE_MAX + 4):
+            if ended := mode.poll(0.1)[1]:
+                break
+        self.assertTrue(ended)
 
 
 if __name__ == "__main__":

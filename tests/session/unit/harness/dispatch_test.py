@@ -27,6 +27,7 @@ from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import Logged
 from tests.session.case import Case
+from tests.session.harnesses import until
 from tests.utils.jsonl import read_jsonl
 
 WAIT = 5
@@ -51,29 +52,21 @@ class Recorder:
         return self.returns
 
 
-def until(check):
-    deadline = time.monotonic() + WAIT
-    while not check():
-        if time.monotonic() > deadline:
-            raise AssertionError("timed out")
-        time.sleep(0.01)
-
-
 class Base(Case):
     def setUp(self):
         self.channel = Channel.create()
         self.session = cast(Session, object())
         self.sleeps = []
 
-    def start(self, *handlers, states=None) -> Dispatch:
+    def start(self, *handlers, sleep=None) -> Dispatch:
         found = Dispatch(
             handlers,
-            states or [{"n": index} for index in range(len(handlers))],
+            [{"n": index} for index in range(len(handlers))],
             self.session,
             self.channel,
             sid="s1",
             generation="g",
-            sleep=self.sleeps.append,
+            sleep=sleep or self.sleeps.append,
         )
         self.addCleanup(found.stop)
         return found
@@ -131,14 +124,16 @@ class DispatchTest(Base):
         )
         self.assertIn("handler broke", records[0]["error"])
 
-    def test_only_attempts_1_2_4_and_so_on_are_noted(self):
+    def test_backoff_doubles_up_to_thirty_seconds(self):
+        """Only attempts 1, 2, 4 and so on are noted."""
         self.enterContext(self.assertLogs("session", "WARNING"))
-        found = self.start(Recorder(fail=6))
+        found = self.start(Recorder(fail=8))
         found.put(Logged(1, "g:1", None, Reply("x")))
         self.assertEqual(found.drain(WAIT), 0)
+        self.assertEqual(self.sleeps, [1, 2, 4, 8, 16, 30, 30, 30])
         self.assertEqual(
             [(d["attempt"], d["state"]) for d in self.deliveries()],
-            [(1, "failed"), (2, "failed"), (4, "failed"), (7, "ok")],
+            [(1, "failed"), (2, "failed"), (4, "failed"), (8, "failed"), (9, "ok")],
         )
 
     def test_a_handler_that_exits_is_retried_like_any_failure(self):
@@ -155,14 +150,6 @@ class DispatchTest(Base):
         found.put(Logged(2, "g:2", None, Reply("y")))
         self.assertEqual(found.drain(WAIT), 0)
         self.assertEqual([c.event_id for c in handler.calls], ["g:1", "g:1", "g:2"])
-
-    def test_backoff_doubles_up_to_thirty_seconds(self):
-        self.enterContext(self.assertLogs("session", "WARNING"))
-        handler = Recorder(fail=7)
-        found = self.start(handler)
-        found.put(Logged(1, "g:1", None, Reply("x")))
-        self.assertEqual(found.drain(WAIT), 0)
-        self.assertEqual(self.sleeps, [1, 2, 4, 8, 16, 30, 30])
 
     def test_error_text_is_capped(self):
         class Loud(Recorder):
@@ -181,16 +168,7 @@ class DispatchTest(Base):
         self.enterContext(self.assertLogs("session", "WARNING"))
         gate = threading.Event()
         handler = Recorder(fail=1)
-        found = Dispatch(
-            [handler],
-            [{}],
-            self.session,
-            self.channel,
-            sid="s1",
-            generation="g",
-            sleep=lambda _seconds: gate.wait(),
-        )
-        self.addCleanup(found.stop)
+        found = self.start(handler, sleep=lambda _seconds: gate.wait())
         found.put(Logged(1, "g:1", None, Reply("a")))
         found.put(Logged(2, "g:2", None, Reply("b")))
         until(lambda: self.deliveries())
@@ -205,16 +183,7 @@ class DispatchTest(Base):
         gate = threading.Event()
         self.addCleanup(gate.set)
         stuck, other = Recorder(fail=1), Recorder()
-        found = Dispatch(
-            [stuck, other],
-            [{}, {}],
-            self.session,
-            self.channel,
-            sid="s1",
-            generation="g",
-            sleep=lambda _seconds: gate.wait(),
-        )
-        self.addCleanup(found.stop)
+        found = self.start(stuck, other, sleep=lambda _seconds: gate.wait())
         found.put(Logged(1, "g:1", None, Reply("a")))
         found.put(Logged(2, "g:2", None, Reply("b")))
         until(lambda: len(other.calls) == 2)

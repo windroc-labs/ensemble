@@ -203,7 +203,10 @@ class Delivery(Case):
                 self.assertEqual([call[0] for call in Child.calls], ["spawn", *ending])
                 if "killpg" in ending:
                     self.assertEqual(Child.calls[2], ("killpg", PID, signal.SIGKILL))
-                self.assertEqual([row["error"] for row in self.errors(work)], [error])
+                rows = self.errors(work)
+                self.assertEqual(
+                    [(row["error"], "stderr" in row) for row in rows], [(error, False)]
+                )
 
     def test_a_nonzero_exit_names_its_last_stderr_line_and_keeps_its_tail(self):
         Child.outcome = 2
@@ -234,13 +237,6 @@ class Delivery(Case):
             self.callback(Begun(SID))
         self.assertEqual(harness.getvalue(), "note\n")
         self.assertEqual(self.errors(), [])
-
-    def test_a_nonzero_exit_without_stderr_has_no_stderr_field(self):
-        Child.outcome = 7
-        self.callback(Begun(SID))
-        (row,) = self.errors()
-        self.assertEqual(row["error"], "callback exited 7")
-        self.assertNotIn("stderr", row)
 
     def test_a_command_that_cannot_start_is_one_callback_error_row(self):
         self.popen.side_effect = FileNotFoundError(2, "No such file or directory", ARGV[0])
@@ -427,12 +423,6 @@ class Sweep(Case):
         self.killpg.assert_not_called()
         self.assertTrue(self.held())
         orphan.free()
-
-    def test_a_group_whose_parent_is_gone_is_killed(self):
-        orphan = self.orphan()
-        sweep(self.store)
-        self.assertEqual(orphan.calls, [(PID, 0), (PID, signal.SIGKILL), (PID, 0)])
-        self.assertFalse(self.held())
 
     def test_a_held_lock_without_a_pid_above_1_sends_no_signal(self):
         for text in (

@@ -19,6 +19,7 @@ from tests.orchestrator.unit.issue_fixtures import (
     VIEWER,
     WriteGql,
     names_cfg,
+    receipt_of,
     write_issue,
 )
 
@@ -45,19 +46,7 @@ class Move(Case):
             with self.subTest(state=state):
                 receipt = move(gql, state)
                 self.assertEqual(gql.writes, [(ops.M_STATE, {"i": "id-TASK-2", "s": STATES[key]})])
-                self.assertEqual(
-                    receipt_payload(receipt),
-                    {
-                        "issue": {
-                            "id": "id-TASK-2",
-                            "identifier": "TASK-2",
-                            "url": "https://linear.app/t/issue/TASK-2",
-                        },
-                        "operation": "move",
-                        "result": "changed",
-                        "actor": VIEWER,
-                    },
-                )
+                self.assertEqual(receipt_payload(receipt), receipt_of("move"))
 
     def test_already_in_the_state_is_unchanged_and_writes_nothing(self):
         gql = WriteGql(write_issue(state=STATES["handoff"]))
@@ -151,20 +140,7 @@ class Comment(Case):
         gql = WriteGql(write_issue())
         receipt = issue_write.comment(gql, "TASK-2", BODY)
         self.assertEqual(gql.writes, [(issue_write.M_COMMENT, {"i": "id-TASK-2", "b": BODY})])
-        self.assertEqual(
-            receipt_payload(receipt),
-            {
-                "issue": {
-                    "id": "id-TASK-2",
-                    "identifier": "TASK-2",
-                    "url": "https://linear.app/t/issue/TASK-2",
-                },
-                "operation": "comment",
-                "result": "changed",
-                "actor": VIEWER,
-                "comment_id": "c-new",
-            },
-        )
+        self.assertEqual(receipt_payload(receipt), receipt_of("comment", comment_id="c-new"))
 
     def test_an_archived_issue_takes_no_comment_and_says_how_to_restore_it(self):
         gql = WriteGql(write_issue(archived=True))

@@ -1,6 +1,4 @@
-"""A run's EnvironmentSpec from the config layers and its prefetch target from the input
-(docs/architecture.md › Environments).
-"""
+"""A run's EnvironmentSpec from the config layers and its prefetch target from the input."""
 
 from collections.abc import Mapping
 

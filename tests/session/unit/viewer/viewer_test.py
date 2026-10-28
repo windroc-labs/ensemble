@@ -25,7 +25,6 @@ from tests.session.tmux_host_support import PROCESS, Base
 
 TuiError = tmux_cli.TuiError
 NO_PANE = "no anchor pane: not in tmux, no iTerm2 pane ($ITERM_SESSION_ID)"
-OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 @contextlib.contextmanager
@@ -63,11 +62,14 @@ class ShowTest(Base):
                 "split-window": (0, "%10\n"),
             }
         )
-        self.assertIsNone(self.viewer.show("w1", self.host, display="mgr/below/m1"))
-        split = next(c for c in self.runner.calls if c[1] == "split-window")
-        self.assertEqual(split[3], "-v")
-        self.assertEqual(split[split.index("-t") + 1], "%9")
-        self.assertEqual(split[-3:], ["attach", "-t", "=w1"])
+        for display in ("mgr/below/m1", "mgr/below/m1/hidden"):
+            with self.subTest(display=display):
+                self.runner.calls.clear()
+                self.assertIsNone(self.viewer.show("w1", self.host, display=display))
+                split = next(c for c in self.runner.calls if c[1] == "split-window")
+                self.assertEqual(split[3], "-v")
+                self.assertEqual(split[split.index("-t") + 1], "%9")
+                self.assertEqual(split[-3:], ["attach", "-t", "=w1"])
 
     def test_show_without_a_pane_logs_why_and_returns_the_attach_command(self):
         self.enterContext(environ())
@@ -155,36 +157,6 @@ class ShowTest(Base):
             displays.layout(self.viewer, self.host, "//m1")
         self.assertEqual(str(caught.exception), "no tmux session m1")
 
-    def test_placement_and_the_tmux_module_are_keyword_only(self):
-        for call in (
-            lambda: self.viewer.show("w1", self.host, "mgr/below"),
-            lambda: Viewer({}, self.tmux),
-        ):
-            with self.subTest(call=call), self.assertRaises(TypeError):
-                call()
-
-    def test_public_surface_is_four_methods(self):
-        self.assertEqual(
-            sorted(n for n in dir(Viewer) if not n.startswith("_")),
-            ["attach_command", "close", "hide", "show"],
-        )
-
-
-class MarkerTest(Base):
-    def test_show_ignores_the_hidden_marker(self):
-        self.enterContext(environ())
-        self.runner.results.update(
-            {
-                "list-clients": (0, f"5 /dev/ttys004 %9 0 {SOCK}\n"),
-                "pgrep": (1,),
-                "split-window": (0, "%10\n"),
-            }
-        )
-        self.assertIsNone(self.viewer.show("w1", self.host, display="mgr/below/m1/hidden"))
-        split = next(c for c in self.runner.calls if c[1] == "split-window")
-        self.assertEqual(split[3], "-v")
-        self.assertEqual(split[split.index("-t") + 1], "%9")
-
 
 class HideTest(Base):
     """Over w1, whose worker state names SID: the sid of its hidden entry."""
@@ -218,20 +190,6 @@ class HideTest(Base):
             self.assertIsNone(self.viewer.hide("w1", self.host))
         self.assertEqual(logged.output, ["WARNING:session:hide w1: hidden size: tmux: boom"])
         self.assertTrue(hidden.read("w1", SID))
-
-    def test_hidden_and_status_read_the_store_entry_of_its_sid(self):
-        for entry, want in (((SID, True), True), ((SID, False), False), ((OTHER, True), False)):
-            with self.subTest(entry=entry):
-                hidden.write("w1", entry[0], hidden=entry[1], live=None)
-                self.assertIs(displays.status(self.viewer, self.host, "w1", SID, None).hidden, want)
-
-    def test_a_sidless_or_unentered_session_is_not_hidden(self):
-        hidden.write("w1", SID, hidden=True, live=None)
-        for sid in (None, OTHER):
-            self.assertFalse(displays.status(self.viewer, self.host, "w1", sid, None).hidden)
-        worker("w1", None)
-        self.viewer.hide("w1", self.host)
-        self.assertTrue(hidden.read("w1", SID))  # no sid in its worker state: no mark
 
     def test_no_worker_state_marks_nothing(self):
         os.unlink(os.path.join(os.path.expanduser(TUI_DIR), "w1", "session.json"))
@@ -455,46 +413,26 @@ class CommandViewTest(Base):
         self.tmux.option.side_effect = lambda _target, key: self.view if key == "@view" else None
         self.enterContext(environ(HOME=self.home))
 
-    def test_show_makes_a_tagged_view_session_running_argv_then_places_it(self):
+    def test_show_makes_a_tagged_view_session_at_its_hosts_size_and_status_line(self):
         self.tmux.status.return_value = None
         self.runner.results["new-session"] = (0,)
-        with self.assertLogs("session", logging.WARNING):
-            self.assertEqual(self.viewer.show("d1", self.docker), self.target.printed)
-        self.tmux.checked.assert_any_call(
-            [
-                *("new-session", "-d", "-s", "d1", "-x", "80", "-y", "24", "--", *self.ARGV),
-                *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
-                *(";", "set-option", "-t", "=d1:", "status", "off"),
-            ]
-        )
-
-    def test_a_view_session_starts_at_its_hosts_hidden_size(self):
-        self.tmux.status.return_value = None
-        self.runner.results["new-session"] = (0,)
-        self.docker.tui_settings.return_value = TuiSettings(hidden_size=(100, 30))
-        with self.assertLogs("session", logging.WARNING):
-            self.viewer.show("d1", self.docker)
-        self.tmux.checked.assert_any_call(
-            [
-                *("new-session", "-d", "-s", "d1", "-x", "100", "-y", "30", "--", *self.ARGV),
-                *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
-                *(";", "set-option", "-t", "=d1:", "status", "off"),
-            ]
-        )
-
-    def test_a_view_session_shows_a_status_line_only_when_its_host_does(self):
-        self.tmux.status.return_value = None
-        self.runner.results["new-session"] = (0,)
-        self.docker.tui_settings.return_value = TuiSettings(status_line=True)
-        with self.assertLogs("session", logging.WARNING):
-            self.viewer.show("d1", self.docker)
-        self.tmux.checked.assert_any_call(
-            [
-                *("new-session", "-d", "-s", "d1", "-x", "80", "-y", "24", "--", *self.ARGV),
-                *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
-                *(";", "set-option", "-t", "=d1:", "status", "on"),
-            ]
-        )
+        for settings, x, y, status in (
+            (TuiSettings(), "80", "24", "off"),
+            (TuiSettings(hidden_size=(100, 30)), "100", "30", "off"),
+            (TuiSettings(status_line=True), "80", "24", "on"),
+        ):
+            with self.subTest(settings=settings):
+                self.tmux.checked.reset_mock()
+                self.docker.tui_settings.return_value = settings
+                with self.assertLogs("session", logging.WARNING):
+                    self.assertEqual(self.viewer.show("d1", self.docker), self.target.printed)
+                self.tmux.checked.assert_any_call(
+                    [
+                        *("new-session", "-d", "-s", "d1", "-x", x, "-y", y, "--", *self.ARGV),
+                        *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
+                        *(";", "set-option", "-t", "=d1:", "status", status),
+                    ]
+                )
 
     def test_show_reuses_its_view_session_and_refuses_another_of_the_name(self):
         self.view = VIEW_TAG

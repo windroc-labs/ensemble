@@ -15,6 +15,10 @@ from tests.utils.fakes.ctl import lines, record
 from tests.utils.sandbox import clean_env
 
 
+def _status(name, *, alive=True, state="working", outcome=None, attach=None):
+    return Status(name=name, alive=alive, state=state, outcome=outcome, attach=attach, hidden=False)
+
+
 class Installed(Case):
     def setUp(self):
         self.bin = os.path.join(self.home, "bin")
@@ -70,14 +74,7 @@ class FakeCtl(Installed):
         started = self.start("w1", "--display", "d")
         self.assertEqual(started, record("w1", "d", sid=started.sid))
         self.assertEqual(str(uuid.UUID(started.sid)), started.sid)
-        self.assertEqual(
-            self.status(record("w1")),
-            [
-                Status(
-                    name="w1", alive=True, state="working", outcome=None, attach=None, hidden=False
-                )
-            ],
-        )
+        self.assertEqual(self.status(record("w1")), [_status("w1")])
 
     def test_start_honors_environment_sid_and_resume_keeps_it(self):
         sid = str(uuid.uuid4())
@@ -88,8 +85,10 @@ class FakeCtl(Installed):
         resumed = self.call(*started.resume)
         self.assertEqual((resumed.returncode, Record.parse(resumed.stdout)), (0, started))
         self.env.pop("ENSEMBLE_SID")
+        ctl.set_session(self.state, "w1", alive=False, state="gone", outcome="failed")
         resumed = self.call(*started.resume)
         self.assertEqual((resumed.returncode, Record.parse(resumed.stdout)), (0, started))
+        self.assertEqual(self.status(started), [_status("w1")])
 
     def test_resume_rejects_a_sid_that_differs_from_its_saved_identity(self):
         started = self.start("w1")
@@ -104,28 +103,12 @@ class FakeCtl(Installed):
         self.start("w1")
         self.assertEqual(
             self.status(record("w1"), record("w2")),
-            [
-                Status(
-                    name="w1", alive=True, state="working", outcome=None, attach=None, hidden=False
-                ),
-                Status(
-                    name="w2", alive=False, state="gone", outcome=None, attach=None, hidden=False
-                ),
-            ],
+            [_status("w1"), _status("w2", alive=False, state="gone")],
         )
         ctl.set_session(self.state, "w1", alive=False, state="dead", outcome="needs_input")
         self.assertEqual(
             self.status(record("w1")),
-            [
-                Status(
-                    name="w1",
-                    alive=False,
-                    state="dead",
-                    outcome="needs_input",
-                    attach=None,
-                    hidden=False,
-                )
-            ],
+            [_status("w1", alive=False, state="dead", outcome="needs_input")],
         )
 
     def test_attach_is_a_command_only_while_alive_and_showable(self):
@@ -157,12 +140,7 @@ class FakeCtl(Installed):
         self.assertEqual((done.returncode, done.stdout, done.stderr), (0, "", ""))
         self.assertEqual(
             self.status(record("w1"), record("w2")),
-            [
-                Status(
-                    name=name, alive=False, state="gone", outcome=None, attach=None, hidden=False
-                )
-                for name in ("w1", "w2")
-            ],
+            [_status(name, alive=False, state="gone") for name in ("w1", "w2")],
         )
 
     def test_resume_of_a_live_session_prints_its_record_and_starts_nothing(self):
@@ -170,28 +148,7 @@ class FakeCtl(Installed):
         ctl.set_session(self.state, "w1", state="blocked")
         again = self.call(*started.resume)
         self.assertEqual((again.returncode, again.stdout), (0, started.to_line() + "\n"))
-        self.assertEqual(
-            self.status(started),
-            [
-                Status(
-                    name="w1", alive=True, state="blocked", outcome=None, attach=None, hidden=False
-                )
-            ],
-        )
-
-    def test_resume_of_an_ended_session_starts_it_with_its_display(self):
-        started = self.start("w1", "--display", "d")
-        ctl.set_session(self.state, "w1", alive=False, state="gone", outcome="failed")
-        again = self.call(*started.resume)
-        self.assertEqual((again.returncode, Record.parse(again.stdout)), (0, started))
-        self.assertEqual(
-            self.status(started),
-            [
-                Status(
-                    name="w1", alive=True, state="working", outcome=None, attach=None, hidden=False
-                )
-            ],
-        )
+        self.assertEqual(self.status(started), [_status("w1", state="blocked")])
 
     def test_bad_stdin_a_bad_name_or_an_unknown_subcommand_exits_2_and_changes_nothing(self):
         self.start("w1")
@@ -208,14 +165,7 @@ class FakeCtl(Installed):
                 done = self.call(self.ctl, *argv, stdin=stdin)
                 self.assertEqual((done.returncode, done.stdout), (2, ""))
                 self.assertTrue(done.stderr)
-        self.assertEqual(
-            self.status(record("w1")),
-            [
-                Status(
-                    name="w1", alive=True, state="working", outcome=None, attach=None, hidden=False
-                )
-            ],
-        )
+        self.assertEqual(self.status(record("w1")), [_status("w1")])
 
     def test_stdin_too_deep_to_decode_exits_2(self):
         done = self.call(self.ctl, "status", stdin="[" * 200000 + "\n")

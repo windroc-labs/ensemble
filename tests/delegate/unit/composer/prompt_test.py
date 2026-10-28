@@ -13,7 +13,6 @@ from dataclasses import replace
 from ensemble.delegate.composer import Composer, ConfigError, RunParams
 from ensemble.delegate.composer.base import TEAM, anchor, fill
 from ensemble.delegate.composer.prompt import (
-    OUTCOME,
     PARAMETERS,
     RESUME,
     RETURN,
@@ -60,10 +59,10 @@ from tests.delegate.unit.composer.teams import (
     STEPS,
     VERSE,
     WRITER,
+    FakeTeam,
 )
 from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
-from tests.utils.sandbox import scratch
 
 TEXTS = {
     "guide.md": (
@@ -79,32 +78,8 @@ PARAMS = RunParams(input="Research X.", out="/w/out.md", workdir="/w")
 METHOD_NAMES = ("deep-research", "ultracode")
 
 
-class Fake(Case):
-    """A team root, config and local file in a temp dir; a HOME of the test's own for team dirs."""
-
-    def setUp(self):
-        self.tmp = scratch(self, real=False)
-        self.root = os.path.join(self.tmp, "team")
-        self.config = os.path.join(self.tmp, "config.toml")
-        self.local_file = os.path.join(self.tmp, "config.local.toml")
-        self.write(FILES | TEXTS)
-        with open(self.config, "w") as f:
-            f.write(RUN_CONFIG)
-
-    def write(self, files, top=None):
-        for rel, text in files.items():
-            path = os.path.join(top or self.root, rel)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                f.write(text)
-
-    def configure(self, text):
-        with open(self.config, "w") as f:
-            f.write(text)
-
-    def local(self, text):
-        with open(self.local_file, "w") as f:
-            f.write(local_section(text, "delegate"))
+class Fake(FakeTeam):
+    files = FILES | TEXTS
 
     def run_of(self, role="writer", task=None, overlays=(), found=None):
         return self.composition(found).resolve(role, task, overlays=overlays)
@@ -430,13 +405,8 @@ class Prompt(Fake):
         self.assertEqual(prompt.split("\n# Input\n\n", 1)[1], f"{given}\n")
         self.assertEqual(prompt.count("\n---\n"), 1)
 
-    def test_the_return_section_closes_the_output_section(self):
-        body = self.compose()[0].rsplit("\n# Input\n", 1)[0]
-        self.assertTrue(body.endswith(f"Keep it local.\n\n{RETURN}"))
-
     def test_the_return_reports_in_replies_and_names_no_client(self):
         self.assertTrue(RETURN.startswith("## Return\n\n"))
-        self.assertEqual(OUTCOME, "ensemble-outcome")
         for literal in (
             (
                 "at each `[ensemble-progress:<name>] …` line in your steps, before calling the next tool, "
@@ -456,15 +426,13 @@ class Prompt(Fake):
         for word in ("report.py", "report progress"):
             self.assertNotIn(word, RETURN)
 
-    def test_the_rule_alone_opens_parameters(self):
+    def test_the_rule_text(self):
         self.assertEqual(
             RULE,
             "Each name below stands for its value. Run every command with each name, nested "
             "ones included, replaced by its value and written out in full, no name or shell "
             "variable left.",
         )
-        first = self.compose()[0].split("\n# Parameters\n\n", 1)[1].split("\n\n", 1)[0]
-        self.assertEqual(first, RULE)
 
     def test_texts_keep_the_names_and_parameters_give_the_composers_paths(self):
         self.write(
@@ -610,7 +578,7 @@ class Parameters(Fake):
     def test_github_output_its_used_keys(self):
         names = parameters(self.compose("editor")[0])
         self.assertEqual(
-            list(names.items())[2:], [("<out-repo>", "`o/docs`"), ("<out-branch>", "`main`")]
+            list(names.items())[2:], [("<out-repo>", "`o/notes`"), ("<out-branch>", "`main`")]
         )
 
     def test_an_unset_host_is_github_com(self):
@@ -683,7 +651,7 @@ class Errors(Fake):
                 "editor",
             ),
             (
-                'repo = "o/docs"\n',
+                'repo = "o/notes"\n',
                 "",
                 "<out-repo> is used in destinations/github.md but Parameters doesn't define "
                 "it (output.repo is not set)",
@@ -752,7 +720,7 @@ class Anchors(Fake):
         self.assertEqual(heading_anchors(prompt).count("input"), 1)
 
     def test_the_input_text_is_verbatim_whatever_it_repeats(self):
-        given = "## Style\n\n## Style\n\n# Input\n\n```\n## Style\n```\n"
+        given = "## Style\n\n## Style\n\n# Input\n\n```\n## Style\n{{role}}\n```\n"
         prompt, _ = self.compose(input=given)
         self.assertEqual(prompt.count("<a id"), 0)
         self.assertTrue(prompt.endswith(f"\n# Input\n\n{given}"))

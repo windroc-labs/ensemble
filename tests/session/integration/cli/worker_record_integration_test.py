@@ -1,6 +1,6 @@
 """A worker's Record and identity through bin/ensemble-session on a private tmux server: the one
-Record line start, restart and resume print, as its worker dir stores it, `ls --here --records`
-returns it and worker.json backs it (Q05); ENSEMBLE_SID and ENSEMBLE_EVENTS as its session id and events
+Record line start prints, as its worker dir stores it, `ls --here --records` returns it and
+worker.json backs it (Q05); ENSEMBLE_SID and ENSEMBLE_EVENTS as its session id and events
 file, and their conflicts (Q06); the producer half of a manager's adoption, which sees only its own
 workers (Q14).
 """
@@ -73,20 +73,6 @@ class RecordTest(RecordCase):
                 "environment": None,
             },
         )
-
-    def test_restart_and_resume_each_print_the_record_start_printed(self):
-        record = self.record(self.start("w1"))
-        self.wait_event("w1", "done")
-        self.assertEqual(self.record(self.session("resume", "w1")), record)
-        self.assertEqual(len(self.calls("w1")), 1)
-        self.assertEqual(self.record(self.session("restart", "w1", **self.scene("w1"))), record)
-        self.assertEqual(self.calls("w1")[1]["argv"][:2], ["--resume", record.sid])
-        self.stored(record)
-        self.ok(self.session("close", "w1"))
-        self.assertFalse(self.live("w1"))
-        self.assertEqual(self.record(self.session("resume", "w1", **self.scene("w1"))), record)
-        self.assertEqual(len(self.calls("w1")), 3)
-        self.stored(record)
 
 
 class IdentityTest(RecordCase):

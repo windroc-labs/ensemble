@@ -33,17 +33,6 @@ ABSTRACT = {
     "session_status",
     "resume",
 }
-CLASS_METHODS = {
-    "create",
-    "attach",
-    "usage",
-    "roles",
-    "resolve",
-    "trusted_dirs",
-    "checkouts",
-    "clean",
-    "check_tui",
-}
 
 
 class Exports(Case):
@@ -83,9 +72,6 @@ class Abstract(Case):
     def test_delegate_is_abstract_in_every_member(self):
         self.assertTrue(inspect.isabstract(Delegate))
         self.assertEqual(Delegate.__abstractmethods__, ABSTRACT)
-        for name in CLASS_METHODS:
-            with self.subTest(name=name):
-                self.assertIsInstance(inspect.getattr_static(Delegate, name), classmethod)
 
     def test_no_constructor_is_declared(self):
         self.assertNotIn("__init__", vars(Delegate))

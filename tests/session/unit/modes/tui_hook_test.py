@@ -310,19 +310,19 @@ class WordTest(Case):
 class SharedTypes(Case):
     """The hook uses engine/types' HookError and MARKS."""
 
-    def test_each_shared_hook_type_has_one_definition(self):
-        package = os.path.join(SRC["session"], "ensemble", "session")
-        definitions = {"HookError": []}
-        for top, _, names in os.walk(package):
+    def test_hook_error_has_one_definition_and_no_other_module_takes_a_type_from_the_hook(self):
+        definitions, found = [], []
+        for top, _, names in os.walk(os.path.join(SRC["session"], "ensemble", "session")):
             for name in sorted(n for n in names if n.endswith(".py")):
                 path = os.path.join(top, name)
-                for node in ast.walk(ast.parse(self.source(path))):
-                    if isinstance(node, ast.ClassDef) and node.name in definitions:
-                        definitions[node.name].append(path)
-        self.assertEqual(
-            definitions,
-            dict.fromkeys(definitions, [engine_types.__file__]),
-        )
+                with open(path, encoding="utf-8") as f:
+                    tree = ast.parse(f.read())
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.ClassDef) and node.name == "HookError":
+                        definitions.append(path)
+                if path != HOOK:
+                    found += self.hook_types(path, tree, {"HookError", "MARKS"})
+        self.assertEqual((definitions, found), ([engine_types.__file__], []))
 
     def test_read_state_raises_the_error_it_is_given(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -333,24 +333,9 @@ class SharedTypes(Case):
             with self.assertRaises(engine_types.HookError):
                 tui_hook.read_state(path)
 
-    def test_no_normal_session_module_takes_a_type_from_the_hook(self):
-        classes = {"HookError", "MARKS"}
-        package = os.path.join(SRC["session"], "ensemble", "session")
-        found = []
-        for top, _, names in os.walk(package):
-            for name in sorted(n for n in names if n.endswith(".py")):
-                path = os.path.join(top, name)
-                if path != HOOK:
-                    found += self.hook_types(path, classes)
-        self.assertEqual(found, [])
-
     @staticmethod
-    def source(path: str) -> str:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
-
-    def hook_types(self, path: str, classes: set[str]) -> list[str]:
-        tree, bound, found = ast.parse(self.source(path)), set(), []
+    def hook_types(path: str, tree: ast.Module, classes: set[str]) -> list[str]:
+        bound, found = set(), []
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module == "ensemble.session.modes":
                 bound |= {a.asname or a.name for a in node.names if a.name == "tui_hook"}

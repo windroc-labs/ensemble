@@ -1,14 +1,13 @@
 """Repository tool fake results and fixtures."""
 
-import importlib.util
 import io
 import json
 import os
 import subprocess
 from unittest import mock
 
-from ensemble.delegate.composer.base import TEAM
 from tests.delegate.case import Case
+from tests.delegate.team_tools import tool
 from tests.utils.sandbox import scratch
 
 LOCAL = "config.local.toml"
@@ -20,11 +19,7 @@ SHA = "a" * 40
 URL = "https://github.com/o/n.git"
 
 
-SPEC = importlib.util.spec_from_file_location("repo", os.path.join(TEAM, "tools", "repo.py"))
-
-
-repo = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(repo)
+repo = tool("repo")
 
 
 FETCH = ("fetch", "--refmap=", "origin", "+refs/heads/*:refs/remotes/origin/*")

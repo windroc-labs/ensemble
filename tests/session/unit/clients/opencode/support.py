@@ -1,18 +1,17 @@
-"""OpenCode unit fixtures: the packaged [clients.opencode] table, a session id and a fake
-opencode.db."""
+"""OpenCode unit fixtures: a session id and a fake opencode.db."""
 
 import json
 import os
 import sqlite3
 from contextlib import closing
+from functools import partial
 from types import SimpleNamespace
 
-from ensemble.session.clients import registry
-from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import ClientContext, Container, Permission
+from tests.session.unit.clients import support
 
 SES = "ses_0123456789abABCDEFGHIJKLMN"
-# The Docker Host's (hosts/docker/host.py _client_context).
+# hosts/docker/host.py _client_context's.
 DOCKER_CONTEXT = ClientContext(
     "host.docker.internal",
     Permission.YOLO,
@@ -24,15 +23,7 @@ DOCKER_CONTEXT = ClientContext(
     ),
 )
 IMAGE_CLIENT = "/opt/ensemble/src/ensemble/session/clients/opencode"
-
-
-def packaged_table() -> dict:
-    """The packaged session config.toml's [clients.opencode], without implementation."""
-    table = dict(registry.settings(read_config(local=os.devnull))["clients"]["opencode"])
-    table.pop("implementation")
-    table.pop("max_runs")
-    return table
-
+packaged_table = partial(support.packaged_table, "opencode")
 
 VERSION = "1.19.3"
 

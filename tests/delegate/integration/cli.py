@@ -1,8 +1,4 @@
-"""Public CLI runs and answers as subprocesses: Integration over
-tests/session/integration/clients/claude/fake_claude.py, CodexIntegration over
-tests/session/integration/clients/codex/fake_codex.py, OpenCodeIntegration over
-tests/session/integration/clients/opencode/fake_opencode.py, their outcomes.
-"""
+"""Public CLI runs and answers as subprocesses over the fake claude, codex and opencode."""
 
 import contextlib
 import json
@@ -16,14 +12,15 @@ import tempfile
 import time
 
 from ensemble.utils import SID_ENV, Record, Status
-from tests.delegate.case import PY, REPO, Case, child_env
+from tests.delegate.case import PY, REPO, Case, RunReads, child_env
+from tests.delegate.plans import TEAM_FILES, write_team
 from tests.delegate.workdir import input_first
 from tests.session import harnesses, live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.utils.case import local_section
-from tests.utils.sandbox import reap
+from tests.utils.sandbox import owned_directory, reap
 
 RUN = (*PY, "-m", "ensemble.delegate.cli", "run")
 SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -38,20 +35,22 @@ ASKING = {
 }
 UNSAVED = {k: v for k, v in DONE.items() if k != "deliverable"}
 UNSAVED_ERROR = "done with a local destination must carry the deliverable"
+TEAMS = os.path.join(REPO, "work")
 
 
-class Runs(Case):
+def owned_team(case, files=TEAM_FILES, *, root=TEAMS, prefix="team-") -> str:
+    """A team dir of `files` under `root`, removed after `case`'s test."""
+    team = owned_directory(case, root, prefix=prefix)
+    os.chmod(team, 0o755)
+    write_team(team, files)
+    return team
+
+
+class Runs(RunReads, Case):
     """A CLI run's records in `work` and the fake client's calls in `log`."""
 
     def records(self) -> list[dict]:
-        with open(os.path.join(self.work, "run", "run.jsonl")) as f:
-            return input_first(list(map(json.loads, f)))
-
-    def kinds(self) -> list[str]:
-        return [e["kind"] for e in self.records()]
-
-    def last(self, kind: str) -> dict:
-        return [e for e in self.records() if e["kind"] == kind][-1]
+        return input_first(super().records())
 
     def calls(self) -> list[dict]:
         if not os.path.exists(self.log):
@@ -104,9 +103,7 @@ class Runs(Case):
 
 
 class Integration(Runs):
-    """ROLE over the fake `claude`: a HOME of the test's own, the CLI run from `proj`, workdir
-    `work`, the agent's cwd its agent dir `agent`, --sid SID.
-    """
+    """ROLE over the fake `claude`: own HOME, CLI cwd `proj`, workdir `work`, agent cwd `agent`."""
 
     ROLE = "dummy-tester"
 
@@ -220,7 +217,7 @@ CODEX_END = {"out": {"type": "turn.completed"}}
 
 
 def codex_said(*texts) -> list[dict]:
-    """The fake's steps: an agent message per text, then the turn's end."""
+    """Fake steps: an agent message per text, then the turn end."""
     return [*map(fake_codex.message, texts), CODEX_END]
 
 
@@ -267,9 +264,7 @@ class CodexIntegration(Runs):
         with open(self.scenario, "w", encoding="utf-8") as stream:
             json.dump({"steps": steps, **scenario}, stream)
 
-    def drive(self, steps, *extra, fixes=None, **scenario) -> subprocess.CompletedProcess:
-        if fixes is not None:
-            scenario["resume"] = fixes
+    def drive(self, steps, *extra, **scenario) -> subprocess.CompletedProcess:
         self.scene(steps, **scenario)
         argv = [
             *RUN,
@@ -304,9 +299,8 @@ class CodexIntegration(Runs):
 
 
 class OpenCodeIntegration(CodexIntegration):
-    """ROLE's TASK, --client opencode over fake_opencode on PATH; HOME, its session bindings,
-    outside the temp dirs. A run's cwd is `proj`, in trusted_dirs (the tmux Host starts OpenCode
-    only in a trusted cwd), unless `trusted=False` leaves it the workdir's agent dir.
+    """ROLE's TASK, --client opencode over fake_opencode on PATH; HOME outside the temp dirs; cwd
+    `proj`, trusted.
     """
 
     CLIENT = "opencode"
@@ -325,6 +319,5 @@ class OpenCodeIntegration(CodexIntegration):
         with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
             f.write(local_section(f"trusted_dirs = [{json.dumps(self.proj)}]\n", "delegate"))
 
-    def drive(self, steps, *extra, trusted=True, **scenario) -> subprocess.CompletedProcess:
-        cwd = ("--cwd", self.proj) if trusted else ()
-        return super().drive(steps, *cwd, *extra, **scenario)
+    def drive(self, steps, *extra, **scenario) -> subprocess.CompletedProcess:
+        return super().drive(steps, "--cwd", self.proj, *extra, **scenario)

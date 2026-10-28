@@ -20,6 +20,7 @@ from tests.orchestrator.unit.issue_fixtures import (
     label,
     names_cfg,
     project,
+    receipt_of,
     uid,
 )
 
@@ -49,19 +50,7 @@ class Edit(Case):
             with self.subTest(given=given, body=body):
                 receipt = edit(gql, body, **given)
                 self.assertEqual(gql.writes, [(issue_edit.M_EDIT, {"i": "id-TASK-2", "in": want})])
-                self.assertEqual(
-                    receipt_payload(receipt),
-                    {
-                        "issue": {
-                            "id": "id-TASK-2",
-                            "identifier": "TASK-2",
-                            "url": "https://linear.app/t/issue/TASK-2",
-                        },
-                        "operation": "edit",
-                        "result": "changed",
-                        "actor": VIEWER,
-                    },
-                )
+                self.assertEqual(receipt_payload(receipt), receipt_of("edit"))
 
     def test_every_field_at_once_is_one_write(self):
         gql = EditGql(CATALOG, [BUILD["id"], CODEX["id"], KEEP["id"]])

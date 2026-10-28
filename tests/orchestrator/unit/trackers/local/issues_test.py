@@ -1,7 +1,6 @@
 """LocalIssues: the issue command's backend on a temp board."""
 
 import os
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,11 +23,11 @@ from ensemble.orchestrator.engine.types import (
 )
 from ensemble.orchestrator.issue import output
 from ensemble.orchestrator.trackers.local.issues import LocalIssues
-from tests.orchestrator.case import Case
 from tests.orchestrator.unit.issue_fixtures import issue_change, list_query, new_issue
+from tests.orchestrator.unit.trackers.local import board_fixtures
+from tests.orchestrator.unit.trackers.local.board_fixtures import MTIME, text
 
 NOW = datetime(2026, 10, 20, 9, 30, tzinfo=UTC)
-MTIME = datetime(2026, 10, 20, tzinfo=UTC)
 ROLES = {
     "pm": SimpleNamespace(tasks=("plan", "build")),
     "engineer": SimpleNamespace(tasks=("build", "light-build")),
@@ -39,13 +38,6 @@ NOTE = (
     "#### self · 2026-10-19 15:00 <!-- id=c1 key=archived:engineer -->\nArchived from engineer.\n"
 )
 CLIENT = "want a client name: no whitespace, control character or leading quote"
-
-
-def text(ident, *, front="", description="", comments="", history=""):
-    body = f"### Description\n{description}\n" if description else ""
-    body += f"### Comments\n{comments}" if comments else ""
-    body += f"### History\n{history}" if history else ""
-    return f"---\nid: {ident}\ntitle: {ident} title\ncreated: 2026-10-19T14:02:00-04:00\n{front}---\n{body}"
 
 
 def rel(ident, state):
@@ -72,23 +64,10 @@ def by_option(issues, **given):
     }
 
 
-class Board(Case):
+class Board(board_fixtures.Board):
     def setUp(self):
-        zone = mock.patch.dict(os.environ, {"TZ": "UTC0"})
-        zone.start()
-        self.addCleanup(time.tzset)
-        self.addCleanup(zone.stop)
-        time.tzset()
-        self.board = os.path.join(os.path.realpath(self.home), "board")
-        os.makedirs(os.path.join(self.board, "pm"))
-
-    def put(self, rel_dir, ident, *, mtime=MTIME, **parts):
-        path = os.path.join(self.board, rel_dir, f"{ident} x.md")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as file:
-            file.write(text(ident, **parts))
-        os.utime(path, (mtime.timestamp(), mtime.timestamp()))
-        return path
+        super().setUp()
+        os.mkdir(os.path.join(self.board, "pm"))
 
     def issues(self):
         return LocalIssues(self.board, ROLES, now=lambda: NOW, prefix="LOC")
@@ -119,8 +98,8 @@ class Board(Case):
 
 class View(Board):
     def test_fields_comments_and_relations(self):
-        self.put("pm/done", "LOC-1")
-        path = self.put(
+        self.write("pm/done", "LOC-1")
+        path = self.write(
             "engineer/review",
             "LOC-2",
             front="task: build\nclient: claude\npriority: 2\nblocked_by: [LOC-9, LOC-3]\n"
@@ -130,11 +109,11 @@ class View(Board):
             "#### self · 2026-10-19 16:10 <!-- id=c1 key=result:ab12 -->\nBuild ready.\n",
             history=READY + "- 2026-10-19 16:10 review self\n",
         )
-        self.put("unassigned/backlog", "LOC-3")
-        self.put("me/backlog", "LOC-10", front="blocked_by: [LOC-2]\n")
-        self.put("pm/ready", "LOC-4", front="blocked_by: [LOC-2]\n")
-        self.put("engineer/running", "LOC-5", front="parent: LOC-2\n")
-        self.put(
+        self.write("unassigned/backlog", "LOC-3")
+        self.write("me/backlog", "LOC-10", front="blocked_by: [LOC-2]\n")
+        self.write("pm/ready", "LOC-4", front="blocked_by: [LOC-2]\n")
+        self.write("engineer/running", "LOC-5", front="parent: LOC-2\n")
+        self.write(
             "archive", "LOC-6", front="parent: LOC-2\n", history="- 2026-10-19 14:02 done self\n"
         )
         comment = {"parent_id": None, "quoted_text": None, "on_behalf_of": None}
@@ -180,7 +159,7 @@ class View(Board):
         )
 
     def test_equal_times_later_in_file_first(self):
-        self.put(
+        self.write(
             "pm/ready",
             "LOC-1",
             comments="#### other · 2026-10-19 14:05\nfirst\n#### self · 2026-10-19 14:05\nsecond\n"
@@ -197,9 +176,11 @@ class View(Board):
         )
 
     def test_archived_and_unassigned(self):
-        path = self.put("archive", "LOC-1", comments=NOTE, history="- 2026-10-19 14:02 done self\n")
-        self.put("archive", "LOC-2")
-        self.put("unassigned/ready", "LOC-3")
+        path = self.write(
+            "archive", "LOC-1", comments=NOTE, history="- 2026-10-19 14:02 done self\n"
+        )
+        self.write("archive", "LOC-2")
+        self.write("unassigned/ready", "LOC-3")
         view = self.issues().view("LOC-1", full=False)
         self.assertEqual(view["url"], Path(path).as_uri())
         self.assertEqual(view["state"], {"id": "done", "name": "done", "type": "completed"})
@@ -210,7 +191,7 @@ class View(Board):
 
     def test_archive_note_left_out(self):
         """The engine's archive note stays in the file, out of the view and of the ids' count."""
-        self.put(
+        self.write(
             "archive",
             "LOC-1",
             comments="#### other · 2026-10-19 14:05\nfirst\n"
@@ -233,7 +214,7 @@ class View(Board):
     def test_ids_stable_across_rearchive(self):
         """Archive, restore, comment, archive again from the same and from another assignee: every
         shown id stays; a restore goes to the latest archive's assignee."""
-        path = self.put(
+        path = self.write(
             "engineer/done",
             "LOC-1",
             comments="#### other · 2026-10-19 14:05\nfirst\n",
@@ -274,7 +255,7 @@ class View(Board):
             "canceled": "canceled",
         }
         for n, state in enumerate(types, 1):
-            self.put(f"pm/{state}", f"LOC-{n}")
+            self.write(f"pm/{state}", f"LOC-{n}")
         issues = self.issues()
         for n, (state, kind) in enumerate(types.items(), 1):
             with self.subTest(state=state):
@@ -288,20 +269,20 @@ class Pages(Board):
     def setUp(self):
         super().setUp()
         self.paths = {
-            "LOC-1": self.put(
+            "LOC-1": self.write(
                 "engineer/ready",
                 "LOC-1",
                 mtime=MTIME.replace(hour=1),
                 front="task: build\nclient: claude\npriority: 2\n",
                 description="Fix the Parser",
             ),
-            "LOC-2": self.put(
+            "LOC-2": self.write(
                 "pm/backlog", "LOC-2", mtime=MTIME.replace(hour=3), front="parent: LOC-1\n"
             ),
-            "LOC-3": self.put("unassigned/backlog", "LOC-3", mtime=MTIME.replace(hour=2)),
-            "LOC-4": self.put("me/review", "LOC-4", mtime=MTIME.replace(hour=2)),
+            "LOC-3": self.write("unassigned/backlog", "LOC-3", mtime=MTIME.replace(hour=2)),
+            "LOC-4": self.write("me/review", "LOC-4", mtime=MTIME.replace(hour=2)),
         }
-        self.put(
+        self.write(
             "archive",
             "LOC-5",
             mtime=MTIME.replace(hour=5),
@@ -382,9 +363,9 @@ class Pages(Board):
 class Create(Board):
     def setUp(self):
         super().setUp()
-        self.put("pm/done", "LOC-1", history=READY)
-        self.put("pm/ready", "LOC-2", history=READY)
-        self.blocked = self.put(
+        self.write("pm/done", "LOC-1", history=READY)
+        self.write("pm/ready", "LOC-2", history=READY)
+        self.blocked = self.write(
             "engineer/ready", "LOC-3", front="blocked_by: [LOC-2]\n", history=READY
         )
 
@@ -471,7 +452,7 @@ class Create(Board):
 
 class Edit(Board):
     def test_each_field(self):
-        path = self.put("pm/ready", "LOC-1", description="Old.", history=READY)
+        path = self.write("pm/ready", "LOC-1", description="Old.", history=READY)
         change = issue_change(
             "LOC-1",
             title="New",
@@ -494,7 +475,7 @@ class Edit(Board):
         )
 
     def test_values_already_so_write_nothing(self):
-        path = self.put(
+        path = self.write(
             "pm/ready",
             "LOC-1",
             front="task: build\nclient: claude\npriority: 3\n",
@@ -515,7 +496,7 @@ class Edit(Board):
         self.assertEqual(self.snapshot(), before)
 
     def test_an_archived_issue_stays_archived(self):
-        path = self.put("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
+        path = self.write("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
         got = self.issues().edit(issue_change("LOC-1", title="New"))
         self.assertEqual(got, self.receipt("LOC-1", path, "edit", "changed"))
         self.assertIn('title: "New"\n', self.read(path))
@@ -523,7 +504,7 @@ class Edit(Board):
     def test_a_role_moves_the_file_to_its_folder_and_changes_nothing_else(self):
         for role in ("engineer", "me", "unassigned"):
             with self.subTest(role=role):
-                old = self.put("pm/ready", "LOC-1", description="Old.", history=READY)
+                old = self.write("pm/ready", "LOC-1", description="Old.", history=READY)
                 before = self.read(old)
                 got = self.issues().edit(issue_change("LOC-1", role=role))
                 path = os.path.join(self.board, role, "ready", "LOC-1 x.md")
@@ -533,28 +514,28 @@ class Edit(Board):
                 os.remove(path)
 
     def test_a_role_with_another_field_is_one_write(self):
-        self.put("pm/ready", "LOC-1", history=READY)
+        self.write("pm/ready", "LOC-1", history=READY)
         got = self.issues().edit(issue_change("LOC-1", role="engineer", title="New"))
         path = os.path.join(self.board, "engineer/ready/LOC-1 x.md")
         self.assertEqual(got, self.receipt("LOC-1", path, "edit", "changed"))
         self.assertIn('title: "New"\n', self.read(path))
 
     def test_the_role_already_assigned_writes_nothing(self):
-        path = self.put("engineer/ready", "LOC-1", history=READY)
+        path = self.write("engineer/ready", "LOC-1", history=READY)
         before = self.snapshot()
         got = self.issues().edit(issue_change("LOC-1", role="engineer"))
         self.assertEqual(got, self.receipt("LOC-1", path, "edit", "unchanged"))
         self.assertEqual(self.snapshot(), before)
 
     def test_a_role_on_an_archived_issue_is_refused(self):
-        self.put("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
+        self.write("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
         issues = self.issues()
         self.refused(lambda: issues.edit(issue_change("LOC-1", role="engineer")), "LOC-1: archived")
 
 
 class Move(Board):
     def test_moves_with_an_other_history_line(self):
-        old = self.put("pm/ready", "LOC-1", history=READY)
+        old = self.write("pm/ready", "LOC-1", history=READY)
         got = self.issues().move("LOC-1", "review")
         path = os.path.join(self.board, "pm/review/LOC-1 x.md")
         self.assertEqual(got, self.receipt("LOC-1", path, "move", "changed"))
@@ -564,21 +545,21 @@ class Move(Board):
         )
 
     def test_already_there(self):
-        path = self.put("pm/ready", "LOC-1", history=READY)
+        path = self.write("pm/ready", "LOC-1", history=READY)
         before = self.snapshot()
         got = self.issues().move("LOC-1", "ready")
         self.assertEqual(got, self.receipt("LOC-1", path, "move", "unchanged"))
         self.assertEqual(self.snapshot(), before)
 
     def test_archived_refused(self):
-        self.put("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
+        self.write("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
         issues = self.issues()
         self.refused(lambda: issues.move("LOC-1", "ready"), "LOC-1: archived")
 
 
 class CommentOn(Board):
     def test_other_comment_with_reads_id(self):
-        path = self.put(
+        path = self.write(
             "pm/ready", "LOC-1", comments="#### other · 2026-10-19 14:05\nfirst\n", history=READY
         )
         issues = self.issues()
@@ -592,7 +573,7 @@ class CommentOn(Board):
         self.assertEqual(latest["author"], ACTOR)
 
     def test_an_archived_issue_stays_archived(self):
-        path = self.put("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
+        path = self.write("archive", "LOC-1", history="- 2026-10-19 14:02 done self\n")
         got = self.issues().comment("LOC-1", "Hello")
         self.assertEqual(
             got, self.receipt("LOC-1", path, "comment", "changed", comment_id="LOC-1#1")
@@ -603,9 +584,9 @@ class CommentOn(Board):
 class Relation(Board):
     def setUp(self):
         super().setUp()
-        self.one = self.put("pm/ready", "LOC-1", history=READY)
-        self.two = self.put("pm/ready", "LOC-2", front="related: [LOC-1]\n", history=READY)
-        self.put("pm/ready", "LOC-3", history=READY)
+        self.one = self.write("pm/ready", "LOC-1", history=READY)
+        self.two = self.write("pm/ready", "LOC-2", front="related: [LOC-1]\n", history=READY)
+        self.write("pm/ready", "LOC-3", history=READY)
 
     def test_add_and_remove_both_directions(self):
         issues = self.issues()
@@ -637,7 +618,7 @@ class Relation(Board):
         )
 
     def test_an_archived_issue_stays_archived(self):
-        path = self.put("archive", "LOC-4", history="- 2026-10-19 14:02 done self\n")
+        path = self.write("archive", "LOC-4", history="- 2026-10-19 14:02 done self\n")
         got = self.issues().relation("add", "LOC-4", "blocked_by", "LOC-1")
         self.assertEqual(got, self.receipt("LOC-4", path, "relation add", "changed"))
         self.assertIn("blocked_by: [LOC-1]\n", self.read(path))
@@ -645,8 +626,8 @@ class Relation(Board):
 
 class Archive(Board):
     def test_refused_dry_run_then_archived(self):
-        self.put("pm/done", "LOC-1", history=READY)
-        child = self.put("pm/ready", "LOC-2", front="parent: LOC-1\n", history=READY)
+        self.write("pm/done", "LOC-1", history=READY)
+        child = self.write("pm/ready", "LOC-2", front="parent: LOC-1\n", history=READY)
         issues = self.issues()
         plan = issues.archive_plan("LOC-1")
         self.assertEqual(
@@ -674,7 +655,7 @@ class Archive(Board):
         )
         self.assertEqual(self.snapshot(), before)
         os.remove(child)
-        self.put("pm/done", "LOC-2", front="parent: LOC-1\n", history=READY)
+        self.write("pm/done", "LOC-2", front="parent: LOC-1\n", history=READY)
         issues = self.issues()
         got = issues.archive("LOC-1")
         path = os.path.join(self.board, "archive/LOC-1 x.md")
@@ -689,8 +670,8 @@ class Archive(Board):
 class Errors(Board):
     def setUp(self):
         super().setUp()
-        self.put("pm/ready", "LOC-1", history=READY)
-        self.put("pm/ready", "LOC-2", history=READY)
+        self.write("pm/ready", "LOC-1", history=READY)
+        self.write("pm/ready", "LOC-2", history=READY)
 
     def test_unresolved_ids(self):
         issues = self.issues()

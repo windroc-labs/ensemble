@@ -13,13 +13,12 @@ from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import execute
 from ensemble.delegate.engine.types import Layout, Result
-from tests.delegate.case import Case
+from tests.delegate.case import FakeClientCase, RunReads
 from tests.delegate.replies import completed_steps
 from tests.delegate.unit.runs import DONE, NAME, turn
+from tests.delegate.workdir import run_log
 from tests.session import fake_client
-from tests.session.modules import client_loader
 from tests.utils.jsonl import read_jsonl
-from tests.utils.sandbox import scratch
 
 NEEDS = {**DONE, "status": "needs_input", "questions": ["Which repo?"], "deliverable": ""}
 
@@ -33,7 +32,7 @@ INVALID = {**DONE, "status": "maybe"}
 INVALID_ERROR = "status 'maybe' is not one of done, needs_input, failed"
 
 
-GH = {"type": "github", "repo": "o/docs", "branch": "main", "dir": "R/"}
+GH = {"type": "github", "repo": "o/notes", "branch": "main", "dir": "R/"}
 
 
 PR = {"type": "pull-request"}
@@ -72,35 +71,14 @@ def executed(
     return execute(accepted, driver=driver, on_event=on_event)
 
 
-class Base(Case):
+class Base(RunReads, FakeClientCase):
     """dummy-tester's echo over the fake client in workdir `work` (not made), out `out`, the cwd
     its agent dir; `channel` its run.jsonl.
     """
 
     def setUp(self):
-        self.tmp = scratch(self)
-        self.work = os.path.join(self.tmp, "work")
-        self.out = os.path.join(self.work, "out.md")
-        self.channel = os.path.join(Layout(self.work).run, "run.jsonl")
-        self.scenario, self.log = (
-            os.path.join(self.tmp, name) for name in ("scenario.json", "client.log")
-        )
-        self.session_dependencies = {
-            "class_loader": client_loader({"ensemble.session.clients.fake": fake_client})
-        }
-        self.configure_fake()
-
-    def configure_fake(self, *, tui=False):
-        self.configure_session(
-            {
-                "fake": {
-                    "implementation": "ensemble.session.clients.fake:FakeClient",
-                    "scenario": self.scenario,
-                    "log": self.log,
-                    "tui": tui,
-                }
-            }
-        )
+        super().setUp()
+        self.channel = run_log(self.work)
 
     def go(
         self,
@@ -156,15 +134,6 @@ class Base(Case):
                 )
         finally:
             self.err = err.getvalue()
-
-    def records(self) -> list[dict]:
-        return read_jsonl(self.channel)
-
-    def kinds(self) -> list[str]:
-        return [e["kind"] for e in self.records()]
-
-    def last(self, kind) -> dict:
-        return [e for e in self.records() if e["kind"] == kind][-1]
 
     def launches(self) -> list[dict]:
         return read_jsonl(self.log)

@@ -1,13 +1,8 @@
-"""ensemble-session resume and restart of a worker (FR-20, FR-36; Q07, Q08) through
-bin/ensemble-session on a private tmux server (tests/session/cli_support.py): a live worker's resume
-prints its Record and starts nothing; a gone worker's resume, from another caller, and a live
-worker's restart replay its saved sid, cwd, flags, env and display without its prompt; concurrent
-resumes start it once; a start killed right after its launch resumes by name; bad saved state or a
-saved Host no longer configured starts and closes nothing. A client that ignores SIGHUP and SIGTERM
-and has a child: a restart, and a resume after its session harness is killed, start the new
-generation only once the old one and its child are gone. Each Claude launch (start, restart, resume)
-gets one /color, at least 1 s after its SessionStart; send, reply and read add none. A kill -9 of
-the harness itself: crash_resume_integration_test.py.
+"""ensemble-session resume and restart of a worker (FR-20, FR-36; Q07, Q08) on a private tmux
+server: resuming a live worker starts nothing; resuming a gone one or restarting replays its saved
+launch without its prompt, once; bad saved state or Host starts nothing; a new generation waits for
+the old one's process group; each launch gets one /color. kill -9 of the harness itself:
+crash_resume_integration_test.py.
 """
 
 import contextlib
@@ -28,8 +23,8 @@ ENV_DUMP = (
     "import json, os, sys; open(sys.argv[1], 'a')"
     ".write(json.dumps({'argv': sys.argv[2:], 'env': dict(os.environ)}) + '\\n')"
 )
-# Each generation: checks which earlier generation's client or child still runs, logs itself, runs
-# the fake claude, then outlives it; it and its child ignore SIGHUP and SIGTERM, for at most CAP s.
+# Each generation logs which earlier client or child still runs, runs the fake claude and outlives
+# it; it and its child ignore SIGHUP and SIGTERM for up to CAP s.
 GENERATION = """import json, os, signal, subprocess, sys, time
 
 CAP = 60
@@ -69,8 +64,7 @@ time.sleep(max(0, start + CAP - time.time()))
 """
 
 
-# Once, beside the first client: kill -9 of w1's session harness once it runs it and the client
-# kept its transcript, so during the start's watch
+# Once: kill -9 of w1's session harness once it runs and the client kept its transcript
 KILLER = """import glob, json, os, signal, sys, time
 if os.path.exists(sys.argv[1]):
     sys.exit(0)
@@ -112,7 +106,7 @@ def has_pair(argv: list[str], flag: str, value: str) -> bool:
 
 class Base(CliCase):
     def again(self, cmd: str, name: str, **kw) -> subprocess.CompletedProcess:
-        """`CMD NAME` with the fake claude's scenario for it, so a client it starts logs."""
+        """`CMD NAME` with its fake claude scenario."""
         return self.session(cmd, name, **self.scene(name), **kw)
 
     def first_on_path(self, script: str) -> str:
@@ -142,9 +136,7 @@ class Base(CliCase):
         self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
 
     def dead(self, name: str) -> None:
-        """Kill worker `name`'s client and wait for its pane to show it dead and its session harness
-        to take its exit.
-        """
+        """Kills `name`'s client; waits until its session harness took the exit."""
         channel = self.owner(name)
         os.kill(self.calls(name)[-1]["pid"], signal.SIGTERM)
         self.wait_event(name, "dead")
@@ -191,6 +183,8 @@ class ResumeTest(Base):
         self.assertEqual([entry["env"].get("K") for entry in logged(dump)], ["v", "v"])
         self.assertEqual(self.dir_record("w1"), record)
         self.assertIn(self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:"))
+        res = self.ok(self.session("ls", "--here", "--records"))
+        self.assertEqual((res.stdout, res.stderr), (record.to_line() + "\n", ""))
 
     def test_a_start_killed_right_after_its_launch_is_resumed_by_name(self):
         killer = os.path.join(self.root, "killer.py")
@@ -233,6 +227,8 @@ class ResumeTest(Base):
         self.assertTrue(running(again["pid"]))
         self.assertNotEqual(self.pane("w1"), pane)
         self.assertEqual(self.dir_record("w1"), record)
+        res = self.ok(self.session("ls", "--here", "--records"))
+        self.assertEqual((res.stdout, res.stderr), (record.to_line() + "\n", ""))
 
     def test_two_concurrent_resumes_of_a_gone_worker_start_one_client(self):
         record = self.record(self.start("w1"))
@@ -302,13 +298,15 @@ class ResumeTest(Base):
 
 class ColorTest(Base):
     def session_start(self, name: str) -> float:
-        """When its launch's one SessionStart record was written, in epoch seconds."""
+        """Its launch's one SessionStart time, epoch s."""
         hooks = logged(os.path.join(self.ensemble, "tui", name, "hooks.jsonl"))
         (stamp,) = [hook["ts"] for hook in hooks if hook["label"] == "SessionStart"]
         return datetime.fromisoformat(stamp).timestamp()
 
     def test_each_launch_gets_one_color(self):
-        self.record(self.start("w1"))
+        res = self.start("w1")
+        self.record(res)
+        self.assertEqual(res.stderr, "session w1: tmux attach -t '=w1'\n")
         starts = [self.session_start("w1")]
         self.record(self.again("restart", "w1"))
         starts.append(self.session_start("w1"))
@@ -334,8 +332,6 @@ class ColorTest(Base):
 
 
 class OldGenerationTest(Base):
-    """FR-36: the new client starts only once the old one's process group is gone."""
-
     def setUp(self):
         super().setUp()
         self.generations = os.path.join(self.root, "generations.jsonl")

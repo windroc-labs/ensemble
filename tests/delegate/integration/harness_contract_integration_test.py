@@ -7,7 +7,7 @@ import sys
 from ensemble.delegate import Spec
 from ensemble.delegate.composer.prompt import RESUME
 from ensemble.delegate.engine.types import Begun
-from ensemble.session import Exited, NotShowable, Reply
+from ensemble.session import Exited, Reply
 from tests.delegate.case import REPO, child_env
 from tests.delegate.contracts.delegate import DelegateContract
 from tests.delegate.fakes.harness_session import (
@@ -120,20 +120,10 @@ class HarnessContract(DelegateContract, HarnessCase):
         self.assertTrue(launched.prompt.endswith("\n" + answer + "\n"))
 
 
-class ShowingHarnessContract(HarnessContract):
-    SHOWABLE = True
-
-    def setUp(self):
-        super().setUp()
-        script = HarnessSession.script
-        HarnessSession.reset(showable=True)
-        HarnessSession.script = script
-
-
 class Ownership(HarnessCase):
-    def pair(self, *, agent_showable=True):
+    def pair(self):
         HarnessSession.reset()
-        HarnessSession.hosts["agent"] = (ShowingHost if agent_showable else RecordingHost)("agent")
+        HarnessSession.hosts["agent"] = ShowingHost("agent")
         delegate = self.make(
             spec=Spec(
                 "input",
@@ -177,13 +167,6 @@ class Ownership(HarnessCase):
         _, view = self.pair()
         view.show()
         self.assertEqual(FakeViewer.shown, [(self.metadata()["agent_name"], "target", None)])
-
-    def test_a_hidden_agent_has_no_attach(self):
-        _, view = self.pair(agent_showable=False)
-        self.assertIsNone(view.status().attach)
-        self.assertIsNone(view.attach_command())
-        with self.assertRaises(NotShowable):
-            view.show()
 
     def test_resume_closes_leftover_agent_before_restarting_lifecycle_owner(self):
         record, view = self.pair()

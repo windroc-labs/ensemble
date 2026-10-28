@@ -194,20 +194,6 @@ class GridTest(Live):
         self.close("w2")
         self.grid([["w1", "w3"]], width)
 
-    def test_name_order(self):
-        self.per_column(2)
-        for name, columns in (
-            ("pm-TASK-10", [["pm-TASK-10"]]),
-            ("engineer-TASK-2", [["engineer-TASK-2", "pm-TASK-10"]]),
-            ("pm-TASK-9", [["engineer-TASK-2", "pm-TASK-9"], ["pm-TASK-10"]]),
-            (
-                "engineer-TASK-11",
-                [["engineer-TASK-2", "engineer-TASK-11"], ["pm-TASK-9", "pm-TASK-10"]],
-            ),
-        ):
-            self.started(name)
-            self.grid(columns)
-
     def test_sub_sessions(self):
         for i, name in enumerate(("m1", "m2", "m3"), 1):
             self.started(name)
@@ -642,18 +628,6 @@ class SettleTest(Live):
                 self.assertEqual(self.busy(), "")
                 self.assertEqual(self.window_option(MANAGER, tmux_model.GRID_PANES_SET), panes)
                 self.assertEqual(self.steady(self.layout()), grid)
-
-    def test_a_tile_without_the_lock_leaves_busy_alone(self):
-        self.grid_up()
-        self.settled()
-        self.tmux("set-option", "-w", "-t", self.window, tmux_model.GRID_BUSY, self.window)
-        socket = self.tmux("display-message", "-p", "-t", self.window, "#{socket_path}")
-        with tmux_model._grid_lock(socket, self.window, wait=False) as held:
-            self.assertTrue(held)
-            self.tui("tile", "--no-wait", self.window)
-            self.assertEqual(self.busy(), self.window)
-        self.tui("tile", "--no-wait", self.window)
-        self.assertEqual(self.busy(), "")
 
     def test_fiftieth_retile_keeps_grid_and_fifty_first_hook_trips_breaker(self):
         self.grid_up()

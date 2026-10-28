@@ -4,7 +4,7 @@ import io
 from dataclasses import replace
 from unittest import mock
 
-from ensemble.delegate.composer import Composer, ConfigError, RunParams, Team
+from ensemble.delegate.composer import Composer, ConfigError, Team
 from tests.delegate.case import Case
 
 ROOT = "/corpus/team"
@@ -15,10 +15,6 @@ TEXTS = {
         "- `note` (`<tasks>/note.md`): a note; always; light.\n"
     ),
     f"{ROOT}/tasks/note.md": "# Note\n\n## Steps\n\nWrite.\n\n## Resume\n\nContinue.\n",
-    f"{ROOT}/guide.md": "# Guide\n\nYou are {{role}}. Task: {{task|pick one}}.\n",
-    f"{ROOT}/principles.md": "# Principles\n\nUse {{language}}.\n",
-    f"{ROOT}/output/output.md": "# Output\n\nReturn it.\n",
-    f"{ROOT}/output/destinations/local.md": "## Destination\n\nSave {{deliverable}}.\n",
 }
 CONFIG = {
     "tier": 2,
@@ -33,13 +29,8 @@ CONFIG = {
 }
 TEAM = Team(
     ROOT,
-    files={
-        (p.split("/")[-2], p.split("/")[-1][:-3]): (p,)
-        for p in TEXTS
-        if p.split("/")[-2] in ("roles", "tasks")
-    },
+    files={(p.split("/")[-2], p.split("/")[-1][:-3]): (p,) for p in TEXTS},
 )
-PARAMS = RunParams(input="  # Literal\n\n```\n{{role}}\n```  ", out="/work/out.md", workdir="/work")
 
 
 class OwnedComposer(Case):
@@ -98,25 +89,7 @@ class OwnedComposer(Case):
         self.assertEqual(self.composer.index("writer"), expected["writer"])
         self.assertEqual(self.composer.trusted_dirs(), frozenset({"/operator/trusted"}))
 
-    def test_render_keeps_placement_resume_and_literal_input(self):
-        prompt = self.composer.render(self.composer.resolve("writer", "note"), PARAMS)
-        self.assertTrue(
-            prompt.startswith("# Guide\n\nYou are Writer. Task: `note` (`<tasks>/note.md`).")
-        )
-        self.assertIn("Save <Workdir>/out.md.", prompt)
-        self.assertTrue(prompt.endswith("\n# Input\n\n# Literal\n\n```\n{{role}}\n```\n"))
-        run = self.composer.resolve("writer")
-        resumed = self.composer.render(run, replace(PARAMS, resume=True, out="/external/out.md"))
-        self.assertTrue(resumed.startswith("Resumed agent run after an interruption."))
-        self.assertIn("Save <Workdir>/tmp/deliverable.md.", resumed)
-        no_language = self.composer.render(replace(run, language=""), PARAMS)
-        self.assertNotIn("Use English.", no_language)
-
-    def test_unknown_role_task_and_bad_unused_custom_text_stay_selective(self):
-        with self.assertRaisesRegex(ConfigError, "unknown role 'missing'"):
-            self.composer.resolve("missing")
-        with self.assertRaisesRegex(ConfigError, "task 'missing' is not one of writer's tasks"):
-            self.composer.resolve("writer", "missing")
+    def test_bad_unused_custom_text_stays_unread(self):
         found = replace(
             TEAM,
             dirs=("/custom",),

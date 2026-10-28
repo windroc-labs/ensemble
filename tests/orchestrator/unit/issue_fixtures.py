@@ -1,8 +1,4 @@
-"""Linear issue nodes, as `ensemble-orchestrator issue read`, `move`, `comment`, `archive`, `relation`,
-`label swap` and `edit` query them, and recording fake gqls; the lookup and list entities by edge with Routes, a fake gql answering each
-by its root field; IssueCase runs issue.main against a test configuration, names_cfg is its
-abstract names' part; list_query, new_issue and issue_change build the backends' requests.
-"""
+"""Linear issue fixtures for the issue command tests."""
 
 import io
 import math
@@ -63,7 +59,6 @@ CONFIG = MANAGER_LINE + tp.CONFIG.replace(
 
 
 def names_cfg(**fields):
-    """The LinearSettings fields issue_names reads, as CONFIG loads them."""
     cfg = {
         "team": TEAM,
         "states": dict(STATES),
@@ -78,20 +73,18 @@ def names_cfg(**fields):
 
 
 def list_query(**given):
-    """A ListQuery of only the given filters."""
     none = ("query", "state", "role", "task", "client", "priority", "parent", "label", "project")
     return ListQuery(**{**dict.fromkeys(none), "include_archived": False, **given})
 
 
 def new_issue(**given):
-    """A NewIssue titled t, body b, with only the given fields and relations."""
+    """A NewIssue titled t, body b, only the given fields set."""
     none = ("state", "role", "task", "client", "priority", "parent", "project", "milestone")
     empty = {"labels": (), "blocks": (), "blocked_by": ()}
     return NewIssue(**{"title": "t", "body": "b", **dict.fromkeys(none), **empty, **given})
 
 
 def issue_change(ident, **given):
-    """An IssueEdit of ident changing only the given fields."""
     none = ("title", "body", "role", "project", "task", "client", "priority")
     return IssueEdit(**{"id": ident, **dict.fromkeys(none), **given})
 
@@ -160,10 +153,7 @@ def issue_node(ident="TASK-2", **fields):
 
 
 class Gql:
-    """Answers the read query with `node`, each later page of a connection from `pages[name]` (in
-    order; an exception there is raised, None or a dict without nodes answers as the whole issue), and records every (query, variables) call; an exception
-    in `fail` is raised instead.
-    """
+    """Answers the read with node, each MORE page from pages[name]; fail raises instead."""
 
     def __init__(self, node, pages=None, fail=None):
         self.node, self.fail, self.calls = node, fail, []
@@ -223,11 +213,11 @@ def user(n, name, email=None, *, active=True):
     return {"id": uid(n), "name": name, "email": email or f"u{n}@example.com", "active": active}
 
 
-LIMIT = 10_000  # Linear's per-query complexity limit
+LIMIT = 10_000  # Linear's query complexity limit
 
 
 def complexity(query, variables):
-    """Linear's score: a field 0.1, an object 1, a connection its fields times first (or 50)."""
+    """Linear's score: field 0.1, object 1, connection its fields times first (50)."""
     tokens = re.findall(r'"(?:[^"\\]|\\.)*"|\$?\w+|\S', query)
     tenths, _, _ = _selection(tokens, tokens.index("{") + 1, variables)
     return math.ceil(tenths / 10)
@@ -257,11 +247,8 @@ def _selection(tokens, at, variables):
 
 
 class Routes:
-    """A fake gql answering a query by its root field (teams, team, issueLabels, …): routes[field]
-    is a list of answers taken in order, else one answer for every call; an answer is the field's
-    value, a callable of the variables giving it, or an exception it raises. strict: a query over
-    LIMIT fails as Linear refuses it, an HTTP 400. Records every (query, variables) call.
-    """
+    """Answers by root field: routes[field], a list in order or one value, callable or exception;
+    strict: over LIMIT fails."""
 
     def __init__(self, *, strict=False, **routes):
         self.routes = {k: list(v) if isinstance(v, list) else v for k, v in routes.items()}
@@ -280,12 +267,10 @@ class Routes:
         return {field: answer}
 
     def sent(self, field):
-        """The variables of every call to field."""
         return [v for q, v in self.calls if re.match(r"query[^{]*\{\s*" + field + r"\b", q)]
 
 
 def issue_row(ident, team_id=TEAM, **fields):
-    """An issue node as ensemble-orchestrator issue list queries it."""
     return {
         "id": f"id-{ident}",
         "identifier": ident,
@@ -304,8 +289,12 @@ def issue_row(ident, team_id=TEAM, **fields):
 VIEWER = {"id": "u-me", "name": "Me"}
 
 
+def receipt_of(operation, ident="TASK-2", **extra):
+    issue = {"id": f"id-{ident}", "identifier": ident, "url": f"https://linear.app/t/issue/{ident}"}
+    return {"issue": issue, "operation": operation, "result": "changed", "actor": VIEWER, **extra}
+
+
 def write_issue(ident="TASK-2", *, state=STATES["todo"], team_id=TEAM, archived=False):
-    """An issue as `ensemble-orchestrator issue move` and `comment` read it."""
     return {
         "id": f"id-{ident}",
         "identifier": ident,
@@ -316,11 +305,16 @@ def write_issue(ident="TASK-2", *, state=STATES["todo"], team_id=TEAM, archived=
     }
 
 
-class WriteGql:
-    """Answers a write's read with `issue` (None: no such issue) and VIEWER, and each mutation with
-    `result`, raised when an exception; an exception in `fail` is raised by the read instead.
-    Records every (query, variables) call.
-    """
+class Recorded:
+    """Records calls; writes: the mutations."""
+
+    @property
+    def writes(self):
+        return [call for call in self.calls if call[0].startswith("mutation")]
+
+
+class WriteGql(Recorded):
+    """Answers the read with issue, a mutation with result or DEFAULTS."""
 
     DEFAULTS = {
         "issueUpdate": {"success": True},
@@ -343,13 +337,9 @@ class WriteGql:
             raise self.fail
         return {"viewer": self.viewer, "issue": self.issue}
 
-    @property
-    def writes(self):
-        return [call for call in self.calls if call[0].startswith("mutation")]
-
 
 def tree(ident="TASK-1", kind="completed", *children, archived=None):
-    """An issue as `ensemble-orchestrator issue archive` reads it, its unarchived sub-issues children."""
+    """An issue as archive reads it, children its sub-issues."""
     return {
         "id": f"id-{ident}",
         "identifier": ident,
@@ -361,13 +351,8 @@ def tree(ident="TASK-1", kind="completed", *children, archived=None):
     }
 
 
-class ArchiveGql:
-    """Answers issue archive's lookup with `root` (None: no such issue) and VIEWER, LinearTracker's
-    archive read with root and its first children page, each later children page in pages of
-    CHILDREN (cursor: the next offset), and the mutation with `result`, raised when an exception.
-    `broken` maps (issue id, offset) to an exception that page raises, or None for a page missing.
-    Records every (query, variables) call.
-    """
+class ArchiveGql(Recorded):
+    """Answers archive's reads from root, paged by CHILDREN; broken[(id, offset)]: a page's error."""
 
     CHILDREN = 50
 
@@ -407,16 +392,11 @@ class ArchiveGql:
         found = self.root and {k: self.root[k] for k in ("id", "identifier", "url")}
         return {"viewer": self.viewer, "issue": found}
 
-    @property
-    def writes(self):
-        return [call for call in self.calls if call[0].startswith("mutation")]
-
 
 NEW = {"id": "id-TASK-9", "identifier": "TASK-9", "url": "https://linear.app/t/issue/TASK-9"}
 
 
 def by_name(*nodes):
-    """A Routes answer: the edges of nodes whose name the query's filter names exactly."""
 
     def find(found):
         if isinstance(found, dict):
@@ -430,11 +410,8 @@ def by_name(*nodes):
     return lambda variables: edges([n for n in nodes if n["name"] == find(variables)])
 
 
-class CreateGql(Routes):
-    """Routes for create's reads; issueCreate answers `created` (default: NEW made), each
-    issueRelationCreate the next of `relations` (default: success); an exception there is raised.
-    Records every (query, variables) call.
-    """
+class CreateGql(Routes, Recorded):
+    """Routes; issueCreate answers created (NEW), each issueRelationCreate the next relations."""
 
     def __init__(self, *, created=None, relations=(), **routes):
         super().__init__(**routes)
@@ -453,19 +430,9 @@ class CreateGql(Routes):
             raise answer
         return {field: answer}
 
-    @property
-    def writes(self):
-        return [call for call in self.calls if call[0].startswith("mutation")]
 
-
-class RelationGql:
-    """A board of issues by identifier, each one's id id-<identifier> unless `ids` names it, and its
-    relations, records [relation id, type, from identifier, to identifier]: answers
-    `ensemble-orchestrator issue relation`'s read with VIEWER and the issue's side in pages of
-    issue_read.PAGE (cursor: the next offset), an issue reference read, and each mutation by
-    applying it to relations, or with `result`, raised when an exception. Records every (query,
-    variables) call.
-    """
+class RelationGql(Recorded):
+    """Issues and their relations [id, type, from, to], paged by issue_read.PAGE."""
 
     def __init__(self, idents, relations=(), *, ids=None, result=None, viewer=VIEWER):
         self.ids = {ident: f"id-{ident}" for ident in idents} | dict(ids or {})
@@ -522,13 +489,9 @@ class RelationGql:
         }
         return {"viewer": self.viewer, "issue": node}
 
-    @property
-    def writes(self):
-        return [call for call in self.calls if call[0].startswith("mutation")]
-
 
 class SecondFails(RelationGql):
-    """RelationGql whose second mutation answers with `later`, raised when an exception."""
+    """RelationGql whose second mutation answers later."""
 
     def __init__(self, *args, later, **options):
         super().__init__(*args, **options)
@@ -548,9 +511,7 @@ def _issue_ref(variables):
 
 
 def create_gql(**overrides):
-    """A strict CreateGql knowing team TEAM's labels bug, ops (workspace) and old (retired), project
-    Ensemble with milestone M1, and every issue but NOPE-*.
-    """
+    """A strict CreateGql of labels, project Ensemble and issues but NOPE-*."""
     routes = {
         "issueLabels": by_name(
             label(4, "bug"), label(5, "ops", None), label(6, "old", retired="2026-01-01")
@@ -564,7 +525,7 @@ def create_gql(**overrides):
 
 
 def _holds(node, match):
-    # the IssueLabelFilter subset issue_refs sends
+    # issue_refs' IssueLabelFilter subset
     if "and" in match:
         return all(_holds(node, m) for m in match["and"])
     if "or" in match:
@@ -579,13 +540,8 @@ def _holds(node, match):
     return node[field] == want
 
 
-class LabelGql:
-    """The workspace's `catalog` of labels (label() nodes) and one issue, TASK-2 of team TEAM,
-    carrying the labels whose ids are `carried`: answers `ensemble-orchestrator issue label swap`'s read
-    with VIEWER and the issue's labels in pages of issue_read.PAGE (cursor: the next offset), each
-    label reference read from the catalog, and the mutation by applying it to carried, or with
-    `result`, raised when an exception. Records every (query, variables) call.
-    """
+class LabelGql(Recorded):
+    """A label catalog and TASK-2 carrying carried, paged by issue_read.PAGE."""
 
     def __init__(self, catalog, carried, *, result=None, viewer=VIEWER):
         self.catalog, self.carried = {n["id"]: n for n in catalog}, list(carried)
@@ -634,17 +590,9 @@ class LabelGql:
         }
         return {"viewer": self.viewer, "issue": node}
 
-    @property
-    def writes(self):
-        return [call for call in self.calls if call[0].startswith("mutation")]
-
 
 class EditGql(LabelGql):
-    """LabelGql whose issue TASK-2 also holds `fields` (title, description, priority, assignee,
-    delegate, project; team to move it), answering `ensemble-orchestrator issue edit`'s read and
-    its --project lookups from `projects` (project() nodes), strictly
-    as Routes; the mutation applies its label changes.
-    """
+    """LabelGql whose TASK-2 also holds fields; --project reads from projects."""
 
     def __init__(self, catalog, carried, *, fields=None, projects=(), **options):
         super().__init__(catalog, carried, **options)

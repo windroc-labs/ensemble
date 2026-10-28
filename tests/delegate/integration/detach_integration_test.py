@@ -19,7 +19,7 @@ from ensemble.delegate.engine.types import Layout
 from ensemble.session import SIGNALS
 from ensemble.utils import ProcessControl, Record, Status
 from tests.delegate import drives
-from tests.delegate.case import PY, PYTHONPATH, Case
+from tests.delegate.case import PY, PYTHONPATH, Case, RunReads
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
 from tests.delegate.replies import block, mark
@@ -45,7 +45,7 @@ SECRET = "sk-fake-441"
 RESUME = (*RUN[:-1], "resume")
 
 
-class Detach(Case):
+class Detach(RunReads, Case):
     def setUp(self):
         self.dir = scratch(self)
         self.server = None
@@ -210,7 +210,7 @@ class Detach(Case):
         return self.server.tmux("has-session", "-t", f"={name}").returncode == 0
 
     def until(self, check, what: str, *, diagnostics=None):
-        """diagnostics: a timeout's AssertionError ends with its text (default: drive.log)."""
+        """A timeout's AssertionError ends with `diagnostics` (default: drive.log)."""
 
         def poked():
             self.poke()
@@ -247,18 +247,12 @@ class Detach(Case):
         return [line for line in shaped if line != "turn end"]
 
     def records(self):
-        """run.jsonl's complete lines; a line still being written waits for a later read."""
+        """run.jsonl's complete lines; a partial line waits."""
         try:
             with open(os.path.join(Layout(self.work).run, "run.jsonl")) as stream:
                 return [json.loads(line) for line in stream if line.endswith("\n")]
         except FileNotFoundError:
             return []
-
-    def kinds(self) -> list[str]:
-        return [e["kind"] for e in self.records()]
-
-    def last(self, kind: str) -> dict:
-        return [e for e in self.records() if e["kind"] == kind][-1]
 
     def read(self, path: str) -> str:
         with open(path) as f:
@@ -304,9 +298,10 @@ class Tui(Detach):
         self.assertTrue(record.display.startswith(MANAGER), record.display)
 
     def test_outside_any_client_runs_shown_in_no_pane(self):
-        res = self.detach(mode="tui", steps=[START], turns=[[block(DONE)]])
+        res = self.detach(mode="tui", steps=[START], turns=[[block(DONE)]], launcher=True)
         self.said(res, tui=True)
         shaped = self.ended(turn_ends=2)
+        self.assertEqual(shaped.count("turn end"), 2)
         self.assertEqual(self.drive_lines(shaped), ["outcome done", "exited 0"])
         self.assertEqual(self.read(self.out), DONE["deliverable"])
         self.assertTrue(self.live(TUI))
@@ -388,13 +383,6 @@ class Tui(Detach):
         self.assertNotIn("result", self.kinds())
         self.assertEqual(self.metadata()["completed"], False)
 
-    def test_the_launchers_events_file_gets_the_turn_ends_and_one_outcome(self):
-        res = self.detach(mode="tui", steps=[START], turns=[[block(DONE)]], launcher=True)
-        self.said(res, tui=True)
-        shaped = self.ended(turn_ends=2)
-        self.assertEqual(shaped.count("turn end"), 2)
-        self.assertEqual(self.drive_lines(shaped), ["outcome done", "exited 0"])
-
     def test_an_events_path_tmux_would_misread_exits_2_starting_nothing(self):
         events = os.path.join(self.dir, "ev#1")
         res = self.detach(mode="tui", steps=[START], events=events)
@@ -413,18 +401,13 @@ class Headless(Detach):
         self.control().terminate()
         self.assertEqual(self.ended(), ["outcome error", "exited 143"])
 
-    def test_done_one_outcome_line_then_the_drive_ends(self):
-        res = self.detach(steps=[START, block(DONE)])
-        self.said(res, tui=False)
-        self.assertEqual(self.ended(), ["outcome done", "exited 0"])
-        self.assertEqual(self.read(self.out), DONE["deliverable"])
-        self.assertEqual(self.last("result")["outcome"]["status"], "done")
-
     def test_on_event_gets_each_event_from_the_run_dir_its_stdout_off_the_record_line(self):
-        res = self.detach(*self.on_event(), steps=[START, block(DONE)])
+        res = self.detach(*self.on_event(), steps=[START, block(DONE)], launcher=True)
         self.said(res, tui=False)
         self.assertNotIn(callback_recorder.NOISE, res.stdout + res.stderr)
         self.assertEqual(self.ended(), ["outcome done", "exited 0"])
+        self.assertEqual(self.read(self.out), DONE["deliverable"])
+        self.assertEqual(self.last("result")["outcome"]["status"], "done")
         entries = self.delivered()
         events = [DelegateEvent.parse(entry["line"]) for entry in entries]
         self.assertEqual([event.kind for event in events], ["begun", "progress", "finished"])
@@ -479,11 +462,6 @@ class Headless(Detach):
         self.assertEqual(state["attempt"], 2)
         self.assertNotEqual(state["drive"], first)
         self.until(lambda: not self.drive_running(), f"the resumed {DRIVE} ended")
-
-    def test_the_launchers_events_file_gets_one_outcome_line(self):
-        res = self.detach(steps=[START, block(DONE)], launcher=True)
-        self.said(res, tui=False)
-        self.assertEqual(self.ended(), ["outcome done", "exited 0"])
 
 
 class Answer(Detach):

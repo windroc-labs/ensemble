@@ -1,8 +1,4 @@
-"""The flows' Segment layer over TmuxFlow: each step changes the board (a seed, a human's move or
-comment, a router.py --issue or tick claim or resume, headless or attended (--tui from MANAGER's
-pane, its events in self.events), an agent run behind its fake_claude gate, a promote tick), says
-what it expects of the tracked issues, runs.jsonl and Linear's failed requests, and verify()
-compares them when the step ends."""
+"""Flow steps over TmuxFlow; verify() checks each step's expectations when it ends."""
 
 import contextlib
 import copy
@@ -74,7 +70,7 @@ BUILD = "Build the session registry."
 
 USAGE = "Current session: 50% used\n"
 
-# turn ends without an outcome after the nudge: past the tui run's give-up count (3)
+# no outcome after the nudge: past the TUI's give-up count (3)
 STOP = {
     "kind": "hook",
     "event": "Stop",
@@ -85,16 +81,13 @@ GIVE_UP = 4
 
 
 def lookup(caller):
-    """A resumed run's look for an unledgered comment step's comment (FR-54): not found, then
-    posted.
-    """
+    """A resumed run looks for an unledgered comment step's comment: not found, then posted."""
     return ("linear.Q_COMMENT", caller, "error")
 
 
 def tui_scene(script):
-    """script as a TUI's turns: its reply in one turn, consecutive texts one step; none: then turn
-    ends until it gives up; open: then the run waits on.
-    """
+    """script as TUI turns: consecutive texts one step; none: turns end until it gives up; open:
+    the run waits on."""
     if script.outcome == "none":
         return {"steps": script.steps, "turns": [[STOP] * (GIVE_UP - 1)]}
     steps = []
@@ -107,7 +100,7 @@ def tui_scene(script):
 
 
 def agent_calls(calls):
-    """Agent runs carry --session-id or --resume; usage probes carry neither."""
+    """Agent runs carry --session-id or --resume; usage probes don't."""
     return [c for c in calls if {"--session-id", "--resume"} & set(c["argv"])]
 
 
@@ -137,7 +130,7 @@ class Pending(NamedTuple):
     gate: str
     resumed: bool
     tui: bool
-    after_stop: bool  # a stopped harness's last write-back may or may not have run before it
+    after_stop: bool  # a stopped harness's last write-back may not have run
 
 
 class Segment(TmuxFlow):
@@ -213,7 +206,7 @@ class Segment(TmuxFlow):
         return {line[2] for line in self.want_runs}
 
     def session_status(self, ident, sid):
-        """The status of sid's session comment on ident, else None."""
+        """sid's session comment status on ident, else None."""
         prefix = f"Run {sid} · "
         return next(
             (
@@ -280,9 +273,7 @@ class Segment(TmuxFlow):
             self.fail("; ".join(found))
 
     def agent_script(self, role, outcome, ident, url=None):
-        """outcome: done, needs_input, failed, none (no outcome block) or open (none; a TUI's run
-        waits on).
-        """
+        """outcome: done, needs_input, failed, none (no outcome block) or open (none; waits)."""
         self.n_scripts += 1
         n = self.n_scripts
         steps = [mark("start", f"Starting run #{n}.")]
@@ -305,11 +296,9 @@ class Segment(TmuxFlow):
         return Script(outcome, [*steps, block(report)], report, {text: TEXT_KINDS[outcome]})
 
     def launch(self, ident, role, script, *, resumed, tui=False, tick=False, after_stop=False):
-        """router.py --issue ident (tick: a scheduled tick) with script behind a new gate, until its
-        fake_claude waits there and write-back has its session comment saying running; returns the
-        runs.jsonl line, fake_claude's call and the events since. tui: --tui from MANAGER's pane,
-        its pipeline Record (self.printed) on stdout; else nothing there.
-        """
+        """router.py --issue ident (or a tick) with script behind a new gate, until fake_claude
+        waits and the session comment says running; returns the runs.jsonl line, the call and the
+        events since."""
         if self.pending:
             self.fail(
                 f"a claim or resume of {ident} while {self.pending.ident}'s run is pending: agent_run() first"
@@ -370,9 +359,8 @@ class Segment(TmuxFlow):
         return line, call, logged
 
     def attended(self, ident, role, sid, res):
-        """res's one Record line, the run's pipeline Record shown at MANAGER, its one session the
-        TUI (the drive is none); its attach command and the TUI's attach-command line on stderr.
-        """
+        """res's one Record line, the run's pipeline Record at MANAGER, and the TUI's attach
+        command."""
         self.assertEqual(len(res.stdout.splitlines()), 1, res.stdout)
         record = Record.parse(res.stdout)
         sessions = (config.tui_name(role, ident, sid),)
@@ -404,7 +392,7 @@ class Segment(TmuxFlow):
                 ends = sum(line[0] != "limit" and line[2] == p.sid for line in self.want_runs)
                 self.wait_end(p.sid, p.ident, ends, p.role)
             self.pending = None
-            if p.tui:  # left open after the outcome or the give-up
+            if p.tui:  # left open after the outcome
                 self.assertTrue(self.live(config.tui_name(p.role, p.ident, p.sid)))
             want, task, app, report = (
                 self.want[p.ident],
@@ -465,10 +453,7 @@ class Segment(TmuxFlow):
             self.expect(p.ident, comments=comments, ledger={p.sid: steps}, **changes)
 
     def wait_written_back(self, p):
-        """Until p's outcome is written back (its ledger's last step, then its session comment's
-        end) and its drive ended: a run after a stop, whose session's count of write-back ends
-        is unknown.
-        """
+        """Until p's outcome is written back and its drive ended, after a stop."""
         self.assertIsNotNone(p.script.report, "a run after a stop waits for its outcome")
         harness, status = self.harness(p.role, p.ident, p.sid), p.script.report["status"]
         live_tmux.wait(
@@ -501,7 +486,7 @@ class Segment(TmuxFlow):
         return ident
 
     def refused(self, ident, note=""):
-        """router.py --issue ident must exit 2; returns the events it logged."""
+        """router.py --issue ident must exit 2; returns its events."""
         events = len(self.logged())
         res = self.router("--issue", ident)
         added = self.logged()[events:]
@@ -609,9 +594,7 @@ class Segment(TmuxFlow):
             self.assertNotIn("handoff", [to for _, to, _ in self.history(ident)])
 
     def assert_child(self, ident, role, nxt):
-        """ident's one related child: nxt's Todo issue in its project, titled and described as
-        promote makes it; returns its identifier and title.
-        """
+        """ident's one child, nxt's Todo issue as promote makes it: (identifier, title)."""
         with self.fake.lock:
             src = copy.deepcopy(self.fake.find(ident))
             related = [b for t, a, b in self.fake.relations if t == "related" and a == src["id"]]
@@ -680,8 +663,8 @@ class Segment(TmuxFlow):
         )
 
     def wait_next_second(self, ident):
-        # router.attempt_count counts the runs.jsonl lines strictly after moved_to_todo, and their
-        # ts is to the second (linear.stamp), so a claim within its second is no attempt
+        # attempt_count counts runs.jsonl lines after moved_to_todo, to the second: a claim in
+        # its second is none
         time.sleep(
             max(
                 0,
@@ -719,15 +702,13 @@ class Segment(TmuxFlow):
         return text
 
     def section(self, prompt, heading):
-        # up to the next `## ` line, a fenced one too: no text a test publishes or reports may hold
-        # one
+        # up to the next `## ` line, even a fenced one
         if m := re.search(rf"^## {re.escape(heading)}\n\n(.*?)(?=^## |\Z)", prompt, re.M | re.S):
             return m[1]
         self.fail(f"no `## {heading}` section in the prompt:\n{prompt}")
 
     def researcher_ready(self, labels=()):
         ident = self.seed_backlog("researcher", *RESEARCH, labels=labels)
-        self.backlog_not_claimed(ident)
         self.human_move(ident, "todo", "human: to todo")
         return ident
 
@@ -767,7 +748,6 @@ class Segment(TmuxFlow):
                     ]
                 ),
             )
-        self.backlog_not_claimed(ident)
         self.human_move(ident, "todo", "human: to todo")
         return ident
 

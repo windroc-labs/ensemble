@@ -88,23 +88,17 @@ class RepliesTest(Case):
         return time.monotonic()
 
     def test_interjection_writes_reply_before_done(self):
-        self.interjected()
+        sent = self.interjected()
         name, _, reply_id = self.until("reply")
         self.assertEqual(name, "w1")
         self.assertEqual(read_reply(str(self.events), reply_id), ANSWER)
+        self.assertLessEqual(time.monotonic() - sent, 10)
+        no_process = glob.glob(
+            str(self.home / "**" / "*.watch.lock"), recursive=True, include_hidden=True
+        )
+        self.assertEqual(no_process, [])  # no reply watcher ran (FR-38)
         self.release.touch()
         self.until("done")
         words = [w[1] for w in self.words()]
         self.assertEqual(words.count("reply"), 1)
         self.assertLess(words.index("reply"), words.index("done"))
-
-    def test_reply_without_tool_call_within_10s(self):
-        sent = self.interjected()
-        self.until("reply")
-        self.assertLessEqual(time.monotonic() - sent, 10)
-        self.assertNotIn("done", [w[1] for w in self.words()])
-        self.release.touch()
-        no_process = glob.glob(
-            str(self.home / "**" / "*.watch.lock"), recursive=True, include_hidden=True
-        )
-        self.assertEqual(no_process, [])  # no reply watcher ran (FR-38)

@@ -161,7 +161,15 @@ class OneFinished(CallbackCase):
                 self.work = os.path.join(self.home, f"returned-{index}")
                 log = os.path.join(self.home, f"returned-{index}.log")
                 HarnessSession.script = script
-                result = self.make(callback=self.callback(log=log), session_cls=session_cls).run()
+                seen = []
+                delegate = self.make(callback=self.callback(log=log), session_cls=session_cls)
+                result = delegate.run(seen.append)
+                first = Finished if session_cls is FailingSession else Begun
+                self.assertIsInstance(seen[0], first)
+                self.assertEqual(
+                    [event for event in seen if isinstance(event, Finished)], [Finished(result)]
+                )
+                self.assertEqual(seen[-1], Finished(result))
                 events = self.events(log)
                 kinds = [event.kind for event in events]
                 self.assertEqual(kinds.count("finished"), 1)
@@ -176,9 +184,13 @@ class OneFinished(CallbackCase):
                     ),
                 )
                 if script and isinstance(script[0], LimitHit):
+                    self.assertIsNone(result.outcome)
                     self.assertEqual(result.limit, Limit(1767225600.0))
+                    self.assertFalse(HarnessSession.live)
                 if session_cls is FailingSession:
                     self.assertEqual(kinds, ["finished"])
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("fake spawn refused", result.error)
 
     def test_a_raised_run_sends_one_stopped_finished_to_the_callback_and_the_stored_result(self):
         for index, (error, stopped) in enumerate(

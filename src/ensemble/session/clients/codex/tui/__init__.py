@@ -387,9 +387,7 @@ class CodexTui(Tui):
         return self.last_reply
 
     def pending(self, payload):
-        """0: Codex's Stop reports no background work, whose end starts no turn
-        (docs/architecture.md › Client policy).
-        """
+        """0: Codex's Stop reports no background work, whose end starts no turn."""
         return 0
 
     def activity(self, payload):

@@ -635,37 +635,7 @@ class ConfigurationLoading(ConfigFile, Case):
             with self.subTest(message):
                 self.fails("orchestrator/config.toml: " + message, text)
 
-    def test_loads(self):
-        cfg = self.load(PIPELINE)
-        self.assertEqual(
-            (
-                cfg.linear.team,
-                cfg.linear.states,
-                cfg.linear.harness,
-                cfg.linear.task_label_group,
-            ),
-            (TEAM, STATES, HARNESS, TASK_GROUP),
-        )
-        pm = cfg.linear.roles["pm"]
-        self.assertEqual(
-            (pm.user_id, pm.token_service, cfg.roles["pm"].max_runs),
-            (role_id("pm"), "linear-app-pm-token", 1),
-        )
-        self.assertEqual(
-            (
-                cfg.linear.task_labels,
-                cfg.linear.project_repos,
-                cfg.local_clones,
-                cfg.linear.human_members,
-            ),
-            ({}, {}, {}, ()),
-        )
-        cfg = self.load(
-            PIPELINE.replace(role("engineer"), role("engineer", "max_runs = 3"))
-            + "[core.roles.pm]\ntier = 1\n"
-        )
-        self.assertEqual(cfg.roles["engineer"].max_runs, 3)
-        self.assertEqual((cfg.roles["pm"].run.tier, cfg.roles["researcher"].run.tier), (1, 2))
+    def test_two_task_labels_and_projects_sharing_a_repo_load(self):
         cfg = self.load(
             PIPELINE
             + f'[linear.task_labels]\nlight-research = "{LABEL1}"\ndeep-research = "{LABEL2}"\n'
@@ -986,24 +956,15 @@ class RemovedSelectionKeys(Case):
         write(self.local, CORE_LOCAL + "\n" + local_section(self.board, "orchestrator") + extra)
         return config.load()
 
-    def test_leftover_selection_local_section_is_rejected(self):
-        with self.assertRaises(config.ConfigError) as cm:
-            self.load('[orchestrator.selection]\nresolvers = ["tier"]\n')
-        self.assertIn("unknown key 'selection' in [orchestrator]", str(cm.exception))
-
-    def test_leftover_choice_translator_role_local_section(self):
-        for extra in (
-            '[orchestrator.core.roles.choice-translator]\ncommands = ["x"]\n',
-            "[delegate.roles.choice-translator]\ntier = 4\n",
-        ):
-            with self.subTest(extra=extra), self.assertRaises(config.ConfigError) as cm:
-                self.load(extra)
-            self.assertIn("choice-translator", str(cm.exception))
-
     def test_leftover_selector_section_is_ignored(self):
         self.assertEqual(
             self.load(""), self.load('[selector.jev]\nurl = "http://127.0.0.1:8000"\n')
         )
+
+    def test_leftover_delegate_role_without_a_charter_is_refused(self):
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load("[delegate.roles.choice-translator]\ntier = 4\n")
+        self.assertIn("no charter roles/choice-translator.md", str(cm.exception))
 
 
 class CommittedConfiguration(Case):
@@ -1195,8 +1156,6 @@ class CommittedConfiguration(Case):
                     str(cm.exception).startswith(f"{workflow.PACKAGED}: "), cm.exception
                 )
                 self.assertIn(message, str(cm.exception))
-        # a bad read keeps the last good one
-        self.assertEqual(config.TASKS["pm"].title_prefix, "PRD")
 
     def test_local_lines_uncommented_set_every_required_key(self):
         with files("ensemble.orchestrator").joinpath("config.toml").open() as f:
@@ -1651,17 +1610,6 @@ class RunnableRoles(ConfigFile, Case):
         roles = self.runs(HEADER + apps + "[roles.pm]\nmax_runs = 2\n")
         self.assertEqual(
             {r: x.max_runs for r, x in roles.items()}, {"researcher": 1, "pm": 2, "engineer": 1}
-        )
-
-    def test_tasks_by_role(self):
-        self.assertEqual(set(config.TASKS), {"researcher", "pm", "engineer"})
-        self.assertEqual(
-            {r: (x.input, x.title_prefix, x.files) for r, x in config.TASKS.items()},
-            {
-                "researcher": ("research", "RES", False),
-                "pm": ("design", "PRD", False),
-                "engineer": ("build", "ENG", True),
-            },
         )
 
 

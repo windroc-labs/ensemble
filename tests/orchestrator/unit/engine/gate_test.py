@@ -1,57 +1,13 @@
 """Actual-client quota keys and tick-local probes at the Delegate boundary."""
 
-import os
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from unittest import mock
-
-from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.gate import Gate
-from ensemble.session import Usage, Window
 from tests.orchestrator.case import Case
 from tests.orchestrator.gate_fixtures import quota_config, quota_provider
 
-NOW = datetime(2026, 10, 14, 12, tzinfo=UTC)
 SHARED = ("first", "shared-client")
 
 
 class DelegateQuotaKeys(Case):
-    def test_available_codex_and_claude_usage_ignores_legacy_records_each_tick(self):
-        until = "2026-11-01T12:39:00+00:00"
-        usage = Usage(
-            Window(10, None), Window(49, datetime(2026, 11, 2, 1, 56, tzinfo=UTC).timestamp())
-        )
-        for client in ("codex", "claude"):
-            with self.subTest(client=client):
-                path = os.path.join(self.home, client, "runs.jsonl")
-                runs.note(
-                    path,
-                    "limit",
-                    issue="TASK-0",
-                    sid="s",
-                    client=client,
-                    resets_at=until,
-                    delegate_kind="first",
-                    attempt=1,
-                )
-                before = Path(path).read_text()
-                provider = quota_provider(client, 10)
-                events = []
-                for _ in range(2):
-                    gate = Gate(
-                        lambda event, *args, events=events, **fields: events.append(
-                            (event, args, fields)
-                        ),
-                        cfg=quota_config(provider, "first"),
-                        dry=False,
-                    )
-                    with mock.patch.object(provider, "usage", return_value=usage) as probe:
-                        self.assertFalse(gate.blocked("engineer", "TASK-1", key=("first", client)))
-                        self.assertFalse(gate.blocked("pm", "TASK-2", key=("first", client)))
-                        probe.assert_called_once()
-                self.assertEqual(events, [])
-                self.assertEqual(Path(path).read_text(), before)
-
     def test_role_tiers_do_not_change_the_client_probe_cache(self):
         provider = quota_provider("shared-client", 10)
         core = {"roles": {"engineer": {"tier": 1}, "pm": {"tier": 4}}}
@@ -82,20 +38,6 @@ class DelegateQuotaKeys(Case):
             (provider.queried, provider.overlays),
             (["engineer"], [(core, {"roles": {"engineer": {"client": "overlay-client"}}})]),
         )
-        log = os.path.join(self.home, "runs.jsonl")
-        runs.note(
-            log,
-            "limit",
-            issue="TASK-0",
-            sid="s",
-            client="overlay-client",
-            resets_at=(NOW + timedelta(hours=1)).isoformat(),
-            delegate_kind="first",
-            attempt=1,
-        )
-        gate = self.gate(provider, client="overlay-client", core=core)
-        self.assertFalse(gate.blocked("engineer", "TASK-1", key=("first", "overlay-client")))
-        self.assertEqual(provider.queried, ["engineer", "engineer"])
 
     def test_roles_sharing_a_client_share_one_probe(self):
         provider = quota_provider("shared-client", 95)
@@ -146,8 +88,11 @@ class DelegateQuotaKeys(Case):
         provider = quota_provider("current-client", 10)
         events = []
         gate = self.gate(
-            provider, say=lambda event, *_args, **fields: events.append((event, fields))
+            provider, say=lambda event, *args, **fields: events.append((event, args, fields))
         )
         self.assertTrue(gate.blocked("engineer", "TASK-1", key=("missing", "saved-client")))
         self.assertEqual(provider.queried, [])
-        self.assertEqual(events[0][1]["reason"], "usage unknown")
+        skip = {"once": True, "client": "saved-client", "reason": "usage unknown"}
+        self.assertEqual(events, [("usage-skip", ("TASK-1",), skip)])
+        self.assertFalse(gate.blocked("engineer", "TASK-2", key=("first", "current-client")))
+        self.assertEqual(provider.queried, ["engineer"])

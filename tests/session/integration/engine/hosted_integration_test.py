@@ -165,11 +165,6 @@ class SessionEnvTest(EnvBase):
 
 
 class ChecksTest(Base):
-    def test_the_spec_sid_is_the_sessions_new_or_resumed(self):
-        for resume in (False, True):
-            with self.subTest(resume=resume):
-                self.assertEqual(self.start(spec=self.spec(sid="s1"), resume=resume).sid, "s1")
-
     def test_headless_flags_and_env_reach_the_client_and_child(self):
         LAUNCHED.clear()
         spec = self.spec(flags=("--custom", "value"), env={"FAKE_ENV": "spec"})
@@ -183,26 +178,19 @@ class ChecksTest(Base):
 
 
 class SidTest(Base):
-    def test_resume_continues_that_session(self):
-        session, argv = self.run_once(sid="r1", resume=True)
-        self.assertEqual(session.sid, "r1")
-        self.assertIn("--resume", argv)
-        self.assertEqual(argv[argv.index("--sid") + 1], "r1")
-        self.assertEqual(self.written()[0]["sid"], "r1")
-
-    def test_sid_names_a_new_session_and_reaches_launch(self):
-        session, argv = self.run_once(sid="s1")
-        self.assertEqual((session.sid, session.info().sid), ("s1", "s1"))
-        self.assertNotIn("--resume", argv)
-        self.assertEqual(argv[argv.index("--sid") + 1], "s1")
-        self.assertEqual(self.written()[0]["sid"], "s1")
-
-    def test_neither_picks_a_uuid4(self):
-        session, argv = self.run_once()
-        self.assertEqual(uuid.UUID(session.sid).version, 4)
-        self.assertEqual(str(uuid.UUID(session.sid)), session.sid)
-        self.assertEqual(argv[argv.index("--sid") + 1], session.sid)
-        self.assertEqual(self.written()[0]["sid"], session.sid)
+    def test_sid_names_a_new_or_resumed_session_and_reaches_launch_neither_picks_a_uuid4(self):
+        for kwargs in ({"sid": "r1", "resume": True}, {"sid": "s1"}, {}):
+            with self.subTest(**kwargs):
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(self.log)
+                session, argv = self.run_once(**kwargs)
+                sid = kwargs.get("sid", session.sid)
+                self.assertEqual((session.sid, session.info().sid), (sid, sid))
+                self.assertEqual("--resume" in argv, kwargs.get("resume", False))
+                self.assertEqual(argv[argv.index("--sid") + 1], sid)
+                self.assertEqual(self.written()[-1]["sid"], sid)
+        self.assertEqual(uuid.UUID(sid).version, 4)
+        self.assertEqual(str(uuid.UUID(sid)), sid)
 
 
 class ClientNoteTest(Base):

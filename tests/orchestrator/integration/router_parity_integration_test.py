@@ -39,7 +39,7 @@ DONE = block(
         "updraft": UPDRAFT,
     }
 )
-# a hang answer's delay: the first router holds the lock that long
+# a hang answer's longest delay (2 * HOLD where the test releases it): a router's lock hold
 HOLD = 10
 MYSTERY = "00000000-0000-4000-8000-000000000031"
 
@@ -78,51 +78,34 @@ class Lock(Parity):
         self.seed(ID, "ENG: Session registry")
 
     def hold(self):
-        self.fake.fail("linear.Q_TEAM", "hang", seconds=HOLD)
+        self.fake.fail("linear.Q_TEAM", "hang", seconds=2 * HOLD)
         self.scene([START, DONE], usage=usage(0.5))
         first = self.start("router")
         live_tmux.wait(self.requests, TIMEOUT, "the first router's team query")
         return first
 
-    def assert_skipped(self, first, said):
-        self.assertIsNone(first.poll(), "the first router ended before the second ran")
-        self.assertEqual(self.said(), [said])
-        self.assertEqual([r.op for r in self.requests()], ["linear.Q_TEAM"])
-        self.assertEqual(agent_calls(self.calls()), [])
-        out, err = first.communicate(timeout=TIMEOUT)
-        self.assertEqual((first.returncode, out, err), (0, "", ""))
-        [row] = self.runs()
-        self.assertEqual((row["kind"], row["issue"]), ("start", ID))
-        self.wait_end(row["sid"], ID)
-        self.assertEqual(self.state(ID), "in_review")
-        self.assertEqual(self.said().count(said), 1)
-
-    def test_a_tick_while_another_router_holds_the_lock_logs_one_skip_and_does_nothing(self):
-        """v1 CLAUDE.md › Architecture: one router at a time."""
-        first = self.hold()
+    def test_a_held_lock_skips_a_tick_once_and_an_issue_run_waits_then_starts(self):
+        """One router at a time: a tick skips; `--issue` waits (up to WAIT s), then starts."""
+        self.seed(OTHER, "ENG: Session index")
+        first, skip = self.hold(), f"router skip reason={BUSY}"
         res = self.router()
         self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
-        self.assert_skipped(first, f"router skip reason={BUSY}")
-
-    def test_an_issue_run_while_another_router_holds_the_lock_waits_then_starts(self):
-        """`--issue` takes the router lock too; held → it waits (up to WAIT s), then starts."""
-        self.seed(OTHER, "ENG: Session index")
-        first = self.hold()
-        res = self.router("--issue", OTHER)
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn(f"router.py: {BUSY}; waiting up to {WAIT} s\n", res.stderr)
-        self.assertNotIn(f"reason={BUSY}", "\n".join(self.said()))
+        self.assertIsNone(first.poll(), "the first router ended before the second ran")
+        self.assertEqual(self.said(), [skip])
+        self.assertEqual([r.op for r in self.requests()], ["linear.Q_TEAM"])
+        self.assertEqual(agent_calls(self.calls()), [])
+        second = self.start("router", "--issue", OTHER)
+        waiting = f"router.py: {BUSY}; waiting up to {WAIT} s\n"
+        self.assertEqual(next((x for x in second.stderr if x == waiting), None), waiting)
+        self.fake.release()
         out, err = first.communicate(timeout=TIMEOUT)
         self.assertEqual((first.returncode, out, err), (0, "", ""))
-        rows = {row["issue"]: row for row in self.runs()}
-        self.assertEqual(
-            sorted((r["kind"], i) for i, r in rows.items()), [("start", ID), ("start", OTHER)]
-        )
-        for ident, row in rows.items():
-            self.wait_end(row["sid"], ident)
+        self.all_started([second], [ID, OTHER])
+        self.assertEqual(len(self.runs()), 2)
+        self.assertEqual([x for x in self.said() if f"reason={BUSY}" in x], [skip])
 
     def inside_start(self):
-        """ID's router, past its claim: its issue read answered 2 * HOLD s late."""
+        """ID's router, past its claim: its issue read answered on release (2 * HOLD s at most)."""
         self.fake.fail("issues.Q_ISSUE", "hang", seconds=2 * HOLD)
         self.scene([START, DONE], usage=usage(0.5))
         first = self.start("router", "--issue", ID)
@@ -166,6 +149,7 @@ class Lock(Parity):
         res = self.router("--issue", OTHER)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIsNone(first.poll(), "the first router ended before the second")
+        self.fake.release()
         self.all_started([first], [ID, OTHER])
 
     def test_a_second_run_of_the_same_issue_is_refused_while_the_first_starts(self):
@@ -176,6 +160,7 @@ class Lock(Parity):
             (2, "", f"router.py: {ID} is {STARTING}; try again\n"),
         )
         self.assertIsNone(first.poll(), "the first router ended before the second")
+        self.fake.release()
         self.all_started([first], [ID])
         self.assertIn(f"router skip {ID} reason={STARTING}", self.said())
 
@@ -194,7 +179,7 @@ class MaxRuns(Parity):
         self.seed(OTHER, "ENG: Session index", priority=3)
 
     def test_a_live_agent_run_on_tmux_holds_the_roles_only_slot(self):
-        """v1 CLAUDE.md › Architecture: a live run holds its max_runs slot."""
+        """A live run holds its max_runs slot."""
         gate = os.path.join(self.root, "gate")
         self.scene([START, DONE], gate=gate, usage=usage(0.5))
         self.tick()
@@ -254,7 +239,7 @@ class Recover(Parity):
         return sid
 
     def test_a_tick_resumes_an_interrupted_in_progress_run(self):
-        """v1 CLAUDE.md › Architecture: a tick Recovers before it claims."""
+        """A tick Recovers before it claims."""
         sid = self.interrupted()
         self.scene([START, DONE], usage=usage(0.5))
         self.tick()
@@ -274,7 +259,7 @@ class Recover(Parity):
         self.assertEqual(self.state(ID), "in_review")
 
     def test_a_logged_role_not_the_delegates_is_not_resumed_and_goes_to_in_review(self):
-        """v1 CLAUDE.md › Architecture: a changed delegate invalidates the saved role."""
+        """A changed delegate invalidates the saved role."""
         sid = self.interrupted()
         with self.fake.lock:
             self.fake.find(ID)["delegate"] = role_id("pm")
@@ -299,7 +284,7 @@ class Refusals(Parity):
         self.assertEqual(sessions.stdout.split(), [MANAGER], sessions.stderr)
 
     def test_a_new_run_whose_target_check_fails_is_bounced_and_starts_no_agent_run(self):
-        """v1 CLAUDE.md › Architecture: `target.check` Invalid → bounce, as the role's app."""
+        """`target.check` Invalid → bounce, as the role's app."""
         self.seed(ID, "ENG: Session registry")
         self.gh["repos"][REPO]["permissions"]["push"] = False
         self.write_gh()
