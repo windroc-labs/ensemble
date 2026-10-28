@@ -267,11 +267,25 @@ class Shipped(Packaged):
             "The check could not run (the mini unreachable, the runbook broke midway, "
             "the `mini-op` skill missing) → `status: failed`",
             "The request is still unclear → `needs_input`",
-            "the runbook's source and path",
-            "its full text",
+            "The `done` deliverable is the report, per the Template.",
             "/run/ensemble/secrets/",
         ):
             self.assertIn(literal, steps)
+        self.assertNotIn("full text", steps)
+
+    def test_the_verify_report_template_is_one_table_with_a_column_per_round(self):
+        template = team_texts()["templates/verify-report.md"]
+        for text in (
+            "**Verdict:** <✅ | ❌ | ⚠️>",
+            "| Requirement | Check | R1 | Notes (latest non-✅ only) |",
+            "✅ pass, ❌ fail, ⚠️ partial, ⏭️ skipped",
+            "add the next round's column",
+            "Blocked / next:",
+        ):
+            self.assertIn(text, template)
+        checklist = item(composed("verifier", "verify")[0], "Checklist first")
+        self.assertIn("the Template's table", checklist)
+        self.assertNotIn("evidence", checklist)
 
     def test_every_plugin_the_team_calls_is_in_the_default_docker_whitelist(self):
         """Or, for a role whose packaged environment adds it, in that environment's plugins."""

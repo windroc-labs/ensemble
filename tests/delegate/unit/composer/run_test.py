@@ -791,7 +791,7 @@ class Real(RealConfig):
             run = resolve(role, task)
             self.assertEqual((run.task, run.language), (task, "French"))
 
-    def test_pm_engineer_and_researcher_runs(self):
+    def test_pm_engineer_researcher_and_verifier_runs(self):
         researcher = (
             (
                 "[Researcher rules](#researcher) > your task file's rules",
@@ -819,6 +819,13 @@ class Real(RealConfig):
             *(
                 ("researcher", task, *researcher)
                 for task in (None, "deep-research", "research", "light-research")
+            ),
+            (
+                "verifier",
+                "verify",
+                ("# Template: `templates/verify-report.md`",),
+                lambda run: run.templates,
+                ["verify-report"],
             ),
         ):
             with self.subTest(role=role, task=task):

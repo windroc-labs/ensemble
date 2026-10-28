@@ -147,6 +147,7 @@ type = "pull-request"
 
 # ── Verifier ────────────────────────────────────────────
 [roles.verifier]
+templates = ["verify-report"]
 
 # repo: required; "" → every verifier run is a configuration error
 [roles.verifier.output]

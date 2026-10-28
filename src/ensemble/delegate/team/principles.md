@@ -38,6 +38,7 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 - In the deliverable, name each principle that shaped a decision and the specific choice it changed; cite only files read this session.
 - Keep a comment only for a non-obvious reason the code cannot show. Assertions and log messages explain test or verification steps; omit phase-narrating comments.
 - **Diagrams and tables**: a flow of 3+ steps or with branches, a structure, a sequence or a timeline → a Mermaid diagram (`flowchart`, `sequenceDiagram` or `timeline` only; short node labels); a comparison of several items → a table; anything simpler → a list or `X → Y`, not prose. Right after a diagram, a caption saying only what it can't carry (sources, confidence, what an edge means, reading order), from facts already in that section, never restating its nodes; delete the text the diagram replaces. A research report: its Template's Body rule instead.
+- A verify report is its Template alone: no goal opening, principle citations, diagram or other section.
 - Reports and PRDs, headings and fixed labels included, are in {{language}}; a `<X, translated>` in a template or task is X in {{language}}. Ids (`FR-<n>`, `NFR-<n>`, `[n]`, `primary`, `secondary`, `code`, `high`, `medium`, `low`, `single-source`, `unverified`), proper nouns and acronyms stay English. A term's first mention adds one gloss, its {{language}} rendering (for an acronym, of its full name); none when the term is common in {{language}}, and none in a heading. Later mentions: just the English.
 
 ## Principle index
