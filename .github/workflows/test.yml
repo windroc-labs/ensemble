@@ -86,8 +86,8 @@ jobs:
       - name: Comment budget
         if: ${{ !cancelled() && matrix.group == 'style' }}
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-        run: python3 .github/comment_budget.py --base "$BASE_SHA"
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || github.event.before }}
+        run: python3 .github/comment_budget.py --base "$BASE_REF"
       - name: Ruff
         if: ${{ !cancelled() && matrix.group == 'style' }}
         run: |
