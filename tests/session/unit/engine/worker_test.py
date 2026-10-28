@@ -486,13 +486,17 @@ class EnvironmentTest(Base):
 
     def test_pre_upgrade_worker_json_loads_without_environment(self):
         data = json.loads(state().to_json())
-        for key in ("environment", "credentials", "environment_credentials"):
-            del data[key]
+        del data["environment"]
         found = WorkerState.from_json(data)
         self.assertIsNone(found.environment)
         self.assertIsNone(found.spec(prompt="", resume=True).environment)
-        self.assertIsNone(found.credentials)
-        self.assertIsNone(found.environment_credentials)
+
+    def test_worker_json_requires_both_credential_fields(self):
+        for key in ("credentials", "environment_credentials"):
+            data = json.loads(state().to_json())
+            del data[key]
+            with self.subTest(key=key), self.assertRaises(ConfigError):
+                WorkerState.from_json(data)
 
     def test_restart_while_held_raises_session_busy(self):
         self.worker(environment=ENVIRONMENT).start(prompt="", resume=False)

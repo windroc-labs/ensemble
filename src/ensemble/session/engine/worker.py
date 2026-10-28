@@ -150,14 +150,12 @@ class WorkerState:
         names = {"version", *(name for name in cls.__dataclass_fields__)}
         if (
             not isinstance(data, dict)
-            or not names - {"environment", "credentials", "environment_credentials"}
-            <= set(data)
-            <= names
+            or not names - {"environment"} <= set(data) <= names
             or data["version"] != VERSION
         ):
             raise ConfigError(
                 f"want version {VERSION} with exactly {', '.join(sorted(names))}"
-                " (environment, credentials and environment_credentials optional)"
+                " (environment optional)"
             )
         if not isinstance(data["flags"], list) or not isinstance(data["env"], dict):
             raise ConfigError("flags: want a list; env: want an object")
