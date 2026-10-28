@@ -84,6 +84,11 @@ LOCK = "writeback.lock"
 MAX_FILE = 1_000_000
 PLAN_MARK = "RESUME: phase="
 FOOTER = "Answer in a comment, then move this issue back to {state}."
+_IDS = rf"(?i:none)|{ISSUE_ID}(?:(?:\s*,\s*|\s+){ISSUE_ID})*"
+# a decompose summary's leading `Created <ids>; reused <ids>`; text after it is never posted
+DECOMPOSED = re.compile(
+    rf"\s*(?i:created)\s+({_IDS})\s*;\s*(?i:reused)\s+({_IDS})[ \t]*(?:$|[.;\n](?!\s*{ISSUE_ID}))"
+)
 LIMIT = "Usage limit,"
 # a failed attempt's own steps; a later valid outcome keeps the normal ones
 NO_OUTCOME = "no-outcome:"
@@ -357,6 +362,13 @@ def finish(ctx, outcome: Outcome, *, steps="", move=True) -> bool:
         return False
 
 
+def _decomposed(summary):
+    if not (found := DECOMPOSED.match(summary)):
+        return "no Created/reused identifiers in the run's summary"
+    created, reused = (", ".join(re.findall(ISSUE_ID, ids)) or "none" for ids in found.groups())
+    return f"Created {created}; reused {reused}"
+
+
 def _completion_body(ctx, o):
     task = workflow.for_task(TASKS, ctx.role, ctx.task)
     url = "" if task.input == "decompose" else _url(ctx, o.url)
@@ -365,7 +377,7 @@ def _completion_body(ctx, o):
     if o.status == OutcomeStatus.DONE:
         lead, text, state = (
             task.done,
-            o.summary,
+            _decomposed(o.summary) if task.input == "decompose" else o.summary,
             "done" if task.input == "decompose" else "in_review",
         )
         if task.input == "build" and text and not task.deliverable:

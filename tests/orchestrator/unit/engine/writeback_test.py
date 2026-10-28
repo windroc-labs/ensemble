@@ -434,9 +434,50 @@ class DecomposeCompletion(Base):
         ctx = replace(self.ctx(), task="decompose", tracker=port)
         return ctx, port
 
-    def test_done_posts_the_summary_alone_and_completes_source_before_decompose_once(self):
+    def test_done_comment_is_built_from_the_summarys_identifiers_alone(self):
+        ctx, _ = self.prepared()
+        unreadable = "no Created/reused identifiers in the run's summary"
+        for summary, text in (
+            ("Created AGE-52, AGE-53; reused none", "Created AGE-52, AGE-53; reused none"),
+            ("Created none; reused AGE-40", "Created none; reused AGE-40"),
+            (
+                "created AGE-52 ,AGE-53 ;  Reused AGE-40,AGE-41",
+                "Created AGE-52, AGE-53; reused AGE-40, AGE-41",
+            ),
+            (
+                "Created AGE-52; reused AGE-40. The old edge from AGE-49 to AGE-38 stays.",
+                "Created AGE-52; reused AGE-40",
+            ),
+            (
+                "Created AGE-52; reused none\nNote: AGE-49 keeps its old edge.",
+                "Created AGE-52; reused none",
+            ),
+            ("Created AGE-52; reused AGE-40. AGE-49 keeps its old edge.", unreadable),
+            ("Created AGE-52; reused none\nAGE-49: the old edge stays.", unreadable),
+            ("Created AGE-52; reused AGE-40; AGE-41", unreadable),
+            ("Created AGE-52; reused AGE-40;AGE-41, AGE-42", unreadable),
+            ("Created AGE-52; reused AGE-40. AGE-41", unreadable),
+            (
+                "Created AGE-52 AGE-53; reused AGE-40 AGE-41",
+                "Created AGE-52, AGE-53; reused AGE-40, AGE-41",
+            ),
+            ("Created NONE; reused None", "Created none; reused none"),
+            ("ENG-8", unreadable),
+            ("Created AGE-52 and AGE-53; reused none", unreadable),
+            ("Created AGE-52; reused AGE-40 and AGE-41", unreadable),
+            ("Created AGE-52; reused AGE-40/AGE-41", unreadable),
+            ("Created AGE-52; reused none, AGE-40", unreadable),
+            ("", unreadable),
+        ):
+            with self.subTest(summary=summary):
+                done = Outcome(status="done", title="Queues", summary=summary, url=PR)
+                self.assertEqual(
+                    writeback._completion_body(ctx, done), (f"Decompose done: {text}", "done", "")
+                )
+
+    def test_done_posts_the_identifiers_alone_and_completes_source_before_decompose_once(self):
         ctx, port = self.prepared()
-        done = Outcome(status="done", title="Queues", summary="Created ENG-8", url=PR)
+        done = Outcome(status="done", title="Queues", summary="Created ENG-8; reused none", url=PR)
         self.assertTrue(writeback.finish(ctx, done))
         self.assertEqual(
             port.move.call_args_list,
@@ -448,7 +489,7 @@ class DecomposeCompletion(Base):
         self.assertFalse(os.path.exists(os.path.join(ctx.workdir, "run", "out.md")))
         self.assertEqual(
             port.comment.call_args_list,
-            [mock.call(UUID, "Decompose done: Created ENG-8", (SID, "comment"))],
+            [mock.call(UUID, "Decompose done: Created ENG-8; reused none", (SID, "comment"))],
         )
         port.link.assert_not_called()
         self.assertTrue(writeback.finish(ctx, done))
@@ -811,7 +852,7 @@ class WritebackContext(run_fixtures.Base):
             issue=ID, uuid=UUID, sid=SID, mode="new", project=PROJECT, task="decompose"
         )
         ctx = writeback.for_run(cfg, "engineer", spec, writers)
-        done = Outcome(status="done", title="Queues", summary="ENG-8")
+        done = Outcome(status="done", title="Queues", summary="Created ENG-8; reused none")
         self.assertFalse(writeback.finish(ctx, done))
         self.assertTrue(writeback.finish(ctx, done))
         moves = [(v["i"], v["s"]) for name, v in gql.calls if name == "state"]
@@ -819,7 +860,8 @@ class WritebackContext(run_fixtures.Base):
             moves, [(SRC_UUID, STATES["done"]), (UUID, STATES["done"]), (UUID, STATES["done"])]
         )
         self.assertEqual(
-            [v["b"] for name, v in gql.calls if name == "comment"], ["Decompose done: ENG-8"]
+            [v["b"] for name, v in gql.calls if name == "comment"],
+            ["Decompose done: Created ENG-8; reused none"],
         )
 
     def test_context_resolves_the_output_host_and_github_blob_prefix(self):
@@ -2070,9 +2112,11 @@ class ForClaim(RunCase):
         ctx = writeback.for_claim(self.cfg, replace(CLAIM, task="decompose"), WRITERS, attempt=2)
         self.assertEqual(ctx.task, "decompose")
         body, state, url = writeback._completion_body(
-            ctx, Outcome(status="done", title="Queue", summary="ENG-8")
+            ctx, Outcome(status="done", title="Queue", summary="Created ENG-8; reused none")
         )
-        self.assertEqual((body, state, url), ("Decompose done: ENG-8", "done", ""))
+        self.assertEqual(
+            (body, state, url), ("Decompose done: Created ENG-8; reused none", "done", "")
+        )
 
     def test_writes_as_the_writers_it_is_given(self):
         ctx = writeback.for_claim(self.cfg, CLAIM, WRITERS, attempt=1)
