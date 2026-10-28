@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -278,11 +279,74 @@ func TestLinearRevocationRecordRetry(t *testing.T) {
 
 func TestLinearUndeclaredCloseDoesNotLock(t *testing.T) {
 	l, _, _, _ := linearRig(t)
-	l.lock = func(string) func() (func(), error) {
-		t.Fatal("undeclared Linear close acquired a lock")
-		return nil
+	base := l.lock
+	l.lock = func(id string, create bool) func() (func(), error) {
+		if create {
+			t.Fatal("undeclared Linear close creates a lock")
+		}
+		return func() (func(), error) {
+			unlock, err := base(id, create)()
+			if !os.IsNotExist(err) {
+				t.Fatal("undeclared Linear close took a lock")
+			}
+			return unlock, err
+		}
 	}
 	if err := l.Revoke(context.Background(), "undeclared"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLinearCloseWaitsForIssuance(t *testing.T) {
+	l, k, _, _ := linearRig(t)
+	a := linearApp("engineer")
+	enrollLinear(t, l, k, a)
+	entered, release, waiting := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	var revoked string
+	l.http.Transport = linearRoundTrip(func(r *http.Request) (*http.Response, error) {
+		body := `{}`
+		if strings.HasSuffix(r.URL.Path, "/token") {
+			close(entered)
+			<-release
+			body = `{"access_token":"ISSUING-TOKEN","expires_in":2592000}`
+		} else {
+			data, _ := io.ReadAll(r.Body)
+			values, _ := url.ParseQuery(string(data))
+			revoked = values.Get("token")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	base := l.lock
+	var calls int
+	l.lock = func(id string, create bool) func() (func(), error) {
+		calls++
+		if calls == 2 {
+			close(waiting)
+		}
+		return base(id, create)
+	}
+	issued, closed := make(chan error, 1), make(chan error, 1)
+	go func() {
+		commands, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "issuing")
+		for _, command := range commands {
+			command.Erase()
+		}
+		issued <- err
+	}()
+	<-entered
+	go func() { closed <- l.Revoke(context.Background(), "issuing") }()
+	select {
+	case <-waiting:
+	case err := <-closed:
+		t.Fatalf("close returned before issuance: %v", err)
+	}
+	releaseOnce.Do(func() { close(release) })
+	if err := <-issued; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closed; err != nil || revoked != "ISSUING-TOKEN" {
+		t.Fatalf("close missed issued token: %v", err)
 	}
 }

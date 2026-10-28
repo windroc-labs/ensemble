@@ -421,7 +421,7 @@ func withHost(command, container string, k keys, progress io.Writer, f func(laun
 		h.Linear = linear
 		h.Static = staticStore(home)
 		h.Progress = progress
-		h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"))
+		h.Lock = broker.FileLock(filepath.Join(home, ".ensemble/docker/images.lock"), true)
 		return f(h)
 	})
 }

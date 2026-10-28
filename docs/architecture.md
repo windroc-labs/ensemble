@@ -463,8 +463,8 @@ The existing maintenance tick renews it ten minutes before expiry, atomically re
 the old token. A failed write revokes the new token; a failed start revokes everything it issued. Before delivery,
 the broker records issued tokens through its existing broker-only Keychain store, at `ensemble-broker-linear` /
 `container/<container>`, separate from the host app record and outside the container and workspace. One per-container
-lock serializes issuance, renewal and close. Close of a container without a Linear record takes no Linear lock and
-creates no lock file. Close marks
+lock serializes issuance, renewal and close. Close of a container that never declared Linear takes no Linear lock and creates no lock file.
+For a declared container, close waits on its existing lock even while initial issuance has not yet saved a record. Close marks
 the record closed before revoking all recorded tokens, so it works after the guard/container stops and queued
 maintenance cannot issue another token. Records retain failed revocations for a repeated close and are deleted
 once all tokens are revoked or expired. Close removes the container even if revocation fails, returning a fixed

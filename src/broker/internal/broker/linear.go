@@ -150,7 +150,7 @@ type Linear struct {
 	keys     linearKeys
 	host     linearHost
 	http     *http.Client
-	lock     func(string) func() (func(), error)
+	lock     func(string, bool) func() (func(), error)
 	now      func() time.Time
 	password func() ([]byte, error)
 }
@@ -159,8 +159,8 @@ type Linear struct {
 func NewLinear(home string, k SystemKeychain, password func() ([]byte, error)) Linear {
 	return Linear{keys: k, host: linearHostEntries{home: home, run: runLinearSecurity, access: k.AppAccess},
 		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now, password: password,
-		lock: func(id string) func() (func(), error) {
-			return FileLock(filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(id)))))
+		lock: func(id string, create bool) func() (func(), error) {
+			return FileLock(filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(id)))), create)
 		}}
 }
 
@@ -190,7 +190,7 @@ func (l Linear) Enroll(a LinearIdentity) error {
 	if a.check() != nil {
 		return errLinear
 	}
-	unlock, err := l.lock("account/" + a.TokenService)()
+	unlock, err := l.lock("account/"+a.TokenService, true)()
 	if err != nil {
 		return errLinear
 	}
@@ -233,7 +233,7 @@ func (l Linear) Enroll(a LinearIdentity) error {
 
 // reserve is a short registry transaction. It never waits for another account, calls a provider or prompts.
 func (l Linear) reserve(a LinearIdentity) (linearAccount, error) {
-	unlock, err := l.lock("registry")()
+	unlock, err := l.lock("registry", true)()
 	if err != nil {
 		return linearAccount{}, errLinear
 	}
@@ -296,7 +296,7 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 	if a.check() != nil {
 		return LinearResult{}, errLinear
 	}
-	unlock, err := l.lock("account/" + a.TokenService)()
+	unlock, err := l.lock("account/"+a.TokenService, true)()
 	if err != nil {
 		return LinearResult{}, errLinear
 	}
@@ -319,7 +319,7 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 		return LinearResult{}, errLinear
 	}
 	p := &linearProvider{owner: l, account: &account}
-	lifecycle := credential.Lifecycle{Provider: p, Store: linearStore{l.keys}, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/" + a.TokenService), Audit: l.Audit}
+	lifecycle := credential.Lifecycle{Provider: p, Store: linearStore{l.keys}, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/"+a.TokenService, true), Audit: l.Audit}
 	d := credential.Delivery{Consumer: credential.Consumer{Host: a.TokenService}, Publish: func(m credential.Material) error {
 		value, _ := json.Marshal(linearAccess{AccessToken: m.Token, ExpiresAt: m.ExpiresAt})
 		defer erase(value)

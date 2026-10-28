@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -127,7 +128,7 @@ func (l Linear) retireContainer(ctx context.Context, c string, record *linearCon
 }
 
 func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string) ([]credential.Command, func(), string, error) {
-	unlock, err := l.lock("container/" + c)()
+	unlock, err := l.lock("container/"+c, true)()
 	if err != nil {
 		return nil, nil, "", errLinear
 	}
@@ -154,7 +155,7 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 }
 
 func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c string, exec func([]string, []byte) error) (string, error) {
-	unlock, err := l.lock("container/" + c)()
+	unlock, err := l.lock("container/"+c, true)()
 	if err != nil {
 		return "", errLinear
 	}
@@ -192,17 +193,16 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 // Revoke survives a stopped or absent container. Closed is durable before revocation,
 // so maintenance queued behind close cannot issue or deliver another token.
 func (l Linear) Revoke(ctx context.Context, c string) error {
-	var record linearContainerRecord
-	if err := l.read("container/"+c, &record); errors.Is(err, ErrNotFound) {
+	// An existing lock also covers issuance still waiting for its first token.
+	unlock, err := l.lock("container/"+c, false)()
+	if os.IsNotExist(err) {
 		return nil
-	} else if err != nil {
-		return errLinear
 	}
-	unlock, err := l.lock("container/" + c)()
 	if err != nil {
 		return errLinear
 	}
 	defer unlock()
+	var record linearContainerRecord
 	if err := l.read("container/"+c, &record); errors.Is(err, ErrNotFound) {
 		return nil
 	} else if err != nil {

@@ -88,13 +88,17 @@ type GitHub struct {
 	Audit    *audit.Recorder
 }
 
-// FileLock is an exclusive flock on path, created 0600 in a 0700 directory.
-func FileLock(path string) func() (func(), error) {
+// FileLock is an exclusive flock on path; create adds a missing 0600 file in a 0700 directory.
+func FileLock(path string, create bool) func() (func(), error) {
 	return func() (func(), error) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return nil, err
+		flags := os.O_RDWR
+		if create {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return nil, err
+			}
+			flags |= os.O_CREATE
 		}
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		f, err := os.OpenFile(path, flags, 0o600)
 		if err != nil {
 			return nil, err
 		}
