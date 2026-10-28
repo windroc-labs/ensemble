@@ -787,18 +787,21 @@ def _credential_table(cfg, role, table, where, *, default=False):
             scopes = "read" if out["linear"] == "read" else SCOPES[AppKind.ROLE]
             app_role = "reader" if scopes == "read" else role
             app = linear["reader"] if scopes == "read" else linear["roles"][role]
-            out["linear"] = {
-                "scopes": scopes,
-                "app": {"role": app_role, **{k.value: app.get(k, "") for k in AppKey}},
-                "board": {
-                    **{k: linear[k] for k in ("team", "states", "project_repos")},
-                    "human_members": linear.get("human_members", []),
-                    "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
-                    "task_label_group": linear["task_label_group"],
-                    "agent_label_group": linear["agent_label_group"],
-                    "role_users": {name: app["user_id"] for name, app in linear["roles"].items()},
-                },
-            }
+            if scopes != "read" or all(app.get(k) for k in AppKey):
+                out["linear"] = {
+                    "scopes": scopes,
+                    "app": {"role": app_role, **{k.value: app[k] for k in AppKey}},
+                    "board": {
+                        **{k: linear[k] for k in ("team", "states", "project_repos")},
+                        "human_members": linear.get("human_members", []),
+                        "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
+                        "task_label_group": linear["task_label_group"],
+                        "agent_label_group": linear["agent_label_group"],
+                        "role_users": {
+                            name: app["user_id"] for name, app in linear["roles"].items()
+                        },
+                    },
+                }
     try:
         json.dumps(out, allow_nan=False)
     except (TypeError, ValueError):
@@ -812,13 +815,7 @@ def credentials(cfg: Config, role, task: str | None) -> dict:
     """A fresh spec: task values replace whole same-kind role values."""
     settings = cfg.roles[role]
     result = utils.thaw({**settings.credentials, **settings.task_credentials.get(task or "", {})})
-    grant = result.get("linear")
-    if (
-        isinstance(grant, dict)
-        and grant.get("scopes") == "read"
-        and cfg.linear
-        and cfg.linear.reader is None
-    ):
+    if result.get("linear") == "read":
         raise ConfigError(
             "Worker issue reads require a distinct [orchestrator.linear.reader] app; configure client_id, secret_service, token_service and user_id, then enroll it with ensemble-broker login linear on the host."
         )

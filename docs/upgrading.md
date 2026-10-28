@@ -353,7 +353,7 @@ Copy the identity's six public values from its config table into a local `linear
 }
 ```
 
-`kind` is `harness`, `manager` or `role` (verifier included). The name and services are 1–128 ASCII letters, digits
+`kind` is `harness`, `manager`, `reader` (fixed `read` scope) or `role` (verifier included). The name and services are 1–128 ASCII letters, digits
 or `._@+-`, not `.` or `..`; the client ID 1–256 printable ASCII characters without whitespace; the user ID a lowercase
 UUID. The secret and token services differ and are no broker service; enrollment rejects an alias of another identity
 before changing access. Enroll it:
@@ -365,7 +365,7 @@ before changing access. Enroll it:
 It may ask the login Keychain password on the terminal, then open a macOS SecurityAgent dialog to change the client
 secret item's access: enter the login Keychain password and click **Allow**. It records a pending binding before
 changing access, so after a failure rerun the same enrollment.
-Then set `renewal = "broker"` in its `[orchestrator.linear.harness]`, `[orchestrator.linear.manager]` or
+Then set `renewal = "broker"` in its `[orchestrator.linear.harness]`, `[orchestrator.linear.manager]`, `[orchestrator.linear.reader]` or
 `[orchestrator.linear.roles.<role>]` table in `~/.ensemble/config.local.toml` and, callers still stopped, run
 `/usr/local/libexec/ensemble/ensemble-broker linear-maintain < linear-identity.json`; success contains version 1,
 `renewed` and `expires_at`, never a token. Then restart callers. Repeat for the next identity, including verifier when configured. An unconfigured

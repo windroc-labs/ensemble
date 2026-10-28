@@ -226,6 +226,14 @@ def prepare(config, slot, service, secret_service, output):
         or any(c.isspace() for c in client_id)
     ):
         raise InstallError("invalid OAuth Client ID")
+    planned = json.loads(Path(output).read_text())
+    data = tomllib.loads(Path(config).read_text()) if Path(config).exists() else {}
+    linear = data.get("orchestrator", {}).get("linear", {})
+    configured = {name: linear.get(name, {}) for name in SCOPES}
+    configured.update(linear.get("roles", {}))
+    for other, old in (*configured.items(), *planned.items()):
+        if other != slot and old.get("client_id") == client_id:
+            raise InstallError(f"the apps for {other} and {slot} are the same Linear app")
     configured_id = settings.get("user_id")
     if configured_id and (not isinstance(configured_id, str) or not UUID.fullmatch(configured_id)):
         raise InstallError("invalid configured app user_id")
@@ -249,7 +257,6 @@ def prepare(config, slot, service, secret_service, output):
     ident = viewer(token) if renewed or not configured_id else configured_id
     if configured_id and ident != configured_id:
         raise InstallError("configured user_id differs from app viewer id")
-    planned = json.loads(Path(output).read_text())
     for other, old in planned.items():
         if other != slot and (old["user_id"] == ident or old.get("client_id") == client_id):
             raise InstallError(f"the apps for {other} and {slot} are the same Linear app")

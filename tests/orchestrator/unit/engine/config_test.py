@@ -1625,6 +1625,25 @@ class TuiSessionNames(Case):
 
 
 class CredentialDeclarations(ConfigFile, Case):
+    def test_explicit_read_reference_does_not_require_the_shorthand_reader_table(self):
+        grant = config.credentials(self.load(PIPELINE), "engineer", None)["linear"]
+
+        def inline(value):
+            if isinstance(value, dict):
+                return (
+                    "{ "
+                    + ", ".join(json.dumps(k) + " = " + inline(v) for k, v in value.items())
+                    + " }"
+                )
+            return json.dumps(value)
+
+        text = "\n".join(
+            line for line in PIPELINE.splitlines() if not line.startswith("linear.reader")
+        )
+        cfg = self.load(text + "\n[roles.engineer.credentials]\nlinear = " + inline(grant) + "\n")
+        self.assertIsNone(cfg.linear.reader)
+        self.assertEqual(config.credentials(cfg, "engineer", None), {"linear": grant})
+
     def test_reader_missing_refuses_launch_credentials_but_host_config_loads(self):
         text = (
             "\n".join(
