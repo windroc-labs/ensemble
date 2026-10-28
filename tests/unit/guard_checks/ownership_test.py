@@ -213,7 +213,7 @@ class Standalone(Sample):
                 f"{PKG}/manager/z.py": "# ensemble/orchestrator/cli.py\n",
                 f"{PKG}/__pycache__/x.pyc": "ensemble.orchestrator",
                 "skills/a/notes": (
-                    "the orchestrator's overlay, an `orchestrator` destination, sub_orchestrator/\n"
+                    "the orchestrator's overlay, the `orchestrator` layer, sub_orchestrator/\n"
                 ),
                 "tests/session/a_test.py": "import ensemble.orchestrator\n",
                 "orchestrator/b.py": "import ensemble.orchestrator\n",

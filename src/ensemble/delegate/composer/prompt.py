@@ -3,7 +3,7 @@
 
 Guide and principles get {{role}}, its anchor, {{task}} (the named task and its file; none → the
 guide's default text) and {{language}} (unset → each line holding it is dropped); a destination gets
-{{deliverable}}, <Workdir>/<its path in the workdir>. Only a `local` or `orchestrator` destination
+{{deliverable}}, <Workdir>/<its path in the workdir>. Only a `local` destination
 returns the deliverable in the outcome: any other publishes it, and its prompt names neither outcome
 field; on Docker, where the harness cannot read the agent's files, a returning one is INLINE and no
 text names `deliverable_file`. Every other run value is a PARAMETERS name,
@@ -37,7 +37,7 @@ from ensemble.delegate.composer.base import (
 )
 from ensemble.delegate.composer.types import ConfigError, RunConfig, RunParams, Team
 from ensemble.delegate.event import OUTCOME, PROGRESS
-from ensemble.delegate.event.outcome import DEFAULT_HOST, SAVES_DELIVERABLE
+from ensemble.delegate.event.outcome import DEFAULT_HOST
 from ensemble.utils import unfenced
 
 RESUME = (
@@ -106,7 +106,7 @@ def render(run: RunConfig, params: RunParams, *, team: Team | None = None) -> st
     destination = fill(
         read_text(os.path.join(output, dest)), {"deliverable": f"<Workdir>/{inside}"}, dest
     )
-    if run.output["type"] not in SAVES_DELIVERABLE:
+    if run.output["type"] != "local":
         rules = _without(rules, "`deliverable`")
     elif params.docker:
         rules, destination = _without(rules, "`deliverable_file`"), INLINE

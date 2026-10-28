@@ -515,7 +515,7 @@ The orchestrator runs the core from a board, chosen by `[orchestrator] tracker`:
 
 By hand (macOS; the orchestrator runs this checkout's scripts; `<work_dir>` is `orchestrator.work_dir`):
 
-1. Create `~/.ensemble/config.local.toml` from the `# local:` lines of each packaged `config.toml`, each under its layer's section, researcher's and pm's `[output]` included. With `tracker = "linear"`, a required `[orchestrator.linear]` key left `""` stops every `ensemble-orchestrator` command:
+1. Create `~/.ensemble/config.local.toml` from the `# local:` lines of each packaged `config.toml`, each under its layer's section, researcher's, pm's and verifier's `[output]` included. With `tracker = "linear"`, a required `[orchestrator.linear]` key left `""` stops every `ensemble-orchestrator` command:
 
    ```toml
    [orchestrator]                         # the tracker
@@ -828,7 +828,7 @@ typos --config pyproject.toml
 
 `.github/comment_budget.py` judges each `.py` file changed since its merge-base with `--base` (default `origin/main`; CI: the PR's base, else the previous base commit): its comments and docstrings may reach 10% of its code (5% under `tests/` or in `*_test.py`) plus 300 characters.
 
-`.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local` host names and literal keychain item names under `.mini-op/` (and, on a PR changing it, in the PR's title, body and commits); its findings never print the matched text.
+`.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local` host names and literal keychain item names under `.mini-op/`; with `--pr-text`, on a PR changing `.mini-op/`, it scans the PR's title, body and commits instead (workflow `mini-op PR text`, which a title or body edit reruns alone). Its findings never print the matched text.
 
 Pre-commit hook, once per clone: `git config core.hooksPath .githooks`. `.githooks/pre-commit` runs `ruff check --fix` and `ruff format` on each staged `.py` file at CI's `ruff==` pin and re-stages it. Docker Host checkouts run it (the worker image sets `core.hooksPath`).
 
@@ -843,7 +843,7 @@ Pre-commit hook, once per clone: `git config core.hooksPath .githooks`. `.githoo
 | Docker protocol fixtures (needs `jsonschema==4.26.0`) | `python3 .github/run_tests.py Protocol tests/unit/docker_broker_protocol_test.py` |
 | Go broker, in `src/broker/` | `sh with-go-state.sh gofmt -l .`, `… go vet ./...`, `… go test ./...`, `… go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...` |
 
-Run tests only through these supervised, sandboxed entries. Unit tests are pure logic with fakes: no processes, no sockets, writes only in the runner's temp dir. Integration tests run real tools in `tests/utils/sandbox.py`, tmux only on `tests/session/live_tmux.py` servers. A harness outlives the start that made it: `tests/session/harnesses.py`'s `end(home)` closes the harnesses under a HOME before cleanup; a session class with injected fakes, which `_spawn` refuses, runs its harness on a test thread (`Threaded` there). Broker tests use fake credentials, never the real keychain.
+Run tests only through these supervised, sandboxed entries. Unit tests are pure logic with fakes: no processes, no sockets, writes only in the runner's temp dir. Integration tests run real tools in `tests/utils/sandbox.py`, tmux only on `tests/session/live_tmux.py` servers. A harness outlives the start that made it: `tests/session/harnesses.py`'s `end(home)` closes the harnesses under a HOME before cleanup, and `tests/delegate/drives.py`'s `end(root)` the detached drives under a temp root; a session class with injected fakes, which `_spawn` refuses, runs its harness on a test thread (`Threaded` there). Broker tests use fake credentials, never the real keychain.
 
 A PR's added and changed `*/src` lines need unit coverage of at least `THRESHOLD` in `.github/coverage_gate.py` (CI job `Coverage`):
 
@@ -863,7 +863,7 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 | PR changing only the release `version` of the plugin manifests and `package.json` | skipped; every lint runs | skipped |
 | anything else, a push to `main` or `merge_group` | all layers | run |
 
-The required `CI` aggregate accepts only the skips its scope allows. `Broker ubuntu-24.04` runs the Go checks for full scope; the `Broker macOS` and `Installer macOS` workflows run apart and never block `CI`. `Worker image` (`.github/workflows/worker-image.yml`) builds the real image when a PR changes an image input.
+The required `CI` aggregate accepts only the skips its scope allows. A PR title or body edit (`edited` without a base change) runs no job: `test.yml`'s `if:`s skip them all and its gate reports as `CI skipped on a PR text edit`, so the code run's `CI` stands while `mini-op PR text` rescans the PR text. `Broker ubuntu-24.04` runs the Go checks for full scope; the `Broker macOS` and `Installer macOS` workflows run apart and never block `CI`. `Worker image` (`.github/workflows/worker-image.yml`) builds the real image when a PR changes an image input.
 
 To regenerate the integration timing table, let a PR's whole `CI` workflow finish (rerun it for more samples), then per attempt, each into its own empty directory:
 

@@ -1,0 +1,43 @@
+name: mini-op PR text
+
+# Apart from CI (test.yml), so a PR title or body edit reruns only this scan. Skipped on queue
+# groups, which have no PR text; a skipped required check passes.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  pr-text:
+    name: mini-op PR text
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Scan the PR title, body and commits
+        run: python3 .github/mini_op_guard.py --pr-text
+      - name: Require unchanged checkout
+        if: ${{ always() }}
+        run: |
+          status=$(git -c core.fsmonitor=false -c core.hooksPath=/dev/null status --porcelain)
+          if [[ -n "$status" ]]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi

@@ -549,11 +549,14 @@ class VerifierDockerTest(HarnessCase):
     """verifier on the packaged Docker Host, its broker faked: a missing mini-op:env or keychain
     item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network. Its
     session harness's start runs in this process (harnesses.Inline), so the faked broker answers.
+    Its github [output] needs the Docker Host's App (WDRC-338).
     """
 
     def setUp(self):
         super().setUp()
         self.settings(default="docker")
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write('[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n')
         self.calls, self.programs, self.refusals = [], [], {}
         path = os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
         for patcher in (

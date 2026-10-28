@@ -39,6 +39,14 @@ def _socket_path(name: str) -> str:
     return os.path.join(os.environ["ENSEMBLE_FAKE_RUN"], f"{name}.sock")
 
 
+def _publish(path, text: str) -> None:
+    """path holding text whole once it exists."""
+    temporary = f"{path}.{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="utf-8") as stream:
+        stream.write(text)
+    os.replace(temporary, path)
+
+
 def info_path(name: str) -> str:
     return os.path.join(os.environ["ENSEMBLE_FAKE_RUN"], f"{name}.json")
 
@@ -90,7 +98,7 @@ def container(name: str) -> int:
                     attached.clear()
 
     threading.Thread(target=accept, daemon=True).start()
-    Path(info_path(name)).write_text(json.dumps({"container": os.getpid(), "guard": main.pid}))
+    _publish(info_path(name), json.dumps({"container": os.getpid(), "guard": main.pid}))
     while data := os.read(main.stdout.fileno(), 65536):
         with lock:
             for peer in attached:
@@ -204,7 +212,7 @@ def harness(directory: str, client: list[str]) -> None:
     _, found = start_container()
     proc = attach()
     worker(directory, proc, client)
-    Path(directory, "harness.json").write_text(json.dumps({**found, "docker": proc.pid}))
+    _publish(Path(directory, "harness.json"), json.dumps({**found, "docker": proc.pid}))
     while True:
         time.sleep(1)
 

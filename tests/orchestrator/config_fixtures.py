@@ -37,6 +37,9 @@ type = "github"
 repo = "windroc/team-docs"
 branch = "main"
 dir = "Product Design/"
+
+[delegate.roles.verifier.output]
+repo = "windroc/team-docs"
 """
 
 
