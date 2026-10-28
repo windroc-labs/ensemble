@@ -5,10 +5,8 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import tempfile
-import threading
-from contextlib import contextmanager, suppress
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
@@ -18,23 +16,14 @@ from ensemble.utils import ProcessControl, Record
 from tests.delegate import drives
 from tests.manager.case import PY, REPO, SRC, Case
 from tests.session import live_tmux
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.live_tmux import MANAGER, logged
 
-MANAGER = "mgr"
 OTHER = "mgr2"
 ROLE = "dummy-tester"
 TIMEOUT = 90
 CREW = (*PY, "-m", "ensemble.manager.cli")
 BIN = os.path.join(REPO, "bin")
 WRAP = ("sh", "-c", 'e=$1 g=$2; shift 2; "$@"; : > "$e"; until [ -e "$g" ]; do sleep 0.05; done')
-
-
-def logged(path: str) -> list[dict]:
-    try:
-        with open(path, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
-    except FileNotFoundError:
-        return []
 
 
 class Owner:
@@ -64,7 +53,10 @@ def has_pair(argv: list[str], flag: str, value: str) -> bool:
     return any(a == flag and b == value for a, b in zip(argv, argv[1:], strict=False))
 
 
-class LiveCrew(Case):
+class LiveCrew(live_tmux.Calls, Case):
+    WAIT = TIMEOUT
+    EVENT = "{count} x `{name} {word}`"
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         self.addCleanup(tmp.cleanup)
@@ -88,18 +80,8 @@ class LiveCrew(Case):
     def roster(self, manager: str = MANAGER) -> dict[str, Entry]:
         return Roster(os.path.dirname(self.events_of(manager))).entries()
 
-    def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
-        """A caller's env in `inside` (None: outside tmux)."""
-        env = self.server.env(**(self.server.inside(inside) if inside else {}))
-        env["PATH"] = os.pathsep.join(
-            (self.spies, BIN, self.server.bin, os.path.dirname(sys.executable), env["PATH"])
-        )
-        for key, value in extra.items():
-            if value is None:
-                env.pop(key, None)
-            else:
-                env[key] = value
-        return env
+    def bins(self) -> tuple:
+        return self.spies, BIN
 
     def call(
         self,
@@ -131,28 +113,8 @@ class LiveCrew(Case):
     def session(self, *args: str, **kw) -> subprocess.CompletedProcess:
         return self.call("ensemble-session", *args, **kw)
 
-    def ok(self, result: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
-        self.assertEqual(
-            result.returncode, 0, f"{result.args}\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-        return result
-
-    def record(self, result: subprocess.CompletedProcess) -> Record:
-        lines = self.ok(result).stdout.splitlines()
-        self.assertEqual(len(lines), 1, result.stdout)
-        return Record.parse(lines[0])
-
-    def scene(self, name: str, steps=None, turns=()) -> dict[str, str]:
-        """`name`'s fake claude scenario, as env."""
-        path = os.path.join(self.root, f"{name}.claude.json")
-        steps = [f"Hi from {name}."] if steps is None else steps
-        scenario = {"steps": steps, "turns": list(turns), "log": self.log(name)}
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({**scenario, "commands": self.log(name, "commands")}, f)
-        return {fake_claude.ENV: path}
-
-    def log(self, name: str, kind: str = "claude") -> str:
-        return os.path.join(self.root, f"{name}.{kind}.jsonl")
+    def ok_message(self, result: subprocess.CompletedProcess) -> str:
+        return f"{result.args}\nstdout: {result.stdout}\nstderr: {result.stderr}"
 
     def launch(
         self, name: str, argv, *, steps=None, turns=(), note: str | None = None, **kw
@@ -284,15 +246,6 @@ class LiveCrew(Case):
         os.chmod(os.path.join(self.spies, command), 0o755)
         return log
 
-    def wait_event(self, name: str, word: str, count: int = 1, events: str | None = None):
-        def found():
-            self.poke()
-            lines = live_tmux.events(events or self.events)
-            hits = [line for line in lines if line.split(" ")[1:3] == [name, word]]
-            return lines if len(hits) >= count else None
-
-        return live_tmux.wait(found, TIMEOUT, what=f"{count} x `{name} {word}`")
-
     def until(self, check, what: str):
         def poked():
             self.poke()
@@ -311,23 +264,3 @@ class LiveCrew(Case):
             live_tmux.crash_owner(self.ensemble, name)
             self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
         self.until(lambda: self.gone(*names), f"{names} gone")
-
-    def poke(self) -> None:
-        # tmux 3.4 may leave a dead pane unreaped: a no-op job reaps it
-        self.server.tmux("run-shell", "-b", "true")
-
-    @contextmanager
-    def poking(self):
-        stop = threading.Event()
-
-        def run():
-            while not stop.wait(live_tmux.POLL * 4):
-                self.poke()
-
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        try:
-            yield
-        finally:
-            stop.set()
-            thread.join()
