@@ -130,8 +130,8 @@ class Detach(Case):
         )
 
     def said(self, res: subprocess.CompletedProcess, *, tui: bool) -> Record:
-        """The Record line; its sessions and drive live on return (a tui drive may have ended with
-        its attempt while the launch waited for its opening); the drive's log 0600.
+        """The Record line; its sessions and drive (tui: unless its attempt ended) live on return;
+        the drive's log 0600.
         """
         drive = self.drive_running()
         live = {TUI: self.live(TUI)} if tui else {}
