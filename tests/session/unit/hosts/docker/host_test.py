@@ -2650,3 +2650,61 @@ class HeadlessWorkerTest(StartBase):
         handle.close()
         self.assertEqual(self.broker.closed, [CONTAINER])
         self.assertEqual((handle.state(), handle.returncode()), (Liveness.ABSENT, 0))
+
+    def test_a_harnessed_headless_worker_records_its_harness_and_host(self):
+        os.unlink(os.path.join(self.home, ".ensemble", "tui", "w", "session.json"))
+        harness = os.path.join(self.home, ".ensemble", "harness", "a" * 32)
+        self.headless(harness=harness)
+        self.assertEqual(
+            (self.host_record()["owner"], self.host_record()["host"]), (harness, "docker")
+        )
+        self.assertFalse(os.path.lexists(tui_lock("w")))
+
+    def test_a_direct_headless_or_tui_worker_records_no_owner(self):
+        self.headless().close()
+        self.assertIsNone(self.host_record()["owner"])
+        self.start().close()
+        self.assertNotIn("owner", self.host_record())
+
+
+class HeadlessOwnerTest(Base):
+    """_headless_owner: a named headless run's harness while its owner lock is held; no docker."""
+
+    def setUp(self):
+        super().setUp()
+        self.harness = os.path.join(self.home, ".ensemble", "harness", "a" * 32)
+
+    def held(self, **changes):
+        self.record(**{"kind": "headless", "owner": self.harness, "host": "docker", **changes})
+        if not hasattr(self, "lock"):
+            self.lock = os.open(os.path.join(self.state, "guard.lock"), os.O_RDWR | os.O_CREAT)
+            self.addCleanup(_close, self.lock)
+            fcntl.flock(self.lock, fcntl.LOCK_EX)
+
+    def test_a_held_headless_record_names_its_owner_sid_and_generation(self):
+        self.held()
+        self.assertEqual(
+            self.host._headless_owner("w"),
+            {"owner": self.harness, "sid": "s1", "generation": GEN},
+        )
+        self.assertEqual(self.order, [])
+
+    def test_no_owner_otherwise(self):
+        for changes in (
+            {"kind": "tui"},
+            {"host": "other"},
+            {"owner": None},
+            {"owner": "/tmp/" + "a" * 32},
+            {"owner": os.path.join(self.home, ".ensemble", "harness", "x")},
+            {"owner": os.path.join(self.home, ".ensemble", "harness", "a" * 32, "..", "b" * 32)},
+        ):
+            with self.subTest(changes=changes):
+                self.held(**changes)
+                self.assertIsNone(self.host._headless_owner("w"))
+        self.assertIsNone(self.host._headless_owner("absent"))
+        self.assertEqual(self.order, [])
+
+    def test_a_free_owner_lock_has_no_owner(self):
+        self.record(kind="headless", owner=self.harness, host="docker")
+        self.assertIsNone(self.host._headless_owner("w"))
+        self.assertIsNone(Host._headless_owner(self.host, "w"))
