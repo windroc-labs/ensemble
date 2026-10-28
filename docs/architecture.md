@@ -55,6 +55,14 @@ OpenCode provider keys, GitHub installation tokens, environment secrets and requ
 App private keys, Codex refresh tokens and enrolled Linear client secrets stay broker-side. Docker access
 and processes running as you remain trusted; a container separates the worker from the host, not its tools from its client.
 
+Environment credentials are declared in delegate environment `credentials` tables. Delegate serializes the
+selected declaration once; it and Session carry that JSON text separately from the caller's credential text.
+The broker alone validates both declarations and merges their kinds, with the caller's whole value winning.
+The merged `env` list supplies only `ensemble-broker-env/*` items, at `/run/ensemble/secrets/env/<file>`;
+without `env`, no environment secret is delivered. These static copies use the broker's existing expiry
+checks, notices and audit. Session saves both declarations on the host for resume/reopen; later configuration
+changes affect new runs. The removed environment and manifest `secrets` fields have no compatibility path.
+
 Docker networking goes through the external [egress proxy](https://github.com/windroc-labs/egress-proxy),
 whose [label contract](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md)
 the [broker consumes](../src/broker/internal/launcher/egress.go). The broker requires a healthy proxy before starting a worker.
