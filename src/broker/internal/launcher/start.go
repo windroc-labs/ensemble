@@ -100,7 +100,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			}
 		}
 	}
-	var userID *int64
+	env := map[string]string{}
 	if m.GitHubApp != "" {
 		if err := h.GitHub.Ready(m.GitHubApp); err != nil {
 			return StartResult{}, err
@@ -109,7 +109,13 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		if err != nil {
 			return StartResult{}, err
 		}
-		userID = &id
+		bot := m.GitHubApp + "[bot]"
+		email := strconv.FormatInt(id, 10) + "+" + bot + "@users.noreply.github.com"
+		env = map[string]string{
+			"ENSEMBLE_PR_AUTHOR": bot,
+			"GIT_AUTHOR_NAME":    bot, "GIT_AUTHOR_EMAIL": email,
+			"GIT_COMMITTER_NAME": bot, "GIT_COMMITTER_EMAIL": email,
+		}
 	}
 	if len(m.Secrets) > 0 {
 		items := make([]string, len(m.Secrets))
@@ -216,7 +222,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		h.withdraw(c, m, held, e)
 		return StartResult{}, e
 	}
-	result.GitHubUserID = userID
+	result.Env = env
 	return result, nil
 }
 

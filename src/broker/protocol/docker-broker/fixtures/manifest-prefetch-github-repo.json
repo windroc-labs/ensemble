@@ -5,13 +5,6 @@
   "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "cwd": "/Users/example/src/project",
   "workspace": "ensemble-ws-worker_1",
-  "github": {
-    "app": "ensemble-broker-bot",
-    "permissions": {
-      "contents": "write"
-    },
-    "repo": "windroc-labs/private_docs"
-  },
   "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
   "hook_path": "/usr/local/bin/ensemble-session",
   "labels": {
@@ -19,5 +12,6 @@
   },
   "prefetch": {
     "repo": "windroc-labs/ensemble"
-  }
+  },
+  "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"contents\":\"write\"},\"repo\":\"windroc-labs/private_docs\"}}"
 }

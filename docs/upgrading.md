@@ -12,11 +12,77 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## Broker protocol 35: explicit GitHub credentials
+
+Close running Docker workers before upgrading, then run `scripts/install.sh --docker`. Protocol 35 removes the
+manifest's top-level `github` grant and replaces the start response's `github_user_id` with a generic `env` map.
+Upgrade the broker and plugin together; old manifests and old brokers are rejected.
+
+There is no automatic configuration migration:
+
+| Old configuration | Required replacement in `~/.ensemble/config.local.toml` |
+|---|---|
+| `[session.hosts.docker.github]` | Delete the table; move its App slug and permissions to `[orchestrator.roles.engineer.credentials.github]`. Keeping it causes `unknown key 'github' in [hosts.docker]` |
+| Verifier output-derived GitHub grant | Keep `[delegate.roles.verifier.output] repo`, and explicitly declare the same repo under `[orchestrator.roles.verifier.credentials.github]` |
+
+The installer writes the engineer declaration after GitHub App enrollment, with the former default permissions;
+existing permission values are preserved. To move customized global permissions, copy them explicitly:
+
+```toml
+[orchestrator.roles.engineer.credentials.github]
+app = "<App slug>"
+permissions = { contents = "write", pull_requests = "write", workflows = "write", checks = "read", actions = "read", statuses = "read" }
+
+[orchestrator.roles.verifier.credentials.github]
+app = "<App slug>"
+repo = "<owner>/<output-repo>"
+permissions = { contents = "write" }
+```
+
+The verifier App must be installed on that output repo. Its token is limited to that repo even beside prefetch;
+delegate no longer derives credentials from `[output]`. Engineer declarations without `repo` retain access to all
+repositories of the App's installations. Commits and PRs still use the App's bot identity.
+
+Workers, `ensemble-delegate run` and `ensemble-session start` have no default GitHub grant. Direct starts must pass
+`--credentials '{"github":{"app":"<App slug>","permissions":{"contents":"write"}}}'` when needed; orchestrated
+roles and `ensemble-crew role` use their role/task declarations. To start a verifier directly, pass the repo-scoped
+declaration with `--credentials`. Saved declarations are reused on resume; changed declarations affect new runs.
+
+Also migrate environment secrets using [environment credential declarations](#environment-credential-declarations)
+below. GitHub and environment files now use the same merged credential request; neither has a legacy grant path.
+
 ## Broker protocol 34: credential requests
 
 Before upgrading, close workers started before this release; they cannot be resumed after it.
-Close running Docker sessions, then run `scripts/install.sh --docker` to install the protocol 34 broker.
-Existing GitHub/env configuration stays in place; request kinds do not yet replace those grants.
+Install the current broker with `scripts/install.sh --docker`. For GitHub configuration, follow protocol 35 above.
+
+### Environment credential declarations
+
+In `~/.ensemble/config.local.toml`, replace each `[[delegate.environments.<name>.secrets]]`
+with `[[delegate.environments.<name>.credentials.env]]`, keeping its `item` and `file` values.
+For example:
+
+```toml
+[[delegate.environments.mini-op.credentials.env]]
+item = "ensemble-broker-env/mini-op-password"
+file = "mini-password"
+
+[[delegate.environments.mini-op.credentials.env]]
+item = "ensemble-broker-env/mini-op-ssh-key"
+file = "mini-ssh-key"
+```
+
+Remove old `secrets` keys from environment defaults and role environment overrides too;
+put any retained entries under that table's `credentials.env`. Removed keys are configuration errors,
+with no automatic migration. The packaged mini-op declaration already uses the new shape.
+Custom session callers must remove `EnvironmentSpec.secrets` and send a separate
+`environment_credentials` JSON-text value; custom broker callers must replace manifest `secrets`
+with `env` inside `credentials` or `environment_credentials`.
+
+Keep Keychain items under `ensemble-broker-env/*`; container paths stay
+`/run/ensemble/secrets/env/<file>`. A caller's `env` replaces the environment's entire `env` list,
+so an explicit override must include every entry that run needs. Existing workers cannot resume after
+this upgrade; close them before installing, as above.
 
 ### Linear container credentials
 
@@ -68,9 +134,8 @@ verifier run:
        - api.github.com
    ```
 
-3. Upgrade the broker as in [Broker protocol 31](#broker-protocol-31-output-repo-token-beside-prefetch): it gives the
-   verifier's container a GitHub token for that repo beside its prefetched checkout, through
-   `[session.hosts.docker.github] app`; without it the verifier cannot push its report.
+3. Declare verifier credentials and upgrade as in [Broker protocol 35](#broker-protocol-35-explicit-github-credentials);
+   without the explicit repo-scoped declaration the verifier cannot push its report.
 4. Remove `deliverable = true` from a local `verifier` stage: the outcome has no deliverable, so write-back reports
    it cannot post one.
 
@@ -121,6 +186,8 @@ listed, and the next Docker start removes its container as debris.
 
 ## Broker protocol 31: output-repo token beside prefetch
 
+Historical protocol 31 behavior; protocol 35 replaces the grant with an explicit credential declaration above.
+
 Broker protocol 31 adds the start manifest's optional `github.repo`: a [prefetching](../src/ensemble/delegate/config.toml) run
 whose `[output]` is `type = "github"` (the `verifier`'s, once set so) gets one GitHub App token for that repo alone,
 `contents: write`. Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker;
@@ -132,7 +199,7 @@ the Docker Host refuses a protocol 30 broker. Install the GitHub App on that out
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →
 `ensemble-broker-claude`, `ensemble-bot` → `ensemble-broker-bot`, `ensemble-env/<name>` → `ensemble-broker-env/<name>`
 and so on: [broker Keychain services](../src/broker/internal/broker/keychain.go)), and the static secret references with
-them: a manifest or `[[delegate.environments.<name>.secrets]]` item names `ensemble-broker-env/<name>`, and one naming
+them: an `env` credential item names `ensemble-broker-env/<name>`, and one naming
 `ensemble-env/<name>` is rejected (`manifest_rejected`). Upgrading from v0.4.1 or earlier, the maintainer gives you a
 one-time rename step; in this order:
 

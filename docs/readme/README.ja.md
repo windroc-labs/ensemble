@@ -64,11 +64,12 @@ fine-grained token には、チェックのために Actions の読み取り権�
 
 ### GitHub App
 
-Docker のワーカーは、ホストの `gh` のログインではなく GitHub App を使います。インストーラーは App を作成しません。
+`github` 認証情報を宣言した Docker ワーカーは GitHub App を使います。インストーラーは App を作成しません。
 GitHub Settings › Developer settings › GitHub Apps で、自分のアカウントにだけインストールできる非公開 App を作成し、
-webhook を無効にしてください。リポジトリの権限は、[Session の設定](../../src/ensemble/session/config.toml)にある
-`github.permissions` を満たす必要があります。ワーカーに push を許可するリポジトリだけにインストールしてください。
-これにはドキュメントの出力先リポジトリも含まれます。
+webhook を無効にしてください。リポジトリの権限は、インストーラーが書き込む engineer ロールの認証情報宣言
+`[orchestrator.roles.engineer.credentials.github]` を満たす必要があります。ドキュメントの出力先を含め、
+ワーカーに push を許可するリポジトリだけにインストールしてください。宣言のない Docker run には GitHub token が渡されません。
+直接起動するワーカーと verifier の出力権限は、[明示的な GitHub 認証情報](../upgrading.md#broker-protocol-35-explicit-github-credentials)を参照してください。
 
 秘密鍵を生成し、App ID を控えて、次のコマンドで取り込みます。
 

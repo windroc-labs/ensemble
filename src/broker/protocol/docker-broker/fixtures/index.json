@@ -1,5 +1,5 @@
 {
-  "protocol_version": "34",
+  "protocol_version": "35",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -1351,21 +1351,11 @@
       }
     },
     {
-      "file": "manifest-missing-github.json",
-      "definition": "manifest",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
       "file": "manifest-github-extra-field.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1373,9 +1363,9 @@
     {
       "file": "manifest-github-bad-repo.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1383,9 +1373,9 @@
     {
       "file": "manifest-github-bad-app.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1393,9 +1383,9 @@
     {
       "file": "manifest-github-missing-permissions.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1403,9 +1393,9 @@
     {
       "file": "manifest-github-empty-permissions.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1413,9 +1403,9 @@
     {
       "file": "manifest-github-unknown-permission.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1423,9 +1413,9 @@
     {
       "file": "manifest-github-bad-level.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1433,9 +1423,9 @@
     {
       "file": "manifest-github-workflows-read.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1443,9 +1433,9 @@
     {
       "file": "manifest-github-empty.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -1641,46 +1631,6 @@
       }
     },
     {
-      "file": "start-output-missing-github-user-id.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
-      "file": "start-output-github-user-id-zero.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
-      "file": "start-output-github-user-id-string.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
-      "file": "start-output-github-user-id-bool.json",
-      "definition": "start_output",
-      "valid": false,
-      "expected": {
-        "stage": "response",
-        "exit_code": null,
-        "error_code": null
-      }
-    },
-    {
       "file": "manifest-opencode.json",
       "definition": "manifest",
       "valid": true,
@@ -1751,7 +1701,7 @@
       }
     },
     {
-      "file": "manifest-secrets.json",
+      "file": "manifest-env.json",
       "definition": "manifest",
       "valid": true,
       "expected": {
@@ -1761,8 +1711,8 @@
       }
     },
     {
-      "file": "manifest-secrets-broker-item.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-broker-item.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1771,8 +1721,8 @@
       }
     },
     {
-      "file": "manifest-secrets-path.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-path.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1781,8 +1731,8 @@
       }
     },
     {
-      "file": "manifest-secrets-dot.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-dot.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1791,8 +1741,8 @@
       }
     },
     {
-      "file": "manifest-secrets-empty-file.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-empty-file.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1801,8 +1751,8 @@
       }
     },
     {
-      "file": "manifest-secrets-extra-field.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-extra-field.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -2193,9 +2143,9 @@
     {
       "file": "manifest-prefetch-github.json",
       "definition": "manifest",
-      "valid": false,
+      "valid": true,
       "expected": {
-        "stage": "schema",
+        "stage": "manifest",
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
@@ -2884,6 +2834,56 @@
     {
       "file": "credential-spec-linear-wrong-key-task-labels.json",
       "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "start-output-env-null.json",
+      "definition": "start_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "start-output-env-value.json",
+      "definition": "start_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "start-output-env-missing.json",
+      "definition": "start_output",
+      "valid": false,
+      "expected": {
+        "stage": "response",
+        "exit_code": 0,
+        "error_code": null
+      }
+    },
+    {
+      "file": "manifest-legacy-github.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-legacy-secrets.json",
+      "definition": "manifest",
       "valid": false,
       "expected": {
         "stage": "schema",

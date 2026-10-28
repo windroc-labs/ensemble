@@ -159,7 +159,7 @@ func TestLinearStartRecordsExpiry(t *testing.T) {
 	h.Linear = &fakeLinear{}
 	path := codexManifest(t, func(f map[string]any) {
 		f["codex_dir"] = filepath.Join(parent, "codex")
-		f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
+		f["environment_credentials"] = githubSpec(t, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet})
 		f["credentials"] = string(fixtureBytes(t, "credential-spec-linear.json"))
 	})
 	if _, err := h.Start(context.Background(), path); err != nil {

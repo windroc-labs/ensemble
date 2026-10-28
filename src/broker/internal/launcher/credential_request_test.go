@@ -59,19 +59,37 @@ func TestCredentialRequestMerge(t *testing.T) {
 	}
 }
 
-func TestCredentialRequestDeferredKindsLeaveLegacyFields(t *testing.T) {
+func TestCredentialRequestGitHubServed(t *testing.T) {
 	spec := `{"github":{"app":"new","permissions":{"contents":"write"}},"env":[{"item":"ensemble-broker-env/new","file":"new"}]}`
 	m, err := ParseManifest(withFields(t, map[string]any{"credentials": spec}))
-	if err != nil || m.GitHubApp != "" || len(m.Secrets) != 0 {
-		t.Fatalf("request served deferred kinds: %+v %v", m, err)
+	if err != nil || m.GitHubApp != "new" || m.GitHubPermissions["contents"] != "write" || len(m.Secrets) != 1 || m.Secrets[0].File != "new" {
+		t.Fatalf("request GitHub: %+v %v", m, err)
 	}
 	m, err = ParseManifest(withFields(t, map[string]any{
-		"credentials": spec,
-		"github":      map[string]any{"app": "old", "permissions": map[string]string{"contents": "read"}},
-		"secrets":     []any{secret("ensemble-broker-env/old", "old")},
+		"credentials":             `{"github":{"app":"new","permissions":{"contents":"write"}}}`,
+		"environment_credentials": `{"github":{"app":"old","repo":"o/old","permissions":{"contents":"read"}},"env":[{"item":"ensemble-broker-env/old","file":"old"}]}`,
 	}))
-	if err != nil || m.GitHubApp != "old" || m.GitHubPermissions["contents"] != "read" || len(m.Secrets) != 1 || m.Secrets[0].File != "old" {
-		t.Fatalf("legacy fields changed: %+v %v", m, err)
+	if err != nil || m.GitHubApp != "new" || m.GitHubRepo != "" || m.GitHubPermissions["contents"] != "write" || len(m.Secrets) != 1 || m.Secrets[0].File != "old" {
+		t.Fatalf("whole-kind override: %+v %v", m, err)
+	}
+	for _, old := range []any{nil, map[string]any{"app": "old", "permissions": map[string]string{"contents": "read"}}} {
+		if _, err := ParseManifest(withFields(t, map[string]any{"github": old})); err == nil {
+			t.Fatal("legacy github field accepted")
+		}
+	}
+}
+
+func TestCredentialRequestEnvReplacesLegacySecrets(t *testing.T) {
+	spec := `{"env":[{"item":"ensemble-broker-env/new","file":"new"}]}`
+	m, err := ParseManifest(withFields(t, map[string]any{"credentials": spec}))
+	if err != nil || m.GitHubApp != "" || len(m.Secrets) != 1 || m.Secrets[0].File != "new" {
+		t.Fatalf("env request not served: %+v %v", m, err)
+	}
+	for _, value := range []any{nil, []any{}, []any{secret("ensemble-broker-env/old", "old")}} {
+		_, err = ParseManifest(withFields(t, map[string]any{"credentials": spec, "secrets": value}))
+		if err == nil || !strings.Contains(err.Error(), `unknown field "secrets"`) {
+			t.Fatalf("legacy secrets accepted: %v", err)
+		}
 	}
 }
 

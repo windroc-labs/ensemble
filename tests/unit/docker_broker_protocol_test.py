@@ -82,7 +82,7 @@ class DockerBrokerProtocol(Case):
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "34")
+        self.assertEqual(index["protocol_version"], "35")
         self.assertEqual(
             index["protocol_version"],
             schema["$defs"]["version_output"]["properties"]["protocol_version"]["const"],
@@ -173,7 +173,6 @@ class DockerBrokerProtocol(Case):
             "client",
             "codex_dir",
             "opencode_dir",
-            "github",
             "labels",
         ):
             self.assertFalse(cases[f"manifest-missing-{field}.json"]["valid"])

@@ -749,9 +749,6 @@ class Docker(DockerCase):
         self.assertIn("team_dirs", self.refused("poet", "verse", team=team, out=None))
 
 
-SECRET = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
-
-
 class PrefetchTest(DockerCase):
     """A resolved environment's prefetch target: the Reference block's one Repo: and optional Ref:,
     syntax-checked before any git call (WDRC-109 FR-52).
@@ -800,48 +797,14 @@ class PrefetchTest(DockerCase):
         )
         self.assertIn("prefetch", message)
 
-    def test_a_github_output_is_the_containers_github_repo(self):
-        text = "Reference: T\nRepo: acme/app\n\nB"
-        for host in ("", "github.com", "GitHub.com"):
-            output = {"type": "github", "repo": "acme/private_docs", "branch": "main", "dir": "d"}
-            output |= {"host": host} if host else {}
-            with self.subTest(host=host):
-                got, _ = self.planned(input=text, environment=self.env(), keys={"output": output})
-                self.assertEqual(got.session.environment.github_repo, "acme/private_docs")
+    def test_output_does_not_derive_credentials(self):
+        output = {"type": "github", "repo": "acme/private_docs", "branch": "main", "dir": "d"}
         got, _ = self.planned(
-            input=text, environment=self.env(prefetch=False), keys={"output": output}
+            input="Reference: T\nRepo: o/r\n\nB", keys={"output": output}, environment=self.env()
         )
-        self.assertIsNone(got.session.environment.github_repo)
-
-    def test_any_other_output_gets_no_github_repo(self):
-        for output in ({"type": "local"}, {"type": "pull-request"}):
-            with self.subTest(output=output):
-                got, _ = self.planned(
-                    input="Reference: T\nRepo: acme/app\n\nB",
-                    environment=self.env(),
-                    keys={"output": output},
-                    out=None,
-                )
-                self.assertIsNone(got.session.environment.github_repo)
-
-    def test_a_github_output_off_github_com_is_refused(self):
-        for repo, host in (
-            ("acme/docs", "ghe.example.com"),
-            ("ghe.example.com/acme/docs", ""),
-            ("not a repo!", ""),
-            ("acme/..", ""),
-            ("", ""),
-        ):
-            output = {"type": "github", "repo": repo, "branch": "main", "dir": "d", "host": host}
-            with self.subTest(repo=repo, host=host):
-                message = self.refused(
-                    input="Reference: T\nRepo: acme/app\n\nB",
-                    environment=self.env(),
-                    keys={"output": {k: v for k, v in output.items() if v}},
-                )
-                self.assertEqual(
-                    message, f"prefetch: output repo {repo} names no github.com repository"
-                )
+        self.assertEqual(got.session.environment.prefetch, {"repo": "o/r"})
+        self.assertIsNone(got.session.credentials)
+        self.assertNotIn("github_repo", got.session.environment.persisted())
 
     def test_without_prefetch_ref_lines_are_not_read(self):
         text = "Reference: T\nRepo: acme/app\nRef: --upload-pack=x\n\nB"
@@ -854,7 +817,6 @@ class PrefetchTest(DockerCase):
         for environment, key in (
             (self.env(prefetch=False), "lock"),
             (self.env(), "prefetch"),
-            (Resolved(replace(self.SPEC, lock=None, secrets=(SECRET,)), prefetch=False), "secrets"),
         ):
             with self.subTest(key=key):
                 message = self.refused(mode="in_process", environment=environment)
@@ -862,3 +824,18 @@ class PrefetchTest(DockerCase):
         gateway = Resolved(EnvironmentSpec(image="@worker", gateway="x"), prefetch=False)
         got, _ = self.planned(mode="in_process", environment=gateway)
         self.assertIsNone(got.session.environment)
+
+    def test_environment_credentials_are_opaque_and_separate_from_the_caller(self):
+        value = ' {"future-kind": [1]}\n'
+        environment = Resolved(replace(self.SPEC, lock=None), prefetch=False, credentials=value)
+        got, _ = self.planned(environment=environment, credentials=' {"other-kind": [2]} ')
+        self.assertEqual(got.session.environment_credentials, value)
+        self.assertEqual(got.session.credentials, ' {"other-kind": [2]} ')
+        self.assertEqual(got.spec.environment_credentials, value)
+        for value in ("{}", "", "{"):
+            with self.subTest(value=value):
+                environment = replace(environment, credentials=value)
+                self.assertIn(
+                    "environment_credentials: in_process",
+                    self.refused(mode="in_process", environment=environment),
+                )

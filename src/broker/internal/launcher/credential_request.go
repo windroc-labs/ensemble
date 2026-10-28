@@ -2,6 +2,9 @@ package launcher
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
 	"ensemble/broker/internal/credential"
@@ -37,11 +40,11 @@ func parseCredentials(fields map[string]json.RawMessage) (credentialRequest, err
 			switch kind {
 			case "github":
 				merged.GitHub, err = parseGitHub(value)
-				if err != nil || merged.GitHub == nil {
+				if err != nil {
 					return reject(kind)
 				}
 			case "env":
-				merged.Env, err = parseSecrets(value)
+				merged.Env, err = parseEnv(value)
 				if err != nil || len(merged.Env) == 0 {
 					return reject(kind)
 				}
@@ -138,4 +141,58 @@ func parseLinear(data []byte) (*credential.LinearRequest, error) {
 		}
 	}
 	return &r, nil
+}
+
+func parseEnv(raw json.RawMessage) ([]Secret, error) {
+	const shape = "env must be an array of at most %d {\"item\", \"file\"} objects"
+	var entries []map[string]json.RawMessage
+	if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &entries) != nil || len(entries) > maxSecrets {
+		return nil, fmt.Errorf(shape, maxSecrets)
+	}
+	secrets := []Secret{}
+	for _, entry := range entries {
+		item, okItem := manifestString(entry["item"])
+		file, okFile := manifestString(entry["file"])
+		switch {
+		case len(entry) != 2 || !okItem || !okFile:
+			return nil, fmt.Errorf(shape, maxSecrets)
+		case !ValidEnvItem(item):
+			return nil, fmt.Errorf("invalid secret item %q", item)
+		case !validSecretFile(file):
+			return nil, fmt.Errorf("invalid secret file %q", file)
+		case slices.ContainsFunc(secrets, func(s Secret) bool { return s.File == file }):
+			return nil, fmt.Errorf("repeated secret file %q", file)
+		}
+		secrets = append(secrets, Secret{Item: item, File: file})
+	}
+	return secrets, nil
+}
+
+type githubRequest struct {
+	App         string
+	Permissions map[string]string
+	Repo        string
+}
+
+func parseGitHub(raw json.RawMessage) (*githubRequest, error) {
+	const shape = "github must be {\"app\": <name>, \"permissions\": {<permission>: <level>}, \"repo\"?: <owner/name>}"
+	var github map[string]json.RawMessage
+	if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil {
+		return nil, errors.New(shape)
+	}
+	app, ok := manifestString(github["app"])
+	rawRepo, hasRepo := github["repo"]
+	repo, okRepo := manifestString(rawRepo)
+	var permissions map[string]string
+	if raw := github["permissions"]; !ok || len(github) != 2 && !(len(github) == 3 && hasRepo) || hasRepo && !okRepo ||
+		!appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &permissions) != nil {
+		return nil, errors.New(shape)
+	}
+	if hasRepo && !githubapi.ValidRepo(repo) {
+		return nil, fmt.Errorf("invalid github repo %q", repo)
+	}
+	if err := githubapi.CheckPermissions(permissions); err != nil {
+		return nil, err
+	}
+	return &githubRequest{App: app, Permissions: permissions, Repo: repo}, nil
 }

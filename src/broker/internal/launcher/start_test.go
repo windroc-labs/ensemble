@@ -495,7 +495,7 @@ func TestStartOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := StartResult{Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
+	want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
 		Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v", got)
@@ -701,7 +701,7 @@ func TestManifestUnreadable(t *testing.T) {
 
 func TestHookUnderUncleanCWD(t *testing.T) {
 	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` + imageKey +
-		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","hook_path":"` + home + `/src/project/hook","github":null,"labels":{}}`
+		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","hook_path":"` + home + `/src/project/hook","labels":{}}`
 	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	_, err := h.Start(context.Background(), writeManifest(t, []byte(m)))
 	if protoErr(t, err).Code != protocol.MountRejected || hasCall(d, "run") {

@@ -6,7 +6,6 @@ prompt the run takes. A refusal is ConfigError, a Driver one keeping its message
 import functools
 import os
 import uuid
-from collections.abc import Mapping
 from dataclasses import replace
 
 from ensemble.delegate.composer import Composer, RunConfig
@@ -21,12 +20,11 @@ from ensemble.delegate.engine.drivers import Driver
 from ensemble.delegate.engine.environment import prefetch_target
 from ensemble.delegate.engine.runner import say
 from ensemble.delegate.engine.types import ConfigError, Layout, Plan, Resolved, Spec
-from ensemble.delegate.event.outcome import DEFAULT_HOST
 from ensemble.delegate.event.reply import OUTCOME, PROGRESS
 from ensemble.session import Access, EnvironmentSpec, Mode, RunLog
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
-from ensemble.utils import Invalid, Repo, sh, thaw, under
+from ensemble.utils import sh, thaw, under
 
 
 def _own(f):
@@ -121,17 +119,17 @@ def plan(
         sid=run_sid(spec.sid),
         team=composition.team,
     )
+    if environment is not None and environment.credentials is not None:
+        spec = replace(spec, environment_credentials=environment.credentials)
     docker = driver.docker and spec.mode in (Mode.TUI, Mode.HEADLESS)
     if environment is not None and not docker:
-        lost = next((k for k in ("lock", "secrets") if getattr(environment.spec, k)), None)
+        lost = "lock" if environment.spec.lock else None
         if lost := "prefetch" if environment.prefetch else lost:
             raise ConfigError(
                 f"mode {spec.mode}: environment {lost} needs a container: tui or headless"
             )
         environment = None
-    environment_spec, repo = (
-        _environment(environment, spec.input, run.output) if docker else (None, None)
-    )
+    environment_spec, repo = _environment(environment, spec.input) if docker else (None, None)
     if docker:
         spec = replace(spec, input=_on_docker(run, spec, repo, composition))
     resume = spec.sid if spec.resume else None
@@ -191,7 +189,7 @@ def plan(
 
 
 def _environment(
-    environment: Resolved | None, text: str, output: Mapping
+    environment: Resolved | None, text: str
 ) -> tuple[EnvironmentSpec | None, str | None]:
     """(the session's environment, the Reference repo); a prefetch's lines checked before git."""
     if environment is None or not environment.prefetch:
@@ -200,21 +198,7 @@ def _environment(
     if (repo := github_repo(target, sh)) is None:
         raise ConfigError(f"prefetch: Repo: {target} names no github.com repository")
     found = {"repo": repo} | ({"ref": ref} if ref else {})
-    return replace(environment.spec, prefetch=found, github_repo=_output_repo(output)), repo
-
-
-def _output_repo(output: Mapping) -> str | None:
-    """A github output's repo as owner/name, on github.com only."""
-    if output.get("type") != "github":
-        return None
-    host, repo = (output.get("host") or DEFAULT_HOST).lower(), output.get("repo", "")
-    try:
-        parsed = Repo.parse(repo)
-    except Invalid:
-        parsed = None
-    if parsed is None or {host, parsed.host} != {DEFAULT_HOST}:
-        raise ConfigError(f"prefetch: output repo {repo} names no github.com repository")
-    return f"{parsed.owner}/{parsed.name}"
+    return replace(environment.spec, prefetch=found), repo
 
 
 def _on_docker(run: RunConfig, spec: Spec, repo: str | None, composition: Composer) -> str:

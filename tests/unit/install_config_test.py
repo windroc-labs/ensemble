@@ -60,3 +60,57 @@ class OpenCodeExecutableConfigTest(Case):
                 actual, changes, selected = self.plan(current)
                 self.assertEqual(actual, current or selected)
                 self.assertEqual("[session.clients.opencode] executable = " in changes, not current)
+
+
+class GitHubCredentialConfigTest(Case):
+    def test_engineer_declaration_fills_permissions_and_keeps_custom_values(self):
+        table = "orchestrator.roles.engineer.credentials.github"
+        expected = {
+            "contents": "write",
+            "pull_requests": "write",
+            "workflows": "write",
+            "checks": "read",
+            "actions": "read",
+            "statuses": "read",
+        }
+        for custom in (False, True):
+            with self.subTest(custom=custom):
+                config = Path(self.home, "config.local.toml")
+                output = Path(self.home, "config.plan")
+                config.write_text(
+                    f'[{table}.permissions]\nstatuses = "write"\nissues = "write"\n'
+                    if custom
+                    else ""
+                )
+                args = [
+                    str(config),
+                    str(output),
+                    "docker",
+                    "claude",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    f"{table}\tapp\tensemble-test-bot",
+                    "",
+                ]
+                with (
+                    mock.patch.object(sys, "argv", ["-c", *args]),
+                    redirect_stdout(io.StringIO()),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    exec(program("config_plan"), {})
+                self.assertEqual(raised.exception.code, 3)
+                data = tomllib.loads(output.read_text())
+                github = data["orchestrator"]["roles"]["engineer"]["credentials"]["github"]
+                self.assertEqual(github["app"], "ensemble-test-bot")
+                self.assertEqual(
+                    github["permissions"],
+                    expected | ({"statuses": "write", "issues": "write"} if custom else {}),
+                )
+                self.assertNotIn("session", data)

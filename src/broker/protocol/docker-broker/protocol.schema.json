@@ -95,16 +95,6 @@
       "type": "string",
       "pattern": "^ensemble-ws-[A-Za-z0-9_-]+$"
     },
-    "github": {
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "$ref": "#/$defs/github_grant"
-        }
-      ]
-    },
     "github_grant": {
       "type": "object",
       "properties": {
@@ -244,9 +234,6 @@
         "claude_dir": {
           "$ref": "#/$defs/path"
         },
-        "github": {
-          "$ref": "#/$defs/github"
-        },
         "hook_path": {
           "$ref": "#/$defs/path"
         },
@@ -283,37 +270,6 @@
           "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
           "not": {
             "const": "setup-token"
-          }
-        },
-        "secrets": {
-          "$comment": "Environment secrets by keychain reference; the broker also refuses a file repeated in the list and a file over 255 bytes.",
-          "type": "array",
-          "maxItems": 16,
-          "items": {
-            "type": "object",
-            "properties": {
-              "item": {
-                "type": "string",
-                "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
-              },
-              "file": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "not": {
-                  "enum": [
-                    ".",
-                    ".."
-                  ]
-                }
-              }
-            },
-            "required": [
-              "item",
-              "file"
-            ],
-            "additionalProperties": false
           }
         },
         "lock": {
@@ -363,7 +319,6 @@
         "image",
         "cwd",
         "workspace",
-        "github",
         "labels",
         "client"
       ],
@@ -469,26 +424,6 @@
         "lock_owner": [
           "lock"
         ]
-      },
-      "dependentSchemas": {
-        "prefetch": {
-          "$comment": "A prefetching container gets no GitHub token (github null) or a repo grant's, which reaches one repository.",
-          "properties": {
-            "github": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "repo"
-                  ]
-                }
-              ]
-            }
-          }
-        }
       }
     },
     "version_input": {
@@ -514,7 +449,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "34"
+          "const": "35"
         }
       },
       "required": [
@@ -657,17 +592,6 @@
           ],
           "additionalProperties": false
         },
-        "github_user_id": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "integer",
-              "minimum": 1
-            }
-          ]
-        },
         "deadline": {
           "oneOf": [
             {
@@ -680,6 +604,12 @@
         },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -687,7 +617,7 @@
         "endpoint",
         "image_digest",
         "clients",
-        "github_user_id",
+        "env",
         "deadline"
       ],
       "additionalProperties": false
@@ -2161,7 +2091,7 @@
           "minItems": 1,
           "maxItems": 16,
           "items": {
-            "$ref": "#/$defs/manifest/properties/secrets/items"
+            "$ref": "#/$defs/env_secret"
           }
         }
       },
@@ -2182,6 +2112,32 @@
           "type": "string"
         }
       }
+    },
+    "env_secret": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string",
+          "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
+          "not": {
+            "enum": [
+              ".",
+              ".."
+            ]
+          }
+        }
+      },
+      "required": [
+        "item",
+        "file"
+      ],
+      "additionalProperties": false
     }
   }
 }

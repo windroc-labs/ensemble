@@ -5,7 +5,6 @@
   "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "cwd": "/",
   "workspace": "ensemble-ws-worker_1",
-  "github": null,
   "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
   "hook_path": "/usr/local/bin/ensemble-session",
   "labels": {

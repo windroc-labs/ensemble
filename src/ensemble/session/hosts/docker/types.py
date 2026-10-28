@@ -13,7 +13,7 @@ class Started:
     endpoint: str
     image_digest: str
     clients: Mapping[str, str]  # client name → its runnable version
-    github_user_id: int | None  # the App's bot user ID; None without an App
+    env: Mapping[str, str]  # broker-provided execution environment
     deadline: Mapping[str, str] | None
 
 
