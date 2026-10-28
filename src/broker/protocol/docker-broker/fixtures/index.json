@@ -1,5 +1,5 @@
 {
-  "protocol_version": "31",
+  "protocol_version": "32",
   "cases": [
     {
       "file": "manifest-valid.json",

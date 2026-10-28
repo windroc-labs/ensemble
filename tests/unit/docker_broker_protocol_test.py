@@ -81,7 +81,7 @@ class DockerBrokerProtocol(Case):
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "31")
+        self.assertEqual(index["protocol_version"], "32")
         self.assertEqual(
             index["protocol_version"],
             schema["$defs"]["version_output"]["properties"]["protocol_version"]["const"],
