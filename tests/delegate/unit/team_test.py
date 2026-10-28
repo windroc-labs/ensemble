@@ -263,7 +263,7 @@ class Shipped(Packaged):
         for literal in (
             "No clear check → `needs_input`",
             "The check ran to its end, passing or not → `status: done`",
-            "`summary` opens with the verdict, `Pass:` or `Fail:`",
+            "`summary` opens with the report's Verdict mark, ✅, ❌ or ⚠️",
             "The check could not run (the mini unreachable, the runbook broke midway, "
             "the `mini-op` skill missing) → `status: failed`",
             "The request is still unclear → `needs_input`",
@@ -285,6 +285,7 @@ class Shipped(Packaged):
             self.assertIn(text, template)
         checklist = item(composed("verifier", "verify")[0], "Checklist first")
         self.assertIn("the Template's table", checklist)
+        self.assertIn("extending an earlier report", checklist)
         self.assertNotIn("evidence", checklist)
 
     def test_every_plugin_the_team_calls_is_in_the_default_docker_whitelist(self):
