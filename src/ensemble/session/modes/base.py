@@ -1,7 +1,4 @@
-"""BaseMode, a Mode's running session, and what the modes share to start one. The class's
-start() fixes a Prepared before anything starts, has `record` write the session line, then starts
-and returns the session, so none exists unstarted. stop() is idempotent.
-"""
+"""Session modes own startup, polling and idempotent shutdown."""
 
 import json
 import os
@@ -111,7 +108,6 @@ class BaseMode(ABC):
     kind: ClassVar[Mode]
 
     def __init__(self, prepared: Prepared) -> None:
-        """Built by start (TuiMode.attach too) from what it started."""
         self._prepared = prepared
 
     @property
@@ -182,7 +178,15 @@ class BaseMode(ABC):
         return self.state() == Liveness.LIVE
 
     @abstractmethod
-    def send(self, text: str) -> None: ...
+    def send(self, text: str) -> bool | None:
+        """False: retry after pumping; None/True: submitted."""
+
+    def _try_send(self, text: str, pending: Callable[[], bool]) -> bool:
+        return pending() and self.send(text) is not False
+
+    def _try_press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None:
+        if pending():
+            self.press(keys)
 
     @abstractmethod
     def screen(self, lines: int | None = None) -> str: ...

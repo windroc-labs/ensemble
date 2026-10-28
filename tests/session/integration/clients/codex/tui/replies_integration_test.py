@@ -1,4 +1,4 @@
-"""A Codex tui session's mid-turn answer: a `reply <id>` events line, before the turn's `done`,
+"""A Codex tui session's keyboard steer: a `reply <id>` events line, before the turn's `done`,
 whose stored text is the answer, on the tmux Host, with fake Codex and a live hook.
 """
 
@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session.engine.types import Access, Mode, Spec
+from ensemble.session.engine.types import Access, KeyPress, Mode, Spec
 from ensemble.session.hosts.base import Host
 from ensemble.utils import read_reply
 from tests.session import harnesses, live_tmux
@@ -90,10 +90,10 @@ class RepliesTest(Case):
             WAIT,
             what="the turn's first prompt hook",
         )
-        handle.send("status?")
+        handle.press([KeyPress.parse(key) for key in (*"status?", "Enter")])
         return time.monotonic()
 
-    def test_steer_writes_reply_before_done(self):
+    def test_keyboard_steer_writes_reply_before_done(self):
         sent = time.monotonic()
         self.steered()
         name, _, reply_id = self.until("reply")

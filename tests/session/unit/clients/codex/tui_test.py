@@ -127,6 +127,34 @@ DIALOG_SCREENS = {
 
 
 class TuiTest(Base):
+    def test_local_commands_and_empty_input_do_not_wait_for_a_turn(self):
+        run = self.client.tui()
+        for text, expected in (
+            ("", False),
+            (" \n ", False),
+            ("/status", False),
+            ("/model", False),
+            ("/review", False),
+            ("/plan", False),
+            ("/unknown", False),
+            ("hello", True),
+            ("/init", False),
+            ("/compact", False),
+            ("/review check this", False),
+            ("/plan implement this", False),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(run._starts_turn(text), expected)
+
+    def test_prompted_launch_waits_for_session_start_and_idle_launch_needs_no_turn_hook(self):
+        run, _, _ = self.launch()
+        self.assertEqual(run._ready, "SessionStart")
+        self.assertEqual(run._interrupt, Key("Escape"))
+        idle = self.client.tui()
+        with mock.patch("shutil.which", return_value="/protected/codex"):
+            idle.launch(dataclasses.replace(self.spec, sid="idle", prompt=""), HOOK)
+        self.assertIsNone(idle._ready)
+
     def test_container_runtime_projects_only_this_identity_without_host_executable(self):
         host = MemoryHost()
         runtime = ClientContext(
