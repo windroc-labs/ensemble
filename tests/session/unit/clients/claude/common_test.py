@@ -237,6 +237,23 @@ class AccountsTest(Base):
                 self.refused(lambda *, a=accounts: self.found(a), message)
                 self.refused(lambda *, a=accounts: ClaudeClient({"accounts": a}), message)
 
+    def test_a_fixed_account_is_a_registered_one(self):
+        work = {"work": {"dir": "/abs/w"}}
+        self.assertEqual(ClaudeClient({"accounts": work, "account": "work"})._account(), "work")
+        self.assertEqual(ClaudeClient({"account": "default"})._account(), "default")
+        self.assertEqual(ClaudeClient({"accounts": work})._account(), "")
+        self.assertEqual(read_config(local=os.devnull)["clients"]["claude"]["account"], "")
+        for config, message in (
+            (
+                {"account": "work"},
+                "[clients.claude].account 'work': not a registered account"
+                " ([clients.claude.accounts.work])",
+            ),
+            ({"account": 1}, "[clients.claude].account must be a string"),
+        ):
+            with self.subTest(config=config):
+                self.refused(lambda *, c=config: ClaudeClient(c), message)
+
 
 class HomeFilesTest(Base):
     MODEL = {"model": "opus[1m]", "effortLevel": "xhigh", "modelSettings": {"opus": {"a": 1}}}

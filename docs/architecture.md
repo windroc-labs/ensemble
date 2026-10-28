@@ -328,7 +328,7 @@ A hook invocation creates one `delivery_id` (32 lowercase hex characters) before
 ensemble-crew reopen [--work-dir <work_dir>] <ID> [--display D]
 ```
 
-It reads the run record, `<work_dir>/work/<ID>/run/delegate.json` (`--work-dir` only when the board's `work_dir` is not `~/.ensemble`), and resumes its session id as worker `<agent name>` on the run's Host, client, cwd and Claude account: a Docker run comes back in a new container with its client history and [workspace volume](#workspace-volumes). The worker is tracked like any other; `ensemble-crew close <agent name>` ends it. It brings back the conversation, not the run: where its start is owned (every built-in client's tui, on tmux or Docker), it runs under a [session harness](#session-harness) of its own with no handlers, so its events are only logged: no outcome or write-back, and the board is untouched. A conversation known only by its session id: `ensemble-crew worker <name> --resume <sid> --client <client> --cwd <cwd> [--host <host>]`.
+It reads the run record, `<work_dir>/work/<ID>/run/delegate.json` (`--work-dir` only when the board's `work_dir` is not `~/.ensemble`), and resumes its session id as worker `<agent name>` on the run's Host, client and cwd, its Claude account the session's choice ([Claude accounts](#claude-accounts)): a Docker run comes back in a new container with its client history and [workspace volume](#workspace-volumes). The worker is tracked like any other; `ensemble-crew close <agent name>` ends it. It brings back the conversation, not the run: where its start is owned (every built-in client's tui, on tmux or Docker), it runs under a [session harness](#session-harness) of its own with no handlers, so its events are only logged: no outcome or write-back, and the board is untouched. A conversation known only by its session id: `ensemble-crew worker <name> --resume <sid> --client <client> --cwd <cwd> [--host <host>]`.
 
 These do not recall it:
 
@@ -534,7 +534,6 @@ By hand (macOS; the orchestrator runs this checkout's scripts; `<work_dir>` is `
    user_id = "<engineer app user UUID>"
    ```
 
-   A role's board runs use the Claude account `[orchestrator.core.roles.<role>.accounts]` ([Claude accounts](#claude-accounts)).
 2. Create the Linear presets, apps and Keychain items the keys above name, and fill their configuration: [Linear presets](upgrading.md#linear-presets).
 3. Dry-run each job: `bin/ensemble-orchestrator router --dry-run`, `bin/ensemble-orchestrator promote --dry-run`.
 4. Install the launchd jobs (router at :00 and :30, promote every 5 min); the plists hard-code this checkout's path and `~/.ensemble`:
@@ -737,7 +736,7 @@ Docker role runs refuse host `read`/`write` dirs, a role `cwd`, custom `team_dir
 
 #### Claude accounts
 
-A Docker Claude session runs on one account: `default` unless a worker or role selects another. Register more in `~/.ensemble/config.local.toml`, then `"$B" login claude work`:
+A Docker Claude session runs on one account: `default` unless the session selects another. Register more in `~/.ensemble/config.local.toml`, then `"$B" login claude work`:
 
 ```toml
 [session.clients.claude.accounts.work]
@@ -745,7 +744,7 @@ dir = "~/.claude-work"   # its CLAUDE_CONFIG_DIR on the host, for the usage prob
 account = "me@work"      # a display string
 ```
 
-Select one with `ensemble-crew worker NAME --client claude --account work`, or for a role `[delegate.roles.<role>.accounts] claude = "work"` (`[delegate.accounts]` for every role; board runs: `[orchestrator.core.accounts]` and `[orchestrator.core.roles.<role>.accounts]` after). With none selected and two or more registered, a start picks the account with the most usage left, under the usage-gate thresholds first (readings cached 5 minutes); the usage gate skips Claude runs only when every account is over. On tmux a selection is checked, then ignored.
+Selection is the session's alone: `ensemble-crew worker NAME --client claude --account work` for one worker, `[session.clients.claude] account = "work"` for every start that gives none; role and board runs take no account of their own (the delegate and orchestrator accounts tables are gone: [upgrading](upgrading.md#claude-account-selection-is-the-sessions)). With none selected and two or more registered, a start picks the account with the most usage left, under the usage-gate thresholds first (readings cached 5 minutes); the usage gate skips Claude runs only when every account is over (with an `account` fixed, when that one is). The probe reads an account's `dir`, not the setup-token its runs get, so a run that hits a usage limit holds its account over until that limit's reset (unknown: 5 hours; at most 7 days), unprobed, in `~/.ensemble/usage/claude-holds.json`. A start prints the account it picked to its harness log (`~/.ensemble/harness/<32 hex>/harness.log`). On tmux a selection is checked, then ignored.
 
 #### OpenCode on Docker
 
@@ -781,7 +780,7 @@ A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cw
 - Docker passes no stdin EOF to a detached container when its `docker attach` dies (WDRC-347 on the test mini, Docker Desktop 4.96.3, Docker 29.9.2, tini via `--init`, 10 runs each: `docker run -d -i` (`StdinOnce=false`) then a killed `docker attach`, none within 10 s; a killed foreground `docker run -i` (`StdinOnce=true`), EOF in 3–4 ms; `create -i` then `start -ai` untested), so a dead harness reaches the guard only through the missing heartbeat: the guard ends its worker 5 s after the last frame, and a harness stalled that long ends it too.
 - The client shares the guard's uid and can write the guard's stdin through `/proc`, forging heartbeats: its container then outlives a dead harness, keeping its lease and environment lock (resume is refused busy) until `ensemble-session close` or another start's sweep removes it. An accepted risk: the heartbeat guards against a dead harness, not a hostile client. Anyone with the Docker socket can attach, as they can `docker exec`.
 - A start whose broker start and staging take over 60 s fails: its guard got no launch handoff in time.
-- A headless run's output comes from its container, where client and tools share uid `agent`: a forged rate-limit line can end the run, notify a usage limit and move the issue to review, as can a forged transcript record for a TUI run.
+- A headless run's output comes from its container, where client and tools share uid `agent`: a forged rate-limit line can end the run, notify a usage limit and move the issue to review, as can a forged transcript record for a TUI run, and hold its [Claude account](#claude-accounts) over for up to 7 days (delete `~/.ensemble/usage/claude-holds.json` to release it).
 - A manual `docker start` of a stopped lock container runs no client (its guard gets no launch handoff and exits within 60 s) but holds the [lock](#environments) meanwhile: start through the broker.
 - The audit log (`broker.jsonl`) is yours to change: it records what the broker did, not that nothing else happened.
 - A resume after an upgrade runs a newer Claude than the one that wrote the conversation; if it cannot read it, the resume fails rather than starting anew. Claude may show an onboarding prompt after a rebuild.

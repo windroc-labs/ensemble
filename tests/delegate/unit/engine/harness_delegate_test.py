@@ -52,7 +52,7 @@ from ensemble.session import (
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 from ensemble.session.engine.types import Liveness, SessionRow
-from ensemble.utils import ACCOUNT_ENV, OutcomeStatus, StatusState, Stopped
+from ensemble.utils import OutcomeStatus, StatusState, Stopped
 from tests.delegate.fakes.harness_session import (
     DrivenDelegate,
     FailingSession,
@@ -1412,49 +1412,6 @@ class OverlayTest(HarnessCase):
         self.stop(record)
         DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume()
         self.assertEqual(self.metadata()["plan"]["run"]["effort"], "high")
-
-
-class AccountsTest(HarnessCase):
-    """The role's accounts table, resolved with the run's overlays, picks its session's account."""
-
-    def setUp(self):
-        super().setUp()
-        self.configured(
-            "[session.clients.fake.accounts.work]\n[session.clients.fake.accounts.home]\n"
-        )
-
-    def configured(self, text):
-        with open(self.local, "a", encoding="utf-8") as file:
-            file.write(text)
-
-    def env(self):
-        return self.metadata()["plan"]["session"]["env"]
-
-    def test_create_takes_the_role_table_then_each_overlay(self):
-        self.make()
-        self.assertNotIn(ACCOUNT_ENV, self.env())
-        self.configured('[delegate.roles.dummy-tester.accounts]\nfake = "work"\n')
-        self.make()
-        self.assertEqual(self.env()[ACCOUNT_ENV], "work")
-        self.make(overlays=({"roles": {"dummy-tester": {"accounts": {"fake": "home"}}}},))
-        self.assertEqual(self.env()[ACCOUNT_ENV], "home")
-        self.make(overlays=({"accounts": {"claude": "home"}},))
-        self.assertEqual(self.env()[ACCOUNT_ENV], "work")
-
-    def test_resume_re_resolves_with_the_current_config_and_its_overlays(self):
-        record = self.make(overlays=({"accounts": {"fake": "home"}},)).detach()
-        self.assertEqual(self.env()[ACCOUNT_ENV], "home")
-        self.stop(record)
-        self.configured('[delegate.accounts]\nfake = "work"\n')
-        DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume()
-        self.assertEqual(self.env()[ACCOUNT_ENV], "home")
-        self.work = os.path.join(self.home, "run-2")
-        record = self.make().detach()
-        self.assertEqual(self.env()[ACCOUNT_ENV], "work")
-        self.stop(record)
-        self.configured('[delegate.roles.dummy-tester.accounts]\nfake = "home"\n')
-        DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume()
-        self.assertEqual(self.env()[ACCOUNT_ENV], "home")
 
 
 class ResumeInputTest(HarnessCase):

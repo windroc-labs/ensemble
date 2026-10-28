@@ -1,5 +1,25 @@
 # Upgrading
 
+## Claude account selection is the session's
+
+A start that selects no Claude account runs on the registered account with the most usage left, and a run that hits a
+usage limit now holds its account over until the reset, so later starts move to another
+([Claude accounts](architecture.md#claude-accounts)). Selection lives in the session only. Before the next run:
+
+1. Remove every `[delegate.accounts]`, `[delegate.roles.<role>.accounts]`, `[orchestrator.core.accounts]` and
+   `[orchestrator.core.roles.<role>.accounts]` from `~/.ensemble/config.local.toml`. A left one is a configuration
+   error: `unknown key 'accounts' …; moved to [session.clients.<client>] account`.
+2. To fix one account for every start, set it in the session instead; leave it out to let each start pick:
+
+   ```toml
+   [session.clients.claude]
+   account = "work"
+   ```
+
+A role no longer has an account of its own, and `ensemble-crew reopen` no longer restores a run's recorded account:
+pass `--account` to choose one. The probe reads each account's `dir`: log that dir in to the same subscription as the
+setup-token `"$B" login claude <name>` holds.
+
 ## Verifier reports on GitHub; orchestrator destination removed
 
 The `verifier` now publishes its report with the `github` destination, to `Verification/` on `main` of a repo you name,

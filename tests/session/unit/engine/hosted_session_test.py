@@ -89,6 +89,7 @@ from tests.session.hosted_support import (
     Base,
     HostedEnvBase,
     HostedTuiBase,
+    PoolClient,
     ProbeClient,
     TuiBase,
     fake_tmux,
@@ -1760,10 +1761,54 @@ class AccountPoolTest(Base):
         self.assertEqual(self.started_env(**{ACCOUNT_ENV: "default"})[ACCOUNT_ENV], "default")
         self.probe.assert_not_called()
 
+    def test_a_configured_account_runs_unprobed_unless_one_is_selected(self):
+        with mock.patch.object(PoolClient, "_account", return_value="work"):
+            self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
+            self.assertEqual(self.started_env(**{ACCOUNT_ENV: "default"})[ACCOUNT_ENV], "default")
+        self.probe.assert_not_called()
+
+    def test_usage_is_the_configured_accounts_reading(self):
+        self.outputs = {"/d": "10,10", "/w": "20,100"}
+        with mock.patch.object(PoolClient, "_account", return_value="work"):
+            self.assertTrue(exhausted(self.usage()))
+            hosted_session.accounts.hold("pool", "work", None)
+            self.assertEqual(self.usage().five_hour.used_percent, 100.0)
+        self.assertEqual(self.usage(), Usage(Window(10, None), Window(10, None)))
+
     def test_with_no_reading_known_a_start_selects_none(self):
         self.probe.side_effect = None
         self.probe.return_value = None
         self.assertNotIn(ACCOUNT_ENV, self.started_env())
+
+    def run_on(self, **env):
+        """An in_process run selecting `env`'s account, drained."""
+        spec = self.spec(client="pool", mode=Mode.IN_PROCESS, env=env)
+        with (
+            mock.patch.object(PoolClient, "in_process", fake_client.InProcessFakeClient.in_process),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            session = self.session.start(spec)
+            self.addCleanup(session.stop)
+            self.drain(session)
+
+    def test_a_run_at_its_weekly_limit_moves_later_starts_to_another_account(self):
+        """WDRC-367: default is over its weekly limit while its probe reads plenty left."""
+        self.outputs = {"/d": "5,10", "/w": "16,52"}
+        self.steps({"out": {"type": "limit", "resets_at": time.time() + 3 * 24 * 3600}})
+        self.assertEqual(self.started_env()[ACCOUNT_ENV], "default")
+        self.run_on()
+        self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
+        self.assertEqual(self.usage(), Usage(Window(16, None), Window(52, None)))
+        self.run_on(**{ACCOUNT_ENV: "work"})
+        self.assertTrue(exhausted(self.usage()))
+
+    def test_a_run_off_the_pool_holds_nothing(self):
+        self.steps({"out": {"type": "limit", "resets_at": time.time() + 3600}})
+        self.pool({"default": "/d"})
+        self.run_on()
+        self.pool({"default": "/d", "work": "/w"}, container=False)
+        self.run_on()
+        self.assertFalse(os.path.exists(os.path.join(self.ensemble, "usage", "pool-holds.json")))
 
     def test_one_account_or_no_container_is_todays_single_probe(self):
         for accounts, container in (

@@ -973,26 +973,16 @@ class Configures(Base):
                 self.assertEqual((code, out, err), (2, "", f"{want}\n"))
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
 
-    def test_an_unregistered_role_account_exits_2_and_starts_nothing(self):
-        self.configure_session(
-            {
-                "fake": {
-                    "implementation": "ensemble.session.clients.fake:FakeClient",
-                    "scenario": self.scenario,
-                    "log": self.log,
-                    "accounts": {"work": {}},
-                }
-            }
-        )
-        self.local('[roles.dummy-tester.accounts]\nfake = "nope"\n')
+    def test_a_role_accounts_table_exits_2_naming_the_session_key(self):
+        self.local('[roles.dummy-tester.accounts]\nfake = "work"\n')
         code, out, err = self.runs()
         self.assertEqual(
             (code, out, err.splitlines()[-1]),
             (
                 2,
                 "",
-                "delegate: account 'nope': not a registered account of client fake"
-                " ([clients.fake.accounts.nope])",
+                "delegate: unknown key 'accounts' in roles.dummy-tester; moved to"
+                " [session.clients.<client>] account",
             ),
         )
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))

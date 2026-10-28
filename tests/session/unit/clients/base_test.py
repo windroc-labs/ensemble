@@ -158,6 +158,7 @@ class ClientTest(Refusals):
         client = StubClient({})
         self.assertIsNone(client.usage_probe())
         self.assertIsNone(client._accounts())
+        self.assertEqual(client._account(), "")
         self.assertIsNone(client._usage_probes())
         for output in ("", "garbage", '{"type": "rate_limit_event"}'):
             with self.subTest(output=output):

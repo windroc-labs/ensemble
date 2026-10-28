@@ -424,12 +424,13 @@ Examples:
             "Resume a closed issue run's conversation as a worker and track its Record",
             f"{LayerCommand.SESSION} start",
             """ISSUE is a board issue identifier with a recorded run.
-Crew reads the run's client, session id, cwd, agent name, Host and account from
-its run record, WORK_DIR/work/ISSUE/run/delegate.json, then starts worker AGENT,
-the agent name: ensemble-session start AGENT --host HOST --client CLIENT --cwd CWD
---resume SID [--account NAME], under that session identity, so a Docker run comes
-back on the Docker Host and its account. No record or session id: exit 1.
-SESSION_OPTIONS naming --account, --client, --cwd, --host or --resume, abbreviated
+Crew reads the run's client, session id, cwd, agent name and Host from its run
+record, WORK_DIR/work/ISSUE/run/delegate.json, then starts worker AGENT, the
+agent name: ensemble-session start AGENT --host HOST --client CLIENT --cwd CWD
+--resume SID, under that session identity, so a Docker run comes back on the
+Docker Host; its Claude account is the session's choice unless SESSION_OPTIONS
+give --account. No record or session id: exit 1.
+SESSION_OPTIONS naming --client, --cwd, --host or --resume, abbreviated
 or not: exit 2. A run still alive
 (roster entry ISSUE or AGENT, or a session listed here or below with its
 session id) or one whose liveness is unknown (its status or the session listing

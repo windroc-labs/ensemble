@@ -338,6 +338,11 @@ class Resources(Case):
                 2,
                 "~/.ensemble/config.local.toml: unknown key 'runtime' in [delegate]; renamed to 'client'",
             ),
+            (
+                '[delegate.accounts]\nclaude = "work"\n',
+                2,
+                "~/.ensemble/config.local.toml: unknown key 'accounts' in [delegate]; moved to [session.clients.<client>] account",
+            ),
         ):
             self.local(text)
             with self.subTest(text=text):

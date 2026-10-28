@@ -1847,18 +1847,14 @@ class ConfigurationRoot(ConfigFile, Case):
             with self.subTest(message):
                 self.fails(message, PIPELINE + text)
 
-    def test_a_core_role_accounts_table_is_the_delegates_overlay(self):
-        text = (
-            PIPELINE
-            + '[core.accounts]\ncodex = "c"\n[core.roles.researcher.accounts]\nclaude = "w"\n'
-        )
-        self.assertEqual(self.load(text).core["roles"]["researcher"]["accounts"], {"claude": "w"})
+    def test_a_core_accounts_table_names_the_session_key(self):
+        moved = "; moved to [session.clients.<client>] account"
         for text, message in (
+            ('[core.accounts]\nclaude = "w"\n', f"unknown key 'accounts' in [overlay]{moved}"),
             (
-                "[core.roles.researcher]\naccounts = 1\n",
-                "[overlay.roles.researcher.accounts] must be a table",
+                '[core.roles.researcher.accounts]\nclaude = "w"\n',
+                f"unknown key 'accounts' in [overlay.roles.researcher]{moved}",
             ),
-            ("[core.accounts]\nclaude = 1\n", "[overlay.accounts] claude must be text"),
         ):
             with self.subTest(message):
                 self.fails(f"core: run overlay: {message}", PIPELINE + text)
