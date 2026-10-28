@@ -1,12 +1,6 @@
-"""The orchestrator's integration flows: the test's HOME with both local files ([linear.task_labels]
-included), FakeLinear over HTTP through test-only transport with the harness and role apps, the
-human and the task label group, fake_claude as `claude`, a launch (router.outer), promote and
-router as `python3 -P` subprocesses, and readers of Linear, the logs and a run's files (its drive, the local process
-delegate.json `drive` controls, included). TmuxFlow adds a private tmux server for the runs' agent sessions (a command
-run as from MANAGER's pane too),
-fake_gh as `gh` with REPO a bare repo, and `ensemble-orchestrator` as entry.py under the fake transport,
-the harness's write-back callback. BinFlow runs router and promote as bin/ensemble-orchestrator by
-absolute path, as launchd does (FR-25, FR-29).
+"""Orchestrator integration flows: Flow (a HOME with both local files, FakeLinear over HTTP,
+fake_claude, router and promote subprocesses, readers); TmuxFlow adds tmux and fake_gh; BinFlow
+runs bin/ensemble-orchestrator as launchd does (FR-25, FR-29).
 """
 
 import copy
@@ -21,6 +15,7 @@ import tomllib
 from urllib.parse import quote
 
 from ensemble.utils import ProcessControl
+from tests.delegate import drives
 from tests.delegate.workdir import input_first, run_log
 from tests.orchestrator.case import PY, Case, child_env
 from tests.orchestrator.case import REPO as WORKTREE
@@ -68,7 +63,7 @@ _OUTPUTS = {
 RESEARCH_DIR, PRD_DIR = _OUTPUTS["researcher"]["dir"], _OUTPUTS["pm"]["dir"]
 
 HEAD = "a" * 40
-# an engineer's done outcome: its updraft head is the head of each of GH's views (the ready gate)
+# the ready gate: each GH view's head
 UPDRAFT = {"status": "converged", "head": HEAD}
 
 GH = {
@@ -99,12 +94,10 @@ GUARD = (
 
 
 def usage(five_hour):
-    """fake_claude's `/usage` panel at five_hour utilization."""
     return f"Current session: {round(100 * five_hour)}% used\n"
 
 
 def steps(*names, end=0, found=(), more=()):
-    """orchestrator.jsonl's lines of the run ID, SID's write-back: its steps, `more`, its end."""
     return [
         *(
             f"writeback step {ID} sid={SID} step={s}" + (" found=true" if s in found else "")
@@ -137,6 +130,7 @@ class Flow(Case):
     def setUp(self):
         self.root = os.path.realpath(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.addCleanup(drives.end, self.root)
         state = os.path.join(self.root, "state")
         self.workdirs, self.logs = os.path.join(state, "work"), os.path.join(state, "logs")
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
@@ -165,7 +159,7 @@ class Flow(Case):
     def env(self):
         return {
             **child_env({}, WORKTREE, os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-            # prune lists tmux sessions: a private dir (or base()'s server), never the developer's
+            # prune lists tmux sessions: never the developer's server
             "TMUX_TMPDIR": self.root,
             **self.base(),
             "TZ": "UTC",
@@ -176,7 +170,7 @@ class Flow(Case):
         }
 
     def guard(self):
-        """config.path() must find each of SHIMS in self.bin first: never a real one."""
+        """config.path() finds each of SHIMS in self.bin, never a real one."""
         res = self.script("-c", GUARD, *self.SHIMS)
         want = {n: os.path.join(self.bin, n) for n in self.SHIMS}
         self.assertEqual((res.returncode, res.stdout), (0, json.dumps(want) + "\n"), res.stderr)
@@ -186,7 +180,6 @@ class Flow(Case):
             json.dump({"steps": steps, **scenario, "log": self.claude_log}, f)
 
     def script(self, *argv, **env):
-        """argv under python3, env added to self.env()."""
         return subprocess.run(
             [*PY, *argv],
             cwd=self.root,
@@ -222,7 +215,6 @@ class Flow(Case):
         return input_first(jsonl(run_log(os.path.join(self.workdirs, ident))))
 
     def drive(self, ident):
-        """ident's run's drive, delegate.json `drive`; None before a detach saved one."""
         path = os.path.join(
             os.path.dirname(run_log(os.path.join(self.workdirs, ident))), "delegate.json"
         )
@@ -238,7 +230,6 @@ class Flow(Case):
         return control is not None and control.running()
 
     def ledger(self, ident):
-        """Each sid's write-back steps."""
         try:
             with open(os.path.join(self.workdirs, ident, "writeback.json")) as f:
                 return {sid: entry.get("steps", []) for sid, entry in json.load(f).items()}
@@ -256,7 +247,6 @@ class Flow(Case):
         return [(r.op, r.caller, r.result) for r in self.requests() if r.result != "ok"]
 
     def who(self, uid):
-        """A user as the flows name it: a human by its email, an app by its user id."""
         return uid and (self.fake.users[uid]["email"] or uid)
 
     def issue(self, ident):
@@ -287,10 +277,7 @@ class Flow(Case):
 
 
 class TmuxFlow(Flow):
-    """A private tmux server (live_tmux) with session MANAGER for the sessions; fake_gh as
-    `gh` over self.gh (write_gh), REPO a bare repo that HOME's .gitconfig puts in place of
-    github.com.
-    """
+    """A live_tmux server; fake_gh over self.gh; REPO a bare repo for github.com."""
 
     SHIMS = ("claude", "gh", "ensemble-orchestrator")
 
@@ -340,25 +327,20 @@ class TmuxFlow(Flow):
 
     @staticmethod
     def harness(role, ident, sid):
-        """The run's drive name, its events lines' session."""
         return f"{role}-{ident}-{sid[:8]}-drive"
 
     def in_manager(self):
-        """The environment of a command run in MANAGER's pane, a client attached to MANAGER."""
         if not self.server.clients:
             self.server.attach(MANAGER)
         return self.server.inside(MANAGER)
 
     def live(self, session):
-        # tmux on Linux (CI: 3.4) can leave an exited pane process unreaped, its session listed,
-        # until another child of the server exits: a no-op job is one
+        # tmux 3.4 reaps an exited pane only when another child exits
         self.server.tmux("run-shell", "-b", "true")
         return self.server.tmux("has-session", "-t", f"={session}").returncode == 0
 
     def wait_end(self, sid, ident, ends=1, role="engineer", timeout=TIMEOUT):
-        """Until orchestrator.jsonl holds `ends` write-back end lines of sid and the run's drive no
-        longer runs; else fails with the tails of orchestrator.jsonl and the run's run.jsonl.
-        """
+        """Until `ends` write-back ends of sid and the drive ended; else fails with the log tails."""
         harness = self.harness(role, ident, sid)
 
         def ended():
@@ -392,11 +374,7 @@ class TmuxFlow(Flow):
 
 
 class BinFlow(TmuxFlow):
-    """bin/ensemble-orchestrator by absolute path with a launchd-like PATH and no PYTHONPATH; its python3
-    is fake_python.py: this interpreter under the fake Linear transport with the test roots its
-    fakes import, the only command added to PATH. The harness calls this installation's
-    `ensemble-orchestrator` back.
-    """
+    """bin/ensemble-orchestrator with a launchd-like PATH; its python3 is fake_python.py."""
 
     def setUp(self):
         super().setUp()
@@ -409,7 +387,6 @@ class BinFlow(TmuxFlow):
         return env
 
     def start(self, *argv):
-        """bin/ensemble-orchestrator argv, running: the test reads its output with communicate()."""
         proc = subprocess.Popen(
             [BIN, *argv],
             cwd=self.root,

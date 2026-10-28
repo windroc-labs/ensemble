@@ -28,6 +28,7 @@ POLL = 0.05
 RESEND = 1  # s: a just-listed client may drop input; every POLL would fill its pty
 SOCKET_MAX = 100  # sun_path: 104 bytes (macOS), 108 (Linux)
 HEADROOM = 256
+NPROC_PROBE = os.path.join(os.path.dirname(__file__), "nproc_probe.py")
 PANES = "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
 
 
@@ -157,19 +158,20 @@ class Server:
         }
 
     def start(self, manager: str, width: int = 200, height: int = 50) -> None:
-        """Capped (RLIMIT_NPROC) at the user's processes plus HEADROOM against a fork loop."""
+        """Capped (RLIMIT_NPROC) at the uid's processes (Linux: nproc_probe) plus HEADROOM against a
+        fork loop.
+        """
         self.size = width, height
         _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-        uid = str(os.getuid())
-        ps = (
-            ["ps", "-L", "-U", uid, "-o", "lwp="]
-            if sys.platform.startswith("linux")
-            else ["ps", "-U", uid, "-o", "pid="]
-        )
-        cap = (
-            len(subprocess.run(ps, capture_output=True, text=True, check=True).stdout.split())
-            + HEADROOM
-        )
+        if sys.platform.startswith("linux"):
+            probe = [sys.executable, "-I", NPROC_PROBE]
+            used = int(subprocess.run(probe, capture_output=True, text=True, check=True).stdout)
+        else:
+            ps = ["ps", "-U", str(os.getuid()), "-o", "pid="]
+            used = len(
+                subprocess.run(ps, capture_output=True, text=True, check=True).stdout.split()
+            )
+        cap = used + HEADROOM
         cap = cap if hard == resource.RLIM_INFINITY else min(cap, hard)
         subprocess.run(
             [
