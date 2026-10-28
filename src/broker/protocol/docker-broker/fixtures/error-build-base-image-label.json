@@ -1,9 +1,0 @@
-{
-  "exit_code": 8,
-  "error": {
-    "command": "build",
-    "code": "build_failed",
-    "message": "Base image dummy-env:test carries reserved labels windroc.lock; remove every windroc. and ensemble. label.",
-    "cleanup": "not_needed"
-  }
-}

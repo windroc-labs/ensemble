@@ -1,9 +1,0 @@
-{
-  "exit_code": 6,
-  "error": {
-    "command": "start",
-    "code": "image_rejected",
-    "message": "Example image_rejected.",
-    "cleanup": "not_needed"
-  }
-}

@@ -172,7 +172,7 @@ func TestAbsentNetwork(t *testing.T) {
 }
 
 func TestCredentialDirsFixture(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "credential-dirs.json"))
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "..", "credential-dirs.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

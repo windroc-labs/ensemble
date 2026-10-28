@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -20,17 +21,18 @@ type Context struct {
 	Egress              string `json:"egress"` // the egress proxy's state; "": healthy
 }
 
+// Case is one entry of a definition's table, <definition>.json.
 type Case struct {
-	File       string `json:"file"`
-	Definition string `json:"definition"`
+	Name       string `json:"name"`
+	Definition string `json:"-"`
 	Valid      bool   `json:"valid"`
 	Expected   struct {
 		Stage     string  `json:"stage"`
 		ExitCode  *int    `json:"exit_code"`
 		ErrorCode *string `json:"error_code"`
 	} `json:"expected"`
-	Context *Context `json:"context"`
-	Data    []byte   `json:"-"`
+	Context *Context        `json:"context"`
+	Data    json.RawMessage `json:"data"`
 }
 
 func Dir() string {
@@ -38,37 +40,49 @@ func Dir() string {
 	return filepath.Join(filepath.Dir(file), "../../protocol/docker-broker/fixtures")
 }
 
-// Cases returns every indexed fixture whose definition is one of defs (all when empty).
+// Cases returns the cases of the tables of defs, in order (every table when empty).
 func Cases(t *testing.T, defs ...string) []Case {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(Dir(), "index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var index struct {
-		Cases []Case `json:"cases"`
-	}
-	if err := json.Unmarshal(data, &index); err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]bool{}
-	for _, d := range defs {
-		want[d] = true
-	}
-	var out []Case
-	for _, c := range index.Cases {
-		if len(defs) > 0 && !want[c.Definition] {
-			continue
-		}
-		if c.Data, err = os.ReadFile(filepath.Join(Dir(), c.File)); err != nil {
+	if len(defs) == 0 {
+		paths, err := filepath.Glob(filepath.Join(Dir(), "*.json"))
+		if err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, c)
+		for _, p := range paths {
+			defs = append(defs, strings.TrimSuffix(filepath.Base(p), ".json"))
+		}
+	}
+	var out []Case
+	for _, d := range defs {
+		data, err := os.ReadFile(filepath.Join(Dir(), d+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var table []Case
+		if err := json.Unmarshal(data, &table); err != nil {
+			t.Fatalf("%s: %v", d, err)
+		}
+		for _, c := range table {
+			c.Definition = d
+			out = append(out, c)
+		}
 	}
 	if len(out) == 0 {
 		t.Fatalf("no fixtures for %v", defs)
 	}
 	return out
+}
+
+// Named returns the data of the case called name, from any table.
+func Named(t *testing.T, name string) []byte {
+	t.Helper()
+	for _, c := range Cases(t) {
+		if c.Name == name {
+			return c.Data
+		}
+	}
+	t.Fatalf("no fixture %s", name)
+	return nil
 }
 
 // SameJSON reports whether a and b hold equal JSON values.

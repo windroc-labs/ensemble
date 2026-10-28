@@ -1,0 +1,230 @@
+[
+  {
+    "name": "build-input",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble"
+      ]
+    }
+  },
+  {
+    "name": "build-input-extra",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--extra"
+      ]
+    }
+  },
+  {
+    "name": "build-input-max-age",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--max-age",
+        "604800"
+      ]
+    }
+  },
+  {
+    "name": "build-input-max-age-missing",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--max-age"
+      ]
+    }
+  },
+  {
+    "name": "build-input-plugins",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--plugin",
+        "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
+        "--plugin",
+        "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--max-age",
+        "604800"
+      ]
+    }
+  },
+  {
+    "name": "build-input-plugin-missing",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--plugin"
+      ]
+    }
+  },
+  {
+    "name": "build-input-plugin-path",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--plugin",
+        "../updraft"
+      ]
+    }
+  },
+  {
+    "name": "build-input-image-plugins",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--plugin",
+        "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--image-plugin",
+        "dummy-plugin",
+        "--image-plugin",
+        "other.plugin",
+        "--max-age",
+        "604800"
+      ]
+    }
+  },
+  {
+    "name": "build-input-image-plugin-path",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--image-plugin",
+        "../x"
+      ]
+    }
+  },
+  {
+    "name": "build-input-base-image",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--base-image",
+        "dummy-env:test",
+        "--plugin",
+        "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--image-plugin",
+        "dummy-plugin",
+        "--image-plugin",
+        "other.plugin",
+        "--max-age",
+        "604800"
+      ]
+    }
+  },
+  {
+    "name": "build-input-base-image-missing",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--base-image"
+      ]
+    }
+  },
+  {
+    "name": "build-input-base-image-bad",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "build",
+        "--ensemble",
+        "/opt/ensemble",
+        "--base-image",
+        "-x"
+      ]
+    }
+  }
+]

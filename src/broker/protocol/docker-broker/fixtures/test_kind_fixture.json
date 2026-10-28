@@ -1,0 +1,15 @@
+[
+  {
+    "name": "credential-spec-test-kind",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": ""
+    },
+    "data": {
+      "credentials": " {\n  \"fixture_test\" : { \"file\": \"fixture-\\u0066ile\" }\n} \n",
+      "environment_credentials": "{ \"fixture_test\": { \"file\": \"environment-file\" } }"
+    }
+  }
+]

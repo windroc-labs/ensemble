@@ -1,0 +1,719 @@
+[
+  {
+    "name": "error-usage",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "exit_code": 2,
+      "error": {
+        "command": "version",
+        "code": "usage",
+        "message": "Example usage.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-manifest_rejected",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "exit_code": 3,
+      "error": {
+        "command": "start",
+        "code": "manifest_rejected",
+        "message": "Example manifest_rejected.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-mount_rejected",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "data": {
+      "exit_code": 4,
+      "error": {
+        "command": "start",
+        "code": "mount_rejected",
+        "message": "Example mount_rejected.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-login_required",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 5,
+      "error_code": "login_required"
+    },
+    "data": {
+      "exit_code": 5,
+      "error": {
+        "command": "start",
+        "code": "login_required",
+        "message": "Example login_required.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-image_rejected",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 6,
+      "error_code": "image_rejected"
+    },
+    "data": {
+      "exit_code": 6,
+      "error": {
+        "command": "start",
+        "code": "image_rejected",
+        "message": "Example image_rejected.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-docker_unreachable",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 7,
+      "error_code": "docker_unreachable"
+    },
+    "data": {
+      "exit_code": 7,
+      "error": {
+        "command": "build",
+        "code": "docker_unreachable",
+        "message": "Example docker_unreachable.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-build_failed",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 8,
+      "error_code": "build_failed"
+    },
+    "data": {
+      "exit_code": 8,
+      "error": {
+        "command": "build",
+        "code": "build_failed",
+        "message": "Example build_failed.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-build-image-plugin",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 8,
+      "error_code": "build_failed"
+    },
+    "data": {
+      "exit_code": 8,
+      "error": {
+        "command": "build",
+        "code": "build_failed",
+        "message": "In-image plugin dummy-plugin: /opt/windroc/plugins/dummy-plugin/.claude-plugin/plugin.json must name it \"dummy-plugin\".",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-build-image-plugin-missing",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 8,
+      "error_code": "build_failed"
+    },
+    "data": {
+      "exit_code": 8,
+      "error": {
+        "command": "build",
+        "code": "build_failed",
+        "message": "In-image plugin dummy-plugin: no /opt/windroc/plugins/dummy-plugin/.claude-plugin/plugin.json.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-build-base-image-absent",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 8,
+      "error_code": "build_failed"
+    },
+    "data": {
+      "exit_code": 8,
+      "error": {
+        "command": "build",
+        "code": "build_failed",
+        "message": "Base image dummy-env:test is not a local image; build or load it first (ensemble-broker never pulls it).",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-build-base-image-label",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 8,
+      "error_code": "build_failed"
+    },
+    "data": {
+      "exit_code": 8,
+      "error": {
+        "command": "build",
+        "code": "build_failed",
+        "message": "Base image dummy-env:test carries reserved labels windroc.lock; remove every windroc. and ensemble. label.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-build-base-image-requirements",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 8,
+      "error_code": "build_failed"
+    },
+    "data": {
+      "exit_code": 8,
+      "error": {
+        "command": "build",
+        "code": "build_failed",
+        "message": "Base image dummy-env:test lacks tmux, a non-root user agent; add what it lacks to the image, then retry.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-start_failed",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 9,
+      "error_code": "start_failed"
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Example start_failed.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-start-rolled-back",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 9,
+      "error_code": "start_failed"
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Example start_failed.",
+        "cleanup": "removed"
+      }
+    }
+  },
+  {
+    "name": "error-start-cleanup-failed",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 9,
+      "error_code": "start_failed"
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Example start_failed.",
+        "cleanup": "failed",
+        "cleanup_error": "Docker delete failed.",
+        "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+      }
+    }
+  },
+  {
+    "name": "error-start-cleanup-missing-container",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Example start_failed.",
+        "cleanup": "failed",
+        "cleanup_error": "Docker delete failed."
+      }
+    }
+  },
+  {
+    "name": "error-start-cleanup-invalid-container",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Example start_failed.",
+        "cleanup": "failed",
+        "cleanup_error": "Docker delete failed.",
+        "container": "worker_1"
+      }
+    }
+  },
+  {
+    "name": "error-close_failed",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 10,
+      "error_code": "close_failed"
+    },
+    "data": {
+      "exit_code": 10,
+      "error": {
+        "command": "close",
+        "code": "close_failed",
+        "message": "Example close_failed.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-keychain_failed",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 11,
+      "error_code": "keychain_failed"
+    },
+    "data": {
+      "exit_code": 11,
+      "error": {
+        "command": "start",
+        "code": "keychain_failed",
+        "message": "Example keychain_failed.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-workspace_dirty",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 12,
+      "error_code": "workspace_dirty"
+    },
+    "data": {
+      "exit_code": 12,
+      "error": {
+        "command": "workspace-rm",
+        "code": "workspace_dirty",
+        "message": "Example workspace_dirty.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-workspace_rejected",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 13,
+      "error_code": "workspace_rejected"
+    },
+    "data": {
+      "exit_code": 13,
+      "error": {
+        "command": "workspace-rm",
+        "code": "workspace_rejected",
+        "message": "Example workspace_rejected.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-workspace_failed",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 14,
+      "error_code": "workspace_failed"
+    },
+    "data": {
+      "exit_code": 14,
+      "error": {
+        "command": "workspace-rm",
+        "code": "workspace_failed",
+        "message": "Example workspace_failed.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-internal_error",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 70,
+      "error_code": "internal_error"
+    },
+    "data": {
+      "exit_code": 70,
+      "error": {
+        "command": "version",
+        "code": "internal_error",
+        "message": "Example internal_error.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-wrong-exit",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 0,
+      "error": {
+        "command": "start",
+        "code": "manifest_rejected",
+        "message": "Invalid manifest.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-wrong-command",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 3,
+      "error": {
+        "command": "build",
+        "code": "manifest_rejected",
+        "message": "Invalid manifest.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-missing-cleanup-detail",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Start failed.",
+        "cleanup": "failed"
+      }
+    }
+  },
+  {
+    "name": "error-github_failed",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 15,
+      "error_code": "github_failed"
+    },
+    "data": {
+      "exit_code": 15,
+      "error": {
+        "command": "start",
+        "code": "github_failed",
+        "message": "GitHub request failed: GitHub answered HTTP 500.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-egress_unavailable",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 17,
+      "error_code": "egress_unavailable"
+    },
+    "data": {
+      "exit_code": 17,
+      "error": {
+        "command": "start",
+        "code": "egress_unavailable",
+        "message": "Egress proxy egress-proxy is unhealthy, not healthy. Caller network workers needs it. Start the egress proxy with ~/.egress/current/start.sh, wait until it is healthy, then retry.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-busy",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 75,
+      "error": {
+        "command": "start",
+        "code": "busy",
+        "message": "Lock held by ensemble-worker_1-0123456789abcdef0123456789abcdef (worker_1).",
+        "cleanup": "not_needed",
+        "holder": {
+          "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+          "owner": "worker_1"
+        }
+      }
+    }
+  },
+  {
+    "name": "error-busy-starting",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 75,
+      "error": {
+        "command": "start",
+        "code": "busy",
+        "message": "Lock held by ~/.ensemble/docker/locks/dummy-lock.lock (starting).",
+        "cleanup": "not_needed",
+        "holder": {
+          "container": "~/.ensemble/docker/locks/dummy-lock.lock",
+          "owner": "starting"
+        }
+      }
+    }
+  },
+  {
+    "name": "error-busy-removed",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 75,
+      "error": {
+        "command": "start",
+        "code": "busy",
+        "message": "Lock held by ensemble-worker_1-0123456789abcdef0123456789abcdef (worker_1).",
+        "cleanup": "removed",
+        "holder": {
+          "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+          "owner": "worker_1"
+        }
+      }
+    }
+  },
+  {
+    "name": "error-busy-missing-holder",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 75,
+      "error": {
+        "command": "start",
+        "code": "busy",
+        "message": "Lock held by ensemble-worker_1-0123456789abcdef0123456789abcdef (worker_1).",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-busy-query",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 75,
+      "error": {
+        "command": "lock-query",
+        "code": "busy",
+        "message": "Lock held by ensemble-worker_1-0123456789abcdef0123456789abcdef (worker_1).",
+        "cleanup": "not_needed",
+        "holder": {
+          "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+          "owner": "worker_1"
+        }
+      }
+    }
+  },
+  {
+    "name": "error-nonbusy-holder",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Lock held by ensemble-worker_1-0123456789abcdef0123456789abcdef (worker_1).",
+        "cleanup": "not_needed",
+        "holder": {
+          "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+          "owner": "worker_1"
+        }
+      }
+    }
+  },
+  {
+    "name": "error-start-audit-warning",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 9,
+      "error_code": "start_failed"
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Example start_failed.",
+        "cleanup": "failed",
+        "cleanup_error": "Docker delete failed.",
+        "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+      },
+      "audit_warning": "audit_write_failed"
+    }
+  },
+  {
+    "name": "error-bad-audit-warning",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 9,
+      "error": {
+        "command": "start",
+        "code": "start_failed",
+        "message": "Example start_failed.",
+        "cleanup": "failed",
+        "cleanup_error": "Docker delete failed.",
+        "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+      },
+      "audit_warning": {
+        "message": "AUDIT_SECRET_SENTINEL"
+      }
+    }
+  },
+  {
+    "name": "error-maintain-manifest_rejected",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "exit_code": 3,
+      "error": {
+        "command": "maintain",
+        "code": "manifest_rejected",
+        "message": "Manifest rejected: maintain needs the container's manifest.",
+        "cleanup": "not_needed"
+      }
+    }
+  },
+  {
+    "name": "error-maintain-refresh_failed",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "exit_code": 16,
+      "error": {
+        "command": "maintain",
+        "code": "refresh_failed",
+        "message": "Renewal unavailable.",
+        "cleanup": "not_needed"
+      }
+    }
+  }
+]

@@ -274,7 +274,7 @@ class ConfigTest(Base):
 
     def test_provider_usage_rejects_broker_18_before_probing_credentials(self):
         request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
-        locked = data("error-login_required.json")
+        locked = data("error-login_required")
         locked["error"].update(
             command="probe-provider",
             message="secret-store ensemble-broker-opencode: keychain locked",

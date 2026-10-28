@@ -95,7 +95,7 @@ func (c *fakeCodexCreds) Refresh(ctx context.Context, exec func([]string, []byte
 
 func codexManifest(t *testing.T, edits ...func(map[string]any)) string {
 	t.Helper()
-	return fixtureManifest(t, "manifest-codex.json", edits...)
+	return fixtureManifest(t, "manifest-codex", edits...)
 }
 
 func TestCodexStartIsolation(t *testing.T) {

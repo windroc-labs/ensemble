@@ -248,10 +248,7 @@ func writeManifest(t *testing.T, data []byte) string {
 // fixtureBytes is fixture name's content; with edits, re-encoded with each (nil: none) applied to its fields.
 func fixtureBytes(t *testing.T, name string, edits ...func(map[string]any)) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), name))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fixtures.Named(t, name)
 	if len(edits) == 0 {
 		return data
 	}
@@ -264,7 +261,8 @@ func fixtureBytes(t *testing.T, name string, edits ...func(map[string]any)) []by
 			edit(fields)
 		}
 	}
-	if data, err = json.Marshal(fields); err != nil {
+	data, err := json.Marshal(fields)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return data
@@ -276,11 +274,11 @@ func fixtureManifest(t *testing.T, name string, edits ...func(map[string]any)) s
 	return writeManifest(t, fixtureBytes(t, name, edits...))
 }
 
-func validManifest(t *testing.T) string { return fixtureManifest(t, "manifest-valid.json") }
+func validManifest(t *testing.T) string { return fixtureManifest(t, "manifest-valid") }
 
-// editedManifest is manifest-valid.json, edit applied to its fields.
+// editedManifest is fixture manifest-valid, edit applied to its fields.
 func editedManifest(t *testing.T, edit func(map[string]any)) string {
-	return fixtureManifest(t, "manifest-valid.json", edit)
+	return fixtureManifest(t, "manifest-valid", edit)
 }
 
 func withClaudeAccount(account any) func(map[string]any) {
@@ -312,7 +310,7 @@ func TestRuntimeFixtures(t *testing.T) {
 		if c.Expected.Stage != "runtime" {
 			continue
 		}
-		t.Run(c.File, func(t *testing.T) {
+		t.Run(c.Name, func(t *testing.T) {
 			ctx := c.Context
 			w := &world{labels: goodLabels()}
 			switch ctx.Image {
@@ -529,7 +527,7 @@ func TestStartOrder(t *testing.T) {
 		t.Fatalf("bootstrap %q", boot)
 	}
 	h, d = startHost(&world{labels: goodLabels()}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), fixtureManifest(t, "manifest-no-hook.json")); err != nil {
+	if _, err := h.Start(context.Background(), fixtureManifest(t, "manifest-no-hook")); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range d.calls {
@@ -776,8 +774,8 @@ func TestStartPhaseTimes(t *testing.T) {
 // exec's stdin, never in a Docker argument, so never in argv or the container's --env configuration.
 func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 	secrets := []string{fakeToken, "ghs_token", "fake-access-only", envValue}
-	for _, manifest := range []string{"manifest-valid.json", "manifest-codex.json", "manifest-opencode-providers.json", "manifest-github-app.json",
-		"manifest-github-app.json" + withSecretsSuffix} {
+	for _, manifest := range []string{"manifest-valid", "manifest-codex", "manifest-opencode-providers", "manifest-github-app",
+		"manifest-github-app" + withSecretsSuffix} {
 		t.Run(manifest, func(t *testing.T) {
 			h, d, _, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
 			if _, err := h.Start(context.Background(), credentialManifest(t, manifest)); err != nil {

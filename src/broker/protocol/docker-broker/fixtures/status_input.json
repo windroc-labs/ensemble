@@ -1,0 +1,31 @@
+[
+  {
+    "name": "status-input",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "status"
+      ]
+    }
+  },
+  {
+    "name": "status-input-extra",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "status",
+        "--all"
+      ]
+    }
+  }
+]

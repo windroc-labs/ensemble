@@ -1,7 +1,0 @@
-{
-  "argv": [
-    "workspace-rm",
-    "--volume",
-    "-v"
-  ]
-}

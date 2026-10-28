@@ -1,0 +1,218 @@
+[
+  {
+    "name": "status-output",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {}
+  },
+  {
+    "name": "status-output-codex-ready",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "codex": {
+        "version": "0.162.1",
+        "path": "/usr/local/libexec/ensemble/codex/releases/release-abc/codex",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logged_in": true,
+        "state": "ready",
+        "expires_at": "2026-10-17T13:00:00Z",
+        "repair": ""
+      }
+    }
+  },
+  {
+    "name": "status-output-codex-unavailable",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "codex": {
+        "version": "",
+        "path": "",
+        "sha256": "",
+        "logged_in": false,
+        "state": "installation_invalid",
+        "repair": "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
+      }
+    }
+  },
+  {
+    "name": "status-output-codex-secret",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "codex": {
+        "version": "0.162.1",
+        "path": "/usr/local/libexec/ensemble/codex/releases/release-abc/codex",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logged_in": true,
+        "state": "ready",
+        "expires_at": "2026-10-17T13:00:00Z",
+        "repair": "",
+        "refresh_token": "FAKE_TEST_SECRET"
+      }
+    }
+  },
+  {
+    "name": "status-output-codex-wrong-type",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "codex": {
+        "version": "0.162.1",
+        "path": "/usr/local/libexec/ensemble/codex/releases/release-abc/codex",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logged_in": "yes",
+        "state": "ready",
+        "expires_at": "2026-10-17T13:00:00Z",
+        "repair": ""
+      }
+    }
+  },
+  {
+    "name": "status-output-codex-bad-expiry",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "codex": {
+        "version": "0.162.1",
+        "path": "/usr/local/libexec/ensemble/codex/releases/release-abc/codex",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logged_in": true,
+        "state": "ready",
+        "expires_at": "tomorrow",
+        "repair": ""
+      }
+    }
+  },
+  {
+    "name": "status-output-codex-missing-expiry",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "codex": {
+        "version": "0.162.1",
+        "path": "/usr/local/libexec/ensemble/codex/releases/release-abc/codex",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "logged_in": true,
+        "state": "ready",
+        "repair": ""
+      }
+    }
+  },
+  {
+    "name": "status-output-audit-warning",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "audit_warning": "audit_write_failed"
+    }
+  },
+  {
+    "name": "status-output-static",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "claude": {
+        "default": true
+      },
+      "static": [
+        {
+          "reference": "ensemble-broker-claude/default",
+          "version": 2,
+          "expires_at": "2027-10-26T12:00:00Z",
+          "provenance": "assumed",
+          "notice": null
+        },
+        {
+          "reference": "ensemble-broker-env/db",
+          "version": 1,
+          "expires_at": "2026-10-31T00:00:00Z",
+          "provenance": "explicit",
+          "notice": "ensemble-broker-env/db expires 2026-10-31 (explicit), in 5 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart"
+        },
+        {
+          "reference": "ensemble-broker-opencode/strata",
+          "version": 0,
+          "expires_at": null,
+          "provenance": "unknown",
+          "notice": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "status-output-static-secret",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "claude": {
+        "default": true
+      },
+      "static": [
+        {
+          "reference": "ensemble-broker-claude/default",
+          "version": 2,
+          "expires_at": "2027-10-26T12:00:00Z",
+          "provenance": "assumed",
+          "notice": null,
+          "value": "sk-secret"
+        },
+        {
+          "reference": "ensemble-broker-env/db",
+          "version": 1,
+          "expires_at": "2026-10-31T00:00:00Z",
+          "provenance": "explicit",
+          "notice": "ensemble-broker-env/db expires 2026-10-31 (explicit), in 5 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart"
+        },
+        {
+          "reference": "ensemble-broker-opencode/strata",
+          "version": 0,
+          "expires_at": null,
+          "provenance": "unknown",
+          "notice": null
+        }
+      ]
+    }
+  }
+]

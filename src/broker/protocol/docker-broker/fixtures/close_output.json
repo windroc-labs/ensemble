@@ -1,0 +1,57 @@
+[
+  {
+    "name": "close-output",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "removed": true
+    }
+  },
+  {
+    "name": "close-output-extra",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "note": "Malformed broker response; caller fails closed.",
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "removed": true,
+      "extra": true
+    }
+  },
+  {
+    "name": "close-absent",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "removed": false
+    }
+  },
+  {
+    "name": "close-output-audit-warning",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "removed": true,
+      "audit_warning": "audit_write_failed"
+    }
+  }
+]

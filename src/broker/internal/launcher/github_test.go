@@ -32,7 +32,7 @@ type fakeTokens struct {
 	repos                       []string            // each Issue's and Refresh's repo
 }
 
-// fixtureSet is manifest-github-app.json's permissions.
+// fixtureSet is fixture manifest-github-app's permissions.
 var fixtureSet = map[string]string{"actions": "read", "checks": "read", "contents": "write", "pull_requests": "write", "statuses": "read", "workflows": "write"}
 
 const botID int64 = 343764394
@@ -91,7 +91,7 @@ func (f *fakeTokens) Prefetch(_ context.Context, repo, ref, dir, c string, run f
 	return nil
 }
 
-func githubManifest(t *testing.T) string { return fixtureManifest(t, "manifest-github-app.json") }
+func githubManifest(t *testing.T) string { return fixtureManifest(t, "manifest-github-app") }
 
 func githubHost(w *world, tokens *fakeTokens) (Host, *fakeDocker) {
 	h, d := startHost(w, &fakeCreds{})
@@ -173,7 +173,7 @@ func TestStartGitHubFailureRollsBack(t *testing.T) {
 
 // A repo grant's renewal names the manifest's repo, so the broker renews that repository's slot alone.
 func TestMaintainRepoGrant(t *testing.T) {
-	path := fixtureManifest(t, "manifest-github-app.json", func(f map[string]any) {
+	path := fixtureManifest(t, "manifest-github-app", func(f map[string]any) {
 		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet, "repo": "acme/out"})
 	})
 	tokens := &fakeTokens{}

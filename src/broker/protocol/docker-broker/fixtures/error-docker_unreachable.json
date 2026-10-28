@@ -1,9 +1,0 @@
-{
-  "exit_code": 7,
-  "error": {
-    "command": "build",
-    "code": "docker_unreachable",
-    "message": "Example docker_unreachable.",
-    "cleanup": "not_needed"
-  }
-}

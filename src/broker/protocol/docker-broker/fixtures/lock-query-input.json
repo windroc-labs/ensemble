@@ -1,7 +1,0 @@
-{
-  "argv": [
-    "lock-query",
-    "--lock",
-    "dummy-lock"
-  ]
-}

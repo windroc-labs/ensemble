@@ -1,0 +1,31 @@
+[
+  {
+    "name": "check-clients-input",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "check-clients"
+      ]
+    }
+  },
+  {
+    "name": "check-clients-input-extra",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "check-clients",
+        "--now"
+      ]
+    }
+  }
+]

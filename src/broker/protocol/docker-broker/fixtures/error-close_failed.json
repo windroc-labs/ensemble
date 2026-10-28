@@ -1,9 +1,0 @@
-{
-  "exit_code": 10,
-  "error": {
-    "command": "close",
-    "code": "close_failed",
-    "message": "Example close_failed.",
-    "cleanup": "not_needed"
-  }
-}

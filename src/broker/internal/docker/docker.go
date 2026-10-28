@@ -23,7 +23,7 @@ const (
 	capture    = 65536
 )
 
-// A credential request kind's directory in a container (protocol fixture credential-dirs.json).
+// A credential request kind's directory in a container (protocol credential-dirs.json).
 const (
 	GitHubDir = SecretsDir + "/github"
 	LinearDir = SecretsDir + "/linear"

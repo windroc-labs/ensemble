@@ -83,7 +83,7 @@ func TestEgressRefusals(t *testing.T) {
 			g["State"].(map[string]any)["Health"] = map[string]any{"Status": "unhealthy"}
 		}}, 2, "Egress proxy my-proxy is unhealthy"},
 	} {
-		for _, manifest := range []string{"manifest-github-app.json", "manifest-codex.json", "manifest-opencode-providers.json", "manifest-github-app.json" + withSecretsSuffix} {
+		for _, manifest := range []string{"manifest-github-app", "manifest-codex", "manifest-opencode-providers", "manifest-github-app" + withSecretsSuffix} {
 			t.Run(tc.name+"/"+manifest, func(t *testing.T) {
 				w := tc.world
 				w.labels = goodLabels()
@@ -157,7 +157,7 @@ func envArgs(argv []string) map[string]string {
 
 // A start, restart and resume (each a new generation) of every client joins only the proxy's workers network.
 func TestStartJoinsOnlyWorkers(t *testing.T) {
-	for _, manifest := range []string{"manifest-valid.json", "manifest-codex.json", "manifest-opencode-providers.json", "manifest-github-app.json"} {
+	for _, manifest := range []string{"manifest-valid", "manifest-codex", "manifest-opencode-providers", "manifest-github-app"} {
 		for _, generation := range []string{"", "fedcba9876543210fedcba9876543210"} {
 			t.Run(manifest+"/"+generation, func(t *testing.T) {
 				w := &world{labels: goodLabels()}
@@ -187,7 +187,7 @@ func TestStartJoinsOnlyWorkers(t *testing.T) {
 
 // Helpers stay on network none, and no client mount reaches the proxy's config, checkout or a Docker socket.
 func TestHelpersStayOffline(t *testing.T) {
-	for _, manifest := range []string{"manifest-valid.json", "manifest-codex.json", "manifest-opencode.json"} {
+	for _, manifest := range []string{"manifest-valid", "manifest-codex", "manifest-opencode"} {
 		t.Run(manifest, func(t *testing.T) {
 			h, d, _, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
 			if _, err := h.Start(context.Background(), fixtureManifest(t, manifest)); err != nil {

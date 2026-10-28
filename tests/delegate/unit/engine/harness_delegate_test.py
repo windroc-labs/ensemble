@@ -458,10 +458,8 @@ class DockerPreflightTest(HarnessCase):
         command = broker_command(argv)
         self.calls.append(command)
         if self.failing and command == "build":
-            return support.FakeProc(
-                argv, err=support.text("error-build_failed.json").encode(), code=8
-            )
-        return support.FakeProc(argv, out=support.text(f"{command}-output.json").encode())
+            return support.FakeProc(argv, err=support.text("error-build_failed").encode(), code=8)
+        return support.FakeProc(argv, out=support.text(f"{command}-output").encode())
 
     def create(self, mode):
         spec = Spec("input", self.work, task="echo", mode=mode, sid=SID)
@@ -579,7 +577,7 @@ class VerifierDockerTest(HarnessCase):
             return support.FakeProc(
                 argv, err=json.dumps({"exit_code": code, "error": error}).encode(), code=code
             )
-        return support.FakeProc(argv, out=support.text(f"{command}-output.json").encode())
+        return support.FakeProc(argv, out=support.text(f"{command}-output").encode())
 
     def failure(self):
         spec = Spec(

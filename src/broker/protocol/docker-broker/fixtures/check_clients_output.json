@@ -1,0 +1,67 @@
+[
+  {
+    "name": "check-clients-output",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "latest": {
+        "claude": "2.1.7",
+        "codex": "0.170.0",
+        "opencode": "1.20.1"
+      },
+      "rebuilt": [
+        "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  },
+  {
+    "name": "check-clients-output-skipped",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "note": "Another check held the lock: nothing checked.",
+    "data": {
+      "rebuilt": []
+    }
+  },
+  {
+    "name": "check-clients-output-bad-version",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "latest": {
+        "claude": "2.1.7",
+        "codex": "0.170.0-alpha.1",
+        "opencode": "1.20.1"
+      },
+      "rebuilt": []
+    }
+  },
+  {
+    "name": "check-clients-output-missing-client",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "latest": {
+        "claude": "2.1.7",
+        "codex": "0.170.0"
+      },
+      "rebuilt": []
+    }
+  }
+]

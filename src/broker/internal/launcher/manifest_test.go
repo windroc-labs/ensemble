@@ -27,7 +27,7 @@ func code(t *testing.T, err error) protocol.Code {
 
 func TestManifestFixtures(t *testing.T) {
 	for _, c := range fixtures.Cases(t, "manifest") {
-		t.Run(c.File, func(t *testing.T) {
+		t.Run(c.Name, func(t *testing.T) {
 			m, err := ParseManifest(c.Data)
 			if c.Valid && c.Expected.Stage != "manifest" {
 				if err != nil || m.Name == "" || m.Labels == nil {
@@ -43,7 +43,7 @@ func TestManifestFixtures(t *testing.T) {
 }
 
 func TestManifestDuplicatesTrailingUTF8(t *testing.T) {
-	m, err := ParseManifest(fixtureBytes(t, "manifest-valid.json"))
+	m, err := ParseManifest(fixtureBytes(t, "manifest-valid"))
 	if err != nil || !m.HasHook || m.HookPath != "/usr/local/bin/ensemble-session" || m.Labels["team"] != "crew" {
 		t.Fatalf("%+v %v", m, err)
 	}
@@ -69,7 +69,7 @@ func TestManifestDuplicatesTrailingUTF8(t *testing.T) {
 }
 
 func TestManifestCleansCWD(t *testing.T) {
-	data := string(fixtureBytes(t, "manifest-valid.json"))
+	data := string(fixtureBytes(t, "manifest-valid"))
 	m, err := ParseManifest([]byte(strings.Replace(data, `src/project"`, `src//project/."`, 1)))
 	if err != nil || m.CWD != "/Users/example/src/project" {
 		t.Fatalf("%q %v", m.CWD, err)
@@ -100,7 +100,7 @@ func TestManifestLock(t *testing.T) {
 		"empty owner":   func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "" },
 		"control owner": func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "a\n" },
 	} {
-		data := fixtureBytes(t, "manifest-valid.json", edit)
+		data := fixtureBytes(t, "manifest-valid", edit)
 		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
 			t.Errorf("accepted %s", name)
 		}
@@ -108,7 +108,7 @@ func TestManifestLock(t *testing.T) {
 }
 
 func TestManifestWorkspace(t *testing.T) {
-	data := fixtureBytes(t, "manifest-valid.json")
+	data := fixtureBytes(t, "manifest-valid")
 	with := func(workspace string) (Manifest, error) {
 		return ParseManifest([]byte(strings.Replace(string(data), `"ensemble-ws-worker_1"`, workspace, 1)))
 	}
@@ -133,12 +133,12 @@ func withGitHubGrant(t *testing.T, fields map[string]any, grant any) {
 }
 
 func TestManifestGitHub(t *testing.T) {
-	m, err := ParseManifest(fixtureBytes(t, "manifest-github-app.json"))
+	m, err := ParseManifest(fixtureBytes(t, "manifest-github-app"))
 	if err != nil || m.GitHubApp != "ensemble-broker-bot" || !maps.Equal(m.GitHubPermissions, fixtureSet) {
 		t.Fatalf("%+v %v", m, err)
 	}
 	for _, grant := range []any{nil, []any{}, "app", map[string]any{"app": "a"}, map[string]any{"app": "a", "permissions": nil}, map[string]any{"app": "a", "permissions": fixtureSet, "repo": "a/b/c"}} {
-		_, err := ParseManifest(fixtureBytes(t, "manifest-valid.json", func(f map[string]any) { withGitHubGrant(t, f, grant) }))
+		_, err := ParseManifest(fixtureBytes(t, "manifest-valid", func(f map[string]any) { withGitHubGrant(t, f, grant) }))
 		if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "github") {
 			t.Fatalf("accepted %v: %v", grant, err)
 		}
@@ -160,7 +160,7 @@ func TestValidClaudeAccount(t *testing.T) {
 
 func TestManifestClaudeAccount(t *testing.T) {
 	parse := func(edit func(map[string]any)) (Manifest, error) {
-		return ParseManifest(fixtureBytes(t, "manifest-valid.json", edit))
+		return ParseManifest(fixtureBytes(t, "manifest-valid", edit))
 	}
 	for want, edit := range map[string]func(map[string]any){"default": nil, "work": withClaudeAccount("work"), "a.b-c_d": withClaudeAccount("a.b-c_d")} {
 		if m, err := parse(edit); err != nil || m.ClaudeAccount != want {
@@ -222,7 +222,7 @@ func TestValidEnvName(t *testing.T) {
 
 func TestParseManifestEnv(t *testing.T) {
 	parse := func(edit func(map[string]any)) (Manifest, error) {
-		return ParseManifest(fixtureBytes(t, "manifest-valid.json", edit))
+		return ParseManifest(fixtureBytes(t, "manifest-valid", edit))
 	}
 	if m, err := parse(nil); err != nil || m.Secrets != nil {
 		t.Fatalf("absent: %+v %v", m.Secrets, err)
@@ -293,10 +293,10 @@ func TestParseManifestEnv(t *testing.T) {
 	}
 }
 
-// withFields is manifest-valid.json with fields set.
+// withFields is fixture manifest-valid with fields set.
 func withFields(t *testing.T, fields map[string]any) []byte {
 	t.Helper()
-	return fixtureBytes(t, "manifest-valid.json", func(doc map[string]any) { maps.Copy(doc, fields) })
+	return fixtureBytes(t, "manifest-valid", func(doc map[string]any) { maps.Copy(doc, fields) })
 }
 
 func TestManifestGateway(t *testing.T) {

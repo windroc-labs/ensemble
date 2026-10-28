@@ -1,0 +1,26 @@
+[
+  {
+    "name": "probe-provider-output",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "available": true
+    }
+  },
+  {
+    "name": "probe-provider-output-invalid",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "available": 1
+    }
+  }
+]

@@ -1,9 +1,0 @@
-{
-  "exit_code": 9,
-  "error": {
-    "command": "start",
-    "code": "start_failed",
-    "message": "Start failed.",
-    "cleanup": "failed"
-  }
-}

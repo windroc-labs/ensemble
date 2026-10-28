@@ -4,6 +4,7 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 from tests.case import REPO, Case
+from tests.session.unit.hosts.docker.support import cases, data
 
 PROTOCOL = Path(REPO, "src/broker/protocol/docker-broker")
 
@@ -80,29 +81,22 @@ class DockerBrokerProtocol(Case):
     def test_every_shared_fixture_has_its_expected_schema_outcome(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         Draft202012Validator.check_schema(schema)
-        index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
-        self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "35")
-        self.assertEqual(
-            index["protocol_version"],
-            schema["$defs"]["version_output"]["properties"]["protocol_version"]["const"],
-        )
-        names = [case["file"] for case in index["cases"]]
+        found = cases()
+        self.assertTrue(found)
+        names = [case["name"] for case in found]
         self.assertEqual(len(names), len(set(names)))
-        self.assertEqual(
-            set(names),
-            {p.name for p in (PROTOCOL / "fixtures").glob("*.json")}
-            - {"index.json", "credential-dirs.json"},
-        )
         covered = set()
-        for case in index["cases"]:
-            with self.subTest(fixture=case["file"]):
-                self.assertEqual(Path(case["file"]).name, case["file"])
+        for case in found:
+            with self.subTest(fixture=case["name"]):
+                self.assertLessEqual({"definition", "name", "valid", "expected", "data"}, set(case))
+                self.assertLessEqual(
+                    set(case),
+                    {"definition", "name", "valid", "expected", "context", "note", "data"},
+                )
                 definition = case["definition"]
                 self.assertIn(definition, schema["$defs"])
                 validator = Draft202012Validator({**schema, "$ref": f"#/$defs/{definition}"})
-                data = json.loads((PROTOCOL / "fixtures" / case["file"]).read_text())
-                errors = list(validator.iter_errors(data))
+                errors = list(validator.iter_errors(case["data"]))
                 self.assertEqual(not errors, case["valid"], [e.message for e in errors])
                 covered.add((definition, case["valid"]))
         for definition in (
@@ -150,19 +144,18 @@ class DockerBrokerProtocol(Case):
                 self.assertEqual(validator.is_valid(spec), valid)
 
     def test_a_broker_only_fixture_kind_fits_the_manifest_envelopes(self):
-        fixture = json.loads((PROTOCOL / "fixtures/credential-spec-test-kind.json").read_text())
+        fixture = data("credential-spec-test-kind")
         extension = json.loads((PROTOCOL / "test-kind.schema.json").read_text())
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         production = Draft202012Validator({**schema, "$ref": "#/$defs/credential_spec"})
         for value in fixture.values():
             self.assertTrue(Draft202012Validator(extension).is_valid(json.loads(value)))
             self.assertFalse(production.is_valid(json.loads(value)))
-        manifest = json.loads((PROTOCOL / "fixtures/manifest-valid.json").read_text())
+        manifest = data("manifest-valid")
         self.assertTrue(Draft202012Validator(schema).is_valid({**manifest, **fixture}))
 
     def test_manifest_required_fields_and_rejected_unknown_fields_are_exercised(self):
-        index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
-        cases = {case["file"]: case for case in index["cases"]}
+        found = {case["name"]: case for case in cases()}
         for field in (
             "name",
             "generation",
@@ -175,6 +168,6 @@ class DockerBrokerProtocol(Case):
             "opencode_dir",
             "labels",
         ):
-            self.assertFalse(cases[f"manifest-missing-{field}.json"]["valid"])
-        self.assertFalse(cases["manifest-unknown-field.json"]["valid"])
-        self.assertTrue(cases["manifest-no-hook.json"]["valid"])
+            self.assertFalse(found[f"manifest-missing-{field}"]["valid"])
+        self.assertFalse(found["manifest-unknown-field"]["valid"])
+        self.assertTrue(found["manifest-no-hook"]["valid"])

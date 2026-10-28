@@ -85,7 +85,7 @@ func TestVersion(t *testing.T) {
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
 		if c.Valid && !fixtures.SameJSON(t, []byte(out), c.Data) {
-			t.Fatalf("%s: %s", c.File, out)
+			t.Fatalf("%s: %s", c.Name, out)
 		}
 	}
 }
@@ -133,8 +133,8 @@ func TestCheckClientsCommand(t *testing.T) {
 		t.Fatalf("%d %q %q calls=%d", code, out, errOut, calls)
 	}
 	for _, c := range fixtures.Cases(t, "check_clients_output") {
-		if c.File == "check-clients-output.json" && !fixtures.SameJSON(t, []byte(out), c.Data) {
-			t.Fatalf("%s: %s", c.File, out)
+		if c.Name == "check-clients-output" && !fixtures.SameJSON(t, []byte(out), c.Data) {
+			t.Fatalf("%s: %s", c.Name, out)
 		}
 	}
 	code, out, errOut = invoke(a, "check-clients", "--now")
@@ -208,7 +208,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 
 func TestInputFixtures(t *testing.T) {
 	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
-		t.Run(c.File, func(t *testing.T) {
+		t.Run(c.Name, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
 				t.Fatal(err)
@@ -643,10 +643,7 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 
 func TestTokenNeverLeaves(t *testing.T) {
 	const token = "sk-ant-oat01-NEVER-PRINT-ME"
-	manifest, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	manifest := fixtures.Named(t, "manifest-valid")
 	path := filepath.Join(t.TempDir(), "m.json")
 	if err := os.WriteFile(path, manifest, 0o600); err != nil {
 		t.Fatal(err)
@@ -798,10 +795,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	manifest, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-github-app.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	manifest := fixtures.Named(t, "manifest-github-app")
 	path := filepath.Join(t.TempDir(), "m.json")
 	if err := os.WriteFile(path, manifest, 0o600); err != nil {
 		t.Fatal(err)
