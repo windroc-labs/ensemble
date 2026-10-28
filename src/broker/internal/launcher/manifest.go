@@ -3,7 +3,6 @@ package launcher
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"maps"
 	"path/filepath"
@@ -31,7 +30,7 @@ type Manifest struct {
 	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
 
 	// Credentials is the credential request; nil without the field.
-	Credentials *CredentialRequest
+	Credentials CredentialRequest
 }
 
 // Prefetch is the repo a start clones into the workspace volume it creates: Repo owner/name, Ref a branch or tag
@@ -42,38 +41,12 @@ type Prefetch struct{ Repo, Ref string }
 // the container's secrets directory.
 type Secret struct{ Item, File string }
 
-// CredentialRequest is a start's credential request (protocol $defs.credentials): references only, never a value; a
-// kind nil is none of it.
-type CredentialRequest struct {
-	GitHub []Grant  // one installation token per grant
-	Linear *Linear  // the role whose Linear app token the container gets
-	Env    []Secret // environment secrets, as Manifest.Secrets
-}
-
 // Grant is one GitHub installation token's scope: App's token limited to Permissions, reaching Repo (owner/name)
 // alone, or every repository of every installation when Repo is "".
 type Grant struct {
 	App         string
 	Permissions map[string]string
 	Repo        string
-}
-
-// Linear names the role whose Linear app token a container gets.
-type Linear struct{ Role string }
-
-// Kinds is the kinds c names, in the schema's order.
-func (c CredentialRequest) Kinds() []string {
-	var kinds []string
-	if c.GitHub != nil {
-		kinds = append(kinds, "github")
-	}
-	if c.Linear != nil {
-		kinds = append(kinds, "linear")
-	}
-	if c.Env != nil {
-		kinds = append(kinds, "env")
-	}
-	return kinds
 }
 
 // A workspace volume's labels: its kind (always kind) and its mount point.
@@ -84,7 +57,6 @@ const (
 	maxProviders   = 32
 	maxSecrets     = 16
 	maxSecretFile  = 255
-	maxGrants      = 16
 	// MaxSecretBytes caps one environment secret's value: login env's limit and the secrets tmpfs budget.
 	MaxSecretBytes = 16384
 )
@@ -240,7 +212,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		"cwd": &m.CWD, "workspace": &m.Workspace, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
 		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath, "lock": &m.Lock, "lock_owner": &m.LockOwner, "gateway": &m.Gateway}
 	for key, raw := range fields {
-		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" || key == "secrets" || key == "prefetch" || key == "credentials" {
+		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" || key == "secrets" || key == "prefetch" || key == "credentials" || key == "environment_credentials" {
 			continue
 		}
 		target, ok := targets[key]
@@ -389,13 +361,11 @@ func ParseManifest(data []byte) (Manifest, error) {
 		m.Prefetch = &Prefetch{Repo: repo, Ref: ref}
 	}
 
-	if raw, ok := fields["credentials"]; ok {
-		credentials, problem := parseCredentials(raw, m, fields["secrets"] != nil)
-		if problem != "" {
-			return reject("%s", problem)
-		}
-		m.Credentials = credentials
+	credentials, problem := mergedCredentials(fields)
+	if problem != "" {
+		return reject("%s", problem)
 	}
+	m.Credentials = credentials
 
 	var labels map[string]json.RawMessage
 	if raw := fields["labels"]; len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &labels) != nil {
@@ -450,87 +420,7 @@ func onlyKeys(fields map[string]json.RawMessage, keys ...string) bool {
 	return true
 }
 
-// parseCredentials checks a manifest's credentials, m its other fields parsed, by the schema's rules plus a repo or
-// env file repeated. Its problem, "" for none, names the kind, index and key at fault, a key only when it is a known
-// name, never a value: a rejected key or value may be a pasted secret.
-func parseCredentials(raw json.RawMessage, m Manifest, hasSecrets bool) (*CredentialRequest, string) {
-	fields, ok := object(raw)
-	if !ok {
-		return nil, "credentials: want an object"
-	}
-	if !onlyKeys(fields, "github", "linear", "env") {
-		return nil, "credentials: an unknown kind"
-	}
-	c := &CredentialRequest{}
-	if raw, ok := fields["github"]; ok {
-		if m.GitHubApp != "" {
-			return nil, "credentials.github: needs github null"
-		}
-		items, ok := list(raw, maxGrants)
-		if !ok {
-			return nil, fmt.Sprintf("credentials.github: want 1 to %d grants", maxGrants)
-		}
-		c.GitHub = []Grant{}
-		for i, raw := range items {
-			g, problem := parseGrant(raw)
-			if problem == "" {
-				switch {
-				case g.Repo == "" && len(items) > 1:
-					problem = "repo missing beside another grant"
-				case g.Repo == "" && m.Prefetch != nil:
-					problem = "repo missing beside prefetch"
-				case slices.ContainsFunc(c.GitHub, func(o Grant) bool { return strings.EqualFold(o.Repo, g.Repo) }):
-					problem = "repo repeated"
-				}
-			}
-			if problem != "" {
-				return nil, fmt.Sprintf("credentials.github[%d]: %s", i, problem)
-			}
-			c.GitHub = append(c.GitHub, g)
-		}
-	}
-	if raw, ok := fields["linear"]; ok {
-		linear, ok := object(raw)
-		if !ok {
-			return nil, "credentials.linear: want an object"
-		}
-		rawRole, hasRole := linear["role"]
-		role, ok := str(rawRole)
-		switch {
-		case !onlyKeys(linear, "role"):
-			return nil, "credentials.linear: an unknown key"
-		case !hasRole:
-			return nil, "credentials.linear: role missing"
-		case !ok || !rolePattern.MatchString(role):
-			return nil, "credentials.linear: role not valid"
-		}
-		c.Linear = &Linear{Role: role}
-	}
-	if raw, ok := fields["env"]; ok {
-		if hasSecrets {
-			return nil, "credentials.env: needs no secrets"
-		}
-		items, ok := list(raw, maxSecrets)
-		if !ok {
-			return nil, fmt.Sprintf("credentials.env: want 1 to %d secrets", maxSecrets)
-		}
-		c.Env = []Secret{}
-		for i, raw := range items {
-			s, problem := parseEnvSecret(raw)
-			if problem == "" && slices.ContainsFunc(c.Env, func(o Secret) bool { return o.File == s.File }) {
-				problem = "file repeated"
-			}
-			if problem != "" {
-				return nil, fmt.Sprintf("credentials.env[%d]: %s", i, problem)
-			}
-			c.Env = append(c.Env, s)
-		}
-	}
-	return c, ""
-}
-
-// parseGrant checks one manifest-form grant {"app", "permissions", "repo"?} as the legacy github object; problem as
-// parseCredentials'. githubapi.CheckPermissions's message quotes a level, so only its verdict is used.
+// parseGrant shares the legacy GitHub validation without echoing reference values.
 func parseGrant(raw json.RawMessage) (Grant, string) {
 	fields, ok := object(raw)
 	if !ok {
@@ -578,7 +468,7 @@ func permissionProblem(permissions map[string]string) string {
 	return "permissions not valid"
 }
 
-// parseEnvSecret checks one env entry {"item", "file"} by the legacy secrets' rules; problem as parseCredentials'.
+// parseEnvSecret shares the legacy environment item and file constraints.
 func parseEnvSecret(raw json.RawMessage) (Secret, string) {
 	fields, ok := object(raw)
 	if !ok {

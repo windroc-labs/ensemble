@@ -12,6 +12,7 @@ from ensemble.delegate.engine.record import HANDLER, RunRecord, worker
 from ensemble.delegate.engine.types import Layout, Limit, Result
 from ensemble.session import EnvironmentSpec, HookCallback
 from ensemble.utils import OutcomeStatus
+from tests.delegate.case import REPO
 from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.harness import SID, HarnessCase
 
@@ -59,7 +60,19 @@ class RunRecordTest(HarnessCase):
         self.make()
         record = self.record()
         state = record.read()
-        for value in (None, "", "not JSON", ' { "fixture_test": {"file": "test"} } '):
+        with open(
+            os.path.join(
+                REPO, "src/broker/protocol/docker-broker/fixtures/credential-spec-test-kind.json"
+            )
+        ) as file:
+            fixture = json.load(file)
+        for value in (
+            fixture["credentials"],
+            None,
+            "",
+            "not JSON",
+            ' { "fixture_test": {"file": "test"} } ',
+        ):
             environment = '{"fixture_test": {"file": "environment"}}'
             carried = replace(
                 state,

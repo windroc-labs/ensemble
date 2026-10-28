@@ -1,6 +1,7 @@
 """Delegate Spec immutability; Layout's checkouts follow the core config's."""
 
 import dataclasses
+import json
 import os
 import re
 import unittest
@@ -8,7 +9,7 @@ from importlib.resources import files
 
 from ensemble import delegate
 from ensemble.delegate.engine.types import Layout, Result
-from tests.delegate.case import Case
+from tests.delegate.case import REPO, Case
 from tests.delegate.plans import Base
 
 
@@ -59,8 +60,14 @@ class ResultTest(Case):
 
 class PlanTest(Base):
     def test_credentials_pass_to_session_without_merging(self):
-        caller = ' {"fixture_test": {"file": "caller"}} '
-        environment = '{ "fixture_test": {"file": "environment"} }'
+        with open(
+            os.path.join(
+                REPO, "src/broker/protocol/docker-broker/fixtures/credential-spec-test-kind.json"
+            )
+        ) as file:
+            fixture = json.load(file)
+        caller = fixture["credentials"]
+        environment = fixture["environment_credentials"]
         planned, _ = self.planned(credentials=caller, environment_credentials=environment)
         self.assertEqual(planned.session.credentials, caller)
         self.assertEqual(planned.session.environment_credentials, environment)

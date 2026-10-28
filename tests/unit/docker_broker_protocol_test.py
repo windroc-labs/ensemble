@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import os
 import tempfile
@@ -111,7 +110,7 @@ class DockerBrokerProtocol(Case):
                 covered.add((definition, case["valid"]))
         for definition in (
             "manifest",
-            "credential_request",
+            "credential_spec",
             "version_input",
             "version_output",
             "build_input",
@@ -140,10 +139,8 @@ class DockerBrokerProtocol(Case):
     def test_credential_dirs_match_request_kinds(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         dirs = json.loads((PROTOCOL / "fixtures/credential-dirs.json").read_text())
-        kinds = list(schema["$defs"]["credential_request"]["properties"])
+        kinds = list(schema["$defs"]["credential_spec"]["properties"])
         self.assertEqual(list(dirs), kinds)
-        self.assertEqual(list(schema["$defs"]["credentials"]["properties"]), kinds)
-        self.assertEqual([f.name for f in dataclasses.fields(session.CredentialRequest)], kinds)
         self.assertEqual(
             {
                 kind: d["const"]
@@ -159,10 +156,22 @@ class DockerBrokerProtocol(Case):
                         Path(path).is_relative_to(other) or Path(other).is_relative_to(path)
                     )
 
-    def test_the_sessions_credentials_manifest_is_schema_valid(self):
+    def test_a_broker_only_fixture_kind_is_transported_unchanged(self):
+        fixture = json.loads((PROTOCOL / "fixtures/credential-spec-test-kind.json").read_text())
+        extension = json.loads((PROTOCOL / "test-kind.schema.json").read_text())
+        self.assertTrue(
+            Draft202012Validator(extension).is_valid(json.loads(fixture["credentials"]))
+        )
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
-        validator = Draft202012Validator({**schema, "$ref": "#/$defs/manifest"})
-        request = json.loads((PROTOCOL / "fixtures/credential-request-all.json").read_text())
+        production = Draft202012Validator({**schema, "$ref": "#/$defs/credential_spec"})
+        self.assertFalse(production.is_valid(json.loads(fixture["credentials"])))
+        caller, environment = fixture["credentials"], fixture["environment_credentials"]
+        spec = session.Spec(
+            workdir="/work",
+            access=session.Access(cwd="/work"),
+            credentials=caller,
+            environment_credentials=environment,
+        )
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "g.json")
             broker.write_manifest(
@@ -174,12 +183,13 @@ class DockerBrokerProtocol(Case):
                 workspace="ensemble-ws-worker_1",
                 home=("claude_dir", "/home/claude"),
                 hook_path="/usr/local/bin/ensemble-session",
-                github="ensemble-broker-bot",
-                credentials=session.CredentialRequest.from_fields(request),
+                github="",
+                credentials=spec.credentials,
+                environment_credentials=spec.environment_credentials,
             )
             manifest = json.loads(Path(path).read_text())
-        self.assertEqual(list(validator.iter_errors(manifest)), [])
-        self.assertIsNone(manifest["github"])
+        for key in ("credentials", "environment_credentials"):
+            self.assertEqual(manifest[key].encode(), fixture[key].encode())
 
     def test_manifest_required_fields_and_rejected_unknown_fields_are_exercised(self):
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
