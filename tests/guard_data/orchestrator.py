@@ -35,7 +35,7 @@ SUBPACKAGES = {
 }
 
 
-# FR-25: the router only triggers a run; its Delegate's harness runs it and calls write-back back
+# FR-25: the router only triggers a run; its Delegate's harness runs it and calls write-back
 ORCH_ABSENT = ("engine/run.py",)
 
 
@@ -131,7 +131,7 @@ PYTHON_CODE_ALLOWED = {
 }
 
 
-# engine/ imports nothing under trackers/, directly or indirectly, but the router's Linear transport
+# engine/ imports nothing under trackers/, even indirectly, but the router's Linear transport
 ENGINE_CONTRACT = "engine imports no tracker"
 
 
@@ -141,13 +141,8 @@ ENGINE_WIRING = frozenset({f"{ORCH_PKG}.engine.router -> {ORCH_PKG}.trackers.lin
 GRAPHQL = re.compile(r"\b(?:query|mutation)\s*(?:\w+\s*)?(?:\(\s*\$|\{)")
 
 
-# Linear concepts engine/flow/, the tracker-agnostic core, names none of
+# Linear terms engine/flow/, the tracker-agnostic core, never names
 FLOW_LINEAR = re.compile(rf"{GRAPHQL.pattern}|linear|graphql|project|email|state id|label id", re.I)
 
 
-EMBEDDED_PROGRAMS_ALLOWED = {
-    (
-        "tests/orchestrator/integration/linear_bin_integration_test.py",
-        "c710e2832b40273e5a68ddb9026256785f0d2f47e44d3f285c6132d45114a427",
-    ): "Existing executable-selection fixture checks the system interpreter meets Python 3.11.",
-}
+EMBEDDED_PROGRAMS_ALLOWED = {}
