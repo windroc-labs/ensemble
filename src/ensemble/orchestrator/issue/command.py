@@ -185,10 +185,11 @@ _LOOKUP_HELP = (
     "  Configuration and command discovery: ensemble-orchestrator --help"
 )
 _READ_HELP = (
-    _RULES + "Output: id, identifier, title, url, state, labels, project, milestone,\n"
-    "  assignee, description, comments (newest first: id, author, created_at, body,\n"
-    "  parent_id, quoted_text, on_behalf_of), blocks (issues it blocks), blocked_by\n"
-    "  (issues blocking it), parent, children; empty: null or [].\n"
+    _RULES + "Output: id, identifier, title, url, state, priority (none, urgent, high,\n"
+    "  medium or low), labels, project, milestone, assignee, description, comments\n"
+    "  (newest first: id, author, created_at, body, parent_id, quoted_text,\n"
+    "  on_behalf_of), blocks (issues it blocks), blocked_by (issues blocking it),\n"
+    "  parent, children; empty: null or [].\n"
     "  Defaults: 5 comments of at most 300 characters, a 600-character\n"
     "  description, 10 issues per relation column. truncated lists every field\n"
     f"  cut or with more pages; continue then gives the read with {FULL}.\n"

@@ -43,6 +43,7 @@ class View(Case):
                 "title": "title TASK-2",
                 "url": "https://linear.app/t/issue/TASK-2",
                 "state": {"id": "s-todo", "name": "Todo", "type": "unstarted"},
+                "priority": "none",
                 "labels": [],
                 "project": None,
                 "milestone": None,
@@ -60,6 +61,7 @@ class View(Case):
         full = issue_node(
             "TASK-2",
             description="Body",
+            priority=2,
             labels=conn([{"id": "l1", "name": "Bug"}]),
             project={"id": "p1", "name": "Ensemble"},
             projectMilestone={"id": "m1", "name": "M1"},
@@ -71,6 +73,14 @@ class View(Case):
         self.assertEqual(view["milestone"], {"id": "m1", "name": "M1"})
         self.assertEqual(view["assignee"], {"id": "u1", "name": "Ann", "email": "ann@x.com"})
         self.assertEqual(view["description"], "Body")
+        self.assertEqual(view["priority"], "high")
+
+    def test_both_reads_ask_for_the_priority(self):
+        for full in (False, True):
+            gql = Gql(issue_node(priority=4))
+            self.assertEqual(issue_read.view(gql, "TASK-2", full=full)["priority"], "low")
+            ((query, _),) = gql.calls
+            self.assertIn(" priority ", query)
 
     def test_comments_newest_first_with_reply_quote_and_delegated_author(self):
         node = issue_node(

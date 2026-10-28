@@ -7,6 +7,7 @@ from ensemble.orchestrator.engine.flow.types import (
     COMMENTS,
     IDENT_ERROR,
     ISSUE_ID,
+    PRIORITY_NAMES,
 )
 from ensemble.orchestrator.engine.types import (
     UUID_RE,
@@ -50,7 +51,7 @@ def _connection(name, first, after=""):
 
 def _query(first):
     return (
-        "query($i: String!) { issue(id: $i) { id identifier title url description "
+        "query($i: String!) { issue(id: $i) { id identifier title url description priority "
         "state { id name type } project { id name } projectMilestone { id name } "
         f"assignee {{ id name email }} parent {{ {_REL} }} "
         + " ".join(_connection(name, first.get(name, PAGE)) for name in CONNECTIONS)
@@ -108,6 +109,7 @@ def _shape(node, nodes, truncated):
         "title": node["title"],
         "url": node["url"],
         "state": node["state"],
+        "priority": PRIORITY_NAMES[node["priority"]],
         "labels": [{"id": n["id"], "name": n["name"]} for n in nodes["labels"]],
         "project": node["project"],
         "milestone": node["projectMilestone"],

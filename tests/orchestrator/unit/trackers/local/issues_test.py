@@ -125,6 +125,7 @@ class View(Board):
                 "title": "LOC-2 title",
                 "url": Path(path).as_uri(),
                 "state": {"id": "review", "name": "review", "type": "started"},
+                "priority": "high",
                 "labels": [{"id": "build", "name": "build"}, {"id": "claude", "name": "claude"}],
                 "project": None,
                 "milestone": None,
@@ -174,6 +175,7 @@ class View(Board):
             (view["parent"], view["children"], view["blocks"], view["blocked_by"]),
             (None, [], [], []),
         )
+        self.assertEqual(view["priority"], "none")
 
     def test_archived_and_unassigned(self):
         path = self.write(

@@ -141,6 +141,7 @@ def issue_node(ident="TASK-2", **fields):
         "title": f"title {ident}",
         "url": f"https://linear.app/t/issue/{ident}",
         "description": None,
+        "priority": 0,
         "state": {"id": "s-todo", "name": "Todo", "type": "unstarted"},
         "project": None,
         "projectMilestone": None,

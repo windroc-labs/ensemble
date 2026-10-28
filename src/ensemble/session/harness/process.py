@@ -6,6 +6,7 @@ pipe, channel.Tie) close. SIGNALS a caller held over its spawn are unblocked onc
 from __future__ import annotations
 
 import logging
+import math
 import os
 import signal
 import sys
@@ -28,7 +29,15 @@ from ensemble.session.engine.types import (
     TurnStarted,
     Unanswered,
 )
-from ensemble.session.harness.channel import CLOSE_WAIT, DRAIN, SLICE, Channel, encode, hung_up
+from ensemble.session.harness.channel import (
+    CLOSE_WAIT,
+    DRAIN,
+    REQUEST_WAIT,
+    SLICE,
+    Channel,
+    encode,
+    hung_up,
+)
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import SERVED, Logged, Op
 from ensemble.session.harness.view import dialog
@@ -67,7 +76,7 @@ class Worker(Protocol):
     def returncode(self) -> int | None: ...
     def confirm_end(self, timeout: float) -> int | None: ...
     def view(self, channel: Channel, idle_timeout: float | None = None) -> Any: ...
-    def try_send(self, text: str, pending: Callable[[], bool]) -> bool: ...
+    def try_send(self, text: str, pending: Callable[[], bool]) -> bool | str: ...
     def press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None: ...
     def screen(self, lines: int | None = None) -> str: ...
     def redisplay(self) -> bool: ...
@@ -131,6 +140,7 @@ class Harness:
         self._dispatch: Dispatch | None = None
         self._turns = Turns("")
         self._leftover: list[tuple[str, Op, dict]] = []
+        self._sends: dict[str, tuple[float, str]] = {}
         self._code: int | None = None
         self._ending: list[tuple[str, bool, str | None]] = []
 
@@ -186,11 +196,15 @@ class Harness:
         while True:
             inputs = (Op.SEND, Op.PRESS)
             batch = self._channel.pending(keep=inputs)
+            present = {ident for ident, _, _ in batch}
+            self._sends = {ident: state for ident, state in self._sends.items() if ident in present}
             waiting = False
             for index, (ident, op, data) in enumerate(batch):
                 if op in SERVED:
-                    if not (waiting and op in inputs):
-                        waiting = not self._serve(worker, op, data, ident) or waiting
+                    if waiting and op == Op.PRESS:
+                        continue
+                    gate = "earlier input" if waiting and op == Op.SEND else None
+                    waiting = not self._serve(worker, op, data, ident, gate=gate) or waiting
                     continue
                 code = self._end(worker, op, ident)
                 if code is not None:
@@ -229,19 +243,41 @@ class Harness:
             self._status = status
             self._write()
 
-    def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> bool:
+    def _serve(
+        self, worker: Worker, op: Op, data: dict, ident: str, *, gate: str | None = None
+    ) -> bool:
         """Any failure is a refusal that leaves the worker up."""
         if op in (Op.SEND, Op.PRESS) and not self._channel.request_pending(ident):
+            self._sends.pop(ident, None)
             return True
+        deadline, reason = 0.0, "request deadline"
+        if op == Op.SEND:
+            deadline, reason = self._sends.setdefault(ident, (_send_deadline(data), reason))
+            reason = gate or reason
+
+        def pending() -> bool:
+            if not self._channel.request_pending(ident):
+                return False
+            if op == Op.SEND and time.monotonic() >= deadline:
+                raise SessionError(f"send to {worker.name or worker.sid}: blocked by {reason}")
+            return True
+
         try:
-            found = _served(worker, op, data, lambda: self._channel.request_pending(ident))
+            if op in (Op.SEND, Op.PRESS) and not pending():
+                self._sends.pop(ident, None)
+                return True
+            found = gate or _served(worker, op, data, pending)
         except (ConfigError, SessionError, ValueError) as error:
             self._answer(
                 ident, ok=False, error=str(error), unanswered=isinstance(error, Unanswered)
             )
         else:
-            if found is None:
+            if isinstance(found, str):
+                self._sends[ident] = deadline, found
                 return False
+            if found is None:
+                self._sends.pop(ident, None)
+                return True
             self._answer(ident, ok=True, data=found)
         return True
 
@@ -366,6 +402,7 @@ class Harness:
 
     def _answer(self, ident: str | None, *, ok: bool, error: str | None = None, **kw) -> None:
         if ident is not None:
+            self._sends.pop(ident, None)
             self._channel.reply(ident, ok=ok, error=error, **kw)
 
     def _write_pending(self, *, force: bool = False) -> None:
@@ -383,7 +420,19 @@ class Harness:
             LOG.warning("session harness %s: harness.json: %s", self._channel.directory, error)
 
 
-def _served(worker: Worker, op: Op, data: dict, pending: Callable[[], bool]) -> dict | None:
+def _send_deadline(data: dict) -> float:
+    fallback = time.monotonic() + REQUEST_WAIT - min(1.0, REQUEST_WAIT / 2)
+    deadline = data.get("_send_deadline")
+    if (
+        isinstance(deadline, (int, float))
+        and not isinstance(deadline, bool)
+        and -math.inf < deadline < math.inf
+    ):
+        return min(deadline, fallback)
+    return fallback
+
+
+def _served(worker: Worker, op: Op, data: dict, pending: Callable[[], bool]) -> dict | str | None:
     """Its fields checked first (ValueError), then the worker's call."""
     if op == Op.DISPLAY:
         return {"reopened": worker.redisplay()}
@@ -391,7 +440,10 @@ def _served(worker: Worker, op: Op, data: dict, pending: Callable[[], bool]) -> 
         text = data.get("text")
         if not isinstance(text, str) or len(text.encode()) > SEND_MAX:
             raise ValueError(f"{op}: want text, a string of at most {SEND_MAX} bytes")
-        return {} if worker.try_send(text, pending) else None
+        result = worker.try_send(text, pending)
+        if isinstance(result, str):
+            return result
+        return {} if result else None
     if op == Op.PRESS:
         keys = data.get("keys")
         if (

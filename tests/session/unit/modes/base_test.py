@@ -152,6 +152,22 @@ class BaseModeTest(Case):
         BaseMode.close(run)
         self.assertEqual(run.mock_calls, [mock.call.stop()])
 
+    def test_canceled_input_never_reaches_the_mode_send(self):
+        run = mock.Mock(spec=BaseMode)
+        self.assertFalse(BaseMode._try_send(run, "canceled", lambda: False))
+        run.send.assert_not_called()
+
+    def test_send_adapter_preserves_submission_retry_and_failure(self):
+        run = mock.Mock(spec=BaseMode)
+        for result, expected in ((None, True), (True, True), (False, "client input")):
+            with self.subTest(result=result):
+                run.send.return_value = result
+                self.assertEqual(BaseMode._try_send(run, "next", lambda: True), expected)
+        self.assertEqual(run.send.call_args_list, [mock.call("next")] * 3)
+        run.send.side_effect = SessionError("unavailable")
+        with self.assertRaisesRegex(SessionError, "unavailable"):
+            BaseMode._try_send(run, "next", lambda: True)
+
     def test_only_a_tui_mode_may_have_a_launch_input_pending(self):
         for cls in (headless.HeadlessMode, in_process.InProcessMode):
             with self.subTest(cls=cls.__name__):

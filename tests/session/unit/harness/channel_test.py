@@ -416,6 +416,17 @@ class AskTest(Base):
         self.assertEqual(self.channel.ask(Op.SCREEN, {"lines": 3}, timeout=5), {"text": "screen"})
         self.assertEqual(self.served, [(Op.SCREEN, {"lines": 3})])
 
+    def test_send_carries_a_submission_deadline_before_its_answer_timeout(self):
+        self.hold_lock()
+        self.serve(lambda ident: self.channel.reply(ident, ok=True))
+        before = time.monotonic()
+        self.assertEqual(self.channel.ask(Op.SEND, {"text": "next"}, timeout=2), {})
+        after = time.monotonic()
+        [(op, data)] = self.served
+        self.assertEqual((op, data["text"]), (Op.SEND, "next"))
+        self.assertGreaterEqual(data["_send_deadline"], before + 1)
+        self.assertLessEqual(data["_send_deadline"], after + 1)
+
     def test_a_refusal_raises_its_error(self):
         self.hold_lock()
         self.serve(lambda ident: self.channel.reply(ident, ok=False, error="bad keys"))
