@@ -1230,7 +1230,7 @@ class HarnessDelegate(Delegate):
                 try:
                     if agent is not None and agent.alive() and agent.status().alive:
                         self._publish_record(state)
-                        self._colored(agent, state.agent_name, began)
+                        self._colored(agent, state, began)
                         return
                 except Unanswered as error:
                     unanswered = error
@@ -1263,10 +1263,12 @@ class HarnessDelegate(Delegate):
             raise SessionError(str(busy))
         raise SessionError(message)
 
-    @staticmethod
-    def _colored(agent: Session, name: str, began: float) -> None:
+    def _colored(self, agent: Session, state: DelegateState, began: float) -> None:
+        name = state.agent_name
         try:
             while isinstance(agent, _Opens) and (text := agent.opening_pending) is not None:
+                if not (self._running(state.drive) and agent.alive()):
+                    return
                 if time.monotonic() - began >= COLOR_WAIT:
                     send = shlex.join(("ensemble-session", "send", name, text))
                     why = f"not ready within {COLOR_WAIT} s"

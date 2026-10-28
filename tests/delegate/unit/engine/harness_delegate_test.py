@@ -1218,15 +1218,24 @@ class AttendedBusyTest(HarnessCase):
 
 
 class LaunchColorTest(HarnessCase):
-    def launched(self, agent: mock.Mock) -> tuple[str, str]:
-        """The stderr of a tui launch whose agent `agent` is live at once, and its agent name."""
-        Clock(self)
+    def setUp(self):
+        super().setUp()
+        self.clock = Clock(self)
+
+    def launched(
+        self, agent: mock.Mock, *, drive: Callable[[], bool] = lambda: True
+    ) -> tuple[str, str]:
+        """The stderr of a tui launch whose agent `agent` is live at once (unless its alive is set)
+        and whose drive runs while `drive()`, and its agent name.
+        """
         err = self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
         delegate = self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID))
-        agent.alive.return_value = True
+        if agent.alive.side_effect is None:
+            agent.alive.return_value = True
         with (
             mock.patch.object(delegate, "_probed_agent", return_value=(agent, None)),
             mock.patch.object(delegate, "_publish_record"),
+            mock.patch.object(delegate, "_running", side_effect=lambda _drive: drive()),
         ):
             delegate._started(delegate._state)
         return err.getvalue(), delegate._state.agent_name
@@ -1253,6 +1262,19 @@ class LaunchColorTest(HarnessCase):
         ):
             with self.subTest(agent=agent):
                 self.assertEqual(self.launched(agent)[0], "")
+
+    def test_its_drive_or_tui_gone_ends_the_wait_at_once_unsaid(self):
+        def soon() -> bool:
+            return self.clock.now < 2
+
+        for gone in ("drive", "tui"):
+            with self.subTest(gone=gone):
+                self.clock.now = 0.0
+                agent = self.opening("/color")
+                if gone == "tui":
+                    agent.alive.side_effect = soon
+                said, _name = self.launched(agent, drive=soon if gone == "drive" else lambda: True)
+                self.assertEqual((said, self.clock.now < 3), ("", True), self.clock.now)
 
 
 class LaunchTest(HarnessCase):
