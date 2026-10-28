@@ -241,6 +241,7 @@ class Stop(Base):
         self.assertEqual(self.mode.state(), "live")
         began = time.monotonic()
         self.mode.stop()
+        self.mode.stop()
         self.assertEqual(self.drain(), [Reply("one"), Stderr("two")])
         self.assertEqual(self.mode.returncode(WAIT), -signal.SIGKILL)
         self.assertLess(time.monotonic() - began, 1)
@@ -256,16 +257,6 @@ class Stop(Base):
         self.assertEqual(self.drain(), [Reply("a")])
         self.mode.stop()
         self.assertEqual(self.mode.returncode(0), 0)
-
-    def test_is_idempotent(self):
-        script, reached, _, _ = self.held()
-        self.begin(script)
-        self.assertTrue(reached.wait(WAIT))
-        self.mode.stop()
-        self.mode.stop()
-        self.assertEqual(self.drain(), [Reply("one"), Stderr("two")])
-        self.assertEqual(self.mode.poll(SHORT), ([], False))
-        self.assertEqual(self.mode.returncode(0), -signal.SIGKILL)
 
     def test_disabled_logging_keeps_stop_bounded_and_suppresses_late_failure(self):
         release, reached = threading.Event(), threading.Event()

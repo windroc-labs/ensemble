@@ -27,6 +27,7 @@ from ensemble.session.modes.base import POINTER
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session.fakes.terminal import GuardHost
 from tests.session.headless_support import NOTHING, SID, HeadlessCase, StubClient, StubRun
+from tests.session.threads import promptly
 from tests.utils.sandbox import kill
 
 WAIT = 10  # upper bound on any wait, in seconds
@@ -117,29 +118,7 @@ class Base(HeadlessCase):
         self.addCleanup(kill, int(self.first().text))
 
     def promptly(self, call):
-        """call()'s result or exception; fails instead of hanging when it blocks."""
-        out = {}
-
-        def run():
-            out["value"] = call()
-
-        previous_hook = threading.excepthook
-
-        def capture(args):
-            if args.thread is thread:
-                out["error"] = args.exc_value
-            else:
-                previous_hook(args)
-
-        thread = threading.Thread(target=run, daemon=True)
-        with mock.patch("threading.excepthook", new=capture):
-            thread.start()
-            thread.join(WAIT)
-        if thread.is_alive():
-            self.fail("blocked")
-        if "error" in out:
-            raise out["error"]
-        return out["value"]
+        return promptly(self, call, WAIT)
 
 
 class Promptly(Base):

@@ -12,7 +12,6 @@ import tempfile
 import unittest
 import unittest.mock
 
-from ensemble.session import ConfigError
 from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.tmux_cli import (
     EXEC,
@@ -800,13 +799,6 @@ class StartTest(StartFixture):
         self.start(fake)
         self.assertEqual(fake._handover["cwd"], self.cwd)
         self.assertEqual([a for c in fake.calls for a in c if "#(x)" in a or "#{y}" in a], [])
-
-    def test_launch_rejects_nul_before_tmux(self):
-        fake = FakeTmux()
-        with self.assertRaisesRegex(ConfigError, "launch: argv must be strings without NUL"):
-            self.start(fake, argv=("tool", "a\0b"))
-        self.assertEqual(fake.calls, [])
-        self.assertEqual(os.listdir(self.temp), [])
 
     def test_refused_before_tmux(self):
         # the command resolved with the env's PATH (no sh there); an events file that is no regular

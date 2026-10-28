@@ -4,7 +4,6 @@ import fcntl
 import json
 import os
 import stat
-import threading
 import time
 from typing import cast
 from unittest import mock
@@ -27,6 +26,7 @@ from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel, decode, encode
 from ensemble.session.harness.types import Logged, Op
 from tests.session.case import Case
+from tests.session.harnesses import serve
 
 EVENTS = (
     TurnStarted(),
@@ -178,31 +178,22 @@ class LockTest(Base):
 
 
 class RequestTest(Base):
-    def serve(self, *, ok=True, error=None, unanswered=False, let_go=None):
+    def serve(self, *, let_go=None, **reply):
         """let_go: the lock fd it then unlocks, as a harness does once it answered an end."""
 
-        def answer():
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                for request_id, op in self.channel.requests():
-                    self.served.append(op)
-                    self.channel.reply(request_id, ok=ok, error=error, unanswered=unanswered)
-                    if let_go is not None:
-                        time.sleep(0.2)
-                        fcntl.flock(let_go, fcntl.LOCK_UN)
-                    return
-                time.sleep(0.01)
+        def answer(ident, _op, _data):
+            self.channel.reply(ident, **{"ok": True, **reply})
+            if let_go is not None:
+                time.sleep(0.2)
+                fcntl.flock(let_go, fcntl.LOCK_UN)
 
-        self.served = []
-        thread = threading.Thread(target=answer)
-        thread.start()
-        self.addCleanup(thread.join)
+        self.served = serve(self, self.channel, answer)
 
     def test_an_answered_request_is_true_once_the_harness_let_go(self):
         self.serve(let_go=self.hold_lock())
         self.assertTrue(self.channel.request(Op.CLOSE, timeout=5))
         self.assertFalse(self.channel.alive())
-        self.assertEqual(self.served, [Op.CLOSE])
+        self.assertEqual(self.served, [(Op.CLOSE, {})])
         self.assertEqual(os.listdir(os.path.join(self.channel.directory, "replies")), [])
 
     def test_its_holders_request_is_true_at_the_answer(self):
@@ -212,7 +203,7 @@ class RequestTest(Base):
         started = time.monotonic()
         self.assertTrue(self.channel.request(Op.CLOSE, timeout=5))
         self.assertLess(time.monotonic() - started, 4)
-        self.assertEqual((self.channel.asked, self.served), (set(), [Op.CLOSE]))
+        self.assertEqual((self.channel.asked, self.served), (set(), [(Op.CLOSE, {})]))
 
     def test_a_refused_request_raises_its_error(self):
         self.hold_lock()
@@ -399,20 +390,7 @@ class SweepTest(Base):
 
 class AskTest(Base):
     def serve(self, answer):
-        self.served = []
-
-        def run():
-            deadline = time.monotonic() + 5
-            while time.monotonic() < deadline:
-                for ident, op, data in self.channel.pending():
-                    self.served.append((op, data))
-                    answer(ident)
-                    return
-                time.sleep(0.01)
-
-        thread = threading.Thread(target=run)
-        thread.start()
-        self.addCleanup(thread.join)
+        self.served = serve(self, self.channel, lambda ident, _op, _data: answer(ident))
 
     def test_data_round_trips_both_ways(self):
         self.hold_lock()

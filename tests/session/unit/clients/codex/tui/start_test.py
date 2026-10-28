@@ -15,9 +15,8 @@ from ensemble.session.clients.codex import tui
 from ensemble.session.clients.codex.tui import start as tui_start
 from ensemble.session.engine.types import ClientContext, Container, Permission
 from ensemble.utils import LOCAL_ENV_VARS
-from tests.session.case import Case
+from tests.session.case import PACKAGE_ROOTS, Case
 from tests.session.codex_tui import HOOK, ROOTS_JSON, LaunchCase
-from tests.session.source_roots import PACKAGE_ROOTS
 from tests.session.unit.clients.codex.support import NATIVE, Base, committed_tui
 
 DIRECTORY = pathlib.Path(tui_start.__file__).parent

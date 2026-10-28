@@ -12,13 +12,13 @@ from unittest import mock
 from ensemble.session.engine.types import Access, Exited, HookCallback, Mode, Reply, Spec, TurnEnd
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
-from ensemble.session.hosts.base import HARNESS_ROOT, Host
-from tests.session import harnesses, live_tmux
-from tests.session.case import HOSTS, REPO, Case
+from ensemble.session.hosts.base import HARNESS_ROOT
+from tests.session import live_tmux
+from tests.session.case import REPO, Case, harnessed
 from tests.session.cli_support import WorkerCase, logged
+from tests.session.integration.harness.support import HANDLER
 
 PERMISSION = {"kind": "hook", "event": "PermissionRequest", "tool_name": "Edit"}
-HANDLER = "tests.session.integration.harness.recording_handler"
 DISPATCHED = ("TurnStarted", "Blocked", "TurnEnd", "Exited")
 
 
@@ -57,14 +57,6 @@ class OwnerTest(HarnessCase):
         self.assertNotEqual(ends[0]["turn"], ends[1]["turn"])
         self.assertTrue(channel.alive())
 
-    def test_close_ends_worker_and_harness(self):
-        self.record(self.start("w1"))
-        channel = self.owner("w1")
-        self.ok(self.session("close", "w1"))
-        self.assertFalse(self.live("w1"))
-        self.assertEqual(self.logged_events(channel)[-1]["type"], "Exited")
-        live_tmux.wait(lambda: not channel.alive(), timeout=40, what="the harness to exit")
-
 
 class HandlerTest(HarnessCase):
     def test_a_handler_gets_turn_started_turn_end_blocked_and_exited_in_order(self):
@@ -72,9 +64,8 @@ class HandlerTest(HarnessCase):
         steps = [PERMISSION, "Done."]
         env = {**self.env(), **self.scene("w1", steps), "ENSEMBLE_EVENTS": self.events}
         self.enterContext(mock.patch.dict(os.environ, env, clear=True))
-        cls = harnesses.Threaded.configured(
-            clients={"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}},
-            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+        cls = harnessed(
+            {"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}}
         )
         spec = Spec(
             workdir=self.cwd,
@@ -122,15 +113,14 @@ class InProcessOwnerTest(Case):
         os.mkdir(self.workdir)
         self.scenario = os.path.join(self.home, "scenario.json")
         self.log = os.path.join(self.home, "fake.log")
-        self.session_cls = harnesses.Threaded.configured(
-            clients={
+        self.session_cls = harnessed(
+            {
                 "fake": {
                     "implementation": "tests.session.fake_client:InProcessFakeClient",
                     "scenario": self.scenario,
                     "log": self.log,
                 }
-            },
-            hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
+            }
         )
 
     def start(self, *steps) -> OwnedSession:

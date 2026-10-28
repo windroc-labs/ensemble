@@ -4,7 +4,6 @@ import errno
 import io
 import json
 import os
-import threading
 import unittest
 import unittest.mock
 from contextlib import redirect_stderr
@@ -13,7 +12,7 @@ from datetime import datetime
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import SessionInfo
 from tests.session.case import Case
-from tests.session.threads import capture_errors
+from tests.session.threads import promptly
 from tests.utils.sandbox import scratch
 
 SID = "4f1c2b9e-0d6a-4c1e-9b7a-2e5f8a3d6c10"
@@ -35,23 +34,6 @@ class Base(Case):
                 (line if isinstance(line, bytes) else json.dumps(line).encode()) + b"\n"
                 for line in lines
             )
-
-    def promptly(self, call):
-        """call()'s result or exception; fails instead of hanging when it blocks."""
-        out = {}
-
-        def run():
-            out["value"] = call()
-
-        thread = threading.Thread(target=run, daemon=True)
-        with capture_errors(thread, lambda error: out.update(error=error)):
-            thread.start()
-            thread.join(5)
-        if thread.is_alive():
-            self.fail("blocked")
-        if "error" in out:
-            raise out["error"]
-        return out["value"]
 
 
 class Stamp(Case):
@@ -117,7 +99,7 @@ class Read(Base):
 
     def test_a_fifo_or_directory_is_never_read(self):
         os.mkfifo(self.path)
-        self.assertEqual(self.promptly(self.log.read), [])
+        self.assertEqual(promptly(self, self.log.read, 5), [])
         os.remove(self.path)
         os.mkdir(self.path)
         self.assertEqual(self.log.read(), [])

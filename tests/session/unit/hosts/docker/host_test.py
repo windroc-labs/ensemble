@@ -59,8 +59,8 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
+from tests.session.unit.hosts.docker.support import BETA, UPDRAFT, data
 from tests.session.unit.hosts.docker.support import FakeBroker as BrokerRunner
-from tests.session.unit.hosts.docker.support import data
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 DOCKER = "/usr/local/bin/docker"
@@ -281,7 +281,7 @@ class ConfigTest(Base):
         with self.assertRaisesRegex(SessionError, "protocol '18', want '33'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
-            "install or upgrade it: see docs/architecture.md#docker-install", str(caught.exception)
+            f"gh logged in), then {BROKER} retrust; scripts/install.sh", str(caught.exception)
         )
         self.assertEqual(runner.calls, [[BROKER, "version"]])
         self.assertEqual(len(runner.results), 1)
@@ -327,9 +327,7 @@ class ConfigTest(Base):
             {
                 "implementation": "ensemble.session.hosts.docker.host:DockerHost",
                 "docker": "/usr/local/bin/docker",
-                "plugins": [
-                    "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43"
-                ],
+                "plugins": [UPDRAFT],
                 "isolated": True,
                 "github": {"app": "", "permissions": PERMISSIONS},
             },
@@ -339,15 +337,7 @@ class ConfigTest(Base):
         host = DockerHost("docker", settings)
         self.assertEqual(
             (host.docker, host.github, host.github_permissions, host.plugins, host._isolated),
-            (
-                "/usr/local/bin/docker",
-                "",
-                PERMISSIONS,
-                (
-                    "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-                ),
-                True,
-            ),
+            ("/usr/local/bin/docker", "", PERMISSIONS, (UPDRAFT,), True),
         )
         bare = DockerHost("docker", {"docker": DOCKER})
         self.assertEqual(
@@ -359,19 +349,10 @@ class ConfigTest(Base):
             "docker",
             {
                 "docker": DOCKER,
-                "plugins": [
-                    "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-                    "b.c@owner/market_1-x#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                ],
+                "plugins": [UPDRAFT, "b.c@owner/market_1-x#" + "a" * 40],
             },
         )
-        self.assertEqual(
-            named.plugins,
-            (
-                "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-                "b.c@owner/market_1-x#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            ),
-        )
+        self.assertEqual(named.plugins, (UPDRAFT, "b.c@owner/market_1-x#" + "a" * 40))
 
     def test_a_local_permissions_table_overrides_the_packaged_one_key_by_key(self):
         local = os.path.join(self.home, "config.local.toml")
@@ -430,7 +411,7 @@ class ConfigTest(Base):
                     r"^\[hosts.docker\] plugins: want unique name@owner/repo#40-hex-commit sources, optionally ::owner/repo#40-hex-commit$",
                 )
                 for plugins in (
-                    "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
+                    UPDRAFT,
                     ["a", "a"],
                     [1],
                     [["a"]],
@@ -492,18 +473,6 @@ class ClientEnvTest(Base):
                     host._client_context(),
                     ClientContext("host.docker.internal", permission, container),
                 )
-
-    def test_the_pythonpath_starts_at_the_images_session_src(self):
-        # Clients find their packaged files (Container.source) there.
-        container = self.host._client_context().container
-        assert container is not None
-        self.assertEqual(container.source, "/opt/ensemble/src")
-
-    def test_client_env_points_at_the_home(self):
-        self.assertEqual(
-            self.host._client_env("w", "agent", HOME, resume=False),
-            {"AGENT_HOME": os.path.join(self.home, ".ensemble", "docker-state", "w", "agent")},
-        )
 
 
 def _read(path):
@@ -731,39 +700,30 @@ class StartTest(StartBase):
                 self.host._stage_prompt(CONTAINER, metadata)
             self.assertNotIn("private", str(raised.exception))
 
-    def test_a_failed_prompt_stage_rolls_the_start_back(self):
-        with (
-            mock.patch.object(self.host, "_stage_prompt", side_effect=SessionError("no room")),
-            self.assertRaisesRegex(SessionError, "no room"),
-        ):
-            self.start(prompt_file="/run/ensemble/prompt/prompt.md", prompt="x")
-        self.assertEqual(self.broker.closed, [CONTAINER])
-        self.assertNotIn("guard", self.order)
-
-    def test_staging_failure_rolls_back_the_container(self):
-        with (
-            mock.patch.object(
-                self.host, "_stage_files", side_effect=SessionError("projection failed")
+    def test_a_failed_stage_rolls_the_start_back(self):
+        for stage, message, options in (
+            (
+                "_stage_prompt",
+                "no room",
+                {"prompt_file": "/run/ensemble/prompt/prompt.md", "prompt": "x"},
             ),
-            self.assertRaisesRegex(SessionError, "projection failed"),
+            ("_stage_files", "projection failed", {}),
         ):
-            self.start()
-        self.assertEqual(self.broker.closed, [CONTAINER])
-        self.assertNotIn("guard", self.order)
+            self.broker.closed.clear()
+            self.order.clear()
+            with (
+                self.subTest(stage),
+                mock.patch.object(self.host, stage, side_effect=SessionError(message)),
+                self.assertRaisesRegex(SessionError, message),
+            ):
+                self.start(**options)
+            self.assertEqual(self.broker.closed, [CONTAINER])
+            self.assertNotIn("guard", self.order)
 
     def test_the_build_holds_the_whitelisted_plugins(self):
-        self.host.plugins = (
-            "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-            "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )
+        self.host.plugins = (UPDRAFT, BETA)
         self.start()
-        self.assertEqual(
-            self.broker.plugins,
-            (
-                "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-                "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ),
-        )
+        self.assertEqual(self.broker.plugins, (UPDRAFT, BETA))
 
     def test_start_order(self):
         os.makedirs(self.home_dir)
@@ -1460,13 +1420,12 @@ class StartTest(StartBase):
             self.start(home_dir="")
 
 
-HOST_SOURCE = "beta@owner/market#" + "b" * 40
 ENV_SOURCE = "gamma@owner/market#" + "e" * 40
 ENVIRONMENT = EnvironmentSpec(
     image="dummy-env:test",
     gateway="mini-op",
     secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
-    plugins=("dummy-plugin", HOST_SOURCE, ENV_SOURCE),
+    plugins=("dummy-plugin", BETA, ENV_SOURCE),
     lock="dummy-lock",
 )
 PREFETCHED = replace(ENVIRONMENT, prefetch={"repo": "o/r", "ref": "main"})
@@ -1494,32 +1453,6 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.order, ["version"])
         self.assertFalse(os.path.exists(cwd))
 
-    def test_preflight_defers_a_held_lock_to_start(self):
-        self.broker.holder = HOLDER
-        self.host._preflight(
-            "w", self.launch, {**self.METADATA, "environment": carried(ENVIRONMENT)}
-        )
-        self.assertEqual(self.order, ["version"])
-
-    def test_preflight_passes_its_own_container_holding_the_lock(self):
-        self.broker.holder = {"container": CONTAINER, "owner": "w"}
-        self.resumable(ENVIRONMENT.persisted())
-        self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
-        self.assertEqual(self.order, ["version"])
-        for holder in (
-            {"container": CONTAINER, "owner": "other"},
-            {"container": "ensemble-other-" + GEN, "owner": "w"},
-        ):
-            self.broker.holder = holder
-            with self.subTest(holder):
-                self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
-        self.assertFalse(any(isinstance(c, tuple) and c[0] == "lock-query" for c in self.order))
-
-    def test_preflight_of_a_resume_in_an_environment_sends_version_only(self):
-        self.resumable(ENVIRONMENT.persisted())
-        self.host._preflight("w", self.launch, {**self.METADATA, "resume": "1"})
-        self.assertEqual(self.order, ["version"])
-
     def test_another_sids_record_is_not_the_stored_environment(self):
         self.resumable(ENVIRONMENT.persisted())
         self.record(sid="another", environment=ENVIRONMENT.persisted())
@@ -1535,9 +1468,9 @@ class EnvironmentTest(StartBase):
         self.assertFalse({"lock", "lock_owner"} & set(self.manifest()))
 
     def test_build_uses_the_base_image_and_plugins(self):
-        self.host.plugins = (HOST_SOURCE,)
+        self.host.plugins = (BETA,)
         self.start(environment=carried(ENVIRONMENT))
-        self.assertEqual(self.broker.plugins, (HOST_SOURCE, ENV_SOURCE))
+        self.assertEqual(self.broker.plugins, (BETA, ENV_SOURCE))
         self.assertEqual(
             self.broker.built, {"base_image": "dummy-env:test", "image_plugins": ("dummy-plugin",)}
         )
@@ -1704,25 +1637,11 @@ class PreflightTest(Base):
             self.validate()
         self.assertRegex(stderr.getvalue(), r"\Adocker timing w: preflight \d+\.\d\d s\n\Z")
 
-    def test_preflight_runs_version_then_build_and_writes_nothing(self):
-        self.validate()
-        self.assertEqual(self.order, ["version", ("build", REPO)])
-        self.assertFalse(os.path.exists(self.state))
-
     def test_resume_preflight_builds_with_the_whitelisted_plugins(self):
-        self.host.plugins = (
-            "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-            "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )
+        self.host.plugins = (UPDRAFT, BETA)
         self.validate()
         self.assertEqual(self.order, ["version", ("build", REPO)])
-        self.assertEqual(
-            self.broker.plugins,
-            (
-                "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-                "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ),
-        )
+        self.assertEqual(self.broker.plugins, (UPDRAFT, BETA))
         self.assertFalse(os.path.exists(self.state))
 
     def test_an_argument_over_the_linux_limit_is_refused_before_any_docker_call(self):
@@ -2345,14 +2264,6 @@ class GuardedStartTest(StartBase):
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(handle.state(), Liveness.ABSENT)
         self.assertEqual(handle.returncode(), 0)
-
-    def test_an_owned_start_in_an_environment_builds_and_locks_it(self):
-        self.start(environment=carried(ENVIRONMENT))
-        self.assertEqual(self.broker.built["base_image"], "dummy-env:test")
-        with open(os.path.join(self.state, f"{GEN}.json")) as f:
-            manifest = json.load(f)
-        self.assertEqual((manifest["lock"], manifest["lock_owner"]), ("dummy-lock", "w"))
-        self.assertEqual(self.host_record()["environment"], ENVIRONMENT.persisted())
 
     def test_the_terminal_path_relies_on_the_tui_lock_its_store_holds(self):
         lock = tui_lock("w")

@@ -1,6 +1,4 @@
-"""A Docker session's broker credential maintenance as a tick its owner drives
-(docs/architecture.md › Harness-owned workers).
-"""
+"""A Docker session's broker credential maintenance as a tick its owner drives."""
 
 import contextlib
 import json

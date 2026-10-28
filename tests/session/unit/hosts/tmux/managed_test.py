@@ -1,5 +1,6 @@
 """Managed channel and conservative crash admission, without real processes."""
 
+import contextlib
 import os
 import sys
 import tempfile
@@ -22,6 +23,31 @@ from ensemble.session.hosts.base import GUARD_WAIT
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.tmux.host import TmuxHost
 from tests.session.case import Case
+
+EXITED = (guard.json_frame(b"s", {"pid": 123}), guard.json_frame(b"x", {"returncode": 0}), b"")
+
+
+@contextlib.contextmanager
+def spawned(read=EXITED):
+    """Popen gives a guard whose stdout reads `read` (frames or a function); yields the Popen mock."""
+    proc = mock.Mock()
+    proc.stdout.read.side_effect = read
+    with (
+        mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
+        mock.patch.object(os, "set_blocking"),
+    ):
+        yield spawn
+
+
+def guard_dir(generation, state, name="worker"):
+    """`name`'s guard dir, `generation` current in `state`."""
+    directory = managed.location("tmux", name)
+    managed.private_directory(directory + "/" + generation)
+    managed.save_json(directory + "/current.json", {"generation": generation})
+    managed.save_json(
+        directory + "/" + generation + "/state.json", {"generation": generation, "state": state}
+    )
+    return directory
 
 
 class ManagedTest(Case):
@@ -51,28 +77,21 @@ class ManagedTest(Case):
         self.assertEqual(host.worker_liveness("worker", current["generation"]), Liveness.ABSENT)
 
     def test_reader_start_failure_closes_both_pipe_ends_and_reaps_guard(self):
-        proc = mock.Mock()
         host = TmuxHost("tmux", tmux=mock.Mock())
         with (
-            mock.patch.object(managed.subprocess, "Popen", return_value=proc),
-            mock.patch.object(os, "set_blocking"),
+            spawned() as spawn,
             mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("no threads")),
             self.assertRaisesRegex(RuntimeError, "no threads"),
         ):
             host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
+        proc = spawn.return_value
         proc.stdin.close.assert_called_once()
         proc.stdout.close.assert_called_once()
         proc.wait.assert_called_once_with(timeout=GUARD_WAIT)
 
     def test_live_lease_and_unclean_guard_death_refuse_second_owner(self):
         generation = "a" * 32
-        directory = managed.location("tmux", "worker")
-        managed.private_directory(directory + "/" + generation)
-        managed.save_json(directory + "/current.json", {"generation": generation})
-        managed.save_json(
-            directory + "/" + generation + "/state.json",
-            {"generation": generation, "state": "running"},
-        )
+        directory = guard_dir(generation, "running")
         lease = managed.lease_file(directory + "/" + generation + "/lease")
         try:
             managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
@@ -100,17 +119,8 @@ class ManagedTest(Case):
         spawn.assert_not_called()
 
     def test_worker_start_inherits_only_lease_into_guard(self):
-        proc = mock.Mock()
-        proc.stdout.read.side_effect = [
-            guard.json_frame(b"s", {"pid": 123}),
-            guard.json_frame(b"x", {"returncode": 0}),
-            b"",
-        ]
         host = TmuxHost("tmux", tmux=mock.Mock())
-        with (
-            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
-            mock.patch.object(os, "set_blocking"),
-        ):
+        with spawned() as spawn:
             channel = host.worker(
                 "worker", Launch((sys.executable,), cwd=self.home), terminal=False
             )
@@ -124,17 +134,8 @@ class ManagedTest(Case):
 
     def test_terminal_worker_guard_awaits_the_display_it_starts(self):
         """tmux starts the guard's display at launch, so its guard keeps the display grace."""
-        proc = mock.Mock()
-        proc.stdout.read.side_effect = [
-            guard.json_frame(b"s", {"pid": 123}),
-            guard.json_frame(b"x", {"returncode": 0}),
-            b"",
-        ]
         host = TmuxHost("tmux", tmux=mock.Mock())
-        with (
-            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
-            mock.patch.object(os, "set_blocking"),
-        ):
+        with spawned() as spawn:
             channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
             channel.close()
         argv = spawn.call_args.args[0]
@@ -145,17 +146,8 @@ class ManagedTest(Case):
         self.assertEqual(argv[start + 4 : start + 6], ["--size", "80x24"])
 
     def test_terminal_worker_guard_and_display_take_the_hidden_size(self):
-        proc = mock.Mock()
-        proc.stdout.read.side_effect = [
-            guard.json_frame(b"s", {"pid": 123}),
-            guard.json_frame(b"x", {"returncode": 0}),
-            b"",
-        ]
         host = TmuxHost("tmux", {"hidden_size": "100x30"}, tmux=mock.Mock())
-        with (
-            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
-            mock.patch.object(os, "set_blocking"),
-        ):
+        with spawned() as spawn:
             channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
             channel.close()
         argv = spawn.call_args.args[0]
@@ -189,13 +181,7 @@ class ManagedTest(Case):
 
     def test_ended_generation_requires_matching_record_and_free_lease(self):
         generation = "a" * 32
-        directory = managed.location("tmux", "worker")
-        managed.private_directory(directory + "/" + generation)
-        managed.save_json(directory + "/current.json", {"generation": generation})
-        managed.save_json(
-            directory + "/" + generation + "/state.json",
-            {"generation": generation, "state": "exited"},
-        )
+        directory = guard_dir(generation, "exited")
         with open(directory + "/" + generation + "/lease", "w"):
             pass
         os.chmod(directory + "/" + generation + "/lease", 0o600)
@@ -207,13 +193,7 @@ class ManagedTest(Case):
         makes no ended worker LIVE; only its guard's exclusive lease does.
         """
         generation = "a" * 32
-        directory = managed.location("tmux", "worker")
-        managed.private_directory(directory + "/" + generation)
-        managed.save_json(directory + "/current.json", {"generation": generation})
-        managed.save_json(
-            directory + "/" + generation + "/state.json",
-            {"generation": generation, "state": "exited"},
-        )
+        directory = guard_dir(generation, "exited")
         lease = managed.lease_file(directory + "/" + generation + "/lease")
         try:
             managed.fcntl.flock(lease, managed.fcntl.LOCK_SH)
@@ -236,17 +216,10 @@ class ManagedTest(Case):
 
     def spawned_env(self, launch: Launch, **environ) -> dict:
         """The guard's environment for `launch`, the harness's environment holding `environ`."""
-        proc = mock.Mock()
-        proc.stdout.read.side_effect = [
-            guard.json_frame(b"s", {"pid": 123}),
-            guard.json_frame(b"x", {"returncode": 0}),
-            b"",
-        ]
         host = TmuxHost("tmux", tmux=mock.Mock())
         with (
             mock.patch.dict(os.environ, environ),
-            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
-            mock.patch.object(os, "set_blocking"),
+            spawned() as spawn,
         ):
             host.worker("worker", launch, terminal=False).close()
         return spawn.call_args.kwargs["env"]
@@ -371,13 +344,8 @@ class ManagedTest(Case):
                 gate.wait(GUARD_WAIT)  # running until the test ends
                 return b""
 
-        proc = mock.Mock()
-        proc.stdout.read.side_effect = read
         tmux = mock.Mock()
-        with (
-            mock.patch.object(managed.subprocess, "Popen", return_value=proc),
-            mock.patch.object(os, "set_blocking"),
-        ):
+        with spawned(read):
             channel = TmuxHost("tmux", tmux=tmux).worker(
                 "worker",
                 Launch((sys.executable,), cwd=self.home),
@@ -413,16 +381,7 @@ class OneShotTest(Case):
         self.root = os.path.dirname(managed.location("tmux", "x"))
 
     def headless(self, name="x", generation=None):
-        proc = mock.Mock()
-        proc.stdout.read.side_effect = [
-            guard.json_frame(b"s", {"pid": 123}),
-            guard.json_frame(b"x", {"returncode": 0}),
-            b"",
-        ]
-        with (
-            mock.patch.object(managed.subprocess, "Popen", return_value=proc),
-            mock.patch.object(os, "set_blocking"),
-        ):
+        with spawned():
             return self.host.worker(
                 name,
                 Launch((sys.executable,), cwd=self.home),
@@ -432,13 +391,7 @@ class OneShotTest(Case):
 
     def live_tui(self, name, generation):
         """A tui worker's guard dir whose lease this test holds, as its running guard would."""
-        directory = managed.location("tmux", name)
-        managed.private_directory(directory + "/" + generation)
-        managed.save_json(directory + "/current.json", {"generation": generation})
-        managed.save_json(
-            directory + "/" + generation + "/state.json",
-            {"generation": generation, "state": "running"},
-        )
+        directory = guard_dir(generation, "running", name=name)
         lease = managed.lease_file(directory + "/" + generation + "/lease")
         managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
         self.addCleanup(os.close, lease)

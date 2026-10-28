@@ -1,5 +1,5 @@
 """DockerHost: a broker-made container per session, its main process the guard (worker.py), reached
-by `docker attach` (docs/architecture.md#docker-host).
+by `docker attach`.
 """
 
 from __future__ import annotations

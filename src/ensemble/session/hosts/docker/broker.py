@@ -22,7 +22,10 @@ from ensemble.utils import save
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 PROTOCOL = "33"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
-INSTALL = "install or upgrade it: see docs/architecture.md#docker-install"
+INSTALL = (
+    "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
+    f" gh logged in), then {BROKER} retrust; scripts/install.sh --docker does both"
+)
 TIMEOUT = 1800
 GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
 

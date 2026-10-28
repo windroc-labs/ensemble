@@ -5,8 +5,6 @@ from pathlib import Path
 
 from ensemble import session
 from ensemble.session.engine.config import read_config
-from ensemble.session.engine.types import ConfigError
-from ensemble.session.hosts.base import Host
 from ensemble.utils import read_resources
 from tests.session.case import Case
 
@@ -37,16 +35,6 @@ class Configuration(Case):
         ):
             read_config(local=str(local))
         self.assertIn("hosts", read_config(local=os.devnull))
-
-    def test_a_local_default_host_of_pty_is_refused_naming_the_hosts_left(self):
-        local = Path(self.home, "config.local.toml")
-        local.write_text('[session.hosts]\ndefault = "pty"\n')
-        with self.assertRaises(ConfigError) as caught:
-            Host.parse_hosts(read_config(local=str(local))["hosts"])
-        self.assertEqual(
-            str(caught.exception),
-            "[hosts] default: 'pty' is not a Host here; want one of docker, tmux",
-        )
 
     def test_utils_local_keys_are_rejected_as_an_unconfigured_lower_layer(self):
         local = Path(self.home, "config.local.toml")

@@ -20,7 +20,44 @@ from ensemble.session.hosts.base import GUARD_HOOK_SOCKET
 from tests.session.case import Case
 
 
-class GuardTest(Case):
+@contextlib.contextmanager
+def spawned(*, terminal=True, sockets=None, proc=None):
+    """A guard's start with no real spawn, socket or (terminal) pty; yields (ioctl, Popen, socket)."""
+    with contextlib.ExitStack() as stack:
+
+        def patch(target, name, **options):
+            return stack.enter_context(mock.patch.object(target, name, **options))
+
+        patch(guard.ctypes, "CDLL").return_value.prctl.return_value = 0
+        socket = patch(guard.socket, "socket", side_effect=sockets)
+        ioctl = patch(guard.fcntl, "ioctl") if terminal else None
+        if terminal:
+            patch(os, "openpty", return_value=(20, 21))
+            patch(os, "close")
+        patch(os, "chmod")
+        patch(os, "set_blocking")
+        patch(os, "listdir", return_value=[])
+        yield (
+            ioctl,
+            patch(guard.subprocess, "Popen", return_value=proc or mock.Mock(pid=100)),
+            socket,
+        )
+
+
+class Base(Case):
+    def runtime(self, *, terminal=False, display_grace=False, size=guard.SIZE, **options):
+        args = argparse.Namespace(
+            hook_socket=self.home + "/hook",
+            display_socket=None,
+            display_grace=display_grace,
+            terminal=terminal,
+            size=size,
+            command=["fake"],
+        )
+        return guard.Guard(args, **options)
+
+
+class GuardTest(Base):
     def test_wide_character_at_right_margin_and_combining_mark_wrap_safely(self):
         screen = guard.Screen()
         screen.append(("a" * 79 + "中\u0301").encode())
@@ -55,18 +92,7 @@ class GuardTest(Case):
     def test_the_pty_and_screen_start_at_the_given_size(self):
         runtime = self.runtime(terminal=True, size=(30, 100))
         self.assertEqual((runtime.screen.rows, runtime.screen.columns), (30, 100))
-        with (
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket"),
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(os, "openpty", return_value=(20, 21)),
-            mock.patch.object(guard.fcntl, "ioctl") as ioctl,
-            mock.patch.object(os, "close"),
-            mock.patch.object(os, "set_blocking"),
-            mock.patch.object(os, "listdir", return_value=[]),
-            mock.patch.object(guard.subprocess, "Popen", return_value=mock.Mock(pid=100)),
-        ):
-            library.return_value.prctl.return_value = 0
+        with spawned() as (ioctl, _, _):
             runtime.start()
         sized = [c for c in ioctl.call_args_list if c.args[1] == termios.TIOCSWINSZ]
         self.assertEqual([struct.unpack("HHHH", c.args[2]) for c in sized], [(30, 100, 0, 0)])
@@ -91,15 +117,7 @@ class GuardTest(Case):
         proc = mock.Mock(returncode=0, pid=100)
         captured = []
         with (
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket") as sockets,
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(os, "openpty", return_value=(20, 21)),
-            mock.patch.object(guard.fcntl, "ioctl"),
-            mock.patch.object(os, "close"),
-            mock.patch.object(os, "listdir", return_value=[]),
-            mock.patch.object(os, "set_blocking"),
-            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            spawned(proc=proc) as (_, _, sockets),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(
                 guard.select, "select", side_effect=[([20, peer], [], []), ([20], [], [])]
@@ -109,7 +127,6 @@ class GuardTest(Case):
                 os, "write", side_effect=lambda _fd, data: captured.append(data) or len(data)
             ),
         ):
-            library.return_value.prctl.return_value = 0
             sockets.return_value.accept.side_effect = BlockingIOError
             self.assertEqual(runtime.run(), 0)
         self.assertEqual(
@@ -125,15 +142,7 @@ class GuardTest(Case):
         peer.send.side_effect = len
         proc = mock.Mock(returncode=0, pid=100)
         with (
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket", side_effect=[hook_server, display_server]),
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(os, "openpty", return_value=(20, 21)),
-            mock.patch.object(guard.fcntl, "ioctl"),
-            mock.patch.object(os, "close"),
-            mock.patch.object(os, "listdir", return_value=[]),
-            mock.patch.object(os, "set_blocking"),
-            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            spawned(sockets=[hook_server, display_server], proc=proc),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(
                 guard.select,
@@ -143,7 +152,6 @@ class GuardTest(Case):
             mock.patch.object(os, "read", side_effect=[b"idle prompt", b""]),
             mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)),
         ):
-            library.return_value.prctl.return_value = 0
             self.assertEqual(runtime.run(), 0)
         self.assertIn(b"idle prompt", peer.send.call_args.args[0])
 
@@ -348,15 +356,7 @@ class GuardTest(Case):
         display_server.accept.side_effect = BlockingIOError
         proc = mock.Mock(returncode=None, pid=100)
         with (
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket", side_effect=[hook_server, display_server]),
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(os, "openpty", return_value=(20, 21)),
-            mock.patch.object(guard.fcntl, "ioctl"),
-            mock.patch.object(os, "close"),
-            mock.patch.object(os, "listdir", return_value=[]),
-            mock.patch.object(os, "set_blocking"),
-            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            spawned(sockets=[hook_server, display_server], proc=proc),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(guard.select, "select", side_effect=[([0], [], []), ([20], [], [])]),
             mock.patch.object(os, "read", side_effect=[guard.frame(b"c", b"{}"), b""]),
@@ -366,7 +366,6 @@ class GuardTest(Case):
                 guard.time, "sleep", side_effect=AssertionError("lingered for a display")
             ),
         ):
-            library.return_value.prctl.return_value = 0
             proc.poll.side_effect = lambda: setattr(proc, "returncode", 0)
             return runtime.run()
 
@@ -437,18 +436,6 @@ class GuardTest(Case):
         with self.assertRaises(ValueError):
             runtime.emit(b"x" * (guard.BUFFER_MAX + 1))
         self.assertFalse(runtime.output)
-
-    def runtime(self, *, terminal=False, display_grace=False, size=guard.SIZE):
-        return guard.Guard(
-            argparse.Namespace(
-                hook_socket=self.home + "/hook",
-                display_socket=None,
-                display_grace=display_grace,
-                terminal=terminal,
-                size=size,
-                command=["fake"],
-            )
-        )
 
     def test_fragmented_frames(self):
         decoder = guard.Decoder()
@@ -908,34 +895,15 @@ class GuardTest(Case):
 
     def test_start_client_exec_failure_never_emits_started(self):
         runtime = self.runtime()
-        with (
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket"),
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(guard.subprocess, "Popen", side_effect=FileNotFoundError),
-            self.assertRaises(FileNotFoundError),
-        ):
-            library.return_value.prctl.return_value = 0
+        with spawned(terminal=False) as (_, popen, _), self.assertRaises(FileNotFoundError):
+            popen.side_effect = FileNotFoundError
             runtime.start()
         self.assertFalse(runtime.output)
 
     def started_env(self, *, terminal, **environ):
         """The env a started guard gave its client, under environ."""
         runtime = self.runtime(terminal=terminal)
-        with (
-            mock.patch.dict(os.environ, environ),
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket"),
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(os, "openpty", return_value=(20, 21)),
-            mock.patch.object(guard.fcntl, "ioctl"),
-            mock.patch.object(os, "close"),
-            mock.patch.object(os, "listdir", return_value=[]),
-            mock.patch.object(os, "set_blocking"),
-            mock.patch.object(guard.subprocess, "Popen") as spawn,
-        ):
-            library.return_value.prctl.return_value = 0
-            spawn.return_value.pid = 100
+        with mock.patch.dict(os.environ, environ), spawned() as (_, spawn, _):
             if "TERM" not in environ:
                 os.environ.pop("TERM", None)
             runtime.start()
@@ -960,12 +928,7 @@ class GuardTest(Case):
         peer.recv.return_value = json.dumps(message).encode() + b"\n"
         runtime.peers[peer] = ("hook", bytearray())
         with (
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket") as sockets,
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(os, "listdir", return_value=[]),
-            mock.patch.object(os, "set_blocking"),
-            mock.patch.object(guard.subprocess, "Popen", return_value=proc),
+            spawned(terminal=False, proc=proc) as (_, _, sockets),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(
                 guard.select, "select", side_effect=[([11, 12], [], []), ([11], [], [])]
@@ -975,7 +938,6 @@ class GuardTest(Case):
                 os, "write", side_effect=lambda _fd, data: captured.append(data) or len(data)
             ),
         ):
-            library.return_value.prctl.return_value = 0
             sockets.return_value.accept.side_effect = BlockingIOError
             self.assertEqual(runtime.run(), 0)
         self.assertEqual(
@@ -1257,18 +1219,7 @@ class ServeTest(Case):
                 guard.main(["--serve", *argv])
 
 
-class HeartbeatTest(Case):
-    def runtime(self, **options):
-        args = argparse.Namespace(
-            hook_socket=self.home + "/hook",
-            display_socket=None,
-            display_grace=False,
-            terminal=False,
-            size=guard.SIZE,
-            command=["fake"],
-        )
-        return guard.Guard(args, **options)
-
+class HeartbeatTest(Base):
     def test_a_serve_guard_closes_once_its_harness_is_silent_over_the_limit(self):
         runtime = self.runtime(heartbeat=5.0)
         runtime.heard = 100.0
@@ -1328,18 +1279,8 @@ class HeartbeatTest(Case):
         runtime.args.terminal = True
         with (
             mock.patch.dict(os.environ, {"KEEP": "own", "OWN": "1"}),
-            mock.patch.object(guard.ctypes, "CDLL") as library,
-            mock.patch.object(guard.socket, "socket"),
-            mock.patch.object(os, "chmod"),
-            mock.patch.object(os, "openpty", return_value=(20, 21)),
-            mock.patch.object(guard.fcntl, "ioctl"),
-            mock.patch.object(os, "close"),
-            mock.patch.object(os, "listdir", return_value=[]),
-            mock.patch.object(os, "set_blocking"),
-            mock.patch.object(guard.subprocess, "Popen") as spawn,
+            spawned() as (_, spawn, _),
         ):
-            library.return_value.prctl.return_value = 0
-            spawn.return_value.pid = 100
             os.environ.pop("TERM", None)
             runtime.start()
         env = spawn.call_args.kwargs["env"]

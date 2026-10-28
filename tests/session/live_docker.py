@@ -1,6 +1,6 @@
-"""The Docker Host's live acceptance gate, run by hand on macOS with Docker Desktop
-(docs/architecture.md › Docker live acceptance). Each command prints a PASS line per check and a timing
-line per generation, and exits 1 at the first failed check:
+"""The Docker Host's live acceptance gate, run only through mini-op on the test Mac mini (Docker
+Desktop, broker installed and logged in, `[session.hosts] default = "docker"`). Each command prints
+a PASS line per check and a timing line per generation, and exits 1 at the first failed check:
 
   python3 tests/session/live_docker.py worker --client claude|codex|opencode CWD [NAME]
       from a manager session: build once, start a worker on the default Host, check its
@@ -510,7 +510,8 @@ def docker_host() -> tuple[str, tuple[str, ...]]:
     table = hosts.tables.get(hosts.default, {})
     if table.get("implementation") != DOCKER_HOST:
         raise SystemExit(
-            f"default Host is {hosts.default}, not a Docker Host (docs/architecture.md#docker-host)"
+            f"default Host is {hosts.default}, not a Docker Host: set [session.hosts]"
+            ' default = "docker" in ~/.ensemble/config.local.toml'
         )
     return table["docker"], tuple(table.get("plugins", ()))
 

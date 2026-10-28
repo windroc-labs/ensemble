@@ -1,5 +1,5 @@
 """The guard channel's host end, shared by every Host's managed worker: frames in, input,
-screen queries and close out (docs/architecture.md › Guard protocol).
+screen queries and close out.
 """
 
 import json

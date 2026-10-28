@@ -10,10 +10,10 @@ import os
 import re
 import signal
 import sys
-import threading
 import time
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from ensemble.session import Session
@@ -35,7 +35,7 @@ from ensemble.session.engine.types import (
 from tests.session import fake_client
 from tests.session.case import Case
 from tests.session.modules import client_loader
-from tests.session.threads import capture_errors
+from tests.session.threads import drain
 from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import kill, scratch
 from tests.utils.sandbox import pid_exists as running
@@ -117,6 +117,7 @@ class Base(Case):
         self.workdir = os.path.join(self.dir, "work")
         self.scenario = os.path.join(self.dir, "scenario.json")
         self.log = os.path.join(self.dir, "client.log")
+        self.gate = os.path.join(self.dir, "gate")
         self.steps()
         self.session_dependencies = {
             "class_loader": client_loader(
@@ -159,26 +160,6 @@ class Base(Case):
         self.addCleanup(handle.stop)
         return handle
 
-    def drain(self, handle, on=lambda _event: None) -> list:
-        """handle.events() to its end, each passed to on(event); fails, stopping it, past WAIT."""
-        found, errors = [], []
-
-        def run():
-            for event in handle.events():
-                found.append(event)
-                on(event)
-
-        thread = threading.Thread(target=run, daemon=True)
-        with capture_errors(thread, errors.append):
-            thread.start()
-            thread.join(WAIT)
-        if thread.is_alive():
-            handle.stop()
-            self.fail(f"events() did not end within {WAIT}s, got {found}")
-        if errors:
-            raise errors[0]
-        return found
-
     def logged(self) -> list[dict]:
         return read_jsonl(self.log)
 
@@ -212,7 +193,7 @@ class AcceptanceTest(Base):
         def bindings() -> int:
             return [e["kind"] for e in self.written()].count("client_session")
 
-        found = self.drain(handle, lambda event: seen.append((event, handle.reply, bindings())))
+        found = drain(self, handle, lambda event: seen.append((event, handle.reply, bindings())))
         self.assertEqual(
             [e for e in found if not isinstance(e, Stderr)],
             [
@@ -270,7 +251,7 @@ class IdleTest(Base):
                 if len(alive) == 2:
                     open(release, "w").close()
 
-        found = self.drain(handle, on)
+        found = drain(self, handle, on)
         self.assertEqual((found[0], found[-1]), (Activity("Read"), Exited(0)))
         idles = [(at, e) for at, e in marks if isinstance(e, IdleTimeout)]
         self.assertGreaterEqual(len(idles), 2)
@@ -288,7 +269,7 @@ class IdleTest(Base):
             {"sleep": 60},
         )
         began = time.monotonic()
-        found = self.drain(self.start(idle_timeout=IDLE))
+        found = drain(self, self.start(idle_timeout=IDLE))
         self.assertLess(time.monotonic() - began, WAIT)
         self.assertEqual(found[0], TurnFailed("permission_required", "approve"))
         self.assertIsInstance(found[-1], Exited)
@@ -328,7 +309,7 @@ class IdleTest(Base):
         ):
             with self.subTest(case=case):
                 self.steps(*steps)
-                self.assertEqual(self.drain(self.start(idle_timeout=idle)), want)
+                self.assertEqual(drain(self, self.start(idle_timeout=idle)), want)
 
 
 class ExitTest(Base):
@@ -347,13 +328,13 @@ class ExitTest(Base):
         ):
             with self.subTest(case=case):
                 self.steps(*steps)
-                self.assertEqual(self.drain(self.start()), want)
+                self.assertEqual(drain(self, self.start()), want)
 
     def test_stop_mid_sleep_ends_with_a_negative_exited_and_is_idempotent(self):
         self.steps(out("activity", name="Read"), {"sleep": 60})
         handle = self.start()
-        found = self.drain(
-            handle, lambda event: handle.stop() if isinstance(event, Activity) else None
+        found = drain(
+            self, handle, lambda event: handle.stop() if isinstance(event, Activity) else None
         )
         self.assertEqual(len(found), 3)
         self.assertEqual(found[0], Activity("Read"))
@@ -386,7 +367,7 @@ class ProcessGroupTest(Base):
                 self.addCleanup(kill, int(event.text))
                 handle.stop()
 
-        found = self.drain(handle, on)
+        found = drain(self, handle, on)
         self.assertEqual(len(found), 3)
         self.assertIsInstance(found[0], Reply)
         self.assertEqual(found[1:], [TurnFailed("interrupted"), Exited(-signal.SIGHUP)])
@@ -395,8 +376,8 @@ class ProcessGroupTest(Base):
         self,
     ):
         handle = self.script("closed pipes", idle_timeout=IDLE)
-        found = self.drain(
-            handle, lambda event: handle.stop() if isinstance(event, IdleTimeout) else None
+        found = drain(
+            self, handle, lambda event: handle.stop() if isinstance(event, IdleTimeout) else None
         )
         self.assertEqual(
             found,
@@ -414,7 +395,7 @@ class FailureTest(Base):
         self.steps(out("session"), {"sleep": 60})
         with self.assertLogs("session", "ERROR") as logs:
             handle = self.start()
-            found = self.drain(handle)
+            found = drain(self, handle)
         self.assertIn("KeyError: 'id'", logs.output[0])
         self.assertEqual(found[0], TurnFailed("interrupted"))
         self.assertIsInstance(found[-1], Exited)
@@ -423,33 +404,33 @@ class FailureTest(Base):
         self.assertEqual(list(handle.events()), [])
 
     def test_a_failed_client_session_line_stops_the_process_and_fails_its_harness(self):
-        # its harness reads the session line once the run log is unwritable
-        self.steps({"sleep": 1}, out("session", id="native-1"), {"sleep": 60})
+        self.steps({"until": self.gate}, out("session", id="native-1"), {"sleep": 60})
         with self.assertLogs("session", "ERROR") as logs:
             handle = self.start()
             self.unwritable()
-            found = self.drain(handle)
+            found = drain(self, handle)
         self.assertIn("IsADirectoryError", logs.output[0])
         self.assertEqual(found[0], TurnFailed("interrupted"))
         self.assertFalse(running(self.logged()[0]["pid"]))
 
     def test_a_failed_stderr_record_loses_the_line_not_the_run(self):
-        self.steps({"sleep": 1}, {"err": "lost"})  # read once the log is unwritable
+        self.steps({"until": self.gate}, {"err": "lost"})
         handle = self.start()
         self.unwritable()
         with mock.patch("sys.stderr", io.StringIO()) as printed:
             self.assertEqual(
-                self.drain(handle),
+                drain(self, handle),
                 [Stderr("lost"), TurnFailed("incomplete_turn", "lost"), Exited(0)],
             )
         self.assertIn("records: ", printed.getvalue())
 
     def unwritable(self) -> None:
-        """A directory in place of the run log: a record write fails."""
+        """A directory in place of the run log, so a record write fails; then opens the gate."""
         path = RunLog(self.workdir).path
         with contextlib.suppress(FileNotFoundError):
             os.unlink(path)
         os.mkdir(path)
+        Path(self.gate).touch()
 
 
 class LaunchEnvironmentTest(Base):
@@ -463,7 +444,7 @@ class LaunchEnvironmentTest(Base):
                 self.forget()
                 self.configure(**extra)
                 self.assertEqual(
-                    self.drain(self.start("launching")), [TurnFailed("incomplete_turn"), Exited(0)]
+                    drain(self, self.start("launching")), [TurnFailed("incomplete_turn"), Exited(0)]
                 )
                 self.assertEqual(self.logged()[0]["env"]["FAKE_ENV"], shown)
 
@@ -483,7 +464,7 @@ class LaunchEnvironmentTest(Base):
                 self.forget()
                 self.configure(**extra)
                 handle = self.start(client, Spec(workdir=self.workdir, access=access))
-                self.assertEqual(self.drain(handle), [TurnFailed("incomplete_turn"), Exited(0)])
+                self.assertEqual(drain(self, handle), [TurnFailed("incomplete_turn"), Exited(0)])
                 (entry,) = self.logged()
                 self.assertEqual((entry["cwd"], entry["env"]["PWD"]), (want, want))
                 self.assertEqual(handle.info().cwd, want)
@@ -498,7 +479,7 @@ class FakeTest(Base):
     def test_a_limit_record_is_a_limit_hit(self):
         self.steps(out("limit", resets_at=1.5), out("limit", resets_at=None), out("limit"))
         self.assertEqual(
-            self.drain(self.start()),
+            drain(self, self.start()),
             [LimitHit(1.5), LimitHit(None), LimitHit(None), TurnFailed("usage_limit"), Exited(0)],
         )
 
@@ -508,10 +489,10 @@ class FakeTest(Base):
         )
         first = self.start()
         self.assertEqual(
-            self.drain(first), [Reply("first"), TurnFailed("incomplete_turn"), Exited(0)]
+            drain(self, first), [Reply("first"), TurnFailed("incomplete_turn"), Exited(0)]
         )
         self.assertEqual(
-            self.drain(self.start(sid=first.sid, resume=True)),
+            drain(self, self.start(sid=first.sid, resume=True)),
             [Reply("again"), TurnFailed("incomplete_turn"), Exited(0)],
         )
         self.assertEqual(["--resume" in entry["argv"] for entry in self.logged()], [False, True])
@@ -519,7 +500,7 @@ class FakeTest(Base):
     def test_an_object_without_resume_steps_runs_its_steps_on_a_resume(self):
         self.scenario_object(steps=[out("message", text="first")])
         self.assertEqual(
-            self.drain(self.start(sid="r1", resume=True)),
+            drain(self, self.start(sid="r1", resume=True)),
             [Reply("first"), TurnFailed("incomplete_turn"), Exited(0)],
         )
 

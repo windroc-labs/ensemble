@@ -5,6 +5,7 @@ import os
 import shlex
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 from unittest import mock
 from zoneinfo import ZoneInfo
 
@@ -125,26 +126,27 @@ class Base(Case):
             call()
         self.assertEqual(str(caught.exception), message)
 
-    def launch(
-        self, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
-    ) -> Launch:
-        spec = Spec(
-            **{
-                "workdir": self.work,
-                "access": Access(cwd=self.work),
-                "sid": SID,
-                "prompt": prompt,
-                "resume": resume,
-                **spec,
-            }
-        )
-        run = ClaudeClient(config).headless()
-        run._context = replace(LOCAL_CONTEXT, permission=permission)
-        return run.launch(spec)
+    def launch(self, prompt="hi", config=CONFIG, **spec) -> Launch:
+        return _launch("headless", self.work, prompt, config, **spec)
 
 
-def stream_line(record) -> str:
-    return json.dumps(record)
+def _launch(
+    mode, work, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
+) -> Launch:
+    spec = Spec(
+        **{
+            "workdir": work,
+            "access": Access(cwd=work),
+            "sid": SID,
+            "prompt": prompt,
+            "resume": resume,
+            **spec,
+        }
+    )
+    client = ClaudeClient(config)
+    run = client.tui() if mode == "tui" else client.headless()
+    run._context = replace(LOCAL_CONTEXT, permission=permission)
+    return run.launch(spec, HOOK) if mode == "tui" else run.launch(spec)
 
 
 def assistant(*blocks, **fields) -> dict:
@@ -232,22 +234,7 @@ def reference(cwd: str, sid: str = SID) -> str:
     return f"cd {q(cwd)} && ensemble-session client-resume claude {q(store())} {q(cwd)} {sid}"
 
 
-def tui_launch(
-    work, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
-) -> Launch:
-    spec = Spec(
-        **{
-            "workdir": work,
-            "access": Access(cwd=work),
-            "sid": SID,
-            "prompt": prompt,
-            "resume": resume,
-            **spec,
-        }
-    )
-    run = ClaudeClient(config).tui()
-    run._context = replace(LOCAL_CONTEXT, permission=permission)
-    return run.launch(spec, HOOK)
+tui_launch = partial(_launch, "tui")
 
 
 def said(mid, *blocks) -> dict:

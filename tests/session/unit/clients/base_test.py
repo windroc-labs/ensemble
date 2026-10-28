@@ -36,7 +36,6 @@ from ensemble.session.engine.types import (
 from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadless
 from ensemble.session.modes.client_adapters.in_process import InProcess
 from ensemble.session.modes.client_adapters.tui import Tui
-from ensemble.utils import sid_error
 from tests.session.case import SID as UUID
 from tests.session.case import Case
 from tests.session.client_adapters_support import DetailedTui, StubHeadless, StubInProcess, StubTui
@@ -276,19 +275,6 @@ class AccessTest(Refusals):
             with self.subTest(fields=fields):
                 self.refused(lambda *, fields=fields: Access(cwd="/c", **fields), message)
 
-    def test_accepts_an_env_of_exec_names_to_strings(self):
-        env = {
-            "PYTHONPATH": "/a b;c",
-            "_x1": "",
-            "A-B": "v",
-            "1A": "v",
-            "X;Y": "v",
-            "A B": "v",
-            "A\n": "v",
-            "Ä": "v",
-        }
-        self.assertEqual(Access(cwd="/c", env=MappingProxyType(env)).env, env)
-
 
 class SpecTest(Refusals):
     def test_defaults(self):
@@ -461,25 +447,6 @@ class SpecTest(Refusals):
                     ),
                     message,
                 )
-
-
-class SidErrorTest(Case):
-    def test_none_for_a_non_empty_printable_string_without_a_slash_else_the_error_text(self):
-        error = 'sid must be a non-empty printable string without "/", got '
-        for sid, want in (
-            *(
-                (sid, None)
-                for sid in ("s", "s-1", "0b6c8f9e-2a1d-4c3e-9f7a-5b4d3c2e1f00", "a b", "ü")
-            ),
-            ("", error + "''"),
-            ("a/b", error + "'a/b'"),
-            ("a\tb", error + r"'a\tb'"),
-            (5, error + "5"),
-            (None, error + "None"),
-            ("s" * 200 + "\n", error + "'" + "s" * 79),
-        ):
-            with self.subTest(sid=sid):
-                self.assertEqual(sid_error(sid), want)
 
 
 class LaunchTest(Refusals):

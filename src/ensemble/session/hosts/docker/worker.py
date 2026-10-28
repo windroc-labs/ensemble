@@ -1,7 +1,6 @@
 """A harness-owned Docker worker: the guard, its container's main process, reached through one
-`docker attach` and kept alive by a heartbeat (docs/architecture.md › Harness-owned workers). Every
-channel frame is untrusted: the client shares the guard's uid. A frame can end its own worker; only
-confirmed container removal makes it ABSENT.
+`docker attach` and kept alive by a heartbeat. Every channel frame is untrusted: the client shares
+the guard's uid. A frame can end its own worker; only confirmed container removal makes it ABSENT.
 """
 
 import contextlib
@@ -112,7 +111,6 @@ class DockerWorker(ManagedProcess):
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
 
     def launch(self, handoff: Mapping) -> None:
-        """Its guard's launch handoff, then a heartbeat every BEAT s until the channel ends."""
         self.send_frame(b"l", json.dumps(handoff, separators=(",", ":")).encode())
         self.beater = threading.Thread(target=self._beat, name=f"{self.name}-beat", daemon=True)
         self.beater.start()
@@ -132,7 +130,7 @@ class DockerWorker(ManagedProcess):
         self._join(self.beater)
 
     def begin(self) -> None:
-        """Its maintenance thread and, journaling, its hook thread; after the guard started."""
+        """Called after the guard started."""
         threading.Thread(
             target=run, args=(self.maintenance, self.stopped), name=f"{self.name}-tick", daemon=True
         ).start()
@@ -190,7 +188,7 @@ class DockerWorker(ManagedProcess):
                 self.condition.notify_all()
 
     def _drop_queued(self) -> None:
-        """Stopped: each hook still queued is rejected, not lost; under its condition."""
+        """Under its condition."""
         for hook, *_ in self.hook_queue:
             reject(self.state_dir, self.generation, "hook")
             self._remember(hook.delivery_id)
@@ -199,13 +197,12 @@ class DockerWorker(ManagedProcess):
         self.condition.notify_all()
 
     def _remember(self, delivery_id: str) -> None:
-        """Journaled or rejected: a resend of it is dropped; the newest SEEN, under its condition."""
+        """Under its condition."""
         self.seen[delivery_id] = None
         while len(self.seen) > SEEN:
             self.seen.popitem(last=False)
 
     def _report(self, word: str, text: str) -> None:
-        """Maintenance's report, dropped once the worker is gone."""
         if not self.stopped.is_set():
             self.report(word, text)
 
@@ -229,9 +226,7 @@ class DockerWorker(ManagedProcess):
             return self.ender
 
     def _end(self) -> None:
-        """Its hooks journaled, the guard told to close, then the container removed, retried.
-        Hooks no _deliver thread took (the channel failed before begin()) are rejected.
-        """
+        """Hooks no _deliver thread took (the channel failed before begin()) are rejected."""
         with self.condition:
             self.condition.wait_for(
                 lambda: (
