@@ -153,6 +153,7 @@ function handle(event, client) {
       const info = p.info ?? {};
       if (event.type === "session.created" && root === null && !info.parentID && info.id) {
         root = info.id;
+        call("plugin.start");
       } else if (info.parentID && owned(info.parentID) && info.id) {
         children.add(info.id);
       }

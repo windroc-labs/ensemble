@@ -324,8 +324,8 @@ class Channel:
     def requests(self) -> list[tuple[str, Op]]:
         return [(ident, op) for ident, op, _ in self.pending()]
 
-    def pending(self) -> list[tuple[str, Op, dict]]:
-        """Pending (id, op, data), oldest first, taken; malformed ones deleted. Only the user's
+    def pending(self, *, keep: tuple[Op, ...] = ()) -> list[tuple[str, Op, dict]]:
+        """Pending (id, op, data), oldest first, taken except `keep`; malformed ones deleted. Only the user's
         processes can write this 0700 dir; no worker or container can.
         """
         try:
@@ -346,10 +346,12 @@ class Channel:
                 when = entry.stat(follow_symlinks=False).st_mtime_ns
             except OSError:
                 when = None
-            _remove(entry.path)
             if op not in tuple(Op) or not isinstance(data, dict) or when is None:
+                _remove(entry.path)
                 LOG.warning("session harness: dropped request %s", entry.name[:80])
                 continue
+            if op not in keep:
+                _remove(entry.path)
             found.append((when, ident, Op(op), data))
         return [(ident, op, data) for _, ident, op, data in sorted(found, key=lambda f: f[:2])]
 
@@ -362,6 +364,7 @@ class Channel:
         unanswered: bool = False,
         data: Mapping | None = None,
     ) -> None:
+        _remove(os.path.join(self._requests, ident + ".json"))
         os.makedirs(self._replies, 0o700, exist_ok=True)
         answer = {
             "ok": ok,

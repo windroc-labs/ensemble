@@ -65,6 +65,7 @@ class OpenCodeTui(Homed, Tui):
         }
     )
     _remote_owned = True
+    _ready = START
     _opening_prompt = True  # its opening is a resume's prompt: not deferred past a launch turn
 
     def __init__(self, common: OpenCodeCommon):

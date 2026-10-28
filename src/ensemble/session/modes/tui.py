@@ -662,6 +662,8 @@ class TuiMode(BaseMode):
         self._live, self._gone = True, False
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
+        self._ready_at: float | None = None if run._ready else 0.0
+        self._interrupting = False
         self._held, self._checked, self._settled = False, -POLL_SCREEN, -SETTLE_EVERY
         self._turn_blocked = False  # its dialog may outlast a later Activity
         self._active_turn = run._turn_open is True
@@ -936,7 +938,13 @@ class TuiMode(BaseMode):
         blocked or the send lock is held.
         """
         now = time.monotonic()
-        if self._opening is None or self._due is None or self._gone or now < self._due:
+        if (
+            self._opening is None
+            or self._due is None
+            or self._gone
+            or now < self._due
+            or not self._input_ready()
+        ):
             return
         waits = self._held or self._launching or now < self._checked + POLL_SCREEN
         if waits or self._active_turn and (self._turn_blocked or not self.run._opening_mid_turn):
@@ -964,7 +972,7 @@ class TuiMode(BaseMode):
             if isinstance(event, TurnStarted):
                 self._active_turn, self._launching = True, False
             elif isinstance(event, TurnEnd | TurnFailed):
-                self._active_turn = False
+                self._active_turn, self._launching, self._interrupting = False, False, False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
                 self._held = isinstance(event, Blocked)
             if isinstance(event, Blocked | TurnEnd | TurnFailed | TurnStarted):
@@ -986,6 +994,8 @@ class TuiMode(BaseMode):
         if end == self._cursor and not observed or self._replaced():
             return []
         self._cursor = end
+        if self._ready_at is None and any(label == self.run._ready for label, *_ in records):
+            self._ready_at = time.monotonic() + OPEN_AFTER
         if self._opening is not None and any(label == self._opening[0] for label, *_ in records):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
@@ -1068,10 +1078,26 @@ class TuiMode(BaseMode):
         except SessionError:
             return False
 
-    def send(self, text: str) -> None:
+    def _input_ready(self) -> bool:
+        return self._ready_at is not None and time.monotonic() >= self._ready_at
+
+    def send(self, text: str) -> bool:
         with self._store.sending():
             self._running()
+            if not self._input_ready():
+                return False
+            if self.run._interrupt is not None:
+                if self._launching:
+                    return False
+                if self._active_turn:
+                    if not self._interrupting:
+                        self._owner().send(self.run._interrupt)
+                        self._interrupting = True
+                    return False
             self._deliver(self.run.submit(text), prompted=True)
+            if self.run._interrupt is not None:
+                self._launching = True
+            return True
 
     def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:
         """Failing after the first action: Unanswered. prompted: marks it begun, then submitted."""

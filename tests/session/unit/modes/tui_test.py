@@ -1765,6 +1765,127 @@ class Opening(ScanTui):
     opening = ("ready", "/color")
 
 
+class StartupTui(ScanTui):
+    _ready = "ready"
+    _interrupt = Key("Escape")
+    hooks = {
+        **ScanTui.hooks,
+        "start": HookKind.TURN_STARTED,
+        "interrupted": HookKind.TURN_END,
+    }
+
+
+class StartupSendTest(Base):
+    def started_with(self, *, prompt="opening", interrupt=True):
+        run = StartupTui(self.client)
+        if not interrupt:
+            run._interrupt = None
+        self.mode = self.start(run, prompt=prompt)
+        self.terminal = self.mode._terminal
+        self.terminal.calls.send.reset_mock()
+        return self.mode
+
+    def sent(self):
+        return [call.args[0] for call in self.terminal.calls.send.call_args_list]
+
+    def ready(self, *, turn=True):
+        self.append(record("ready"))
+        if turn:
+            self.append(record("start", turn_id="first"))
+        self.mode.poll(0)
+        self.mode.poll(tui.OPEN_AFTER + 0.1)
+
+    def test_startup_send_interrupts_the_first_turn_then_starts_the_next(self):
+        mode = self.started_with()
+        self.assertFalse(mode.send("follow-up"))
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(mode._store.prompts(mode.generation), (0, 0))
+        self.append(record("start", turn_id="first"))
+        self.assertEqual(mode.poll(0), ([TurnStarted()], False))
+        self.assertFalse(mode.send("follow-up"))
+        self.append(record("ready"))
+        mode.poll(0)
+        self.assertFalse(mode.send("follow-up"))
+        self.assertEqual(self.sent(), [])
+        mode.poll(tui.OPEN_AFTER + 0.1)
+        self.assertFalse(mode.send("follow-up"))
+        self.assertFalse(mode.send("follow-up"))
+        self.assertEqual(self.sent(), [Key("Escape")])
+        self.assertEqual(mode._store.prompts(mode.generation), (0, 0))
+        self.append(record("interrupted", turn_id="first"))
+        self.assertEqual(mode.poll(0), ([TurnEnd()], False))
+
+        def receive(action):
+            if action == Key("Enter"):
+                self.append(record("start", turn_id="next"))
+
+        self.terminal.calls.send.side_effect = receive
+        self.assertTrue(mode.send("follow-up"))
+        self.assertEqual(self.sent(), [Key("Escape"), Paste("follow-up"), Key("Enter")])
+        self.assertEqual(mode._store.prompts(mode.generation), (1, 1))
+        self.assertEqual(mode.poll(0), ([TurnStarted()], False))
+        self.append(record("stop", turn_id="first", last_message="late"))
+        self.assertEqual(mode.poll(0), ([], False))
+        self.assertFalse(mode.send("another"))
+        self.assertEqual(self.sent()[-1], Key("Escape"))
+
+    def test_readiness_does_not_mistake_an_unobserved_launch_turn_for_idle(self):
+        mode = self.started_with()
+        self.ready(turn=False)
+        self.assertFalse(mode.send("next"))
+        self.assertEqual(self.sent(), [])
+        self.append(record("start", turn_id="first"))
+        mode.poll(0)
+        self.assertFalse(mode.send("next"))
+        self.assertEqual(self.sent(), [Key("Escape")])
+
+    def test_idle_send_submits_without_escape_and_the_next_send_waits_for_acceptance(self):
+        mode = self.started_with(prompt="")
+        self.ready(turn=False)
+        self.assertTrue(mode.send("first"))
+        self.assertFalse(mode.send("second"))
+        self.assertEqual(self.sent(), [Paste("first"), Key("Enter")])
+        self.append(record("start", turn_id="first"))
+        mode.poll(0)
+        self.assertFalse(mode.send("second"))
+        self.assertEqual(self.sent()[-1], Key("Escape"))
+
+    def test_a_natural_end_winning_the_interrupt_race_allows_submission(self):
+        mode = self.started_with()
+        self.ready()
+        self.assertFalse(mode.send("next"))
+        self.append(record("stop", turn_id="first", last_message="finished"))
+        self.assertEqual(mode.poll(0), ([TurnEnd("finished")], False))
+        self.assertTrue(mode.send("next"))
+        self.assertEqual(self.sent(), [Key("Escape"), Paste("next"), Key("Enter")])
+
+    def test_other_clients_wait_only_for_startup_then_keep_their_mid_turn_send(self):
+        mode = self.started_with(interrupt=False)
+        self.assertFalse(mode.send("next"))
+        self.assertEqual(self.sent(), [])
+        self.ready()
+        self.assertTrue(mode.send("one"))
+        self.append(record("ready"))
+        mode.poll(0)
+        self.assertTrue(mode.send("two"))
+        self.assertEqual(self.sent(), [Paste("one"), Key("Enter"), Paste("two"), Key("Enter")])
+
+    def test_an_interrupt_failure_is_refused_without_a_prompt_marker(self):
+        mode = self.started_with()
+        self.ready()
+        self.terminal.calls.send.side_effect = SessionError("gone")
+        with self.assertRaisesRegex(SessionError, "gone"):
+            mode.send("next")
+        self.assertEqual(mode._store.prompts(mode.generation), (0, 0))
+
+    def test_a_dead_client_is_refused_even_before_readiness(self):
+        mode = self.started_with()
+        self.terminal.calls.state.return_value = Liveness.ABSENT
+        with self.assertRaisesRegex(SessionError, "not running"):
+            mode.send("next")
+        self.assertEqual(self.sent(), [])
+
+
 class PromptOpening(Opening):
     _opening_prompt = True
 

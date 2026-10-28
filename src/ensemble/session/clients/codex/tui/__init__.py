@@ -40,6 +40,7 @@ from ensemble.session.engine.types import (
     HookCall,
     HookCallback,
     HookKind,
+    Key,
     Launch,
     LimitHit,
     Reply,
@@ -145,6 +146,7 @@ class CodexTui(Tui):
     hooks = MappingProxyType({label: HookKind(kind) for label, _, kind in HOOKS})
     dialogs = tuple(DIALOGS)
     _remote_owned = True
+    _interrupt = Key("Escape")
 
     def _home(self) -> ClientHome:
         return self.common.home()
@@ -165,6 +167,7 @@ class CodexTui(Tui):
     def launch(self, spec: Spec, hook):
         common = self.common
         prompt, resume = spec.prompt, spec.resume
+        self._ready = "SessionStart" if prompt else None
         self.name = spec.name or ""
         self.state = common.prepare(spec)
         snapshot = self.state.snapshot

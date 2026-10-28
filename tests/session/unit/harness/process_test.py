@@ -878,6 +878,10 @@ class RemoteOwned(FakeOwned):
     def send(self, text):
         self._did(("send", text))
 
+    def try_send(self, text):
+        self.send(text)
+        return True
+
     def press(self, keys):
         self._did(("press", [str(key) for key in keys]))
 
@@ -903,6 +907,86 @@ class DisplayOwned(FakeOwned):
         if self.failure is not None:
             raise self.failure
         return self.reopened
+
+
+class WaitingOwned(RemoteOwned):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.ready, self.attempts = False, []
+
+    def try_send(self, text):
+        self.attempts.append(text)
+        if not self.ready:
+            return False
+        self.send(text)
+        return True
+
+
+class WaitingSendTest(Base):
+    def queue(self, ident, op, data):
+        folder = os.path.join(self.channel.directory, "requests")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, ident * 32 + ".json")
+        with open(path, "w") as stream:
+            json.dump({"op": op, "data": data}, stream)
+        stamp = int(ident, 16)
+        os.utime(path, ns=(stamp, stamp))
+
+    def test_waiting_sends_preserve_order_and_press_while_screen_and_close_work(self):
+        owned = WaitingOwned()
+        self.queue("a", Op.SEND, {"text": "one"})
+        self.queue("b", Op.SEND, {"text": "two"})
+        self.queue("c", Op.PRESS, {"keys": ["Enter"]})
+        self.running(owned)
+        until(lambda: owned.attempts)
+        self.assertEqual(set(owned.attempts), {"one"})
+        self.assertEqual(self.ask(Op.SCREEN, {"lines": 1}), {"text": "screen 1"})
+        self.assertEqual(owned.inputs, [("screen", 1)])
+        owned.ready = True
+        until(lambda: len(owned.inputs) == 4)
+        self.assertEqual(
+            owned.inputs,
+            [("screen", 1), ("send", "one"), ("send", "two"), ("press", ["Enter"])],
+        )
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_a_timed_out_send_cannot_be_delivered_when_readiness_arrives_later(self):
+        owned = WaitingOwned()
+        self.running(owned)
+        with self.assertRaises(Unanswered):
+            self.channel.ask(Op.SEND, {"text": "expired"}, timeout=0.05)
+        self.assertTrue(owned.attempts)
+        owned.ready = True
+        self.ask(Op.SCREEN, {"lines": 1})
+        self.assertEqual(owned.inputs, [("screen", 1)])
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_close_refuses_the_pending_send_instead_of_waiting_for_readiness(self):
+        owned = WaitingOwned()
+        self.queue("a", Op.SEND, {"text": "one"})
+        self.running(owned)
+        until(lambda: owned.attempts)
+        self.assertTrue(self.request(Op.CLOSE))
+        reply = os.path.join(self.channel.directory, "replies", "a" * 32 + ".json")
+        with open(reply) as stream:
+            answer = json.load(stream)
+        self.assertFalse(answer["ok"])
+        self.assertIn("worker exited", answer["error"])
+        self.assertEqual(owned.inputs, [])
+
+    def test_a_worker_exit_refuses_the_pending_send(self):
+        owned = WaitingOwned()
+        self.queue("a", Op.SEND, {"text": "one"})
+        thread = self.running(owned)
+        until(lambda: owned.attempts)
+        owned.ended = True
+        thread.join(WAIT)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(owned.inputs, [])
+        self.assertEqual(self.types(), ["Exited"])
+        reply = os.path.join(self.channel.directory, "replies", "a" * 32 + ".json")
+        with open(reply) as stream:
+            self.assertFalse(json.load(stream)["ok"])
 
 
 class RemoteTest(Base):

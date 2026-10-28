@@ -66,6 +66,8 @@ class Base(Case):
 
 class LaunchTest(Base):
     def test_a_fresh_start_submits_its_prompt(self):
+        self.assertEqual(self.run_tui()._ready, tui.START)
+        self.assertIsNone(self.run_tui()._interrupt)
         launch = self.launch(self.spec(tier=1))
         self.assertEqual(
             launch.argv,

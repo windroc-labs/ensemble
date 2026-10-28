@@ -1501,8 +1501,8 @@ class Owned:
     def up(self) -> bool:
         return self._session._running.client_up
 
-    def send(self, text: str) -> None:
-        self._session.send(text)
+    def try_send(self, text: str) -> bool:
+        return self._session._running.send(text) is not False
 
     def press(self, keys: Sequence[KeyPress]) -> None:
         self._session.press(keys)

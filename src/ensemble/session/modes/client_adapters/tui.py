@@ -30,12 +30,14 @@ class Tui(ABC):
     hooks: Mapping[str, HookKind] = MappingProxyType({})  # hook label → its kind
     dialogs: tuple[str, ...] = ()
     opening: tuple[str, str] | None = None  # (hook label, text)
+    _ready: str | None = None  # startup hook; None: no input gate
+    _interrupt: Key | None = None  # interrupt an active turn before a send
     _opening_prompt: ClassVar[bool] = False  # the prompt: not deferred past a launch turn
     _opening_mid_turn: ClassVar[bool] = False
     client = ""  # last ClientBound's id
     _turn_id = ""
     _turn_open: bool | None = None
-    _turn_ids: frozenset[str] = frozenset()  # a subclass's __init__ may skip Tui's
+    _turn_ids: frozenset[str] = frozenset()
     _remote_owned: ClassVar[bool] = False  # also as a remote tui, its hooks through a guard
 
     def __init__(self) -> None:
@@ -43,9 +45,7 @@ class Tui(ABC):
 
     @abstractmethod
     def launch(self, spec: Spec, hook: tuple[str, ...]) -> Launch:
-        """As Headless.launch, plus each label L of `hooks` and `opening` as a hook running
-        `hook + (L,)`, its payload on stdin.
-        """
+        """Launch with `hook + (L,)`, payload on stdin, for hooks, _ready and opening labels L."""
 
     def _home(self) -> ClientHome | None:
         return None
