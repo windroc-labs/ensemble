@@ -22,8 +22,11 @@ turn with StopFailure; {"kind": "dialog", "text": S} prints S and reads another 
 conversation can answer from the first generation's.
 {"kind": "queued", "answer": A} runs a tool while the next stdin line arrives, which Claude Code
 queues (an enqueue record) and joins to the turn once the tool returns (PostToolUse, then a
-queued_command attachment), then answers A; {"kind": "pause", "file": F} waits for F to exist;
-{"kind": "input"} waits for any input to arrive (kept for the next line).
+queued_command attachment), then answers A; with "prompted": true, UserPromptSubmit runs for the line
+as the turn joins it, before its attachment, as Claude Code 2.1.312 does. {"kind": "notice", "text":
+T} is a background task's completion Claude Code queues and joins to the turn: an enqueue record,
+UserPromptSubmit for T, then a task-notification queued_command attachment; it reads no input. {"kind": "pause", "file": F} waits
+for F to exist; {"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
 - dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
 trust dialog), awaiting its answer as a dialog step does.
@@ -102,6 +105,7 @@ PRINT = {
         "path": lambda v: _text(v) and v != "",
     },
 }
+OPTIONAL = {"queued": {"prompted": lambda v: isinstance(v, bool)}}  # tui keys a step may leave out
 TUI = {
     "tool": {"name": _text},
     "limit": {"text": _text},
@@ -109,6 +113,7 @@ TUI = {
     "sleep": {"seconds": lambda v: _number(v) and 0 <= v <= HANG_CAP},
     "exit": {},
     "queued": {"answer": _text},
+    "notice": {"text": _text},
     "pause": {"file": lambda v: _text(v) and v != ""},
     "input": {},
     "recall": {},
@@ -122,10 +127,11 @@ def _step(step, *, tui: bool) -> bool:
     if tui and kind == "hook":
         return isinstance(step.get("event"), str) and step["event"] != ""
     shape = (TUI if tui else PRINT).get(kind) if isinstance(kind, str) else None
-    return (
-        shape is not None
-        and set(step) == {"kind", *shape}
-        and all(ok(step[key]) for key, ok in shape.items())
+    if shape is None:
+        return False
+    optional = OPTIONAL.get(kind, {}) if tui else {}
+    return {"kind", *shape} <= set(step) <= {"kind", *shape, *optional} and all(
+        ok(step[key]) for key, ok in {**shape, **optional}.items() if key in step
     )
 
 
@@ -388,7 +394,15 @@ class InteractiveSession:
             elif kind == "sleep":
                 time.sleep(step["seconds"])
             elif kind == "queued":
-                last = self.queued(k, step["answer"])
+                last = self.queued(k, step["answer"], prompted=step.get("prompted", False))
+            elif kind == "notice":
+                queued = {
+                    "type": "queue-operation",
+                    "operation": "enqueue",
+                    "content": step["text"],
+                }
+                self.request.record(queued)
+                self.joined(step["text"], "task-notification")
             elif kind == "pause":
                 until = time.monotonic() + HANG_CAP
                 while not os.path.exists(step["file"]) and time.monotonic() < until:
@@ -423,18 +437,27 @@ class InteractiveSession:
             },
         )
 
-    def queued(self, k: int, answer: str) -> str:
+    def queued(self, k: int, answer: str, *, prompted: bool) -> str:
         request = self.request
         request.keep("assistant", [{"type": "tool_use", "id": f"toolu_{k}", "name": "Bash"}])
         line = request.stdin.line()
         request.record({"type": "queue-operation", "operation": "enqueue", "content": line})
         request.keep("user", [{"type": "tool_result", "tool_use_id": f"toolu_{k}"}])
         self.hook("PostToolUse", {"tool_name": "Bash"})
-        attachment = {"type": "queued_command", "prompt": line, "commandMode": "prompt"}
-        request.record({"type": "attachment", "attachment": attachment})
+        if prompted:
+            self.joined(line, "prompt")
+        else:
+            attachment = {"type": "queued_command", "prompt": line, "commandMode": "prompt"}
+            request.record({"type": "attachment", "attachment": attachment})
         print(answer, flush=True)
         request.keep("assistant", [{"type": "text", "text": answer}])
         return answer
+
+    def joined(self, text: str, mode: str) -> None:
+        """`text` joined to the running turn with its UserPromptSubmit, as Claude Code 2.1.312."""
+        self.hook("UserPromptSubmit", {"prompt": text})
+        attachment = {"type": "queued_command", "prompt": text, "commandMode": mode}
+        self.request.record({"type": "attachment", "attachment": attachment})
 
     def answer(self) -> None:
         stdin = self.request.stdin
