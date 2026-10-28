@@ -97,6 +97,7 @@ NAMES = {
     linear_tracker.Q_ATTACHED: "read",
     ops.Q_ISSUE_STATE: "reread",
     linear_tracker.Q_ID: "id",
+    linear_tracker.Q_UPSTREAM: "description",
 }
 
 FIELDS = {
@@ -200,6 +201,8 @@ class Gql:
         fail=lambda _name, _v: None,
         issue=None,
         comments=None,
+        *,
+        description=None,
     ):
         self.calls, self.states, self.attachments, self.fail, self.issue = (
             [],
@@ -209,6 +212,7 @@ class Gql:
             issue,
         )
         self.comments = dict(comments or {})
+        self.description = description
 
     def __call__(self, query, **v):
         if query == linear_tracker.Q_STATE_NAME:
@@ -225,6 +229,8 @@ class Gql:
             return {"issue": {"state": {"id": s}}}
         if name == "id":
             return {"issue": self.issue}
+        if name == "description":
+            return {"issue": {"description": self.description}}
         if name == "find":
             c = self.comments.get(v["c"])
             if c is None:
@@ -423,7 +429,7 @@ class DecomposeCompletion(Base):
     def prepared(self):
         port = mock.Mock()
         port.links.return_value = set()
-        port.issue.return_value = issue(HANDOFF)
+        port.description.return_value = HANDOFF
         port.on_board.return_value = SRC_UUID
         port.move.return_value = None
         port.find_comment.return_value = None
@@ -457,7 +463,7 @@ class DecomposeCompletion(Base):
                 if missing == "table":
                     os.remove(os.path.join(ctx.workdir, "run/out.md"))
                 elif missing == "handoff":
-                    port.issue.return_value = issue("No handoff")
+                    port.description.return_value = "No handoff"
                 else:
                     port.on_board.return_value = None
                 self.assertFalse(
@@ -512,8 +518,11 @@ class DecomposeCompletion(Base):
                 ctx = replace(ctx, resume=resumed, assignee="human-id")
                 port.notify.return_value = ""
                 port.state_name.return_value = "Todo"
-                stage = replace(config.TASKS["engineer"], first_failure=first_failure)
-                with mock.patch.dict(config.TASKS._stages, engineer=stage):
+                flow = board_ids.PACKAGED_FLOW.replace(
+                    'role = "engineer"', f'role = "engineer"\nfirst_failure = "{first_failure}"'
+                )
+                config.TASKS.load(board_ids.workflow_file(flow))
+                try:
                     self.assertTrue(
                         writeback.finish(
                             ctx,
@@ -525,7 +534,9 @@ class DecomposeCompletion(Base):
                             ),
                         )
                     )
-                port.issue.assert_not_called()
+                finally:
+                    config.TASKS.load()
+                port.description.assert_not_called()
                 port.on_board.assert_not_called()
                 port.move.assert_called_once_with(
                     UUID, writeback.MOVES[state], frm=writeback.IssueState.RUNNING
@@ -782,6 +793,40 @@ WRITERS = Writers(tracker(Gql()), LinearTracker(Gql()), STATES, HUMANS, {PROJECT
 
 
 class WritebackContext(run_fixtures.Base):
+    def test_production_writer_completes_decompose_and_recovers_a_failed_move(self):
+        cfg = config.load()
+        failures = []
+
+        def fail(name, variables):
+            if name == "state" and variables["i"] == UUID and not failures:
+                failures.append(name)
+                raise LinearError("offline")
+            return None
+
+        gql = Gql(
+            states=(STATES["handoff"], STATES["in_progress"]),
+            issue={"id": SRC_UUID, "team": {"id": cfg.linear.team}},
+            description=HANDOFF,
+            fail=fail,
+        )
+        writers = cli.TRACKERS[cfg.tracker].writers(gql, cfg, cfg.linear.roles["engineer"])
+        spec = SimpleNamespace(
+            issue=ID, uuid=UUID, sid=SID, mode="new", project=PROJECT, task="decompose"
+        )
+        ctx = writeback.for_run(cfg, "engineer", spec, writers)
+        self.write(os.path.join(ctx.workdir, "run", "out.md"), DecomposeCompletion.TABLE)
+        done = Outcome(status="done", title="Queues", summary="ENG-8")
+        self.assertFalse(writeback.finish(ctx, done))
+        self.assertTrue(writeback.finish(ctx, done))
+        moves = [(v["i"], v["s"]) for name, v in gql.calls if name == "state"]
+        self.assertEqual(
+            moves, [(SRC_UUID, STATES["done"]), (UUID, STATES["done"]), (UUID, STATES["done"])]
+        )
+        self.assertEqual(
+            sum(name == "comment" and v["b"] == DecomposeCompletion.TABLE for name, v in gql.calls),
+            1,
+        )
+
     def test_context_resolves_the_output_host_and_github_blob_prefix(self):
         cfg = config.load()
         cfg = replace(cfg, docs=replace(cfg.docs, host="ghe.example.com"))

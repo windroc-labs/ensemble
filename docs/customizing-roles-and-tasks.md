@@ -97,7 +97,7 @@ token_service = "linear-app-analyst-token"
 user_id = "<analyst app user UUID>"
 ```
 
-A stage needs only `role` and `input` (`research`, `design` or `build`: the layout its input takes):
+A stage needs only `role` and `input` (`research`, `design`, `build` or `decompose`: its input layout):
 
 ```toml
 [[stage]]
@@ -106,7 +106,7 @@ input = "research"
 next = "pm"           # promote hands its Handoff issues to pm
 ```
 
-- The role's charter (`roles/<role>.md`, here in a team dir) says where its output goes. Its runs end as every stage's do: done or a question → In Review, a failure → `first_failure`, a failure after a resume → In Review.
+- The role's charter (`roles/<role>.md`, here in a team dir) says where its output goes. A done run or a question goes to In Review; a failure follows `first_failure`, and a failure after resume goes to In Review. Engineer `decompose` uses local ticket-table output and completes itself and its source PRD on done; questions and failures leave the PRD unchanged.
 - `[orchestrator.roles.<role>] max_runs` is optional: no table → 1.
 - Every `ensemble-orchestrator` command checks the file when it loads it and exits 2 naming the file and stage: an unknown or ill-typed key, a role the Delegate does not know, a `next` that names no other stage, a `next` chain with a cycle.
 - At least one stage's role must still publish documents to GitHub (its `[output]`), as the packaged researcher and pm do.

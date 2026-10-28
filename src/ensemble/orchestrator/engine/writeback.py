@@ -19,7 +19,7 @@ from traceback import format_exception
 from ensemble.delegate import DelegateEvent, Outcome, Progress
 from ensemble.orchestrator.engine import run_comments, runs
 from ensemble.orchestrator.engine.config import LOCAL, TASKS
-from ensemble.orchestrator.engine.flow import workflow
+from ensemble.orchestrator.engine.flow import handoff, workflow
 from ensemble.orchestrator.engine.flow.tracker import Tracker
 from ensemble.orchestrator.engine.flow.types import (
     ISSUE_ID,
@@ -448,15 +448,15 @@ def _assign(ctx):
 
 
 def _complete_source(ctx):
-    handoff = ctx.tracker.issue(ctx.ident).handoff
-    if handoff is None:
+    source_handoff = handoff.parse_handoff(ctx.tracker.description(ctx.ident))
+    if source_handoff is None:
         raise IssueError(f"{ctx.ident}: missing source PRD handoff")
-    source = ctx.tracker.on_board(handoff.source)
+    source = ctx.tracker.on_board(source_handoff.source)
     if source is None:
-        raise IssueError(f"{handoff.source}: source PRD not on this board")
+        raise IssueError(f"{source_handoff.source}: source PRD not on this board")
     state = ctx.tracker.move(source, IssueState.DONE, frm=IssueState.APPROVED)
     if state not in (None, ctx.states["done"]):
-        raise IssueError(f"{handoff.source}: source PRD left Handoff (state {state})")
+        raise IssueError(f"{source_handoff.source}: source PRD left Handoff (state {state})")
 
 
 def _finish(ctx, o, steps="", *, move=True):
