@@ -879,6 +879,10 @@ class GraphQLQueries(ServerCase):
             {"issue": {"attachments": {"nodes": [{"url": PR}]}}},
         )
         self.assertEqual(ops.subscribe(self.eng, "TASK-7", ["ME@x.com"]), "")
+        linear_tracker.LinearTracker(self.eng).assign("TASK-7", self.human)
+        self.assertEqual(self.fake.find("TASK-7")["assignee"], self.human)
+        with self.assertRaisesRegex(LinearError, "Entity not found: User"):
+            linear_tracker.LinearTracker(self.eng).assign("TASK-7", "no-such-user")
         ops.call(
             self.eng, linear_tracker.M_TITLE, "issueUpdate", i="TASK-7", t="ENG: Session registry"
         )

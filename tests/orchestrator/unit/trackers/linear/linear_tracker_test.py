@@ -1528,6 +1528,7 @@ class Interface(Case):
                 "find_comment",
                 "put_comment",
                 "notify",
+                "assign",
                 "links",
                 "link",
                 "retitle",

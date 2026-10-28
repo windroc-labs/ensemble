@@ -30,6 +30,7 @@ class HarnessRun(HarnessCase):
             team="",
             states={},
             human_members=(),
+            assignee_id="",
             harness=HARNESS_IDENTITY,
             manager=NO_MANAGER,
             task_label_group="",

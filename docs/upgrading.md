@@ -174,6 +174,7 @@ is `client_id` in `[orchestrator.linear.roles.pm]`).
 | an `Agent` label group and one label per client, optional; both or neither | `linear.agent_label_group`, `linear.agent_labels` |
 | the harness's, the manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
 | the humans subscribed on In Review | `linear.human_members` |
+| the human a PM question's issue is assigned to, optional: their Linear user id | `linear.assignee_id` |
 | the Linear project of each product repo, optional | `linear.project_repos` |
 
 Each OAuth app:
