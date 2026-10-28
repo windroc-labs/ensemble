@@ -257,7 +257,6 @@ class InteractiveProcess(ABC):
 
 
 def _hidden_size(value) -> tuple[int, int]:
-    """[hosts] hidden_size "<columns>x<rows>" as (columns, rows)."""
     found = HIDDEN.fullmatch(value) if isinstance(value, str) else None
     if found is None:
         raise ConfigError(
@@ -376,7 +375,7 @@ class Host(ABC):
         return None
 
     def attach_target(self, name: str) -> SessionView | CommandView | None:
-        """What the Viewer shows session `name` through; None unless attachable."""
+        """None unless attachable."""
         return None
 
     _inherit_env = True
@@ -389,7 +388,7 @@ class Host(ABC):
     def _client_env(
         self, name: str, client: str, home: ClientHome | None, *, resume: bool
     ) -> Mapping[str, str]:
-        """Env for `client`'s launch as `name`; ConfigError: not on this Host."""
+        """ConfigError: `client` cannot run on this Host."""
         return {}
 
     def _resume_argv(self, name: str) -> tuple[str, ...] | None:
