@@ -1796,6 +1796,41 @@ class StartupSendTest(Base):
             self.assertEqual(mode._try_send("next", lambda: True), "send lock")
         self.assertEqual(self.sent(), [])
 
+    def test_cancellation_after_paste_cannot_submit_enter(self):
+        mode = self.started_with(prompt="")
+        self.ready(turn=False)
+        pending = [True]
+
+        def pasted(action):
+            if isinstance(action, Paste):
+                pending[0] = False
+
+        self.terminal.calls.send.side_effect = pasted
+        with self.assertRaisesRegex(Unanswered, "partly sent.*canceled"):
+            mode._try_send("canceled", lambda: pending[0])
+        self.assertEqual(self.sent(), [Paste("canceled")])
+        self.assertEqual(mode._store.prompts(mode.generation), (1, 0))
+
+    def test_expiry_after_paste_is_partial_and_cannot_submit_enter(self):
+        mode = self.started_with(prompt="")
+        self.ready(turn=False)
+        deadline = self.clock.now + 0.5
+
+        def pasted(action):
+            if isinstance(action, Paste):
+                self.clock.now = deadline
+
+        def pending():
+            if self.clock.now >= deadline:
+                raise SessionError("blocked by request deadline")
+            return True
+
+        self.terminal.calls.send.side_effect = pasted
+        with self.assertRaisesRegex(Unanswered, "partly sent.*request deadline"):
+            mode._try_send("expired", pending)
+        self.assertEqual(self.sent(), [Paste("expired")])
+        self.assertEqual(mode._store.prompts(mode.generation), (1, 0))
+
     def test_a_rejected_plan_command_cannot_hold_the_next_send(self):
         mode = self.started_with(prompt="")
         self.ready(turn=False)

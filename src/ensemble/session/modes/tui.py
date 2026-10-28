@@ -1097,16 +1097,27 @@ class TuiMode(BaseMode):
                         self._owner().send(self.run._interrupt)
                         self._interrupting = True
                     return "turn interruption"
-            self._deliver(self.run.submit(text), prompted=True)
+            if not self._deliver(self.run.submit(text), prompted=True, pending=pending):
+                return False
             if self.run._interrupt is not None:
                 self._launching = self.run._starts_turn(text)
             return True
 
-    def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:
+    def _deliver(
+        self,
+        actions: Sequence[Paste | Key],
+        *,
+        prompted: bool,
+        pending: Callable[[], bool] | None = None,
+    ) -> bool:
         """Failing after the first action: Unanswered. prompted: marks it begun, then submitted."""
         terminal = self._owner()
         for index, action in enumerate(actions):
             try:
+                if pending is not None and not pending():
+                    if index == 0:
+                        return False
+                    raise SessionError("request canceled")
                 terminal.send(action)
             except SessionError as error:
                 if index == 0:
@@ -1118,6 +1129,7 @@ class TuiMode(BaseMode):
                 self._store.mark_prompted(self._generation)
         if prompted:
             self._store.mark_prompted(self._generation, submitted=True)
+        return True
 
     def press(self, keys: Sequence[KeyPress]) -> None:
         self._try_press(keys, lambda: True)

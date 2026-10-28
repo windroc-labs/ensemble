@@ -929,6 +929,27 @@ class WaitingOwned(RemoteOwned):
 
 
 class WaitingSendTest(Base):
+    def test_a_short_send_wait_names_its_deadline_with_the_production_poll(self):
+        owned = WaitingOwned()
+        pumping = threading.Event()
+
+        def pump(wait):
+            pumping.set()
+            time.sleep(wait)
+            return [], False
+
+        owned.pump = pump
+        harness = Harness(self.channel)
+        self.begin = mock.Mock(return_value=(owned, [], []))
+        self.run_in_thread(harness)
+        self.assertTrue(pumping.wait(WAIT))
+        with self.assertRaisesRegex(Unanswered, "blocked by request deadline"):
+            self.channel.ask(Op.SEND, {"text": "expired"}, timeout=0.2)
+        owned.ready = True
+        self.assertEqual(self.ask(Op.SCREEN, {"lines": 1}), {"text": "screen 1"})
+        self.assertEqual(owned.inputs, [("screen", 1)])
+        self.assertTrue(self.request(Op.CLOSE))
+
     def test_blocked_sends_answer_with_the_gate_before_the_caller_times_out(self):
         owned = WaitingOwned()
         self.running(owned)

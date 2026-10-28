@@ -323,6 +323,11 @@ class Channel:
                 return None
             if time.monotonic() >= deadline:
                 _remove(os.path.join(self._requests, ident + ".json"))
+                if op == Op.SEND:
+                    raise Unanswered(
+                        f"session harness {self.directory}: send blocked by request deadline "
+                        "(no harness response; submission unconfirmed)"
+                    )
                 raise Unanswered(f"session harness {self.directory}: no answer to {op}")
             time.sleep(SLICE)
 
