@@ -375,7 +375,7 @@ def login(client, args, status, start, logout):
     if args == status:
         if (FAKES / "hang" / f"{client}-status").exists() and (FAKES / "hung").exists():
             mark(FAKES / "status-hung")
-            time.sleep(30)
+            time.sleep(120)
         return 0 if flag.exists() else 1
     if args == logout:
         flag.unlink(missing_ok=True)

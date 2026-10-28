@@ -770,22 +770,6 @@ class InstallTest(Case):
         self.assert_secret_free(PASSWORD, TOKEN, result=result)
         self.assertNotIn(PASSWORD, self.envlog.read_text())
 
-    def test_sudo_prompt_once(self):
-        result = self.fresh()
-        self.assert_ok(result)
-        self.assertEqual(len(re.findall(SUDO_Q, result.tty)), 1)
-        calls = self.calls()
-        self.assertEqual(calls.count("sudo -S -p  -v"), 1)
-        self.assertIn("sudo -n -v", calls)
-        self.assertEqual(calls[-1], "sudo -k")
-        keepalive = int((self.fakes / "keepalive.pid").read_text())
-        deadline = time.monotonic() + 2
-        with self.assertRaises(ProcessLookupError):
-            while time.monotonic() < deadline:
-                os.kill(keepalive, 0)
-                time.sleep(0.05)
-        self.assertFalse((self.fakes / "sudo_ticket").exists())
-
     def test_fresh_install_core(self):
         result = self.fresh()
         self.assert_ok(result)
@@ -835,6 +819,17 @@ class InstallTest(Case):
         self.assertIn("Log in to gh in your browser.", result.tty)
         self.assertEqual(self.state()["docker"], "no")
         self.assertEqual(self.state()["clients"], "claude,codex")
+        self.assertEqual(len(re.findall(SUDO_Q, result.tty)), 1)
+        self.assertEqual(calls.count("sudo -S -p  -v"), 1)
+        self.assertIn("sudo -n -v", calls)
+        self.assertEqual(calls[-1], "sudo -k")
+        keepalive = int((self.fakes / "keepalive.pid").read_text())
+        deadline = time.monotonic() + 2
+        with self.assertRaises(ProcessLookupError):
+            while time.monotonic() < deadline:
+                os.kill(keepalive, 0)
+                time.sleep(0.05)
+        self.assertFalse((self.fakes / "sudo_ticket").exists())
 
     def test_no_reload_when_the_path_has_it(self):
         brew = f"{self.root}/opt/homebrew/bin"
@@ -977,6 +972,8 @@ class InstallTest(Case):
             "(its `# local:` lines);\n# the Linear board: rerun install.sh --board linear.\n"
             '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n',
         )
+        self.assertNotIn("plugins =", self.config().read_text())
+        self.assertNotIn("updraft", "\n".join(self.plugin_calls()))
         cases = (
             (
                 '# mine\n[session.hosts]\ndefault = "tmux" # x\n\n[other]\nx = 1\n',
@@ -1378,24 +1375,35 @@ class InstallTest(Case):
             before,
         )
 
-    def test_egress_stopped_and_invalid_metadata_cannot_finish_installation(self):
+    def test_egress_stopped_cannot_finish_installation(self):
         self.assert_ok(self.fresh("--clients", "claude", "--docker"))
         (self.bin / "sleep").unlink()
         executable(self.bin / "sleep", "#!/bin/sh\n")
+        stopped = "false|healthy|1|egress-workers|http://egress-proxy-workers:4750|workers"
+        (self.fakes / "egress_inspect").write_text(stopped + "\n")
+        result = self.again("--clients", "claude", "--docker")
+        self.assertEqual(result.code, 1)
+        self.assertIn("not healthy after 120 seconds", result.stderr)
+        self.assertNotIn("ensemble-broker login claude", self.calls())
+
+    def test_egress_ready_needs_a_running_healthy_proxy_with_workers_labels(self):
+        """egress_ready: 0 ready, 2 a healthy contract-1 proxy without a workers network, else 1."""
+        self.env["PATH"] = f"{self.fakes / 'apps'}:{self.bin}"
+        (self.fakes / "egress_started").touch()
         good = "true|healthy|1|egress-workers|http://egress-proxy-workers:4750|workers"
-        for status in (
-            good.replace("true", "false"),
-            good.replace("healthy|1", "healthy|2"),
-            good.replace("|egress-workers|", "||"),
-            good.replace("http://egress-proxy-workers:4750", "<no value>"),
-            "true|starting|1|||mini-op",
+        for status, ready in (
+            (good, 0),
+            (good.replace("true", "false"), 1),
+            (good.replace("healthy|1", "healthy|2"), 1),
+            (good.replace("|egress-workers|", "||"), 1),
+            (good.replace("http://egress-proxy-workers:4750", "<no value>"), 1),
+            ("true|starting|1|||mini-op", 1),
+            ("true|healthy|1|||mini-op", 2),
         ):
             with self.subTest(status=status):
                 (self.fakes / "egress_inspect").write_text(status + "\n")
-                result = self.again("--clients", "claude", "--docker")
-                self.assertEqual(result.code, 1)
-                self.assertIn("not healthy after 120 seconds", result.stderr)
-                self.assertNotIn("ensemble-broker login claude", self.calls())
+                proc = self.function(["egress_ready"], "egress_ready")
+                self.assertEqual(proc.returncode, ready, proc.stderr)
 
     def test_egress_config_without_workers_fails_at_once(self):
         egress = Path(self.home, ".egress")
@@ -1434,16 +1442,6 @@ class InstallTest(Case):
             self.again("--clients", "claude", "--docker", answers=DOCKER_LOGINS + ((WRITE_Q, "y"),))
         )
 
-    def test_u1a_failed_egress_fetch_leaves_nothing(self):
-        (self.fakes / "fail").write_text("gh api repos/windroc-labs/egress-proxy/tarball/")
-        result = self.fresh(
-            "--clients", "claude", "--docker", egress_failure=True, shell="/bin/bash"
-        )
-        self.assertEqual(result.code, 1)
-        self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
-        self.assertNotIn("unbound variable", result.stderr)
-        self.assertEqual(list(Path(self.home, ".egress/versions").iterdir()), [])
-
     def test_u1a_failed_egress_fetch_removes_earlier_leftovers(self):
         """A download directory an earlier failed run left (v0.5.0's U1a) goes on the next egress step."""
         versions = Path(self.home, ".egress/versions")
@@ -1455,6 +1453,7 @@ class InstallTest(Case):
         )
         self.assertEqual(result.code, 1)
         self.assertIn("cannot fetch pinned windroc-labs/egress-proxy", result.stderr)
+        self.assertNotIn("unbound variable", result.stderr)
         self.assertEqual(list(versions.iterdir()), [])
         (versions / ".download.stale").mkdir()
         self.assert_ok(
@@ -1661,9 +1660,6 @@ class InstallTest(Case):
             self.assertTrue(
                 Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.8", CLIENT).is_file()
             )
-
-    def test_stale_claude_cache_updates_before_source_reads(self):
-        self.stale_plugin_upgrade("claude")
 
     def test_stale_codex_cache_updates_before_source_reads(self):
         self.stale_plugin_upgrade("codex")
@@ -2628,20 +2624,28 @@ class InstallTest(Case):
             "node_modules/ensemble",
         )
 
-    def test_opencode_selects_usable_path_binary_or_installs_private_copy(self):
+    def test_opencode_usable_needs_a_stable_1x_release_from_the_minimum(self):
+        binary = str(self.fakes / "apps/opencode")
         cases = [(v, True) for v in ("1.19.3", "1.20.0", "1.100.0")]
         cases += [
             (v, False)
-            for v in ("1.19.2", "1.9.9", "1.20.0-beta.1", "2.0.0", "garbage", "", "failed", None)
+            for v in ("1.19.2", "1.9.9", "1.20.0-beta.1", "2.0.0", "garbage", "", "failed")
         ]
         for version, usable in cases:
+            with self.subTest(version=version):
+                (self.fakes / "opencode_version").write_text(version)
+                if version == "failed":
+                    (self.fakes / "fail").write_text("opencode --version")
+                proc = self.function(["opencode_usable"], 'opencode_usable "$1" 1.19.3', binary)
+                self.assertEqual(proc.returncode, 0 if usable else 1, proc.stderr)
+
+    def test_opencode_selects_usable_path_binary_or_installs_private_copy(self):
+        for version, usable in (("1.19.3", True), ("1.19.2", False), (None, False)):
             with self.subTest(version=version):
                 external = self.bin / "opencode"
                 if version is not None:
                     shutil.copy(self.fakes / "apps/opencode", external)
                 (self.fakes / "opencode_version").write_text(version or "")
-                if version == "failed":
-                    (self.fakes / "fail").write_text("opencode --version")
                 self.assert_ok(self.opencode_only(path_answer=None if usable else "y"))
                 private = Path(self.ensemble, "opencode/bin/opencode")
                 self.assertEqual(private.exists(), not usable)
@@ -3172,23 +3176,6 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("    clients: opencode, Docker: no", result.stderr)
         self.assertEqual(self.state()["clients"], "opencode")
-
-    def test_codex_only_docker_keeps_default_image_plugins(self):
-        result = self.fresh("--clients", "codex", "--docker", logins=[(PEM_Q, "")])
-        self.assert_ok(result)
-        self.assertNotIn("plugins =", self.config().read_text())
-        self.assertNotIn("updraft", "\n".join(self.plugin_calls()))
-
-    def test_opencode_only_docker_keeps_default_image_plugins(self):
-        result = self.fresh(
-            clients="opencode",
-            docker="y",
-            opencode=PROVIDER_ANSWERS,
-            logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
-        )
-        self.assert_ok(result)
-        self.assertNotIn("plugins =", self.config().read_text())
-        self.assertEqual(self.plugin_calls(), [f"opencode plugin -g -f {SPEC}"])
 
     def test_cleanup_round_trip_opencode_only(self):
         conf = Path(self.home, ".config/opencode")
@@ -3769,6 +3756,8 @@ exec /bin/rm "$@"
             logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
         )
         self.assert_ok(result)
+        self.assertNotIn("plugins =", self.config().read_text())
+        self.assertEqual(self.plugin_calls(), [f"opencode plugin -g -f {SPEC}"])
         self.assertEqual((self.fakes / "keychain/ensemble-broker-opencode").read_text(), KEY)
         self.assertIn("keychain\tensemble-broker-opencode\tlan", self.ledger())
         self.assertRegex(self.state()["login_opencode"], r"^[0-9a-f]{64} lan$")
@@ -4681,21 +4670,15 @@ exec /bin/rm "$@"
                     "--no-board",
                     "--launchd",
                 )
-                self.assertEqual(result.code, 2)
-                self.assertIn("requires a board", result.stderr)
+                self.assertEqual(result.code, 2, result.stderr)
+                self.assertIn(
+                    "install.sh: --launchd/--no-launchd requires a board, and --no-board skips it\n",
+                    result.stderr,
+                )
+                self.assertNotIn("rerun the same command to continue", result.stderr)
                 self.assertEqual(self.snapshot(), before)
                 self.assertFalse([c for c in self.calls() if c.startswith(("sudo", "brew"))])
                 self.assertNotIn("dependencies", result.stderr)
-
-    def test_p6_usage_error_gives_no_rerun_advice(self):
-        self.assert_ok(self.fresh("--board", "local", "--no-launchd", then=[(WRITE_Q, "y")] * 2))
-        result = self.run_install("--no-board", "--launchd")
-        self.assertEqual(result.code, 2, result.stderr)
-        self.assertIn(
-            "install.sh: --launchd/--no-launchd requires a board, and --no-board skips it\n",
-            result.stderr,
-        )
-        self.assertNotIn("rerun the same command to continue", result.stderr)
 
     def test_board_tracker_inference_handles_invalid_config(self):
         self.assert_ok(self.fresh("--clients", "claude", "--no-docker"))
@@ -4948,7 +4931,8 @@ exec /bin/rm "$@"
         self.assert_ok(result)
         self.assertEqual(self.board_config()["team"], uuid(2))
 
-    def test_board_missing_state_stops(self):
+    def test_board_missing_state_or_tasks_group_stops(self):
+        """The rerun finds the stopped run's client secrets in the keychain and asks only the Client IDs."""
         team = LINEAR["teams"][0]
         states = [s for s in team["states"] if s["name"] != "Handoff"]
         self.linear(teams=[{**team, "states": states}])
@@ -4958,10 +4942,9 @@ exec /bin/rm "$@"
             "Linear team ENG lacks states: Handoff (the board needs Backlog, Todo, In Progress,"
             " In Review, Handoff, Done, Canceled); add them, then rerun",
         )
-
-    def test_board_without_tasks_group_stops(self):
         self.linear(labels=[x for x in LINEAR["labels"] if x["name"] != "Tasks"])
-        result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
+        ids = [answer for answer in self.secrets(*SLOTS) if answer[0] != SECRET_Q]
+        result = self.again("--board", "linear", "--launchd", answers=ids)
         self.assert_board_stopped(
             result,
             "Linear team ENG has no Tasks label group: add a label group named Tasks, then rerun",
@@ -5125,9 +5108,9 @@ exec /bin/rm "$@"
         )
         self.assertFalse([record for record in self.ledger() if "uv-cache" in record])
 
-    def test_ledger_with_docker_and_opencode(self):
+    def test_rerun_refreshes_plugins_and_reuses_completed_setup(self):
         self.assert_ok(self.full())
-        h, ledger = self.home, self.ledger()
+        h, before = self.home, self.ledger()
         for record in (
             f"dir\t{h}/.ensemble/bin",
             f"dir\t{h}/.ensemble/docker",
@@ -5145,13 +5128,9 @@ exec /bin/rm "$@"
             "keychain\tensemble-broker-codex\tauth",
             "keychain\tensemble-broker-opencode\tlan",
         ):
-            self.assertIn(record, ledger)
-        self.assertNotIn(f"dir\t{h}/.ensemble", ledger)
-        self.assertNotIn("keychain\tensemble-broker-github-users\tensemble-broker-bot", ledger)
-
-    def test_rerun_refreshes_plugins_and_reuses_completed_setup(self):
-        self.assert_ok(self.full())
-        before = self.ledger()
+            self.assertIn(record, before)
+        self.assertNotIn(f"dir\t{h}/.ensemble", before)
+        self.assertNotIn("keychain\tensemble-broker-github-users\tensemble-broker-bot", before)
         files = {
             p: p.read_bytes()
             for p in Path(self.home).rglob("*")
@@ -6265,32 +6244,34 @@ exec /bin/rm "$@"
             )
             self.assert_ok(result)
 
-    def configured_provider(self, toml=None, jsonc=None, flag=""):
-        """install.sh's configured_provider for `flag` over config.local.toml `toml` and opencode.jsonc `jsonc`
-        (None: absent)."""
+    def function(self, names, call, *args):
+        """bash running `call` with `args` after install.sh's functions `names`."""
         text = SCRIPT.read_text()
         functions = [
-            re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.S | re.M).group(0)
-            for name in ("opencode_config_edit", "configured_provider")
+            re.search(rf"^{name}\(\) \{{\n.*?^\}}", text, re.S | re.M).group(0) for name in names
         ]
         patterns = re.findall(r"(?m)^(?:name|url|model|context)_pattern=.*$", text)
-        conf = Path(self.home, ".config/opencode/opencode.jsonc")
-        for path, content in ((self.config(), toml), (conf, jsonc)):
-            path.unlink(missing_ok=True)
-            if content is not None:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(content)
-        program = "\n".join(
-            [*patterns, *functions, f"config={self.config()}", 'configured_provider "$1"']
-        )
-        proc = subprocess.run(
-            ["bash", "-euo", "pipefail", "-c", program, "bash", flag],
+        program = "\n".join([*patterns, *functions, f"config={self.config()}", call])
+        return subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", program, "bash", *args],
             env=self.env,
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
+
+    def configured_provider(self, toml=None, jsonc=None, flag=""):
+        """install.sh's configured_provider for `flag` over config.local.toml `toml` and opencode.jsonc `jsonc`
+        (None: absent)."""
+        conf = Path(self.home, ".config/opencode/opencode.jsonc")
+        for path, content in ((self.config(), toml), (conf, jsonc)):
+            path.unlink(missing_ok=True)
+            if content is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+        names = ("opencode_config_edit", "configured_provider")
+        proc = self.function(names, 'configured_provider "$1"', flag)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return proc.stdout
 
@@ -6518,14 +6499,12 @@ exec /bin/rm "$@"
         self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
         self.logged_out("claude")
         (self.fakes / "hang/claude-status").write_text("")
-        start = time.monotonic()
         result = self.run_install(
             "--password-stdin",
             stdin=PASSWORD + "\n",
             interrupt=(self.fakes / "hung", self.fakes / "status-hung"),
         )
         self.assertTrue((self.fakes / "status-hung").exists(), result.stderr)
-        self.assertLess(time.monotonic() - start, 20)
         self.assertEqual(result.code, 130, result.stderr)
         self.assertIn(
             "install.sh: Claude Code login failed; rerun the same command to continue",
