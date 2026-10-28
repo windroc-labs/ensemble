@@ -87,6 +87,19 @@ Make simplification a continual investment. Leave the design slightly simpler an
 """
 
 
+PSTACK_REDESIGN_FROM_FIRST_PRINCIPLES = """# Redesign From First Principles
+
+When integrating a change, don't bolt it onto the existing design. Redesign as if the requirement had been a foundational assumption from the start.
+
+- Read all affected files and understand the current design
+- Ask: "if we were writing this from scratch with this new requirement, what would we build?"
+- Propagate the change through every reference: types, docs, examples, rationale sections
+- Think about the whole redesign, then deliver it incrementally
+
+This is the method for preserving option value when integrating changes into an existing design.
+"""
+
+
 def destined(role, output, *, docker=False):
     """The real core's prompt for `role` with `output`, rendered for Docker when `docker`."""
     composition = Composer()
@@ -743,6 +756,29 @@ class Real(RealConfig):
         for role, task in runs():
             if role != "engineer":
                 self.assertNotIn("subtract-before-you-add", composed(role, task)[0], (role, task))
+
+    def test_engineers_redesign_from_first_principles_by_the_method_file(self):
+        rules = section(composed("engineer")[0], "Rules")
+        self.assertEqual(
+            item(rules, "Redesign from first principles"),
+            ": for every change, read and follow the **redesign-from-first-principles method** "
+            "`<team>/methods/redesign-from-first-principles.md`. Every brief to a sub-agent "
+            "(producer, reviewer) names that file for the sub-agent to read.\n",
+        )
+        labels = re.findall(r"^- \*\*(.*?)\*\*", rules, re.MULTILINE)
+        self.assertEqual(
+            labels.index("Redesign from first principles"),
+            labels.index("Subtract before you add") + 1,
+        )
+        with open(
+            os.path.join(TEAM, "methods", "redesign-from-first-principles.md"), encoding="utf-8"
+        ) as f:
+            self.assertEqual(f.read(), PSTACK_REDESIGN_FROM_FIRST_PRINCIPLES)
+        for role, task in runs():
+            if role != "engineer":
+                self.assertNotIn(
+                    "redesign-from-first-principles", composed(role, task)[0], (role, task)
+                )
 
     def test_the_summary_is_short_and_details_go_in_the_deliverable(self):
         for role, task in runs():
