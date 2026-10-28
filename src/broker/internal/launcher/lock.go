@@ -94,7 +94,7 @@ func (h Host) LockQuery(ctx context.Context, lock string) (LockResult, error) {
 }
 
 // startLock takes lock's start lock without waiting, from before the holder check until the start returns; another
-// start holding it is busy. Closing the file, once this process and every command holding it have ended, releases it.
+// start holding it is busy. Closing the file, or this process ending, releases it.
 func (h Host) startLock(lock string) (*os.File, error) {
 	shown := "~/.ensemble/docker/locks/" + lock + ".lock"
 	path := h.dockerPath("locks/" + lock + ".lock")

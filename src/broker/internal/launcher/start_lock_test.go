@@ -206,11 +206,6 @@ func TestLockedStartArguments(t *testing.T) {
 	if flag(run, "--restart") != "no" || !slices.Contains(run, "windroc.lock=dummy") || !slices.Contains(run, "windroc.lock.owner=worker_1") {
 		t.Fatalf("run %q", run)
 	}
-	// A broker killed during the run leaves the lock with its docker child until the container is up.
-	i := slices.IndexFunc(d.calls, func(c []string) bool { return c[0] == "run" && c[1] == "--detach" })
-	if f := d.held[i]; f == nil || f.Name() != filepath.Join(w.home, ".ensemble/docker/locks/dummy.lock") {
-		t.Fatalf("run --detach holds %v", f)
-	}
 }
 
 // Another broker's start holds the lock until its descriptor closes, as when its process dies.

@@ -156,14 +156,12 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		lap("prefetch")
 	}
 	var held holding
-	making := ctx
 	if m.Lock != "" {
 		lock, err := h.startLock(m.Lock)
 		if err != nil {
 			return StartResult{}, err
 		}
 		defer lock.Close()
-		making = docker.Holding(ctx, lock)
 		holder, err := h.lockHolder(ctx, m.Lock, "")
 		if err != nil {
 			return StartResult{}, err
@@ -172,7 +170,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, busy(holder)
 		}
 	}
-	result, held, err = h.create(making, c, m, info, route, facts, lap)
+	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
 		lostName = true
 		return StartResult{}, taken(c)

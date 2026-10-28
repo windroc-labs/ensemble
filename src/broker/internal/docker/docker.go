@@ -23,20 +23,6 @@ const (
 	capture    = 65536
 )
 
-type heldKey struct{}
-
-// Holding is ctx whose commands also hold f open until they exit, so a flock on f outlives a broker killed while one
-// runs.
-func Holding(ctx context.Context, f *os.File) context.Context {
-	return context.WithValue(ctx, heldKey{}, f)
-}
-
-// Held is the file Holding gave ctx, else nil.
-func Held(ctx context.Context) *os.File {
-	f, _ := ctx.Value(heldKey{}).(*os.File)
-	return f
-}
-
 type Runner interface {
 	Run(ctx context.Context, args []string, stdin []byte) ([]byte, error)
 }
@@ -149,9 +135,6 @@ func (c *CLI) Run(ctx context.Context, args []string, stdin []byte) ([]byte, err
 	cmd := exec.CommandContext(ctx, path, argv...)
 	cmd.Env = env
 	cmd.Stdin = bytes.NewReader(stdin)
-	if f := Held(ctx); f != nil {
-		cmd.ExtraFiles = []*os.File{f}
-	}
 	var stdout, stderr capped
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if c.Progress != nil && len(args) > 0 && args[0] == "build" {
