@@ -337,7 +337,7 @@ def _run_options(ap: argparse.ArgumentParser) -> None:
     ap.add_argument(
         "--credentials",
         metavar="JSON",
-        help="opaque credential references for Docker; omitted: none; tmux ignores them",
+        help="opaque credential references for Docker; omitted: none; in_process refuses them",
     )
     ap.add_argument(
         "--cwd",

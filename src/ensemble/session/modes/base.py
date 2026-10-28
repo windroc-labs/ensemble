@@ -1,7 +1,4 @@
-"""BaseMode, a Mode's running session, and what the modes share to start one. The class's
-start() fixes a Prepared before anything starts, has `record` write the session line, then starts
-and returns the session, so none exists unstarted. stop() is idempotent.
-"""
+"""Shared mode lifecycle: prepare, record, then launch; stop() is idempotent."""
 
 import json
 import os
@@ -111,7 +108,6 @@ class BaseMode(ABC):
     kind: ClassVar[Mode]
 
     def __init__(self, prepared: Prepared) -> None:
-        """Built by start (TuiMode.attach too) from what it started."""
         self._prepared = prepared
 
     @property
