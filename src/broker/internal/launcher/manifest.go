@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"ensemble/broker/internal/credential"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -355,7 +356,7 @@ func (m *Manifest) parseGitHub(raw json.RawMessage) error {
 		const shape = "github must be null or {\"app\": <name>, \"permissions\": {<permission>: <level>}, \"repo\"?: <owner/name>}"
 		var github map[string]json.RawMessage
 		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil {
-			return fmt.Errorf(shape)
+			return errors.New(shape)
 		}
 		app, ok := str(github["app"])
 		rawRepo, hasRepo := github["repo"]
@@ -363,7 +364,7 @@ func (m *Manifest) parseGitHub(raw json.RawMessage) error {
 		var permissions map[string]string
 		if raw := github["permissions"]; !ok || len(github) != 2 && !(len(github) == 3 && hasRepo) || hasRepo && !okRepo ||
 			!appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &permissions) != nil {
-			return fmt.Errorf(shape)
+			return errors.New(shape)
 		}
 		if hasRepo && !githubapi.ValidRepo(repo) {
 			return fmt.Errorf("invalid github repo %q", repo)

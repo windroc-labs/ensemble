@@ -191,17 +191,20 @@ func (h Host) Maintain(ctx context.Context, container, path string, delivered []
 	return result, nil
 }
 
-// deadlineOf is the first held kind's with a deadline whose expiry is recorded; nil for none.
+// deadlineOf is the earliest recorded expiry among held kinds with a deadline; nil for none.
 func deadlineOf(record TokenRecord, held []credential.Kind) *Deadline {
+	var deadline *Deadline
+	var first time.Time
 	for _, p := range tokenProviders {
 		if p.deadline == "" || !slices.Contains(held, p.kind) {
 			continue
 		}
-		if at := earliest(record.Expires[p.kind]); at != nil {
-			return &Deadline{At: at.UTC().Format(time.RFC3339), Action: "close", Reason: p.deadline}
+		if at := earliest(record.Expires[p.kind]); at != nil && (deadline == nil || at.Before(first)) {
+			first = *at
+			deadline = &Deadline{At: at.UTC().Format(time.RFC3339), Action: "close", Reason: p.deadline}
 		}
 	}
-	return nil
+	return deadline
 }
 
 // dueAt is when kind is next due: once its retry time has passed, RefreshAhead before its earliest recorded expiry;
