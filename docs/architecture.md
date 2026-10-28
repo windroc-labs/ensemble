@@ -859,7 +859,7 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 | Change/event | Unit and integration tests | Repository tests |
 |---|---|---|
 | PR touching only `src/ensemble/manager/`, `src/ensemble/orchestrator/`, their `tests/<layer>/`, `skills/manage/`, `skills/board/`, `hooks/` and `launchd/` | both upper layers | skipped |
-| PR touching only root `*.md` files and/or `docs/` but `docs/architecture.md` (read by repository checks) | upper skill unit tests in `Lint style` only | skipped |
+| PR touching only root `*.md` files and/or `docs/` | upper skill unit tests in `Lint style` only | skipped |
 | PR changing only the release `version` of the plugin manifests and `package.json` | skipped; every lint runs | skipped |
 | anything else, a push to `main` or `merge_group` | all layers | run |
 
