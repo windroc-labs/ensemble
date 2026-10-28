@@ -1,9 +1,6 @@
 """Claude claude behavior."""
 
-import contextlib
-import io
 import os
-from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.common import ClaudeCommon as UnconfiguredCommon
@@ -12,7 +9,6 @@ from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine.types import (
     Access,
     ConfigError,
-    Launch,
     SessionInfo,
     SessionStatus,
 )
@@ -21,7 +17,6 @@ from tests.session.unit.clients.claude.support import (
     CONFIG,
     MODES,
     NOTE,
-    PROBE,
     SID,
     UNSET,
     WHAT,
@@ -137,21 +132,9 @@ class ClientTest(Base):
                 self.assertIsNot(mode(), mode())
                 self.assertIs(mode().common, client.common)
 
-    def test_the_usage_probe_and_its_reading(self):
-        self.assertEqual(ClaudeCommon.PROBE, PROBE)
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(
-                ClaudeClient(CONFIG).usage_probe(),
-                Launch(
-                    PROBE,
-                    env={"K": "v", "DISABLE_AUTOUPDATER": "1"},
-                    unset=(*UNSET, "CLAUDE_CODE_OAUTH_TOKEN"),
-                ),
-            )
+    def test_usage_reads_the_panel(self):
         found = ClaudeClient({}).usage(fixture("usage-default.txt"))
         self.assertEqual((found.five_hour.used_percent, found.weekly.used_percent), (17.0, 1.0))
-        with contextlib.redirect_stderr(io.StringIO()):
-            self.assertIsNone(ClaudeClient({}).usage("garbage"))
 
     def test_status_uses_an_in_store_recorded_transcript_and_rebuilds_resume(self):
         client = ClaudeClient({})

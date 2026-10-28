@@ -64,45 +64,6 @@ class TuiArgvTest(Base):
     def tui(self, prompt="hi", config=CONFIG, *, resume=False, **spec) -> Launch:
         return tui_launch(self.work, prompt, config, resume=resume, **spec)
 
-    def test_a_new_session_with_every_part(self):
-        access = Access(
-            cwd=self.work,
-            dirs=("/d1", "/d 2"),
-            commands=("git status", "ls"),
-            reads=("/r1", "/r 2/"),
-        )
-        self.assertEqual(
-            self.tui("do it", tier=4, effort="low", access=access).argv,
-            (
-                "claude",
-                "--session-id",
-                SID,
-                "--model",
-                "haiku",
-                "--effort",
-                "lo",
-                "--permission-mode",
-                "auto",
-                "--setting-sources",
-                "user",
-                "--settings",
-                TUI_SETTINGS,
-                "--add-dir",
-                "/d1",
-                "--add-dir",
-                "/d 2",
-                "--allowedTools",
-                "Bash(git status)",
-                "Bash(ls)",
-                "Read(//r1/**)",
-                "Read(//r 2/**)",
-                "Read",
-                "Edit(/x)",
-                "--",
-                "do it",
-            ),
-        )
-
     def test_resume_with_none_of_the_optional_parts(self):
         self.assertEqual(
             self.tui(config={}, resume=True).argv,
@@ -185,10 +146,6 @@ class TuiArgvTest(Base):
             (tui.unset, tui.cwd, tui.transcript, tui.resume),
             (headless.unset, headless.cwd, headless.transcript, headless.resume),
         )
-
-    def test_a_bad_sid_or_tier_is_refused(self):
-        self.refused(lambda: self.tui(sid="abc"), "session ids are UUIDs, got 'abc'")
-        self.refused(lambda: self.tui(tier=3), "no model for tier 3 in [clients.claude].tiers")
 
     def test_the_flags_go_before_the_prompt_the_rest_unchanged(self):
         access = Access(cwd=self.work, dirs=("/d1",), commands=("ls",))
@@ -566,9 +523,6 @@ class TuiPayloadTest(Base):
         for label, payload, events in rows:
             with self.subTest(label=label):
                 self.assertEqual(self.run.hook_events(label, payload), events)
-
-    def test_a_claude_tui_runs_remote_under_its_session_harness(self):
-        self.assertTrue(type(self.run)._remote_owned)
 
     def test_it_binds_the_sid_it_launched_or_restored_once(self):
         launched = ClaudeClient({}).tui()

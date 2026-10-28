@@ -46,7 +46,7 @@ class EnvironmentSources(Case):
         self.assertEqual((spec.access.env, dict(spec.env)), ({"A": "1"}, {"B": "2"}))
 
     def test_every_input_accepts_exec_environment_names(self):
-        env = {"A-B": "a b", "1A": "", "X;Y": "value", "Ä": "value"}
+        env = {"A-B": "a b", "1A": "", "X;Y": "v", "Ä": "v", "A B": "v", "A\n": "v", "_x1": ""}
         for build in (
             lambda **fields: Access(cwd="/c", **fields),
             ProcessOptions,

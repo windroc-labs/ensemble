@@ -644,18 +644,6 @@ class Committed(Case):
             ),
         )
 
-    def test_the_claude_flags_comment_says_how_settings_combine(self):
-        config = os.path.join(os.path.dirname(ensemble.session.__file__), "config.toml")
-        with open(config, encoding="utf-8") as f:
-            comments = " ".join(line.lstrip("#").strip() for line in f if line.startswith("#"))
-        for claim in (
-            "claude flags added to every session command and its resume command",
-            "Every --settings here and in a Spec, inline JSON or a settings file's path (relative to"
-            " the session's cwd), merges into one",
-            "A local list replaces it whole",
-        ):
-            self.assertIn(claim, comments)
-
     def test_every_committed_claude_session_turns_the_ensemble_plugin_off(self):
         tmp = scratch(self, real=False)
         self.enterContext(

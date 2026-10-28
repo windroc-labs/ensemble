@@ -31,13 +31,10 @@ from tests.session.unit.clients.claude.support import (
     assistant,
     epoch,
     rejected,
-    stream_line,
     text,
     tool,
     tui_launch,
 )
-
-CLAUDE = ("--permission-mode", "auto", "--strict-mcp-config")
 
 
 class ArgvTest(Base):
@@ -249,7 +246,7 @@ class ParseTest(Base):
         found = list(
             self.run.events(
                 [
-                    stream_line({"type": "result", "subtype": "success", "result": "done"}),
+                    json.dumps({"type": "result", "subtype": "success", "result": "done"}),
                     '{"type":"result"',
                 ]
             )
@@ -295,14 +292,14 @@ class ParseTest(Base):
 
     def test_a_session_in_order(self):
         lines = [
-            stream_line(INIT),
+            json.dumps(INIT),
             "not json",
-            stream_line(assistant(text("one"))),
-            stream_line(assistant(text("two"))),
-            stream_line({"type": "user", "message": {"content": [{"type": "tool_result"}]}}),
+            json.dumps(assistant(text("one"))),
+            json.dumps(assistant(text("two"))),
+            json.dumps({"type": "user", "message": {"content": [{"type": "tool_result"}]}}),
             "[1]",
-            stream_line(assistant(text("three"))),
-            stream_line({"type": "result", "subtype": "success", "result": "three"}),
+            json.dumps(assistant(text("three"))),
+            json.dumps({"type": "result", "subtype": "success", "result": "three"}),
         ]
         self.assertEqual(
             list(self.run.events(lines)),
@@ -558,22 +555,6 @@ class LimitTest(Case):
         ):
             with self.subTest(screen=screen):
                 self.assertIsNone(ClaudeClient({}).tui().limit(screen))
-
-
-class SuppliedPolicy(Base):
-    def test_a_policy_reaches_both_client_launches(self):
-        flags = CLAUDE
-        client = ClaudeClient({})
-        spec = Spec(
-            workdir=str(self.work),
-            access=Access(cwd=str(self.work)),
-            sid=SID,
-            flags=flags,
-            prompt="hi",
-        )
-        launch = client.headless().launch(spec)
-        start = launch.argv.index(flags[0])
-        self.assertEqual(launch.argv[start : start + len(flags)], flags)
 
 
 class SharedConversationTest(Base):

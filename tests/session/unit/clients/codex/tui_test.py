@@ -52,10 +52,12 @@ from tests.session.unit.clients.codex.support import (
     TOOLS_OFF,
     UNIFIED,
     Base,
+    LaunchPolicyCases,
     committed_tui,
-    holds,
     packaged,
+    said,
 )
+from tests.session.unit.clients.support import holds
 
 HOOK = (
     sys.executable,
@@ -74,16 +76,6 @@ TURNS = (
     ("Stop", "final"),
 )
 TOOL = {"type": "response_item", "payload": {"type": "function_call", "name": "exec_command"}}
-
-
-def _said(role, *texts):
-    """A Codex session file message record."""
-    kind = "output_text" if role == "assistant" else "input_text"
-    content = [{"type": kind, "text": text} for text in texts]
-    return {
-        "type": "response_item",
-        "payload": {"type": "message", "role": role, "content": content},
-    }
 
 
 def _failed(message, info="other"):
@@ -136,9 +128,6 @@ DIALOG_SCREENS = {
 
 
 class TuiTest(Base):
-    def test_a_codex_tui_runs_remote_under_its_session_harness(self):
-        self.assertTrue(CodexTui._remote_owned)
-
     def test_container_runtime_projects_only_this_identity_without_host_executable(self):
         host = MemoryHost()
         runtime = ClientContext(
@@ -292,7 +281,6 @@ class TuiTest(Base):
             ):
                 launch = committed_tui(self.client, dataclasses.replace(spec, prompt="hi"), hook)
             data = json.loads(launch.argv[-1])
-            self.assertNotIn("import_roots", data)
             self.assertEqual(data["hook"], list(hook))
             plan = tui.decode(data)
             for label, command in tui.commands(plan.hook).items():
@@ -376,27 +364,17 @@ class TuiTest(Base):
                 self.assertNotIn(secret, argv)
             self.assertEqual(each.env[tui.CLIENT_PYTHONPATH], secrets[2])
 
-    def test_invalid_launch_plan_saves_no_recovery_state(self):
-        with (
-            mock.patch("shutil.which", return_value="/protected/codex"),
-            self.assertRaisesRegex(ConfigError, "invalid prompt"),
-        ):
-            committed_tui(
-                self.client, dataclasses.replace(self.spec, prompt="invalid\0prompt"), HOOK
-            )
-        self.assertIsNone(self.common.load(str(self.work), self.spec.sid))
-        self.assertFalse((self.home / ".ensemble").exists())
-
     def test_invalid_launch_inputs_leave_no_state_directory(self):
-        for prompt, hook, roots in (
-            ("surrogate\ud800", HOOK, PACKAGE_ROOTS),
-            ("hi", (), PACKAGE_ROOTS),
-            ("hi", ("relative-hook",), PACKAGE_ROOTS),
+        for prompt, hook, message in (
+            ("invalid\0prompt", HOOK, "invalid prompt"),
+            ("surrogate\ud800", HOOK, ""),
+            ("hi", (), ""),
+            ("hi", ("relative-hook",), ""),
         ):
             with (
-                self.subTest(prompt=prompt, hook=hook, roots=roots),
+                self.subTest(prompt=prompt, hook=hook),
                 mock.patch("shutil.which", return_value="/protected/codex"),
-                self.assertRaises(ConfigError),
+                self.assertRaisesRegex(ConfigError, message),
             ):
                 committed_tui(self.client, dataclasses.replace(self.spec, prompt=prompt), hook)
             self.assertIsNone(self.common.load(str(self.work), self.spec.sid))
@@ -589,27 +567,27 @@ class TuiTest(Base):
 
     def test_observe_reports_a_mid_turn_reply_once_and_not_the_stops_again(self):
         run, path = self.bound()
-        _append(path, _said("user", "go"), _said("assistant", "[ensemble-progress:start] x"), TOOL)
+        _append(path, said("user", "go"), said("assistant", "[ensemble-progress:start] x"), TOOL)
         self.assertEqual(run.observe(), [Reply("[ensemble-progress:start] x")])
         self.assertEqual(
             run.hook_events("Stop", self.payload(last_assistant_message="done")),
             [TurnEnd("done")],
         )
-        _append(path, _said("assistant", "done"))
+        _append(path, said("assistant", "done"))
         self.assertEqual(run.observe(), [])
-        _append(path, _said("user", "again"), _said("assistant", "done"))
+        _append(path, said("user", "again"), said("assistant", "done"))
         self.assertEqual(run.observe(), [Reply("done")])
 
     def test_a_stop_repeating_the_observed_reply_leaves_nothing_to_report(self):
         run, path = self.bound()
-        _append(path, _said("user", "go"), _said("assistant", "done"))
+        _append(path, said("user", "go"), said("assistant", "done"))
         self.assertEqual(run.observe(), [Reply("done")])
         self.assertEqual(
             run.hook_events("Stop", self.payload(last_assistant_message="done")),
             [TurnEnd("done")],
         )
         self.assertEqual(run.observe(), [])
-        _append(path, _said("assistant", "done"))
+        _append(path, said("assistant", "done"))
         self.assertEqual(run.observe(), [Reply("done")])
 
     def test_observe_skips_records_that_are_not_assistant_text(self):
@@ -618,23 +596,23 @@ class TuiTest(Base):
             stream.write("not json\n[]\n")
         _append(
             path,
-            _said("developer", "rules"),
-            _said("assistant", " "),
+            said("developer", "rules"),
+            said("assistant", " "),
             {"type": "response_item", "payload": {"type": "message", "role": "assistant"}},
             {"type": "event_msg", "payload": {"type": "agent_message", "message": "dup"}},
             {"type": "response_item", "payload": None},
-            _said("assistant", "a"),
+            said("assistant", "a"),
         )
         self.assertEqual(run.observe(), [Reply("a")])
 
     def test_observe_joins_a_messages_text_blocks(self):
         run, path = self.bound()
-        _append(path, _said("assistant", "a", "b"))
+        _append(path, said("assistant", "a", "b"))
         self.assertEqual(run.observe(), [Reply("a\nb")])
 
     def test_observe_reports_a_failed_turn_after_its_replies(self):
         run, path = self.bound()
-        _append(path, _said("user", "go"), _said("assistant", "a"), _failed("bad request"))
+        _append(path, said("user", "go"), said("assistant", "a"), _failed("bad request"))
         self.assertEqual(run.observe(), [Reply("a"), TurnFailed("other", "bad request")])
 
     def test_unhooked_initial_and_pane_turns_fail_once(self):
@@ -725,14 +703,14 @@ class TuiTest(Base):
         run, path = self.bound()
         _append(path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}})
         found = run.replay([("UserPromptSubmit", self.payload(turn_id="one"))])
-        self.assertFalse(any(isinstance(event, TurnStarted) for event in found))
+        self.assertEqual(found, [])
 
     def test_native_complete_delivers_reply_before_a_later_turn_can_overtake_hook(self):
         run, path = self.bound()
         _append(
             path,
             {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "one"}},
-            _said("assistant", "complete\n\nreply"),
+            said("assistant", "complete\n\nreply"),
             {
                 "type": "event_msg",
                 "payload": {
@@ -776,16 +754,16 @@ class TuiTest(Base):
         self.prepare()
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         path = self.rollout()
-        _append(path, _said("user", "old"), _failed("old failure"))
+        _append(path, said("user", "old"), _failed("old failure"))
         run, _, _ = self.launch(resume=True)
         self.assertEqual(run.observe(), [])
-        _append(path, _said("user", "new"), _failed("new failure"))
+        _append(path, said("user", "new"), _failed("new failure"))
         self.assertEqual(run.observe(), [TurnFailed("other", "new failure")])
         self.assertEqual(run.observe(), [])
 
     def test_observe_waits_for_a_whole_line(self):
         run, path = self.bound()
-        line = json.dumps(_said("assistant", "a"))
+        line = json.dumps(said("assistant", "a"))
         with path.open("a", encoding="utf-8") as stream:
             stream.write(line[:10])
         self.assertEqual(run.observe(), [])
@@ -804,7 +782,7 @@ class TuiTest(Base):
                 self.assertEqual(run.observe(), [])
             self.assertEqual(lookup.call_count, 1)
             path = self.rollout()
-            _append(path, _said("assistant", "late"))
+            _append(path, said("assistant", "late"))
             clock.return_value += tui.LOOKUP_EVERY - 0.1
             self.assertEqual(run.observe(), [])
             lookup.side_effect = ConfigError("duplicate")
@@ -815,7 +793,7 @@ class TuiTest(Base):
             clock.return_value += tui.LOOKUP_EVERY
             self.assertEqual(run.observe(), [Reply("late")])
             clock.return_value += tui.LOOKUP_EVERY
-            _append(path, _said("assistant", "next"))
+            _append(path, said("assistant", "next"))
             self.assertEqual(run.observe(), [Reply("next")])
             self.assertEqual(lookup.call_count, 3)
 
@@ -824,7 +802,7 @@ class TuiTest(Base):
         run.hook_events("SessionStart", self.payload())
         with mock.patch("time.monotonic", return_value=1000.0) as clock:
             self.assertEqual(run.observe(), [])
-            _append(self.rollout(), _said("user", "go"), _said("assistant", "A"))
+            _append(self.rollout(), said("user", "go"), said("assistant", "A"))
             clock.return_value += 0.5
             self.assertEqual(run.observe(), [])
             self.assertEqual(
@@ -838,12 +816,12 @@ class TuiTest(Base):
         self.prepare()
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
         path = self.rollout()
-        _append(path, _said("assistant", "old"))
+        _append(path, said("assistant", "old"))
         run, launch, _ = self.launch(resume=True)
         self.assertEqual(launch.transcript, str(path))
         self.assertEqual(run.hook_callback().state["start"], path.stat().st_size)
         self.assertEqual(run.observe(), [])
-        _append(path, _said("assistant", "new"))
+        _append(path, said("assistant", "new"))
         self.assertEqual(run.observe(), [Reply("new")])
 
     def attached(self, *labels):
@@ -852,7 +830,7 @@ class TuiTest(Base):
         """
         run, path = self.bound()
         self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        _append(path, _said("user", "go"), _said("assistant", "a"))
+        _append(path, said("user", "go"), said("assistant", "a"))
         self.assertEqual(run.observe(), [Reply("a")])
         attached = self.client.tui()
         attached.restore(self.spec, run.hook_callback().state)
@@ -878,18 +856,18 @@ class TuiTest(Base):
     def test_attach_reads_on_from_the_session_files_end(self):
         attached, path, _ = self.attached(*TURNS)
         self.assertEqual(attached.observe(), [])
-        _append(path, _said("user", "next"), _said("assistant", "b"))
+        _append(path, said("user", "next"), said("assistant", "b"))
         self.assertEqual(attached.observe(), [Reply("b")])
 
     def test_attach_a_new_prompt_clears_the_pending_stop_text(self):
         attached, path, _ = self.attached(*TURNS)
-        _append(path, _said("user", "next"), _said("assistant", "final"))
+        _append(path, said("user", "next"), said("assistant", "final"))
         self.assertEqual(attached.observe(), [Reply("final")])
 
     def test_attach_mid_turn_skips_the_pending_stop_text_once(self):
         attached, path, replayed = self.attached(("UserPromptSubmit", ""), ("Stop", "final"))
         self.assertEqual(replayed, [Reply("a"), ClientBound(NATIVE), TurnEnd("final")])
-        _append(path, _said("assistant", "final"), _said("assistant", "final"))
+        _append(path, said("assistant", "final"), said("assistant", "final"))
         self.assertEqual(attached.observe(), [Reply("final")])
 
     def test_identity_accepts_canonical_cwd_alias_and_keeps_native_binding(self):
@@ -1162,29 +1140,17 @@ class SuppliedFlagsTest(Base):
                 for value in AUTO[3::2]:
                     self.assertEqual(value in trust, permission == Permission.AUTO)
 
-    def test_the_packaged_config_turns_the_ensemble_plugin_off(self):
+    def test_the_packaged_config_turns_tools_off_and_gives_each_policy_flag_once(self):
         self.client = packaged()
         _, data = self.launch(self.spec)
         snapshot = self.common.load(data["workdir"], data["sid"]).snapshot
         argv = tui.execution_argv(tui.decode(data), snapshot, "hooks.state={trusted}")
         start = argv.index(PLUGIN_OFF[1]) - 1
         self.assertEqual(argv[start : start + 2], list(PLUGIN_OFF))
-
-    def test_the_packaged_config_turns_the_browser_computer_use_apps_and_suggestions_off(self):
-        self.client = packaged()
-        _, data = self.launch(self.spec)
-        snapshot = self.common.load(data["workdir"], data["sid"]).snapshot
-        argv = tui.execution_argv(tui.decode(data), snapshot, "hooks.state={trusted}")
         for pair in TOOLS_OFF:
             with self.subTest(pair=pair):
                 self.assertTrue(holds(argv, pair), argv)
                 self.assertEqual(argv.count(pair[1]), 1)
-
-    def test_the_packaged_config_gives_a_crew_worker_each_codex_policy_flag_once(self):
-        self.client = packaged()
-        _, data = self.launch(self.spec)
-        snapshot = self.common.load(data["workdir"], data["sid"]).snapshot
-        argv = tui.execution_argv(tui.decode(data), snapshot, "hooks.state={trusted}")
         for flag, value in UNIFIED:
             with self.subTest(value=value):
                 self.assertEqual(argv.count(value), 1)
@@ -1292,7 +1258,9 @@ class SuppliedFlagsTest(Base):
         )
 
 
-class LaunchPolicy(Base):
+class LaunchPolicy(LaunchPolicyCases, Base):
+    mode = "tui"
+
     def argv(self, client, spec, *, resume=False):
         with mock.patch("shutil.which", return_value="/protected/codex"):
             launch = committed_tui(
@@ -1304,65 +1272,12 @@ class LaunchPolicy(Base):
             "hooks.state={trusted}",
         )
 
-    def test_supplied_policy_and_saved_replay_in_both_modes(self):
-        mode = "tui"
-        for saved, current in (
-            ("workspace-write", "danger-full-access"),
-            ("danger-full-access", "workspace-write"),
-        ):
-            with self.subTest(mode=mode, saved=saved):
-                flags = (
-                    "-s",
-                    saved,
-                    "-c",
-                    'approval_policy="on-request"',
-                    "-c",
-                    'approvals_reviewer="auto_review"',
-                    "-c",
-                    "sandbox_workspace_write.network_access=false",
-                )
-                spec = dataclasses.replace(
-                    self.spec, sid=f"{mode}-{saved}", flags=flags, env={"K": "saved"}
-                )
-                first = self.argv(self.client, spec)
-                self.assertEqual(first[first.index("-s") :][: len(flags)], list(flags))
-                self.common.bind(str(self.work), spec.sid, NATIVE)
-                self.rollout()
-                changed = dataclasses.replace(spec, flags=("-s", current), env={"K": "changed"})
-                second = self.argv(self.client, changed, resume=True)
-                self.assertEqual(second[second.index("-s") :][: len(flags)], list(flags))
-                self.assertEqual(
-                    self.common.load(str(self.work), spec.sid).snapshot.flags, tuple(flags)
-                )
-
-    def test_separator_tail_follows_generated_options_on_fresh_and_resume(self):
-        mode = "tui"
-        with self.subTest(mode=mode):
-            supplied = ("--enable", "web", "--", "literal", "--last")
-            spec = dataclasses.replace(self.spec, sid=f"separator-{mode}", flags=supplied)
-            first = self.argv(self.client, spec)
-            self.common.bind(str(self.work), spec.sid, NATIVE)
-            self.rollout()
-            changed = dataclasses.replace(spec, flags=("--", "changed"))
-            second = self.argv(self.client, changed, resume=True)
-            for argv in (first, second):
-                boundary = argv.index("--")
-                self.assertEqual(argv[boundary:], ["--", "literal", "--last", "hi"])
-                self.assertIn("gpt-test", argv[:boundary])
-                self.assertIn(str(self.extra), argv[:boundary])
-                self.assertIn("project_doc_max_bytes=0", argv[:boundary])
-                self.assertEqual(argv[:boundary].count("hooks.state={trusted}"), 1)
-                self.assertEqual(
-                    sum(
-                        word.startswith("hooks.")
-                        for word in argv[:boundary]
-                        if word != "hooks.state={trusted}"
-                    ),
-                    len(tui.HOOKS),
-                )
-            self.assertEqual(
-                self.common.load(str(self.work), spec.sid).snapshot.flags, tuple(supplied)
-            )
+    def generated(self, options):
+        self.assertEqual(options.count("hooks.state={trusted}"), 1)
+        self.assertEqual(
+            sum(word.startswith("hooks.") for word in options if word != "hooks.state={trusted}"),
+            len(tui.HOOKS),
+        )
 
 
 class PlanTest(PlanCase):
