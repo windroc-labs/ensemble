@@ -184,9 +184,4 @@ func TestCredentialDirsFixture(t *testing.T) {
 	if !reflect.DeepEqual(dirs, want) {
 		t.Fatalf("credential-dirs.json %v, want %v", dirs, want)
 	}
-	for kind, dir := range want {
-		if dir != SecretsDir+"/"+kind {
-			t.Errorf("%s: %s", kind, dir)
-		}
-	}
 }

@@ -10,8 +10,8 @@ Close every running Docker session, then run `scripts/install.sh --docker` to in
 refuses an older protocol's broker. This interface-only change requires no configuration migration. The existing
 `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal,
 explicit role/task declarations, `--credentials`, and the no-implicit-credentials rule are not enabled here.
-WDRC-350 will move GitHub grants (including verifier output) to orchestrator/CLI declarations; WDRC-351 will move
-environment secrets to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
+GitHub grants (including verifier output) will move to orchestrator/CLI declarations; environment secrets will move
+to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
 errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for the contract.
 
 ## Claude account selection is the session's

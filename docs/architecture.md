@@ -388,7 +388,7 @@ read `/run/ensemble/secrets/`. The App private key, Codex refresh token and enro
 the broker; a provider API key or an environment secret is the same long-lived value in every container that lists
 it. Each container copy is 0400 on the container's tmpfs and goes with the container.
 
-**Credential spec** (interface only, WDRC-278; WDRC-268 FR-27, FR-31–39): the caller supplies references, never secret
+**Credential spec** (interface only): the caller supplies references, never secret
 values. Delegate and session `Spec` each carry `credentials` and `environment_credentials` as `str | None`; the
 second is the selected environment's declaration. They never parse, validate, interpret or merge their contents.
 Their records preserve both strings. The start manifest reserves two optional JSON strings, omitting only `None`;
