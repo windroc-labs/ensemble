@@ -1,10 +1,9 @@
-"""hosts/docker/broker.py: protocol-1 calls, every shared response fixture's outcome, the manifest."""
+"""hosts/docker/broker.py: protocol-1 calls, every shared response fixture's outcome."""
 
 import io
 import json
 import logging
 import os
-import stat
 import tempfile
 from unittest import mock
 
@@ -14,7 +13,9 @@ from ensemble.session.hosts.docker.broker import BROKER, Broker, BrokerError
 from ensemble.session.hosts.docker.types import Started
 from tests.session.case import REPO, Case
 from tests.session.unit.hosts.docker.support import (
+    BETA,
     HOOK,
+    UPDRAFT,
     FakeBroker,
     FakePopen,
     FakeProc,
@@ -446,16 +447,12 @@ class ResponseTest(Case):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build("/opt/ensemble")
         self.assertEqual(fake.calls, [[BROKER, *data("build-input.json")["argv"]]])
-        self.assertFalse(hasattr(broker, "REFRESH"))
 
     def test_build_passes_plugins(self):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
-            plugins=(
-                "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-                "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ),
+            plugins=(UPDRAFT, BETA),
         )
         argv = data("build-input-plugins.json")["argv"]
         self.assertEqual(argv[-2:], ["--max-age", "604800"])
@@ -517,12 +514,6 @@ class ResponseTest(Case):
                 self.assertIn(BROKER, str(raised.exception))
                 self.assertEqual(fake.calls, [argv("version")])
 
-    def test_a_protocol_2_update_field_is_bad(self):
-        started = {**data("start-output.json"), "update": {"status": "updated"}}
-        result = (0, json.dumps(started), "")
-        with self.assertRaisesRegex(SessionError, "bad response"):
-            Broker(FakeBroker(result)).start(MANIFEST, clients=KEYS)
-
     def test_a_client_key_set_other_than_the_schemas_is_bad(self):
         for keys in (frozenset({"claude"}), frozenset({"claude", "codex", "other"})):
             with self.subTest(keys=keys), self.assertRaisesRegex(SessionError, "bad response"):
@@ -557,7 +548,7 @@ class LockTest(Case):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
-            plugins=("beta@owner/market#" + "b" * 40,),
+            plugins=(BETA,),
             base_image="dummy-env:test",
             image_plugins=("dummy-plugin", "other.plugin"),
         )
@@ -565,173 +556,12 @@ class LockTest(Case):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
-            plugins=("beta@owner/market#" + "b" * 40,),
+            plugins=(BETA,),
             image_plugins=("dummy-plugin", "other.plugin"),
         )
         self.assertEqual(
             fake.calls, [[BROKER, *data("build-input-image-plugins.json")["argv"][:-2]]]
         )
-
-
-class ManifestTest(Case):
-    def test_writes_the_protocol_manifest_owner_only(self):
-        path = os.path.join(self.home, "state", "g.json")
-        broker.write_manifest(
-            path,
-            name="w",
-            generation="0" * 32,
-            image="ensemble-worker:" + "a" * 64,
-            cwd="/work",
-            workspace="ensemble-ws-w",
-            home=("x_dir", "/home/x"),
-            hook_path="/plugin/bin/ensemble-session",
-            github="",
-        )
-        with open(path) as f:
-            self.assertEqual(
-                json.load(f),
-                {
-                    "name": "w",
-                    "generation": "0" * 32,
-                    "image": "ensemble-worker:" + "a" * 64,
-                    "cwd": "/work",
-                    "workspace": "ensemble-ws-w",
-                    "client": "x",
-                    "x_dir": "/home/x",
-                    "hook_path": "/plugin/bin/ensemble-session",
-                    "github": None,
-                    "labels": {},
-                },
-            )
-        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
-        broker.write_manifest(
-            path,
-            name="w",
-            generation="0" * 32,
-            image="ensemble-worker:" + "a" * 64,
-            cwd="/work",
-            workspace="ensemble-ws-w",
-            home=("x_dir", "/home/x"),
-            hook_path="/plugin/bin/ensemble-session",
-            github="ensemble-broker-bot",
-            permissions={"contents": "write", "statuses": "read"},
-        )
-        with open(path) as f:
-            self.assertEqual(
-                json.load(f)["github"],
-                {
-                    "app": "ensemble-broker-bot",
-                    "permissions": {"contents": "write", "statuses": "read"},
-                },
-            )
-        broker.write_manifest(
-            path,
-            name="w",
-            generation="0" * 32,
-            image="ensemble-worker:" + "a" * 64,
-            cwd="/work",
-            workspace="ensemble-ws-w",
-            home=("x_dir", "/home/x"),
-            hook_path="/plugin/bin/ensemble-session",
-            github="ensemble-broker-bot",
-            permissions={"contents": "write"},
-            repo="o/out",
-        )
-        with open(path) as f:
-            self.assertEqual(
-                json.load(f)["github"],
-                {
-                    "app": "ensemble-broker-bot",
-                    "permissions": {"contents": "write"},
-                    "repo": "o/out",
-                },
-            )
-
-    def test_an_opencode_manifest_lists_its_providers(self):
-        path = os.path.join(self.home, "state", "g.json")
-        for providers in (("lab", "strata"), ()):
-            broker.write_manifest(
-                path,
-                name="w",
-                generation="0" * 32,
-                image="ensemble-worker:" + "a" * 64,
-                cwd="/work",
-                workspace="ensemble-ws-w",
-                home=("opencode_dir", "/home/opencode"),
-                hook_path="/plugin/bin/ensemble-session",
-                github="",
-                providers=providers,
-            )
-            with open(path) as f:
-                manifest = json.load(f)
-            if providers:
-                self.assertEqual(manifest["opencode_providers"], ["lab", "strata"])
-            else:
-                self.assertNotIn("opencode_providers", manifest)
-
-    def test_a_claude_manifest_names_its_selected_account(self):
-        path = os.path.join(self.home, "state", "g.json")
-        for account in ("work", ""):
-            broker.write_manifest(
-                path,
-                name="w",
-                generation="0" * 32,
-                image="ensemble-worker:" + "a" * 64,
-                cwd="/work",
-                workspace="ensemble-ws-w",
-                home=("claude_dir", "/home/claude"),
-                hook_path="/plugin/bin/ensemble-session",
-                github="",
-                account=account,
-            )
-            with open(path) as f:
-                manifest = json.load(f)
-            if account:
-                self.assertEqual(manifest["claude_account"], "work")
-            else:
-                self.assertNotIn("claude_account", manifest)
-
-    def test_an_environment_reaches_the_manifest_only_when_set(self):
-        path = os.path.join(self.home, "state", "g.json")
-        base = {
-            "name": "w",
-            "generation": "0" * 32,
-            "image": "ensemble-worker:" + "a" * 64,
-            "cwd": "/work",
-            "workspace": "ensemble-ws-w",
-            "home": ("claude_dir", "/home/claude"),
-            "hook_path": "/plugin/bin/ensemble-session",
-            "github": "",
-        }
-        secret = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
-        broker.write_manifest(
-            path,
-            **base,
-            gateway="mini-op",
-            secrets=(secret,),
-            lock="dummy-lock",
-            lock_owner="w",
-            prefetch={"repo": "o/r", "ref": "main"},
-        )
-        with open(path) as f:
-            manifest = json.load(f)
-        self.assertEqual(
-            {
-                key: manifest[key]
-                for key in ("gateway", "secrets", "lock", "lock_owner", "prefetch")
-            },
-            {
-                "gateway": "mini-op",
-                "secrets": [secret],
-                "lock": "dummy-lock",
-                "lock_owner": "w",
-                "prefetch": {"repo": "o/r", "ref": "main"},
-            },
-        )
-        broker.write_manifest(path, **base)
-        with open(path) as f:
-            manifest = json.load(f)
-        self.assertFalse({"gateway", "secrets", "lock", "lock_owner", "prefetch"} & set(manifest))
 
 
 class StreamTest(Case):

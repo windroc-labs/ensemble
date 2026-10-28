@@ -323,109 +323,75 @@ class NetworkProbeTest(Case):
 
 
 class ReclaimedTest(Case):
-    def test_revoked_and_withdrawn(self):
-        lines = [
-            line("start", G1, token("issued")),
-            line("close", G1, token("revoked"), withdrawn()),
-        ]
-        self.assertEqual(gate.reclaimed(lines, G1, "claude"), [])
+    def test_a_fully_reclaimed_generation_is_clean(self):
+        closed = line("close", G1, token("revoked"), withdrawn())
+        codex = line("close", G1, token("revoked"), withdrawn("codex-access-token"))
+        role = (line("start", G2, token("issued")), line("refresh", G2, token("renewed")))
+        for generation, client, *lines in (
+            (G1, "claude", line("start", G1, token("issued")), closed),
+            (G1, "opencode", line("close", G1, token("revoked"))),
+            (G1, "codex", codex),
+            (G1, "claude", line("close", G2, token("unrevoked", reason="offline")), closed),
+            (G2, "claude", *role, line("close", G2, token("revoked"), withdrawn())),
+        ):
+            with self.subTest(client=client, lines=lines):
+                self.assertEqual(gate.reclaimed(lines, generation, client), [])
 
-    def test_opencode_has_no_client_credential(self):
-        lines = [line("close", G1, token("revoked"))]
-        self.assertEqual(gate.reclaimed(lines, G1, "opencode"), [])
-        self.assertEqual(len(gate.reclaimed([line("close", G1)], G1, "opencode")), 1)
-
-    def test_codex_withdrawal(self):
-        lines = [line("close", G1, token("revoked"), withdrawn("codex-access-token"))]
-        self.assertEqual(gate.reclaimed(lines, G1, "codex"), [])
-        self.assertEqual(len(gate.reclaimed(lines, G1, "claude")), 1)
-
-    def test_unrevoked_names_its_reason(self):
-        lines = [line("close", G1, token("unrevoked", reason="network down"), withdrawn())]
-        (problem,) = gate.reclaimed(lines, G1, "claude")
-        self.assertIn("unrevoked (network down)", problem)
-
-    def test_every_installation_counts(self):
-        lines = [line("close", G1, token("revoked"), token("unrevoked", "other", 2), withdrawn())]
-        (problem,) = gate.reclaimed(lines, G1, "claude")
-        self.assertIn("other", problem)
-
-    def test_no_close_line(self):
-        (problem,) = gate.reclaimed([line("start", G1, token("issued"))], G1, "claude")
-        self.assertIn("no close", problem)
-
-    def test_no_github_token(self):
-        (problem,) = gate.reclaimed([line("close", G1, withdrawn())], G1, "claude")
-        self.assertIn("github-installation-token", problem)
-
-    def test_no_withdrawal(self):
-        (problem,) = gate.reclaimed([line("close", G1, token("revoked"))], G1, "claude")
-        self.assertIn("withdrawn", problem)
-
-    def test_other_generation_ignored(self):
-        lines = [
-            line("close", G2, token("unrevoked", reason="offline")),
-            line("close", G1, token("revoked"), withdrawn()),
-        ]
-        self.assertEqual(gate.reclaimed(lines, G1, "claude"), [])
-
-    def test_role_generation(self):
-        lines = [
-            line("start", G2, token("issued")),
-            line("refresh", G2, token("renewed")),
-            line("close", G2, token("revoked"), withdrawn()),
-        ]
-        self.assertEqual(gate.reclaimed(lines, G2, "claude"), [])
+    def test_each_gap_is_one_problem_naming_it(self):
+        codex = withdrawn("codex-access-token")
+        unrevoked, other = token("unrevoked", reason="network down"), token("unrevoked", "other", 2)
+        for client, problem, audit in (
+            ("opencode", "close revoked no github-installation-token", line("close", G1)),
+            (
+                "claude",
+                "claude-setup-token not withdrawn",
+                line("close", G1, token("revoked"), codex),
+            ),
+            ("claude", "unrevoked (network down)", line("close", G1, unrevoked, withdrawn())),
+            ("claude", "other", line("close", G1, token("revoked"), other, withdrawn())),
+            ("claude", "no close", line("start", G1, token("issued"))),
+            ("claude", "github-installation-token", line("close", G1, withdrawn())),
+            ("claude", "withdrawn", line("close", G1, token("revoked"))),
+        ):
+            with self.subTest(problem):
+                (found,) = gate.reclaimed([audit], G1, client)
+                self.assertIn(problem, found)
 
 
 class RemovedTokensTest(Case):
-    def test_revoked_later(self):
-        lines = [line("start", G1, token("issued")), line("close", G1, token("revoked"))]
-        self.assertEqual(gate.removed_tokens(lines, G1), f"removed {G1}: github tokens revoked 1/1")
-
-    def test_never_revoked(self):
-        lines = [line("start", G1, token("issued"), token("issued", "other", 2))]
-        self.assertEqual(
-            gate.removed_tokens(lines, G1),
-            f"removed {G1}: github tokens not revoked (revoked 0/2), expires 2026-10-18T13:00:00Z",
-        )
+    def test_the_line_counts_the_revoked_tokens(self):
+        never = "github tokens not revoked (revoked 0/2), expires 2026-10-18T13:00:00Z"
+        for lines, want in (
+            (
+                [line("start", G1, token("issued")), line("close", G1, token("revoked"))],
+                "github tokens revoked 1/1",
+            ),
+            ([line("start", G1, token("issued"), token("issued", "other", 2))], never),
+        ):
+            with self.subTest(want):
+                self.assertEqual(gate.removed_tokens(lines, G1), f"removed {G1}: {want}")
 
 
 class BaselineTest(Case):
     def check(self, found, plan=(CLAUDE_DIR,)):
         return gate.baseline(found, "live", CWD, list(plan), NETWORK)
 
-    def test_compliant_claude(self):
-        self.assertEqual(self.check(inspect()), [])
-
-    def test_compliant_codex(self):
-        sessions = "/Users/u/.ensemble/docker-state/live/codex/sessions"
-        mounts = [
-            {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD},
-            {"Type": "bind", "Source": sessions, "Destination": sessions},
-        ]
-        self.assertEqual(self.check(inspect(Mounts=mounts), (sessions,)), [])
-
-    def test_docker_desktop_shared_folder_source(self):
+    def test_compliant_containers_pass(self):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
-        bind = {"Type": "bind", "Source": "/host_mnt" + CLAUDE_DIR, "Destination": CLAUDE_DIR}
-        self.assertEqual(self.check(inspect(Mounts=[volume, bind])), [])
-        inside = {"Type": "bind", "Source": "/host_mnt" + CWD + "/src", "Destination": "/w"}
-        problems = gate.baseline(
-            inspect(Mounts=[volume, inside]), "live", CWD, [CWD + "/src"], NETWORK
-        )
-        self.assertEqual(len(problems), 1, problems)
-        self.assertIn("cwd", problems[0])
-
-    def test_no_extra_hosts(self):
-        for hosts in (None, []):
-            with self.subTest(hosts=hosts):
-                self.assertEqual(self.check(inspect(HostConfig__ExtraHosts=hosts)), [])
-
-    def test_no_new_privileges_with_value(self):
-        self.assertEqual(
-            self.check(inspect(HostConfig__SecurityOpt=["no-new-privileges:true"])), []
-        )
+        desktop = {"Type": "bind", "Source": "/host_mnt" + CLAUDE_DIR, "Destination": CLAUDE_DIR}
+        cases = {
+            "claude": inspect(),
+            "docker desktop shared folder": inspect(Mounts=[volume, desktop]),
+            "extra hosts None": inspect(HostConfig__ExtraHosts=None),
+            "extra hosts []": inspect(HostConfig__ExtraHosts=[]),
+            "no-new-privileges:true": inspect(HostConfig__SecurityOpt=["no-new-privileges:true"]),
+        }
+        for label, found in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self.check(found), [])
+        sessions = "/Users/u/.ensemble/docker-state/live/codex/sessions"
+        codex = {"Type": "bind", "Source": sessions, "Destination": sessions}
+        self.assertEqual(self.check(inspect(Mounts=[volume, codex]), (sessions,)), [])
 
     def test_each_violation_alone(self):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
@@ -454,24 +420,19 @@ class BaselineTest(Case):
             with self.subTest(label):
                 self.assertEqual(len(self.check(found)), 1, self.check(found))
 
-    def test_cwd_related_binds(self):
-        volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
-        for source in (CWD, "/Users/u/work", CWD + "/src"):
-            with self.subTest(source):
-                found = inspect(
-                    Mounts=[volume, {"Type": "bind", "Source": source, "Destination": "/w"}]
-                )
-                problems = gate.baseline(found, "live", CWD, [source], NETWORK)
-                self.assertEqual(len(problems), 1, problems)
-                self.assertIn("cwd", problems[0])
-
-    def test_docker_socket(self):
+    def test_a_cwd_or_docker_socket_bind_is_one_problem(self):
         volume = {"Type": "volume", "Name": "ensemble-ws-live", "Destination": CWD}
         sock = "/var/run/docker.sock"
-        found = inspect(Mounts=[volume, {"Type": "bind", "Source": sock, "Destination": sock}])
-        problems = gate.baseline(found, "live", CWD, [sock], NETWORK)
-        self.assertEqual(len(problems), 1, problems)
-        self.assertIn("docker.sock", problems[0])
+        for source, destination, plan, problem in (
+            ("/host_mnt" + CWD + "/src", "/w", CWD + "/src", "cwd"),
+            *((source, "/w", source, "cwd") for source in (CWD, "/Users/u/work", CWD + "/src")),
+            (sock, sock, sock, "docker.sock"),
+        ):
+            with self.subTest(source):
+                bind = {"Type": "bind", "Source": source, "Destination": destination}
+                problems = self.check(inspect(Mounts=[volume, bind]), (plan,))
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn(problem, problems[0])
 
 
 class EgressProxyTest(Case):

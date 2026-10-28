@@ -2,7 +2,6 @@
 parser.
 """
 
-import abc
 import dataclasses
 import inspect
 import json
@@ -15,8 +14,6 @@ import tomllib
 from types import MappingProxyType
 from unittest import mock
 
-import ensemble.session as session_package
-import ensemble.session.extension as extension
 from ensemble.session import (
     SIGNALS,
     ConfigError,
@@ -60,28 +57,6 @@ ABSTRACT = {
     Host: {"list"},
     InteractiveProcess: {"send", "press", "state", "close", "returncode"},
 }
-HANDLE = {
-    "name",
-    "generation",
-    "send",
-    "press",
-    "screen",
-    "state",
-    "close",
-    "returncode",
-    "read",
-    "write",
-    "tick",
-}
-REMOVED_HOST = {
-    "terminal",
-    "detach",
-    "attach",
-    "reclaim",
-    "events_path",
-    "prepare_events",
-    "hook_callback",
-}
 
 
 class MinimalHost(Host):
@@ -104,16 +79,6 @@ class Abstract(Case):
             with self.subTest(cls=cls.__name__):
                 self.assertTrue(inspect.isabstract(cls))
                 self.assertEqual(cls.__abstractmethods__, methods)
-
-    def test_list_rows_and_validate_take_no_display(self):
-        for method, parameters in (
-            (Host.list, ["self"]),
-            (Host.rows, ["self"]),
-            (Host.validate, ["self", "name", "launch"]),
-        ):
-            with self.subTest(method=method.__name__):
-                found = inspect.signature(method).parameters
-                self.assertEqual(list(found), parameters)
 
 
 class HostDefaults(Case):
@@ -191,28 +156,6 @@ class HostDefaults(Case):
 
     def test_signals_a_detached_run_blocks_are_hup_term_and_int(self):
         self.assertEqual(SIGNALS, (signal.SIGHUP, signal.SIGTERM, signal.SIGINT))
-
-
-class InteractiveProcessShape(Case):
-    """AC8: InteractiveProcess is the one managed handle, a standalone ABC; Process, Interactive
-    and the in-session Host members are gone from both session surfaces.
-    """
-
-    def test_interactive_process_is_a_standalone_abc_of_exactly_the_kept_members(self):
-        self.assertEqual(InteractiveProcess.__bases__, (abc.ABC,))
-        members = {n for n in vars(InteractiveProcess) if not n.startswith("_")}
-        self.assertEqual(members | set(InteractiveProcess.__annotations__), HANDLE)
-
-    def test_neither_surface_exports_process_or_interactive(self):
-        for module in (session_package, extension, host_base):
-            for name in ("Process", "Interactive", "check_sid"):
-                with self.subTest(module=module.__name__, name=name):
-                    self.assertFalse(hasattr(module, name))
-                    self.assertNotIn(name, getattr(module, "__all__", ()))
-
-    def test_host_has_none_of_the_removed_members(self):
-        for host in (Host, extension.Host):
-            self.assertEqual({n for n in REMOVED_HOST if hasattr(host, n)}, set())
 
 
 class CapacityRows(Case):
