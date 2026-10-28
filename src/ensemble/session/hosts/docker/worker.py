@@ -1,6 +1,7 @@
-"""A harness-owned Docker worker: the guard in its container, reached through one `docker exec -i`
-(docs/architecture.md › Harness-owned workers). Every channel frame is untrusted: the client shares
-the guard's uid. A frame can end its own worker; only confirmed container removal makes it ABSENT.
+"""A harness-owned Docker worker: the guard, its container's main process, reached through one
+`docker attach` and kept alive by a heartbeat (docs/architecture.md › Harness-owned workers). Every
+channel frame is untrusted: the client shares the guard's uid. A frame can end its own worker; only
+confirmed container removal makes it ABSENT.
 """
 
 import contextlib
@@ -10,7 +11,7 @@ import re
 import threading
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from ensemble.session.engine.types import (
     Liveness,
@@ -24,7 +25,7 @@ from ensemble.session.hosts.docker.maintenance import RETRY, Maintenance, run
 from ensemble.session.hosts.managed import QUEUE_MAX, ManagedProcess
 
 GUARD = "/opt/ensemble/src/ensemble/session/harness/guard.py"
-RUN = "/run/ensemble/guard"
+BEAT = 1.0  # s between heartbeats; the guard ends its worker after guard.HEARTBEAT s without one
 LABEL = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 SEEN = 4096
 HOOK_PAUSE = 1.0
@@ -105,9 +106,30 @@ class DockerWorker(ManagedProcess):
         self.stopped = threading.Event()
         self.retry = threading.Event()
         self.ender: threading.Thread | None = None
+        self.beater: threading.Thread | None = None
         self.report = report
         self.maintenance = maintenance(close=self._expire, report=self._report)
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
+
+    def launch(self, handoff: Mapping) -> None:
+        """Its guard's launch handoff, then a heartbeat every BEAT s until the channel ends."""
+        self.send_frame(b"l", json.dumps(handoff, separators=(",", ":")).encode())
+        self.beater = threading.Thread(target=self._beat, name=f"{self.name}-beat", daemon=True)
+        self.beater.start()
+
+    def _beat(self) -> None:
+        while True:
+            with self.condition:
+                if self.condition.wait_for(self._released, BEAT):
+                    return
+            try:
+                self.send_frame(b"p", b"{}")
+            except SessionError:
+                return
+
+    def end_releases(self) -> None:
+        super().end_releases()
+        self._join(self.beater)
 
     def begin(self) -> None:
         """Its maintenance thread and, journaling, its hook thread; after the guard started."""

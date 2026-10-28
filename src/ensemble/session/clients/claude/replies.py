@@ -1,11 +1,11 @@
 """Claude mid-turn replies. Claude Code queues a message sent while a turn runs (a `queue-operation`
 enqueue record) and, once the running tool returns, joins it to that turn as a `queued_command`
-attachment; no hook runs for it. A message one (commandMode prompt, not a background task's
-notification) after the turn's first assistant record is an interjection;
-the first assistant text after it is its answer, stored and announced as `reply <id>` by the owning
-harness's pump (settle_pending) or the turn's Stop hook, whichever finds it first. UserPromptSubmit
-opens the turn, PostToolUse scans it, Stop scans with its text and closes it. Only main-thread
-records count.
+attachment; its UserPromptSubmit, if one runs, keeps the open turn. A message one (commandMode
+prompt, not a background task's notification) after the turn's first assistant record is an
+interjection; the first assistant text after it is its answer, stored and announced as
+`reply <id>` by the owning harness's pump (settle_pending) or the turn's Stop hook, whichever finds
+it first. UserPromptSubmit opens the turn, PostToolUse scans it, Stop scans with its text and
+closes it. Only main-thread records count.
 """
 
 import hashlib

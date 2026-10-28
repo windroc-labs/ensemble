@@ -16,6 +16,7 @@ from ensemble.session.engine.types import (
     ConfigError,
     NotShowable,
     SessionError,
+    TuiSettings,
     Unanswered,
 )
 from ensemble.session.hosts.base import Host, worker_state
@@ -167,7 +168,7 @@ class Viewer:
         if display is None and (state := worker_state(name)) is not None:
             display = state.display
         if isinstance(target, CommandView):
-            self._view(name, target, status_line=host.tui_settings().status_line)
+            self._view(name, target, host.tui_settings())
         elif self._tmux.status(target.session) is None:
             raise SessionError(f"no tmux session {name}")
         return target, display
@@ -175,6 +176,7 @@ class Viewer:
     def hide(self, name: str, host: Host, *, if_closed: bool = False) -> None:
         """Undoes show: hidden until a show (if_closed: only once its pane was closed by hand)."""
         target = self._target(name, host)
+        size = host.tui_settings().hidden_size
         if self._tmux.status(name) is None:
             if isinstance(target, SessionView):
                 raise SessionError(f"no tmux session {name}")
@@ -194,9 +196,10 @@ class Viewer:
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
         try:
-            self._tmux.unview(name)
+            # a SessionView is a Host's tmux session, TmuxCli.start's, under a pane border
+            self._tmux.unview(name, size, border=isinstance(target, SessionView))
         except TuiError as e:
-            LOG.warning("hide %s: readable size: %s", name, e)
+            LOG.warning("hide %s: hidden size: %s", name, e)
         self._mark(name, host, hidden=True)
         try:
             # a show meanwhile may have written hidden=False before this mark
@@ -252,14 +255,15 @@ class Viewer:
             raise NotShowable(f"host {host.name} cannot show")
         return target
 
-    def _view(self, name: str, target: CommandView, *, status_line: bool) -> None:
+    def _view(self, name: str, target: CommandView, settings: TuiSettings) -> None:
+        size = tmux_cli.sized(settings.hidden_size)
         try:
             if self._tmux.status(name) is None:
                 self._tmux.checked(
                     [
-                        *("new-session", "-d", "-s", name, *tmux_cli.READABLE, "--", *target.argv),
+                        *("new-session", "-d", "-s", name, *size, "--", *target.argv),
                         *(";", "set-option", "-t", f"={name}:", VIEW, VIEW_TAG),
-                        *(";", *tmux_cli.status(name, on=status_line)),
+                        *(";", *tmux_cli.status(name, on=settings.status_line)),
                     ]
                 )
             elif self._tmux.option(name, VIEW) != VIEW_TAG:

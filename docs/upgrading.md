@@ -31,6 +31,15 @@ verifier run:
 The `orchestrator` destination is removed: a local `[output] type = "orchestrator"` is a configuration error. Use
 `local` or `github`.
 
+## Broker protocol 32: the guard is the Docker container's main process
+
+The broker now starts each worker container with the guard as its main process, and the harness reaches it over
+`docker attach` ([Harness-owned workers](architecture.md#harness-owned-workers)), so a killed harness no longer leaves
+its container running. Install this release's broker with its plugin (`scripts/install.sh` does both); the plugin
+refuses an older broker. Close every running Docker session first (`ensemble-session ls`, then
+`ensemble-session close NAME`): an older container has no guard for this release's harness to attach to.
+Conversations stay: resume them after the upgrade.
+
 ## The delegate's drive: harness_host removed
 
 A detached run's drive (`<agent>-drive`) now runs as a local process the delegate starts itself
