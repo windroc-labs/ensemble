@@ -673,10 +673,6 @@ class ConfinedRead(Case):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class EventsFileTest(Case):
     def setUp(self):
         self.root = scratch(self)
@@ -755,3 +751,7 @@ class EventsFileTest(Case):
             ):
                 files.events_file(path)
             self.assertFalse(os.path.exists(path))
+
+
+if __name__ == "__main__":
+    unittest.main()

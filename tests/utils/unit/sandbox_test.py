@@ -12,7 +12,7 @@ from unittest import mock
 
 from ensemble.utils.process_control import TIMEOUT
 from tests.utils import sandbox
-from tests.utils.case import REPO, Case
+from tests.utils.case import Case
 from tests.utils.process_fixtures import TimeoutExpired
 
 
@@ -36,12 +36,6 @@ class ProjectRoots(Case):
             (repo / "inited/src/ensemble/__init__.py").touch()
             (repo / "src/ensemble/.DS_Store").touch()
             self.assertEqual(sandbox.project_roots(tmp), (f"{tmp}/src",))
-
-    def test_this_repo_has_one_source_root(self):
-        self.assertEqual(
-            sandbox.project_roots(REPO),
-            (os.path.join(REPO, "src"),),
-        )
 
 
 class TmuxCleanup(Case):

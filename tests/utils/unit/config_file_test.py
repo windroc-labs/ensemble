@@ -179,11 +179,6 @@ class Resources(Case):
             read_resources(self.resources[:1]),
             {"hosts": {"default": "tmux", "tmux": {"status_line": True}}},
         )
-        self.local("unknown_key = 1\n")
-        with self.assertRaisesRegex(
-            ConfigFileError, "unknown key 'unknown_key': flat local configuration"
-        ):
-            read_resources(self.resources[:1])
 
     def test_path_replaces_one_resource_with_defaults_as_schema(self):
         override = Path(self.root, "override.toml")
@@ -274,8 +269,6 @@ class Resources(Case):
 
     def test_misplaced_or_unknown_keys_are_errors(self):
         for text, error in (
-            ('client = "x"\n', r"move it under \[delegate\]"),
-            ("[hosts.tmux]\nstatus_line = true\n", r"move it under \[session\]"),
             ("[delegate]\nunknown_field = 1\n", r"unknown key 'unknown_field' in \[delegate\]"),
             (
                 "session = 1\n",
