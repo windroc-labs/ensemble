@@ -166,7 +166,6 @@ func TestPrefetchOrder(t *testing.T) {
 		return base.respond(args, stdin)
 	}}
 	h.Docker = d
-	h.Now = func() time.Time { return time.Unix(1000, 0) }
 	path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
@@ -185,7 +184,6 @@ func TestPrefetchOrder(t *testing.T) {
 		at(func(c []string) bool { return c[0] == "volume" && c[1] == "create" }),
 		at(func(c []string) bool { return c[0] == "run" && c[1] == "--rm" && slices.Contains(c, "CHOWN") }),
 		at(func(c []string) bool { return c[0] == "run" && slices.Contains(c, "ensemble.prefetch=1") }),
-		at(func(c []string) bool { return c[0] == "create" && flag(c, "--name") == "windroc-lock-dummy" }),
 		at(func(c []string) bool { return c[0] == "run" && c[1] == "--detach" }),
 	}
 	if !slices.IsSorted(order) {
@@ -248,15 +246,13 @@ func TestPrefetchHelperFailureRemovesHelper(t *testing.T) {
 func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		setup func(*lockWorld)
+		setup func(*testing.T, *lockWorld, Host)
 	}{
-		{"holder", func(lw *lockWorld) {
+		{"holder", func(_ *testing.T, lw *lockWorld, _ Host) {
 			lw.add("other", "running", map[string]string{"windroc.lock": "dummy", "windroc.lock.owner": "other-session"})
 		}},
-		{"mutex", func(lw *lockWorld) {
-			lw.add("windroc-lock-dummy", "created", map[string]string{"windroc.lock.mutex": "dummy", "windroc.lock.since": "1000"})
-		}},
-		{"recheck", func(lw *lockWorld) {
+		{"starting", func(t *testing.T, _ *lockWorld, h Host) { holdStartLock(t, h.Home) }},
+		{"recheck", func(_ *testing.T, lw *lockWorld, _ Host) {
 			lw.after = func(_ string, args []string, _ []byte) {
 				if args[0] == "run" && args[1] == "--detach" {
 					lw.add("other", "running", map[string]string{"windroc.lock": "dummy", "windroc.lock.owner": "other-session"})
@@ -280,8 +276,7 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 				return base.respond(args, stdin)
 			}}
 			h.Docker = d
-			h.Now = func() time.Time { return time.Unix(1000, 0) }
-			tc.setup(lw)
+			tc.setup(t, lw, h)
 			path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 			_, err := h.Start(context.Background(), path)
 			if e := protoErr(t, err); e.Code != protocol.Busy {

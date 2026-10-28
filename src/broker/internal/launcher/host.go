@@ -90,7 +90,7 @@ type Host struct {
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
 	Lock     func() (unlock func(), err error) // the image lock: build's lease and inspect, and prune
 	Audit    *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
-	Now      func() time.Time                  // nil: host clock; mutex expiry, replaced image and check state tests supply a clock
+	Now      func() time.Time                  // nil: host clock; replaced image and check state tests supply a clock
 	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
 }
 

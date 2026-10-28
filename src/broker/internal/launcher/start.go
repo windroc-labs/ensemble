@@ -154,8 +154,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		// Registered before the lock's, so it runs after every rollback of the container. A start that lost the
-		// container name to another leaves the workspace to that one.
+		// A start that lost the container name to another leaves the workspace to that one.
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
@@ -169,31 +168,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	var held holding
 	if m.Lock != "" {
-		mutex, err := h.acquireMutex(ctx, m.Lock, info.ID)
+		lock, err := h.startLock(m.Lock)
 		if err != nil {
 			return StartResult{}, err
 		}
-		defer func() {
-			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
-				if retErr == nil {
-					held.revokeTokens()
-					h.rollback(ctx, c, cleanup)
-					h.dropTokens(m)
-					h.withdraw(c, m, held, cleanup)
-					result, retErr = StartResult{}, cleanup
-				} else {
-					var e *protocol.Error
-					if errors.As(retErr, &e) {
-						e.Message += " " + cleanup.Message
-						if e.Code == protocol.Busy {
-							e.Code, e.Holder = protocol.StartFailed, nil
-						}
-					} else {
-						retErr = cleanup
-					}
-				}
-			}
-		}()
+		defer lock.Close()
 		holder, err := h.lockHolder(ctx, m.Lock, "")
 		if err != nil {
 			return StartResult{}, err
