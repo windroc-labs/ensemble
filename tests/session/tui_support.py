@@ -37,8 +37,8 @@ TMUX = "/opt/tmux/bin/tmux"
 class Stream:
     """A session's events drained by a daemon; its scoped exception hook carries failures."""
 
-    def __init__(self, case, handle: Session):
-        self.queue = queue.Queue()
+    def __init__(self, case, handle: Session, poke=None):
+        self.queue, self.poke = queue.Queue(), poke
         self.thread = threading.Thread(target=self._drain, args=(handle,), daemon=True)
         case.enterContext(capture_errors(self.thread, self.queue.put))
         case.addCleanup(self.close, handle)
@@ -56,6 +56,7 @@ class Stream:
 
     def next(self, poke=None, *, idle=True):
         """Next event within WAIT s; idle=False skips IdleTimeout; poke runs meanwhile."""
+        poke = poke or self.poke
         deadline = time.monotonic() + WAIT
         while True:
             try:
@@ -71,14 +72,17 @@ class Stream:
             if idle or not isinstance(item, IdleTimeout):
                 return item
 
-    def until_exited(self) -> list:
-        """Events up to Exited, IdleTimeouts dropped."""
-        found = [self.next(idle=False)]
-        while not isinstance(found[-1], Exited):
-            found.append(self.next(idle=False))
+    def until(self, kind, *, idle=True) -> list:
+        found = [self.next(idle=idle)]
+        while not isinstance(found[-1], kind):
+            found.append(self.next(idle=idle))
         return found
 
-    def quiet(self, seconds: float) -> None:
+    def until_exited(self) -> list:
+        """Events up to Exited, IdleTimeouts dropped."""
+        return self.until(Exited, idle=False)
+
+    def quiet(self, seconds: float = 1.0) -> None:
         time.sleep(seconds)
         if not self.queue.empty():
             raise AssertionError(f"an event within {seconds} s: {self.queue.get()!r}")

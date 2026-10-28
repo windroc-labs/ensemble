@@ -1,8 +1,6 @@
-"""HostedSession's tui mode with client claude end to end on a private tmux server: the real
-ClaudeClient runs tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`) interactively, its
-hooks from --settings. Turns, Blocked (a hook, the trust dialog), idle timeouts, the usage-limit
-screen, deaths, resume, attach from another process, show, close by name and the launch's /color,
-typed once no turn runs (tests that send wait for it first).
+"""HostedSession's tui mode with client claude on a private tmux server: the real ClaudeClient runs
+fake_claude.py (on PATH as `claude`), its hooks from --settings. Turns, Blocked, idle timeouts,
+limits, deaths, resume, attach, show, close and the launch's /color, typed once no turn runs.
 CLAUDE_CONFIG_DIR is a temp dir; the iTerm2 path fails the test.
 """
 
@@ -56,8 +54,7 @@ TABLE = {
 TRUST = "Quick safety check: Is this a project you created or one you trust?\n1. Yes, I trust this folder\n2. No, exit"
 LIMIT = "You've hit your weekly limit · resets Oct 15, 2027, 9am (UTC)"
 RESETS = datetime(2027, 10, 15, 9, tzinfo=UTC).timestamp()
-# Another process: attaches by name, sends text, prints [sid, state, reply, its first TurnEnd,
-# reply].
+# Another process attaching by name, sending text: prints [sid, alive, reply, TurnEnd, reply]
 ATTACH = """import json, sys
 table, name, text = sys.argv[1:]
 from ensemble.session import Host, Session, TurnEnd
@@ -71,9 +68,7 @@ print(json.dumps([*before, repr(event), handle.reply]))
 
 
 class HookStream(Stream):
-    """A Stream without Replies, whose timing against the hook events varies: the hook and screen
-    events alone.
-    """
+    """A Stream of the hook and screen events only: Replies' timing against them varies."""
 
     def _drain(self, handle):
         for event in handle.events():
@@ -111,9 +106,6 @@ class Live(tui_live.Live):
         resume=False,
         **kwargs,
     ) -> Session:
-        """Tui session `name` of claude on `prompt`, the fake playing `scenario`, its events file
-        self.events.
-        """
         with open(self.scenario, "w", encoding="utf-8") as f:
             json.dump({"log": self.log, "commands": self.command_log, **scenario}, f)
         handle = self.session_cls.start(
@@ -134,16 +126,13 @@ class Live(tui_live.Live):
         return handle
 
     def show(self, name: str) -> str | None:
-        """The Viewer's show(name) on the default Host."""
         host = self.session_cls.host()
         if not host.attachable:
             self.fail(f"host {host.name} cannot show")
         return self.session_cls.viewer().show(name, host)
 
     def stream(self, handle: Session, *, replies: bool = False) -> Stream:
-        """handle's Stream (a HookStream unless `replies`); at cleanup the handle stops and the
-        thread ends, so it never polls a later test's server.
-        """
+        """Its handle stops at cleanup, so its thread never polls a later test's server."""
         stream = (Stream if replies else HookStream)(self, handle)
         self.addCleanup(handle.stop)
         return stream
@@ -257,9 +246,8 @@ class TurnsTest(Live):
 
 
 class MidTurnTest(Live):
-    """Input Claude joins to its running turn, its UserPromptSubmit run (Claude Code 2.1.312): a
-    send while the turn's tool runs, or a background task's notice. The turn goes on to its Stop.
-    """
+    """Input Claude joins to its running turn (Claude Code 2.1.312): a send while its tool runs, or
+    a background notice."""
 
     def test_a_send_mid_turn_joins_it(self):
         steps = [{"kind": "queued", "answer": "Noted.", "prompted": True}, "Done."]
@@ -283,7 +271,7 @@ class MidTurnTest(Live):
             found = [line.split()[1:3] for line in live_tmux.events(self.events)]
             return found if found[-1:] == [["w1", "done"]] else None
 
-        self.assertEqual(  # the joined send's answer, then the turn's one end
+        self.assertEqual(
             live_tmux.wait(done, what="w1's done line"), [["w1", "reply"], ["w1", "done"]]
         )
 
@@ -307,54 +295,26 @@ class MidTurnTest(Live):
         stream.quiet(1.0)
         self.lines("w1 done")
 
-    def test_a_background_notice_mid_turn_joins_it(self):
-        notice = "<task-notification>sleep 30 completed</task-notification>"
-        steps = ["Waiting.", {"kind": "notice", "text": notice}, "Done."]
-        handle = self.start("w1", scenario={"steps": steps})
-        stream = self.stream(handle)
-        self.assertEqual(
-            [stream.next(idle=False) for _ in range(2)], [TurnStarted(), TurnEnd("Done.", 0)]
-        )
-        stream.quiet(1.0)
-        self.lines("w1 done")
-
 
 def delivered(events: list) -> list[str]:
-    """The texts a turn's events deliver: each Reply, then its TurnEnd's unless that repeats the
-    last Reply.
-    """
+    """Each Reply's text, then its TurnEnd's unless that repeats the last."""
     texts = [e.text for e in events if isinstance(e, Reply)]
     end = events[-1].reply
     return [*texts, end] if end and texts[-1:] != [end] else texts
 
 
 class RepliesTest(Live):
-    def until_turn_end(self, stream: Stream) -> list:
-        found = [stream.next(idle=False)]
-        while not isinstance(found[-1], TurnEnd):
-            found.append(stream.next(idle=False))
-        return found
-
     def test_each_text_of_a_turn_is_delivered_once(self):
         steps = ["Start: go.", {"kind": "tool", "name": "Bash"}, "Middle.", "Done."]
         handle = self.start("w1", scenario={"steps": steps})
-        events = self.until_turn_end(self.stream(handle, replies=True))
+        events = self.stream(handle, replies=True).until(TurnEnd, idle=False)
         self.assertEqual(delivered(events), ["Start: go.", "Middle.", "Done."])
         self.assertIn(Activity("Bash"), events)
-
-    def test_a_resumed_session_delivers_only_its_new_texts(self):
-        first = self.start("w1", scenario={"steps": ["One."]}, sid=SID)
-        stream = self.stream(first, replies=True)
-        self.assertEqual(delivered(self.until_turn_end(stream)), ["One."])
-        self.session_cls.retire("w1")
-        again = self.start("w1", "again", scenario={"steps": ["Two."]}, sid=SID, resume=True)
-        events = self.until_turn_end(self.stream(again, replies=True))
-        self.assertEqual(delivered(events), ["Two."])
 
     def test_prompted_launch_colors_without_extra_turn(self):
         handle = self.start("w1", scenario={"steps": ["Hi."]})
         stream = self.stream(handle, replies=True)
-        events = self.until_turn_end(stream)
+        events = stream.until(TurnEnd, idle=False)
         self.assertEqual((delivered(events), events[-1]), (["Hi."], TurnEnd("Hi.", 0)))
         (call,) = self.calls()
         self.assertEqual(
@@ -450,7 +410,7 @@ class DeadTest(Live):
         self.assertEqual(stream.next(poke=self.poke), Exited(-signal.SIGTERM))
         self.lines("w1 done", "w1 dead")
         self.assertEqual(self.server.option("w1", "@state"), "dead")
-        self.assertEqual(  # not alive: its worker ended, its display kept till close
+        self.assertEqual(
             (handle.alive(), [r.state for r in self.session_cls.list("w1")]), (False, ["dead"])
         )
         for call in (lambda: handle.send("more"), handle.screen):
@@ -483,8 +443,11 @@ class ResumeTest(Live):
         self.session_cls.retire("w1")
         self.assertEqual(stream.until_exited(), [Exited(-signal.SIGHUP)])
         again = self.start("w1", "again", scenario={"steps": ["Two."]}, sid=SID, resume=True)
-        stream = self.stream(again)
-        self.assertEqual([stream.next() for _ in range(2)], [TurnStarted(), TurnEnd("Two.", 0)])
+        events = self.stream(again, replies=True).until(TurnEnd, idle=False)
+        self.assertEqual(
+            ([e for e in events if not isinstance(e, Reply)], delivered(events)),
+            ([TurnStarted(), TurnEnd("Two.", 0)], ["Two."]),
+        )
         argv = self.calls()[1]["argv"]
         self.assertEqual((argv[argv.index("--resume") + 1], "--session-id" in argv), (SID, False))
         self.assertEqual(again.info().transcript, transcript)

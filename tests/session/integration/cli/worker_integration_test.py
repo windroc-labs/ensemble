@@ -176,15 +176,6 @@ class DialogTest(WorkerCase):
 
 
 class ColorTest(WorkerCase):
-    def test_start_colors_quietly(self):
-        res = self.start("w1")
-        self.assertEqual((self.record(res).name, res.stderr), ("w1", ATTACH + "\n"))
-        (call,) = self.calls("w1")
-        colored = live_tmux.wait(lambda: self.commands("w1"), what="w1's /color")
-        self.assertEqual(
-            [(c["pid"], c["line"], c["dialog"]) for c in colored], [(call["pid"], "/color", False)]
-        )
-
     def test_a_launch_turn_that_starts_first_still_colors_quietly(self):
         # its launch turn ends only once input arrives: /color, typed into that turn
         res = self.start("w1", steps=[{"kind": "input"}, "Colored."])

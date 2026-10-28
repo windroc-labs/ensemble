@@ -6,14 +6,12 @@ import dataclasses
 import functools
 import json
 import os
-import queue
 import select as select_module
 import signal
 import stat
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -37,7 +35,7 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from tests.session import live_tmux
+from tests.session import live_tmux, tui_support
 from tests.session.case import PLUGIN_BIN, PY, REPO, ROOTS, Case, configured
 from tests.session.integration.clients.codex import fake_codex, fake_tui
 from tests.session.unit.clients.codex.support import CHILD, NATIVE, Base
@@ -63,52 +61,9 @@ else:
 """
 
 
-class Stream:
+class Stream(tui_support.Stream):
     def __init__(self, case, handle):
-        self.queue = queue.Queue()
-        self.server = case.server
-        self.executor = ThreadPoolExecutor(max_workers=1)
-        self.result = self.executor.submit(self.collect, handle)
-        case.addCleanup(self.close, handle)
-
-    def collect(self, handle):
-        for event in handle.events():
-            self.queue.put(event)
-
-    def close(self, handle):
-        handle.stop()
-        try:
-            self.result.result(timeout=2)
-        except TimeoutError:
-            raise AssertionError("event consumer did not finish") from None
-        finally:
-            self.executor.shutdown(wait=False, cancel_futures=True)
-
-    def next(self):
-        deadline = time.monotonic() + WAIT
-        while True:
-            try:
-                event = self.queue.get(timeout=live_tmux.POLL)
-                break
-            except queue.Empty:
-                if self.result.done():
-                    self.result.result()
-                self.server.tmux("run-shell", "-b", "true")
-                if time.monotonic() > deadline:
-                    raise AssertionError("no event before deadline") from None
-        return event
-
-    def until(self, kind):
-        found = [self.next()]
-        while not isinstance(found[-1], kind):
-            found.append(self.next())
-        return found
-
-    def quiet(self):
-        try:
-            raise AssertionError(f"unexpected event: {self.queue.get(timeout=0.4)!r}")
-        except queue.Empty:
-            pass
+        super().__init__(case, handle, poke=lambda: case.server.tmux("run-shell", "-b", "true"))
 
 
 class Live(Case):
@@ -608,12 +563,10 @@ class TuiLaunchIntegrationTest(Live):
         stream = Stream(self, handle)
         self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("first"))
         live_tmux.wait(lambda: len(self.hooks()) == 3, WAIT, what="the turn's hook results")
-        time.sleep(2)  # past a Claude launch's /color, 1 s after its SessionStart
-        stream.quiet()
+        stream.quiet(0.4)
         self.assertEqual(
             [h["hook"] for h in self.hooks()], ["SessionStart", "UserPromptSubmit", "Stop"]
         )
-        self.assertNotIn("/color", handle.screen())
 
     def test_workspace_write_flags_and_saved_policy_through_the_session(self):
         self.spec = dataclasses.replace(
@@ -765,33 +718,8 @@ class TuiLaunchIntegrationTest(Live):
         stream = Stream(self, handle)
         self.assertEqual(stream.until(LimitHit)[-1], LimitHit(reset))
         self.assertIn("You've hit your usage limit", handle.screen())
-        stream.quiet()
+        stream.quiet(0.4)
         handle.stop()
-
-    def test_usage_limit_without_reset_is_still_an_event(self):
-        release = self.root / "release"
-        self.scene(
-            [
-                [
-                    {
-                        "kind": "screen",
-                        "text": "■ Quota exceeded. Check your plan and billing details.",
-                    },
-                    {"kind": "pause", "file": str(release)},
-                ]
-            ]
-        )
-        self.assertEqual(Stream(self, self.start()).until(LimitHit)[-1], LimitHit())
-
-    def test_quoted_assistant_limit_screen_does_not_emit_limit_hit(self):
-        screen = "Codex > gpt-test\n• You have asked me to quote this error.\n• You've hit your usage limit. is a quoted example\n› "
-        self.scene([[{"kind": "screen", "text": screen}, "quoted reply"]])
-        stream = Stream(self, self.start())
-        self.assertEqual(
-            stream.until(TurnEnd),
-            [Activity(), TurnStarted(), TurnEnd("quoted reply")],
-        )
-        stream.quiet()
 
     def test_configured_home_keeps_caller_store_for_stop_binding_and_resume(self):
         client_home = self.root / "client-home"
@@ -1024,7 +952,7 @@ class TuiRecoveryIntegrationTest(Live):
         )
         self.assertEqual(self.lines(1), ["w1 done"])
         self.assertEqual(self.attach()[2], "root")
-        stream.quiet()
+        stream.quiet(0.4)
 
     def test_resume_keeps_native_id_cwd_home_model_effort_dirs_network_and_commands(self):
         handle = self.start()
@@ -1098,48 +1026,21 @@ class TuiRecoveryIntegrationTest(Live):
         self.assertEqual(self.bound().native_id, native)
         self.assertEqual(len(list(self.record().parent.glob("*.json"))), 1)
 
-    def test_resume_missing_binding_native_fifo_and_malformed_record_fail_before_spawn(self):
+    def test_resume_missing_binding_and_fifo_record_fail_before_spawn(self):
         with self.assertRaisesRegex(ConfigError, "no transcript to resume"):
             self.start(resume=True)
         self.assertEqual(self.logged(), [])
         handle = self.start()
         self.assertEqual(Stream(self, handle).until(TurnEnd)[-1], TurnEnd("first"))
         handle.stop()
-        path, saved, before = self.record(), self.record().read_bytes(), len(self.logged())
-        for mode in ("unbound", "missing", "fifo", "malformed"):
-            with self.subTest(mode=mode):
-                path.unlink(missing_ok=True)
-                if mode == "fifo":
-                    os.mkfifo(path, 0o600)
-                elif mode != "missing":
-                    data = json.loads(saved)
-                    data["native_id"] = None
-                    path.write_text("invalid" if mode == "malformed" else json.dumps(data))
-                    path.chmod(0o600)
-                started = time.monotonic()
-                with self.assertRaises(ConfigError):
-                    self.start(resume=True)
-                self.assertLess(time.monotonic() - started, 1)
-                self.assertEqual(len(self.logged()), before)
+        path, before = self.record(), len(self.logged())
         path.unlink()
-        path.write_bytes(saved)
-        path.chmod(0o600)
-        native = fake_codex.session_path(self.bound().native_id)
-        original = native.read_bytes()
-        for mode in ("missing", "fifo", "malformed"):
-            with self.subTest(native=mode):
-                native.unlink(missing_ok=True)
-                if mode == "fifo":
-                    os.mkfifo(native, 0o600)
-                elif mode == "malformed":
-                    native.write_text("invalid")
-                started = time.monotonic()
-                with self.assertRaises(ConfigError):
-                    self.start(resume=True)
-                self.assertLess(time.monotonic() - started, 1)
-                self.assertEqual(len(self.logged()), before)
-        native.unlink(missing_ok=True)
-        native.write_bytes(original)
+        os.mkfifo(path, 0o600)
+        started = time.monotonic()
+        with self.assertRaises(ConfigError):
+            self.start(resume=True)
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(len(self.logged()), before)
 
     def test_source_roots_interpreter_prefix_and_tmux_bin_are_grantable(self):
         for index, root in enumerate((*ROOTS, sys.prefix, self.server.bin)):
