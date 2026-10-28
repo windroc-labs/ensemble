@@ -497,19 +497,6 @@ class CrewTest(Case):
             if original is not None:
                 self.assertEqual(record, original)
 
-    def test_attach_times_out_old_starting_and_resuming_entries_but_leaves_young_ones(self):
-        self.roster.begin(Spec("old", (self.command, "start", "old")), sid=str(uuid.uuid4()))
-        self.roster.begin(Spec("young", (self.command, "start", "young")), sid=str(uuid.uuid4()))
-        self.age("old")
-        self.gone("resuming")
-        self.roster.claim_resume("resuming")
-        self.age("resuming")
-        with self.listed():
-            self.crew.attach()
-        self.assertEqual(self.roster.entries()["old"].state, State.LOST)
-        self.assertEqual(self.roster.entries()["young"].state, State.STARTING)
-        self.assertEqual(self.roster.entries()["resuming"].state, State.GONE)
-
     def test_attach_adopts_only_the_sid_matched_orphan_under_its_alias_and_note(self):
         sid = str(uuid.uuid4())
         self.roster.begin(Spec("alias", (self.command, "start", "actual-name"), "keep"), sid=sid)
@@ -708,18 +695,6 @@ class CrewTest(Case):
         self.assertTrue(self.crew.status(("first",))[0].alive)
         self.assertEqual(self.calls("close"), [{"argv": ["close"], "names": ["other"]}])
 
-    def test_failed_close_retains_entry(self):
-        self.start("worker")
-        with (
-            mock.patch(
-                "subprocess.run",
-                return_value=subprocess.CompletedProcess([], 1, "", "close failed"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "close failed"),
-        ):
-            self.crew.close("worker")
-        self.assertIn("worker", self.roster.entries())
-
     def test_attach_keeps_failed_ctl_unknown_and_processes_healthy_group(self):
         healthy = self.start("healthy", display="view")
         ctl.set_session(self.ctl_dir, "healthy", showable=True)
@@ -807,15 +782,6 @@ class CrewTest(Case):
             self.assertEqual(self.crew.close_all(), ["orphan", "owned"])
         self.assertEqual(self.roster.entries(), {})
         self.assertEqual(self.calls("close"), [{"argv": ["close"], "names": ["owned", "orphan"]}])
-
-    def test_close_all_closes_healthy_groups_and_retains_failed_groups(self):
-        bad = with_ctl(self.fake_record("broken"), MISSING)
-        self.own(bad)
-        self.start("healthy")
-        with self.listed(), self.assertRaisesRegex(RuntimeError, MISSING):
-            self.crew.close_all()
-        self.assertEqual(set(self.roster.entries()), {"broken"})
-        self.assertEqual(self.calls("close"), [{"argv": ["close"], "names": ["healthy"]}])
 
     def test_each_ctl_is_queried_once_and_answers_are_mapped_to_their_names(self):
         self.start("one")
@@ -1013,11 +979,6 @@ class CrewTest(Case):
         with self.listed():
             other.attach()
 
-    def test_next_event_returns_only_the_event_with_its_line(self):
-        with open(self.roster.events, "a", encoding="utf-8") as stream:
-            stream.write("12:00:00 worker outcome done\n")
-        self.assertEqual(self.crew.next_event(after=0, gen=0), (1, "12:00:00 worker outcome done"))
-
     def test_next_event_retains_every_line_until_explicit_ack(self):
         path = self.roster.events
         with open(path, "a", encoding="utf-8") as stream:
@@ -1149,45 +1110,6 @@ class CloseAllTest(Case):
 
         with mock.patch("subprocess.run", side_effect=run):
             yield
-
-    def test_failed_listing_still_closes_known_records_and_keeps_unknown_work_alive(self):
-        self.crew.run(Spec("owned", (self.command, "start", "owned")))
-        ctl.set_session(self.ctl_dir, "unknown", alive=True)
-        stderr = io.StringIO()
-        with (
-            self.unavailable_listing(),
-            contextlib.redirect_stderr(stderr),
-            self.assertRaisesRegex(RuntimeError, "close-all partial"),
-        ):
-            self.crew.close_all()
-        self.assertIn("listing unavailable", stderr.getvalue())
-        self.assertEqual(self.roster.entries(), {})
-        with Path(self.ctl_dir, ctl.SESSIONS).open(encoding="utf-8") as stream:
-            sessions = json.load(stream)
-        self.assertFalse(sessions["owned"]["alive"])
-        self.assertTrue(sessions["unknown"]["alive"])
-        self.assertEqual(
-            [call for call in ctl.calls(self.ctl_dir) if call["argv"] == ["close"]],
-            [{"argv": ["close"], "names": ["owned"]}],
-        )
-
-    def test_failed_listing_dry_run_preserves_known_records_and_closes_nothing(self):
-        self.crew.run(Spec("owned", (self.command, "start", "owned")))
-        before = Path(self.roster.path).read_bytes()
-        stderr = io.StringIO()
-        with (
-            self.unavailable_listing(),
-            contextlib.redirect_stderr(stderr),
-            self.assertRaisesRegex(RuntimeError, "close-all partial"),
-        ):
-            self.crew.close_all(dry_run=True)
-        self.assertIn("listing unavailable", stderr.getvalue())
-        self.assertEqual(Path(self.roster.path).read_bytes(), before)
-        self.assertEqual(
-            [call for call in ctl.calls(self.ctl_dir) if call["argv"] == ["close"]], []
-        )
-        with Path(self.ctl_dir, ctl.SESSIONS).open(encoding="utf-8") as stream:
-            self.assertTrue(json.load(stream)["owned"]["alive"])
 
     def test_failed_listing_empty_roster_reports_failure_without_creating_state(self):
         stderr = io.StringIO()

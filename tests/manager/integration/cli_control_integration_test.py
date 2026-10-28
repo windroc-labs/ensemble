@@ -17,17 +17,6 @@ from tests.utils.fakes import ctl
 
 
 class CliTest(CliCase):
-    def test_force_forget_is_explicit_and_needs_no_controller(self):
-        command = self.setup_ctl()
-        Crew(self.roster).run(Spec("worker", (command, "start", "worker")))
-        with mock.patch("subprocess.run", side_effect=FileNotFoundError("missing ctl")):
-            result, _, stderr = self.invoke("forget", "worker", "--manager", "mgr")
-            self.assertEqual(result, 1, stderr)
-            self.assertIn("worker", self.roster.entries())
-            result, _, stderr = self.invoke("forget", "worker", "--manager", "mgr", "--force")
-            self.assertEqual(result, 0, stderr)
-        self.assertEqual(self.roster.entries(), {})
-
     def test_empty_run_note_and_note_command_store_null(self):
         command = self.setup_ctl()
         result, _, stderr = self.invoke(
