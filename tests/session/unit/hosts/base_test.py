@@ -10,6 +10,7 @@ import operator
 import os
 import re
 import signal
+import threading
 import tomllib
 from types import MappingProxyType
 from unittest import mock
@@ -465,3 +466,31 @@ class WorkerStateFilesTest(Case):
             self.assertIsNone(host_base.stored_record("w1", "g"))
         self.put("record", line[:-1] + b" " * (1 << 16) + b"\n")
         self.assertIsNone(host_base.stored_record("w1", "g"))
+
+
+class StartPhaseTest(Case):
+    def test_a_phase_goes_to_this_contexts_reporter_and_ends_even_on_error(self):
+        reports = []
+        with host_base.phase_reporter(lambda phase, wait: reports.append((phase, wait))):
+            with host_base.start_phase("building", 30):
+                reports.append("inside")
+            with self.assertRaises(RuntimeError), host_base.start_phase("building", 30):
+                raise RuntimeError("broke")
+        with host_base.start_phase("building", 30):
+            pass
+        self.assertEqual(
+            reports, [("building", 30), "inside", (None, 0), ("building", 30), (None, 0)]
+        )
+
+    def test_a_thread_started_under_a_reporter_reports_to_none(self):
+        reports = []
+
+        def build():
+            with host_base.start_phase("building", 30):
+                pass
+
+        with host_base.phase_reporter(lambda phase, wait: reports.append((phase, wait))):
+            thread = threading.Thread(target=build)
+            thread.start()
+            thread.join()
+        self.assertEqual(reports, [])
