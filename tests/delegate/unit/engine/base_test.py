@@ -56,7 +56,7 @@ class Exports(Case):
         self.assertIs(delegate.DelegateEvent, event.DelegateEvent)
 
     def test_session_types_are_public_at_the_delegate_boundary(self):
-        for name in ("Resumable", "Window"):
+        for name in ("Resumable", "Window", "CredentialRequest"):
             with self.subTest(name=name):
                 self.assertIn(name, delegate.__all__)
                 self.assertIs(getattr(delegate, name), getattr(session, name))

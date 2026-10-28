@@ -22,7 +22,13 @@ from ensemble.delegate.engine.types import (
     Stopped,
 )
 from ensemble.delegate.event.types import Outcome
-from ensemble.session import Access, EnvironmentSpec, HookCallback, SessionStatusLog
+from ensemble.session import (
+    Access,
+    CredentialRequest,
+    EnvironmentSpec,
+    HookCallback,
+    SessionStatusLog,
+)
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 
@@ -35,6 +41,26 @@ def _encode(value: object) -> object:
     if isinstance(value, (list, tuple)):
         return [_encode(item) for item in value]
     return value
+
+
+def _encoded(value, **given) -> dict:
+    """A dataclass's fields, each _encode'd but those `given`."""
+    return {
+        field.name: given[field.name]
+        if field.name in given
+        else _encode(getattr(value, field.name))
+        for field in fields(value)
+    }
+
+
+def _credentials(request: CredentialRequest | None) -> dict | None:
+    """The request form: _encode's empty kinds are a request from_fields refuses."""
+    return None if request is None else request.persisted()
+
+
+def _request(found: Mapping | None) -> CredentialRequest | None:
+    """A record's credentials; one written before them has none."""
+    return None if found is None else CredentialRequest.from_fields(found)
 
 
 def _result(data: dict | None) -> Result | None:
@@ -83,17 +109,18 @@ class RunRecord:
             field.name: _encode(getattr(persisted, field.name)) for field in fields(persisted)
         }
         accepted = {
-            "session": _encode(state.plan.session),
+            "session": _encoded(
+                state.plan.session, credentials=_credentials(state.plan.session.credentials)
+            ),
             "run": _encode(state.plan.run),
             "repo": state.plan.repo,
             "docker": state.plan.docker,
         }
-        spec = {
-            field.name: _encode(getattr(state.plan.spec, field.name))
-            for field in fields(state.plan.spec)
-            if field.name != "team"
-        }
-        spec["team"] = None if team is None else {"root": team.root, "dirs": team.dirs}
+        spec = _encoded(
+            state.plan.spec,
+            team=None if team is None else {"root": team.root, "dirs": team.dirs},
+            credentials=_credentials(state.plan.spec.credentials),
+        )
         values["plan"], values["spec"], values["version"] = accepted, spec, 1
         self.store.write(json.dumps(values))
 
@@ -107,9 +134,11 @@ class RunRecord:
             if data.pop("version") != 1:
                 raise ValueError("unsupported metadata version")
             given = data.pop("spec")
-            team = given.pop("team")
+            team, credentials = given.pop("team"), _request(given.pop("credentials", None))
             spec = Spec(
-                **given, team=None if team is None else Team(team["root"], tuple(team["dirs"]))
+                **given,
+                team=None if team is None else Team(team["root"], tuple(team["dirs"])),
+                credentials=credentials,
             )
             if os.path.realpath(spec.workdir) != os.path.realpath(self.layout.workdir):
                 raise ValueError("metadata workdir differs")
@@ -123,6 +152,7 @@ class RunRecord:
             session["reply_tags"] = tuple(session["reply_tags"])
             if session.get("environment") is not None:
                 session["environment"] = EnvironmentSpec.from_fields(session["environment"])
+            session["credentials"] = _request(session.get("credentials"))
             session["handlers"] = tuple(
                 HookCallback(h["module"], h["state"], tuple(h["roots"]))
                 for h in session.get("handlers", ())

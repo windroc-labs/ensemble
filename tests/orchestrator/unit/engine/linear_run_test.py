@@ -1,14 +1,18 @@
 """LinearRun owns exact plans and forwards views to the saved Delegate."""
 
+import json
+import os
 from dataclasses import replace
 from unittest import mock
 
 from ensemble.delegate import ConfigError as DelegateConfigError
+from ensemble.delegate import CredentialRequest
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import ConfigError
 from ensemble.utils import OutcomeStatus, Record, StatusState
 from tests.delegate.fakes.delegate import FakeDelegate
+from tests.orchestrator.case import REPO, Case
 from tests.orchestrator.linear_run_case import SID, ReadyDelegate, RunCase
 
 
@@ -372,3 +376,20 @@ class Runs(RunCase):
             ConfigError, f"session {SID}'s runs.jsonl row has no delegate kind"
         ):
             LinearRun.attach("TASK-1", cfg=changed)
+
+
+class CredentialRequests(Case):
+    def test_the_delegate_parses_the_shared_linear_request(self):
+        fixture = os.path.join(
+            REPO,
+            "src",
+            "broker",
+            "protocol",
+            "docker-broker",
+            "fixtures",
+            "credential-request-linear.json",
+        )
+        with open(fixture, encoding="utf-8") as file:
+            request = CredentialRequest.from_fields(json.load(file))
+        self.assertEqual(request.linear, {"role": "engineer"})
+        self.assertEqual((request.github, request.env), ((), ()))

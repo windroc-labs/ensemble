@@ -10,7 +10,7 @@ from typing import TypedDict
 from ensemble.delegate.composer import ConfigError, RunConfig, RunParams, Team
 from ensemble.delegate.composer.types import DELIVERABLE, TMP
 from ensemble.delegate.event.types import Outcome
-from ensemble.session import EnvironmentSpec
+from ensemble.session import CredentialRequest, EnvironmentSpec
 from ensemble.session import Spec as SessionSpec
 from ensemble.utils import Display
 from ensemble.utils import Stopped as Stopped
@@ -109,7 +109,9 @@ class Spec:
     client None: the role's; `out` None: `<run>/out.md` for a session run, else nothing is saved;
     `team` None: the built-in one. name and events: tui only for plan(); HarnessDelegate takes them
     in every mode (`name`: its agent session, `<name>-drive` its harness's; `events`: also the
-    detached harness's outcome line).
+    detached harness's outcome line). `credentials`: the run's part of its credential request
+    (github, linear; the delegate adds the environment's env), set only by the orchestrator's run
+    path (WDRC-268 FR-33), never by CLI options, overlays or run input.
     """
 
     input: str
@@ -125,6 +127,15 @@ class Spec:
     repo: str | None = None
     cwd: str | None = None
     team: Team | None = None
+    credentials: CredentialRequest | None = None  # no Plan passes it on yet
+
+    def __post_init__(self):
+        if self.credentials is None:
+            return
+        if not isinstance(self.credentials, CredentialRequest):
+            raise ConfigError("credentials must be None or a CredentialRequest")
+        if self.credentials.env:
+            raise ConfigError("credentials env: the environment's secrets, never the run's request")
 
 
 @dataclass(frozen=True)

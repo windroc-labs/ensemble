@@ -7,7 +7,7 @@ import os
 from contextlib import redirect_stderr
 from dataclasses import replace
 
-from ensemble.delegate import ConfigError, Outcome
+from ensemble.delegate import ConfigError, CredentialRequest, Outcome
 from ensemble.delegate.engine.record import HANDLER, RunRecord, worker
 from ensemble.delegate.engine.types import Layout, Limit, Result
 from ensemble.session import HookCallback
@@ -43,6 +43,54 @@ class RunRecordTest(HarnessCase):
         )
         record.save(full)
         self.assertEqual(record.read(), full)
+
+    def test_credential_requests_round_trip_on_both_specs(self):
+        self.make()
+        record = self.record()
+        state = record.read()
+        run = CredentialRequest(
+            github=(
+                {"permissions": {"contents": "write", "pull_requests": "write"}, "repo": "o/a"},
+                {"permissions": {"contents": "read"}, "repo": "o/b"},
+            ),
+            linear={"role": "engineer"},
+        )
+        composed = CredentialRequest(
+            github=run.github,
+            linear=run.linear,
+            env=({"item": "ensemble-broker-env/mini-password", "file": "mini-password"},),
+        )
+        session = replace(state.plan.session, environment=None, credentials=composed)
+        carried = replace(
+            state,
+            plan=replace(
+                state.plan, spec=replace(state.plan.spec, credentials=run), session=session
+            ),
+        )
+        record.save(carried)
+        data = self.metadata()
+        self.assertEqual(data["spec"]["credentials"], run.persisted())
+        self.assertEqual(data["plan"]["session"]["credentials"], composed.persisted())
+        found = record.read()
+        self.assertEqual(found, carried)
+        self.assertEqual(
+            (found.plan.spec.credentials, found.plan.session.credentials), (run, composed)
+        )
+
+    def test_a_record_without_credentials_reads_none(self):
+        self.make()
+        data = self.metadata()
+        data["spec"].pop("credentials", None)
+        data["plan"]["session"].pop("credentials", None)
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        found = self.record().read()
+        self.assertIsNone(found.plan.spec.credentials)
+        self.assertIsNone(found.plan.session.credentials)
+        self.record().save(found)
+        data = self.metadata()
+        self.assertIsNone(data["spec"]["credentials"])
+        self.assertIsNone(data["plan"]["session"]["credentials"])
 
     def test_a_bad_record_is_a_config_error(self):
         self.make()

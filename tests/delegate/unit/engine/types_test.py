@@ -25,6 +25,7 @@ SPEC = {
     "repo": None,
     "cwd": None,
     "team": None,
+    "credentials": None,
 }
 
 
@@ -37,6 +38,30 @@ class SpecTest(Case):
         self.assertEqual(found, SPEC)
         with self.assertRaises(dataclasses.FrozenInstanceError):
             delegate.Spec("x", "/w").sid = "s"
+
+    def test_credentials_take_the_runs_request_never_env(self):
+        request = delegate.CredentialRequest(
+            github=({"permissions": {"contents": "write"}, "repo": "o/n"},),
+            linear={"role": "engineer"},
+        )
+        self.assertIs(delegate.Spec("x", "/w", credentials=request).credentials, request)
+        self.assertIsNone(delegate.Spec("x", "/w").credentials)
+        for value in ({"linear": {"role": "engineer"}}, "linear", ()):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(
+                    delegate.ConfigError, r"^credentials must be None or a CredentialRequest$"
+                ),
+            ):
+                delegate.Spec("x", "/w", credentials=value)
+        env = delegate.CredentialRequest(
+            env=({"item": "ensemble-broker-env/mini-password", "file": "mini-password"},)
+        )
+        with self.assertRaisesRegex(
+            delegate.ConfigError,
+            r"^credentials env: the environment's secrets, never the run's request$",
+        ):
+            delegate.Spec("x", "/w", credentials=env)
 
 
 class LayoutTest(Case):
