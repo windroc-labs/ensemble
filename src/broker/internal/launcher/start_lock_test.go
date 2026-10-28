@@ -10,7 +10,6 @@ import (
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
@@ -62,21 +61,6 @@ func (w *lockWorld) respond(args []string) ([]byte, error, bool) {
 		}
 	}
 	switch args[0] {
-	case "create":
-		name := flag(args, "--name")
-		for _, c := range w.objects {
-			if c.name == name {
-				return nil, &docker.CommandError{Exit: 125, Stderr: "Conflict. The container name"}, true
-			}
-		}
-		labels := map[string]string{}
-		for i, a := range args {
-			if a == "--label" {
-				k, v, _ := strings.Cut(args[i+1], "=")
-				labels[k] = v
-			}
-		}
-		return []byte(w.add(name, "created", labels) + "\n"), nil, true
 	case "ps":
 		if !strings.HasPrefix(flag(args, "--filter"), "label=windroc.lock=") {
 			return nil, nil, false
@@ -127,7 +111,7 @@ func (w *lockWorld) respond(args []string) ([]byte, error, bool) {
 	return nil, nil, false
 }
 
-func (w *lockWorld) host(t *testing.T, name string, now int64) (Host, string, *fakeDocker) {
+func (w *lockWorld) host(t *testing.T, name string) (Host, string, *fakeDocker) {
 	t.Helper()
 	if w.home == "" {
 		w.home = t.TempDir()
@@ -145,7 +129,6 @@ func (w *lockWorld) host(t *testing.T, name string, now int64) (Host, string, *f
 		return base.respond(args, stdin)
 	}}
 	h.Docker = d
-	h.Now = func() time.Time { return time.Unix(now, 0) }
 	path := editedManifest(t, func(f map[string]any) {
 		f["name"], f["workspace"], f["lock"], f["lock_owner"] = name, "ensemble-ws-"+name, "dummy", name
 		f["claude_dir"] = w.home + "/.ensemble/docker-state/" + name + "/claude"
@@ -206,7 +189,7 @@ func (w *lockWorld) assertFinal(t *testing.T, holders int) {
 
 func TestLockedStartArguments(t *testing.T) {
 	w := newLockWorld()
-	h, path, d := w.host(t, "worker_1", 1000)
+	h, path, d := w.host(t, "worker_1")
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
@@ -223,12 +206,17 @@ func TestLockedStartArguments(t *testing.T) {
 	if flag(run, "--restart") != "no" || !slices.Contains(run, "windroc.lock=dummy") || !slices.Contains(run, "windroc.lock.owner=worker_1") {
 		t.Fatalf("run %q", run)
 	}
+	// A broker killed during the run leaves the lock with its docker child until the container is up.
+	i := slices.IndexFunc(d.calls, func(c []string) bool { return c[0] == "run" && c[1] == "--detach" })
+	if f := d.held[i]; f == nil || f.Name() != filepath.Join(w.home, ".ensemble/docker/locks/dummy.lock") {
+		t.Fatalf("run --detach holds %v", f)
+	}
 }
 
 // Another broker's start holds the lock until its descriptor closes, as when its process dies.
 func TestStartLockHeld(t *testing.T) {
 	w := newLockWorld()
-	h, path, d := w.host(t, "worker_1", 1000)
+	h, path, d := w.host(t, "worker_1")
 	other := holdStartLock(t, w.home)
 	_, err := h.Start(context.Background(), path)
 	if e := protoErr(t, err); e.Code != protocol.Busy || e.Holder == nil || *e.Holder != heldBy || detached(d) != nil || hasCall(d, "create") {
@@ -243,7 +231,7 @@ func TestStartLockHeld(t *testing.T) {
 
 func TestStartLockUnusable(t *testing.T) {
 	w := newLockWorld()
-	h, path, d := w.host(t, "worker_1", 1000)
+	h, path, d := w.host(t, "worker_1")
 	if err := os.MkdirAll(filepath.Join(w.home, ".ensemble/docker"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +249,7 @@ func TestLockHolderStates(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			w := newLockWorld()
 			id := w.add("other-container", state, map[string]string{"windroc.lock": "dummy", "windroc.lock.owner": "other-session"})
-			h, path, d := w.host(t, "worker_1", 1000)
+			h, path, d := w.host(t, "worker_1")
 			_, err := h.Start(context.Background(), path)
 			active := state == "running" || state == "paused" || state == "restarting"
 			if active {
@@ -283,7 +271,7 @@ func TestLockHolderStates(t *testing.T) {
 func TestLockConfigBeforeBusy(t *testing.T) {
 	for _, kind := range []string{"credentials", "image", "mount"} {
 		w := newLockWorld()
-		h, path, d := w.host(t, "worker_1", 1000)
+		h, path, d := w.host(t, "worker_1")
 		holdStartLock(t, w.home)
 		want := protocol.LoginRequired
 		switch kind {
@@ -327,7 +315,7 @@ func TestLockRecheckCleanup(t *testing.T) {
 			}
 			return nil
 		}
-		h, path, _ := w.host(t, "worker_1", 1000)
+		h, path, _ := w.host(t, "worker_1")
 		_, err := h.Start(context.Background(), path)
 		e := protoErr(t, err)
 		if rmFails {
@@ -353,8 +341,8 @@ func TestConcurrentLockedStarts(t *testing.T) {
 			<-release
 		}
 	}
-	h1, p1, _ := w.host(t, "first", 1000)
-	h2, p2, _ := w.host(t, "second", 1000)
+	h1, p1, _ := w.host(t, "first")
+	h2, p2, _ := w.host(t, "second")
 	done := make(chan error, 1)
 	go func() { _, err := h1.Start(context.Background(), p1); done <- err }()
 	<-entered
@@ -408,7 +396,7 @@ func TestLockedStartCleanup(t *testing.T) {
 				}
 				return nil
 			}
-			h, path, d := w.host(t, "worker_1", 1000)
+			h, path, d := w.host(t, "worker_1")
 			var progress strings.Builder
 			h.Progress = &progress
 			_, err := h.Start(ctx, path)

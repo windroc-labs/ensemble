@@ -53,6 +53,24 @@ func TestRunResults(t *testing.T) {
 	}
 }
 
+func TestRunHolding(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	c := fakeDocker(t, "printf held >&3")
+	if _, err := c.Run(Holding(context.Background(), f), []string{"ps"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(f.Name()); string(got) != "held" {
+		t.Fatalf("child wrote %q to the held file", got)
+	}
+	if _, err := c.Run(context.Background(), []string{"ps"}, nil); err == nil {
+		t.Fatal("a command without Holding had descriptor 3")
+	}
+}
+
 func TestUnreachable(t *testing.T) {
 	for _, msg := range []string{
 		"Cannot connect to the Docker daemon at unix:///Users/x/.docker/run/docker.sock. Is the docker daemon running?",

@@ -143,8 +143,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		// Registered before the lock's, so it runs after every rollback of the container. A start that lost the
-		// container name to another leaves the workspace to that one.
+		// A start that lost the container name to another leaves the workspace to that one.
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
@@ -157,12 +156,14 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		lap("prefetch")
 	}
 	var held holding
+	making := ctx
 	if m.Lock != "" {
-		unlock, err := h.startLock(m.Lock)
+		lock, err := h.startLock(m.Lock)
 		if err != nil {
 			return StartResult{}, err
 		}
-		defer unlock()
+		defer lock.Close()
+		making = docker.Holding(ctx, lock)
 		holder, err := h.lockHolder(ctx, m.Lock, "")
 		if err != nil {
 			return StartResult{}, err
@@ -171,7 +172,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, busy(holder)
 		}
 	}
-	result, held, err = h.create(ctx, c, m, info, route, facts, lap)
+	result, held, err = h.create(making, c, m, info, route, facts, lap)
 	if errors.Is(err, errTaken) {
 		lostName = true
 		return StartResult{}, taken(c)

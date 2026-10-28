@@ -62,7 +62,7 @@ func TestStartRefusesExpiredStatic(t *testing.T) {
 	for _, kind := range staticKinds {
 		for _, held := range []bool{true, false} {
 			w := newLockWorld()
-			h, base, d := w.host(t, "worker_1", 1000)
+			h, base, d := w.host(t, "worker_1")
 			if held {
 				holdStartLock(t, h.Home)
 				w.add("ensemble-other-1", "running", map[string]string{"windroc.lock": "dummy", "windroc.lock.owner": "other"})

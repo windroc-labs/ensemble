@@ -166,7 +166,6 @@ func TestPrefetchOrder(t *testing.T) {
 		return base.respond(args, stdin)
 	}}
 	h.Docker = d
-	h.Now = func() time.Time { return time.Unix(1000, 0) }
 	path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
@@ -277,7 +276,6 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 				return base.respond(args, stdin)
 			}}
 			h.Docker = d
-			h.Now = func() time.Time { return time.Unix(1000, 0) }
 			tc.setup(t, lw, h)
 			path := prefetchManifest(t, h, func(f map[string]any) { f["lock"], f["lock_owner"] = "dummy", "worker_1" })
 			_, err := h.Start(context.Background(), path)

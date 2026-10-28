@@ -22,6 +22,7 @@ type fakeDocker struct {
 	calls   [][]string
 	stdin   [][]byte
 	ctxErrs []error
+	held    []*os.File // each call's docker.Held
 	respond func(args []string, stdin []byte) ([]byte, error)
 }
 
@@ -29,6 +30,7 @@ func (f *fakeDocker) Run(ctx context.Context, args []string, stdin []byte) ([]by
 	f.calls = append(f.calls, slices.Clone(args))
 	f.stdin = append(f.stdin, slices.Clone(stdin))
 	f.ctxErrs = append(f.ctxErrs, ctx.Err())
+	f.held = append(f.held, docker.Held(ctx))
 	if f.respond != nil {
 		return f.respond(args, stdin)
 	}
@@ -43,7 +45,7 @@ func (f *fakeDocker) removed() []string {
 			refs = append(refs, c[2])
 		}
 	}
-	f.calls, f.stdin, f.ctxErrs = nil, nil, nil
+	f.calls, f.stdin, f.ctxErrs, f.held = nil, nil, nil, nil
 	return refs
 }
 
