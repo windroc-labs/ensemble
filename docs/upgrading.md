@@ -28,7 +28,9 @@ or changes Keychain trust. Enable client credentials on the app and keep the sam
 The validated `board` object is written as `/run/ensemble/secrets/linear/board.json`; the independently issued
 `{"access_token": "…", "expires_at": "…"}` is `/run/ensemble/secrets/linear/token.json`. Both are 0400 on tmpfs,
 with no `config.local.toml` or app entries. No `linear` request means neither file. Maintenance replaces only the
-token file; close revokes that token without disturbing host write-back. CLI consumption and declaration plumbing
+token file; close revokes that token without disturbing host write-back, even after the container stops.
+The broker retains a private host revocation record until all issued tokens are revoked or expired; failed
+revocation returns an error and a repeated close retries it. CLI consumption and declaration plumbing
 ship separately. See [Credential spec](architecture.md#credentials) for merging and lifecycle details.
 
 ## Claude account selection is the session's

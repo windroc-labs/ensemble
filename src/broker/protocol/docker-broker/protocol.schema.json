@@ -1942,7 +1942,7 @@
       "pattern": "^[!-~]+$"
     },
     "credential_spec": {
-      "$comment": "Broker-only contract: independently validate both declarations, then replace whole same-kind environment values with the caller value. No secret values. Runtime kind validation and issuance are not enabled; nonempty declarations are refused.",
+      "$comment": "Broker-only contract: independently validate both declarations, then replace whole same-kind environment values with the caller value. No secret values. The broker validates all kinds and serves them through its credential delivery batch.",
       "type": "object",
       "properties": {
         "github": {

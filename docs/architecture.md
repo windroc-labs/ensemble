@@ -442,9 +442,14 @@ Linear writes `token.json` (`access_token`, `expires_at`) and `board.json` (only
 its directory, both 0400. The app reference and root secret are never copied into the container. It requests a separate
 client_credentials token with the role app's existing scopes, leaving the host token and its write-back untouched.
 The existing maintenance tick renews it ten minutes before expiry, atomically replaces the token file, then revokes
-the old token. A failed write revokes the new token; a failed start revokes everything it issued. Close reads back
-and revokes the container token before removing its tmpfs. Failed read/revocation is audited without a value; a
-container lost without close leaves its token to expire (up to 30 days). No Linear token is persisted by the broker.
+the old token. A failed write revokes the new token; a failed start revokes everything it issued. Before delivery,
+the broker records issued tokens in 0600 files under its private `~/.ensemble/linear/containers/` directory (0700),
+outside the container and workspace. One per-container lock serializes issuance, renewal and close. Close marks
+the record closed before revoking all recorded tokens, so it works after the guard/container stops and queued
+maintenance cannot issue another token. Records retain failed revocations for a repeated close and are deleted
+once all tokens are revoked or expired. Close removes the container even if revocation fails, returning a fixed
+error so callers retry. A container never closed leaves its token to expire (up to 30 days). Token values never
+appear in responses or audit logs.
 [Linear's OAuth contract](https://linear.app/developers/oauth-2-0-authentication) permits parallel client_credentials
 tokens with identical scopes and individual revocation. Enable client credentials for the role app; changing its
 scopes invalidates its other tokens. Host renewal keeps using its existing shared token path.

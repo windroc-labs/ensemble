@@ -1,7 +1,6 @@
 package launcher
 
 import (
-	"bytes"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -74,15 +73,34 @@ var linearServicePattern = regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,128}$`)
 var linearUserPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func credentialReference(s string) bool {
+	return len(s) > 0 && len(s) <= 256 && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x21 || r > 0x7e })
+}
+
+func credentialKey(s string) bool {
 	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r >= 0x7f && r <= 0x9f })
+}
+
+func exactCredentialObject(data []byte, keys ...string) map[string]json.RawMessage {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil || len(object) != len(keys) {
+		return nil
+	}
+	for _, key := range keys {
+		if _, ok := object[key]; !ok {
+			return nil
+		}
+	}
+	return object
 }
 
 func parseLinear(data []byte) (*credential.LinearRequest, error) {
 	bad := protocol.New(protocol.ManifestRejected, "Manifest rejected: invalid linear")
 	var r credential.LinearRequest
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if dec.Decode(&r) != nil {
+	object := exactCredentialObject(data, "app", "board")
+	app := exactCredentialObject(object["app"], "role", "client_id", "user_id", "secret_service", "token_service")
+	board := exactCredentialObject(object["board"], "team", "states", "labels", "project_repos", "human_members")
+	labels := exactCredentialObject(board["labels"], "task_labels", "agent_labels")
+	if object == nil || app == nil || board == nil || labels == nil || json.Unmarshal(data, &r) != nil {
 		return nil, bad
 	}
 	a, b := r.App, r.Board
@@ -104,13 +122,13 @@ func parseLinear(data []byte) (*credential.LinearRequest, error) {
 	}
 	for _, labels := range []map[string]string{b.Labels.TaskLabels, b.Labels.AgentLabels} {
 		for key, value := range labels {
-			if !credentialReference(key) || !credentialReference(value) {
+			if !credentialKey(key) || !credentialReference(value) {
 				return nil, bad
 			}
 		}
 	}
 	for key, repo := range b.ProjectRepos {
-		if !credentialReference(key) || !githubapi.ValidRepo(repo) {
+		if !credentialKey(key) || !githubapi.ValidRepo(repo) {
 			return nil, bad
 		}
 	}

@@ -55,3 +55,19 @@ func TestCredentialRequestDoesNotEchoValues(t *testing.T) {
 		t.Fatal("duplicate kind accepted")
 	}
 }
+
+func TestLinearRequestExactContract(t *testing.T) {
+	base := string(fixtureBytes(t, "credential-spec-linear.json"))
+	for _, replacement := range []string{`" "`, `"non-ascii-é"`, `"` + strings.Repeat("a", 257) + `"`} {
+		spec := strings.Replace(base, `"dummy-team-id"`, replacement, 1)
+		if _, err := ParseManifest(withFields(t, map[string]any{"credentials": spec})); err == nil {
+			t.Fatal("invalid reference accepted")
+		}
+	}
+	for _, key := range []string{"app", "board", "role", "client_id", "user_id", "secret_service", "token_service", "team", "states", "labels", "project_repos", "human_members", "task_labels", "agent_labels"} {
+		spec := strings.Replace(base, `"`+key+`"`, `"`+strings.ToUpper(key)+`"`, 1)
+		if _, err := ParseManifest(withFields(t, map[string]any{"credentials": spec})); err == nil {
+			t.Fatalf("non-exact %s key accepted", key)
+		}
+	}
+}

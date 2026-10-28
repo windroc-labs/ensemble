@@ -73,7 +73,7 @@ var tokenProviders = []tokenProvider{
 }
 
 func renewLinear(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
-	expiry, err := h.Linear.Refresh(ctx, *m.Linear, container, h.agentExec(ctx, container), h.agentRead(container))
+	expiry, err := h.Linear.Refresh(ctx, *m.Linear, container, h.agentExec(ctx, container))
 	if err != nil {
 		return nil, err
 	}

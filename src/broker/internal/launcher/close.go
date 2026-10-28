@@ -60,8 +60,9 @@ func (h Host) Close(ctx context.Context, container string) (CloseResult, error) 
 	h.Audit.Begin(container, nil)
 	kind, secrets := h.held(ctx, container)
 	h.GitHub.Revoke(ctx, container, h.agentRead(container))
+	var revokeErr error
 	if h.Linear != nil {
-		h.Linear.Revoke(ctx, container, h.agentRead(container))
+		revokeErr = h.Linear.Revoke(ctx, container)
 	}
 	removed, err := h.remove(ctx, container)
 	if removed {
@@ -74,6 +75,9 @@ func (h Host) Close(ctx context.Context, container string) (CloseResult, error) 
 	}
 	if err != nil {
 		return CloseResult{}, failure(err, protocol.CloseFailed, "Deleting container "+container+" failed.")
+	}
+	if revokeErr != nil {
+		return CloseResult{}, injected(revokeErr, protocol.CloseFailed, "Revoking Linear credentials failed.")
 	}
 	return CloseResult{Container: container, Removed: removed}, nil
 }

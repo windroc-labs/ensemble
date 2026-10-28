@@ -12,7 +12,6 @@ import (
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/credential"
-	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -70,7 +69,11 @@ func (l Linear) noteContainer(c, result, reason string, token linearAccess) {
 	l.Audit.Add(c, audit.Credential{Kind: audit.LinearAccessToken, Result: result, Reason: reason, ExpiresAt: &token.ExpiresAt})
 }
 
-func (l Linear) revokeContainerToken(ctx context.Context, c string, token linearAccess) {
+func (l Linear) revokeContainerToken(ctx context.Context, c string, token linearAccess) bool {
+	if expiry, err := time.Parse(time.RFC3339, token.ExpiresAt); err == nil && !l.now().Before(expiry) {
+		l.noteContainer(c, audit.Withdrawn, "", token)
+		return true
+	}
 	rctx, cancel := detached(ctx)
 	defer cancel()
 	form := url.Values{"token": {token.AccessToken}}
@@ -88,56 +91,69 @@ func (l Linear) revokeContainerToken(ctx context.Context, c string, token linear
 		}
 	}
 	l.noteContainer(c, result, reason, token)
+	return result == audit.Revoked
+}
+
+// retireContainer keeps every failed revocation and the active token, if any.
+func (l Linear) retireContainer(ctx context.Context, c string, record *linearContainerRecord, keep string) error {
+	pending := make([]linearAccess, 0, len(record.Tokens))
+	failed := false
+	for _, token := range record.Tokens {
+		if token.AccessToken == keep {
+			pending = append(pending, token)
+		} else if !l.revokeContainerToken(ctx, c, token) {
+			pending = append(pending, token)
+			failed = true
+		}
+	}
+	record.Tokens = pending
+	if l.writeContainer(c, *record) != nil || failed {
+		return errLinear
+	}
+	return nil
 }
 
 func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string) ([]credential.Command, func(), string, error) {
+	unlock, err := l.lock("container/" + c)()
+	if err != nil {
+		return nil, nil, "", errLinear
+	}
+	defer unlock()
+	if _, exists, err := l.readContainer(c); err != nil || exists {
+		return nil, nil, "", errLinear
+	}
 	token, err := l.containerToken(ctx, r.App)
 	if err != nil {
 		return nil, nil, "", errLinear
 	}
 	l.noteContainer(c, audit.Issued, "", token)
-	revoke := func() { l.revokeContainerToken(ctx, c, token) }
-	command, err := linearCommand(token, false)
-	if err != nil {
-		revoke()
+	record := linearContainerRecord{Current: token, Tokens: []linearAccess{token}}
+	if l.writeContainer(c, record) != nil {
+		l.revokeContainerToken(ctx, c, token)
 		return nil, nil, "", errLinear
 	}
+	command, err := linearCommand(token, false)
 	board, _ := json.Marshal(r.Board)
 	defer erase(board)
-	config, err := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "board.json"}, board)
-	if err != nil {
+	config, configErr := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "board.json"}, board)
+	if err != nil || configErr != nil {
 		command.Erase()
-		revoke()
+		config.Erase()
+		record.Closed = true
+		_ = l.retireContainer(ctx, c, &record, "")
 		return nil, nil, "", errLinear
 	}
-	return []credential.Command{command, config}, revoke, token.ExpiresAt, nil
+	return []credential.Command{command, config}, func() { _ = l.Revoke(ctx, c) }, token.ExpiresAt, nil
 }
 
-func readLinearToken(ctx context.Context, read func(context.Context, []string) ([]byte, error)) (linearAccess, error) {
-	data, err := read(ctx, []string{"/bin/sh", "-c", "if [ -f " + credential.LinearDir + "/token.json ]; then head -c 65537 " + credential.LinearDir + "/token.json; fi"})
-	defer erase(data)
-	if docker.Absent(err) {
-		return linearAccess{}, nil
-	}
+func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c string, exec func([]string, []byte) error) (string, error) {
+	unlock, err := l.lock("container/" + c)()
 	if err != nil {
-		return linearAccess{}, errLinear
+		return "", errLinear
 	}
-	if len(data) == 0 {
-		return linearAccess{}, nil
-	}
-	var token linearAccess
-	if len(data) > 65536 || json.Unmarshal(data, &token) != nil || !linearClean(token.AccessToken) {
-		return linearAccess{}, errLinear
-	}
-	if _, err := time.Parse(time.RFC3339, token.ExpiresAt); err != nil {
-		return linearAccess{}, errLinear
-	}
-	return token, nil
-}
-
-func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c string, exec func([]string, []byte) error, read func(context.Context, []string) ([]byte, error)) (string, error) {
-	old, err := readLinearToken(ctx, read)
-	if err != nil {
+	defer unlock()
+	record, exists, err := l.readContainer(c)
+	if err != nil || !exists || record.Closed {
 		return "", errLinear
 	}
 	token, err := l.containerToken(ctx, r.App)
@@ -145,31 +161,48 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 		return "", errLinear
 	}
 	l.noteContainer(c, audit.Renewed, "", token)
+	record.Tokens = append(record.Tokens, token)
+	if l.writeContainer(c, record) != nil {
+		l.revokeContainerToken(ctx, c, token)
+		return "", errLinear
+	}
 	command, err := linearCommand(token, true)
 	if err == nil {
 		defer command.Erase()
 		err = exec(command.Argv, command.Stdin)
 	}
 	if err != nil {
-		l.revokeContainerToken(ctx, c, token)
+		_ = l.retireContainer(ctx, c, &record, record.Current.AccessToken)
 		return "", errLinear
 	}
-	if old.AccessToken != "" {
-		l.revokeContainerToken(ctx, c, old)
+	record.Current = token
+	if l.writeContainer(c, record) != nil {
+		return "", errLinear
+	}
+	if l.retireContainer(ctx, c, &record, token.AccessToken) != nil {
+		return "", errLinear
 	}
 	return token.ExpiresAt, nil
 }
 
-// Revoke reads only the container copy, then leaves removal to the launcher even on failure.
-func (l Linear) Revoke(ctx context.Context, c string, read func(context.Context, []string) ([]byte, error)) {
-	rctx, cancel := detached(ctx)
-	token, err := readLinearToken(rctx, read)
-	cancel()
+// Revoke survives a stopped or absent container. Closed is durable before revocation,
+// so maintenance queued behind close cannot issue or deliver another token.
+func (l Linear) Revoke(ctx context.Context, c string) error {
+	unlock, err := l.lock("container/" + c)()
 	if err != nil {
-		l.noteContainer(c, audit.Unrevoked, "token file unreadable", linearAccess{})
-		return
+		return errLinear
 	}
-	if token.AccessToken != "" {
-		l.revokeContainerToken(ctx, c, token)
+	defer unlock()
+	record, exists, err := l.readContainer(c)
+	if err != nil {
+		return errLinear
 	}
+	if !exists {
+		return nil
+	}
+	record.Closed = true
+	if l.writeContainer(c, record) != nil {
+		return errLinear
+	}
+	return l.retireContainer(ctx, c, &record, "")
 }

@@ -33,15 +33,16 @@ func (f *fakeLinear) Issue(_ context.Context, r credential.LinearRequest, _ stri
 	f.prepared = append(f.prepared, token.Stdin, board.Stdin)
 	return []credential.Command{token, board}, func() { f.calls = append(f.calls, "rollback") }, "2026-11-18T12:00:00Z", nil
 }
-func (f *fakeLinear) Refresh(context.Context, credential.LinearRequest, string, func([]string, []byte) error, func(context.Context, []string) ([]byte, error)) (string, error) {
+func (f *fakeLinear) Refresh(context.Context, credential.LinearRequest, string, func([]string, []byte) error) (string, error) {
 	f.calls = append(f.calls, "refresh")
 	if f.fail == "refresh" {
 		return "", errors.New("private-token")
 	}
 	return "2026-11-18T12:00:00Z", nil
 }
-func (f *fakeLinear) Revoke(context.Context, string, func(context.Context, []string) ([]byte, error)) {
+func (f *fakeLinear) Revoke(context.Context, string) error {
 	f.calls = append(f.calls, "revoke")
+	return nil
 }
 
 func linearManifest(t *testing.T) string {

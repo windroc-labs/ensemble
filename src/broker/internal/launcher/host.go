@@ -67,8 +67,8 @@ type Tokens interface {
 type LinearTokens interface {
 	Ready(credential.LinearApp) error
 	Issue(context.Context, credential.LinearRequest, string) ([]credential.Command, func(), string, error)
-	Refresh(context.Context, credential.LinearRequest, string, func([]string, []byte) error, func(context.Context, []string) ([]byte, error)) (string, error)
-	Revoke(context.Context, string, func(context.Context, []string) ([]byte, error))
+	Refresh(context.Context, credential.LinearRequest, string, func([]string, []byte) error) (string, error)
+	Revoke(context.Context, string) error
 }
 
 type Host struct {

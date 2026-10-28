@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"ensemble/broker/internal/credential"
@@ -74,7 +76,7 @@ func TestLinearContainerLifecycle(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
 	request := credential.LinearRequest{App: containerApp(a)}
-	commands, rollback, expiry, err := l.Issue(context.Background(), request, "container")
+	commands, _, expiry, err := l.Issue(context.Background(), request, "container")
 	if err != nil || len(commands) != 2 || expiry == "" {
 		t.Fatalf("issue %v", err)
 	}
@@ -90,9 +92,8 @@ func TestLinearContainerLifecycle(t *testing.T) {
 			t.Fatal("token in argv")
 		}
 	}
-	read := func(context.Context, []string) ([]byte, error) { return json.Marshal(token) }
 	exec := func([]string, []byte) error { return errors.New("CONTAINER-TOKEN ROOT-SENTINEL") }
-	if _, err := l.Refresh(context.Background(), request, "container", exec, read); err == nil || strings.Contains(err.Error(), "CONTAINER-TOKEN") {
+	if _, err := l.Refresh(context.Background(), request, "container", exec); err == nil || strings.Contains(err.Error(), "CONTAINER-TOKEN") {
 		t.Fatal("unsafe refresh error")
 	}
 	if requests[len(requests)-1].Get("token") != "CONTAINER-TOKEN-2" {
@@ -107,18 +108,25 @@ func TestLinearContainerLifecycle(t *testing.T) {
 		}
 		return json.Unmarshal(data, &token)
 	}
-	if _, err := l.Refresh(context.Background(), request, "container", exec, read); err != nil {
+	if _, err := l.Refresh(context.Background(), request, "container", exec); err != nil {
 		t.Fatal(err)
 	}
 	if requests[len(requests)-1].Get("token") != "CONTAINER-TOKEN-1" {
 		t.Fatal("old token not revoked")
 	}
-	l.Revoke(context.Background(), "container", read)
+	_ = l.Revoke(context.Background(), "container")
 	if requests[len(requests)-1].Get("token") != "CONTAINER-TOKEN-3" {
 		t.Fatal("close did not revoke current token")
 	}
+	rollbackCommands, rollback, _, err := l.Issue(context.Background(), request, "rollback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range rollbackCommands {
+		command.Erase()
+	}
 	rollback()
-	if requests[len(requests)-1].Get("token") != "CONTAINER-TOKEN-1" {
+	if requests[len(requests)-1].Get("token") != "CONTAINER-TOKEN-4" {
 		t.Fatal("rollback did not revoke issued token")
 	}
 	if err := rec.Flush(nil); err != nil {
@@ -150,5 +158,121 @@ func TestLinearContainerErrorsHideSecrets(t *testing.T) {
 	_, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "container")
 	if err == nil || strings.Contains(err.Error(), "ROOT-SENTINEL") {
 		t.Fatalf("unsafe error %v", err)
+	}
+}
+
+func TestLinearStoppedContainerClose(t *testing.T) {
+	l, k, _, calls := linearRig(t)
+	a := linearApp("engineer")
+	enrollLinear(t, l, k, a)
+	commands, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "stopped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, command := range commands {
+			command.Erase()
+		}
+	}()
+	if err := l.Revoke(context.Background(), "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 2 || (*calls)[1].Get("token") != "TOKEN-1" {
+		t.Fatal("stopped-container close did not revoke")
+	}
+}
+
+func TestLinearConcurrentRenewAndClose(t *testing.T) {
+	l, k, _, _ := linearRig(t)
+	a := linearApp("engineer")
+	enrollLinear(t, l, k, a)
+	var mu sync.Mutex
+	active := map[string]bool{}
+	issued := 0
+	l.http.Transport = linearRoundTrip(func(r *http.Request) (*http.Response, error) {
+		data, _ := io.ReadAll(r.Body)
+		values, _ := url.ParseQuery(string(data))
+		mu.Lock()
+		defer mu.Unlock()
+		body := `{}`
+		if strings.HasSuffix(r.URL.Path, "/token") {
+			issued++
+			token := fmt.Sprintf("TOKEN-%d", issued)
+			active[token] = true
+			body = fmt.Sprintf(`{"access_token":%q,"expires_in":2592000}`, token)
+		} else {
+			delete(active, values.Get("token"))
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	request := credential.LinearRequest{App: containerApp(a)}
+	commands, _, _, err := l.Issue(context.Background(), request, "race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands {
+		command.Erase()
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	exec := func([]string, []byte) error { once.Do(func() { close(entered); <-release }); return nil }
+	first := make(chan error, 1)
+	go func() { _, err := l.Refresh(context.Background(), request, "race", exec); first <- err }()
+	<-entered
+	second, closed := make(chan error, 1), make(chan error, 1)
+	go func() { _, err := l.Refresh(context.Background(), request, "race", exec); second <- err }()
+	go func() { closed <- l.Revoke(context.Background(), "race") }()
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	<-second // May be refused because close acquired the lock first.
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Refresh(context.Background(), request, "race", exec); err == nil {
+		t.Fatal("renewal after close allowed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(active) != 0 {
+		t.Fatalf("%d token(s) remain active", len(active))
+	}
+}
+
+func TestLinearRevocationRecordRetry(t *testing.T) {
+	l, k, _, _ := linearRig(t)
+	a := linearApp("engineer")
+	enrollLinear(t, l, k, a)
+	request := credential.LinearRequest{App: containerApp(a)}
+	commands, _, _, err := l.Issue(context.Background(), request, "retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands {
+		command.Erase()
+	}
+	info, err := os.Stat(l.containerFile("retry"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatal("record must be private")
+	}
+	transport := l.http.Transport
+	l.http.Transport = linearRoundTrip(func(*http.Request) (*http.Response, error) { return nil, errors.New("TOKEN-1 ROOT-SENTINEL") })
+	if l.Revoke(context.Background(), "retry") == nil {
+		t.Fatal("revocation failure hidden")
+	}
+	record, exists, err := l.readContainer("retry")
+	if err != nil || !exists || !record.Closed || len(record.Tokens) != 1 {
+		t.Fatal("lost revocation reference")
+	}
+	if _, err := l.Refresh(context.Background(), request, "retry", func([]string, []byte) error { return nil }); err == nil {
+		t.Fatal("closed record renewed")
+	}
+	l.http.Transport = transport
+	if err := l.Revoke(context.Background(), "retry"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(l.containerFile("retry")); !os.IsNotExist(err) {
+		t.Fatal("revoked token retained")
 	}
 }
