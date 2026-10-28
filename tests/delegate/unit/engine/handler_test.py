@@ -34,6 +34,7 @@ from ensemble.session import (
     Unanswered,
 )
 from ensemble.utils import Status, StatusState
+from tests.delegate.fakes.callback_child import CallbackChild
 from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
 from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
@@ -92,25 +93,6 @@ class Timer:
 
     def fire(self):
         self.function()
-
-
-class Child:
-    """subprocess.Popen for the callback: keeps each line, with the record's state at delivery."""
-
-    def __init__(self, case, argv):
-        self.case, self.pid, self.returncode = case, 4321, 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc):
-        return False
-
-    def communicate(self, line, timeout=None):
-        if self.case.racing is not None:
-            self.case.racing()
-        self.case.sent.append((json.loads(line), self.case.metadata()))
-        return "", ""
 
 
 class OwnerRefused(SessionError):
@@ -172,9 +154,17 @@ class HandlerCase(HarnessCase):
         Timer.made = []
         self.enterContext(mock.patch("threading.Timer", Timer))
         self.enterContext(
-            mock.patch("subprocess.Popen", side_effect=lambda argv, **_kw: Child(self, argv))
+            mock.patch(
+                "subprocess.Popen", side_effect=lambda _argv, **_kw: CallbackChild(self.keep)
+            )
         )
         self.err = self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
+
+    def keep(self, line: str) -> None:
+        """The callback's delivery: keeps each line, with the record's state at delivery."""
+        if self.racing is not None:
+            self.racing()
+        self.sent.append((json.loads(line), self.metadata()))
 
     def register(self, token, **changes) -> None:
         state = self.record.read()

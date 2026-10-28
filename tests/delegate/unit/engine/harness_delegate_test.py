@@ -53,6 +53,7 @@ from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 from ensemble.session.engine.types import Liveness, SessionRow
 from ensemble.utils import OutcomeStatus, StatusState, Stopped
+from tests.delegate.fakes.callback_child import CallbackChild
 from tests.delegate.fakes.harness_session import (
     DrivenDelegate,
     FailingSession,
@@ -83,6 +84,17 @@ def gives_up():
     """
     HarnessSession.script = (TurnEnd("No outcome block."),) * (1 + STOP_LIMIT)
     HarnessSession.lingers = True
+
+
+def docker_box(case: HarnessCase) -> None:
+    """The Docker Host `box` in `case`'s config, a RecordingHost in HarnessSession."""
+    HarnessSession.hosts["box"] = RecordingHost("box")
+    with open(case.local, "a", encoding="utf-8") as file:
+        file.write(
+            "[session.hosts.box]\n"
+            'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
+            'docker = "/usr/local/bin/docker"\n'
+        )
 
 
 class RealSpawn(DrivenDelegate):
@@ -277,13 +289,7 @@ class Drive(HarnessCase):
                 self.assertEqual(self.metadata(), before)
 
     def test_docker_agent_needs_no_other_host(self):
-        with open(self.local, "a", encoding="utf-8") as file:
-            file.write(
-                "[session.hosts.box]\n"
-                'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
-                'docker = "/usr/local/bin/docker"\n'
-            )
-        HarnessSession.hosts["box"] = RecordingHost("box")
+        docker_box(self)
         spec = Spec(
             "Reference: T\nRepo: acme/ensemble\n\nHi.",
             self.work,
@@ -357,13 +363,7 @@ class Record(HarnessCase):
 
 class DockerHeadlessTest(HarnessCase):
     def test_a_headless_session_carries_the_agent_name_only_on_the_docker_host(self):
-        HarnessSession.hosts["box"] = RecordingHost("box")
-        with open(self.local, "a", encoding="utf-8") as file:
-            file.write(
-                "[session.hosts.box]\n"
-                'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
-                'docker = "/usr/local/bin/docker"\n'
-            )
+        docker_box(self)
         name = f"dummy-tester-{SID[:8]}"
         for host, want in (("box", name), ("agent", None)):
             with self.subTest(host=host):
@@ -390,13 +390,7 @@ class ForegroundHeadlessCloseTest(HarnessCase):
 
     def setUp(self):
         super().setUp()
-        HarnessSession.hosts["box"] = RecordingHost("box")
-        with open(self.local, "a", encoding="utf-8") as file:
-            file.write(
-                "[session.hosts.box]\n"
-                'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
-                'docker = "/usr/local/bin/docker"\n'
-            )
+        docker_box(self)
         for patcher in (
             mock.patch.object(HarnessSession, "attach", side_effect=SessionError("no session")),
             mock.patch.object(HarnessSession, "retire"),
@@ -449,12 +443,7 @@ class DockerPreflightTest(HarnessCase):
     def setUp(self):
         super().setUp()
         self.settings(client="claude")
-        with open(self.local, "a", encoding="utf-8") as file:
-            file.write(
-                "[session.hosts.box]\n"
-                'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
-                'docker = "/usr/local/bin/docker"\n'
-            )
+        docker_box(self)
         self.calls, self.failing = [], False
         path = os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
         for patcher in (
@@ -2042,40 +2031,41 @@ class ViewTest(HarnessCase):
         self.assertEqual(FakeViewer.hidden, [])
 
 
-class CrashTest(HarnessCase):
-    def crashed(self, cwd=None):
-        """A tui run whose process died mid-run: no outcome stored, no run lock held, its agent
-        session left live as the run started it.
-        """
-        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID, cwd=cwd)
-        self.make(spec=spec)
-        state = self.metadata()
-        agent = SessionSpec(
-            workdir=self.work,
-            access=Access(cwd=self.work),
-            client="fake",
-            mode=Mode.TUI,
-            sid=SID,
-            name=state["agent_name"],
-        )
-        HarnessSession.start(agent, host=state["host"])
-        return DrivenDelegate.attach(self.work, session_cls=HarnessSession), state["agent_name"]
+def crashed(case: HarnessCase, cwd: str | None = None) -> tuple[HarnessDelegate, str]:
+    """A tui run whose process died mid-run: no outcome stored, no run lock held, its agent
+    session left live as the run started it. Its view and its agent session's name.
+    """
+    spec = Spec("input", case.work, mode="tui", client="fake", sid=SID, cwd=cwd)
+    case.make(spec=spec)
+    state = case.metadata()
+    agent = SessionSpec(
+        workdir=case.work,
+        access=Access(cwd=case.work),
+        client="fake",
+        mode=Mode.TUI,
+        sid=SID,
+        name=state["agent_name"],
+    )
+    HarnessSession.start(agent, host=state["host"])
+    return DrivenDelegate.attach(case.work, session_cls=HarnessSession), state["agent_name"]
 
+
+class CrashTest(HarnessCase):
     def test_a_tui_run_whose_process_died_is_not_alive(self):
-        view, name = self.crashed()
+        view, name = crashed(self)
         self.assertEqual(HarnessSession.live[name].alive(), True)
         self.assertFalse(view.alive())
         self.assertFalse(view.status().alive)
 
     def test_its_status_is_unknown_while_its_agent_sessions_host_cannot_tell(self):
-        view, name = self.crashed()
+        view, name = crashed(self)
         agent = HarnessSession.live[name]
         self.assertEqual((view.status().state, view.status().hidden), ("working", False))
         agent.liveness = Liveness.UNKNOWN
         self.assertEqual(view.status().state, "unknown")
 
     def test_resume_closes_the_left_agent_session_and_launches_the_next_attempt(self):
-        view, name = self.crashed()
+        view, name = crashed(self)
         left = HarnessSession.live[name]
         launches = len(harness_launches())
         record = view.resume()
@@ -2085,7 +2075,7 @@ class CrashTest(HarnessCase):
         self.assertEqual(self.metadata()["attempt"], 2)
 
     def test_a_resume_after_its_agent_dir_was_pruned_makes_it_again(self):
-        view, _name = self.crashed()
+        view, _name = crashed(self)
         shutil.rmtree(Layout(self.work).agent)
         view.resume()
         self.assertTrue(os.path.isdir(Layout(self.work).agent))
@@ -2095,7 +2085,7 @@ class CrashTest(HarnessCase):
         project = os.path.join(self.home, "project")
         os.mkdir(project)
         self.settings(trusted_dirs=(project,))
-        _view, name = self.crashed(cwd=project)
+        _view, name = crashed(self, cwd=project)
         self.settings()
         left = HarnessSession.live[name]
         launches = (len(harness_launches()), len(HarnessSession.started))
@@ -2107,7 +2097,7 @@ class CrashTest(HarnessCase):
         self.assertEqual((len(harness_launches()), len(HarnessSession.started)), launches)
 
     def test_a_resume_its_preflight_refuses_leaves_the_agent_session_live(self):
-        _view, name = self.crashed()
+        _view, name = crashed(self)
         left, launches = HarnessSession.live[name], len(harness_launches())
         HarnessSession.preflight_error = SessionConfigError("fake: no client binary")
         view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
@@ -2116,14 +2106,14 @@ class CrashTest(HarnessCase):
         self.assertEqual((left.alive(), len(harness_launches())), (True, launches))
 
     def test_resume_preflights_the_live_agents_name_under_a_probe_name(self):
-        view, name = self.crashed()
+        view, name = crashed(self)
         view.resume()
         self.assertNotEqual(HarnessSession.preflights[-1]["spec"].name, name)
         self.assertTrue(HarnessSession.preflights[-1]["spec"].resume)
         self.assertEqual(self.metadata()["plan"]["session"]["name"], name)
 
     def test_resume_refuses_a_run_replaced_since_its_attach(self):
-        view, _name = self.crashed()
+        view, _name = crashed(self)
         other = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
         self.make(spec=Spec("input", self.work, task="echo", sid=other))
         launches = len(harness_launches())
@@ -2134,7 +2124,7 @@ class CrashTest(HarnessCase):
         )
 
     def test_the_status_of_an_agent_session_another_process_started_comes_from_its_plan(self):
-        view, _name = self.crashed()
+        view, _name = crashed(self)
         self.assertEqual(view.session_status(), HarnessSession.history)
         (inspected,) = HarnessSession.inspected
         self.assertEqual((inspected.sid, inspected.mode, inspected.client), (SID, "tui", "fake"))
@@ -2188,7 +2178,7 @@ class SweepTest(HarnessCase):
         self.assertEqual(self.kills(orphan), [(ORPHAN, signal.SIGKILL)])
 
     def test_resume_kills_the_left_group_before_it_launches_a_harness(self):
-        view = self.crashed()
+        view, _name = crashed(self)
         orphan = self.orphan()
         launches = len(harness_launches())
         view.resume()
@@ -2205,7 +2195,7 @@ class SweepTest(HarnessCase):
         self.assertEqual(self.kills(orphan), [(ORPHAN, signal.SIGKILL)])
 
     def test_a_group_that_will_not_end_refuses_each_start_changing_nothing(self):
-        view = self.crashed()
+        view, _name = crashed(self)
         orphan = self.orphan()
         orphan.dies = False
         before, launches = self.record(), len(harness_launches())
@@ -2230,22 +2220,6 @@ class SweepTest(HarnessCase):
         self.killpg.assert_not_called()
         self.assertEqual(self.record(), before)
 
-    def crashed(self) -> HarnessDelegate:
-        """A tui run whose harness died, its agent session left live."""
-        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
-        self.make(spec=spec)
-        state = self.metadata()
-        agent = SessionSpec(
-            workdir=self.work,
-            access=Access(cwd=self.work),
-            client="fake",
-            mode=Mode.TUI,
-            sid=SID,
-            name=state["agent_name"],
-        )
-        HarnessSession.start(agent, host=state["host"])
-        return DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-
 
 AGENT = f"dummy-tester-{SID[:8]}"
 HARNESS = f"{AGENT}-drive"
@@ -2268,13 +2242,7 @@ class StartedTest(HarnessCase):
         self.host = "agent"
         if docker:
             self.host = "box"
-            HarnessSession.hosts["box"] = RecordingHost("box")
-            with open(self.local, "a", encoding="utf-8") as file:
-                file.write(
-                    "[session.hosts.box]\n"
-                    'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
-                    'docker = "/usr/local/bin/docker"\n'
-                )
+            docker_box(self)
         text = "Reference: T\nRepo: acme/ensemble\n\nHi." if docker else "input"
         spec = Spec(text, self.work, mode="tui", client="fake", sid=SID)
         return self.make(spec=spec, host=self.host)
@@ -2573,7 +2541,9 @@ class StartFailureEndTest(HarnessCase):
                 raise Stopped(129)
 
         with (
-            mock.patch("subprocess.Popen", side_effect=lambda _argv, **_kw: Child(lines)),
+            mock.patch(
+                "subprocess.Popen", side_effect=lambda _argv, **_kw: CallbackChild(lines.append)
+            ),
             mock.patch("sys.stderr", new_callable=io.StringIO),
             self.assertRaises(Stopped),
         ):
@@ -2599,23 +2569,6 @@ class StartFailureEndTest(HarnessCase):
     def test_another_attempts_start_failure_is_ignored(self):
         _result, sent = self.stopped(self.FAILURE, attempt=2)
         self.assertEqual(sent["error"], "stopped: Stopped: 129")
-
-
-class Child:
-    """subprocess.Popen for the run's callback: takes its event line, exits 0."""
-
-    def __init__(self, lines):
-        self.lines, self.pid, self.returncode = lines, 4321, 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc):
-        return False
-
-    def communicate(self, line, timeout=None):
-        self.lines.append(line)
-        return "", ""
 
 
 ACCEPTANCE = """
@@ -2787,7 +2740,10 @@ class OwnedRun(HarnessCase):
         LockingSession.lingers = True
         self.lines: list[str] = []
         self.enterContext(
-            mock.patch("subprocess.Popen", side_effect=lambda _argv, **_kw: Child(self.lines))
+            mock.patch(
+                "subprocess.Popen",
+                side_effect=lambda _argv, **_kw: CallbackChild(self.lines.append),
+            )
         )
         self.err = self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
         self.events_file = os.path.join(self.home, "events.log")
@@ -2832,6 +2788,12 @@ class OwnedRun(HarnessCase):
                 act()
 
         return seen, on
+
+    def ended(self, view: HarnessDelegate, result: Result = NEEDS) -> Result:
+        """view.run(), its attempt ended at Begun with `result` as its handler would store it."""
+        record, sid = RunRecord(view.layout), view._state.plan.sid
+        _seen, on = self.at_begun(lambda: (record.bind(1, 1), record.complete(1, result, sid=sid)))
+        return view.run(on)
 
     def test_a_tui_run_a_harness_owns_is_planned_with_the_handler(self):
         view = self.owned()
@@ -3010,10 +2972,7 @@ class OwnedRun(HarnessCase):
         HarnessSession.reset(showable=True)
         HarnessSession.lingers = True
         view = self.owned(lock="dummy-lock")
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
-        )
-        self.assertEqual(view.run(on), self.NEEDS)
+        self.assertEqual(self.ended(view), self.NEEDS)
         self.assertTrue(view.driver.session.alive())
         again = DrivenDelegate.attach(self.work, session_cls=HarnessSession, viewer=FakeViewer())
         self.assertFalse(again.alive())
@@ -3025,10 +2984,7 @@ class OwnedRun(HarnessCase):
 
     def test_a_locked_runs_answer_goes_to_its_live_worker(self):
         view = self.owned(lock="dummy-lock")
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
-        )
-        view.run(on)
+        self.ended(view)
         agent, launches = view.driver.session, len(harness_launches())
         DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
         self.assertEqual(agent.sent, ["the answer"])
@@ -3039,11 +2995,7 @@ class OwnedRun(HarnessCase):
     def waiting(self, work: str, sid: str) -> HarnessDelegate:
         """A LockingSession run on dummy-lock, its attempt ended needs_input, its worker live."""
         view = self.owned(lock="dummy-lock", work=work, sid=sid, session_cls=LockingSession)
-        record = RunRecord(Layout(work))
-        _seen, on = self.at_begun(
-            lambda: (record.bind(1, 1), record.complete(1, self.NEEDS, sid=sid))
-        )
-        self.assertEqual(view.run(on), self.NEEDS)
+        self.assertEqual(self.ended(view), self.NEEDS)
         return view
 
     def busy_until(self, end) -> None:
@@ -3118,10 +3070,7 @@ class OwnedRun(HarnessCase):
     def test_resume_without_input_closes_a_live_locked_worker_and_claims_release(self):
         view = self.owned(lock="dummy-lock", session_cls=LockingSession)
         failed = Result(0, None, "the client's turn failed: server_overloaded (529)")
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, failed, sid=SID))
-        )
-        view.run(on)
+        self.ended(view, failed)
         old = view.driver.session
         self.assertTrue(old.alive())
         DrivenDelegate.attach(self.work, session_cls=LockingSession).resume()
@@ -3229,10 +3178,7 @@ class OwnedRun(HarnessCase):
 
     def test_resume_input_on_a_live_worker_only_sends_it(self):
         view = self.owned()
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
-        )
-        view.run(on)
+        self.ended(view)
         agent, before, launches = view.driver.session, self.metadata(), len(harness_launches())
         again = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
         record = again.resume(input="the answer")
@@ -3247,10 +3193,7 @@ class OwnedRun(HarnessCase):
 
     def test_resume_input_reaches_a_live_worker_while_its_drive_winds_down(self):
         view = self.owned()
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
-        )
-        view.run(on)
+        self.ended(view)
         agent = view.driver.session
         with RunState(Layout(self.work)).run_lock():
             DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
@@ -3262,10 +3205,7 @@ class OwnedRun(HarnessCase):
         """
         view = self.owned()
         result = result or Result(129, None, "stopped: Stopped: 129")
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, result, sid=SID))
-        )
-        view.run(on)
+        self.ended(view, result)
         view.driver.session.liveness = Liveness.ABSENT
         fd = os.open(os.path.join(Layout(self.work).run, "delegate.run.lock"), os.O_RDWR)
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -3283,10 +3223,7 @@ class OwnedRun(HarnessCase):
 
     def test_resume_input_waits_for_a_drive_whose_worker_exited(self):
         view = self.owned()
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))
-        )
-        view.run(on)
+        self.ended(view)
         view.driver.session.liveness = Liveness.ABSENT
         fd = os.open(os.path.join(Layout(self.work).run, "delegate.run.lock"), os.O_RDWR)
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -3350,10 +3287,7 @@ class OwnedRun(HarnessCase):
         """
         view = self.owned()
         stopped = Result(129, None, "stopped: Stopped: 129")
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
-        )
-        view.run(on)
+        self.ended(view, stopped)
         view.driver.session.liveness = Liveness.ABSENT
         store = RunState(Layout(self.work))
         held = []
@@ -3396,10 +3330,7 @@ class OwnedRun(HarnessCase):
     def test_settle_retires_under_the_run_lock_only_the_attempt_it_checked(self):
         view = self.owned()
         stopped = Result(129, None, "stopped: Stopped: 129")
-        _seen, on = self.at_begun(
-            lambda: (self.record.bind(1, 1), self.record.complete(1, stopped, sid=SID))
-        )
-        view.run(on)
+        self.ended(view, stopped)
         view.driver.session.liveness = Liveness.ABSENT
         again, store = DrivenDelegate.attach(self.work, session_cls=HarnessSession), self.record
         held = []
