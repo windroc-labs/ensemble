@@ -663,6 +663,7 @@ class TuiMode(BaseMode):
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
         self._held, self._checked, self._settled = False, -POLL_SCREEN, -SETTLE_EVERY
+        self._turn_blocked = False  # its dialog may outlast a later Activity
         self._active_turn = run._turn_open is True
         self._absorbed, self._launching = 0, bool(prepared.spec.prompt) and not run._opening_prompt
         self._owned, self._hook_logged = terminal is not None, False
@@ -930,15 +931,15 @@ class TuiMode(BaseMode):
                 )
 
     def _open(self) -> None:
-        """Submits the opening once due, no turn runs (one may for a mid-turn opening) and a turn
-        boundary's hook saw every send, unless a dialog shows, the client is blocked or the send
-        lock is held.
+        """Submits the opening once due, no turn runs (one unblocked so far may for a mid-turn
+        opening) and a turn boundary's hook saw every send, unless a dialog shows, the client is
+        blocked or the send lock is held.
         """
         now = time.monotonic()
         if self._opening is None or self._due is None or self._gone or now < self._due:
             return
         waits = self._held or self._launching or now < self._checked + POLL_SCREEN
-        if waits or self._active_turn and not self.run._opening_mid_turn:
+        if waits or self._active_turn and (self._turn_blocked or not self.run._opening_mid_turn):
             return
         self._checked = now
         terminal = self._owner()
@@ -966,6 +967,8 @@ class TuiMode(BaseMode):
                 self._active_turn = False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
                 self._held = isinstance(event, Blocked)
+            if isinstance(event, Blocked | TurnEnd | TurnFailed | TurnStarted):
+                self._turn_blocked = isinstance(event, Blocked)
 
     def _end(self) -> None:
         self._gone = True

@@ -2095,18 +2095,28 @@ class OpeningTest(Base):
         self.assertIsNone(mode.opening_pending)
         self.assertFalse(Opening._opening_mid_turn)
 
-    def test_a_mid_turn_opening_still_waits_on_a_block_and_an_unread_send(self):
+    def test_a_mid_turn_opening_waits_out_a_turn_once_blocked(self):
         mode = self.launched(MidTurnOpening(self.client), prompt="go")
         self.append(record("ready"), record("start"), record("ask", why="perm"))
         mode.poll(0)
         mode.poll(1.2)
+        self.append(record("tool"))  # another tool's: its dialog may still show
+        mode.poll(0)
+        mode.poll(1.2)
         self.assertEqual(self.sends(mode), [])
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+
+    def test_a_mid_turn_opening_waits_for_a_send_its_turn_has_not_taken(self):
+        mode = self.launched(MidTurnOpening(self.client))
         self.other().send("hi")
-        self.append(record("tool"))
+        self.append(record("ready"))
         mode.poll(0)
         mode.poll(1.2)
         self.assertEqual(self.sends(mode), [Paste("hi"), Key("Enter")])
-        self.append(record("stop"))
+        self.append(record("start"))
         mode.poll(0)
         mode.poll(0.6)
         self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])

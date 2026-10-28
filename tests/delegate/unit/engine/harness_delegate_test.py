@@ -29,7 +29,7 @@ from ensemble.delegate import ConfigError, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
-from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
+from ensemble.delegate.engine.harness_delegate import COLOR_WAIT, DRAIN_WAIT, HarnessDelegate
 from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
 from ensemble.delegate.engine.runner import STOP_LIMIT, report
 from ensemble.delegate.engine.state import RunState
@@ -2815,6 +2815,42 @@ class OwnedRun(HarnessCase):
         _seen, on = self.at_begun(lambda: self.record.bind(1, 1))
         self.assertEqual(view.run(on), self.NEEDS)
         self.assertNotIn("give_up", self.kinds())
+
+    def color_said(self, pending: str | None) -> int:
+        """How often a run whose opening_pending is `pending` throughout says it unsent."""
+        clock = Clock(self)
+        view = self.owned()
+        advance = clock.advance
+
+        def later(seconds):
+            advance(seconds)
+            if clock.now >= 2 * COLOR_WAIT and not self.record.read().completed:
+                self.record.complete(1, self.NEEDS, sid=SID)
+
+        self.enterContext(mock.patch("time.sleep", side_effect=later))
+        self.enterContext(
+            mock.patch.object(
+                HarnessSession,
+                "opening_pending",
+                new_callable=mock.PropertyMock,
+                return_value=pending,
+                create=True,
+            )
+        )
+        _seen, on = self.at_begun(lambda: self.record.bind(1, 1))
+        self.assertEqual(view.run(on), self.NEEDS)
+        name = view._state.agent_name
+        line = (
+            f"delegate: session {name}: color not set: not sent within 15 s; "
+            f"ensemble-session send {name} /color\n"
+        )
+        return self.err.getvalue().count(line)
+
+    def test_an_opening_unsent_at_the_color_wait_is_said_once(self):
+        self.assertEqual(self.color_said("/color"), 1, self.err.getvalue())
+
+    def test_a_sent_opening_is_not_said(self):
+        self.assertEqual(self.color_said(None), 0, self.err.getvalue())
 
     def test_a_gone_worker_ends_the_attempt_after_the_drain_wait(self):
         clock = Clock(self)
