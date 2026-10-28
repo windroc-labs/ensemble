@@ -25,7 +25,7 @@ def orchestrator_entry(repo: str) -> list[str]:
         if os.path.lexists(os.path.join(root, rel))
     ]
     for rel, text in _files(root, ".py"):
-        if rel in {"cli.py"} | ENTRY_MODULES.get("orchestrator", set()):
+        if rel == "cli.py":
             continue
         for node in ast.walk(ast.parse(text, rel)):
             if isinstance(node, ast.Compare) and any(

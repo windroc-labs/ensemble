@@ -7,6 +7,7 @@ import functools
 import sys
 
 from ensemble.delegate import ConfigError as DelegateConfigError
+from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.flow.types import (
     PRIORITY_NUMBERS,
     ArchiveRefused,
@@ -55,6 +56,7 @@ from ensemble.orchestrator.issue.output import (
 from ensemble.orchestrator.trackers.linear.client import linear_gql, messages, use
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
 from ensemble.orchestrator.trackers.linear.worker import backend as worker_backend
+from ensemble.orchestrator.trackers.local.issues import LocalIssues
 
 STATES = [str(state) for state in IssueState]
 PRIORITIES = [str(priority) for priority in PRIORITY_NUMBERS]
@@ -824,25 +826,13 @@ def _linear_only(command, request):
 
 def _linear(cfg, gql, err):
     """cfg's LinearIssues, as the manager's app, whose failed renewals go to err."""
-    from ensemble.orchestrator.engine import config
-
     linear = config.linear_settings(cfg, "issue")
     app = config.manager_app(linear)
     use(report=lambda identity, reason: diagnose(err, f"token-error: {identity}: {reason}"))
     return LinearIssues(functools.partial(gql, identity=app), linear)
 
 
-def _host_backend(cfg, args, request, gql, err):
-    from ensemble.orchestrator.trackers.local.issues import LocalIssues
-
-    if cfg.tracker is TrackerKind.LOCAL:
-        if what := _linear_only(args.command, request):
-            raise IssueError(_LINEAR_ONLY.format(what))
-        return LocalIssues(cfg.board, cfg.roles, prefix=cfg.local_prefix)
-    return _linear(cfg, gql, err)
-
-
-def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=None, worker=False):
+def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=None):
     args = _parser().parse_args(argv)
     out = sys.stdout.buffer if out is None else out
     err = sys.stderr if err is None else err
@@ -860,15 +850,15 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
     try:
         board = worker_backend()
         if board is None:
-            if worker:
-                raise IssueError(
-                    "Worker tracker settings are missing; ask the manager to restore access "
-                    "or send the current description and comments."
-                )
-            from ensemble.orchestrator.engine import config
-
             cfg = config.load(path=config_path)
-            board = _host_backend(cfg, args, request, gql, err)
+            if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args.command, request)):
+                diagnose(err, _LINEAR_ONLY.format(what))
+                return USAGE
+            board = (
+                LocalIssues(cfg.board, cfg.roles, prefix=cfg.local_prefix)
+                if cfg.tracker is TrackerKind.LOCAL
+                else _linear(cfg, gql, err)
+            )
     except (
         ConfigError,
         DelegateConfigError,

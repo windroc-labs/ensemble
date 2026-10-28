@@ -21,7 +21,7 @@ typeCheckingMode = "basic"
 reportUnnecessaryComparison = "error"
 reportUnnecessaryCast = "error"
 pythonVersion = "3.11"
-include = ["src/ensemble", ".github/worker_codex.py", ".github/worker_codex", ".github/worker_issue.py", ".github/worker_issue"]
+include = ["src/ensemble", ".github/worker_codex.py", ".github/worker_codex"]
 extraPaths = ["src"]
 
 [tool.vulture]
@@ -97,10 +97,9 @@ allow_indirect_imports = true
 name = "Linear transport, operations and reporting have one direction"
 type = "units"
 container = "ensemble.orchestrator"
-units = ["ensemble.orchestrator", "ensemble.orchestrator.cli", "ensemble.orchestrator.worker_cli", "ensemble.orchestrator.engine", "ensemble.orchestrator.engine.log", "ensemble.orchestrator.engine.issues", "ensemble.orchestrator.engine.run_comments", "ensemble.orchestrator.engine.types", "ensemble.orchestrator.engine.flow", "ensemble.orchestrator.engine.flow.handoff", "ensemble.orchestrator.engine.flow.tracker", "ensemble.orchestrator.engine.flow.types", "ensemble.orchestrator.engine.flow.workflow", "ensemble.orchestrator.issue", "ensemble.orchestrator.trackers", "ensemble.orchestrator.trackers.linear", "ensemble.orchestrator.trackers.linear.client", "ensemble.orchestrator.trackers.linear.ops", "ensemble.orchestrator.trackers.linear.linear_tracker", "ensemble.orchestrator.trackers.local"]
+units = ["ensemble.orchestrator", "ensemble.orchestrator.cli", "ensemble.orchestrator.engine", "ensemble.orchestrator.engine.log", "ensemble.orchestrator.engine.issues", "ensemble.orchestrator.engine.run_comments", "ensemble.orchestrator.engine.types", "ensemble.orchestrator.engine.flow", "ensemble.orchestrator.engine.flow.handoff", "ensemble.orchestrator.engine.flow.tracker", "ensemble.orchestrator.engine.flow.types", "ensemble.orchestrator.engine.flow.workflow", "ensemble.orchestrator.issue", "ensemble.orchestrator.trackers", "ensemble.orchestrator.trackers.linear", "ensemble.orchestrator.trackers.linear.client", "ensemble.orchestrator.trackers.linear.ops", "ensemble.orchestrator.trackers.linear.linear_tracker", "ensemble.orchestrator.trackers.local"]
 dependencies = [
     "ensemble.orchestrator -> ensemble.orchestrator.engine",
-    "ensemble.orchestrator.worker_cli -> ensemble.orchestrator.issue",
     "ensemble.orchestrator.engine -> ensemble.orchestrator.engine.log ensemble.orchestrator.engine.issues ensemble.orchestrator.engine.run_comments ensemble.orchestrator.engine.types ensemble.orchestrator.engine.flow.handoff ensemble.orchestrator.engine.flow.tracker ensemble.orchestrator.engine.flow.types ensemble.orchestrator.engine.flow.workflow ensemble.orchestrator.trackers.linear.client ensemble.delegate ensemble.utils",
     "ensemble.orchestrator.engine.flow.handoff -> ensemble.orchestrator.engine.flow.types ensemble.utils",
     "ensemble.orchestrator.engine.flow.tracker -> ensemble.orchestrator.engine.flow.types",

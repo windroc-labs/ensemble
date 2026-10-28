@@ -24,7 +24,6 @@ COPY src/ensemble/session /opt/ensemble/src/ensemble/session
 COPY src/ensemble/utils /opt/ensemble/src/ensemble/utils
 COPY src/ensemble/delegate /opt/ensemble/src/ensemble/delegate
 COPY src/ensemble/orchestrator /opt/ensemble/src/ensemble/orchestrator
-COPY ensemble-orchestrator /opt/ensemble/bin/ensemble-orchestrator
 COPY plugin-sources.json /opt/ensemble/plugin-sources.json
 COPY .claude-plugin/plugin.json /opt/ensemble/version.json
 COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/
@@ -46,11 +45,11 @@ RUN test -n "${CLAUDE_VERSION}" && test -n "${CODEX_VERSION}" && test -n "${OPEN
     && PATH=/opt/ensemble/clients/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin python3 -I /opt/ensemble/lib/plugin-install.py /opt/ensemble/plugin-sources.json /opt/ensemble
 # python3 on the agent's PATH is this venv's, importing ensemble; system site keeps pip --user working.
 RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/ensemble/bin \
-    && chmod 755 /opt/ensemble/bin/ensemble-orchestrator \
     && printf '%s\n' /opt/ensemble/src > "$(/opt/ensemble/venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/ensemble.pth" \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/ensemble/venv/bin/python "$@"' > /opt/ensemble/bin/python3 \
     && ln -s /opt/ensemble/src/ensemble/delegate/team /opt/ensemble/team \
     && printf '%s\n' '#!/bin/sh' 'export PYTHONPATH=/opt/ensemble/src' 'exec /opt/ensemble/venv/bin/python -P -m ensemble.session.cli "$@"' > /opt/ensemble/bin/ensemble-session \
+    && printf '%s\n' '#!/bin/sh' 'export PYTHONPATH=/opt/ensemble/src' 'exec /opt/ensemble/venv/bin/python -P -m ensemble.orchestrator.cli "$@"' > /opt/ensemble/bin/ensemble-orchestrator \
     && ln -s /opt/ensemble/lib/with-secrets /opt/ensemble/bin/with-secrets \
     && ln -s /opt/ensemble/clients/bin/claude /opt/ensemble/bin/claude \
     && ln -s /opt/ensemble/clients/bin/codex /opt/ensemble/bin/codex \
@@ -60,7 +59,7 @@ RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/e
     && printf '%s\n' '[credential]' 'helper = /opt/ensemble/bin/git-credential-ensemble' 'useHttpPath = true' >> /etc/gitconfig \
     && printf '%s\n' '[core]' 'hooksPath = .githooks' >> /etc/gitconfig \
     && printf '%s\n' 'PATH=/opt/ensemble/bin:$PATH' > /etc/profile.d/ensemble.sh \
-    && chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/python3 /opt/ensemble/lib/with-secrets /opt/ensemble/lib/hook-stub /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble \
+    && chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/ensemble-orchestrator /opt/ensemble/bin/python3 /opt/ensemble/lib/with-secrets /opt/ensemble/lib/hook-stub /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble \
     && chmod -R a+rX /opt/ensemble/codex-plugins \
     && chmod -R a+rX /opt/ensemble/claude-plugins \
     && chmod -R a+rX /opt/ensemble/plugins \
