@@ -386,6 +386,17 @@ read `/run/ensemble/secrets/`. The App private key, Codex refresh token and enro
 the broker; a provider API key or an environment secret is the same long-lived value in every container that lists
 it. Each container copy is 0400 on the container's tmpfs and goes with the container.
 
+**Credential request** (interface only, WDRC-268 FR-32): one per-run request naming every credential the broker puts in
+a container, by reference, never a value: `github` (grants of `permissions` and an optional `repo`, one token each; no
+`repo`: every repository of every installation, then alone), `linear` (`{"role"}`: that role's Linear app token) and
+`env` (`{"item", "file"}` environment secrets). The task decides the kinds and levels, the role the Linear identity,
+the environment its own secrets, the run the repos. The orchestrator resolves the run's `github` and `linear` onto the
+delegate `Spec.credentials` (`ensemble.delegate.CredentialRequest`), never `env`; the delegate adds the environment's
+`env` for the session `Spec`; the Docker Host writes it as the start manifest's `credentials` (each grant with the
+App), one source per kind beside the legacy `github` and `secrets`. Each kind lands in `/run/ensemble/secrets/<kind>/`
+(`src/broker/protocol/docker-broker/fixtures/credential-dirs.json`). Nothing sends a request yet, and protocol 33's
+broker refuses a start naming any kind.
+
 | Credential | Host | Purpose | Stored at | Readers | Lifetime | Revoke |
 |---|---|---|---|---|---|---|
 | host `gh` login | `tmux`; the orchestrator and manager on either | target-repo check, docs fetch, duplicate search; the Delegate's ready gate (`gh pr ready`, `--undo`, Actions job and workflow-run reads); `repo.py`; the manager's PR reads. Push and PR rights on every target repo: a classic token needs `repo`, `read:org`, `gist`; a fine-grained one also Actions read | the system credential store, else a plain-text file (`gh auth status` says which) | any process running as the user; never a container | until revoked | github.com › Settings › Applications › GitHub CLI › Revoke access (every token gh made); `gh auth logout` is local only |
