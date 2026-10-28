@@ -28,7 +28,7 @@ LINEAR_STATES = {"ready": "todo", "review": "in_review", "done": "done"}
 T0 = datetime(2026, 10, 1, 9, tzinfo=UTC)
 USAGE = "five_hour=50% weekly=none"
 BAD_TASK = (
-    'Task "light-research" is not one of engineer\'s tasks (build, light-build). '
+    'Task "light-research" is not one of engineer\'s tasks (build, light-build, decompose). '
     "Fix the task or the assignee, then move the issue back to ready/."
 )
 
