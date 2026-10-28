@@ -43,7 +43,7 @@ RETIRED = (
     "/home/agent/keychain-backup",
 )
 APM = re.compile(r"~/apm/\S*")
-APM_OK = re.compile(r"~/apm/(?:bin/[A-Za-z0-9_-]+|lib/[A-Za-z0-9_-]+\.zsh)(?![\w/.-])")
+APM_OK = re.compile(r"~/apm/(?:bin/[A-Za-z0-9_-]+|lib/[A-Za-z0-9_-]+\.zsh|js/click\.js)(?![\w/.-])")
 TOOLS = re.compile(r"(?<![\w/-])(linearlogin|maillink)(?![\w-])")
 PROJECT = re.compile(r"~/mini-op-projects/ensemble/([^/\s`'\"]+)/")
 
@@ -122,6 +122,12 @@ class Layout(Case):
                 ]
                 found += [where] * bool(apm or tools)
         self.assertEqual(found, [])
+
+    def test_only_the_documented_click_jxa_helper_is_allowed(self):
+        self.assertIsNotNone(APM_OK.fullmatch("~/apm/js/click.js"))
+        for path in ("keys.js", "click.js.bak", "click.js/extra", "other.js"):
+            with self.subTest(path=path):
+                self.assertIsNone(APM_OK.match(f"~/apm/js/{path}"))
 
     def test_downloads_and_strata_conf(self):
         for script in ("install-ensemble/install-test", "clean-ensemble/clean-test"):

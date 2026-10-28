@@ -1501,11 +1501,11 @@ class Owned:
     def up(self) -> bool:
         return self._session._running.client_up
 
-    def send(self, text: str) -> None:
-        self._session.send(text)
+    def try_send(self, text: str, pending: Callable[[], bool]) -> bool:
+        return self._session._running._try_send(text, pending)
 
-    def press(self, keys: Sequence[KeyPress]) -> None:
-        self._session.press(keys)
+    def press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None:
+        self._session._running._try_press(keys, pending)
 
     def screen(self, lines: int | None = None) -> str:
         return self._session.screen(lines)

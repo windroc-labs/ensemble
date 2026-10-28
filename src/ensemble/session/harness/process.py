@@ -67,8 +67,8 @@ class Worker(Protocol):
     def returncode(self) -> int | None: ...
     def confirm_end(self, timeout: float) -> int | None: ...
     def view(self, channel: Channel, idle_timeout: float | None = None) -> Any: ...
-    def send(self, text: str) -> None: ...
-    def press(self, keys: Sequence[KeyPress]) -> None: ...
+    def try_send(self, text: str, pending: Callable[[], bool]) -> bool: ...
+    def press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None: ...
     def screen(self, lines: int | None = None) -> str: ...
     def redisplay(self) -> bool: ...
 
@@ -184,14 +184,17 @@ class Harness:
 
     def _supervise(self, worker: Worker) -> int:
         while True:
-            batch = self._channel.pending()
+            inputs = (Op.SEND, Op.PRESS)
+            batch = self._channel.pending(keep=inputs)
+            waiting = False
             for index, (ident, op, data) in enumerate(batch):
                 if op in SERVED:
-                    self._serve(worker, op, data, ident)
+                    if not (waiting and op in inputs):
+                        waiting = not self._serve(worker, op, data, ident) or waiting
                     continue
                 code = self._end(worker, op, ident)
                 if code is not None:
-                    self._leftover = batch[index + 1 :]  # taken already: served after the exit
+                    self._leftover = [r for r in batch[index + 1 :] if r[1] not in inputs]
                     return code
             if self._caller is not None and hung_up(self._caller):
                 LOG.info("session harness %s: its caller ended", self._channel.directory)
@@ -226,16 +229,21 @@ class Harness:
             self._status = status
             self._write()
 
-    def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> None:
+    def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> bool:
         """Any failure is a refusal that leaves the worker up."""
+        if op in (Op.SEND, Op.PRESS) and not self._channel.request_pending(ident):
+            return True
         try:
-            found = _served(worker, op, data)
+            found = _served(worker, op, data, lambda: self._channel.request_pending(ident))
         except (ConfigError, SessionError, ValueError) as error:
             self._answer(
                 ident, ok=False, error=str(error), unanswered=isinstance(error, Unanswered)
             )
         else:
+            if found is None:
+                return False
             self._answer(ident, ok=True, data=found)
+        return True
 
     def _end(self, worker: Worker, op: Op, ident: str | None) -> int | None:
         """The exit code once confirmed (Exited logged, then answered); else None, answered."""
@@ -375,7 +383,7 @@ class Harness:
             LOG.warning("session harness %s: harness.json: %s", self._channel.directory, error)
 
 
-def _served(worker: Worker, op: Op, data: dict) -> dict:
+def _served(worker: Worker, op: Op, data: dict, pending: Callable[[], bool]) -> dict | None:
     """Its fields checked first (ValueError), then the worker's call."""
     if op == Op.DISPLAY:
         return {"reopened": worker.redisplay()}
@@ -383,8 +391,7 @@ def _served(worker: Worker, op: Op, data: dict) -> dict:
         text = data.get("text")
         if not isinstance(text, str) or len(text.encode()) > SEND_MAX:
             raise ValueError(f"{op}: want text, a string of at most {SEND_MAX} bytes")
-        worker.send(text)
-        return {}
+        return {} if worker.try_send(text, pending) else None
     if op == Op.PRESS:
         keys = data.get("keys")
         if (
@@ -393,7 +400,7 @@ def _served(worker: Worker, op: Op, data: dict) -> dict:
             or not all(isinstance(key, str) for key in keys)
         ):
             raise ValueError(f"{op}: want keys, 1 to {KEYS_MAX} key names")
-        worker.press([KeyPress.parse(key) for key in keys])
+        worker.press([KeyPress.parse(key) for key in keys], pending)
         return {}
     lines = data.get("lines")
     if (

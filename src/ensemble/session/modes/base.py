@@ -1,4 +1,4 @@
-"""Shared mode lifecycle: prepare, record, then launch; stop() is idempotent."""
+"""Session modes own startup, polling and idempotent shutdown: prepare, record, then launch."""
 
 import json
 import os
@@ -178,7 +178,15 @@ class BaseMode(ABC):
         return self.state() == Liveness.LIVE
 
     @abstractmethod
-    def send(self, text: str) -> None: ...
+    def send(self, text: str) -> bool | None:
+        """False: retry after pumping; None/True: submitted."""
+
+    def _try_send(self, text: str, pending: Callable[[], bool]) -> bool:
+        return pending() and self.send(text) is not False
+
+    def _try_press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None:
+        if pending():
+            self.press(keys)
 
     @abstractmethod
     def screen(self, lines: int | None = None) -> str: ...
