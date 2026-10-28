@@ -1778,6 +1778,16 @@ class StartupTui(ScanTui):
 
 
 class StartupSendTest(Base):
+    def test_cancellation_before_paste_sends_no_input_and_allows_the_next_send(self):
+        mode = self.started_with(prompt="")
+        self.ready(turn=False)
+        pending = iter((True, False))
+        self.assertFalse(mode._try_send("canceled", lambda: next(pending)))
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(mode._store.prompts(mode.generation), (0, 0))
+        self.assertTrue(mode.send("next"))
+        self.assertEqual(self.sent(), [Paste("next"), Key("Enter")])
+
     def test_each_wait_reports_its_gate_and_cancellation_stays_distinct(self):
         mode = self.started_with()
         self.assertEqual(mode._try_send("next", lambda: True), "client startup")

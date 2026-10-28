@@ -929,6 +929,60 @@ class WaitingOwned(RemoteOwned):
 
 
 class WaitingSendTest(Base):
+    def test_cancellation_between_request_checks_does_not_answer_or_send(self):
+        owned = WaitingOwned()
+        owned.ready = True
+        harness = self.harness(owned)
+        data = {"text": "canceled"}
+        ident = "a" * 32
+        self.queue("a", Op.SEND, data)
+        request = os.path.join(self.channel.directory, "requests", ident + ".json")
+        isfile = os.path.isfile
+
+        def canceled_after_check(path):
+            found = isfile(path)
+            if path == request and found:
+                os.unlink(path)
+            return found
+
+        with mock.patch("os.path.isfile", side_effect=canceled_after_check):
+            self.assertTrue(harness._serve(owned, Op.SEND, data, ident))
+        self.assertEqual(owned.inputs, [])
+        self.assertFalse(
+            os.path.exists(os.path.join(self.channel.directory, "replies", ident + ".json"))
+        )
+        self.queue("b", Op.SEND, {"text": "next"})
+        self.assertTrue(harness._serve(owned, Op.SEND, {"text": "next"}, "b" * 32))
+        self.assertEqual(owned.inputs, [("send", "next")])
+        with open(os.path.join(self.channel.directory, "replies", "b" * 32 + ".json")) as stream:
+            self.assertTrue(json.load(stream)["ok"])
+
+    def test_cancellation_at_the_worker_boundary_does_not_answer_or_send(self):
+        owned = WaitingOwned()
+        owned.ready = True
+        harness = self.harness(owned)
+        data = {"text": "canceled"}
+        ident = "a" * 32
+        self.queue("a", Op.SEND, data)
+        send = owned.try_send
+
+        def cancel(text, pending):
+            os.unlink(os.path.join(self.channel.directory, "requests", ident + ".json"))
+            return send(text, pending)
+
+        owned.try_send = cancel
+        self.assertTrue(harness._serve(owned, Op.SEND, data, ident))
+        self.assertEqual(owned.inputs, [])
+        self.assertFalse(
+            os.path.exists(os.path.join(self.channel.directory, "replies", ident + ".json"))
+        )
+        owned.try_send = send
+        self.queue("b", Op.SEND, {"text": "next"})
+        self.assertTrue(harness._serve(owned, Op.SEND, {"text": "next"}, "b" * 32))
+        self.assertEqual(owned.inputs, [("send", "next")])
+        with open(os.path.join(self.channel.directory, "replies", "b" * 32 + ".json")) as stream:
+            self.assertTrue(json.load(stream)["ok"])
+
     def test_a_short_send_wait_names_its_deadline_with_the_production_poll(self):
         owned = WaitingOwned()
         pumping = threading.Event()
