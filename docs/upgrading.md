@@ -8,6 +8,10 @@ Existing GitHub/env configuration stays in place until WDRC-350 and WDRC-351 mig
 For `--credentials JSON` options, defaults, host-side state and resume rules, see
 [Credential spec](architecture.md#credentials).
 
+To supply references for a new run, use `--credentials JSON` on `ensemble-delegate run`, `ensemble-session start`,
+or `ensemble-crew worker NAME --credentials JSON`. For role runs, put `--task` and `--credentials` before ROLE:
+`ensemble-crew role [--task TASK] [--credentials JSON] ROLE --input TEXT`.
+
 ### Linear container credentials
 
 Before declaring a role app in `linear`:

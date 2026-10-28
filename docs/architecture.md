@@ -397,8 +397,9 @@ This envelope keeps malformed opaque text from changing the surrounding manifest
 type or kind registry. tmux ignores these fields; in_process refuses either field's presence, even empty text.
 
 `ensemble-delegate run --credentials JSON` and `ensemble-session start --credentials JSON` take the caller's
-declaration as raw text, defaulting to absent. Crew forwards this option after the role or worker name:
-`ensemble-crew role ROLE --credentials JSON --input TEXT` or
+declaration as raw text, defaulting to absent. Crew parses `--task` and `--credentials` before ROLE:
+`ensemble-crew role [--task TASK] --credentials JSON ROLE --input TEXT`.
+The worker form forwards credentials after NAME:
 `ensemble-crew worker NAME --client CLIENT --credentials JSON`. Caller overlays cannot carry `credentials`.
 Without an explicit `--credentials`, crew role queries `ensemble-orchestrator credentials --role ROLE [--task TASK]`
 for its declarations; an undeclared role yields `{}`. An explicit option replaces that whole default without a query.
