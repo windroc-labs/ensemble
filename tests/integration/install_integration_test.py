@@ -2163,11 +2163,26 @@ class InstallTest(Case):
         self.assertIn("ensemble-broker login github ensemble-broker-bot", self.calls())
         self.assertEqual(len(self.state()["login_github"]), 64)
         self.assertEqual(self.state()["github_app"], "ensemble-test-bot")
-        self.assertIn('[session.hosts.docker.github] app = "ensemble-test-bot"', result.tty)
-        self.assertTrue(
-            self.config()
-            .read_text()
-            .endswith('[session.hosts.docker.github]\napp = "ensemble-test-bot"\n')
+        self.assertIn(
+            '[orchestrator.roles.engineer.credentials.github] app = "ensemble-test-bot"', result.tty
+        )
+        declaration = tomllib.loads(self.config().read_text())["orchestrator"]["roles"]["engineer"][
+            "credentials"
+        ]["github"]
+        self.assertEqual(declaration["app"], "ensemble-test-bot")
+        self.assertEqual(
+            declaration["permissions"],
+            {
+                "contents": "write",
+                "pull_requests": "write",
+                "workflows": "write",
+                "checks": "read",
+                "actions": "read",
+                "statuses": "read",
+            },
+        )
+        self.assertNotIn(
+            "github", tomllib.loads(self.config().read_text())["session"]["hosts"]["docker"]
         )
         result = self.again()
         self.assert_ok(result)

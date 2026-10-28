@@ -77,6 +77,10 @@ linear = "role"
 
 # local: [orchestrator.roles.engineer]
 # local: max_runs = 1
+# scripts/install.sh writes the engineer App declaration after broker enrollment; no repo means every installation.
+# local: [orchestrator.roles.engineer.credentials.github]
+# local: app = "<App slug>"
+# local: permissions = { contents = "write", pull_requests = "write", workflows = "write", checks = "read", actions = "read", statuses = "read" }
 
 # Local clones; optional, an unlisted repo gets a fresh clone.
 # A bare "<owner>/<name>" is on the build roles' host (their output host, else the documents host); use

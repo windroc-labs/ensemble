@@ -55,6 +55,16 @@ OpenCode provider keys, GitHub installation tokens, environment secrets and requ
 App private keys, Codex refresh tokens and enrolled Linear client secrets stay broker-side. Docker access
 and processes running as you remain trusted; a container separates the worker from the host, not its tools from its client.
 
+GitHub container tokens require a `github` credential declaration (`app`, `permissions`, optional `repo`). The
+broker merges the caller's and environment's declarations, with the caller's whole same-kind value winning, and
+alone interprets kinds. Session and Delegate pass both values unchanged. An undeclared run receives no GitHub token.
+The broker signs, renews and revokes the declared tokens and returns the App bot's commit/PR identity in its start
+response's generic `env` map; Session applies that map without interpreting credential kinds.
+
+Engineer access comes from its orchestrator role declaration, written by the installer; verifier output-repo access
+is separately declared and repo-scoped. Prefetch uses a temporary clone token and does not imply container access.
+Configuration and upgrade steps: [explicit GitHub credentials](upgrading.md#broker-protocol-35-explicit-github-credentials).
+
 Docker networking goes through the external [egress proxy](https://github.com/windroc-labs/egress-proxy),
 whose [label contract](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md)
 the [broker consumes](../src/broker/internal/launcher/egress.go). The broker requires a healthy proxy before starting a worker.
