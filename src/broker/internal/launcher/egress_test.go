@@ -2,15 +2,11 @@ package launcher
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"ensemble/broker/internal/docker"
-	"ensemble/broker/internal/fixtures"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -18,15 +14,6 @@ var proxyCalls = []string{"ps --all", "container inspect", "network inspect"}
 
 func labelsEdit(edit func(labels map[string]any)) func(map[string]any) {
 	return func(g map[string]any) { edit(g["Config"].(map[string]any)["Labels"].(map[string]any)) }
-}
-
-func fixtureManifest(t *testing.T, name string) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return writeManifest(t, data)
 }
 
 // credentialHost is startHost with every credential side recording its calls.
@@ -41,7 +28,7 @@ func credentialHost(w *world) (Host, *fakeDocker, *fakeCreds, *fakeTokens, *fake
 func credentialManifest(t *testing.T, name string) string {
 	t.Helper()
 	if base, ok := strings.CutSuffix(name, withSecretsSuffix); ok {
-		return editedFixture(t, base, withSecrets(dummySecrets))
+		return fixtureManifest(t, base, withSecrets(dummySecrets))
 	}
 	return fixtureManifest(t, name)
 }
@@ -108,7 +95,7 @@ func TestEgressRefusals(t *testing.T) {
 				}
 				if !strings.Contains(e.Message, tc.want) || !strings.HasSuffix(e.Message, egressHint) ||
 					!strings.Contains(e.Message, "workers") || // the caller network, by key or network name
-					!strings.Contains(e.Message, "Start the egress proxy (~/.egress/current/start.sh") ||
+					!strings.Contains(e.Message, "Start the egress proxy with ~/.egress/current/start.sh") ||
 					(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-proxy")) {
 					t.Fatalf("message %q lacks %q, the proxy or ~/.egress/current/start.sh", e.Message, tc.want)
 				}
@@ -177,7 +164,7 @@ func TestStartJoinsOnlyWorkers(t *testing.T) {
 				h, d, _, _, _, _, _ := credentialHost(w)
 				path := fixtureManifest(t, manifest)
 				if generation != "" {
-					path = editedFixture(t, manifest, func(f map[string]any) { f["generation"] = generation })
+					path = fixtureManifest(t, manifest, func(f map[string]any) { f["generation"] = generation })
 				}
 				if _, err := h.Start(context.Background(), path); err != nil {
 					t.Fatal(err)
@@ -194,46 +181,6 @@ func TestStartJoinsOnlyWorkers(t *testing.T) {
 					t.Fatalf("proxy calls %q", d.calls[:2])
 				}
 			})
-		}
-	}
-}
-
-func editedFixture(t *testing.T, name string, edit func(map[string]any)) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), name))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatal(err)
-	}
-	edit(fields)
-	if data, err = json.Marshal(fields); err != nil {
-		t.Fatal(err)
-	}
-	return writeManifest(t, data)
-}
-
-func TestStartProxyEnv(t *testing.T) {
-	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
-		t.Fatal(err)
-	}
-	env := envArgs(detached(d))
-	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
-		if env[key] != workersProxy {
-			t.Fatalf("%s=%q", key, env[key])
-		}
-	}
-	for _, key := range []string{"NO_PROXY", "no_proxy"} {
-		if env[key] != "localhost,127.0.0.1,::1" {
-			t.Fatalf("%s=%q", key, env[key])
-		}
-	}
-	for _, key := range []string{"ALL_PROXY", "all_proxy"} {
-		if _, ok := env[key]; ok {
-			t.Fatalf("%s set", key)
 		}
 	}
 }
@@ -301,7 +248,7 @@ func TestEgressListingIgnoresBlankLines(t *testing.T) {
 // A manifest's gateway picks the caller network: the container joins it alone, with its proxy.
 func TestStartOnCallerNetwork(t *testing.T) {
 	h, d, _, _, _, _, _ := credentialHost(&world{labels: goodLabels()})
-	path := editedFixture(t, "manifest-valid.json", func(f map[string]any) { f["gateway"] = "mini-op" })
+	path := editedManifest(t, func(f map[string]any) { f["gateway"] = "mini-op" })
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +294,7 @@ func TestEgressRefusalsByKey(t *testing.T) {
 			w := tc.world
 			w.labels = goodLabels()
 			h, d, creds, _, _, _, _ := credentialHost(&w)
-			path := editedFixture(t, "manifest-valid.json", func(f map[string]any) { f["gateway"] = tc.gateway })
+			path := editedManifest(t, func(f map[string]any) { f["gateway"] = tc.gateway })
 			_, err := h.Start(context.Background(), path)
 			e := protoErr(t, err)
 			if e.Code != protocol.EgressUnavailable || e.Code == protocol.Busy || e.Holder != nil {

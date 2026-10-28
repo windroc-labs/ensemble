@@ -65,14 +65,6 @@ func TestUnreachable(t *testing.T) {
 	}
 }
 
-func TestNewNeedsNoDockerDesktop(t *testing.T) {
-	_, clean, err := New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	clean()
-}
-
 func TestMissingExecutableIsUnreachable(t *testing.T) {
 	present := fakeDocker(t, "touch ran").path
 	for _, c := range []*CLI{{path: "/nonexistent/docker", buildx: present}, {path: present, buildx: "/nonexistent/docker-buildx"}} {

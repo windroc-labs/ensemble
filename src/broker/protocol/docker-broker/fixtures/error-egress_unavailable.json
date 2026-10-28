@@ -3,7 +3,7 @@
   "error": {
     "command": "start",
     "code": "egress_unavailable",
-    "message": "Egress proxy egress-proxy is unhealthy, not healthy. Caller network workers needs it. Start the egress proxy (~/.egress/current/start.sh, docs/architecture.md#egress-proxy), then retry.",
+    "message": "Egress proxy egress-proxy is unhealthy, not healthy. Caller network workers needs it. Start the egress proxy with ~/.egress/current/start.sh, wait until it is healthy, then retry.",
     "cleanup": "not_needed"
   }
 }

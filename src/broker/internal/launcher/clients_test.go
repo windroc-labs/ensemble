@@ -139,16 +139,6 @@ func prunedLast(t *testing.T, e *buildEnv) {
 	}
 }
 
-func layerBuilds(calls [][]string) int {
-	n := 0
-	for _, c := range calls {
-		if c[0] == "build" && slices.Contains(c, "--build-arg") {
-			n++
-		}
-	}
-	return n
-}
-
 func TestCheckClientsRebuildsDifferingVariant(t *testing.T) {
 	ctx := context.Background()
 	for name, tc := range map[string]struct{ pkg, version string }{
@@ -232,7 +222,7 @@ func TestCheckClientsCurrentRebuildsNothing(t *testing.T) {
 	if err != nil || got.Latest != e.latestVersions() || got.Rebuilt == nil || len(got.Rebuilt) != 0 {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if layerBuilds(e.fake.calls[calls:]) != 0 {
+	if packageBuild(e.fake.calls[calls:]) != nil {
 		t.Fatalf("rebuilt: %q", e.fake.verbs()[calls:])
 	}
 	prunedLast(t, e)
@@ -266,7 +256,7 @@ func TestCheckClientsRegistryDown(t *testing.T) {
 			if message, cause := buildFailure(t, err); message != "Cannot look up the latest client releases." || cause != "" {
 				t.Fatalf("%q %q", message, cause)
 			}
-			if layerBuilds(e.fake.calls[calls:]) != 0 {
+			if packageBuild(e.fake.calls[calls:]) != nil {
 				t.Fatalf("rebuilt: %q", e.fake.verbs()[calls:])
 			}
 			prunedLast(t, e)
@@ -382,7 +372,7 @@ func TestCheckClientsDropsStaleRecords(t *testing.T) {
 			e.releases.latest["@openai/codex"] = "0.171.0"
 			calls := len(e.fake.calls)
 			got, err := e.host().CheckClients(ctx)
-			if err != nil || len(got.Rebuilt) != 0 || layerBuilds(e.fake.calls[calls:]) != 0 {
+			if err != nil || len(got.Rebuilt) != 0 || packageBuild(e.fake.calls[calls:]) != nil {
 				t.Fatalf("%+v %v %q", got, err, e.fake.verbs()[calls:])
 			}
 			if _, err := os.Stat(record(e, key)); os.IsNotExist(err) == tc.kept {

@@ -3,7 +3,7 @@
   "error": {
     "command": "build",
     "code": "build_failed",
-    "message": "Base image dummy-env:test lacks tmux, a non-root user agent; see docs/architecture.md#base-images.",
+    "message": "Base image dummy-env:test lacks tmux, a non-root user agent; add what it lacks to the image, then retry.",
     "cleanup": "not_needed"
   }
 }

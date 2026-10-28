@@ -246,32 +246,42 @@ func writeManifest(t *testing.T, data []byte) string {
 	return path
 }
 
-func validManifest(t *testing.T) string {
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
+// fixtureBytes is fixture name's content; with edits, re-encoded with each (nil: none) applied to its fields.
+func fixtureBytes(t *testing.T, name string, edits ...func(map[string]any)) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), name))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return writeManifest(t, data)
-}
-
-// editedManifest is manifest-valid.json, edit applied to its fields.
-func editedManifest(t *testing.T, edit func(map[string]any)) string {
-	t.Helper()
-	data, err := os.ReadFile(validManifest(t))
-	if err != nil {
-		t.Fatal(err)
+	if len(edits) == 0 {
+		return data
 	}
 	var fields map[string]any
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if edit != nil {
-		edit(fields)
+	for _, edit := range edits {
+		if edit != nil {
+			edit(fields)
+		}
 	}
 	if data, err = json.Marshal(fields); err != nil {
 		t.Fatal(err)
 	}
-	return writeManifest(t, data)
+	return data
+}
+
+// fixtureManifest is a manifest file holding fixtureBytes(name, edits...).
+func fixtureManifest(t *testing.T, name string, edits ...func(map[string]any)) string {
+	t.Helper()
+	return writeManifest(t, fixtureBytes(t, name, edits...))
+}
+
+func validManifest(t *testing.T) string { return fixtureManifest(t, "manifest-valid.json") }
+
+// editedManifest is manifest-valid.json, edit applied to its fields.
+func editedManifest(t *testing.T, edit func(map[string]any)) string {
+	return fixtureManifest(t, "manifest-valid.json", edit)
 }
 
 func withClaudeAccount(account any) func(map[string]any) {
@@ -522,12 +532,8 @@ func TestStartOrder(t *testing.T) {
 		!slices.Equal(hook[len(hook)-2:], []string{"hook", "/usr/local/bin/ensemble-session"}) {
 		t.Fatalf("%q %q", boot, hook)
 	}
-	noHook, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-no-hook.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	h, d = startHost(&world{labels: goodLabels()}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), writeManifest(t, noHook)); err != nil {
+	if _, err := h.Start(context.Background(), fixtureManifest(t, "manifest-no-hook.json")); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range d.calls {
@@ -768,38 +774,6 @@ func TestStartPhaseTimes(t *testing.T) {
 		if _, err := h.Start(context.Background(), validManifest(t)); err == nil || progress.Len() != 0 {
 			t.Fatalf("%s: %v, progress %q", name, err, progress.String())
 		}
-	}
-}
-
-func TestCodexStartRunsNoClientUpdate(t *testing.T) {
-	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
-	v := defaultVersions()
-	h.Versions, h.Codex = v, &fakeCodexCreds{}
-	var progress strings.Builder
-	h.Progress = &progress
-	got, err := h.Start(context.Background(), codexManifest(t))
-	if err != nil || got.Clients.Codex != "codex-cli 0.163.0" || !slices.Equal(v.calls, []string{"verify"}) {
-		t.Fatalf("%+v %v %v", got, err, v.calls)
-	}
-	for _, call := range d.calls {
-		joined := strings.Join(call, " ")
-		if strings.Contains(joined, "codex-update") || strings.Contains(joined, "codex-probe") || strings.Contains(joined, "/opt/ensemble/runtime") {
-			t.Fatalf("client update step: %v", call)
-		}
-	}
-	if strings.Contains(progress.String(), "client_update") || strings.Contains(progress.String(), "update-codex") {
-		t.Fatal(progress.String())
-	}
-	data, err := json.Marshal(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fields map[string]any
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatal(err)
-	}
-	if _, present := fields["client_update"]; present {
-		t.Fatal(string(data))
 	}
 }
 

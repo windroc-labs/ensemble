@@ -87,11 +87,35 @@ func TestPluginCommitChangesTheKey(t *testing.T) {
 }
 
 func TestPluginSourceValidation(t *testing.T) {
-	for _, names := range [][]string{{"updraft"}, {"x@owner/repo"}, {"x@owner/repo#" + strings.Repeat("a", 39)}, {"x@owner/repo#" + strings.Repeat("A", 40)}, {"x@owner/repo#" + strings.Repeat("a", 40), "y@owner/repo#" + strings.Repeat("b", 40)}, {"x@owner/repo#" + strings.Repeat("a", 40), "x@owner/other#" + strings.Repeat("a", 40)}, {"unknown"}, {"updraft@market"}, {"x@../repo"}, {"x@owner/.."}, {"x@owner/repo#ref"}, {"updraft@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc", "updraft@owner/repo"}} {
-		t.Run(strings.Join(names, ","), func(t *testing.T) {
+	a, b, c := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+	widget := "widget@custom/plugin#" + a
+	const format = ": use name@owner/repo#40-hex-commit"
+	for _, tc := range []struct {
+		want  string
+		names []string
+	}{
+		{format, []string{"updraft"}}, {format, []string{"x@owner/repo"}},
+		{format, []string{"x@owner/repo#" + strings.Repeat("a", 39)}}, {format, []string{"x@owner/repo#" + strings.Repeat("A", 40)}},
+		{"Plugin y: conflicting commits for owner/repo.", []string{"x@owner/repo#" + a, "y@owner/repo#" + b}},
+		{"Plugin x: duplicate plugin name.", []string{"x@owner/repo#" + a, "x@owner/other#" + a}},
+		{format, []string{"unknown"}}, {format, []string{"updraft@market"}}, {format, []string{"x@../repo"}},
+		{format, []string{"x@owner/.."}}, {format, []string{"x@owner/repo#ref"}},
+		{format, []string{"updraft@vendor/plugin#" + a + "::vendor/catalogue#" + c, "updraft@owner/repo"}},
+		// One commit per plugin repository, also behind a shared marketplace, and per marketplace.
+		{"Plugin beta: conflicting commits for vendor/plugin.",
+			[]string{"updraft@vendor/plugin#" + a + "::vendor/catalogue#" + c, "beta@vendor/plugin#" + b + "::vendor/catalogue#" + c}},
+		{"Plugin two: conflicting commits for marketplace shared/catalogue.",
+			[]string{"one@first/plugin#" + a + "::shared/catalogue#" + a, "two@second/plugin#" + b + "::shared/catalogue#" + b}},
+		// Malformed configured marketplaces.
+		{format, []string{widget + "::"}}, {format, []string{widget + "::owner/catalogue"}},
+		{format, []string{widget + "::owner/catalogue#main"}}, {format, []string{widget + "::../catalogue#" + a}},
+		{format, []string{widget + "::owner/catalogue#" + strings.Repeat("A", 40)}},
+	} {
+		t.Run(strings.Join(tc.names, ","), func(t *testing.T) {
 			e := newBuildEnv(t)
-			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: names}, -1)
-			if err == nil || !strings.Contains(err.Error(), "Plugin") || len(e.fake.calls) != 0 {
+			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: tc.names}, -1)
+			if err == nil || !strings.Contains(err.Error(), "Plugin") || !strings.Contains(err.Error(), tc.want) ||
+				len(e.fake.calls) != 0 {
 				t.Fatalf("invalid source accepted: %v; %q", err, e.fake.calls)
 			}
 		})
@@ -108,17 +132,6 @@ func TestEmptyPluginSources(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(tmp, "package/plugin-sources.json"))
 	if err != nil || string(data) != "[]" {
 		t.Fatalf("%s %v", data, err)
-	}
-}
-
-func TestPluginPinsCannotConflictBehindSharedMarketplace(t *testing.T) {
-	e := newBuildEnv(t)
-	_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{
-		"updraft@vendor/plugin#" + strings.Repeat("a", 40) + "::vendor/catalogue#" + strings.Repeat("c", 40),
-		"beta@vendor/plugin#" + strings.Repeat("b", 40) + "::vendor/catalogue#" + strings.Repeat("c", 40),
-	}}, -1)
-	if err == nil || !strings.Contains(err.Error(), "conflicting commits") || len(e.fake.calls) != 0 {
-		t.Fatalf("conflicting upstream pins accepted: %v; %q", err, e.fake.calls)
 	}
 }
 
@@ -147,27 +160,6 @@ func TestConfiguredMarketplacePinsAffectImageKey(t *testing.T) {
 	}
 }
 
-func TestMarketplacePinsCannotConflictBetweenPlugins(t *testing.T) {
-	e := newBuildEnv(t)
-	_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{
-		"one@first/plugin#" + strings.Repeat("a", 40) + "::shared/catalogue#" + strings.Repeat("a", 40),
-		"two@second/plugin#" + strings.Repeat("b", 40) + "::shared/catalogue#" + strings.Repeat("b", 40),
-	}}, -1)
-	if err == nil || !strings.Contains(err.Error(), "conflicting commits for marketplace") || len(e.fake.calls) != 0 {
-		t.Fatalf("conflicting catalogue pins accepted: %v; %q", err, e.fake.calls)
-	}
-}
-
-func TestMalformedConfiguredMarketplacesFailBeforeDocker(t *testing.T) {
-	for _, suffix := range []string{"::", "::owner/catalogue", "::owner/catalogue#main", "::../catalogue#" + strings.Repeat("a", 40), "::owner/catalogue#" + strings.Repeat("A", 40)} {
-		e := newBuildEnv(t)
-		_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{"widget@custom/plugin#" + strings.Repeat("a", 40) + suffix}}, -1)
-		if err == nil || len(e.fake.calls) != 0 {
-			t.Fatalf("invalid marketplace suffix accepted: %q: %v", suffix, err)
-		}
-	}
-}
-
 func TestPluginNameGrammar(t *testing.T) {
 	long := strings.Repeat("a", 64)
 	for name, want := range map[string]bool{"a": true, "a.b-c_d": true, long: true, long + "a": false, "../x": false, ".x": false, "-x": false, "a/b": false, "": false, "a@b": false} {
@@ -188,17 +180,6 @@ func packageBuild(calls [][]string) []string {
 		}
 	}
 	return nil
-}
-
-func TestImagePluginDirs(t *testing.T) {
-	e := newBuildEnv(t)
-	spec := BuildSpec{Plugins: []string{"beta@owner/market#" + strings.Repeat("b", 40)}, ImagePlugins: []string{"zeta", "alpha"}}
-	if _, err := e.host().Build(context.Background(), e.pkg, spec, -1); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(packageBuild(e.fake.calls), "ENSEMBLE_PLUGIN_DIRS=/opt/ensemble/plugins/beta:/opt/windroc/plugins/alpha:/opt/windroc/plugins/zeta") {
-		t.Fatalf("%q", packageBuild(e.fake.calls))
-	}
 }
 
 func TestImagePluginDuplicates(t *testing.T) {

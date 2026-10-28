@@ -274,7 +274,7 @@ class Install(Case):
         self.assertTrue(self.ran.exists())
         self.assertIn(
             "v9.8.7's ensemble-broker speaks protocol 6, this plugin wants 7: install the plugin"
-            " at v9.8.7 (docs/upgrading.md), or build the broker from this plugin with"
+            " at v9.8.7, or build the broker from this plugin with"
             f" sh {self.plugin.resolve()}/src/broker/install.sh --build, which needs Go,"
             " then run its retrust; nothing installed",
             result.stderr,

@@ -129,5 +129,5 @@ func (a app) legacyError() error {
 	for _, f := range found[:min(3, len(found))] {
 		quoted = append(quoted, fmt.Sprintf("%q", f))
 	}
-	return fmt.Errorf("old-name broker items found (%d: %s): run the maintainer's one-time rename step (docs/upgrading.md), then rerun", len(found), strings.Join(quoted, ", "))
+	return fmt.Errorf("old-name broker items found (%d: %s): run the maintainer's one-time rename step, which renames them to ensemble-broker-*, then rerun", len(found), strings.Join(quoted, ", "))
 }

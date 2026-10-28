@@ -59,7 +59,7 @@ else
     || want=
   got=$("$work/ensemble-broker" version 2>/dev/null | sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p')
   [ -n "$want" ] && [ "$got" = "$want" ] \
-    || fail "$tag's ensemble-broker speaks protocol ${got:-unknown}, this plugin wants ${want:-unknown}: install the plugin at $tag (docs/upgrading.md), or build the broker from this plugin with sh $here/install.sh --build, which needs Go, then run its retrust; nothing installed"
+    || fail "$tag's ensemble-broker speaks protocol ${got:-unknown}, this plugin wants ${want:-unknown}: install the plugin at $tag, or build the broker from this plugin with sh $here/install.sh --build, which needs Go, then run its retrust; nothing installed"
 fi
 if [ ! -e "$worker" ]; then
   mkdir -p "$worker"

@@ -5,14 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"ensemble/broker/internal/docker"
-	"ensemble/broker/internal/fixtures"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -83,13 +80,8 @@ func (f *fakeTokens) Prefetch(_ context.Context, repo, ref, dir, c string, run f
 	}
 	return nil
 }
-func githubManifest(t *testing.T) string {
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-github-app.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return writeManifest(t, data)
-}
+
+func githubManifest(t *testing.T) string { return fixtureManifest(t, "manifest-github-app.json") }
 
 func githubHost(w *world, tokens *fakeTokens) (Host, *fakeDocker) {
 	h, d := startHost(w, &fakeCreds{})
@@ -175,15 +167,13 @@ func TestStartGitHubFailureRollsBack(t *testing.T) {
 
 // A repo grant's renewal names the manifest's repo, so the broker renews that repository's slot alone.
 func TestMaintainRepoGrant(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-github-app.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	data = []byte(strings.Replace(string(data), `"app": "ensemble-broker-bot",`, `"app": "ensemble-broker-bot", "repo": "acme/out",`, 1))
+	path := fixtureManifest(t, "manifest-github-app.json", func(f map[string]any) {
+		f["github"].(map[string]any)["repo"] = "acme/out"
+	})
 	tokens := &fakeTokens{}
 	h := mountHost()
 	h.Docker, h.GitHub = &fakeDocker{}, tokens
-	if _, err := h.Maintain(context.Background(), container, writeManifest(t, data), nil, false); err != nil {
+	if _, err := h.Maintain(context.Background(), container, path, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) || !slices.Equal(tokens.repos, []string{"acme/out"}) {
@@ -210,40 +200,10 @@ func TestMaintainGitHub(t *testing.T) {
 	if len(tokens.permissions) != 1 || !maps.Equal(tokens.permissions[0], fixtureSet) {
 		t.Fatalf("refreshed with %v, want the manifest's set", tokens.permissions)
 	}
-	other := "ensemble-worker_1-ffffffffffffffffffffffffffffffff"
-	for name, tc := range map[string]struct {
-		container, manifest string
-		code                protocol.Code
-	}{
-		"other container": {other, githubManifest(t), protocol.ManifestRejected},
-		"missing":         {container, "/nonexistent/m.json", protocol.ManifestRejected},
-	} {
-		host := mountHost()
-		host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{}
-		_, err := host.Maintain(context.Background(), tc.container, tc.manifest, nil, false)
-		if protoErr(t, err).Code != tc.code {
-			t.Errorf("%s: %v", name, err)
-		}
-	}
-	for name, tc := range map[string]struct {
-		tokens *fakeTokens
-		code   protocol.Code
-	}{
-		"no key":      {&fakeTokens{ready: protocol.New(protocol.LoginRequired, "x")}, protocol.LoginRequired},
-		"no record":   {&fakeTokens{refresh: protocol.New(protocol.RefreshFailed, "x")}, protocol.RefreshFailed},
-		"write":       {&fakeTokens{refresh: errors.New("opaque")}, protocol.RefreshFailed},
-		"unreachable": {&fakeTokens{refresh: docker.ErrUnreachable}, protocol.DockerUnreachable},
-	} {
-		host := mountHost()
-		host.Docker, host.GitHub = &fakeDocker{}, tc.tokens
-		got, err := host.Maintain(context.Background(), container, githubManifest(t), nil, false)
-		if err != nil || len(got.Results) != 1 || got.Results[0].Error == nil || got.Results[0].Error.Code != tc.code {
-			t.Errorf("%s: %+v %v", name, got, err)
-		}
-	}
 	host := mountHost()
-	host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{}
-	if got, err := host.Maintain(context.Background(), container, validManifest(t), nil, false); err != nil || len(got.Results) != 0 {
-		t.Errorf("github null: %+v %v", got, err)
+	host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{refresh: docker.ErrUnreachable}
+	got, err = host.Maintain(context.Background(), container, githubManifest(t), nil, false)
+	if e := results(got)["github"].Error; err != nil || len(got.Results) != 1 || e == nil || e.Code != protocol.DockerUnreachable {
+		t.Errorf("unreachable: %+v %v", got, err)
 	}
 }

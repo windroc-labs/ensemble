@@ -54,53 +54,6 @@ func renewalFixture(t *testing.T) (Codex, *refreshingNative, *fakeCodexKeychain)
 	return c, n, key
 }
 
-func TestCodexRefreshConcurrentDelayedWaiter(t *testing.T) {
-	c, n, _ := renewalFixture(t)
-	n.enter = make(chan struct{}, 2)
-	clock := codexNow
-	c.now = func() time.Time { return clock }
-	n.refresh = func(home string) error {
-		return os.WriteFile(filepath.Join(home, "auth.json"), codexAuth(codexNow.Add(120*time.Second).Unix()), 0o600)
-	}
-	entered, release := make(chan struct{}), make(chan struct{})
-	result := make(chan error, 2)
-	go func() {
-		_, err := c.Inject(context.Background(), func([]string, []byte) error {
-			close(entered)
-			<-release
-			clock = clock.Add(61 * time.Second)
-			return nil
-		})
-		result <- err
-	}()
-	<-n.enter
-	<-entered
-	go func() {
-		_, err := c.Inject(context.Background(), func([]string, []byte) error { return nil })
-		result <- err
-	}()
-	<-n.enter
-	close(release)
-	for range 2 {
-		if err := <-result; err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n.refreshes != 1 {
-		t.Fatalf("native refresh count %d", n.refreshes)
-	}
-	clock = clock.Add(time.Second)
-	n.refresh = func(home string) error {
-		return os.WriteFile(filepath.Join(home, "auth.json"), codexAuth(clock.Add(time.Hour).Unix()), 0o600)
-	}
-	if _, err := c.Inject(context.Background(), func([]string, []byte) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if n.refreshes != 2 {
-		t.Fatalf("later refresh count %d", n.refreshes)
-	}
-}
-
 func TestCodexRenewalValidationAndCleanup(t *testing.T) {
 	for _, failure := range []string{"native", "account", "expiry", "write", "cancel"} {
 		t.Run(failure, func(t *testing.T) {
@@ -183,10 +136,16 @@ func TestCodexPublicationFailureRepairsWithoutRotation(t *testing.T) {
 }
 
 // TestConcurrentMaintainRenewsOnce: two maintains due at once renew the login once; the one queued on the account
-// lock delivers and publishes the login the first renewed.
+// lock, though it reads the renewed login still due over a minute later, delivers and publishes it. A later maintain
+// renews it again.
 func TestConcurrentMaintainRenewsOnce(t *testing.T) {
 	c, n, _ := renewalFixture(t)
 	n.enter = make(chan struct{}, 2)
+	clock := codexNow
+	c.now = func() time.Time { return clock }
+	n.refresh = func(home string) error {
+		return os.WriteFile(filepath.Join(home, "auth.json"), codexAuth(clock.Add(120*time.Second).Unix()), 0o600)
+	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	published, result := make(chan string, 2), make(chan error, 2)
 	payloads := make([][]byte, 2)
@@ -196,6 +155,7 @@ func TestConcurrentMaintainRenewsOnce(t *testing.T) {
 			payloads[0] = bytes.Clone(stdin)
 			close(entered)
 			<-release
+			clock = clock.Add(61 * time.Second)
 			return nil
 		}, publish)
 		result <- err
@@ -219,12 +179,16 @@ func TestConcurrentMaintainRenewsOnce(t *testing.T) {
 	if n.refreshes != 1 {
 		t.Fatalf("native refresh count %d", n.refreshes)
 	}
-	want := codexNow.Add(time.Hour).Format(time.RFC3339)
+	want := codexNow.Add(120 * time.Second).Format(time.RFC3339)
 	if a, b := <-published, <-published; a != want || b != want {
 		t.Fatalf("published %s and %s, want %s", a, b, want)
 	}
 	if len(payloads[0]) == 0 || !bytes.Equal(payloads[0], payloads[1]) {
 		t.Fatal("the maintains delivered different logins")
+	}
+	clock = clock.Add(time.Second)
+	if _, err := c.Refresh(context.Background(), nopExec, nopPublish); err != nil || n.refreshes != 2 {
+		t.Fatalf("later refresh count %d: %v", n.refreshes, err)
 	}
 }
 

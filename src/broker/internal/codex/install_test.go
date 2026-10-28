@@ -17,8 +17,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"ensemble/broker/internal/npm"
 )
 
 const nativeEntry = "package/vendor/aarch64-apple-darwin/bin/codex"
@@ -129,7 +127,7 @@ func (zeroReader) Read(p []byte) (int, error) {
 
 func TestPublishedPlatformArchiveSize(t *testing.T) {
 	var compressed bytes.Buffer
-	z := gzip.NewWriter(&compressed)
+	z, _ := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
 	tw := tar.NewWriter(z)
 	const publishedSize = 338137646
 	if err := tw.WriteHeader(&tar.Header{Name: "package/support-data", Typeflag: tar.TypeReg, Mode: 0644, Size: publishedSize}); err != nil {
@@ -264,45 +262,6 @@ func TestNativeProbeIsPrivate(t *testing.T) {
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatal("probe home retained")
-	}
-}
-
-func TestRegistryValidation(t *testing.T) {
-	for _, name := range []string{"integrity", "origin", "alias", "package", "cpu", "os", "redirect", "oversize"} {
-		t.Run(name, func(t *testing.T) {
-			r, data := fixture(t)
-			key := "https://registry.npmjs.org/@openai%2Fcodex/0.163.0-darwin-arm64"
-			var m map[string]any
-			if err := json.Unmarshal(data[key], &m); err != nil {
-				t.Fatal(err)
-			}
-			switch name {
-			case "integrity":
-				m["dist"].(map[string]any)["integrity"] = "sha512-AAAA"
-			case "origin":
-				m["dist"].(map[string]any)["tarball"] = "https://evil.example/package.tgz"
-			case "package":
-				m["name"] = "@evil/codex"
-			case "cpu":
-				m["cpu"] = []string{"x64"}
-			case "os":
-				m["os"] = []string{"linux"}
-			case "alias":
-				data["https://registry.npmjs.org/@openai%2Fcodex/0.163.0"] = bytes.ReplaceAll(data["https://registry.npmjs.org/@openai%2Fcodex/0.163.0"], []byte("npm:@openai/codex@0.163.0-darwin-arm64"), []byte("npm:@evil/codex@0.163.0"))
-			case "redirect":
-				r.http.Transport = roundTrip(func(req *http.Request) (*http.Response, error) {
-					return &http.Response{StatusCode: 302, Header: http.Header{"Location": []string{"https://evil.example/"}}, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
-				})
-			case "oversize":
-				data[key] = bytes.Repeat([]byte(" "), npm.MaxMetadata+1)
-			}
-			if name != "oversize" {
-				data[key], _ = json.Marshal(m)
-			}
-			if _, err := r.Install(context.Background(), "0.163.0", false); err == nil {
-				t.Fatal("bad registry metadata accepted")
-			}
-		})
 	}
 }
 

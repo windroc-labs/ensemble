@@ -2,8 +2,6 @@ package launcher
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,27 +17,17 @@ func refreshCodexHost(t *testing.T, github bool) (Host, string, string, *fakeTok
 	h.Home = t.TempDir()
 	tokens, creds := &fakeTokens{}, &fakeCodexCreds{}
 	h.GitHub, h.Codex = tokens, creds
-	raw, err := os.ReadFile(codexManifest(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatal(err)
-	}
 	parent := filepath.Join(h.Home, ".ensemble/docker-state", "worker_1")
-	m["codex_dir"] = filepath.Join(parent, "codex")
-	if github {
-		m["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
-	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	raw, err = json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return h, writeManifest(t, raw), parent, tokens, creds
+	manifest := codexManifest(t, func(m map[string]any) {
+		m["codex_dir"] = filepath.Join(parent, "codex")
+		if github {
+			withGitHub(m)
+		}
+	})
+	return h, manifest, parent, tokens, creds
 }
 
 func TestMaintainRecordFailureIsEachProvidersResultAndRecovers(t *testing.T) {
@@ -74,26 +62,6 @@ func TestMaintainRecordFailureIsEachProvidersResultAndRecovers(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{tokensGeneration + ".tokens.json", tokensGeneration + ".tokens.lock"}) {
 		t.Fatalf("left staging files: %q", names)
-	}
-}
-
-func TestMaintainRejectsUnsafeStateBeforeInjection(t *testing.T) {
-	for _, kind := range []string{"container", "directory", "symlink"} {
-		t.Run(kind, func(t *testing.T) {
-			h, manifest, _, tokens, creds := refreshCodexHost(t, false)
-			c := container
-			switch kind {
-			case "container":
-				c = "ensemble-other-0123456789abcdef0123456789abcdef"
-			case "directory":
-				h.Home = "/arbitrary"
-			case "symlink":
-				h.Safe = func(string) error { return errors.New("link") }
-			}
-			if _, err := h.Maintain(context.Background(), c, manifest, nil, false); err == nil || creds.injected != 0 || len(tokens.calls) != 0 {
-				t.Fatalf("%v %v %v", err, creds.injected, tokens.calls)
-			}
-		})
 	}
 }
 

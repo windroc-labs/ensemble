@@ -125,7 +125,7 @@ func TestLegacyStateBlocksCommands(t *testing.T) {
 	a.legacy = func() ([]string, error) {
 		return []string{"ensemble-claude", "ensemble-tokens", "ensemble-env/db", "ensemble-claude/default"}, nil
 	}
-	refusal := `old-name broker items found (4: "ensemble-claude", "ensemble-tokens", "ensemble-env/db"): run the maintainer's one-time rename step (docs/upgrading.md), then rerun`
+	refusal := `old-name broker items found (4: "ensemble-claude", "ensemble-tokens", "ensemble-env/db"): run the maintainer's one-time rename step, which renames them to ensemble-broker-*, then rerun`
 	for _, args := range [][]string{{"retrust"}, {"login", "claude"}, {"linear-maintain"}} {
 		if code, out, errOut := invoke(a, args...); code != 1 || out != "" || errOut != "ensemble-broker: "+refusal+"\n" {
 			t.Fatalf("%q: %d %q %q", args, code, out, errOut)
