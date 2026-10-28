@@ -21,10 +21,11 @@ from ensemble.delegate.engine.plan import place, plan
 from ensemble.delegate.engine.types import Layout, Resolved
 from ensemble.delegate.event.reply import OUTCOME, PROGRESS
 from ensemble.session import Access, EnvironmentSpec, RunLog
-from tests.delegate.case import REPO, SRC, VERIFIER, packaged
+from tests.delegate.case import REPO, SRC, packaged
 from tests.delegate.plans import SID, TASKS, Base, write_team
 from tests.delegate.repo import fail, ok
 from tests.delegate.unit.engine.instruction import CLIENTS, GITHUB, ROLES, InstructionCase
+from tests.delegate.verifier import VERIFIER
 from tests.session.unit.clients.codex.support import UNIFIED, committed_headless
 from tests.session.unit.clients.codex.support import packaged as codex_client
 from tests.utils.case import local_section

@@ -1,7 +1,4 @@
-"""ensemble-crew over the real layer commands: a private tmux server (tests/session/live_tmux.py)
-with manager MANAGER attached, <repo>/bin and the fake clients on PATH, HOME outside the temp
-dirs (Codex's rule), and the crew run as a module with only utils and manager importable (FR-3).
-"""
+"""ensemble-crew over the real commands on a private tmux server."""
 
 import fcntl
 import json
@@ -41,7 +38,7 @@ def logged(path: str) -> list[dict]:
 
 
 class Owner:
-    """A tui session's harness dir, read without importing the session harness."""
+    """A tui session's harness dir."""
 
     def __init__(self, ensemble: str, name: str):
         with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
@@ -92,7 +89,7 @@ class LiveCrew(Case):
         return Roster(os.path.dirname(self.events_of(manager))).entries()
 
     def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
-        """A caller's in session `inside` (None: outside tmux); an extra None drops its key."""
+        """A caller's env in `inside` (None: outside tmux)."""
         env = self.server.env(**(self.server.inside(inside) if inside else {}))
         env["PATH"] = os.pathsep.join(
             (self.spies, BIN, self.server.bin, os.path.dirname(sys.executable), env["PATH"])
@@ -127,7 +124,7 @@ class LiveCrew(Case):
         return self.call(*CREW, *args, **self.crew_env(manager), **kw)
 
     def crew_env(self, manager: str = MANAGER) -> dict[str, str]:
-        """What a crew call adds to its caller's env: its manager, only utils and manager."""
+        """A crew call's env: utils and manager only."""
         crew_path = os.pathsep.join((SRC["utils"], SRC["manager"]))
         return {"ENSEMBLE_MANAGER": manager, "PYTHONPATH": crew_path}
 
@@ -146,7 +143,7 @@ class LiveCrew(Case):
         return Record.parse(lines[0])
 
     def scene(self, name: str, steps=None, turns=()) -> dict[str, str]:
-        """`name`'s fake claude scenario, as env; its starts log to self.log(name)."""
+        """`name`'s fake claude scenario, as env."""
         path = os.path.join(self.root, f"{name}.claude.json")
         steps = [f"Hi from {name}."] if steps is None else steps
         scenario = {"steps": steps, "turns": list(turns), "log": self.log(name)}
@@ -160,12 +157,12 @@ class LiveCrew(Case):
     def launch(
         self, name: str, argv, *, steps=None, turns=(), note: str | None = None, **kw
     ) -> subprocess.CompletedProcess:
-        """crew run `name` [--note] -- argv, `name`'s fake claude scenario in its env."""
+        """crew run `name` [--note] -- argv, with `name`'s scenario."""
         noted = ("--note", note) if note else ()
         return self.crew("run", name, *noted, "--", *argv, **self.scene(name, steps, turns), **kw)
 
     def worker(self, name: str, *flags: str, client: str = "claude", **kw):
-        """crew run `name` -- ensemble-session start `name`, a fake claude worker in self.cwd."""
+        """crew run `name` -- ensemble-session start `name` (fake claude)."""
         return self.launch(name, self.worker_argv(name, *flags, client=client), **kw)
 
     def worker_argv(self, name: str, *flags: str, client: str = "claude") -> tuple[str, ...]:
@@ -173,16 +170,16 @@ class LiveCrew(Case):
         return (*start, "--prompt", "hi", *flags)
 
     def orphan(self, name: str, inside: str | None = MANAGER) -> Record:
-        """A fake claude worker started by ensemble-session itself, from session `inside`."""
+        """A worker ensemble-session starts from `inside`."""
         argv = self.worker_argv(name)[1:]
         return self.record(self.session(*argv, inside=inside, **self.scene(name)))
 
     def role(self, name: str, *flags: str, mode: str = "tui", **kw):
-        """crew run `name` -- ensemble-delegate run … --detach, ROLE over the fake claude."""
+        """crew run `name` -- ensemble-delegate run … --detach."""
         return self.launch(name, self.role_argv(name, *flags, mode=mode), **kw)
 
     def role_argv(self, name: str, *flags: str, mode: str = "tui") -> tuple[str, ...]:
-        """ROLE's detached run, workdir self.workdir(name), no --sid or --events."""
+        """ROLE's detached run in self.workdir(name)."""
         work = self.workdir(name)
         os.makedirs(work, exist_ok=True)
         run = ("ensemble-delegate", "run", "--role", ROLE, "--input", "Hello.")
@@ -193,7 +190,7 @@ class LiveCrew(Case):
         return os.path.join(self.root, f"{name}-work")
 
     def crashed(self, name: str, argv, **scene: str) -> Record:
-        """crew run `name` --note keep -- argv, killed after argv's Record; attach RECOVERY_AGE later."""
+        """crew run `name` --note keep -- argv, killed after its Record."""
         emitted, gate = (os.path.join(self.root, f"{name}.{n}") for n in ("emitted", "gate"))
         crew = subprocess.Popen(
             (*CREW, "run", name, "--note", "keep", "--", *WRAP, "wrap", emitted, gate, *argv),
@@ -248,7 +245,7 @@ class LiveCrew(Case):
         return self.drive(record).running()
 
     def kill_drive(self, record: Record) -> None:
-        """SIGKILL to record's drive's group, never this test's, until its control saw it end."""
+        """SIGKILL to record's drive's group, never this test's."""
         ps = self.ok(
             subprocess.run(
                 ["ps", "-A", "-ww", "-o", "pid=,pgid=,args="], capture_output=True, text=True
@@ -263,9 +260,7 @@ class LiveCrew(Case):
         drives.stop(self.drive(record))
 
     def killed(self, name: str, record: Record) -> None:
-        """SIGKILLs tui run `name`'s drive group, harness and client after its first turn; attach:
-        gone.
-        """
+        """SIGKILLs run `name`'s drive, harness and client; attach: gone."""
         (tui,) = record.sessions
         self.wait_event(tui, "done")
         self.kill_drive(record)
@@ -281,7 +276,7 @@ class LiveCrew(Case):
         self.assertFalse(self.drive_running(record))
 
     def spy(self, command: str) -> str:
-        """Puts a `command` before <repo>/bin that logs its argv, then runs the real one; its log."""
+        """A `command` before <repo>/bin logging its argv; its log."""
         os.makedirs(self.spies, exist_ok=True)
         log = os.path.join(self.root, f"{command}.calls")
         with open(os.path.join(self.spies, command), "w", encoding="utf-8") as f:
@@ -318,8 +313,7 @@ class LiveCrew(Case):
         self.until(lambda: self.gone(*names), f"{names} gone")
 
     def poke(self) -> None:
-        # tmux on Linux (CI: 3.4) can leave a dead pane's process unreaped, so no pane-died, until
-        # another child of the server exits: a no-op job is one
+        # tmux 3.4 may leave a dead pane unreaped: a no-op job reaps it
         self.server.tmux("run-shell", "-b", "true")
 
     @contextmanager

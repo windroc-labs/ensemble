@@ -14,8 +14,9 @@ import unittest
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.types import Layout
 from tests.delegate.case import REPO as CHECKOUT
-from tests.delegate.case import VERIFIER, Case
+from tests.delegate.case import Case
 from tests.delegate.skills.act_as import argv, head, prefix
+from tests.delegate.verifier import VERIFIER
 from tests.session import harnesses
 from tests.utils.case import local_section
 

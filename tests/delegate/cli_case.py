@@ -11,10 +11,11 @@ from ensemble.delegate import cli
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import ConfigError
-from tests.delegate.case import VERIFIER, Case
+from tests.delegate.case import Case
 from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.replies import block, completed_steps
 from tests.delegate.unit.runs import DONE, START, said
+from tests.delegate.verifier import VERIFIER
 from tests.session import fake_client
 from tests.session.modules import client_loader
 from tests.utils.case import local_section

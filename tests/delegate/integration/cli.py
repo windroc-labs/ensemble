@@ -16,7 +16,6 @@ import tempfile
 import time
 
 from ensemble.utils import SID_ENV, Record, Status
-from tests.delegate import drives
 from tests.delegate.case import PY, REPO, Case, child_env
 from tests.delegate.workdir import input_first
 from tests.session import harnesses, live_tmux
@@ -114,9 +113,8 @@ class Integration(Runs):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
-        self.addCleanup(drives.end, self.root)
         self.addCleanup(harnesses.end, self.home)
+        self.root = os.path.realpath(tmp.name)
         self.proj, self.work, bin_dir = (
             os.path.join(self.root, d) for d in ("proj", "work", "bin")
         )

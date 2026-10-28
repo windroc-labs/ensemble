@@ -6,7 +6,8 @@ import tempfile
 from ensemble.delegate import Spec
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.drivers import InstructionDriver
-from tests.delegate.case import VERIFIER, Case
+from tests.delegate.case import Case
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 SID = "11111111-2222-3333-4444-555555555555"

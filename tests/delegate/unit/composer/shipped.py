@@ -6,11 +6,12 @@ from ensemble.delegate.composer import Composer
 from ensemble.delegate.composer.base import TEAM
 from ensemble.delegate.config import CONFIG
 from ensemble.delegate.engine.config import read_config
-from tests.delegate.case import REPO, VERIFIER, Case
+from tests.delegate.case import REPO, Case
 from tests.delegate.unit.composer.prompts import (
     composed,
     parameters,
 )
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 TASKS = os.path.join(TEAM, "tasks")

@@ -25,7 +25,7 @@ from ensemble.delegate.composer.run import resolve
 from ensemble.delegate.composer.teams import index, team
 from ensemble.delegate.config import CONFIG
 from ensemble.delegate.engine.config import read_config
-from tests.delegate.case import ROOTS, VERIFIER, Case
+from tests.delegate.case import ROOTS, Case
 from tests.delegate.unit.composer.prompts import (
     RUN,
     composed,
@@ -61,6 +61,7 @@ from tests.delegate.unit.composer.teams import (
     VERSE,
     WRITER,
 )
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 TEXTS = {

@@ -1,10 +1,6 @@
-"""A local `team_dirs`, a team dir of TEAM's files. Read by the Composer in a child process
-(child.Case): a team dir's role composes with its tasks dir to read, never added; its catalog row; a
-read dir holding the team dir composes unadded, a write dir refused. Read by delegate/cli.py as a
-subprocess over the fake `claude`: a dry run, --list, a run in headless mode of the team dir's role,
-its tasks dir a read rule, never added; over fake_codex: a run and its resume reading the tasks dir
-unadded, a read dir holding the team dir run unadded, a write dir or CODEX_HOME overlapping it
-refused. Main's tests/integration/core/team_dirs_integration_test.py, the Delegate's part.
+"""A local `team_dirs` of TEAM's files, read by the Composer in a child process and by
+delegate/cli.py over the fake `claude` and fake_codex: its tasks dir is read, never added; a read
+dir holding the team dir runs unadded, a write dir (or CODEX_HOME) overlapping it is refused.
 """
 
 import json
@@ -14,7 +10,7 @@ import unittest
 
 from ensemble.delegate.composer.prompt import RESUME, RETURN
 from ensemble.delegate.engine.types import Layout
-from tests.delegate.case import REPO, VERIFIER
+from tests.delegate.case import REPO
 from tests.delegate.integration.cli import (
     ASKING,
     NATIVE,
@@ -25,6 +21,7 @@ from tests.delegate.integration.cli import (
 )
 from tests.delegate.integration.composer import child
 from tests.delegate.replies import block, mark
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 from tests.utils.sandbox import owned_directory
 

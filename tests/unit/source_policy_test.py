@@ -11,9 +11,9 @@ from ensemble.delegate.composer import Composer
 from ensemble.delegate.config import CONFIG
 from ensemble.delegate.event.outcome import SCHEMA
 from tests.case import REPO, Case
-from tests.delegate.case import VERIFIER
 from tests.delegate.unit.composer.prompts import composed
 from tests.delegate.unit.composer.shipped import generic_names, runs, team_texts, words
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 TICKET = re.compile(r"TASK-\d+")

@@ -27,7 +27,6 @@ SRC = {
 PYTHONPATH = os.pathsep.join(ROOTS)
 RUN_WITH = os.pathsep.join(os.path.relpath(root, REPO) for root in ROOTS)
 PY = (sys.executable, "-P", "-S")
-VERIFIER = '[roles.verifier.output]\nrepo = "windroc/team-docs"\n'
 
 
 def committed(local: str = os.devnull) -> dict:

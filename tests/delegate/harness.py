@@ -7,7 +7,7 @@ from ensemble.delegate import Spec
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import Exited, Reply
-from tests.delegate.case import REPO, VERIFIER, Case
+from tests.delegate.case import REPO, Case
 from tests.delegate.fakes.harness_session import (
     DrivenDelegate,
     FakeControl,
@@ -17,6 +17,7 @@ from tests.delegate.fakes.harness_session import (
 )
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 from tests.utils.sandbox import owned_directory
 

@@ -1,8 +1,5 @@
-"""Write-back: an agent run's progress, outcome and usage limit as tracker comments, links and
-moves through the engine Tracker (the Writers cli.py's wiring builds), each step once per session
-id and attempt (the ledger; comment steps by ref (sid, step), found again on resume);
-`deliver`, one DelegateEvent's write-back; `replay`, Recover's of an ended run's outcome; bounce,
-the router's repo-check report.
+"""Write-back: a run's progress, outcome and usage limit as tracker comments, links and moves,
+each step once per sid and attempt (the ledger); `deliver`, `replay` (Recover's), `bounce`.
 """
 
 import contextlib
@@ -86,7 +83,7 @@ MAX_FILE = 1_000_000
 PLAN_MARK = "RESUME: phase="
 FOOTER = "Answer in a comment, then move this issue back to {state}."
 LIMIT = "Usage limit,"
-# Failed attempts keep their own steps; a later valid outcome keeps the session's normal steps.
+# a failed attempt's own steps; a later valid outcome keeps the normal ones
 NO_OUTCOME = "no-outcome:"
 INTERRUPTED = ("stopped: Stopped", "stopped: KeyboardInterrupt")
 # what a failed tracker read or write raises
@@ -226,10 +223,7 @@ def _entry(value):
 
 
 def _ledger(ctx):
-    """{sid: {"steps": [step, ...], "attempts": {"<attempt>": {"started_at", "seq", "ended_at"}}}}:
-    each attempt's session comment start, last written number and, once written, end; anything
-    else reads as empty.
-    """
+    """{sid: {"steps": [...], "attempts": {"<n>": {"started_at", "seq", "ended_at"}}}}; else {}."""
     try:
         # O_NONBLOCK: a FIFO there would block a plain open forever
         with os.fdopen(
@@ -244,9 +238,7 @@ def _ledger(ctx):
 
 @contextlib.contextmanager
 def _exclusive(ctx):
-    """The run's write-back lock, held while a callback or Recover writes back: yields False,
-    logged, when it cannot be opened.
-    """
+    """The run's write-back lock; yields False, logged, if it cannot open."""
     try:
         os.makedirs(ctx.workdir, exist_ok=True)
         fd = os.open(
@@ -343,13 +335,12 @@ def _url(ctx, url):
 
 
 def _scope(attempt: int) -> str:
-    """Outcome steps' prefix `attempt:<n>:`; none at attempt 1, so older ledgers stay valid."""
+    """Outcome steps' prefix `attempt:<n>:`; none at attempt 1 (older ledgers)."""
     return "" if attempt == 1 else f"attempt:{attempt}:"
 
 
 def finish(ctx, outcome: Outcome, *, steps="", move=True) -> bool:
-    # never raises: Stopped stops the steps and returns False, so the session comment's end is
-    # still written; `steps` prefixes each step's name
+    # never raises: on Stopped returns False, so the session comment's end is still written
     try:
         return _finish(ctx, outcome, steps, move=move)
     except (Exception, Stopped) as e:  # noqa: BLE001  # Report the session after failed steps.
@@ -414,9 +405,7 @@ def _post_files(ctx, o, body):
 
 
 def _report(ctx, body):
-    """The done run's deliverable as the Delegate saved it (`run/out.md`, or the role's document),
-    else None with body noting why.
-    """
+    """The saved deliverable (`run/out.md` or the document), else None."""
     path = ctx.document or os.path.join(ctx.workdir, "run", "out.md")
     try:
         text = _read_file(path, os.path.dirname(path)).decode("utf-8", errors="replace")
@@ -495,14 +484,12 @@ def _finish(ctx, o, steps="", *, move=True):
         lambda: _guarded_move(ctx, issue, ctx.ident, state, "in_progress"),
     ):
         return False
-    # the write-back is complete: Recover replays a valid outcome's write-back until this is ledgered
+    # complete: Recover replays a valid outcome until this is ledgered
     return _step(ctx, f"{steps}outcome", lambda: None) is None
 
 
 def _session(ctx, cfg, client, attempt, *, now, end=None) -> bool:
-    """The attempt's session comment, as the harness: running at Begun, its `end` (rc, outcome,
-    limit) at Finished, each written once.
-    """
+    """The attempt's session comment: running at Begun, its `end` at Finished, each once."""
     record = _ledger(ctx).get(ctx.sid, {}).get("attempts", {}).get(str(attempt))
     record = record or {"started_at": now(), "seq": 0}
     if "ended_at" in record or end is None and record["seq"]:
@@ -581,9 +568,8 @@ def _claim(cfg, issue, sid) -> Claim:
 
 
 def _replayed_attempt(begun, rows) -> int:
-    """The latest Begun's attempt, the next one when a start or resume row came after it (a
-    launch whose Begun was lost); without a Begun, the rows' count. A row refused before its launch
-    precedes the Begun of the attempt that ran, or leaves no outcome to replay.
+    """The latest Begun's attempt, the next when a start or resume row follows it (its Begun
+    lost); without a Begun, the rows' count.
     """
     if not begun:
         return len(rows)
@@ -602,10 +588,8 @@ def replay(
     dry=False,
     now=timestamp,
 ) -> bool | None:
-    """Recover's write-back of the ended (issue, sid) run's outcome, in process and each step once,
-    as its callback's, then its session comment's end unless the callback's wrote it: None when
-    its ledger has it complete; else whether it now is (dry: True, nothing written). Raises
-    ConfigError or ValueError on a start row it cannot write back as.
+    """Recover's write-back of the ended (issue, sid) run's outcome, each step once: None when
+    its ledger has it complete, else whether it now is (dry: True, nothing written).
     """
     rows = [e for e in runs.parse_log(cfg.runs_log) if (e.issue, e.sid) == (issue, sid)]
     claim = _claim(cfg, issue, sid)
@@ -634,9 +618,8 @@ def deliver(
     writers: Callable[[Claim], Writers],
     now=timestamp,
 ) -> bool:
-    """Writes the (issue, event.sid) run's event back as its start row's claim (writers: the row's),
-    each step once however often the event arrives; False when a write failed. Raises ConfigError
-    or ValueError, before any write, on what it cannot write.
+    """Writes the (issue, event.sid) run's event back as its start row's claim, each step once;
+    False when a write failed; ConfigError or ValueError before any write.
     """
     if not re.fullmatch(ISSUE_ID, issue):
         raise ConfigError(f"bad issue id: {issue}")

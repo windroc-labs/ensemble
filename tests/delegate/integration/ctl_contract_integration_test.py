@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from ensemble.utils import Record
+from tests.delegate import drives
 from tests.delegate.integration.cli import ASKING, Integration
 from tests.delegate.replies import block, mark
 from tests.session import live_tmux
@@ -29,6 +30,7 @@ class DelegateCtlContract(AnswerCtlContract, Integration):
 
     def setUp(self):
         super().setUp()
+        self.addCleanup(drives.end, self.root)
         self.started_records = {}
 
     def call(self, *argv, stdin="", sid=None):

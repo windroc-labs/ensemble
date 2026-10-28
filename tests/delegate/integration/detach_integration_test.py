@@ -1,18 +1,5 @@
-"""delegate/cli.py run --detach as a subprocess, the session config's ClaudeClient running
-tests/session/integration/clients/claude/fake_claude.py: a tui run on a private tmux server
-(tests/session/live_tmux.py) with a control-mode client on the manager, a headless one with no tmux
-server at all. The drive is a real local process the delegate spawns through ProcessControl, never a
-tmux session: delegate.json's `drive` (its control path), its output in run/drive.log, its own
-outcome and exited events lines. Covers the one Record line whose sessions are live on return (the
-agent's, never the drive), the TUI beside the caller or in no pane, a SIGKILL of the drive's process
-group (no exited line; an owned tui keeps its attempt), an events path tmux would misread, the
-events file and sid a launcher gives in $ENSEMBLE_EVENTS and $ENSEMBLE_SID, a needs_input run
-answered by `resume WORKDIR --input TEXT` (refused while the run lives; an owned tui's live pane
-gets it) whose outcome a `resume WORKDIR` then leaves alone, and an owned tui's next attempts opened
-by input in its pane. Ports main's tests/integration/core/drive_tui_integration_test.py
-test_detach_from_the_manager. Its test_detach_events_default and main's
-tests/manager/integration/crew_integration_test.py role-run cases run through ensemble-crew in
-tests/manager/integration/crew_*_integration_test.py.
+"""`delegate run --detach` over fake_claude: a tui run on a private tmux server, a headless one
+with none; the drive is a local ProcessControl process, never a tmux session.
 """
 
 import contextlib
@@ -143,9 +130,7 @@ class Detach(Case):
         )
 
     def said(self, res: subprocess.CompletedProcess, *, tui: bool) -> Record:
-        """The one Record line, every session it lists and the drive live when the command
-        returned; the drive in no tmux session, its log 0600.
-        """
+        """The Record line; its sessions and drive live on return; the drive's log 0600."""
         drive = self.drive_running()
         live = {TUI: self.live(TUI)} if tui else {}
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -235,10 +220,7 @@ class Detach(Case):
             raise AssertionError(f"{timeout}; {told}") from None
 
     def ended(self, turn_ends: int = 0) -> list[str]:
-        """The events file's lines, shaped, once they hold the drive's exited line and turn_ends
-        turn ends and its control no longer runs; a valid outcome's status in drive.log; no tmux
-        server for a headless run.
-        """
+        """The shaped events once they hold the drive's exited line and turn_ends turn ends."""
 
         def check():
             shaped = shape(live_tmux.events(self.events_used))
