@@ -148,6 +148,7 @@ Recovery and next help:
             "content": "Prints the run's current content; does not resume it.",
             "outcome": "Prints outcome JSON, or null when no outcome is recorded.",
             "resume": "Live/completed runs return their Record; interrupted runs restart.\n"
+            "A run whose worker is ending (its container still reaped) exits 75, busy.\n"
             "--input answers a needs_input role run; pipeline answers belong on the\n"
             "issue board. Requires the original workdir, client and session identity.",
             "show": "Shows the agent session using saved display; accepts no new --display.",
