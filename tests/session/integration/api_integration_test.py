@@ -1,5 +1,5 @@
-"""HostedSession over fake clients: events, idle timeouts, exits, stop, process groups, inherited
-pipes, launch environment, limits and resume. Custom clients: in-process module tables.
+"""HostedSession over fake clients (in-process module tables): events, idle timeouts, exits, stop,
+process groups, inherited pipes, launch environment, limits and resume.
 """
 
 import contextlib
@@ -38,15 +38,15 @@ from tests.session.case import Case
 from tests.session.modules import client_loader
 from tests.session.threads import capture_errors
 
-WAIT = 20  # upper bound on any wait, in seconds
-IDLE = 0.3  # idle_timeout, in seconds
+WAIT = 20  # s, bound on any wait
+IDLE = 0.3  # s, idle_timeout
 SILENCE = 0.9  # 3 × IDLE
-GAP = 0.2  # between stderr lines; that test's idle_timeout is 3 × GAP
+GAP = 0.2  # s between stderr lines, under a 3 × GAP idle_timeout
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}[+-]\d\d:\d\d\Z")
 
 
 class LaunchingClient(fake_client.FakeClient):
-    """The fake client whose launch also takes its env, unset and cwd from its config."""
+    """The fake client whose launch takes env, unset and cwd from its config."""
 
     keys = fake_client.FakeClient.keys | {"env", "unset", "cwd"}
 
@@ -85,9 +85,7 @@ time.sleep(60)
 
 
 class ScriptClient(fake_client.FakeClient):
-    """The fake client whose client is this Python running GRANDCHILD if its config's `script` is
-    "grandchild", else CLOSED_PIPES.
-    """
+    """The fake client running GRANDCHILD (config `script` "grandchild"), else CLOSED_PIPES."""
 
     keys = fake_client.FakeClient.keys | {"script"}
 
@@ -120,7 +118,7 @@ def running(pid: int) -> bool:
 
 
 def kill(pid: int) -> None:
-    """SIGKILL to a test's stray process, if it still runs."""
+    """SIGKILL to a stray process, if any."""
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.kill(pid, signal.SIGKILL)
 
@@ -150,9 +148,7 @@ class Base(Case):
             json.dump(list(steps), f)
 
     def configure(self, **extra):
-        """Tables fake and launching, each with this test's scenario and log; `extra` keys go into
-        launching's.
-        """
+        """Tables fake and launching on this test's scenario and log, `extra` in launching's."""
         tables = {
             name: {
                 "implementation": f"ensemble.session.clients.{name}:{name.capitalize()}Client",
@@ -165,9 +161,7 @@ class Base(Case):
         self.configure_session(tables)
 
     def start(self, client="fake", spec=None, *, idle_timeout=None, **fields) -> Session:
-        """A headless session of `client` on prompt hello: `spec` (else one in self.workdir) with
-        `fields`.
-        """
+        """A headless session of `client` on prompt hello, `spec` (default in workdir) + `fields`."""
         spec = dataclasses.replace(
             spec or Spec(workdir=self.workdir, access=Access(cwd=self.workdir)),
             client=client,
@@ -180,9 +174,7 @@ class Base(Case):
         return handle
 
     def drain(self, handle, on=lambda _event: None) -> list:
-        """handle.events() to its end, each event passed to on(event) as it comes; fails, stopping
-        the handle, instead of hanging past WAIT.
-        """
+        """handle.events() to its end, each passed to on(event); fails, stopping it, past WAIT."""
         found, errors = [], []
 
         def run():
@@ -206,7 +198,7 @@ class Base(Case):
             return [json.loads(line) for line in f]
 
     def forget(self):
-        """Drops the client's log."""
+        """Drops the client log."""
         if os.path.exists(self.log):
             os.unlink(self.log)
 
@@ -229,7 +221,7 @@ class AcceptanceTest(Base):
         )
         handle = self.start()
         replies = ["one", marker, "three", "done"]
-        self.assertIn(handle.reply, [None, *replies])  # its harness reads ahead of events()
+        self.assertIn(handle.reply, [None, *replies])  # the harness reads ahead
         seen = []
 
         def bindings() -> int:
@@ -281,23 +273,26 @@ class AcceptanceTest(Base):
 
 class IdleTest(Base):
     def test_silence_yields_idle_timeouts_while_the_process_lives_then_exited(self):
-        self.steps(out("activity", name="Read"), {"sleep": SILENCE})
+        release = os.path.join(self.dir, "release")
+        self.steps(out("activity", name="Read"), {"until": release})
         handle = self.start(idle_timeout=IDLE)
         marks, alive = [], []
 
         def on(event):
             marks.append((time.monotonic(), event))
-            if isinstance(event, IdleTimeout):
+            if isinstance(event, IdleTimeout) and len(alive) < 2:
                 alive.append(running(self.logged()[0]["pid"]))
+                if len(alive) == 2:
+                    open(release, "w").close()
 
         found = self.drain(handle, on)
         self.assertEqual((found[0], found[-1]), (Activity("Read"), Exited(0)))
         idles = [(at, e) for at, e in marks if isinstance(e, IdleTimeout)]
-        self.assertGreaterEqual(len(idles), 1)
+        self.assertGreaterEqual(len(idles), 2)
         self.assertEqual(found[-2], TurnFailed("incomplete_turn"))
         self.assertEqual(len(found), len(idles) + 3)
         self.assertEqual({e for _, e in idles}, {IdleTimeout(IDLE)})
-        self.assertEqual(alive, [True] * len(idles))
+        self.assertEqual(alive, [True, True])
         times = [marks[0][0]] + [at for at, _ in idles]
         for before, after in zip(times, times[1:], strict=False):
             self.assertGreaterEqual(after - before, IDLE - 0.01)
@@ -387,7 +382,7 @@ class ExitTest(Base):
 
 class ProcessGroupTest(Base):
     def script(self, script: str, **kwargs) -> Session:
-        """A started session of client `script` with config key `script`."""
+        """A started session of client `script`, config key `script`."""
         self.configure_session(
             {
                 "script": {
@@ -443,7 +438,7 @@ class FailureTest(Base):
         self.assertEqual(list(handle.events()), [])
 
     def test_a_failed_client_session_line_stops_the_process_and_fails_its_harness(self):
-        # the sleep: its harness reads the session line once the run log is unwritable
+        # its harness reads the session line once the run log is unwritable
         self.steps({"sleep": 1}, out("session", id="native-1"), {"sleep": 60})
         with self.assertLogs("session", "ERROR") as logs:
             handle = self.start()
@@ -454,7 +449,7 @@ class FailureTest(Base):
         self.assertFalse(running(self.logged()[0]["pid"]))
 
     def test_a_failed_stderr_record_loses_the_line_not_the_run(self):
-        self.steps({"sleep": 1}, {"err": "lost"})  # read once the run log is unwritable
+        self.steps({"sleep": 1}, {"err": "lost"})  # read once the log is unwritable
         handle = self.start()
         self.unwritable()
         with mock.patch("sys.stderr", io.StringIO()) as printed:
@@ -465,7 +460,7 @@ class FailureTest(Base):
         self.assertIn("records: ", printed.getvalue())
 
     def unwritable(self) -> None:
-        """A directory in place of the run log, which a record write refuses."""
+        """A directory in place of the run log: a record write fails."""
         path = RunLog(self.workdir).path
         with contextlib.suppress(FileNotFoundError):
             os.unlink(path)

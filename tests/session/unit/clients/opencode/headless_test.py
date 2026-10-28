@@ -596,12 +596,15 @@ class ResumeTest(Base):
     def test_an_unbound_resume_takes_no_other_runs_session(self):
         data = os.path.join(self.home, "data")
         titled_session(os.path.join(data, "opencode", "opencode.db"), SES, "ensemble-run-2", 1)
-        with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):
-            self.launch(self.spec(resume=True, env={"XDG_DATA_HOME": data}))
+        command = self.command(self.launch(self.spec(resume=True, env={"XDG_DATA_HOME": data})))
+        self.assertNotIn("--session", command)
+        self.assertIsNone(self.client.common.native(self.cwd, "run-1"))
 
-    def test_unbound_resume_fails(self):
-        with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):
-            self.launch(self.spec(resume=True))
+    def test_an_unbound_resume_starts_a_fresh_titled_session(self):
+        """A run killed before OpenCode saved its session resumes as a fresh one (WDRC-366)."""
+        command = self.command(self.launch(self.spec(resume=True)))
+        self.assertEqual(command[4:6], ("--title", "ensemble-run-1"))
+        self.assertNotIn("--session", command)
 
     def test_an_untrusted_cwd_on_a_non_isolated_host_is_refused(self):
         self.client.common.bind(self.cwd, "run-1", SES)

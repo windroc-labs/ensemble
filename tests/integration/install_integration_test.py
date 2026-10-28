@@ -140,12 +140,14 @@ DOCKER_STEPS = (
     "Docker Desktop running",
     "egress proxy",
     "broker",
+    "retired broker keychain items",
     "broker re-trust",
     "broker login: Claude",
     "broker login: GitHub",
     "broker Codex install",
     "broker login: Codex",
 )
+RETIRED = ("ensemble-broker-tokens", "ensemble-broker-revocations", "ensemble-broker-codex-grants")
 BROKER_INSTALL = """#!/bin/sh
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -2263,7 +2265,7 @@ class InstallTest(Case):
             self.assertIn("the operation result still applies", result.stderr)
             self.assertNotIn("AUDIT_SECRET_SENTINEL", result.stdout + result.stderr + result.tty)
             calls = self.calls()
-            self.assertIn("ensemble-broker status --cleanup", calls)
+            self.assertIn("ensemble-broker status", calls)
             self.assertNotIn("ensemble-broker login claude", calls)
             self.assertNotIn("ensemble-broker login codex", calls)
 
@@ -2410,7 +2412,7 @@ class InstallTest(Case):
         calls = self.calls()
         self.assertEqual(calls.count("ensemble-broker retrust"), 1)
         self.assertLess(
-            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker status --cleanup")
+            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker status")
         )
         self.assertLess(
             calls.index("ensemble-broker retrust"), calls.index("ensemble-broker login claude")
@@ -2452,6 +2454,85 @@ class InstallTest(Case):
         self.assertNotIn("retrust", self.state())
         doc = Path(REPO, "docs/upgrading.md").read_text()
         self.assertIn("\n## Broker protocol 30: Keychain rename\n", doc)
+
+    def seed_retired(self, counts):
+        """`counts` items of each retired broker service in the fake keychain."""
+        for service, count in counts.items():
+            (self.fakes / "keychain").mkdir(parents=True, exist_ok=True)
+            (self.fakes / f"keychain/{service}.count").write_text(str(count))
+
+    def retired_left(self):
+        keychain = self.fakes / "keychain"
+        names = [p.name for p in keychain.iterdir()] if keychain.exists() else []
+        return [n for n in names if n.startswith(RETIRED)]
+
+    def retired_calls(self):
+        return [c for c in self.calls() if any(s in c for s in RETIRED)]
+
+    def test_docker_install_deletes_retired_items_before_retrust(self):
+        self.seed_retired({"ensemble-broker-tokens": 2, "ensemble-broker-codex-grants": 1})
+        result = self.fresh(clients="claude", docker="y")
+        self.assert_ok(result)
+        self.assertEqual(self.retired_left(), [])
+        calls = self.calls()
+        deletes = [i for i, c in enumerate(calls) if c in self.retired_calls()]
+        # 3 items, then one "not found" per service
+        self.assertEqual(len(deletes), 6)
+        self.assertLess(max(deletes), calls.index("ensemble-broker retrust"))
+        self.assertIn(
+            "==> retired broker keychain items\n    deleted 3 retired broker keychain items\n"
+            "==> broker re-trust\n",
+            result.stderr,
+        )
+
+    def test_docker_install_without_retired_items_skips(self):
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        keychain = {p.name: p.read_bytes() for p in (self.fakes / "keychain").iterdir()}
+        result = self.again()
+        self.assert_ok(result)
+        self.assertIn("==> retired broker keychain items\n    skip: none\n", result.stderr)
+        self.assertEqual(
+            self.retired_calls(), [f"security delete-generic-password -s {s}" for s in RETIRED]
+        )
+        self.assertEqual(
+            {p.name: p.read_bytes() for p in (self.fakes / "keychain").iterdir()}, keychain
+        )
+
+    def test_retired_item_cleanup_only_deletes(self):
+        self.seed_retired(dict.fromkeys(RETIRED, 2))
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        self.assertEqual(
+            self.retired_calls(),
+            [f"security delete-generic-password -s {s}" for s in RETIRED for _ in range(3)],
+        )
+        # The fake answers any subcommand it does not model with 2, not as if it worked.
+        unknown = subprocess.run(
+            [self.bin / "security", "dump-keychain"], env=self.env, check=False
+        )
+        self.assertEqual(unknown.returncode, 2)
+
+    def test_retired_item_deletion_failure_stops_install(self):
+        self.seed_retired({"ensemble-broker-revocations": 1})
+        (self.fakes / "security_delete_fails").write_text("ensemble-broker-revocations")
+        result = self.fresh("--clients", "claude", "--docker", egress_failure=True)
+        self.assertEqual(result.code, 1, result.stderr)
+        self.assertIn(
+            "install.sh: deleting ensemble-broker-revocations keychain items failed (45): delete the"
+            " ensemble-broker-revocations items in Keychain Access, then rerun"
+            " scripts/install.sh --docker\n",
+            result.stderr,
+        )
+        self.assertNotIn("ensemble-broker retrust", self.calls())
+        self.assertEqual(self.retired_left(), ["ensemble-broker-revocations.count"])
+
+    def test_cleanup_deletes_every_retired_item(self):
+        """A Mac whose installer never deleted them still has them: install-cleanup.sh deletes all."""
+        self.assert_ok(self.fresh(clients="claude", docker="y"))
+        self.assertIn("broker", self.ledger())
+        self.seed_retired({"ensemble-broker-tokens": 3, "ensemble-broker-revocations": 2})
+        self.assert_ok(self.cleanup("--yes"))
+        self.assertEqual(self.retired_left(), [])
+        self.assertEqual(len(self.retired_calls()), 5 + len(RETIRED))
 
     def test_broker_logins_use_the_terminal_device(self):
         result = self.fresh(clients="claude", docker="y", ctty=self.refused_tty())

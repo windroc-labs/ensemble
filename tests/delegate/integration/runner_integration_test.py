@@ -385,7 +385,6 @@ class Start(Base):
         url, pr_url = "https://github.com/o/docs/blob/main/x.md", "https://github.com/o/n/pull/7"
         for output, data, want_url, saved in (
             ({"type": "local"}, DONE, self.out, "# Doc\n"),
-            ({"type": "orchestrator"}, DONE, "", "# Doc\n"),
             (GH, {**DONE, "url": url}, url, "# Doc\n"),
             (PR, {**DONE, "url": pr_url, "updraft": UPDRAFT}, pr_url, "# Doc\n"),
             ({"type": "local"}, NEEDS, "", None),
@@ -413,15 +412,12 @@ class Start(Base):
                 raise denied
             return replace(source, destination)
 
-        for output in ({"type": "local"}, {"type": "orchestrator"}):
-            with self.subTest(output=output):
-                self.fresh()
-                with mock.patch("os.replace", side_effect=replace_out), self.assertRaises(OSError):
-                    self.go(said(START, block(DONE)), output=output)
-                self.assertEqual(
-                    (self.last("result")["error"], os.path.lexists(self.out)),
-                    (f"stopped: PermissionError: {denied}", False),
-                )
+        with mock.patch("os.replace", side_effect=replace_out), self.assertRaises(OSError):
+            self.go(said(START, block(DONE)), output={"type": "local"})
+        self.assertEqual(
+            (self.last("result")["error"], os.path.lexists(self.out)),
+            (f"stopped: PermissionError: {denied}", False),
+        )
         for output, url, gated in (
             (GH, "https://github.com/o/docs/blob/main/x.md", []),
             (PR, "https://github.com/o/n/pull/7", ["ready_gate"]),
@@ -536,18 +532,11 @@ class Start(Base):
                 self.write(self.out, "# Doc\n")
                 written.append(os.stat(self.out))
 
-        for dest in ("local", "orchestrator"):
-            with self.subTest(dest):
-                r = self.go(said(START, block(DONE)), output={"type": dest}, on_event=write)
-                st = os.stat(self.out)
-                self.assertEqual(
-                    (st.st_ino, st.st_mtime_ns), (written[-1].st_ino, written[-1].st_mtime_ns)
-                )
-                self.assertEqual((save_spy.called, self.read(self.out)), (False, "# Doc\n"))
-                self.assertEqual(
-                    (r.outcome.url, r.outcome.deliverable),
-                    (self.out if dest == "local" else "", "# Doc\n"),
-                )
+        r = self.go(said(START, block(DONE)), output={"type": "local"}, on_event=write)
+        st = os.stat(self.out)
+        self.assertEqual((st.st_ino, st.st_mtime_ns), (written[-1].st_ino, written[-1].st_mtime_ns))
+        self.assertEqual((save_spy.called, self.read(self.out)), (False, "# Doc\n"))
+        self.assertEqual((r.outcome.url, r.outcome.deliverable), (self.out, "# Doc\n"))
 
     def test_output_replaces_unusable_files_without_following_or_waiting(
         self,

@@ -1,10 +1,6 @@
-"""A local `team_dirs`, a team dir of TEAM's files. Read by the Composer in a child process
-(child.Case): a team dir's role composes with its tasks dir to read, never added; its catalog row; a
-read dir holding the team dir composes unadded, a write dir refused. Read by delegate/cli.py as a
-subprocess over the fake `claude`: a dry run, --list, a run in headless mode of the team dir's role,
-its tasks dir a read rule, never added; over fake_codex: a run and its resume reading the tasks dir
-unadded, a read dir holding the team dir run unadded, a write dir or CODEX_HOME overlapping it
-refused. Main's tests/integration/core/team_dirs_integration_test.py, the Delegate's part.
+"""A local `team_dirs` of TEAM's files, read by the Composer in a child process and by
+delegate/cli.py over the fake `claude` and fake_codex: its tasks dir is read, never added; a read
+dir holding the team dir runs unadded, a write dir (or CODEX_HOME) overlapping it is refused.
 """
 
 import json
@@ -25,6 +21,8 @@ from tests.delegate.integration.cli import (
 )
 from tests.delegate.integration.composer import child
 from tests.delegate.replies import block, mark
+from tests.delegate.verifier import VERIFIER
+from tests.utils.case import local_section
 from tests.utils.sandbox import owned_directory
 
 # the repo's gitignored work/
@@ -67,7 +65,10 @@ class ComposerTeamDirs(child.Case):
         super().setUp()
         self.team = make_team(self)
         self.tasks = os.path.join(self.team, "tasks")
-        self.local(f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n")
+        self.local(
+            f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
+            + local_section(VERIFIER, "delegate")
+        )
 
     def composed(self, **req) -> dict:
         got = self.compose("writer", "note", **req)
@@ -153,7 +154,10 @@ class TeamDirs(Integration):
         self.team = make_team(self)
         self.tasks = os.path.join(self.team, "tasks")
         with open(os.path.join(self.env["HOME"], ".ensemble", "config.local.toml"), "w") as f:
-            f.write(f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n")
+            f.write(
+                f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
+                + local_section(VERIFIER, "delegate")
+            )
 
     def test_a_dry_run(self):
         res = self.drive([], "--task", "note", "--dry-run")
@@ -203,7 +207,10 @@ class CodexTeamDirs(CodexIntegration):
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
         self.toml = os.path.join(self.home, ".ensemble", "config.local.toml")
         with open(self.toml, "w") as f:
-            f.write(f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n")
+            f.write(
+                f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
+                + local_section(VERIFIER, "delegate")
+            )
 
     def role(self, key: str) -> None:
         with open(self.toml, "a") as f:

@@ -8,7 +8,7 @@ Rules, waiting and answering: mini-op's rules (the `mini-op` skill loads them). 
 
 ## Setup
 
-1. Install ensemble at the branch or release under test (`install-ensemble.md`), Docker Host on, broker logged in. `"$B" version` prints `{"protocol_version":"34"}`.
+1. Install ensemble at the branch or release under test (`install-ensemble.md`), Docker Host on, broker logged in. `"$B" version` prints its `protocol_version`: 32 or later.
 2. Record `docker version --format '{{.Server.Version}}'` and the ensemble commit.
 3. Names: `W` a new worker name per case; `C` its container, `docker ps --filter label=ensemble.session=W --format '{{.Names}}'`; `A` the harness's attach process, `pgrep -f "attach --sig-proxy=false $C"`; `H` the harness, `ps -o ppid= -p $A`; `G` the guard's PID in the container, from `docker exec $C ps -o pid,ppid,args` (PID 1 is tini; the guard is its child running `guard.py --serve`; the client is the guard's child).
 4. Each case runs twice: TUI (`ensemble-session start W --client claude --host docker --cwd <test repo checkout> --prompt 'Say hi and wait.'`) and headless (a role run, as `python3 tests/session/live_docker.py role --repo OWNER/NAME` starts one, observed while it runs).

@@ -7,6 +7,47 @@ and `env` credentials, by reference only). No run sends one yet, and this broker
 Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
 refuses an older protocol's broker. Nothing else changes.
 
+## Verifier reports on GitHub; orchestrator destination removed
+
+The `verifier` now publishes its report with the `github` destination, to `Verification/` on `main` of a repo you name,
+and its outcome carries only the verdict (`Pass:` or `Fail:` and one line) and the report's `url`. Before the next
+verifier run:
+
+1. Name the repo in `~/.ensemble/config.local.toml`; without it every verifier run and `ensemble-delegate run --list`
+   stop with a configuration error naming `output.repo`. Install the ensemble bot GitHub App on that repo.
+
+   ```toml
+   [delegate.roles.verifier.output]
+   repo = "<owner>/<name>"
+   ```
+
+2. Add exactly these two entries to `networks.mini-op.allow` in `~/.egress/config.local.yaml`, then run
+   `~/.egress/current/start.sh`:
+
+   ```yaml
+       - github.com
+       - api.github.com
+   ```
+
+3. Upgrade the broker as in [Broker protocol 31](#broker-protocol-31-output-repo-token-beside-prefetch): it gives the
+   verifier's container a GitHub token for that repo beside its prefetched checkout, through
+   `[session.hosts.docker.github] app`; without it the verifier cannot push its report.
+4. Remove `deliverable = true` from a local `verifier` stage: the outcome has no deliverable, so write-back reports
+   it cannot post one.
+
+The `orchestrator` destination is removed: a local `[output] type = "orchestrator"` is a configuration error. Use
+`local` or `github`.
+
+## Broker protocol 33: short-lived credentials off the Keychain
+
+Broker protocol 33 keeps no short-lived credential in the Keychain: GitHub tokens are issued and written per command
+and revoked from memory or, at `close`, read back from the container; Codex logins keep no per-container record
+([Credentials](architecture.md#credentials)). `ensemble-broker status` loses `revocations`, and `status --cleanup` is
+gone. Run `scripts/install.sh --docker`: before `broker re-trust` it deletes the leftover `ensemble-broker-tokens`,
+`ensemble-broker-revocations` and `ensemble-broker-codex-grants` items and prints how many. Then close and resume every
+running Docker session: one an older broker started fails its next renewal. A token an older broker recorded is no
+longer revoked and expires within the hour.
+
 ## Broker protocol 32: the guard is the Docker container's main process
 
 The broker now starts each worker container with the guard as its main process, and the harness reaches it over
@@ -311,6 +352,10 @@ before selecting broker again. This does not delete or migrate pending GitHub re
 Manual, for the manager and the user, through mini-op on the test Mac mini with Docker Desktop, never on a developer's
 Mac; the `tests/session/live_docker.py` checks: [Docker host › Docker live acceptance](architecture.md#docker-live-acceptance).
 
+- [ ] Set up as in
+  [Verifier reports on GitHub](#verifier-reports-on-github-orchestrator-destination-removed), one
+  verifier run publishes its report under `Verification/` and returns only `status`, `title`, `summary` and `url`;
+  its target checkout's `HEAD` and `git diff HEAD` are unchanged.
 - [ ] Fresh `scripts/install.sh --docker` ends with `egress-proxy` healthy; rerunning keeps the proxy's ID and start
   time, pinned checkout, and config bytes, mode and modification time. Repeat with an existing config.
 - [ ] After changing or recreating `~/.egress/config.local.yaml`, rerunning `scripts/install.sh --docker` makes the

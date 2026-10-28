@@ -27,7 +27,7 @@ dir = "Research/"
 
 - **Client:** `client` picks it; `ensemble-delegate run --client` overrides it for one run. This applies to every role, including `verifier`. The flags a role run passes its client: [Client policy](architecture.md#client-policy).
 - **Claude account:** `[delegate.roles.<role>.accounts]` `claude = "work"` runs the role's Docker Claude sessions on that registered account, keyed by client: [Docker host › Claude accounts](architecture.md#claude-accounts).
-- **Destination:** `[output]` (`local`, `github`, `pull-request` or `orchestrator`); a lower level's `[output]` replaces the whole table.
+- **Destination:** `[output]` (`local`, `github` or `pull-request`); a lower level's `[output]` replaces the whole table.
 - **Access:** `read`, `write` and `commands` widen what the agent run may read, write and run; `templates` inlines templates into its prompt.
 - **Board runs:** the same keys under `[orchestrator.core]` (e.g. `[orchestrator.core.roles.engineer]`) apply to board runs only, after the `[delegate]` ones.
 
@@ -111,6 +111,24 @@ next = "pm"           # promote hands its Handoff issues to pm
 - Every `ensemble-orchestrator` command checks the file when it loads it and exits 2 naming the file and stage: an unknown or ill-typed key, a role the Delegate does not know, a `next` that names no other stage, a `next` chain with a cycle.
 - At least one stage's role must still publish documents to GitHub (its `[output]`), as the packaged researcher and pm do.
 - A `[orchestrator.roles.<role>]` or `[orchestrator.linear.roles.<role>]` table must name a stage's role (one for a packaged stage your workflow leaves out is ignored), and a `[orchestrator.linear.task_labels]` or `[orchestrator.task_tiers]` entry a task of one. Board runs' run keys: `[orchestrator.core]`, above.
+
+### A standalone verifier stage
+
+To run `verifier` checks from the board, add a stage no other stage's `next` names, with its `[orchestrator.linear.roles.verifier]` app as above:
+
+```toml
+[[stage]]
+role = "verifier"
+input = "build"       # the target repo is checked as for engineer
+ref = true            # reads the description's optional Ref: line (a branch or tag)
+mapped_only = true    # Repo: must be the project's mapped repo
+start = "Verification started:"
+done = "Verification done:"
+failed = "Verification failed:"
+```
+
+- Leave `next` and `deliverable` unset: the verifier publishes its report itself ([Upgrading](upgrading.md#verifier-reports-on-github-orchestrator-destination-removed) has its setup), and write-back links the report's `url` on the issue.
+- Its issue, delegated to the verifier app: an optional `Repo:` line (the project's mapping), an optional `Ref:` line, then what to test or the steps to run.
 
 ## OpenCode sessions
 

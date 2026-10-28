@@ -287,7 +287,7 @@ class Detach(Base):
                     code, out, err = self.runs("--sid", SID, "--detach", *extra)
                     self.assertEqual((code, out, err), (2, "", f"delegate: {why}\n"))
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
-        self.assertEqual(os.listdir(self.ensemble), [])
+        self.assertEqual(os.listdir(self.ensemble), ["config.local.toml"])
 
     def test_a_display_is_given_to_the_delegate_unread(self):
         code, _, err = self.detaches("--mode", "tui", "--display", "mgr:%1 right")
@@ -512,7 +512,7 @@ class Verifier(Harnessed):
                 "plugins": [],
                 "lock": "mini-op",
                 "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
-                "github_repo": None,
+                "github_repo": "windroc/team-docs",
             },
         )
         self.assertIn("`mini-op` skill", shown["prompt"])
@@ -572,7 +572,7 @@ class Verifier(Harnessed):
         listed = io.StringIO()
         with redirect_stdout(listed), redirect_stderr(io.StringIO()):
             self.assertEqual(cli.main(["run", "--list"]), 0)
-        self.assertIn("\nverifier  orchestrator  built-in\n  verify: ", listed.getvalue())
+        self.assertIn("\nverifier  github  built-in\n  verify: ", listed.getvalue())
 
 
 class DetachDisplay(Harnessed):
@@ -697,7 +697,8 @@ class DryRun(Base):
         self.assertTrue(shown["prompt"].endswith("\n# Input\n\nHello.\n"))
         self.assertEqual(err, "")
         self.assertEqual(
-            (self.launches(), os.path.exists(self.work), os.listdir(self.ensemble)), ([], False, [])
+            (self.launches(), os.path.exists(self.work), os.listdir(self.ensemble)),
+            ([], False, ["config.local.toml"]),
         )
 
     def test_a_new_run_gets_a_sid(self):
@@ -918,7 +919,7 @@ class List(Base):
             all(line.endswith("  [built-in]") for line in lines if line.startswith("  "))
         )
         self.assertNotIn("<tasks>", out)
-        self.assertEqual(os.listdir(self.ensemble), [])
+        self.assertEqual(os.listdir(self.ensemble), ["config.local.toml"])
 
     def test_list_takes_no_abbreviation_and_no_other_option(self):
         code, out, err = self.cli("run", "--li")
@@ -1632,6 +1633,16 @@ class Queries(Case):
         self.assertEqual(
             self.query("resume", "a", a=View("a")), (0, record("a").to_line() + "\n", "")
         )
+
+    def test_a_busy_resume_exits_75_any_other_refusal_1(self):
+        busy = str(SessionBusy("w", "previous worker generation (live or unknown)"))
+        for error, code in ((SessionError(busy), 75), (SessionError("no such run"), 1)):
+            view = View("a")
+            view.resume = mock.Mock(side_effect=error)
+            with self.subTest(error=str(error)):
+                self.assertEqual(
+                    self.query("resume", "a", a=view), (code, "", f"delegate: a: {error}\n")
+                )
 
 
 class AdhocWorkdir(Base):

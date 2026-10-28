@@ -3,6 +3,7 @@
 import concurrent.futures
 import contextlib
 import dataclasses
+import functools
 import json
 import os
 import queue
@@ -345,16 +346,28 @@ class HookTrustIntegrationTest(Live):
                 handle = self.start(f"u{index}", sid=f"user-{index}")
                 stream = Stream(self, handle)
                 if status in ("untrusted", "modified"):
-                    live_tmux.wait(
-                        lambda *, index=index: (
-                            "review it"
-                            in self.server.tmux(
-                                "capture-pane", "-p", "-J", "-S", "-1000", "-t", f"=u{index}:"
-                            ).stdout
-                        ),
-                        WAIT,
-                        what="user hook trust diagnostic",
+                    pane = functools.partial(
+                        self.server.tmux,
+                        "capture-pane",
+                        "-p",
+                        "-J",
+                        "-S",
+                        "-1000",
+                        "-t",
+                        f"=u{index}:",
                     )
+                    try:
+                        live_tmux.wait(
+                            lambda pane=pane: "review it" in pane().stdout,
+                            WAIT,
+                            what="user hook trust diagnostic",
+                        )
+                    except AssertionError as timeout:
+                        shown = pane()
+                        raise AssertionError(
+                            f"{timeout}; pane: {shown.stdout or shown.stderr!r}; "
+                            f"fake codex log tail: {self.logged()[-20:]}"
+                        ) from None
                     self.assertEqual(stream.until(Exited), [Exited(1)])
                     self.assertEqual(len(self.calls()), before)
                 else:

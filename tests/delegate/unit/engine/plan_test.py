@@ -25,6 +25,7 @@ from tests.delegate.case import REPO, SRC, packaged
 from tests.delegate.plans import SID, TASKS, Base, write_team
 from tests.delegate.repo import fail, ok
 from tests.delegate.unit.engine.instruction import CLIENTS, GITHUB, ROLES, InstructionCase
+from tests.delegate.verifier import VERIFIER
 from tests.session.unit.clients.codex.support import UNIFIED, committed_headless
 from tests.session.unit.clients.codex.support import packaged as codex_client
 from tests.utils.case import local_section
@@ -600,7 +601,7 @@ class InstructionPlans(InstructionCase):
     def test_each_roles_destination_and_prompt_are_the_same_under_any_client(self):
         for local in ("", GITHUB):
             with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
-                f.write(local_section(local, "delegate"))
+                f.write(local_section(local + VERIFIER, "delegate"))
             for role in ROLES:
                 with self.subTest(github=bool(local), role=role):
                     clients = CLIENTS
@@ -705,7 +706,7 @@ class Docker(Base):
                 self.assertFalse(any(TEAM in c for c in access.commands), access.commands)
 
     def test_the_prompt_asks_for_the_deliverable_inline(self):
-        for output in ({"type": "local"}, {"type": "orchestrator"}, {"type": "pull-request"}):
+        for output in ({"type": "local"}, {"type": "pull-request"}):
             with self.subTest(output=output):
                 got, _ = self.planned(keys={"output": output}, out=None)
                 self.assertNotIn("deliverable_file", got.prompt)
@@ -839,7 +840,7 @@ class PrefetchTest(Docker):
         self.assertIsNone(got.session.environment.github_repo)
 
     def test_any_other_output_gets_no_github_repo(self):
-        for output in ({"type": "orchestrator"}, {"type": "local"}, {"type": "pull-request"}):
+        for output in ({"type": "local"}, {"type": "pull-request"}):
             with self.subTest(output=output):
                 got, _ = self.planned(
                     input="Reference: T\nRepo: acme/app\n\nB",

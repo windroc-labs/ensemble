@@ -135,8 +135,7 @@ class Validate(Base):
         self.assertEqual(self.check({**DONE, "questions": ["q"]}).questions, [])
 
     def test_done_needs_the_deliverable_when_it_comes_back(self):
-        for output in ({"type": "local"}, {"type": "orchestrator"}):
-            self.fails({**DONE, "deliverable": " "}, "must carry the deliverable", output)
+        self.fails({**DONE, "deliverable": " "}, "must carry the deliverable", {"type": "local"})
         self.assertEqual(
             self.check({**DONE, "deliverable": ""}, {"type": "pull-request"}).deliverable, ""
         )
