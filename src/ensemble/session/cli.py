@@ -203,11 +203,6 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         help="opaque Docker credential references; resume reuses saved text and refuses changes",
     )
     p.add_argument(
-        "--environment-credentials",
-        metavar="JSON",
-        help="opaque environment credential declaration from delegate; kept separate",
-    )
-    p.add_argument(
         "--environment-spec",
         type=_environment,
         metavar="JSON",
@@ -775,7 +770,6 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_c
         display=Session.display(args.display, host=host),
         environment=args.environment_spec,
         credentials=args.credentials,
-        environment_credentials=args.environment_credentials,
     )
     worker.check(prompt=args.prompt, resume=args.resume is not None)
     with worker.locked():
