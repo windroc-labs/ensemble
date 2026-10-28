@@ -1,4 +1,6 @@
-"""Codex steer replies: steer detection, session file scans, reply lines and the watcher."""
+"""Codex steer replies: steer detection, session file scans, reply lines and the owning harness's
+settle; no hook starts a process (FR-38).
+"""
 
 import contextlib
 import io
@@ -7,12 +9,12 @@ import os
 import time
 from unittest import mock
 
-from ensemble.session.clients import replies as shared
 from ensemble.session.clients.codex import tui
 from ensemble.session.clients.codex.common import SessionStore
 from ensemble.session.clients.codex.tui import replies
 from ensemble.session.engine.types import HookCall
 from ensemble.utils import STALE_AGE, file_lock, read_reply
+from tests.session.case import SPAWNS
 from tests.session.unit.clients.codex.support import NATIVE, Base
 
 NAME = "w1"
@@ -50,7 +52,8 @@ class RepliesBase(Base):
         self.path = self.rollout()
         self.events = str(self.root / "events")
         open(self.events, "w", encoding="utf-8").close()
-        self.spawned = self.enterContext(mock.patch.object(shared.subprocess, "Popen"))
+        for spawn in SPAWNS:
+            self.enterContext(mock.patch(spawn, side_effect=AssertionError(spawn)))
         self.stderr = self.enterContext(contextlib.redirect_stderr(io.StringIO()))
         self.sid = str(self.spec.sid)
         self.state_file = replies.state_path(SessionStore().root, str(self.work), self.sid)
@@ -95,9 +98,8 @@ class RepliesBase(Base):
         self.hook("UserPromptSubmit", prompt=prompt, turn_id=turn_id)
         self.append(_said("user", prompt))
 
-    def watch(self, clock=None):
-        clock = clock or Clock()
-        return replies.watch(self.state_file, clock=clock, sleep=clock.sleep)
+    def pump(self):
+        replies.settle_pending(SessionStore().root, str(self.work), self.sid)
 
 
 class SteerTest(RepliesBase):
@@ -106,7 +108,6 @@ class SteerTest(RepliesBase):
         self.append(_said("assistant", "done text"))
         self.hook("Stop", turn_id="t1", last_assistant_message="done text")
         self.assertEqual(self.lines(), [])
-        self.spawned.assert_not_called()
 
     def test_first_prompt_is_not_steer(self):
         self.open_turn()
@@ -131,9 +132,8 @@ class SteerTest(RepliesBase):
         self.open_turn()
         self.append(_said("assistant", "working on it"))
         self.steer("status?")
-        self.spawned.assert_called_once()
         self.append(_said("user", "status?"), _said("assistant", "half", "done"))
-        self.assertEqual(self.watch(), 0)
+        self.pump()
         (reply_id,) = self.reply_ids()
         self.assertRegex(reply_id, r"^[0-9a-f]{32}$")
         self.assertEqual(read_reply(self.events, reply_id), "half\ndone")
@@ -143,12 +143,12 @@ class SteerTest(RepliesBase):
         self.open_turn()
         self.steer("status?")
         self.append(_said("user", "status?"), _said("assistant", "answer"))
-        self.watch()
+        self.pump()
         self.append(_said("assistant", "final"))
         self.hook("Stop", turn_id="t1", last_assistant_message="final")
         self.assertEqual(len(self.reply_ids()), 1)
 
-    def test_stop_finds_answer_before_the_watcher(self):
+    def test_stop_finds_answer_before_the_pump(self):
         self.open_turn()
         self.steer("status?")
         self.append(
@@ -158,7 +158,7 @@ class SteerTest(RepliesBase):
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "answer")
         self.assertFalse(self.state()["turn"]["open"])
-        self.assertEqual(self.watch(), 0)
+        self.pump()
         self.assertEqual(len(self.reply_ids()), 1)
 
     def test_answers_before_the_steer_record_are_skipped(self):
@@ -167,7 +167,7 @@ class SteerTest(RepliesBase):
         self.append(
             _said("assistant", "before"), _said("user", "status?"), _said("assistant", "after")
         )
-        self.watch()
+        self.pump()
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "after")
 
@@ -175,7 +175,7 @@ class SteerTest(RepliesBase):
         self.open_turn()
         self.append(_said("user", "status?"), _said("assistant", "answer"))
         self.steer("status?")  # the Docker Host runs a relayed hook after Codex goes on
-        self.watch()
+        self.pump()
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "answer")
 
@@ -184,7 +184,7 @@ class SteerTest(RepliesBase):
         self.append(_said("assistant", "early"))
         self.steer("same")
         self.append(_said("user", "same"), _said("assistant", "for the steer"))
-        self.watch()
+        self.pump()
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "for the steer")
 
@@ -220,10 +220,10 @@ class SteerTest(RepliesBase):
         self.open_turn()
         self.steer("same")
         self.append(_said("user", "same"), _said("assistant", "one"))
-        self.watch()
+        self.pump()
         self.steer("same")
         self.append(_said("user", "same"), _said("assistant", "two"))
-        self.watch()
+        self.pump()
         texts = [read_reply(self.events, reply_id) for reply_id in self.reply_ids()]
         self.assertEqual(texts, ["one", "two"])
 
@@ -231,13 +231,13 @@ class SteerTest(RepliesBase):
         self.open_turn()
         self.steer("status?")
         self.append(_said("user", "status?"), _said("assistant", "answer"))
-        self.watch()
+        self.pump()
         saved = self.state()
         steer = {"n": 9, "prompt": "status?", "cursor": 0, "at": None, "skip": False}
         saved["steers"], saved["turn"]["claimed"] = [steer], []
         with open(self.state_file, "w", encoding="utf-8") as stream:
             json.dump(saved, stream)
-        self.watch()
+        self.pump()
         self.assertEqual(len(self.reply_ids()), 1)
 
     def test_stop_falls_back_to_last_assistant_message(self):
@@ -279,7 +279,6 @@ class SteerTest(RepliesBase):
         self.hook("UserPromptSubmit", prompt="x", events=None)
         self.hook("UserPromptSubmit", prompt="y", name="")
         self.assertFalse(os.path.lexists(self.state_file))
-        self.spawned.assert_not_called()
 
     def test_failure_keeps_hook_payload(self):
         self.open_turn()
@@ -325,7 +324,7 @@ class SteerTest(RepliesBase):
         long = "word " * replies.PROMPT_MAX
         self.steer(long)
         self.append(_said("user", long), _said("assistant", "ok"))
-        self.watch()
+        self.pump()
         self.assertEqual(len(self.reply_ids()), 1)
 
     def test_on_hook_uses_only_hook_call_paths(self):
@@ -340,7 +339,7 @@ class SteerTest(RepliesBase):
         directory = os.path.dirname(self.state_file)
         os.makedirs(directory, exist_ok=True)
         old = os.path.join(directory, "0" * 64 + ".json")
-        for name in (old, old + ".lock", old + ".watch.lock"):
+        for name in (old, old + ".lock"):
             with open(name, "w", encoding="utf-8") as stream:
                 stream.write("{}")
             then = time.time() - STALE_AGE - 10
@@ -366,7 +365,8 @@ class ScanTest(RepliesBase):
         (found,) = replies.scan(state, budget=1000)["steers"].values()
         self.assertLessEqual(found["cursor"] - start, 1000)
         self.assertFalse(found["skip"])  # a read the budget cut short skips no record
-        self.watch()
+        for _ in range(4):  # a pump's settle reads SCAN_MAX of the ~3 MB filler
+            self.pump()
         (reply_id,) = self.reply_ids()
         self.assertEqual(read_reply(self.events, reply_id), "answer")
 
@@ -396,75 +396,45 @@ class ScanTest(RepliesBase):
         self.assertEqual(self.lines(), [])
 
 
-class WatcherTest(RepliesBase):
-    def test_ensure_watcher_spawns_detached(self):
+class PumpTest(RepliesBase):
+    """B2: the owning harness's pump announces a steer's answer no hook follows; a steer starts no
+    process (RepliesBase fails any spawn) and leaves no watch lock.
+    """
+
+    def test_a_steer_starts_no_process(self):
         self.open_turn()
         self.steer("status?")
-        ((args, kwargs),) = self.spawned.call_args_list
-        self.assertEqual(args[0][1:5], ["-P", "-s", "-m", replies.WATCH])
-        self.assertEqual(args[0][5], self.state_file)
-        self.assertTrue(kwargs["start_new_session"])
-        for stream in ("stdin", "stdout", "stderr"):
-            self.assertEqual(kwargs[stream], shared.subprocess.DEVNULL)
-        self.assertEqual(replies.WATCH, "ensemble.session.clients.codex.tui.watch")
+        folder = os.path.dirname(self.state_file)
+        self.assertEqual([n for n in os.listdir(folder) if n.endswith(".watch.lock")], [])
 
-    def test_no_spawn_while_a_watcher_holds_its_lock(self):
-        self.open_turn()
-        with file_lock(self.state_file + ".watch", wait=False):
-            self.steer("status?")
-        self.spawned.assert_not_called()
-
-    def test_second_watcher_exits(self):
+    def test_the_pump_writes_a_reply_without_a_hook(self):
         self.open_turn()
         self.steer("status?")
-        with file_lock(self.state_file + ".watch", wait=False):
-            clock = Clock()
-            self.assertEqual(replies.watch(self.state_file, clock=clock, sleep=clock.sleep), 0)
-            self.assertEqual(clock.now, 1000.0)
-
-    def test_watcher_writes_reply_without_stop(self):
-        self.open_turn()
-        self.steer("status?")
-        clock = Clock()
-        polls = []
-
-        def sleep(seconds):
-            polls.append(seconds)
-            if len(polls) == 3:
-                self.append(_said("user", "status?"), _said("assistant", "answer"))
-            clock.sleep(seconds)
-
-        self.assertEqual(replies.watch(self.state_file, clock=clock, sleep=sleep), 0)
+        self.pump()
+        self.assertEqual(self.reply_ids(), [])
+        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        self.pump()
+        self.pump()
         self.assertEqual(len(self.reply_ids()), 1)
-        self.assertLessEqual(clock.now - 1000.0, 3 * shared.POLL + shared.IDLE_EXIT + shared.POLL)
 
-    def test_watcher_idle_quiet_and_lifetime_exit(self):
+    def test_a_held_lock_is_left_to_the_next_pump(self):
         self.open_turn()
-        clock = Clock()
-        self.assertEqual(self.watch(clock), 0)
-        self.assertLessEqual(clock.now - 1000.0, shared.IDLE_EXIT + shared.POLL)
-        self.steer("never answered")
-        clock = Clock()
-        self.assertEqual(self.watch(clock), 0)
-        self.assertGreaterEqual(clock.now - 1000.0, shared.QUIET)
-        self.assertLess(clock.now - 1000.0, shared.QUIET + 2 * shared.POLL)
+        self.steer("status?")
+        self.append(_said("user", "status?"), _said("assistant", "answer"))
+        with file_lock(self.state_file, wait=False):
+            self.pump()
+        self.assertEqual(self.reply_ids(), [])
+        self.pump()
+        self.assertEqual(len(self.reply_ids()), 1)
 
-        def growing(_):
-            self.append({"type": "event_msg", "payload": {}})
-            clock.sleep(600.0)  # long polls keep this loop short
-
-        clock = Clock()
-        self.assertEqual(replies.watch(self.state_file, clock=clock, sleep=growing), 0)
-        self.assertGreaterEqual(clock.now - 1000.0, replies.LIFETIME)
-
-    def test_watcher_claim_during_stop_scan_keeps_stop_commit(self):
+    def test_pump_claim_during_stop_scan_keeps_stop_commit(self):
         self.open_turn()
         self.steer("status?")
         self.append(_said("user", "status?"))
         opened, rollout, ran = os.open, self.path.name, []
 
         def open_(name, *args, **kwargs):
-            if name == rollout and not ran:  # Stop's unlocked scan: a watcher poll commits first
+            if name == rollout and not ran:  # Stop's unlocked scan: a pump's settle commits first
                 ran.append(True)
                 clock = Clock()
                 replies.settle(
@@ -486,7 +456,7 @@ class WatcherTest(RepliesBase):
         self.assertFalse(self.state()["turn"]["open"])
         self.assertEqual(self.state()["steers"], [])
 
-    def test_stop_waits_behind_watcher_emit(self):
+    def test_stop_waits_behind_pump_emit(self):
         self.open_turn()
         self.steer("status?")
         self.append(_said("user", "status?"), _said("assistant", "answer"))
@@ -494,7 +464,7 @@ class WatcherTest(RepliesBase):
 
         def claimed(*args, **kwargs):
             link(*args, **kwargs)
-            if not seen:  # between the watcher's claim and its line, under its lock
+            if not seen:  # between the pump's claim and its line, under its lock
                 seen.append(self.reply_ids())
                 with (
                     mock.patch.object(replies.time, "monotonic", hook_clock),
@@ -504,7 +474,7 @@ class WatcherTest(RepliesBase):
                 seen.append(self.reply_ids())
 
         with mock.patch.object(os, "link", claimed):
-            self.watch()
+            self.pump()
         self.assertEqual(seen, [[], []])
         self.assertIn("locked", self.stderr.getvalue())
         self.assertEqual(len(self.reply_ids()), 1)

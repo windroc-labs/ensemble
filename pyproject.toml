@@ -154,6 +154,7 @@ ignore_imports = [
     "tests.delegate.case -> ensemble.session.engine.config",
     "tests.delegate.unit.engine.config_test -> ensemble.session.engine.config",
     "tests.delegate.fakes.harness_session -> ensemble.session.engine.types",
+    "tests.delegate.fakes.session -> ensemble.session.engine.types",
     "tests.delegate.unit.engine.harness_delegate_test -> ensemble.session.engine.types",
     "tests.delegate.unit.engine.runner_test -> ensemble.session.engine.types",
 ]
