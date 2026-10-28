@@ -1751,7 +1751,7 @@
       }
     },
     {
-      "file": "manifest-secrets.json",
+      "file": "manifest-env.json",
       "definition": "manifest",
       "valid": true,
       "expected": {
@@ -1761,8 +1761,8 @@
       }
     },
     {
-      "file": "manifest-secrets-broker-item.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-broker-item.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1771,8 +1771,8 @@
       }
     },
     {
-      "file": "manifest-secrets-path.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-path.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1781,8 +1781,8 @@
       }
     },
     {
-      "file": "manifest-secrets-dot.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-dot.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1791,8 +1791,8 @@
       }
     },
     {
-      "file": "manifest-secrets-empty-file.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-empty-file.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -1801,8 +1801,8 @@
       }
     },
     {
-      "file": "manifest-secrets-extra-field.json",
-      "definition": "manifest",
+      "file": "credential-spec-env-extra-field.json",
+      "definition": "credential_spec",
       "valid": false,
       "expected": {
         "stage": "schema",
@@ -2888,6 +2888,16 @@
       "expected": {
         "stage": "schema",
         "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-legacy-secrets.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
         "error_code": "manifest_rejected"
       }
     }

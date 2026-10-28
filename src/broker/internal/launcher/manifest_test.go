@@ -205,7 +205,13 @@ func TestManifestClaudeAccount(t *testing.T) {
 }
 
 func withSecrets(secrets any) func(map[string]any) {
-	return func(f map[string]any) { f["secrets"] = secrets }
+	return func(f map[string]any) {
+		data, err := json.Marshal(map[string]any{"env": secrets})
+		if err != nil {
+			panic(err)
+		}
+		f["environment_credentials"] = string(data)
+	}
 }
 
 func secret(item, file string) map[string]any { return map[string]any{"item": item, "file": file} }
@@ -228,14 +234,14 @@ func TestValidEnvName(t *testing.T) {
 	}
 }
 
-func TestParseManifestSecrets(t *testing.T) {
+func TestParseManifestEnv(t *testing.T) {
 	parse := func(edit func(map[string]any)) (Manifest, error) {
 		return ParseManifest(fixtureBytes(t, "manifest-valid.json", edit))
 	}
 	if m, err := parse(nil); err != nil || m.Secrets != nil {
 		t.Fatalf("absent: %+v %v", m.Secrets, err)
 	}
-	if m, err := parse(withSecrets([]any{})); err != nil || len(m.Secrets) != 0 {
+	if m, err := parse(withSecrets([]any{})); code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("empty: %+v %v", m.Secrets, err)
 	}
 	two := []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/dummy", "copy of dummy")}
@@ -254,7 +260,8 @@ func TestParseManifestSecrets(t *testing.T) {
 	}
 	for _, client := range []string{"codex", "opencode"} {
 		edit := func(f map[string]any) {
-			f["client"], f[client+"_dir"], f["secrets"] = client, "/x", []any{secret("ensemble-broker-env/dummy", "dummy.txt")}
+			f["client"], f[client+"_dir"] = client, "/x"
+			withSecrets([]any{secret("ensemble-broker-env/dummy", "dummy.txt")})(f)
 			delete(f, "claude_dir")
 		}
 		if m, err := parse(edit); err != nil || len(m.Secrets) != 1 {
@@ -294,9 +301,8 @@ func TestParseManifestSecrets(t *testing.T) {
 	if _, err := parse(withSecrets([]any{secret("ensemble-broker-env/dummy", strings.Repeat("f", 255))})); err != nil {
 		t.Fatalf("255-byte file: %v", err)
 	}
-	doc := `"secrets":[{"item":"ensemble-broker-env/dummy","file":"a","file":"b"}]`
-	valid := string(fixtureBytes(t, "manifest-valid.json"))
-	if _, err := ParseManifest([]byte(strings.Replace(valid, `"github": null`, `"github": null, `+doc, 1))); code(t, err) != protocol.ManifestRejected {
+	duplicate, _ := json.Marshal(`{"env":[{"item":"ensemble-broker-env/dummy","file":"a","file":"b"}]}`)
+	if _, err := ParseManifest(withFields(t, map[string]any{"credentials": json.RawMessage(duplicate)})); code(t, err) != protocol.ManifestRejected {
 		t.Fatal("duplicate key accepted")
 	}
 }
@@ -371,7 +377,7 @@ func TestManifestPrefetch(t *testing.T) {
 	}
 	// A Linear keychain item is never an environment secret, prefetch or not.
 	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"},
-		"secrets": []any{map[string]any{"item": "linear.harness_key", "file": "linear"}}}))
+		"credentials": `{"env":[{"item":"linear.harness_key","file":"linear"}]}`}))
 	if code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("prefetch with a Linear item: %v", err)
 	}
