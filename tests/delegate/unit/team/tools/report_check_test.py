@@ -18,19 +18,22 @@ class ReportCheck(Case):
         template = Path(TEAM, "templates", "research-report.md").read_text(encoding="utf-8")
         self.assertIn(f"lists/paragraphs {report_check.LINE_LIMIT}", template)
         self.assertIn(f"other cells {report_check.CELL_LIMIT}", template)
+        self.assertIn(f"at most {report_check.FINDINGS_LIMIT} in total", template)
         sample = template.split("## Filled example\n", 1)[1].strip()
         self.assertEqual(self.check(sample), (0, "ok\n"))
         visible = []
         hidden = False
         for line in sample.splitlines():
-            if line.startswith("<details>"):
+            if line.startswith("<details"):
                 hidden = True
             if not hidden or line.startswith("<summary>"):
                 visible.append(line)
             if line.startswith("</details>"):
                 hidden = False
         self.assertLessEqual(sum(not c.isspace() for c in "".join(visible)), 1500)
-        self.assertEqual(sample.count("<details>"), 2)
+        self.assertEqual(sample.count("<details>"), 1)
+        self.assertEqual(sample.count('<details id="findings">'), 1)
+        self.assertIn("## What it means for us", sample)
         self.assertIn("```mermaid", sample)
         self.assertRegex(
             sample,

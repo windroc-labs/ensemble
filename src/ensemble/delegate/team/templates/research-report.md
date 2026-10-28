@@ -27,8 +27,8 @@ Instruction sections: omit Template rules and Filled example from the report. St
 | Deep Research | Research workflows; independent votes on key claims |
 
 - Alert: one bold answer with confidence; at most 3 reasons; Next step and Risk each one line. No synthesis label inside it.
-- Body: text where detail is needed; a figure (Mermaid, or SVG: [Researcher › Standards › Figures](#standards)) or table wherever it makes the report easier to read. Be concise; avoid long essay-style paragraphs. One fact per list item. Keep only material relevant to the research question. Mark synthesis at most once per section, outside the alert.
-- Length: display columns, lists/paragraphs 80; table last column 80, other cells 30. W/F characters in `unicodedata.east_asian_width` count 2, others 1. URLs, link targets, `[n]` and Markdown markers do not count. Code/Mermaid blocks, headings, type line and HTML tag lines are exempt; text inside `<details>` is checked. Soft-wrapped text shares one item's budget. Delivery check: [Researcher › Standards › Concise](#standards).
+- Body: text where detail is needed; a figure (Mermaid, or SVG: [Researcher › Standards › Figures](#standards)) or table wherever it makes the report easier to read. Be concise; avoid long essay-style paragraphs. Outside Findings, one fact per list item. Keep only material relevant to the research question. Mark synthesis at most once per section, outside the alert.
+- Length: display columns. Outside Findings: lists/paragraphs 80; table last column 80, other cells 30. Findings: no per-line cap; the `<details id="findings">` block (keep that id) at most 6000 in total. W/F characters in `unicodedata.east_asian_width` count 2, others 1. URLs, link targets, `[n]` and Markdown markers do not count. Code/Mermaid blocks, headings, type line and HTML tag lines are exempt; text inside `<details>` is checked. Soft-wrapped text shares one item's budget. Delivery check: [Researcher › Standards › Concise](#standards).
 
 ## Comparison table
 
@@ -36,12 +36,16 @@ Optional; omit when the input asks for no comparison. A table ([Principles › W
 
 ## Findings
 
-<details>
+<details id="findings">
 <summary>Findings (<count>)</summary>
 
-One subsection per part of the question, each starting with one **bold answer**; list the findings the conclusion depends on first. One list item per finding, ending with `(<confidence: high, medium or low>; [n]…; <single-source or unverified, when so>)`. Translate the label names, keeping the listed values English. Sources disagree → name both and which you favor, and why; confidence at most medium.
+One subsection per part of the question; the findings the conclusion depends on first. Each finding is one **bold claim** line, then 1–3 sentences: the evidence (what was measured, on what, how big), why it holds, and what it means for the research question; they end with `(<confidence: high, medium or low>; [n]…; <single-source or unverified, when so>)`. Translate the label names, keeping the listed values English. Sources disagree → name both and which you favor, and why; confidence at most medium.
 
 </details>
+
+## What it means for us
+
+Optional; omit when the input asks no decision. 1–3 list items tying the findings to that decision: what they favor, rule out or still require.
 
 ## Corrections to known claims
 
@@ -98,38 +102,42 @@ Light Research: light-research · mixed · windroc-labs/ensemble@f597b17033e7
 
 ## Findings
 
-<details>
-<summary>Findings (4)</summary>
+<details id="findings">
+<summary>Findings (8)</summary>
 
 ### Existing client contract
 
-**The adapter needs hooks, ids and recorded replies.**
+**A new client must supply hooks, caller-known session ids and recorded replies.**
 
-- Map hooks to HookKind; provide launch, reply, session_id and observe. (high; [1])
-- Claude supplies ids and injects hooks at launch. (high; [2][3])
+The client base class requires launch, reply, session_id and observe, and maps every hook event to a HookKind [1]. Claude meets it by choosing the session id itself and injecting its hooks at launch [2][3], so a client that allows both can reuse Claude's adapter shape. (high; [1][2][3])
 
 ### Cursor CLI
 
-**Session creation adds a step; hook coverage has gaps.**
+**Every launch needs an extra call to get a session id.**
 
-- create-chat returns an id; --resume restores it. (high; [4])
-- stop lacks reply text; afterAgentResponse carries it. (high; [5])
-- CLI emits fewer hooks, says NVIDIA. (low; [6]; single-source)
-- Full account isolation remains undocumented. (low; unverified)
+Cursor's parameter reference has create-chat return a new id, which --resume then restores [4]. Ensemble would run and parse create-chat before each launch, a step Claude does not need. (high; [4])
+
+**Replies arrive on a separate hook, which the CLI may not emit.**
+
+Cursor's hook reference puts the reply text on afterAgentResponse, not on stop [5], so observe must join two events per turn. NVIDIA's guide says the CLI emits fewer hooks than the editor [6]; if so, headless runs could lose replies. (medium; [5][6]; single-source)
+
+**Per-account isolation is undocumented.**
+
+Cursor documents only where its config lives, not its sessions or credentials, so separating accounts would rest on guesses. (low; unverified)
 
 ### Grok Build
 
-**Documented ids and hooks fit the existing adapter.**
+**Session ids and hooks map one-to-one onto the contract.**
 
-- -s creates with a UUID; -r resumes; GROK_HOME stores sessions. (high; [7])
-- Stop carries lastAssistantMessage; StopCancelled marks interruption. (high; [8])
-- Disable inherited Claude/Cursor hooks using their ENABLED flags. (high; [8][9])
-- GROK_HOME holds auth.json as well as sessions. (high; [7][10])
-- Grok Build is Apache-2.0. (high; [11])
+Grok's session guide has -s create a session under a caller UUID and -r resume it [7]; its Stop hook carries lastAssistantMessage, and StopCancelled marks an interrupted turn [8]. That covers session_id, reply and observe with no extra call. (high; [7][8])
+
+**One GROK_HOME per account isolates sessions and credentials.**
+
+GROK_HOME holds auth.json beside the sessions [7][10], so one directory per account separates both. Grok also runs inherited Claude and Cursor hooks unless their ENABLED flags are off [8][9], so the adapter must turn them off. (high; [7][8][9][10])
 
 ### Integration work
 
-**Reuse Claude's shape with account-scoped hook files.**
+**Reuse Claude's adapter shape with account-scoped hook files.**
 
 ```mermaid
 flowchart LR
@@ -138,10 +146,18 @@ flowchart LR
   C --> D[Read updates]
 ```
 
-- Synthesis: map against Claude's adapter; filter hooks by sessionId. [3][7][8]
-- Read updates.jsonl fields before implementing observe. (low; unverified)
+Synthesis: mapping Grok's docs onto Claude's adapter gives these four steps; hooks filter by sessionId, since one GROK_HOME serves several sessions. [3][7][8]
+
+**observe's input format is still unknown.**
+
+The docs do not list the fields of updates.jsonl. Grok Build is Apache-2.0 [11], so they can be read in its source before observe is implemented. (low; unverified)
 
 </details>
+
+## What it means for us
+
+- Grok Build fits today's adapter: ids, replies and isolation map directly.
+- Cursor would add an id call, a two-hook join and guessed isolation.
 
 ## Gaps
 
