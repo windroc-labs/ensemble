@@ -139,7 +139,7 @@ jobs:
           config: pyproject.toml
 
   repository:
-    name: Repository tests ${{ matrix.job }}
+    name: Repository tests ${{ matrix.job }} / repeat ${{ matrix.repeat }}
     needs: [changes]
     if: ${{ needs.changes.outputs.full == 'true' }}
     runs-on: ubuntu-24.04
@@ -148,6 +148,7 @@ jobs:
       fail-fast: false
       matrix:
         job: ["1", "2", "3", "4", "5", "6"]
+        repeat: [1, 2, 3, 4, 5]
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -172,12 +173,12 @@ jobs:
       - name: Repository integration tests
         env:
           RUN_TESTS_REPORT_DIR: ${{ runner.temp }}/repository
-        run: python3 -X faulthandler .github/run_tests.py 'Repository integration ${{ matrix.job }}' tests/integration --durations .github/test_durations.json --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'
+        run: python3 -X faulthandler .github/run_tests.py 'Repository integration ${{ matrix.job }}' tests/integration --durations .github/test_durations.json --parallel 4 --shard '${{ matrix.job }}/6'
       - name: Preserve repository timings
         if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: repository-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
+          name: repository-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}-${{ matrix.repeat }}
           path: ${{ runner.temp }}/repository/
           if-no-files-found: error
           retention-days: 30
@@ -290,7 +291,7 @@ jobs:
           fi
 
   integration:
-    name: Integration ${{ matrix.job }}
+    name: Integration ${{ matrix.job }} / repeat ${{ matrix.repeat }}
     runs-on: ubuntu-24.04
     needs: [changes]
     if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
@@ -302,6 +303,7 @@ jobs:
       fail-fast: false
       matrix:
         job: ["1", "2", "3", "4", "5", "6", "7", "8"]
+        repeat: [1, 2, 3, 4, 5]
     steps:
       - name: Check out
         uses: actions/checkout@v7.0.1
@@ -335,7 +337,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: integration-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
+          name: integration-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}-${{ matrix.repeat }}
           path: ${{ runner.temp }}/integration-timing/
           if-no-files-found: error
           retention-days: 30
