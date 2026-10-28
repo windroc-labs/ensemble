@@ -121,7 +121,6 @@ class Harness:
         drain: float = DRAIN,
         caller: int | None = None,
     ) -> None:
-        """caller: the far end of its caller's pipe, if any."""
         self._channel, self._poll, self._close_wait, self._drain = channel, poll, close_wait, drain
         self._caller = caller
         if caller is not None:
@@ -214,9 +213,8 @@ class Harness:
                 return -signal.SIGHUP if code is None else code
 
     def _pumped(self, worker: Worker, found: Sequence[Event]) -> None:
-        """A pump's opening, up and dialog, in one write before its events are logged: a view
-        acting on an event reads the status it came with, and one acting on the status (a start's
-        watch) finds any dialog of the events it has yet to read.
+        """Opening, up and dialog written before the events are logged, so a view acting on either
+        finds the other.
         """
         status = dict(self._status, opening=worker.opening_pending)
         if worker.up:
@@ -230,7 +228,7 @@ class Harness:
             self._write()
 
     def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> None:
-        """Its worker's input, screen or display; any failure is a refusal that leaves it up."""
+        """Any failure is a refusal that leaves the worker up."""
         try:
             found = _served(worker, op, data)
         except (ConfigError, SessionError, ValueError) as error:
@@ -279,7 +277,6 @@ class Harness:
         self._append(None, Exited(code))
 
     def _drain_handlers(self, worker: Worker) -> None:
-        """Its last writes: harness.json's exited, then the deferred answers."""
         assert self._dispatch is not None
         deadline = time.monotonic() + self._drain
         try:

@@ -1,6 +1,4 @@
-"""Host, where processes live, keeping each one's Record and Display; an attachable one names the
-attach target the Viewer shows a session through.
-"""
+"""Host: where processes live, each with its Record and Display."""
 
 from __future__ import annotations
 
@@ -116,8 +114,6 @@ def created_events(path: str | None) -> str | None:
 
 @dataclass(frozen=True)
 class WorkerState:
-    """A tui worker's current generation, as its session.json says."""
-
     sid: str | None
     generation: str | None
     client: str | None
@@ -223,9 +219,7 @@ def tui_lock(name: str) -> str:
 
 
 class InteractiveProcess(ABC):
-    """A managed worker's handle (docs/architecture.md › Session harness interfaces): send and
-    press into its input (Key names: the Client's), its screen, liveness and confirmed close.
-    """
+    """A managed worker's handle (docs/architecture.md › Session harness interfaces)."""
 
     name: str
     generation: str
@@ -275,7 +269,6 @@ class Host(ABC):
     _named_headless: ClassVar[bool] = False
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
-        """Probe with this Host's credentials, when supported."""
         return None
 
     def __init__(self, name: str, settings: Mapping | None = None) -> None:
@@ -330,9 +323,7 @@ class Host(ABC):
         raise SessionError(f"host {self.name} runs no managed worker")
 
     def _release(self, name: str, generation: str) -> None:
-        """Worker `name`'s generation `generation`'s leftovers removed, once its worker_liveness
-        is ABSENT; a Host that overrides worker overrides this too.
-        """
+        """Removes `generation`'s leftovers once worker_liveness is ABSENT; override with worker."""
         return None
 
     @abstractmethod

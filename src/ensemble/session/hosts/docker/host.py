@@ -1,5 +1,5 @@
-"""DockerHost runs each session in its own broker-made container (docs/architecture.md#docker-host): its
-worker's guard (worker.py), tui or headless, through `docker exec -i`.
+"""DockerHost: a broker-made container per session, its guard (worker.py) run by `docker exec -i`
+(docs/architecture.md#docker-host).
 """
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ RECORD = "host.json"
 OWNER_LOCK = "guard.lock"
 BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
-STATE_ROOT = "/run/ensemble"  # the client context's Container.state_root
+STATE_ROOT = "/run/ensemble"  # Container.state_root
 _ARG_STRLEN_MAX = 131072  # Linux exec's limit on one argument, its NUL included
 PROMPT_STAGE = """import os, sys
 os.makedirs(os.path.dirname(sys.argv[1]), 0o700, exist_ok=True)
@@ -117,16 +117,16 @@ PS_FORMAT = "\t".join(
 )
 STOPPED = frozenset({"created", "exited", "dead"})  # narrower than _row_liveness's not running
 LOG = logging.getLogger("session")
-KEPT = f"{DOCKER_STATE}/.kept"  # a marker per run volume kept: unsaved work, or a failed check
+KEPT = f"{DOCKER_STATE}/.kept"  # a marker per kept run volume
 KEPT_LOCK = ".lock"
-KEPT_RETRY = 24 * 3600  # seconds before a volume whose check failed is checked again
+KEPT_RETRY = 24 * 3600  # seconds until a failed check is retried
 VOLUME_FORMAT = '{{.Name}}\t{{.Label "' + WORKSPACE_LABEL + '"}}'
 STATE_MAX = 1 << 20
 STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 
 
 class Row(NamedTuple):
-    """A `docker ps` row whose labels name a session and generation and match its name."""
+    """A `docker ps` row whose labels match its container name."""
 
     name: str
     container: str
@@ -197,9 +197,8 @@ def _state_file(name: str) -> str:
 
 
 def _reset_home(name: str, home: str, kept: Iterable[str]) -> None:
-    """Empties a new start's client home in place, never following a link: Docker Desktop can
-    report a bind source recreated at a path it saw before as missing, so `home` and each `kept`
-    dir under it stay the same dir, mode 0700; a link or file there is removed.
+    """Empties a new start's client home in place, following no link: Docker Desktop can report a
+    bind source recreated at a known path as missing, so `home` and each `kept` dir stay the same dir.
     """
     keep = {os.path.join(home, directory) for directory in kept}
 
@@ -226,7 +225,7 @@ def _reset_home(name: str, home: str, kept: Iterable[str]) -> None:
 
 
 def _report_plan(name: str, plan: Mapping) -> None:
-    """Freeze a generation's plan beside its manifest, then print it to stderr, a line a part."""
+    """Saves a generation's plan beside its manifest; prints it to stderr."""
     try:
         save(
             os.path.join(state_dir(name), f"{plan['generation']}.plan.json"),
@@ -247,7 +246,7 @@ def _report_plan(name: str, plan: Mapping) -> None:
 
 
 def _parsed_environment(name: str, value) -> EnvironmentSpec | None:
-    """An environment from metadata's JSON or host.json's object; None for none."""
+    """From metadata's JSON or host.json's object."""
     if value is None:
         return None
     try:
@@ -261,9 +260,8 @@ def _holder_text(found: Mapping[str, str]) -> str:
 
 
 class _Stops:
-    """Holds STOPS but ignored ones while a start owns its container, so its rollback still runs:
-    check() raises for one received, which is raised again on exit. Catches, not blocks, so no child
-    inherits them blocked; only the main thread can set handlers.
+    """Defers non-ignored STOPS while a start owns its container, so its rollback runs; re-raised on
+    exit. Catches, not blocks, so no child inherits them blocked; main thread only.
     """
 
     def __enter__(self) -> _Stops:
@@ -342,9 +340,7 @@ class _Laps:
 def _accept_started(
     name: str, generation: str, started: Started, container: str, github: str
 ) -> None:
-    """The broker started `container` here, with a bot user ID exactly when `github` names an App;
-    its deadline saved for the credential tick.
-    """
+    """Checks the broker's start reply; saves its deadline for the credential tick."""
     if (started.endpoint, started.container) != (endpoint(), container):
         raise SessionError(
             f"broker: started {started.container} at {started.endpoint},"
@@ -360,9 +356,7 @@ def _accept_started(
 
 
 def _held(marker: str) -> bool:
-    """Whether a kept marker still holds its volume back: a failed check for KEPT_RETRY, anything
-    else for good.
-    """
+    """A failed check holds its volume for KEPT_RETRY, any other marker for good."""
     try:
         with open(marker) as f:
             failed = f.read() == "failed"
@@ -372,9 +366,8 @@ def _held(marker: str) -> bool:
 
 
 class DockerHost(Host):
-    """settings: [hosts.<name>]'s docker, the CLI's absolute path; plugins, repository sources
-    installed in its image (none when absent); and github.app, the GitHub App whose tokens every
-    session gets ("" or no table: none).
+    """settings: docker, the CLI's absolute path; plugins, sources installed in its image; and
+    github.app, the GitHub App whose tokens every session gets ("" or absent: none).
     """
 
     _inherit_env = False  # the container gets only the launch's own env (D10)
@@ -432,16 +425,14 @@ class DockerHost(Host):
         self._workers: dict[str, DockerWorker] = {}
 
     def _ps(self, *, required: bool = False) -> list[list[str]]:
-        """Admission requires an answer; other callers list no sessions without a daemon/CLI."""
+        """Admission requires an answer; others list none without a daemon/CLI."""
         rows = self._listed("ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT)
         if rows is None and required:
             raise SessionError(f"host {self.name}: inventory unavailable (no Docker CLI or socket)")
         return rows or []
 
     def _listed(self, *args: str) -> list[list[str]] | None:
-        """docker `args`' tab-separated rows; None with no daemon socket or docker CLI; Unanswered
-        when docker fails or times out.
-        """
+        """Tab-separated rows; None without a daemon socket or CLI; Unanswered on failure."""
         if not os.path.exists(endpoint().removeprefix("unix://")):
             return None
         argv, env = docker_call(self.docker, *args)
@@ -476,7 +467,7 @@ class DockerHost(Host):
 
     def sweep(self, own: str) -> None:
         """Closes rows whose owner lock is free, and `own`'s debris; others only under their tui
-        lock taken without waiting (`own`'s caller holds its).
+        lock, untaken if busy (`own`'s caller holds its).
         """
         try:
             rows = self._rows()
@@ -500,7 +491,7 @@ class DockerHost(Host):
                 LOG.warning("docker sweep %s: %s", row.name, error)
 
     def _spawn_reclaim(self) -> None:
-        """Detach the close's cleanup, so broker checks outlive the caller without delaying it."""
+        """Detached, so broker checks outlive the caller without delaying it."""
         try:
             state = os.path.expanduser(DOCKER_STATE)
             os.makedirs(state, mode=0o700, exist_ok=True)
@@ -525,10 +516,8 @@ class DockerHost(Host):
             LOG.warning("docker reclaim: %s", error)
 
     def reclaim_volumes(self) -> None:
-        """Background close pass: removes all run workspace volumes whose workdir is gone, after
-        the broker's check. One with unsaved work is kept for good, one whose check
-        failed for KEPT_RETRY; each is warned about once and marked. Listed before the lock, so no
-        orphan writes no file.
+        """Removes run workspace volumes whose workdir is gone, after the broker's check; a kept
+        one is marked and warned about once. Lists before locking, so no orphan writes no file.
         """
         try:
             self._reclaim()
@@ -614,7 +603,7 @@ class DockerHost(Host):
     def _preflight(
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
-        """With an environment: cwd and handshake; start owns the lock and credential checks."""
+        """With an environment: cwd and handshake; start does lock and credential checks."""
         environment = self._environment(name, metadata)
         if environment is None:
             self.validate(name, launch, missing_ok=True)
@@ -628,7 +617,7 @@ class DockerHost(Host):
     def _validate(
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
-        """With an environment: the cwd and the broker handshake; the start builds and locks."""
+        """With an environment: cwd and handshake; the start builds and locks."""
         if self._environment(name, metadata) is None:
             self.validate(name, launch)
             return
@@ -636,8 +625,8 @@ class DockerHost(Host):
         self.broker.version()
 
     def _environment(self, name: str, metadata: Mapping[str, str] | None) -> EnvironmentSpec | None:
-        """The given environment; a resume's is its stored one (FR-62): taken when none is given,
-        refused when the given one differs but in prefetch.
+        """A resume's is its stored one (FR-62): taken if none is given, refused if the given one
+        differs but in prefetch.
         """
         given = _parsed_environment(name, (metadata or {}).get("environment"))
         record = _record(name)
@@ -668,9 +657,7 @@ class DockerHost(Host):
         return self.github, self.github_permissions, ""
 
     def validate(self, name: str, launch: Launch, *, missing_ok: bool = False) -> None:
-        """The preflight, before any container: the cwd (`missing_ok`: or none yet), the broker
-        handshake and the build.
-        """
+        """The preflight, before any container: cwd (`missing_ok`: or none yet) and build."""
         laps = _Laps()
         self._check_cwd(name, launch, missing_ok=missing_ok)
         self._image(name)
@@ -692,9 +679,7 @@ class DockerHost(Host):
     def _image(
         self, name: str, environment: EnvironmentSpec | None = None
     ) -> tuple[str, str, tuple[str, str]]:
-        """(the hook path, the plugin root, the built image and digest); an environment's base
-        image and plugins over the Host's.
-        """
+        """(hook path, plugin root, (image, digest)); an environment's image and plugins added."""
         hook = command_path(COMMAND)
         if hook is None:
             raise ConfigError(f"docker session {name}: {COMMAND} is not on PATH (its hooks run it)")
@@ -715,9 +700,7 @@ class DockerHost(Host):
         return hook, root, built
 
     def _move_workspace(self, name: str, volume: str, cwd: str) -> None:
-        """Deletes a new start's workspace volume mounted at another cwd, unless the broker's check
-        finds unsaved work there; one at `cwd`, or none, is kept for this start.
-        """
+        """Deletes a new start's workspace volume made at another cwd, unless it has unsaved work."""
         rows = self._listed(
             "volume", "ls", "--filter", f"label={KIND_LABEL}", "--format", VOLUME_FORMAT
         )
@@ -744,9 +727,7 @@ class DockerHost(Host):
         environment: EnvironmentSpec | None,
         github: tuple[str, Mapping[str, str], str],
     ) -> _Container:
-        """The checks, image, workspace, home and plan, then the broker's start, rolled back on a
-        transport failure.
-        """
+        """Checks, image, workspace, home and plan, then the start; rolled back on transport failure."""
         app, permissions, repo = github
         generation, field, home_dir, credential = (
             metadata.get(key) for key in ("generation", "home_field", "home_dir", "credential")
@@ -868,8 +849,8 @@ class DockerHost(Host):
         events: str | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> DockerWorker:
-        """A direct caller's (a headless run's) start: under the tui lock, whose file goes after
-        unless a session.json names it; an owned one's (metadata `owner`) TuiStore holds it.
+        """A direct (headless) start holds the tui lock, its file removed unless a session.json
+        names it; an owned one's (metadata `owner`) TuiStore holds it.
         """
         if (metadata or {}).get("owner"):
             return self._worker(
@@ -903,8 +884,8 @@ class DockerHost(Host):
         events: str | None,
         metadata: Mapping[str, str] | None,
     ) -> DockerWorker:
-        """The guard in a new container over one `docker exec -i`, holding the owner lock; a live or
-        unknown earlier guarded generation refuses (SessionBusy), an ended one is removed first.
+        """Holds the owner lock; a live or unknown earlier generation refuses (SessionBusy), an
+        ended one is removed first.
         """
         if why := display_error(display):
             raise ConfigError(why)
@@ -1072,7 +1053,7 @@ class DockerHost(Host):
         return report
 
     def worker_liveness(self, name: str, generation: str) -> Liveness:
-        """LIVE while another process holds its owner lock, with no docker call; else the row's."""
+        """LIVE while another process holds the owner lock (no docker call); else the row's."""
         if not GEN.fullmatch(generation) or not SESSION_NAME.fullmatch(name):
             return Liveness.UNKNOWN
         if not _lock_free(_owner_path(name)):
@@ -1080,7 +1061,7 @@ class DockerHost(Host):
         return self._row_liveness(name, generation)
 
     def _release(self, name: str, generation: str) -> None:
-        """Its container of `generation`, once its owner lock is free."""
+        """Once its owner lock is free."""
         if not any(r.name == name and r.generation == generation for r in self._rows()):
             return
         if not _lock_free(_owner_path(name)):
@@ -1088,9 +1069,7 @@ class DockerHost(Host):
         self._remove(container_name(name, generation))
 
     def _row_liveness(self, name: str, generation: str) -> Liveness:
-        """The container of `generation` and its guard's lease, by docker; ABSENT permits only that
-        container's removal.
-        """
+        """By docker; ABSENT permits only that container's removal."""
         try:
             rows = self._rows()
         except SessionError:
@@ -1141,7 +1120,7 @@ class DockerHost(Host):
             raise SessionError("staging client runtime failed")
 
     def _stage_prompt(self, container: str, metadata: Mapping[str, str]) -> None:
-        """metadata's prompt written at its prompt_file in the container, as its agent user."""
+        """As the container's agent user."""
         path = metadata.get("prompt_file")
         if path is None:
             return
@@ -1161,7 +1140,7 @@ class DockerHost(Host):
             )
 
     def _exec_env(self, launch: Launch, started: Started, app: str) -> dict[str, str]:
-        """launch's env, plus with a GitHub App its bot as PR author and git identity."""
+        """With a GitHub App, its bot is PR author and git identity."""
         env = {k: v for k, v in launch.env.items() if k != "PATH"}
         if app:
             bot = f"{app}[bot]"
@@ -1193,9 +1172,7 @@ class DockerHost(Host):
         return f"docker:{endpoint()}"
 
     def rows(self) -> list[SessionRow]:
-        """[] with a warning when docker fails, so the other Hosts' rows still list; list() raises,
-        as its callers act on absence.
-        """
+        """[] when docker fails, so other Hosts' rows list; list() raises: callers act on absence."""
         try:
             containers = self._containers()
         except SessionError as error:

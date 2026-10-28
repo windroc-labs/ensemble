@@ -162,9 +162,7 @@ def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
 
 
 class Threaded(HostedSession):
-    """The test session class: a start of a class with injected callables runs its harness on a
-    thread (threaded_spawn); any other, a harness process.
-    """
+    """Injected callables run its harness on a thread (threaded_spawn), else in a process."""
 
     @classmethod
     def _spawn(cls, spec, mode, **options):
@@ -178,9 +176,7 @@ _RUNNING: list[tuple[Channel, threading.Thread]] = []
 
 @contextlib.contextmanager
 def joined():
-    """On exit each threaded harness still running is closed and its thread joined, so none
-    outlives its test.
-    """
+    """Closes and joins the threaded harnesses still running on exit."""
     try:
         yield
     finally:
