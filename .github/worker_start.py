@@ -11,7 +11,11 @@ CHECKS = ROOT / "src/broker/internal/launcher/checks"
 
 
 def docker(*args, **kwargs):
-    return subprocess.run(["docker", *args], check=True, capture_output=True, **kwargs).stdout
+    result = subprocess.run(["docker", *args], capture_output=True, timeout=120, **kwargs)
+    if result.returncode:
+        print(result.stderr.decode(errors="replace")[-8000:], file=sys.stderr)
+        raise RuntimeError(f"container startup check: docker {args[0]} exited {result.returncode}")
+    return result.stdout
 
 
 def main(image):
@@ -23,8 +27,8 @@ def main(image):
     uid, gid = labels["ensemble.agent-uid"], labels["ensemble.agent-gid"]
     for client, hook in (
         ("claude", ""),
-        ("claude", "/usr/local/bin/ci-start-hook"),
-        ("codex", "/usr/local/bin/ci-start-hook"),
+        ("claude", "/opt/ensemble/ci-start-hook"),
+        ("codex", "/opt/ensemble/ci-start-hook"),
     ):
         flags = ["--cap-add", "SETUID", "--cap-add", "SETGID"] if hook else []
         container = (

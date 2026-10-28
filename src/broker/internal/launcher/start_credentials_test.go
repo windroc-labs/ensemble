@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
+	"ensemble/broker/internal/protocol"
 )
 
 func startCommands(t *testing.T, d *fakeDocker) []startCommand {
@@ -126,5 +130,53 @@ func TestStartPreparationDoesNotDeliverCredentials(t *testing.T) {
 	_, err := h.Start(context.Background(), editedManifest(t, withSecrets(dummySecrets)))
 	if err == nil || len(startCommands(t, d)) != 0 {
 		t.Fatalf("preparation failure delivered credentials: %v", err)
+	}
+}
+
+func TestStartPartialDeliveryAuditAndPersistence(t *testing.T) {
+	for _, rollbackFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "removed", true: "retained"}[rollbackFails], func(t *testing.T) {
+			w := &world{labels: goodLabels(), execErr: failOn("id_ed25519", errors.New("secret write failed"))}
+			if rollbackFails {
+				w.rmErr = errors.New("container busy")
+			}
+			tokens := &fakeTokens{owners: []string{"first", "second"}}
+			h, d := githubHost(w, tokens)
+			h.Home, h.Env = t.TempDir(), &fakeEnv{}
+			h.Static = &fakeStatic{loads: []map[string]credential.Static{{}, {}}}
+			h.Schedule = StateSchedule{Home: h.Home, Safe: h.Safe}
+			parent := filepath.Join(h.Home, ".ensemble/docker-state/worker_1")
+			if err := os.MkdirAll(parent, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := fixtureManifest(t, "manifest-github-app.json", withSecrets(dummySecrets), func(m map[string]any) {
+				m["claude_dir"] = filepath.Join(parent, "claude")
+			})
+			rec, log := audited(t, &h, "start", "")
+			_, err := h.Start(context.Background(), path)
+			rec.Flush(err)
+			e := protoErr(t, err)
+			if e.Message != "Writing ensemble-broker-env/ssh into the container failed." || e.Code != protocol.StartFailed {
+				t.Fatalf("wrong failed step: %+v", e)
+			}
+			want := []string{"claude-setup-token issued", "env-secret issued ensemble-broker-env/dummy"}
+			cleanup := protocol.Failed
+			if !rollbackFails {
+				want = append(want, "claude-setup-token withdrawn", "env-secret withdrawn ensemble-broker-env/dummy")
+				cleanup = protocol.Removed
+			}
+			line := readLines(t, log)[0]
+			if !slices.Equal(kinds(line), want) || e.Cleanup != cleanup || line.Credentials[1].Item != "ensemble-broker-env/dummy" {
+				t.Fatalf("audit=%+v cleanup=%s", line.Credentials, e.Cleanup)
+			}
+			if !slices.Contains(tokens.calls, "revoke "+container) || !hasCall(d, "rm") {
+				t.Fatalf("rollback or revocation missing: %v %v", tokens.calls, d.verbs())
+			}
+			for _, suffix := range []string{".static.json", ".tokens.json"} {
+				if _, err := os.Stat(filepath.Join(parent, tokensGeneration+suffix)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("failed delivery wrote %s: %v", suffix, err)
+				}
+			}
+		})
 	}
 }

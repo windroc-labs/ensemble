@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -627,16 +628,25 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 		return []byte(`[{"Name":"egress-workers","Id":"` + strings.Repeat("f", 64) + `","Internal":true}]`), nil
 	case strings.HasPrefix(joined, "image inspect"):
 		return []byte(`[{"Id":"sha256:` + strings.Repeat("b", 64) + `","Config":{"Labels":{"ensemble.key":"` + strings.Repeat("a", 64) +
-			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002"}}}]`), nil
+			`","ensemble.version":"1.2.3","ensemble.agent-uid":"1001","ensemble.agent-gid":"1002","ensemble.claude-version":"2.1.0","ensemble.codex-version":"0.163.0","ensemble.opencode-version":"1.19.3"}}}]`), nil
 	case strings.HasPrefix(joined, "volume inspect"):
 		return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"/Users/example/src/project"}`), nil
 	case strings.HasPrefix(joined, "container inspect"):
 		return nil, &docker.CommandError{Exit: 1, Stderr: "No such container"}
-	case strings.HasSuffix(joined, "--version"):
-		if strings.Contains(joined, "codex --version") {
-			return []byte("codex-cli 0.100.0\n"), nil
+	case slices.Contains(args, "/opt/ensemble/lib/credential-batch.py"):
+		var commands []struct {
+			Argv  []string `json:"argv"`
+			Stdin []byte   `json:"stdin"`
 		}
-		return []byte("1.0.0\n"), nil
+		if err := json.Unmarshal(stdin, &commands); err != nil {
+			return nil, err
+		}
+		for i, command := range commands {
+			if s.fail != "" && strings.Contains(strings.Join(command.Argv, " "), s.fail) {
+				return json.Marshal(map[string]int{"completed": i})
+			}
+		}
+		return json.Marshal(map[string]int{"completed": len(commands)})
 	}
 	return nil, nil
 }
@@ -652,7 +662,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	const home = "/Users/example"
-	for _, fail := range []string{"", "cat >", "codex --version"} {
+	for _, fail := range []string{"", "cat >", "/usr/bin/python3", "credential-batch.py"} {
 		d := &scripted{fail: fail}
 		h := launcher.Host{
 			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
@@ -664,7 +674,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 		}
 		a := app{start: func(ctx context.Context, _ keys, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
 		_, out, errOut := invoke(a, "start", "--manifest", path)
-		if strings.Contains(out+errOut, token) {
+		if strings.Contains(out+errOut, token) || strings.Contains(out+errOut, base64.StdEncoding.EncodeToString([]byte(token))) {
 			t.Fatalf("token in output: %q %q", out, errOut)
 		}
 		injected := 0
@@ -672,11 +682,21 @@ func TestTokenNeverLeaves(t *testing.T) {
 			if strings.Contains(strings.Join(c, " "), token) {
 				t.Fatalf("token in argv %q", c)
 			}
-			if strings.Contains(string(d.stdin[i]), token) {
-				injected++
+			if slices.Contains(c, "/opt/ensemble/lib/credential-batch.py") {
+				var commands []struct {
+					Stdin []byte `json:"stdin"`
+				}
+				if err := json.Unmarshal(d.stdin[i], &commands); err != nil {
+					t.Fatal(err)
+				}
+				for _, command := range commands {
+					if string(command.Stdin) == token {
+						injected++
+					}
+				}
 			}
 		}
-		if injected != 1 && fail != "codex --version" {
+		if injected != 1 && fail != "/usr/bin/python3" {
 			t.Fatalf("%q: token written %d times", fail, injected)
 		}
 	}
@@ -841,7 +861,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 			results = append(results, l.Event+" "+cr.Kind+" "+cr.Result)
 		}
 	}
-	want := []string{"start claude-setup-token issued", "start github-installation-token issued",
+	want := []string{"start github-installation-token issued", "start claude-setup-token issued",
 		"refresh github-installation-token renewed", "close github-installation-token revoked"}
 	if !slices.Equal(results, want) || !bytes.Contains(data, []byte(`"repositories":["acme/ensemble"]`)) {
 		t.Fatalf("%v\n%s", results, data)

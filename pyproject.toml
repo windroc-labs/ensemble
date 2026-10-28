@@ -258,3 +258,7 @@ extend-ignore-re = ["U\\+[0-9A-Fa-f]{1,6}(-[0-9A-Fa-f]{1,6})?"]
 caf = "caf"
 # English ordinal suffix in 2nd, parsed by the client's reset-time protocol.
 nd = "nd"
+
+[tool.typos.default.extend-identifiers]
+# Linux /proc status capability field.
+CapInh = "CapInh"
