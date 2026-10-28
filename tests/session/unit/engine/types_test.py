@@ -494,7 +494,6 @@ SOURCE = "dummy@owner/repo#" + "a" * 40
 ENVIRONMENT = {
     "image": "dummy-env:test",
     "gateway": "workers",
-    "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
     "plugins": ["dummy-plugin", SOURCE],
     "lock": "dummy-lock",
     "prefetch": {"repo": "o/r", "ref": "main"},
@@ -515,7 +514,7 @@ class EnvironmentSpecTest(Case):
             self.assertIs(module.SessionBusy, engine_types.SessionBusy)
 
     def test_unknown_or_role_field_is_refused(self):
-        for key in ("role", "ports", "name"):
+        for key in ("role", "ports", "name", "secrets"):
             with self.subTest(key), self.assertRaisesRegex(ConfigError, key):
                 environment(**{key: "x"})
 
@@ -529,38 +528,10 @@ class EnvironmentSpecTest(Case):
         with self.assertRaises(ConfigError):
             session.EnvironmentSpec.from_fields(["image"])
 
-    def test_bad_secret_files_and_items_are_refused(self):
-        item = "ensemble-broker-env/dummy"
-        for secrets in (
-            [{"item": item, "file": "../x"}],
-            [{"item": item, "file": ""}],
-            [{"item": item, "file": "a\nb"}],
-            [{"item": item, "file": "a\x85b"}],
-            [{"item": item, "file": "."}],
-            [{"item": item, "file": ".."}],
-            [{"item": item, "file": "x" * 256}],
-            [
-                {"item": item, "file": "dummy.txt"},
-                {"item": "ensemble-broker-env/other", "file": "dummy.txt"},
-            ],
-            [{"item": "ensemble-broker-bot", "file": "dummy.txt"}],
-            [{"item": "ensemble-broker-env/A", "file": "dummy.txt"}],
-            [{"item": item}],
-            [{"item": item, "file": "dummy.txt", "value": "s3cret"}],
-            [{"item": item, "file": f"f{i}"} for i in range(17)],
-            ["dummy.txt"],
-        ):
-            with self.subTest(secrets), self.assertRaisesRegex(ConfigError, "secrets"):
-                environment(secrets=secrets)
-
     def test_each_field_has_an_accepted_value(self):
         found = environment()
         self.assertEqual(found.image, "dummy-env:test")
         self.assertEqual(found.gateway, "workers")
-        self.assertEqual(
-            [dict(s) for s in found.secrets],
-            [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
-        )
         self.assertEqual(found.plugins, ("dummy-plugin", SOURCE))
         self.assertEqual(found.lock, "dummy-lock")
         self.assertEqual(dict(found.prefetch), {"repo": "o/r", "ref": "main"})
@@ -570,7 +541,6 @@ class EnvironmentSpecTest(Case):
             {"image": "sha256:" + "b" * 64},
             {"image": "registry/team/mini-op"},
             {"gateway": "mini-op_1"},
-            {"secrets": []},
             {"plugins": []},
             {"lock": None},
             {"prefetch": None},
@@ -620,21 +590,16 @@ class EnvironmentSpecTest(Case):
     def test_the_constructor_wants_tuples_and_freezes_mappings(self):
         with self.assertRaisesRegex(ConfigError, "plugins"):
             session.EnvironmentSpec(image="x", gateway="workers", plugins=["a"])
-        secret = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
         prefetch = {"repo": "o/r"}
-        found = session.EnvironmentSpec(
-            image="x", gateway="workers", secrets=(secret,), prefetch=prefetch
-        )
-        secret["file"], prefetch["repo"] = "other", "o/other"
-        self.assertEqual(found.secrets[0]["file"], "dummy.txt")
+        found = session.EnvironmentSpec(image="x", gateway="workers", prefetch=prefetch)
+        prefetch["repo"] = "o/other"
         self.assertEqual(found.prefetch["repo"], "o/r")
-        self.assertIsInstance(found.secrets[0], MappingProxyType)
         self.assertIsInstance(found.prefetch, MappingProxyType)
 
     def test_persisted_round_trips(self):
         for found in (
             environment(),
-            environment(lock=None, prefetch=None, secrets=[], github_repo=None),
+            environment(lock=None, prefetch=None, github_repo=None),
         ):
             with self.subTest(found):
                 data = found.persisted()

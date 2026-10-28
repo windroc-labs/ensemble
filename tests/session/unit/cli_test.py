@@ -59,7 +59,6 @@ class WorkerEnvironment(Case):
             image="dummy-env:test",
             gateway="workers",
             lock="dummy-lock",
-            secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
         )
         self.addCleanup(setattr, HostedSession, "_setup", None)
         self.workers = mock.MagicMock()
@@ -118,11 +117,16 @@ class WorkerEnvironment(Case):
                 self.assertEqual(fields["credentials"], value)
                 self.assertIsNone(fields.get("environment_credentials"))
 
-    def test_environment_credentials_option_is_not_accepted(self):
-        code, _, err = self.start("--environment-credentials", "{}")
-        self.assertEqual(code, 2)
-        self.assertIn("unrecognized arguments: --environment-credentials", err)
-        self.workers.new.assert_not_called()
+    def test_environment_credentials_option_is_forwarded_without_decoding(self):
+        for value in (' {"future-kind": [1]}\n', "{", "{}", ""):
+            with self.subTest(value=value):
+                code, _, err = self.start(
+                    "--credentials", "caller", "--environment-credentials", value
+                )
+                self.assertEqual(code, 0, err)
+                fields = self.workers.new.call_args.kwargs
+                self.assertEqual(fields["environment_credentials"], value)
+                self.assertEqual(fields["credentials"], "caller")
 
     def test_bad_environment_json_is_rejected_before_a_worker_exists(self):
         valid = self.environment.persisted()

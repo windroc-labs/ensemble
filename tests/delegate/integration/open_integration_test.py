@@ -22,7 +22,7 @@ class Open(Case):
         self.config.write_text(
             '[session.hosts]\ndefault = "docker"\n'
             '[delegate.environments.dummy]\nimage = "dummy-env:test"\nlock = "dummy-lock"\n'
-            '[[delegate.environments.dummy.secrets]]\nitem = "ensemble-broker-env/dummy"\nfile = "dummy.txt"\n'
+            '[[delegate.environments.dummy.credentials.env]]\nitem = "ensemble-broker-env/dummy"\nfile = "dummy.txt"\n'
         )
 
     def open(self, *extra, code="0", name="dummy-1"):
@@ -69,7 +69,8 @@ class Open(Case):
         self.assertIn("--account=work", argv)
         spec = json.loads(argv[argv.index("--environment-spec") + 1])
         self.assertEqual(
-            spec["secrets"], [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}]
+            json.loads(argv[argv.index("--environment-credentials") + 1]),
+            {"env": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}]},
         )
         self.assertIsNone(spec["prefetch"])
         self.assertFalse(list(Path(self.home).rglob("delegate.json")))

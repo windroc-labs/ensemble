@@ -112,7 +112,7 @@ Examples:
   in_process uses the configured in-process client runtime.
   --dry-run prints a JSON preview, writes nothing and skips launch preflight;
   it still requires valid configuration and conditional inputs. Its "environment" is the
-  resolved container environment (secrets by reference only), null for none.
+  resolved container environment, null for none.
 
 Examples:
   Discover roles/tasks before choosing one:

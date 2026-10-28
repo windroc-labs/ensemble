@@ -241,6 +241,7 @@ class Gated:
 class Resolved:
     spec: EnvironmentSpec
     prefetch: bool
+    credentials: str | None = None
 
 
 @dataclass(frozen=True)

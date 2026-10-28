@@ -2,6 +2,8 @@ package launcher
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 
 	"ensemble/broker/internal/credential"
@@ -41,7 +43,7 @@ func parseCredentials(fields map[string]json.RawMessage) (credentialRequest, err
 					return reject(kind)
 				}
 			case "env":
-				merged.Env, err = parseSecrets(value)
+				merged.Env, err = parseEnv(value)
 				if err != nil || len(merged.Env) == 0 {
 					return reject(kind)
 				}
@@ -124,4 +126,29 @@ func parseLinear(data []byte) (*credential.LinearRequest, error) {
 		}
 	}
 	return &r, nil
+}
+
+func parseEnv(raw json.RawMessage) ([]Secret, error) {
+	const shape = "env must be an array of at most %d {\"item\", \"file\"} objects"
+	var entries []map[string]json.RawMessage
+	if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &entries) != nil || len(entries) > maxSecrets {
+		return nil, fmt.Errorf(shape, maxSecrets)
+	}
+	secrets := []Secret{}
+	for _, entry := range entries {
+		item, okItem := manifestString(entry["item"])
+		file, okFile := manifestString(entry["file"])
+		switch {
+		case len(entry) != 2 || !okItem || !okFile:
+			return nil, fmt.Errorf(shape, maxSecrets)
+		case !ValidEnvItem(item):
+			return nil, fmt.Errorf("invalid secret item %q", item)
+		case !validSecretFile(file):
+			return nil, fmt.Errorf("invalid secret file %q", file)
+		case slices.ContainsFunc(secrets, func(s Secret) bool { return s.File == file }):
+			return nil, fmt.Errorf("repeated secret file %q", file)
+		}
+		secrets = append(secrets, Secret{Item: item, File: file})
+	}
+	return secrets, nil
 }
