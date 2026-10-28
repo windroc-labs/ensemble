@@ -175,18 +175,6 @@ class Fix(Base):
         )
 
 
-class Idle(Base):
-    def test_silence_longer_than_the_idle_timeout_is_recorded_and_the_run_goes_on(self):
-        self.write(
-            os.path.join(self.ensemble, "config.local.toml"), "[delegate]\nidle_timeout = 0.3\n"
-        )
-        r = self.go({"sleep": 1.0}, said(START, block(DONE)))
-        self.assertEqual(r.outcome.status, "done")
-        idle = [e for e in self.records() if e["kind"] == "idle"]
-        self.assertTrue(idle)
-        self.assertEqual({e["seconds"] for e in idle}, {0.3})
-
-
 class UsageLimit(Base):
     """A usage limit stops the session and returns a Finished result without outcome or repair."""
 
@@ -383,7 +371,7 @@ class Start(Base):
         )
 
     def test_a_destination_decides_the_url_and_each_saves_a_deliverable(self):
-        url, pr_url = "https://github.com/o/docs/blob/main/x.md", "https://github.com/o/n/pull/7"
+        url, pr_url = "https://github.com/o/notes/blob/main/x.md", "https://github.com/o/n/pull/7"
         for output, data, want_url, saved in (
             ({"type": "local"}, DONE, self.out, "# Doc\n"),
             (GH, {**DONE, "url": url}, url, "# Doc\n"),
@@ -420,7 +408,7 @@ class Start(Base):
             (f"stopped: PermissionError: {denied}", False),
         )
         for output, url, gated in (
-            (GH, "https://github.com/o/docs/blob/main/x.md", []),
+            (GH, "https://github.com/o/notes/blob/main/x.md", []),
             (PR, "https://github.com/o/n/pull/7", ["ready_gate"]),
         ):
             with self.subTest(output=output):

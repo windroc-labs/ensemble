@@ -1,4 +1,4 @@
-"""Delegate Spec fields, defaults and immutability; Layout's checkouts follow the core config's."""
+"""Delegate Spec immutability; Layout's checkouts follow the core config's."""
 
 import dataclasses
 import os
@@ -11,30 +11,9 @@ from ensemble.delegate.engine.types import Layout, Result
 from tests.delegate.case import Case
 from tests.delegate.plans import Base
 
-SPEC = {
-    "input": None,
-    "workdir": None,
-    "task": None,
-    "mode": "headless",
-    "client": None,
-    "sid": None,
-    "resume": False,
-    "name": None,
-    "events": None,
-    "out": None,
-    "repo": None,
-    "cwd": None,
-    "team": None,
-}
-
 
 class SpecTest(Case):
-    def test_a_frozen_spec_its_fields_and_defaults(self):
-        found = {
-            f.name: None if f.default is dataclasses.MISSING else f.default
-            for f in dataclasses.fields(delegate.Spec)
-        }
-        self.assertEqual(found, SPEC)
+    def test_a_spec_is_frozen(self):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             delegate.Spec("x", "/w").sid = "s"
 

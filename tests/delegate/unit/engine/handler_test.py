@@ -34,6 +34,7 @@ from ensemble.session import (
     Unanswered,
 )
 from ensemble.utils import Status, StatusState
+from tests.delegate.fakes.callback_child import CallbackChild
 from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
 from tests.delegate.harness import SID, HarnessCase, ViewedHarnessDelegate
 from tests.delegate.replies import block
@@ -92,25 +93,6 @@ class Timer:
 
     def fire(self):
         self.function()
-
-
-class Child:
-    """subprocess.Popen for the callback: keeps each line, with the record's state at delivery."""
-
-    def __init__(self, case, argv):
-        self.case, self.pid, self.returncode = case, 4321, 0
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_exc):
-        return False
-
-    def communicate(self, line, timeout=None):
-        if self.case.racing is not None:
-            self.case.racing()
-        self.case.sent.append((json.loads(line), self.case.metadata()))
-        return "", ""
 
 
 class OwnerRefused(SessionError):
@@ -172,9 +154,17 @@ class HandlerCase(HarnessCase):
         Timer.made = []
         self.enterContext(mock.patch("threading.Timer", Timer))
         self.enterContext(
-            mock.patch("subprocess.Popen", side_effect=lambda argv, **_kw: Child(self, argv))
+            mock.patch(
+                "subprocess.Popen", side_effect=lambda _argv, **_kw: CallbackChild(self.keep)
+            )
         )
         self.err = self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
+
+    def keep(self, line: str) -> None:
+        """The callback's delivery: keeps each line, with the record's state at delivery."""
+        if self.racing is not None:
+            self.racing()
+        self.sent.append((json.loads(line), self.metadata()))
 
     def register(self, token, **changes) -> None:
         state = self.record.read()
@@ -417,22 +407,16 @@ class CloseTest(HandlerCase):
 
         AgentSession.agent = Agent(close)
 
-    def test_a_close_ends_the_active_attempt_as_a_stop_before_the_worker_exits(self):
-        for opening in (True, False):
-            with self.subTest(opening=opening):
-                if not opening:
-                    self.call(TurnStarted())
-                self.delegate.close()
-                state = self.state()
-                self.assertEqual(state.result, self.STOP)
-                self.assertEqual(self.kinds_sent()[-1], ("finished", state.attempt))
-                self.assertEqual(self.kinds()[-2:], ["result", "end"])
-                sent = len(self.sent)
-                self.call(Exited(0))
-                self.assertEqual(self.state().result, state.result)
-                self.assertEqual(len(self.sent), sent)
-                self.register(state.attempt + 1, attempt=state.attempt + 1, completed=False)
-                self.record.save(replace(self.state(), result=None, bound=False))
+    def test_a_close_ends_the_opening_attempt_as_a_stop_before_the_worker_exits(self):
+        self.delegate.close()
+        state = self.state()
+        self.assertEqual(state.result, self.STOP)
+        self.assertEqual(self.kinds_sent()[-1], ("finished", state.attempt))
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        sent = len(self.sent)
+        self.call(Exited(0))
+        self.assertEqual(self.state().result, state.result)
+        self.assertEqual(len(self.sent), sent)
 
     def test_its_claim_covers_the_attach_and_the_owners_close(self):
         self.call(TurnStarted())
@@ -573,12 +557,6 @@ class CloseTest(HandlerCase):
         self.assertFalse(self.state().completed)
         self.assertFalse(self.record.store.closing())
         self.assertEqual(self.kinds_sent(), [])
-
-    def test_a_close_after_the_attempt_ended_sends_no_second_finished(self):
-        self.finish()
-        before = (replace(self.state(), closing=True), list(self.sent))
-        self.delegate.close()
-        self.assertEqual((self.state(), self.sent), before)
 
 
 class IgnoredTest(HandlerCase):

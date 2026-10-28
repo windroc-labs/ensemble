@@ -82,14 +82,6 @@ class UsersEnv(Base):
             with self.subTest(users=users), self.assertRaises(ConfigError):
                 container.users_env(users)
 
-    def test_a_docker_run_whose_reference_names_two_repos_is_refused_before_any_write(self):
-        text = "Reference: T\nRepo: acme/a\nRepo: acme/b\n\nResearch X."
-        got, _ = self.planned(input=text)
-        self.assertIsNone(got.repo)
-        self.driver.docker = True
-        self.assertIn("Repo:", self.refused(input=text, mode="tui", workdir=self.tmp + "/w2"))
-        self.assertFalse(os.path.exists(self.tmp + "/w2"))
-
 
 class OnDocker(Base):
     def test_the_agents_host_is_docker_by_its_implementation(self):

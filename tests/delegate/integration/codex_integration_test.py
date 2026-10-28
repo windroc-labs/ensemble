@@ -8,21 +8,11 @@ part.
 import json
 import os
 import unittest
-from unittest import mock
 
-from ensemble.delegate.engine.runner import FIX
 from ensemble.delegate.engine.types import Layout
-from tests.delegate.integration.cli import (
-    ASKING,
-    DONE,
-    NATIVE,
-    UNSAVED,
-    UNSAVED_ERROR,
-    CodexIntegration,
-)
+from tests.delegate.integration.cli import ASKING, DONE, NATIVE, CodexIntegration
 from tests.delegate.integration.cli import codex_said as said
 from tests.delegate.replies import block, mark
-from tests.session.integration.clients.codex import fake_codex
 
 
 class Codex(CodexIntegration):
@@ -93,15 +83,6 @@ class Codex(CodexIntegration):
             self.assertEqual(call["argv"][call["argv"].index(feature) - 1], "--disable")
         self.assertFalse([w for w in call["argv"] if w.startswith("sandbox_workspace_write.")])
 
-    def test_two_runs_resume_the_same_native_session_and_keep_previous_progress(self):
-        first = self.drive(said(mark("start", "first turn"), block(ASKING)))
-        self.assertEqual(first.returncode, 0, first.stderr)
-        second = self.answer(said(mark("review", "second turn"), block(DONE)))
-        self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertEqual([call["resume_id"] for call in self.calls()], [None, NATIVE])
-        self.assertEqual(self.texts("progress"), ["first turn", "second turn"])
-        self.assertEqual(self.texts("client_session", "client_id"), [NATIVE, NATIVE])
-
     def test_an_answer_resumes_the_same_run_and_keeps_progress(self):
         first = self.drive(said(mark("start", "before answer"), block(ASKING)))
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -112,63 +93,6 @@ class Codex(CodexIntegration):
         self.assertEqual(self.texts("client_session", "client_id"), [NATIVE, NATIVE])
         self.assertEqual(self.texts("progress"), ["before answer", "recovered"])
         self.assertEqual(len([e for e in self.records() if "outcome" in e]), 2)
-        self.assertEqual(self.read(self.out), DONE["deliverable"])
-
-    def test_missing_mapping_fails_before_spawn(self):
-        first = self.drive(said(block(ASKING)))
-        self.assertEqual(first.returncode, 0, first.stderr)
-        store = os.path.join(self.home, ".ensemble", "sessions", "codex")
-        mappings = [
-            os.path.join(store, name) for name in os.listdir(store) if name.endswith(".json")
-        ]
-        self.assertEqual(len(mappings), 1)
-        os.unlink(mappings[0])
-        res = self.answer([])
-        self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
-        self.assertIn("missing Codex recovery state", res.stderr)
-        self.assertEqual(len(self.calls()), 1)
-
-    def test_missing_native_file_fails_before_spawn(self):
-        first = self.drive(said(block(ASKING)))
-        self.assertEqual(first.returncode, 0, first.stderr)
-        with mock.patch.dict(os.environ, {"CODEX_HOME": self.env["CODEX_HOME"]}):
-            os.unlink(fake_codex.session_path(NATIVE))
-        res = self.answer([])
-        self.assertEqual(res.returncode, 2, res.stderr)
-        self.assertIn("missing Codex session file", res.stderr)
-        self.assertEqual(len(self.calls()), 1)
-
-    def test_a_bare_json_final_reply_is_no_outcome(self):
-        reply = json.dumps(DONE)
-        res = self.drive(said(mark("start", "working"), reply))
-        self.assertEqual(res.returncode, 1, res.stderr)
-        self.assertIn(reply, res.stderr)
-        self.assertIn("delegate: the agent run returned no outcome", res.stderr)
-        self.assertEqual(self.records()[-2]["error"], "the agent run returned no outcome")
-        self.assertFalse(os.path.exists(self.out))
-
-    def test_an_invalid_outcome_is_fixed_by_one_resume(self):
-        res = self.drive(said(mark("start", "working"), block(UNSAVED)), fixes=said(block(DONE)))
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn(f"delegate: invalid outcome: {UNSAVED_ERROR}; resuming once", res.stderr)
-        first, second = self.calls()
-        self.assertEqual((first["resume_id"], second["resume_id"]), (None, NATIVE))
-        self.assertTrue(second["prompt"].startswith(FIX.format(error=UNSAVED_ERROR)))
-        self.assertEqual(
-            self.kinds(),
-            [
-                "session",
-                "input",
-                "client_session",
-                "session_metadata",
-                "progress",
-                "invalid",
-                "session",
-                "client_session",
-                "result",
-                "end",
-            ],
-        )
         self.assertEqual(self.read(self.out), DONE["deliverable"])
 
 

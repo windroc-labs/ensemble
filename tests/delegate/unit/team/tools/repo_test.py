@@ -96,7 +96,7 @@ class PlanDocs(Case):
         open_ = doc(".updraft/b-plan.md", "phase=S5 worktree=/w branch=b")
         doc(".updraft/c-plan.md", "phase=S5 worktree=/w branch=other")
         doc(".updraft/a-spec.md", "phase=S5 worktree=/w branch=b")
-        doc("docs/a-plan.md", "phase=S7 worktree=/w branch=b")
+        doc("design/a-plan.md", "phase=S7 worktree=/w branch=b")
         os.utime(open_, (1_000, 1_000))
         os.utime(done, (2_000, 2_000))
         self.assertEqual(
@@ -352,20 +352,6 @@ class Status(Base):
         self.assertEqual([e["body"] for e in r["others"]], ["bob"])
         self.assertTrue(run.ran("gh", "api", "--hostname", "github.com", "user"))
 
-    def test_an_invalid_ensemble_users_is_reported_before_the_repo_is_read(self):
-        for value in ("[1]", "{}", '"me"', "not json", ""):
-            with (
-                self.subTest(value=value),
-                unittest.mock.patch.dict(os.environ, {"ENSEMBLE_USERS": value}),
-            ):
-                run = Fake([])
-                code, out, err = self.main(
-                    ["status", "--dir", self.dir, "--branch", "b", "not a repo"], run
-                )
-                self.assertEqual((code, out), (1, ""))
-                self.assertEqual(err, "repo.py: ENSEMBLE_USERS: want a JSON array of strings\n")
-                self.assertEqual(run.calls, [])
-
     def test_other_branches_plan_docs_and_no_pr(self):
         self.plan_doc(branch="other")
         self.assertEqual(
@@ -398,16 +384,24 @@ class Status(Base):
         self.assertEqual(code, 1)
 
     def test_invalid_users_are_reported_before_the_repo_is_read(self):
-        for value in ("[1]", "5", '["me", 1]', '"me"'):
-            with self.subTest(users=value):
+        env = "repo.py: ENSEMBLE_USERS: want a JSON array of strings\n"
+        configured = "repo.py: users: want a list of strings\n"
+        for environ, users, want in (
+            *(({"ENSEMBLE_USERS": v}, None, env) for v in ("[1]", "{}", '"me"', "not json", "")),
+            *(({}, v, configured) for v in ("[1]", "5", '["me", 1]', '"me"')),
+        ):
+            with (
+                self.subTest(environ=environ, users=users),
+                unittest.mock.patch.dict(os.environ, environ),
+            ):
                 run = Fake([])
                 code, out, err = self.main(
                     ["status", "--dir", self.dir, "--branch", "b", "not a repo"],
                     run,
-                    self.config(f"users = {value}\n"),
+                    users and self.config(f"users = {users}\n"),
                 )
                 self.assertEqual((code, out), (1, ""))
-                self.assertEqual(err, "repo.py: users: want a list of strings\n")
+                self.assertEqual(err, want)
                 self.assertEqual(run.calls, [])
 
     def test_the_defaults_load_the_local_file(self):
@@ -598,61 +592,54 @@ class Worktree(Base):
         self.assertIn("origin/missing", err)
 
     def test_fresh_blobless_clone_on_a_new_branch_from_the_default(self):
-        (code, out, _), run = self.worktree(info(default="trunk"))
-        self.assertEqual(code, 0)
-        self.assertEqual(
-            json.loads(out),
-            {
-                "repo": "o/n",
-                "host": "github.com",
-                "default": "trunk",
-                "branch": "TASK-1-x",
-                "commit": SHA,
-                "worktree": self.wt,
-                "permalink_base": f"https://github.com/o/n/blob/{SHA}/",
-                "push": True,
-            },
-        )
-        self.assertIn(
-            [
-                "gh",
-                "repo",
-                "clone",
-                "github.com/o/n",
-                self.wt,
-                "--",
-                "-c",
-                "core.symlinks=false",
-                "--filter=blob:none",
-            ],
-            run.calls,
-        )
-        self.assertTrue(
-            run.ran(
-                "git", "-C", self.wt, "checkout", "--no-track", "-b", "TASK-1-x", "origin/trunk"
-            )
-        )
-        self.assertEqual(run.timeout("git", "-C", self.wt, "checkout"), repo.LONG)
-
-    def test_a_remote_repo_gets_no_symlinks_whatever_the_list(self):
-        (code, _, err), run = self.worktree(
-            info(), config=self.config(f'trusted_dirs = ["{self.dir}", "~/n"]\n')
-        )
-        self.assertEqual(code, 0, err)
-        self.assertIn(
-            [
-                "gh",
-                "repo",
-                "clone",
-                "github.com/o/n",
-                self.wt,
-                "--",
-                "-c",
-                "core.symlinks=false",
-                "--filter=blob:none",
-            ],
-            run.calls,
-        )
+        # A remote repo gets no symlinks whatever the trusted_dirs list.
+        for config in (None, f'trusted_dirs = ["{self.dir}", "~/n"]\n'):
+            with self.subTest(config=config):
+                shutil.rmtree(self.wt, ignore_errors=True)
+                (code, out, err), run = self.worktree(
+                    info(default="trunk"), config=config and self.config(config)
+                )
+                self.assertEqual(code, 0, err)
+                self.assertEqual(
+                    json.loads(out),
+                    {
+                        "repo": "o/n",
+                        "host": "github.com",
+                        "default": "trunk",
+                        "branch": "TASK-1-x",
+                        "commit": SHA,
+                        "worktree": self.wt,
+                        "permalink_base": f"https://github.com/o/n/blob/{SHA}/",
+                        "push": True,
+                    },
+                )
+                self.assertIn(
+                    [
+                        "gh",
+                        "repo",
+                        "clone",
+                        "github.com/o/n",
+                        self.wt,
+                        "--",
+                        "-c",
+                        "core.symlinks=false",
+                        "--filter=blob:none",
+                    ],
+                    run.calls,
+                )
+                self.assertTrue(
+                    run.ran(
+                        "git",
+                        "-C",
+                        self.wt,
+                        "checkout",
+                        "--no-track",
+                        "-b",
+                        "TASK-1-x",
+                        "origin/trunk",
+                    )
+                )
+                self.assertEqual(run.timeout("git", "-C", self.wt, "checkout"), repo.LONG)
 
     def test_a_bad_trusted_dirs_fails_worktree_before_the_repo_is_read(self):
         for text, want in (

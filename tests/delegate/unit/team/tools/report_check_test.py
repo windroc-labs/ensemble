@@ -1,4 +1,3 @@
-import importlib.util
 import io
 import os
 import runpy
@@ -8,12 +7,10 @@ from unittest import mock
 
 from ensemble.delegate.composer.base import TEAM
 from tests.delegate.case import Case
+from tests.delegate.team_tools import tool
 
 SCRIPT = os.path.join(TEAM, "tools", "report_check.py")
-SPEC = importlib.util.spec_from_file_location("report_check", SCRIPT)
-assert SPEC and SPEC.loader
-report_check = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(report_check)
+report_check = tool("report_check")
 
 
 class ReportCheck(Case):

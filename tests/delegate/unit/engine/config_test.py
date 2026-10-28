@@ -162,10 +162,6 @@ class Shipped(Case):
             check_old_keys(table, role)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 D2 = """
 [session.hosts.d2]
 implementation = "ensemble.session.hosts.docker.host:DockerHost"
@@ -317,3 +313,7 @@ class EnvironmentCheckTest(Case):
         ):
             with self.subTest(text):
                 self.refused(text, table)
+
+
+if __name__ == "__main__":
+    unittest.main()

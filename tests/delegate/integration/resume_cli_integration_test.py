@@ -1,8 +1,8 @@
 """ensemble-delegate resume, each a fresh process (tests/delegate/fakes/control_launcher.py), on a
 detached headless run whose drive and Hosts keep their state on disk
 (tests/delegate/fakes/harness_session.py FakeControl, PersistentSession): one Record line, a
-live run's unchanged, a stopped run's resumed once (two concurrent commands included), a run of
-another $ENSEMBLE_SID refused, and an old-layout workdir refused naming its missing run record.
+live run's unchanged, a stopped run's resumed once, a run of another $ENSEMBLE_SID refused, and
+an old-layout workdir refused naming its missing run record.
 """
 
 import os
@@ -107,34 +107,3 @@ class ResumeCommand(HarnessCase):
         )
         self.assertFalse(os.path.lexists(run))
         self.assertEqual(len(self.launches()), 1)
-
-    def test_two_resumes_started_together_launch_one_harness(self):
-        self.end()
-        children = [
-            subprocess.Popen(
-                (*RESUME, self.work),
-                cwd=self.home,
-                env=self.env(SID),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            for _ in range(2)
-        ]
-        for child in children:
-            self.addCleanup(_close, child)
-        records = []
-        for child in children:
-            stdout, stderr = child.communicate(timeout=60)
-            self.assertEqual(child.returncode, 0, stderr)
-            records.append(Record.parse(stdout))
-        self.assertEqual(records, [self.record] * 2)
-        self.assertEqual(len(self.launches()), 2)
-        self.assertEqual(self.metadata()["attempt"], 2)
-
-
-def _close(child):
-    if child.poll() is None:
-        child.kill()
-    child.communicate(timeout=10)

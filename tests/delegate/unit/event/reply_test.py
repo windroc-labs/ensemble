@@ -109,6 +109,7 @@ class OutcomeBlock(Case):
             "no block",
             "```\n{}\n```",
             "ensemble-outcome {}",
+            '{"status": "done"}',
             "````md\n```ensemble-outcome\n{}\n```\n````\n",
         ):
             with self.subTest(text=text):

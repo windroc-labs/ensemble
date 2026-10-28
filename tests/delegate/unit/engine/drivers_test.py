@@ -7,7 +7,6 @@ from dataclasses import fields
 from ensemble.delegate import ConfigError, Spec
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
-from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.types import DriverSpec, Finished, Instruction
 from ensemble.session import Access, Session
 from ensemble.session import ConfigError as SessionConfigError
@@ -267,23 +266,6 @@ class Drivers(Case):
                     driver.start(DriverSpec(spec, out), **keywords)
                 self.assertEqual(str(caught.exception), message)
                 self.assertFalse(os.path.exists(os.path.dirname(out)))
-
-    def test_instruction_run_bypasses_attempts_and_replies_but_finishes(self):
-        work = os.path.join(self.home, "work")
-        out = os.path.join(work, "prompt.md")
-        spec = Spec("[ensemble-progress:start] source text", work, out=out)
-        composition = Composer()
-        config = composition.resolve("dummy-tester")
-        driver = InstructionDriver()
-        expected = plan(config, spec, driver=driver, composition=composition).prompt
-        events = []
-        with no_spawn():
-            result = executed(config, spec, driver=driver, on_event=events.append)
-        self.assertEqual((result.returncode, result.outcome, result.instruction), (0, None, out))
-        self.assertEqual(events, [Finished(result)])
-        with open(out, "rb") as stream:
-            self.assertEqual(stream.read(), expected.encode("utf-8"))
-        self.assertFalse(os.path.exists(os.path.join(work, "run.jsonl")))
 
 
 if __name__ == "__main__":

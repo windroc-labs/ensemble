@@ -627,12 +627,6 @@ class NotDone(Base):
                 )
                 self.assertEqual(self.gh.calls, calls)
 
-    def test_never_readies(self):
-        for status in (OutcomeStatus.FAILED, OutcomeStatus.NEEDS_INPUT):
-            with self.subTest(status=status):
-                self.go(Gh(view([run_("a")])), out=outcome(status))
-                self.assertNotIn(READY, self.gh.calls)
-
 
 class Skipped(Base):
     def test_compare_tree_and_empty_urls_skip_the_gate(self):

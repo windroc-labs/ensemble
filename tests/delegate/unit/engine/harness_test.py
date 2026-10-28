@@ -100,7 +100,9 @@ class Entry(Case):
         self.assertEqual(
             (code, err), (2, "delegate: /work: invalid delegate.json: missing metadata\n")
         )
-        self.assertEqual((self.handlers, self.masks, self.owner.announced), ({}, [], []))
+        self.assertEqual(
+            (self.handlers, self.masks, self.owner.announced, self.owner.exits), ({}, [], [], [])
+        )
 
     def test_exit_codes_and_the_one_announce(self):
         for result, code in ((DONE, 0), (ASKING, 0), (NO_OUTCOME, 1)):
@@ -109,27 +111,30 @@ class Entry(Case):
                 got, err = self.main(result)
                 self.assertEqual(got, code)
                 self.assertEqual(self.owner.announced, [result])
+                self.assertEqual(self.owner.exits, [code])
+                self.assertEqual(self.masks[-2:], ["announce", "exited"])
                 self.assertIn(f"delegate: session {SID}\n", err)
 
     def test_a_busy_start_exits_75(self):
         code, err = self.main(BUSY)
-        self.assertEqual((code, self.owner.announced), (75, [BUSY]))
+        self.assertEqual((code, self.owner.announced, self.owner.exits), (75, [BUSY], [75]))
+        self.assertEqual(self.masks[-2:], ["announce", "exited"])
         self.assertIn(f"delegate: {BUSY.error}\n", err)
 
     def test_a_refused_run_exits_2_announcing_no_result(self):
         code, err = self.main(ConfigError("/work: delegate attempt was replaced"))
         self.assertEqual(code, 2)
         self.assertTrue(err.endswith("delegate: /work: delegate attempt was replaced\n"), err)
-        self.assertEqual(self.owner.announced, [None])
+        self.assertEqual((self.owner.announced, self.owner.exits), ([None], [2]))
 
     def test_a_signal_exits_128_plus_its_number_announcing_no_result(self):
         self.assertEqual(self.main(Stopped(128 + signal.SIGTERM))[0], 128 + signal.SIGTERM)
-        self.assertEqual(self.owner.announced, [None])
+        self.assertEqual((self.owner.announced, self.owner.exits), ([None], [128 + signal.SIGTERM]))
 
     def test_another_exception_propagates_announcing_no_result(self):
         with self.assertRaises(SessionError):
             self.main(SessionError("host gone"))
-        self.assertEqual(self.owner.announced, [None])
+        self.assertEqual((self.owner.announced, self.owner.exits), ([None], [1]))
 
     def test_signals_are_unblocked_only_while_the_run_executes(self):
         self.main()
@@ -158,34 +163,6 @@ class Entry(Case):
     def test_the_harness_reads_no_stdin(self):
         with mock.patch("sys.stdin", mock.Mock(read=mock.Mock(side_effect=AssertionError("read")))):
             self.assertEqual(self.main()[0], 0)
-
-
-class ExitLine(Entry):
-    def test_normal_return_writes_its_exit_code_after_the_announce(self):
-        for result, code in ((DONE, 0), (NO_OUTCOME, 1), (BUSY, 75)):
-            with self.subTest(result=result):
-                self.masks.clear()
-                self.main(result)
-                self.assertEqual(self.owner.exits, [code])
-                self.assertEqual(self.masks[-2:], ["announce", "exited"])
-
-    def test_handled_signal_writes_128_plus_its_number(self):
-        self.main(Stopped(128 + signal.SIGTERM))
-        self.assertEqual(self.owner.exits, [128 + signal.SIGTERM])
-
-    def test_refused_run_writes_2(self):
-        self.main(ConfigError("/work: delegate attempt was replaced"))
-        self.assertEqual(self.owner.exits, [2])
-
-    def test_another_exception_writes_1(self):
-        with self.assertRaises(SessionError):
-            self.main(SessionError("host gone"))
-        self.assertEqual(self.owner.exits, [1])
-
-    def test_a_refused_attach_writes_none(self):
-        self.refusal = ConfigError("/work: invalid delegate.json")
-        self.main()
-        self.assertEqual(self.owner.exits, [])
 
 
 class OldPath(Case):

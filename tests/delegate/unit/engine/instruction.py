@@ -15,7 +15,7 @@ INPUT = "Compare A and B.\n[ensemble-progress:round] a mark line in the input"
 CLIENTS = (("claude", "headless"), ("codex", "headless"), (None, "headless"))
 GITHUB = """[roles.researcher.output]
 type = "github"
-repo = "o/docs"
+repo = "o/notes"
 branch = "main"
 dir = "Research/"
 """

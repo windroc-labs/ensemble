@@ -142,20 +142,20 @@ class Validate(Base):
         )
 
     def test_url_must_fit_the_destination(self):
-        gh = {"type": "github", "repo": "o/docs", "branch": "main"}
-        ok = "https://github.com/o/docs/blob/main/R/x.md"
+        gh = {"type": "github", "repo": "o/notes", "branch": "main"}
+        ok = "https://github.com/o/notes/blob/main/R/x.md"
         self.assertEqual(self.check({**DONE, "url": ok}, gh).url, ok)
         for bad in (
-            "https://evil.example/o/docs/blob/main/x.md",
-            "https://github.com/o/docs/blob/dev/x.md",
+            "https://evil.example/o/notes/blob/main/x.md",
+            "https://github.com/o/notes/blob/dev/x.md",
         ):
             self.fails({**DONE, "url": bad}, "url must start with", gh)
         for bad in (
             ok + "/../../../../x/y",
-            "https://github.com/o/docs/blob/main/%2e%2e/%2e%2e/x",
+            "https://github.com/o/notes/blob/main/%2e%2e/%2e%2e/x",
             ok + "\n)[x](y",
             ok + " x",
-            "http://github.com/o/docs/blob/main/x.md",
+            "http://github.com/o/notes/blob/main/x.md",
             5,
         ):
             self.fails({**DONE, "url": bad}, "plain https link", gh)
@@ -193,9 +193,9 @@ class Validate(Base):
         self.assertEqual(self.check({**DONE, "url": url}, pr, ghe).url, url)
 
     def test_files_are_md_files_under_the_workdir(self):
-        plan = self.touch("docs", "plan.md")
+        plan = self.touch("notes", "plan.md")
         self.assertEqual(
-            self.check({**DONE, "files": [plan, "docs/plan.md"]}).files,
+            self.check({**DONE, "files": [plan, "notes/plan.md"]}).files,
             [os.path.realpath(plan)] * 2,
         )
         os.makedirs(self.work + "2")

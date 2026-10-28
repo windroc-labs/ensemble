@@ -354,17 +354,11 @@ class HandleRun(Handles):
             (self.handle.calls, self.kinds()), ([("stop",)], ["input", "limit", "result", "end"])
         )
 
-    def test_a_failed_headless_turn_stops_its_session(self):
-        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(0))
+    def test_a_failed_headless_turn_stops_its_session_keeping_its_exit_status(self):
+        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(3))
         self.assertEqual(
-            (r.error, self.handle.calls), ("the client's turn failed: overloaded", [("stop",)])
-        )
-
-    def test_headless_failure_retains_the_actual_exit_status(self):
-        result = self.faked(TurnFailed("server_overloaded"), Exited(3))
-        self.assertEqual(
-            (result.returncode, result.outcome, result.error),
-            (3, None, "the client's turn failed: server_overloaded"),
+            (r.returncode, r.outcome, r.error, self.handle.calls),
+            (3, None, "the client's turn failed: overloaded", [("stop",)]),
         )
 
     def test_a_session_exiting_without_an_outcome_is_the_error(self):
