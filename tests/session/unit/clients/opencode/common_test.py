@@ -25,6 +25,7 @@ from ensemble.session.engine.types import (
     Permission,
     Resumable,
     SessionInfo,
+    SessionStatus,
     Spec,
     Usage,
 )
@@ -269,9 +270,13 @@ class SessionStatusTest(Case):
         self.assertEqual(found.last_active, 1_760_000_000.25)
         self.assertEqual(found.resume_command, "")
 
-    def test_no_binding_or_no_row_is_not_resumable(self):
-        make_db(self.db, {SES: 1})
+    def test_an_unbound_run_is_resumable_as_a_fresh_session_once_its_db_exists(self):
         self.assertEqual(self.status().resumable, Resumable.NO)
+        make_db(self.db, {SES: 1})
+        self.assertEqual(self.status(), SessionStatus(Resumable.YES, None, ""))
+
+    def test_a_bound_session_without_its_row_is_not_resumable(self):
+        make_db(self.db, {SES: 1})
         self.client.common.bind(self.cwd, "run-1", "ses_notInTheDb")
         self.assertEqual(self.status().resumable, Resumable.NO)
 
@@ -398,9 +403,10 @@ class SelectionTest(Case):
         resumed = self.common.selection(replace(self.spec, resume=True), LOCAL_CONTEXT)
         self.assertEqual(resumed, ("--session", SES))
 
-    def test_an_unbound_resume_fails(self):
-        with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):
-            self.common.selection(replace(self.spec, resume=True), LOCAL_CONTEXT)
+    def test_an_unbound_resume_selects_a_fresh_session(self):
+        """A run killed before OpenCode saved its session bound none (WDRC-366)."""
+        self.assertEqual(self.common.selection(replace(self.spec, resume=True), LOCAL_CONTEXT), ())
+        self.assertIsNone(self.common.native(self.cwd, "run-1"))
 
     def test_a_container_context_selects_as_a_local_one(self):
         self.assertEqual(self.common.selection(self.spec, DOCKER_CONTEXT), ())

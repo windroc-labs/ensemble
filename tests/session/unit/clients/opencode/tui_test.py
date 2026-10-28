@@ -107,9 +107,14 @@ class LaunchTest(Base):
         self.assertEqual(launch.argv[:3], ("opencode", "--session", SES))
         self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], SES)
 
-    def test_resume_without_a_binding_fails(self):
-        with self.assertRaisesRegex(ConfigError, "no OpenCode session bound to run ID 'run-1'"):
-            self.launch(self.spec(resume=True))
+    def test_a_resume_without_a_binding_starts_a_fresh_session_with_its_prompt(self):
+        """A run killed before its session bound resumes as a fresh one (WDRC-366)."""
+        run = self.run_tui()
+        launch = run.launch(self.spec(resume=True, prompt="Fix it."), HOOK)
+        self.assertEqual(launch.argv, ("opencode", *MODEL, "--prompt=Fix it."))
+        self.assertIsNone(run.opening)
+        self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], "")
+        self.assertTrue(run.fresh)
 
     def test_an_untrusted_cwd_on_a_non_isolated_host_is_refused(self):
         self.client.common.bind(self.cwd, "run-1", SES)
