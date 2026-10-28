@@ -1,10 +1,8 @@
 """The fake client: client.py --scenario FILE --log FILE --sid SID [--resume] -- PROMPT [HOOK...].
 
-Logs its argv, pid, cwd and env (PWD, FAKE_ENV, PYTHONPATH) as a JSON line, then runs the scenario,
-a JSON list of steps (or {"steps": [...], "resume": [...]}: resume's run on --resume): {"out": obj}
-prints obj as JSON, {"raw": text} prints text, {"err": text} to stderr, {"sleep": s}, {"exit": n},
-{"hook": label, "payload": obj} runs HOOK + [label] with obj on stdin, {"read": true} reads a stdin
-line, {"run": argv} runs argv quietly and logs {ran, found (PATH's argv[0]), rc}; then exits 0.
+Logs argv, pid, cwd and env as a JSON line, then runs its steps (on --resume, {"resume": [...]}'s):
+out, raw, err, sleep, until (a path exists), exit, hook (HOOK + [label], payload on stdin), read (a
+stdin line), run (argv, logging {ran, found, rc}); then exits 0.
 """
 
 import argparse
@@ -56,6 +54,9 @@ def execute(steps, hook, log):
             print(step["err"], file=sys.stderr, flush=True)
         elif "sleep" in step:
             time.sleep(step["sleep"])
+        elif "until" in step:
+            while not os.path.exists(step["until"]):
+                time.sleep(0.01)
         elif "exit" in step:
             return step["exit"]
         elif "hook" in step:

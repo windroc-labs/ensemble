@@ -1,5 +1,5 @@
-"""Reject sensitive literals in .mini-op/ and, on a pull request that changes it, in the PR's title,
-body and commit messages. Findings name the place and the pattern class, never the matched text.
+"""Reject sensitive literals in .mini-op/ or, with --pr-text on a PR changing it, in its title, body
+and commits. Findings name the place and pattern class, never the match.
 """
 
 import ipaddress
@@ -207,16 +207,18 @@ def scan_pull_request(root, environ):
 def main(argv=None, *, root=ROOT, environ=os.environ):
     if argv is None:
         argv = sys.argv[1:]
-    if argv:
-        print("usage: mini_op_guard.py", file=sys.stderr)
+    if argv not in ([], ["--pr-text"]):
+        print("usage: mini_op_guard.py [--pr-text]", file=sys.stderr)
         return 2
     root = Path(root)
-    findings, count = scan_tree(root)
-    error = skipped = None
-    if environ.get("GITHUB_EVENT_NAME") == "pull_request":
+    findings, count, skipped, error = [], 0, False, None
+    if not argv:
+        findings, count = scan_tree(root)
+    elif environ.get("GITHUB_EVENT_NAME") != "pull_request":
+        error = GuardError("not a pull_request event")
+    else:
         try:
-            more, skipped = scan_pull_request(root, environ)
-            findings += more
+            findings, skipped = scan_pull_request(root, environ)
         except GuardError as failure:
             error = failure
     for finding in findings:
@@ -224,8 +226,9 @@ def main(argv=None, *, root=ROOT, environ=os.environ):
     if error or findings:
         print(f"mini-op guard: {error or f'{len(findings)} findings'}")
         return 1
-    print(f"mini-op guard: {count} files clean")
-    if skipped is not None:
+    if not argv:
+        print(f"mini-op guard: {count} files clean")
+    else:
         print("PR fields skipped: no .mini-op/ change" if skipped else "PR fields clean")
     return 0
 

@@ -100,10 +100,16 @@ class ManagedIntegrationTest(Case):
         return proc, value, pids
 
     def cleanup_harness(self, proc):
+        """Its guard, once known, ended too: its last state write lands in the temp home."""
         if proc.poll() is None:
             proc.kill()
         proc.wait(timeout=10)
         proc.stderr.close()
+        try:
+            guard_pid = json.loads(Path(self.home, "harness.json").read_text())["guard"]
+        except (OSError, ValueError):
+            return
+        live_tmux.wait(lambda: not self.alive(guard_pid), what="the guard's end")
 
     def test_harness_sigkill_reclaims_stopped_detached_tree_and_allows_new_generation(self):
         proc, value, pids = self.crash_harness(terminal=True)

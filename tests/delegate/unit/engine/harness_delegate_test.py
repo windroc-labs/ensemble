@@ -378,6 +378,56 @@ class DockerHeadlessTest(HarnessCase):
         self.assertEqual(self.metadata()["plan"]["session"]["name"], name)
 
 
+class ForegroundHeadlessCloseTest(HarnessCase):
+    """close from another process of a foreground headless run: its own process holds its run
+    lock and its Tie; on Docker its session is closed by name, elsewhere close refuses.
+    """
+
+    def setUp(self):
+        super().setUp()
+        HarnessSession.hosts["box"] = RecordingHost("box")
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write(
+                "[session.hosts.box]\n"
+                'implementation = "ensemble.session.hosts.docker.host:DockerHost"\n'
+                'docker = "/usr/local/bin/docker"\n'
+            )
+        for patcher in (
+            mock.patch.object(HarnessSession, "attach", side_effect=SessionError("no session")),
+            mock.patch.object(HarnessSession, "retire"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def foreground(self, host):
+        spec = Spec("input", self.work, task="echo", mode="headless", client="fake", sid=SID)
+        self.make(spec=spec, host=host)
+        return DrivenDelegate.attach(self.work, session_cls=HarnessSession)
+
+    def test_on_docker_it_closes_the_running_runs_session_by_name(self):
+        view = self.foreground("box")
+        with RunState(Layout(self.work)).run_lock():
+            view.close()
+        HarnessSession.retire.assert_called_once_with(
+            f"dummy-tester-{SID[:8]}", sid=SID, host="box"
+        )
+        HarnessSession.retire.side_effect = Unanswered("still running without its harness")
+        with RunState(Layout(self.work)).run_lock(), self.assertRaises(Unanswered):
+            view.close()
+
+    def test_elsewhere_a_running_one_is_refused_an_ended_one_is_left(self):
+        view = self.foreground("agent")
+        refused = self.assertRaisesRegex(SessionError, "no close route; end it in its terminal")
+        with RunState(Layout(self.work)).run_lock(), refused:
+            view.close()
+        view.close()
+        HarnessSession.retire.assert_not_called()
+
+    def test_an_ended_docker_run_retires_nothing(self):
+        self.foreground("box").close()
+        HarnessSession.retire.assert_not_called()
+
+
 def broker_command(argv) -> str:
     """The faked broker's command; an AssertionError names any other process, which a patched
     Popen would otherwise answer from a missing fixture as FileNotFoundError."""

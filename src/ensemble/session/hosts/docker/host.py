@@ -45,6 +45,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import (
+    HARNESS_ROOT,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -963,6 +964,7 @@ class DockerHost(Host):
                     "events": events,
                     "kind": Kind.TUI if terminal else Kind.HEADLESS,
                     "environment": None if environment is None else environment.persisted(),
+                    **({} if terminal else {"owner": metadata.get("harness"), "host": self.name}),
                 },
             )
             handoff = {
@@ -1056,6 +1058,21 @@ class DockerHost(Host):
         if not _lock_free(_owner_path(name)):
             return Liveness.LIVE
         return self._row_liveness(name, generation)
+
+    def _headless_owner(self, name: str) -> Mapping[str, str] | None:
+        """While its owner lock is held, by its record alone: no docker call."""
+        found = _record(name)
+        owner = found.get("owner")
+        if (
+            found.get("kind") != Kind.HEADLESS
+            or found.get("host") != self.name
+            or not isinstance(owner, str)
+            or not GEN.fullmatch(os.path.basename(owner))
+            or os.path.dirname(owner) != os.path.expanduser(HARNESS_ROOT)
+            or _lock_free(_owner_path(name))
+        ):
+            return None
+        return {"owner": owner, "sid": found.get("sid") or "", "generation": found["generation"]}
 
     def _release(self, name: str, generation: str) -> None:
         """Once its owner lock is free."""

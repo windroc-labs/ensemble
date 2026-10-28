@@ -218,6 +218,8 @@ class HeadlessMode(BaseMode):
         run.commit()
         record(prepared.info)
         metadata = {"generation": uuid.uuid4().hex, **(metadata or {})}
+        if owner is not None and prepared.spec.name is not None:
+            metadata["harness"] = owner
         name = prepared.spec.name or f"headless-{metadata['generation']}"
         try:
             worker = host.worker(name, _launch(prepared), terminal=False, metadata=metadata)
