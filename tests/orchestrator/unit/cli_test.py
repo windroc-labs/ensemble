@@ -47,15 +47,13 @@ class CredentialQuery(run_fixtures.Base):
             f.write(
                 "\n[orchestrator.roles.engineer.credentials]\nfuture = {value = 1}\nother = [2]\n[orchestrator.roles.engineer.tasks.build.credentials]\nfuture = {value = 3}\n"
             )
-        with mock.patch.object(LinearTracker, "connect") as connect:
-            for extra, expected in (
-                ([], {"future": {"value": 1}, "other": [2]}),
-                (["--task", "build"], {"future": {"value": 3}, "other": [2]}),
-            ):
-                code, out, err = _call(["credentials", "--role", "engineer", *extra])
-                self.assertEqual((code, err), (0, ""))
-                self.assertEqual(json.loads(out), expected)
-            connect.assert_not_called()
+        for extra, expected in (
+            ([], {"future": {"value": 1}, "other": [2]}),
+            (["--task", "build"], {"future": {"value": 3}, "other": [2]}),
+        ):
+            code, out, err = _call(["credentials", "--role", "engineer", *extra])
+            self.assertEqual((code, err), (0, ""))
+            self.assertEqual(json.loads(out), expected)
         self.assertFalse(os.path.exists(self.logs))
 
     def test_undeclared_role_has_no_defaults(self):

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from ensemble.manager import Crew, Roster, Spec, State, cli
+from ensemble.manager import Roster, Spec, State, cli
 from ensemble.manager.cli import main
 from ensemble.manager.engine.pr import VIEW_FIELDS
 from ensemble.utils import Record, append_line
@@ -291,7 +291,7 @@ class Launch(CliCase):
             reply = SimpleNamespace(returncode=0, stdout=declared + "\n", stderr="")
             with (
                 self.subTest(task_options=task_options),
-                mock.patch.object(Crew, "_call", return_value=reply) as query,
+                mock.patch("subprocess.run", return_value=reply) as query,
             ):
                 code, _, err = self.start(
                     "role",
@@ -305,7 +305,9 @@ class Launch(CliCase):
                     "x",
                 )
                 self.assertEqual(code, 0, err)
-                query.assert_called_once_with(
+                query.assert_called_once()
+                self.assertEqual(
+                    query.call_args.args[0],
                     (
                         "ensemble-orchestrator",
                         "credentials",
@@ -313,8 +315,8 @@ class Launch(CliCase):
                         "engineer",
                         *(("--task=build",) if task_options else ()),
                     ),
-                    "",
                 )
+                self.assertEqual(query.call_args.kwargs["input"], "")
                 self.assertEqual(self.calls[0][0][-2:], ("--credentials", declared))
                 self.roster.remove("r")
 
@@ -324,7 +326,7 @@ class Launch(CliCase):
             ("--credentials={}",),
             ("--credentials", ' {"future-kind": [1]} '),
         ):
-            with self.subTest(options=options), mock.patch.object(Crew, "_call") as query:
+            with self.subTest(options=options), mock.patch("subprocess.run") as query:
                 code, _, err = self.start(
                     "role", "--manager", "mgr", "--name", "r", "engineer", "--input", "x", *options
                 )
@@ -335,7 +337,7 @@ class Launch(CliCase):
 
     def test_role_default_config_failure_starts_nothing(self):
         reply = SimpleNamespace(returncode=2, stdout="", stderr="invalid credentials overlay")
-        with mock.patch.object(Crew, "_call", return_value=reply):
+        with mock.patch("subprocess.run", return_value=reply):
             code, out, err = self.start("role", "--manager", "mgr", "engineer", "--input", "x")
         self.assertEqual((code, out, self.calls), (2, "", []))
         self.assertIn("invalid credentials overlay", err)
