@@ -644,7 +644,7 @@ class DryRun(Base):
         )
         self.assertEqual(
             (shown["dirs"], shown["reads"], shown["commands"]),
-            ([], [os.path.join(TEAM, "tasks")], []),
+            ([], [os.path.join(TEAM, "tasks"), TEAM], []),
         )
         self.assertIn("**Your task**: `echo` (`<tasks>/echo.md`).", shown["prompt"])
         self.assertTrue(shown["prompt"].endswith("\n# Input\n\nHello.\n"))

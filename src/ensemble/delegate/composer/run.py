@@ -171,7 +171,7 @@ def access(
     dirs = [workdir] if os.path.realpath(cwd) != os.path.realpath(workdir) else []
     dirs += [p for p in paths["write"] if p not in dirs]
     seen, reads = set(map(os.path.realpath, dirs)), []
-    for p in (roots["tasks"], *paths["read"]):
+    for p in (roots["tasks"], roots["team"], roots["role_team"], *paths["read"]):
         if (real := os.path.realpath(p)) not in seen:
             seen.add(real)
             reads.append(p)
