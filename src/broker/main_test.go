@@ -634,7 +634,6 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 		return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"/Users/example/src/project"}`), nil
 	case strings.HasPrefix(joined, "container inspect"):
 		return nil, &docker.CommandError{Exit: 1, Stderr: "No such container"}
-
 	}
 	if args[0] == "exec" {
 		return s.output, nil
