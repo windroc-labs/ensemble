@@ -274,8 +274,7 @@ class Cleanup(Case):
             self.skipTest(result.skipped[0][1])
         server = seen["server"]
         self.assertFalse(os.path.exists(server.root))
-        with self.assertRaises(ProcessLookupError):
-            os.kill(seen["pid"], 0)
+        self.assertFalse(live_tmux.alive(seen["pid"]))  # ended; init reaps the daemon in its time
         (client,) = server.clients
         self.assertIsNotNone(client.proc.returncode)
         self.assertFalse(client.thread.is_alive())
