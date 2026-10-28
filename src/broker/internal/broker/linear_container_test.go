@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/credential"
@@ -21,6 +22,32 @@ import (
 
 func containerApp(a LinearIdentity) credential.LinearApp {
 	return credential.LinearApp{Role: a.Name, ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
+}
+
+func TestLinearCloseLargeRevocationRecord(t *testing.T) {
+	l, _, _, calls := linearRig(t)
+	unlock, err := l.lock("container/large", true)()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := linearContainerRecord{}
+	for i := range 64 {
+		record.Tokens = append(record.Tokens, linearAccess{AccessToken: strings.Repeat("x", maxToken-2) + fmt.Sprintf("%02d", i), ExpiresAt: linearNow.AddDate(0, 1, 0).Format(time.RFC3339)})
+	}
+	err = l.save("container/large", record)
+	unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Revoke(context.Background(), "large"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != len(record.Tokens) {
+		t.Fatalf("revoked %d of %d retained tokens", len(*calls), len(record.Tokens))
+	}
+	if !errors.Is(l.read("container/large", &record), ErrNotFound) {
+		t.Fatal("revoked record retained")
+	}
 }
 
 func TestLinearContainerLockCleanup(t *testing.T) {

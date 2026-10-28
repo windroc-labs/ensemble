@@ -18,6 +18,7 @@ import (
 )
 
 type Manifest struct {
+	Linear                                                                                      *credential.LinearRequest // the requested role app token and board config; nil without linear
 	Name, Generation, Image, CWD, Workspace, Client, ClaudeDir, CodexDir, OpencodeDir, HookPath string
 	HasHook                                                                                     bool
 	Labels                                                                                      map[string]string
@@ -30,8 +31,6 @@ type Manifest struct {
 	Lock, LockOwner                                                                             string            // optional lock name and readable owner
 	Gateway                                                                                     string            // the egress proxy's caller network key; workers without the field
 	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
-
-	Linear *credential.LinearRequest // the requested role app token and board config; nil without linear
 }
 
 // Prefetch is the repo a start clones into the workspace volume it creates: Repo owner/name, Ref a branch or tag
