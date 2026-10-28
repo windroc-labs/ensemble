@@ -31,6 +31,7 @@ class Tui(ABC):
     dialogs: tuple[str, ...] = ()
     opening: tuple[str, str] | None = None  # (hook label, text)
     _opening_prompt: ClassVar[bool] = False  # the prompt: not deferred past a launch turn
+    _opening_mid_turn: ClassVar[bool] = False
     client = ""  # last ClientBound's id
     _turn_id = ""
     _turn_open: bool | None = None

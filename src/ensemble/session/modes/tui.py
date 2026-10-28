@@ -930,13 +930,15 @@ class TuiMode(BaseMode):
                 )
 
     def _open(self) -> None:
-        """Submits the opening once due, no turn runs and a turn boundary's hook saw every send,
-        unless a dialog shows, the client is blocked or the send lock is held.
+        """Submits the opening once due, no turn runs (one may for a mid-turn opening) and a turn
+        boundary's hook saw every send, unless a dialog shows, the client is blocked or the send
+        lock is held.
         """
         now = time.monotonic()
         if self._opening is None or self._due is None or self._gone or now < self._due:
             return
-        if self._held or self._active_turn or self._launching or now < self._checked + POLL_SCREEN:
+        waits = self._held or self._launching or now < self._checked + POLL_SCREEN
+        if waits or self._active_turn and not self.run._opening_mid_turn:
             return
         self._checked = now
         terminal = self._owner()

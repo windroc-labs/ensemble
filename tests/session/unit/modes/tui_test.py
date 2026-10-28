@@ -1789,6 +1789,10 @@ class PromptOpening(Opening):
     _opening_prompt = True
 
 
+class MidTurnOpening(Opening):
+    _opening_mid_turn = True
+
+
 class OpeningTest(Base):
     def opened(self) -> tui.TuiMode:
         self.client.run = Opening(self.client)
@@ -2077,6 +2081,35 @@ class OpeningTest(Base):
         mode.poll(1.2)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
         self.assertFalse(Opening._opening_prompt)
+
+    def test_a_mid_turn_opening_goes_in_once_the_launch_turn_started(self):
+        mode = self.launched(MidTurnOpening(self.client), prompt="go")
+        self.append(record("ready"))
+        mode.poll(0)
+        mode.poll(1.2)  # its launch prompt not yet taken: keys now could join it
+        self.assertEqual(self.sends(mode), [])
+        self.append(record("start"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
+        self.assertIsNone(mode.opening_pending)
+        self.assertFalse(Opening._opening_mid_turn)
+
+    def test_a_mid_turn_opening_still_waits_on_a_block_and_an_unread_send(self):
+        mode = self.launched(MidTurnOpening(self.client), prompt="go")
+        self.append(record("ready"), record("start"), record("ask", why="perm"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [])
+        self.other().send("hi")
+        self.append(record("tool"))
+        mode.poll(0)
+        mode.poll(1.2)
+        self.assertEqual(self.sends(mode), [Paste("hi"), Key("Enter")])
+        self.append(record("stop"))
+        mode.poll(0)
+        mode.poll(0.6)
+        self.assertEqual(self.sends(mode)[2:], [Paste("/color"), Key("Enter")])
 
     def test_the_opening_holds_the_send_lock(self):
         mode = self.launched()
