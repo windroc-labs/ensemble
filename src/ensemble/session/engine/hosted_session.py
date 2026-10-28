@@ -35,6 +35,7 @@ from ensemble.session.engine.types import (
     Access,
     ClientBound,
     ConfigError,
+    CredentialRequest,
     EnvironmentSpec,
     Exited,
     HookCallback,
@@ -649,6 +650,7 @@ class HostedSession(Session):
                 for h in spec.handlers
             ],
             environment=None if spec.environment is None else spec.environment.persisted(),
+            credentials=None if spec.credentials is None else spec.credentials.persisted(),
         )
         return {
             "spec": thaw(fields),
@@ -687,6 +689,9 @@ class HostedSession(Session):
                 environment=None
                 if fields["environment"] is None
                 else EnvironmentSpec.from_fields(fields["environment"]),
+                credentials=None
+                if fields.get("credentials") is None
+                else CredentialRequest.from_fields(fields["credentials"]),
             )
             spec = Spec(**fields)
             display, host, roots = request["display"], request["host"], request["roots"]
