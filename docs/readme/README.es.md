@@ -64,11 +64,13 @@ los tokens de permisos detallados también necesitan acceso de lectura a Actions
 
 ### GitHub App
 
-Los trabajadores de Docker usan una GitHub App en lugar del inicio de sesión de `gh` del host. El instalador no crea la App.
+Los trabajadores de Docker que declaran una credencial `github` usan una GitHub App. El instalador no crea la App.
 En GitHub Settings › Developer settings › GitHub Apps, crea una App privada que solo se pueda instalar en tu cuenta,
-con los webhooks desactivados. Sus permisos de repositorio deben cubrir `github.permissions` en la
-[configuración de Session](../../src/ensemble/session/config.toml). Instálala solo en los repositorios a los que los trabajadores puedan hacer push,
-incluidos los repositorios de salida de documentos.
+con los webhooks desactivados. Sus permisos de repositorio deben cubrir la declaración de credenciales del rol engineer,
+que el instalador escribe en `[orchestrator.roles.engineer.credentials.github]`. Instálala solo en los repositorios a los que
+los trabajadores puedan hacer push, incluidos los repositorios de salida de documentos. Las ejecuciones de Docker sin declaración
+no reciben ningún token de GitHub. Para trabajadores iniciados directamente y el acceso de salida del verifier, consulta
+[Credenciales de GitHub explícitas](../upgrading.md#broker-protocol-35-explicit-github-credentials).
 
 Genera una clave privada, anota el App ID e impórtalos:
 

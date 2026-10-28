@@ -64,10 +64,12 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
 
 ### GitHub App
 
-Docker 工作者使用 GitHub App，而非宿主机上的 `gh` 登录。安装程序不会创建 App。
+声明了 `github` 凭据的 Docker 工作者使用 GitHub App。安装程序不会创建 App。
 在 GitHub Settings › Developer settings › GitHub Apps 中创建仅可安装到你自己账号的私有 App，
-并关闭 webhook。其仓库权限必须涵盖 [Session 配置](../../src/ensemble/session/config.toml)中的 `github.permissions`。
-只将它安装到允许工作者推送的仓库，包括文档输出仓库。
+并关闭 webhook。其仓库权限必须涵盖安装程序写入的 engineer 角色凭据声明
+`[orchestrator.roles.engineer.credentials.github]`。只将它安装到允许工作者推送的仓库，包括文档输出仓库。
+未声明凭据的 Docker run 不会获得 GitHub 令牌；直接启动工作者和 verifier 输出权限的配置见
+[显式 GitHub 凭据](../upgrading.md#broker-protocol-35-explicit-github-credentials)。
 
 生成私钥，记下 App ID，然后将它们导入：
 
