@@ -269,7 +269,6 @@ class LocalBoard(BinFlow):
         for event in on_linear:
             if "credentials" in event:
                 self.assertEqual(event["credentials"], remote_credentials)
-                self.assertEqual(event["credentials"]["linear"]["scopes"], "read")
                 event["credentials"] = {}
         self.assertEqual(normalized, on_linear)
 

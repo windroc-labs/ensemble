@@ -41,7 +41,7 @@ func TestLinearTransportContainerWithoutEnrollment(t *testing.T) {
 	if err := l.Ready(app); err != nil {
 		t.Fatalf("existing transport role requires enrollment: %v", err)
 	}
-	request := credential.LinearRequest{App: app, Scopes: a.scopes()}
+	request := credential.LinearRequest{App: app}
 	commands, rollback, gotExpiry, err := l.Issue(context.Background(), request, "transport")
 	if err != nil || len(commands) != 2 || gotExpiry != expiry || !strings.Contains(string(commands[0].Stdin), "HOST-TOKEN") {
 		t.Fatalf("transport delivery: %v %q", err, gotExpiry)

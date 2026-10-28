@@ -58,10 +58,7 @@ func (l Linear) Ready(app credential.LinearApp) error {
 }
 
 // containerToken follows the app's renewal owner without changing host credentials.
-func (l Linear) containerToken(ctx context.Context, app credential.LinearApp, scopes string) (linearAccess, error) {
-	if !credential.ValidLinearScopes(scopes) {
-		return linearAccess{}, errLinear
-	}
+func (l Linear) containerToken(ctx context.Context, app credential.LinearApp) (linearAccess, error) {
 	if app.Renewal == "transport" {
 		return l.transportToken(ctx, app)
 	}
@@ -69,15 +66,12 @@ func (l Linear) containerToken(ctx context.Context, app credential.LinearApp, sc
 	if err != nil {
 		return linearAccess{}, errLinear
 	}
-	if account.Identity.scopes() != scopes {
-		return linearAccess{}, errLinear
-	}
 	secret, err := l.keys.Secret(app.SecretService, account.RootAccount)
 	defer erase(secret)
 	if err != nil || !linearClean(string(secret)) {
 		return linearAccess{}, errLinear
 	}
-	token, _, err := l.request(ctx, account.Identity, string(secret), scopes)
+	token, _, err := l.request(ctx, account.Identity, string(secret))
 	return token, err
 }
 
@@ -155,7 +149,7 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 	if err := l.read("container/"+c, &existing); !errors.Is(err, ErrNotFound) {
 		return nil, nil, "", errLinear
 	}
-	token, err := l.containerToken(ctx, r.App, r.Scopes)
+	token, err := l.containerToken(ctx, r.App)
 	if err != nil {
 		return nil, nil, "", errLinear
 	}
@@ -170,10 +164,7 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 		return nil, nil, "", errLinear
 	}
 	command := linearCommand(token, false)
-	board, _ := json.Marshal(struct {
-		credential.LinearBoard
-		Scopes string `json:"scopes"`
-	}{r.Board, r.Scopes})
+	board, _ := json.Marshal(r.Board)
 	defer erase(board)
 	config, _ := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "board.json"}, board)
 	return []credential.Command{command, config}, func() { _ = l.Revoke(ctx, c) }, token.ExpiresAt, nil
@@ -189,7 +180,7 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 	if l.read("container/"+c, &record) != nil || record.Closed || record.Shared != (r.App.Renewal == "transport") {
 		return "", errLinear
 	}
-	token, err := l.containerToken(ctx, r.App, r.Scopes)
+	token, err := l.containerToken(ctx, r.App)
 	if err != nil {
 		return "", errLinear
 	}

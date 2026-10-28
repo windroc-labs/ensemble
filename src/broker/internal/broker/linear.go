@@ -49,7 +49,7 @@ func (a LinearIdentity) scopes() string {
 	case "manager":
 		return "read,write,app:assignable"
 	case "role":
-		return credential.LinearRoleScopes
+		return "read,write,app:assignable,app:mentionable"
 	}
 	return ""
 }
@@ -395,7 +395,7 @@ func (p *linearProvider) Issue(ctx context.Context, scope map[string]string) (cr
 		if !linearClean(string(secret)) {
 			return credential.Material{}, errLinear
 		}
-		current, seconds, err := l.request(ctx, a.Identity, string(secret), a.Identity.scopes())
+		current, seconds, err := l.request(ctx, a.Identity, string(secret))
 		if err != nil {
 			l.Audit.Renewing(protocol.RefreshFailed)
 			return credential.Material{}, errLinear
@@ -410,8 +410,8 @@ func (p *linearProvider) Issue(ctx context.Context, scope map[string]string) (cr
 	return credential.Material{Account: a.Identity.Name, Token: a.Current.AccessToken, ExpiresAt: a.Current.ExpiresAt}, nil
 }
 
-func (l Linear) request(ctx context.Context, a LinearIdentity, secret, scopes string) (linearAccess, time.Duration, error) {
-	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {a.ClientID}, "client_secret": {secret}, "scope": {scopes}}
+func (l Linear) request(ctx context.Context, a LinearIdentity, secret string) (linearAccess, time.Duration, error) {
+	form := url.Values{"grant_type": {"client_credentials"}, "client_id": {a.ClientID}, "client_secret": {secret}, "scope": {a.scopes()}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, linearTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return linearAccess{}, 0, errLinear

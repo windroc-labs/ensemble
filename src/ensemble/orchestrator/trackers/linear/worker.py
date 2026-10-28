@@ -5,7 +5,6 @@ import os
 from datetime import UTC, datetime
 
 from ensemble.orchestrator.engine.types import (
-    SCOPES,
     AppKind,
     IssueError,
     LinearApp,
@@ -58,8 +57,6 @@ def backend():
         ) from None
     try:
         board = _file("board")
-        if board["scopes"] != SCOPES[AppKind.ROLE]:
-            raise ValueError
         roles = {name: _app(name, user) for name, user in board["role_users"].items()}
         linear = LinearSettings(
             team=board["team"],

@@ -1042,8 +1042,7 @@ class CommittedConfiguration(Case):
         self.assertEqual(resolved["linear"]["app"]["user_id"], role_id("engineer"))
         ordinary = config.credentials(cfg, "engineer", "build")
         self.assertEqual(ordinary["github"], github)
-        self.assertEqual(ordinary["linear"]["scopes"], cfg.linear.roles["engineer"].scopes)
-        self.assertEqual(resolved["linear"]["scopes"], cfg.linear.roles["engineer"].scopes)
+        self.assertEqual(ordinary["linear"], resolved["linear"])
 
     def test_all_remote_roles_receive_their_existing_grant_by_default(self):
         cfg = self.load(BASE)
@@ -1051,10 +1050,7 @@ class CommittedConfiguration(Case):
             for task in (None, *settings.tasks):
                 with self.subTest(role=name, task=task):
                     grant = config.credentials(cfg, name, task)["linear"]
-                    self.assertEqual(
-                        grant["scopes"],
-                        cfg.linear.roles[name].scopes,
-                    )
+                    self.assertEqual(grant["app"]["role"], name)
                     self.assertEqual(
                         grant["board"]["role_users"][name], cfg.linear.roles[name].user_id
                     )
@@ -1631,7 +1627,7 @@ class CredentialDeclarations(ConfigFile, Case):
                 with self.subTest(role=name, task=task):
                     grant = config.credentials(cfg, name, task)["linear"]
                     app = cfg.linear.roles[name]
-                    self.assertEqual(grant["scopes"], app.scopes)
+                    self.assertEqual(set(grant), {"app", "board"})
                     self.assertEqual(
                         grant["app"],
                         {
@@ -1671,8 +1667,8 @@ class CredentialDeclarations(ConfigFile, Case):
 
     def test_absent_declarations_are_empty_and_local_declarations_overlay_packaged(self):
         self.assertEqual(
-            config.credentials(self.load(PIPELINE), "engineer", None)["linear"]["scopes"],
-            config.SCOPES[config.AppKind.ROLE],
+            config.credentials(self.load(PIPELINE), "engineer", None)["linear"]["app"]["role"],
+            "engineer",
         )
         self.local('[roles.engineer.tasks.light-build.credentials]\nfuture = ["opaque"]\n')
         cfg = self.load(PIPELINE + "credentials = { future = false }\n")
@@ -1693,7 +1689,6 @@ class CredentialDeclarations(ConfigFile, Case):
         cfg = self.load(MANAGER_LINE + PIPELINE + '[roles.engineer.credentials]\nlinear = "role"\n')
         app = role_app("engineer")
         expected = {
-            "scopes": app.scopes,
             "app": {
                 "role": "engineer",
                 "renewal": app.renewal,

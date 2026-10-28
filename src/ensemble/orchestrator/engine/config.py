@@ -15,7 +15,6 @@ from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.log import config_error
 from ensemble.orchestrator.engine.types import (
     KEYCHAIN_NAME,
-    SCOPES,
     UUID_RE,
     AppKind,
     Config,
@@ -778,7 +777,6 @@ def _credential_table(cfg, role, table, where, *, default=False):
             linear = cfg["linear"]
             app = linear["roles"][role]
             out["linear"] = {
-                "scopes": SCOPES[AppKind.ROLE],
                 "app": {
                     "role": role,
                     "renewal": app.get("renewal", "transport"),

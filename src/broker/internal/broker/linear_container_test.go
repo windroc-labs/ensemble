@@ -20,7 +20,7 @@ import (
 )
 
 func containerApp(a LinearIdentity) credential.LinearApp {
-	return credential.LinearApp{Role: a.Name, ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
+	return credential.LinearApp{Role: a.Name, ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService, Renewal: "broker"}
 }
 
 func TestLinearContainerLockCleanup(t *testing.T) {
@@ -33,7 +33,7 @@ func TestLinearContainerLockCleanup(t *testing.T) {
 			l.removeLock = locks.removeLock
 			a := linearApp("engineer")
 			enrollLinear(t, l, k, a)
-			commands, rollback, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}, "cleanup")
+			commands, rollback, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "cleanup")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestLinearContainerLockCleanup(t *testing.T) {
 			if _, err := os.Stat(path); !os.IsNotExist(err) {
 				t.Fatal("revoked container retained its lock")
 			}
-			if _, err := l.Refresh(context.Background(), credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}, "cleanup", func([]string, []byte) error {
+			if _, err := l.Refresh(context.Background(), credential.LinearRequest{App: containerApp(a)}, "cleanup", func([]string, []byte) error {
 				t.Fatal("closed container received a token")
 				return nil
 			}); err == nil {
@@ -140,7 +140,7 @@ func TestLinearContainerLifecycle(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
-	request := credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}
+	request := credential.LinearRequest{App: containerApp(a)}
 	commands, _, expiry, err := l.Issue(context.Background(), request, "container")
 	if err != nil || len(commands) != 2 || expiry == "" {
 		t.Fatalf("issue %v", err)
@@ -224,7 +224,7 @@ func TestLinearContainerErrorsHideSecrets(t *testing.T) {
 	a := linearApp("engineer")
 	enrollLinear(t, l, k, a)
 	l.http.Transport = linearRoundTrip(func(*http.Request) (*http.Response, error) { return nil, errors.New("ROOT-SENTINEL") })
-	_, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}, "container")
+	_, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "container")
 	if err == nil || strings.Contains(err.Error(), "ROOT-SENTINEL") {
 		t.Fatalf("unsafe error %v", err)
 	}
@@ -234,7 +234,7 @@ func TestLinearStoppedContainerClose(t *testing.T) {
 	l, k, _, calls := linearRig(t)
 	a := linearApp("engineer")
 	enrollLinear(t, l, k, a)
-	commands, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}, "stopped")
+	commands, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "stopped")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestLinearConcurrentRenewAndClose(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
 	})
-	request := credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}
+	request := credential.LinearRequest{App: containerApp(a)}
 	commands, _, _, err := l.Issue(context.Background(), request, "race")
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +313,7 @@ func TestLinearRevocationRecordRetry(t *testing.T) {
 	l, k, _, _ := linearRig(t)
 	a := linearApp("engineer")
 	enrollLinear(t, l, k, a)
-	request := credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}
+	request := credential.LinearRequest{App: containerApp(a)}
 	commands, _, _, err := l.Issue(context.Background(), request, "retry")
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +394,7 @@ func TestLinearCloseWaitsForIssuance(t *testing.T) {
 	}
 	issued, closed := make(chan error, 1), make(chan error, 1)
 	go func() {
-		commands, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}, "issuing")
+		commands, _, _, err := l.Issue(context.Background(), credential.LinearRequest{App: containerApp(a)}, "issuing")
 		for _, command := range commands {
 			command.Erase()
 		}
@@ -438,7 +438,7 @@ func TestLinearFailedRefreshPreservesPreviouslyDeliveredToken(t *testing.T) {
 	l, k, _, calls := linearRig(t)
 	a := linearApp("engineer")
 	enrollLinear(t, l, k, a)
-	request := credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}
+	request := credential.LinearRequest{App: containerApp(a)}
 	commands, _, _, err := l.Issue(context.Background(), request, "delivered")
 	if err != nil {
 		t.Fatal(err)
@@ -474,7 +474,7 @@ func TestLinearFailedSaveRetainsUnrevokedToken(t *testing.T) {
 			l, k, _, calls := linearRig(t)
 			a := linearApp("engineer")
 			enrollLinear(t, l, k, a)
-			request := credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}
+			request := credential.LinearRequest{App: containerApp(a)}
 			count := 1
 			if phase == "refresh" {
 				commands, _, _, err := l.Issue(context.Background(), request, "save-failure")
@@ -531,7 +531,7 @@ func TestLinearRefreshRevocationRetry(t *testing.T) {
 	l, k, _, calls := linearRig(t)
 	a := linearApp("engineer")
 	enrollLinear(t, l, k, a)
-	request := credential.LinearRequest{App: containerApp(a), Scopes: a.scopes()}
+	request := credential.LinearRequest{App: containerApp(a)}
 	commands, _, _, err := l.Issue(context.Background(), request, "refresh-retry")
 	if err != nil {
 		t.Fatal(err)

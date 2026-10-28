@@ -42,7 +42,7 @@ class Worker(Case):
             )
         )
         self.board = self.directory / "board.json"
-        self.board.write_text(json.dumps(self.grant["board"] | {"scopes": self.grant["scopes"]}))
+        self.board.write_text(json.dumps(self.grant["board"]))
         original_open, original_stat = builtins.open, os.stat
 
         def translated(path):

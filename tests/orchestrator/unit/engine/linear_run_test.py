@@ -91,7 +91,7 @@ class Runs(RunCase):
             delegate_cls=CapturedDelegate,
         )
         grant = json.loads(owner.delegate.accepted[1].credentials)["linear"]
-        self.assertEqual(grant["scopes"], self.cfg.linear.roles["engineer"].scopes)
+        self.assertEqual(set(grant), {"app", "board"})
         self.assertEqual(grant["app"]["client_id"], self.cfg.linear.roles["engineer"].client_id)
 
     def test_document_host_is_canonicalized_in_delegate_output_overlay(self):

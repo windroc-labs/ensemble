@@ -9,7 +9,7 @@ type LinearApp struct {
 	UserID        string `json:"user_id"`
 	SecretService string `json:"secret_service"`
 	TokenService  string `json:"token_service"`
-	Renewal       string `json:"renewal,omitempty"`
+	Renewal       string `json:"renewal"`
 }
 
 // LinearBoard contains only the non-secret board settings a run can use.
@@ -28,14 +28,9 @@ type LinearBoard struct {
 }
 
 type LinearRequest struct {
-	Scopes string      `json:"scopes"`
-	App    LinearApp   `json:"app"`
-	Board  LinearBoard `json:"board"`
+	App   LinearApp   `json:"app"`
+	Board LinearBoard `json:"board"`
 }
-
-const LinearRoleScopes = "read,write,app:assignable,app:mentionable"
-
-func ValidLinearScopes(s string) bool { return s == LinearRoleScopes }
 
 const LinearDir = "/run/ensemble/secrets/linear"
 
