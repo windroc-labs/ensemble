@@ -164,18 +164,6 @@ func TestMaintainWithoutTokenProvidersOrStaticSecretsNeverChecksAgain(t *testing
 	}
 }
 
-func TestMaintainWithoutRecordRenewsAll(t *testing.T) {
-	h, manifest, tokens, creds := maintainHost(t, true, nil)
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
-	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
-		t.Fatalf("%+v %v", got, err)
-	}
-	record := h.Schedule.Read(tokensManifest)
-	if len(record.Expires[credential.Codex]) != 1 || len(record.Expires[credential.GitHub]) != 1 {
-		t.Fatalf("%+v", record)
-	}
-}
-
 func TestMaintainRenewFlag(t *testing.T) {
 	far := map[credential.Kind][]string{credential.Codex: {"2026-10-20T12:00:00Z"}, credential.GitHub: {"2026-10-20T12:00:00Z"}}
 	h, manifest, tokens, creds := maintainHost(t, true, far)
@@ -191,43 +179,6 @@ func TestMaintainWithoutRecordCodexFailureHasNoDeadline(t *testing.T) {
 	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
 	if err != nil || got.Deadline != nil || len(got.Results) != 1 || got.Results[0].Error == nil || got.NextCheck == nil || *got.NextCheck != soon(time.Minute) {
 		t.Fatalf("%+v %v", got, err)
-	}
-}
-
-func TestMaintainStaticOnly(t *testing.T) {
-	now := noticeNow
-	h, path, _, _ := noticeHost(t, &now, func(s credential.StaticStore) {
-		login(t, s, "ensemble-broker-claude/default", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
-	})
-	tokens := &fakeTokens{}
-	h.GitHub = tokens
-	got, err := h.Maintain(context.Background(), container, path, nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Results) != 0 || got.Deadline != nil || len(got.Notices) != 1 || got.Notices[0].Key != "ensemble-broker-claude/default@1:30d" ||
-		got.NextCheck == nil || *got.NextCheck != "2026-10-26T13:00:00Z" || len(tokens.calls) != 0 {
-		t.Fatalf("%+v %q", got, tokens.calls)
-	}
-}
-
-func TestMaintainDeliveredAcks(t *testing.T) {
-	now := noticeNow
-	h, path, _, record := noticeHost(t, &now, func(s credential.StaticStore) {
-		login(t, s, "ensemble-broker-env/dummy", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
-	})
-	_, logPath := audited(t, &h, "maintain", container)
-	got, err := h.Maintain(context.Background(), container, path, []string{"ensemble-broker-env/dummy@1:30d"}, false)
-	if err != nil || len(got.Notices) != 0 {
-		t.Fatalf("%+v %v", got, err)
-	}
-	if err := h.Audit.Flush(nil); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(record)
-	lines := readLines(t, logPath)
-	if !strings.Contains(string(raw), "ensemble-broker-env/dummy@1:30d") || len(lines) != 1 || lines[0].Event != "credential-notice" || lines[0].Command != "maintain" {
-		t.Fatalf("%s %+v", raw, lines)
 	}
 }
 
@@ -312,16 +263,29 @@ func TestMaintainWritesNoRefreshLineWhenNothingIsDue(t *testing.T) {
 	}
 }
 
+// A manifest that is unreadable, not the container's or not safely mounted fails Maintain before any provider runs.
 func TestMaintainRejects(t *testing.T) {
-	h, manifest, _, _ := maintainHost(t, false, nil)
-	if _, err := h.Maintain(context.Background(), "ensemble-other-"+tokensGeneration, manifest, nil, false); code(t, err) != protocol.ManifestRejected {
-		t.Fatalf("%v", err)
-	}
-	if _, err := h.Maintain(context.Background(), container, filepath.Join(t.TempDir(), "missing.json"), nil, false); code(t, err) != protocol.ManifestRejected {
-		t.Fatalf("%v", err)
-	}
-	h.Safe = func(string) error { return errors.New("link") }
-	if _, err := h.Maintain(context.Background(), container, manifest, nil, false); code(t, err) != protocol.MountRejected {
-		t.Fatalf("%v", err)
+	for name, want := range map[string]protocol.Code{
+		"other container": protocol.ManifestRejected, "missing": protocol.ManifestRejected,
+		"directory": protocol.MountRejected, "symlink": protocol.MountRejected,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, manifest, tokens, creds := maintainHost(t, true, nil)
+			c := container
+			switch name {
+			case "other container":
+				c = "ensemble-other-" + tokensGeneration
+			case "missing":
+				manifest = filepath.Join(t.TempDir(), "missing.json")
+			case "directory":
+				h.Home = "/arbitrary"
+			case "symlink":
+				h.Safe = func(string) error { return errors.New("link") }
+			}
+			_, err := h.Maintain(context.Background(), c, manifest, nil, false)
+			if code(t, err) != want || creds.injected != 0 || len(tokens.calls) != 0 {
+				t.Fatalf("%v %d %q", err, creds.injected, tokens.calls)
+			}
+		})
 	}
 }

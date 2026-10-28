@@ -192,15 +192,9 @@ func TestNoticesWithoutRecord(t *testing.T) {
 	}
 }
 
-func TestNoticesRejects(t *testing.T) {
+func TestNoticesCorruptRecord(t *testing.T) {
 	now := noticeNow
 	h, path, _, record := noticeHost(t, &now, nil)
-	if _, err := h.Maintain(context.Background(), "ensemble-other-0123456789abcdef0123456789abcdef", path, nil, false); code(t, err) != protocol.ManifestRejected {
-		t.Fatalf("%v", err)
-	}
-	if _, err := h.Maintain(context.Background(), container, filepath.Join(t.TempDir(), "absent.json"), nil, false); code(t, err) != protocol.ManifestRejected {
-		t.Fatalf("%v", err)
-	}
 	if err := os.WriteFile(record, []byte("SENTINEL-not-json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -213,13 +207,12 @@ func TestNoticesRejects(t *testing.T) {
 	}
 }
 
-func TestNoticesSentinelAbsent(t *testing.T) {
-	const sentinel = "SENTINEL-n0t1ce"
+// The value start injected, envValue-<item>, stays out of a notice check's output, audit line and records.
+func TestNoticesLeaveOutEnvValue(t *testing.T) {
 	now := noticeNow
 	h, path, _, record := noticeHost(t, &now, func(s credential.StaticStore) {
 		login(t, s, "ensemble-broker-env/dummy", credential.Registration{Expires: noticeNow.Add(3 * 24 * time.Hour)}, noticeNow)
 	})
-	h.Env = &fakeEnv{} // its value, envValue-<item>, went into the container at start
 	_, logPath := audited(t, &h, "maintain", container)
 	got, err := h.Maintain(context.Background(), container, path, []string{"ensemble-broker-env/dummy@1:7d"}, false)
 	if err != nil {
@@ -233,7 +226,7 @@ func TestNoticesSentinelAbsent(t *testing.T) {
 	raw, _ := os.ReadFile(record)
 	store, _ := os.ReadFile(filepath.Join(h.Home, ".ensemble/docker/static-secrets.json"))
 	for name, text := range map[string]string{"output": string(encoded), "audit": string(logged), "record": string(raw), "store": string(store)} {
-		if strings.Contains(text, sentinel) || strings.Contains(text, envValue) {
+		if strings.Contains(text, envValue) {
 			t.Errorf("%s: %s", name, text)
 		}
 	}

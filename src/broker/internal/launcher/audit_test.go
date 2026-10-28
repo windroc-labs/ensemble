@@ -291,12 +291,7 @@ func TestNoSecretsInLog(t *testing.T) {
 		manifest := githubManifest(t)
 		if client == "codex" {
 			h.Codex, h.Versions = &fakeCodexCreds{}, &fakeVersions{}
-			raw, _ := os.ReadFile(codexManifest(t))
-			var m map[string]any
-			_ = json.Unmarshal(raw, &m)
-			m["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
-			raw, _ = json.Marshal(m)
-			manifest = writeManifest(t, raw)
+			manifest = codexManifest(t, withGitHub)
 		}
 		h.Audit = &audit.Recorder{Command: "start", Log: audit.Log{Path: path}}
 		_, err := h.Start(context.Background(), manifest)

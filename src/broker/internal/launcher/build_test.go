@@ -35,6 +35,18 @@ func (f *fakeDocker) Run(ctx context.Context, args []string, stdin []byte) ([]by
 	return nil, nil
 }
 
+// removed is each image rm call's reference; it clears the record, so the next one sees only later removals.
+func (f *fakeDocker) removed() []string {
+	var refs []string
+	for _, c := range f.calls {
+		if strings.Join(c[:2], " ") == "image rm" {
+			refs = append(refs, c[2])
+		}
+	}
+	f.calls, f.stdin, f.ctxErrs = nil, nil, nil
+	return refs
+}
+
 func (f *fakeDocker) verbs() []string {
 	var out []string
 	for _, c := range f.calls {
@@ -458,13 +470,6 @@ func TestBuildCacheAndStages(t *testing.T) {
 }
 
 func TestBuildFailures(t *testing.T) {
-	code := func(err error) protocol.Code {
-		var e *protocol.Error
-		if !errors.As(err, &e) {
-			t.Fatalf("not a protocol error: %v", err)
-		}
-		return e.Code
-	}
 	for name, mutate := range map[string]func(*buildEnv){
 		"missing definition": func(e *buildEnv) { os.RemoveAll(filepath.Join(e.home, ".ensemble")) },
 		"missing version":    func(e *buildEnv) { os.Remove(filepath.Join(e.pkg, ".claude-plugin/plugin.json")) },
@@ -480,7 +485,7 @@ func TestBuildFailures(t *testing.T) {
 			e := newBuildEnv(t)
 			mutate(e)
 			_, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1)
-			if code(err) != protocol.BuildFailed {
+			if code(t, err) != protocol.BuildFailed {
 				t.Fatal(err)
 			}
 			if name == "missing definition" && !strings.Contains(err.(*protocol.Error).Message, "src/broker/install.sh") {
@@ -500,7 +505,7 @@ func TestBuildFailures(t *testing.T) {
 			}
 			return inner(args)
 		}
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(err) != protocol.BuildFailed {
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(t, err) != protocol.BuildFailed {
 			t.Fatal(err)
 		}
 	})
@@ -522,7 +527,7 @@ func TestBuildFailures(t *testing.T) {
 	t.Run("unreachable", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.fake.respond = func([]string) ([]byte, error) { return nil, docker.ErrUnreachable }
-		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(err) != protocol.DockerUnreachable {
+		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(t, err) != protocol.DockerUnreachable {
 			t.Fatal(err)
 		}
 	})
@@ -607,28 +612,19 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 		"ensemble-worker:" + kept + " " + id("e"), "ensemble-user:" + kept + " " + id("f"),
 		"ensemble-worker:latest " + id("7"), "ubuntu:24.04 " + id("8"), "<none>:<none> " + id("9"), "",
 	}, "\n")
-	removed := func(e *buildEnv) []string {
-		var refs []string
-		for _, c := range e.fake.calls {
-			if strings.Join(c[:2], " ") == "image rm" {
-				refs = append(refs, c[2:]...)
-			}
-		}
-		return refs
-	}
 	t.Run("keeps the current pair and images containers use", func(t *testing.T) {
 		e := newBuildEnv(t)
 		e.images, e.containers, e.used = listing, "c1\nc2\n", id("e")+"\n"+id("0")+"\n"
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"ensemble-worker:" + old, "ensemble-user:" + old, "ensemble-user:" + kept}
-		if got := removed(e); !slices.Equal(got, want) {
-			t.Fatalf("%q", got)
-		}
 		inspect := e.fake.calls[slices.Index(e.fake.verbs(), "container inspect")]
 		if !slices.Equal(inspect, []string{"container", "inspect", "--format", "{{.Image}}", "c1", "c2"}) {
 			t.Fatalf("%q", inspect)
+		}
+		want := []string{"ensemble-worker:" + old, "ensemble-user:" + old, "ensemble-user:" + kept}
+		if got := e.fake.removed(); !slices.Equal(got, want) {
+			t.Fatalf("%q", got)
 		}
 		if got := e.progress.String(); got != "ensemble-broker: removed ensemble-worker:"+old+"\nensemble-broker: removed ensemble-user:"+old+"\nensemble-broker: removed ensemble-user:"+kept+"\n" {
 			t.Fatalf("%q", got)
@@ -654,7 +650,8 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
 			t.Fatal(err)
 		}
-		if got := removed(e); got != nil || e.progress.String() != "ensemble-broker: kept older images: cannot list containers: boom\n" {
+		if got := e.fake.removed(); got != nil ||
+			e.progress.String() != "ensemble-broker: kept older images: cannot list containers: boom\n" {
 			t.Fatalf("%q %q", got, e.progress.String())
 		}
 	})
@@ -680,7 +677,7 @@ func TestBuildRemovesOlderImages(t *testing.T) {
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
 			t.Fatal(err)
 		}
-		if got := removed(e); !slices.Equal(got, []string{"ensemble-worker:" + old, "ensemble-user:" + old}) {
+		if got := e.fake.removed(); !slices.Equal(got, []string{"ensemble-worker:" + old, "ensemble-user:" + old}) {
 			t.Fatalf("%q", got)
 		}
 		for _, suffix := range []string{"", ".json", ".replaced"} {
@@ -1597,35 +1594,25 @@ func TestPruneKeepsReplacedImageForGrace(t *testing.T) {
 	h.Now = func() time.Time { return clock }
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"), `[{"id":"`+young+`","at":"2026-10-26T11:51:00Z"}]`)
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("2", 64)+".replaced"), `[{"id":"`+old+`","at":"2026-10-26T11:50:00Z"}]`)
-	removed := func() []string {
-		var ids []string
-		for _, c := range e.fake.calls {
-			if strings.Join(c[:2], " ") == "image rm" {
-				ids = append(ids, c[2])
-			}
-		}
-		e.fake.calls = nil
-		return ids
-	}
 	h.prune(context.Background(), "")
-	if got := removed(); !slices.Equal(got, []string{old}) {
+	if got := e.fake.removed(); !slices.Equal(got, []string{old}) {
 		t.Fatalf("%q", got)
 	}
 	clock = clock.Add(time.Minute)
 	h.prune(context.Background(), "")
-	if got := removed(); !slices.Equal(got, []string{young, old}) {
+	if got := e.fake.removed(); !slices.Equal(got, []string{young, old}) {
 		t.Fatalf("%q", got)
 	}
 	t.Run("an entry whose rebuild still runs outlives the grace", func(t *testing.T) {
 		putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"),
 			`[{"id":"`+young+`","at":"2026-10-26T11:00:00Z","pending":true}]`)
 		h.prune(context.Background(), "")
-		if got := removed(); !slices.Equal(got, []string{old}) {
+		if got := e.fake.removed(); !slices.Equal(got, []string{old}) {
 			t.Fatalf("%q", got)
 		}
 		clock = clock.Add(pendingGrace)
 		h.prune(context.Background(), "")
-		if got := removed(); !slices.Equal(got, []string{young, old}) {
+		if got := e.fake.removed(); !slices.Equal(got, []string{young, old}) {
 			t.Fatalf("%q", got)
 		}
 	})
@@ -1643,25 +1630,15 @@ func TestPruneKeepsRecordedVariantsForTheVariantLease(t *testing.T) {
 		putFile(t, e.leasePath(key), "")
 	}
 	putFile(t, e.leasePath(recorded)+".json", "{}")
-	removed := func() []string {
-		var refs []string
-		for _, c := range e.fake.calls {
-			if strings.Join(c[:2], " ") == "image rm" {
-				refs = append(refs, c[2])
-			}
-		}
-		e.fake.calls = nil
-		return refs
-	}
 	clock = clock.Add(2 * time.Hour)
 	h.prune(context.Background(), "")
-	if got := removed(); !slices.Equal(got, []string{"ensemble-worker:" + unrecorded}) {
+	if got := e.fake.removed(); !slices.Equal(got, []string{"ensemble-worker:" + unrecorded}) {
 		t.Fatalf("%q", got)
 	}
 	e.images = "ensemble-worker:" + recorded + " sha256:" + strings.Repeat("5", 64) + "\n"
 	clock = clock.Add(variantLease)
 	h.prune(context.Background(), "")
-	if got := removed(); !slices.Equal(got, []string{"ensemble-worker:" + recorded}) {
+	if got := e.fake.removed(); !slices.Equal(got, []string{"ensemble-worker:" + recorded}) {
 		t.Fatalf("%q", got)
 	}
 }
