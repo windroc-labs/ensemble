@@ -1,7 +1,4 @@
-"""v1 router behaviors, each against its v1 source (`v1-runtime`'s CLAUDE.md › Architecture or a v1
-test, named in the test's docstring), end to end: bin/ensemble-orchestrator router as a real process
-(BinFlow), fake_claude as client claude, FakeLinear over HTTP, the runs' drives local processes.
-"""
+"""v1 router behaviors end to end (BinFlow); a test's docstring names its v1 source."""
 
 import os
 import re
@@ -64,11 +61,10 @@ class Parity(BinFlow):
         self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""), self.said())
 
     def routed(self):
-        """The router's orchestrator.jsonl lines: a run's write-back may log in between."""
+        """A run's write-back may log in between."""
         return [line for line in self.said() if line.startswith("router ")]
 
     def started(self, n=1):
-        """The first n agent runs' fake_claude calls, once logged."""
         return live_tmux.wait(
             lambda: (calls := agent_calls(self.calls()))[n - 1 :] and calls,
             TIMEOUT,
@@ -82,7 +78,6 @@ class Lock(Parity):
         self.seed(ID, "ENG: Session registry")
 
     def hold(self):
-        """A tick in the router lock, its first Linear call (the team) answered HOLD s late."""
         self.fake.fail("linear.Q_TEAM", "hang", seconds=HOLD)
         self.scene([START, DONE], usage=usage(0.5))
         first = self.start("router")
@@ -103,9 +98,7 @@ class Lock(Parity):
         self.assertEqual(self.said().count(said), 1)
 
     def test_a_tick_while_another_router_holds_the_lock_logs_one_skip_and_does_nothing(self):
-        """v1 CLAUDE.md › Architecture: the router lock keeps one router at a time; held by
-        another router → one `skip` event, nothing else.
-        """
+        """v1 CLAUDE.md › Architecture: one router at a time."""
         first = self.hold()
         res = self.router()
         self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
@@ -136,9 +129,7 @@ class MaxRuns(Parity):
         self.seed(OTHER, "ENG: Session index", priority=3)
 
     def test_a_live_agent_run_on_tmux_holds_the_roles_only_slot(self):
-        """v1 CLAUDE.md › Architecture: a tick compares live runs (v1: tmux sessions) with
-        `max_runs`; the issue's run holds a slot while its drive runs, so a full role claims nothing.
-        """
+        """v1 CLAUDE.md › Architecture: a live run holds its max_runs slot."""
         gate = os.path.join(self.root, "gate")
         self.scene([START, DONE], gate=gate, usage=usage(0.5))
         self.tick()
@@ -175,7 +166,6 @@ class Recover(Parity):
         self.seed(ID, "ENG: Session registry")
 
     def transcript(self, sid):
-        """The Claude client's transcript of sid in ID's agent dir and the files beside it."""
         cwd = session_cwd(os.path.join(self.workdirs, ID))
         project = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(cwd))
         path = os.path.join(self.root, "claude-config", "projects", project, f"{sid}.jsonl")
@@ -184,10 +174,7 @@ class Recover(Parity):
         return [path, *(os.path.join(top, name) for top, _, names in beside for name in names)]
 
     def interrupted(self):
-        """ID's run ended without an outcome by a SIGTERM to its harness, its transcript idle past
-        router.LIVE: In Progress, a resumable session no tick holds back. Claimed by --issue: a
-        tick's usage probe would hang with the agent.
-        """
+        """Claimed by --issue: a tick's usage probe would hang with the agent."""
         self.scene([START], hang=True)
         res = self.router("--issue", ID)
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -209,10 +196,7 @@ class Recover(Parity):
         return sid
 
     def test_a_tick_resumes_an_interrupted_in_progress_run(self):
-        """v1 CLAUDE.md › Architecture: a tick, without `--issue`, Recovers dead In Progress agent
-        runs before it claims (v1 router_integration_test.test_a_crash_mid_run_resumes_the_session
-        ran Recover by --issue only).
-        """
+        """v1 CLAUDE.md › Architecture: a tick Recovers before it claims."""
         sid = self.interrupted()
         self.scene([START, DONE], usage=usage(0.5))
         self.tick()
@@ -232,9 +216,7 @@ class Recover(Parity):
         self.assertEqual(self.state(ID), "in_review")
 
     def test_a_logged_role_not_the_delegates_is_not_resumed_and_goes_to_in_review(self):
-        """v1 CLAUDE.md › Architecture: Recover resumes a session only while its runs.jsonl
-        `role` is the delegate's; a changed delegate invalidates the saved role.
-        """
+        """v1 CLAUDE.md › Architecture: a changed delegate invalidates the saved role."""
         sid = self.interrupted()
         with self.fake.lock:
             self.fake.find(ID)["delegate"] = role_id("pm")
@@ -259,10 +241,7 @@ class Refusals(Parity):
         self.assertEqual(sessions.stdout.split(), [MANAGER], sessions.stderr)
 
     def test_a_new_run_whose_target_check_fails_is_bounced_and_starts_no_agent_run(self):
-        """v1 CLAUDE.md › Architecture: router.outer, a build role: `target.check` Invalid on a
-        new agent run → `writeback.bounce`, no agent run; the bounce acts as the role's app
-        and its move to In Review subscribes each human_members email.
-        """
+        """v1 CLAUDE.md › Architecture: `target.check` Invalid → bounce, as the role's app."""
         self.seed(ID, "ENG: Session registry")
         self.gh["repos"][REPO]["permissions"]["push"] = False
         self.write_gh()
@@ -284,10 +263,7 @@ class Refusals(Parity):
         self.assertIn(f"router launch {ID} exit=0", self.routed())
 
     def test_a_promoted_issue_whose_target_check_fails_returns_to_its_source(self):
-        """v1 writeback.bounce of an issue promoted from a Handoff source in the team: the
-        source is unarchived, gets the `Repo check failed:` comment and goes Done → In Review;
-        the issue gets it too and is Canceled; no agent run.
-        """
+        """v1 writeback.bounce of an issue promoted from a Handoff source."""
         now, pm = datetime.now(UTC), role_id("pm")
         self.fake.issue(
             "PRD: Session registry",
@@ -326,10 +302,7 @@ class Refusals(Parity):
         self.assertIn(HUMAN, self.subscribers(SOURCE))
 
     def test_bad_task_labels_send_their_issues_to_in_review_unclaimed(self):
-        """v1 CLAUDE.md › Architecture and v1 router_test.test_fr7_invalid_label_goes_to_review:
-        a Tasks label that is not one of the role's tasks, or not in [linear.task_labels], is a
-        claim-skip: the issue goes to In Review with a comment saying what to fix, no agent run.
-        """
+        """v1 router_test.test_fr7_invalid_label_goes_to_review."""
         self.fake.label_group(TASK_GROUP, "Tasks", {MYSTERY: "Mystery"})
         self.seed(ID, "ENG: Session registry", labels=[LIGHT_RESEARCH])
         self.seed(OTHER, "ENG: Session index", labels=[MYSTERY])
