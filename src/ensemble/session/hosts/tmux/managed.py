@@ -176,13 +176,15 @@ def lease_file(path: str, *, create: bool = True) -> int:
 
 
 def held(path: str) -> bool:
-    """Whether another holds lock file `path`; absent: free."""
+    """Whether another holds lock file `path` (its owner's exclusive lock; a probe's shared one
+    never counts); absent: free.
+    """
     try:
         descriptor = lease_file(path, create=False)
     except FileNotFoundError:
         return False
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
     except BlockingIOError:
         return True
     finally:
@@ -235,8 +237,8 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
         check_directory(run)
         descriptor = lease_file(os.path.join(run, "lease"), create=False)
         try:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:  # shared: a concurrent probe is no live guard
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
                 return Liveness.LIVE
             value = load_json(os.path.join(run, "state.json"))

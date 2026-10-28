@@ -87,16 +87,20 @@ max_runs = 3
 # The Linear tracker's entities and keys, by id; required only with tracker = "linear".
 #   team              local, required: the Linear team id
 #   human_members     local: the human users' emails; each is subscribed to every issue moved to In Review; [] → none
+#   assignee_id       local: the Linear user id of the human an assign stage's question (workflow.toml) assigns its
+#                     issue to; "" → none
 #   task_label_group  local, required: Linear id of the `Tasks` label group; its labels pick an issue's task through
 #                     [linear.task_labels]
 [linear]
 team = ""
 human_members = []
+assignee_id = ""
 task_label_group = ""
 agent_label_group = ""
 # local: [orchestrator.linear]
 # local: team = "00000000-0000-0000-0000-000000000000"
 # local: human_members = ["you@example.com"]
+# local: assignee_id = "00000000-0000-0000-0000-000000000000"
 # local: task_label_group = "00000000-0000-0000-0000-000000000000"
 # local: agent_label_group = "00000000-0000-4000-8000-000000000101"
 

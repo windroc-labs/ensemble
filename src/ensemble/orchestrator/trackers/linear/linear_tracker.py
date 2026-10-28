@@ -128,6 +128,7 @@ M_RELATE = (
 M_TITLE = (
     "mutation($i: String!, $t: String!) { issueUpdate(id: $i, input: { title: $t }) { success } }"
 )
+M_ASSIGN = "mutation($i: String!, $a: String!) { issueUpdate(id: $i, input: { assigneeId: $a }) { success } }"
 M_ATTACH = "mutation($i: String!, $u: String!, $t: String) { attachmentLinkURL(issueId: $i, url: $u, title: $t) { success } }"
 M_UNARCHIVE = "mutation($i: String!) { issueUnarchive(id: $i) { success } }"
 Q_ATTACHED = "query($i: String!) { issue(id: $i) { attachments(first: 50) { nodes { url } } } }"
@@ -784,6 +785,9 @@ class LinearTracker(Tracker):
 
     def notify(self, key, people):
         return ops.subscribe(self.gql, key, people)
+
+    def assign(self, key, user):
+        call(self.gql, M_ASSIGN, "issueUpdate", i=key, a=user)
 
     def links(self, key):
         return {a["url"] for a in self.gql(Q_ATTACHED, i=key)["issue"]["attachments"]["nodes"]}

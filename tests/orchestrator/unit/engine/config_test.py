@@ -165,7 +165,7 @@ class CatalogDelegate(FakeDelegate):
 HARNESS = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
 
 LINEAR_DEFAULTS = {
-    **dict.fromkeys(("team", "task_label_group", "agent_label_group"), ""),
+    **dict.fromkeys(("team", "assignee_id", "task_label_group", "agent_label_group"), ""),
     "harness": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "manager": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "states": dict.fromkeys(State, ""),
@@ -936,7 +936,8 @@ class ConfigurationLoading(ConfigFile, Case):
         with self.assertRaises(TypeError):
             cfg.docs.dirs["x"] = "y"
         self.assertEqual(
-            (cfg.linear.human_members, cfg.roles["pm"].tasks), (("a@x.com",), ("product-design",))
+            (cfg.linear.human_members, cfg.linear.assignee_id, cfg.roles["pm"].tasks),
+            (("a@x.com",), "", ("product-design",)),
         )
 
     def test_roles_keep_delegate_runs_and_task_indexes_with_core_overlay(self):
@@ -1116,6 +1117,7 @@ class CommittedConfiguration(Case):
             + "[orchestrator.task_tiers]\nlight-build = 3\n"
             + "[orchestrator.roles.engineer]\nmax_runs = 2\n"
             + f'[orchestrator.linear]\nteam = "{TEAM}"\nhuman_members = ["me@x.com"]\n'
+            + f'assignee_id = "{P1}"\n'
             + HARNESS_LINE.replace("linear.harness", "harness")
             + f'task_label_group = "{TASK_GROUP}"\n'
             + f'agent_label_group = "{AGENT_GROUP}"\n'
@@ -1131,11 +1133,12 @@ class CommittedConfiguration(Case):
             (
                 cfg.linear.team,
                 cfg.linear.human_members,
+                cfg.linear.assignee_id,
                 cfg.linear.harness,
                 cfg.linear.task_label_group,
                 cfg.linear.states,
             ),
-            (TEAM, ("me@x.com",), HARNESS, TASK_GROUP, STATES),
+            (TEAM, ("me@x.com",), P1, HARNESS, TASK_GROUP, STATES),
         )
         self.assertEqual(
             (
