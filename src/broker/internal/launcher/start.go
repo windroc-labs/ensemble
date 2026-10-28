@@ -284,6 +284,10 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	// Stdin open for the harness's docker attach; no log driver, so no channel data lands in docker logs.
 	args := append([]string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
 		route.args()...)
+	if m.HasHook {
+		// Only the root bootstrap helper switches identities; agent stays unprivileged with no-new-privileges.
+		args = append(args, "--cap-add", "SETUID", "--cap-add", "SETGID")
+	}
 	args = append(args, "--workdir", m.CWD)
 	switch m.Client {
 	case "codex":
@@ -340,23 +344,8 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 			return StartResult{}, held, busy(holder)
 		}
 	}
-	contentCheck, err := checks.ReadFile("checks/image-content-check")
-	if err != nil {
-		return StartResult{}, held, protocol.New(protocol.StartFailed, "Embedded image checks unreadable.")
-	}
-	if _, err := h.Docker.Run(ctx, []string{"exec", "--interactive", "--user", "agent", c, "/bin/sh", "-s"}, contentCheck); err != nil {
-		return StartResult{}, held, failure(err, protocol.StartFailed, "Image content under /opt/ensemble is unreadable by agent; rebuild with ensemble-broker build.")
-	}
-	// OpenCode has no state to seed.
-	if m.Client != "opencode" {
-		if _, err := h.Docker.Run(ctx, asAgent(c, Python, "-I", Bootstrap, m.Client, m.StateDir(), m.CWD), nil); err != nil {
-			return StartResult{}, held, failure(err, protocol.StartFailed, "Writing client bootstrap state failed.")
-		}
-	}
-	if m.HasHook {
-		if _, err := h.Docker.Run(ctx, []string{"exec", "--user", "root", c, Python, "-I", Bootstrap, "hook", m.HookPath}, nil); err != nil {
-			return StartResult{}, held, failure(err, protocol.StartFailed, "Installing the hook stub failed.")
-		}
+	if err := h.bootstrap(ctx, c, m); err != nil {
+		return StartResult{}, held, err
 	}
 	lap("bootstrap")
 	clients, err := startClients(labels)

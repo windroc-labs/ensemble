@@ -136,6 +136,11 @@ jobs:
             and (.["ensemble.agent-gid"] | test("^[1-9][0-9]*$"))
             and ([.["ensemble.claude-version"], .["ensemble.codex-version"], .["ensemble.opencode-version"]]
               | all(test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))' <<<"$labels"
+      - name: Check combined container bootstrap identities and capabilities
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: python3 .github/worker_start.py "$IMAGE"
       - name: Check image history holds no token
         if: ${{ steps.inputs.outputs.build != 'false' }}
         env:

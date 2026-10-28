@@ -390,6 +390,7 @@ func TestRunArguments(t *testing.T) {
 		"--network", workersNetwork, "--env", "HTTP_PROXY=" + workersProxy, "--env", "HTTPS_PROXY=" + workersProxy,
 		"--env", "http_proxy=" + workersProxy, "--env", "https_proxy=" + workersProxy,
 		"--env", "NO_PROXY=localhost,127.0.0.1,::1", "--env", "no_proxy=localhost,127.0.0.1,::1",
+		"--cap-add", "SETUID", "--cap-add", "SETGID",
 		"--workdir", cwd, "--env", "CLAUDE_CONFIG_DIR=" + claude,
 		"--env", "npm_config_cache=" + cwd + "/.ensemble-cache", "--env", "UV_CACHE_DIR=" + cwd + "/.ensemble-cache", "--env", "PIP_CACHE_DIR=" + cwd + "/.ensemble-cache",
 		"--label", "ensemble.session=worker_1", "--label", "ensemble.generation=0123456789abcdef0123456789abcdef", "--label", "ensemble.client=claude", "--label", "team=crew",
@@ -487,9 +488,9 @@ func TestStartOrder(t *testing.T) {
 	for i, c := range d.calls {
 		step := strings.Join(c[:2], " ")
 		if c[0] == "exec" {
-			step = c[1] + " " + c[2] + " " + c[len(c)-1]
-			if c[1] == "--user" {
-				step = c[2] + " " + strings.Join(c[4:min(len(c), 7)], " ")
+			step = "credentials"
+			if slices.Contains(c, "/usr/bin/python3") {
+				step = "bootstrap"
 			}
 		}
 		if len(d.stdin[i]) > 0 && c[1] != "--interactive" {
@@ -498,20 +499,16 @@ func TestStartOrder(t *testing.T) {
 		steps = append(steps, step)
 	}
 	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm", "run --detach",
-		"--interactive --user -s",
-		"agent /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
-		"root /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
-		"--interactive --user inject"}
+		"bootstrap", "credentials"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
 	}
 	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, "inject"}) {
 		t.Fatalf("inject %q", inject)
 	}
-	boot, hook := d.calls[12], d.calls[13]
-	if !slices.Equal(boot[len(boot)-3:], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) ||
-		!slices.Equal(hook[len(hook)-2:], []string{"hook", "/usr/local/bin/ensemble-session"}) {
-		t.Fatalf("%q %q", boot, hook)
+	boot := d.calls[11]
+	if !slices.Equal(boot[8:12], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project", "/usr/local/bin/ensemble-session"}) {
+		t.Fatalf("bootstrap %q", boot)
 	}
 	h, d = startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	if _, err := h.Start(context.Background(), fixtureManifest(t, "manifest-no-hook.json")); err != nil {
@@ -529,7 +526,7 @@ func TestStartUnreadableImage(t *testing.T) {
 		for _, unreachable := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/unreachable=%t", client, unreachable), func(t *testing.T) {
 				w := &world{labels: goodLabels(), execErr: func(args []string) error {
-					if slices.Contains(args, "/bin/sh") && slices.Contains(args, "-s") {
+					if slices.Contains(args, "/usr/bin/python3") {
 						if unreachable {
 							return docker.ErrUnreachable
 						}
@@ -569,10 +566,9 @@ func TestStartUnreadableImage(t *testing.T) {
 					if slices.Contains(call, Bootstrap) || slices.Contains(call, "--version") {
 						t.Fatalf("bootstrap or probe ran before content check: %v", call)
 					}
-					if slices.Contains(call, "/bin/sh") {
-						want := []string{"exec", "--interactive", "--user", "agent", container, "/bin/sh", "-s"}
-						if !slices.Equal(call, want) || !strings.Contains(string(d.stdin[i]), "/opt/ensemble") || !strings.Contains(string(d.stdin[i]), "find -L") {
-							t.Fatalf("content check must run as agent over stdin: %v %q", call, d.stdin[i])
+					if slices.Contains(call, "/usr/bin/python3") {
+						if !slices.Contains(call, "-I") || !strings.Contains(call[len(call)-1], "find -L") || !strings.Contains(string(d.stdin[i]), "subprocess.run") {
+							t.Fatalf("content check missing: %v", call)
 						}
 					}
 					if strings.Contains(strings.Join(call, " "), "inject") {
@@ -616,7 +612,7 @@ func TestRollback(t *testing.T) {
 		cleanup string
 	}{
 		"bootstrap":           {&world{execErr: failOn("claude", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
-		"hook":                {&world{execErr: failOn("hook", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
+		"hook":                {&world{execErr: failOn("/usr/bin/python3", &docker.CommandError{Exit: 43, Stderr: "boom"})}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"inject":              {&world{}, &fakeCreds{injectErr: errors.New("opaque")}, protocol.StartFailed, protocol.Removed},
 		"inject unreachable":  {&world{}, &fakeCreds{injectErr: docker.ErrUnreachable}, protocol.DockerUnreachable, protocol.Removed},
 		"inject keychain":     {&world{}, &fakeCreds{injectErr: protocol.New(protocol.KeychainFailed, "denied")}, protocol.KeychainFailed, protocol.Removed},

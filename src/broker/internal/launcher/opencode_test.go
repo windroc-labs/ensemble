@@ -283,7 +283,7 @@ func TestStartOpencode(t *testing.T) {
 			if slices.Contains(c, "inject") || slices.Contains(c, "inject-codex") {
 				t.Fatalf("client credential injected: %q", c)
 			}
-			hooked = hooked || slices.Contains(c, "hook")
+			hooked = hooked || slices.Contains(c, "/usr/local/bin/ensemble-session")
 		}
 		if !hooked {
 			t.Fatal("hook stub not installed")
