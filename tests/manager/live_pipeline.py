@@ -13,6 +13,7 @@ from tests.manager.case import REPO
 from tests.manager.live_crew import MANAGER, LiveCrew
 from tests.orchestrator.integration import fake_gh, fake_linear, fake_python, fake_transport
 from tests.orchestrator.integration.flow_fixtures import (
+    DECOMPOSE,
     GH,
     HARNESS,
     HUMAN,
@@ -50,7 +51,11 @@ class LivePipeline(LiveCrew):
         for r in ROLES:
             self.fake.user(r.title(), TOKENS[r], uid=board_ids.role_id(r))
         self.fake.user("Me", email=HUMAN)
-        self.fake.label_group(board_ids.TASK_GROUP, "Tasks", {LIGHT_RESEARCH: "Light Research"})
+        self.fake.label_group(
+            board_ids.TASK_GROUP,
+            "Tasks",
+            {LIGHT_RESEARCH: "Light Research", DECOMPOSE: "Decompose"},
+        )
         self.seam = fake_linear.seam(self, self.fake, fake_linear.serve(self, self.fake))
         self.fake.issue(
             "ENG: Session registry",

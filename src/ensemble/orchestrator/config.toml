@@ -184,7 +184,7 @@ canceled = ""
 # local: done        = "00000000-0000-0000-0000-000000000000"
 # local: canceled    = "00000000-0000-0000-0000-000000000000"
 
-# Task labels; optional: an issue without one runs its role, which picks a task from its index.
+# Task labels: an issue without one lets its role pick a task. Linear PM promotion requires decompose.
 #   <task>  local: the task's Linear label id, a child of the Tasks group; empty table → none
 [linear.task_labels]
 

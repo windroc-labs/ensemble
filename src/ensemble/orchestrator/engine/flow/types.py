@@ -178,7 +178,7 @@ class Stage:
     """See workflow.toml's header."""
 
     role: str
-    input: Literal["research", "design", "build"]
+    input: Literal["research", "design", "build", "decompose"]
     next: str
     require_instructions: bool
     title_prefix: str

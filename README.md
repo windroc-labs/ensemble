@@ -15,9 +15,13 @@ Developers: `AGENTS.md`.
 ```mermaid
 flowchart LR
     R["researcher<br>deep-research, research, light-research"] -->|"report → Approve → promote"| P["pm<br>product-design"]
-    P -->|"PRD → Approve → promote"| E["engineer<br>build, light-build"] -->|pull request| Y[you]
-    T[ensemble-orchestrator router] -.->|claims ready issues| R & P & E
+    P -->|"Linear PRD → Approve → promote"| D["engineer<br>decompose"]
+    D -->|child issues| E["engineer<br>build, light-build"] -->|pull request| Y[you]
+    P -->|"local PRD → Approve → promote"| E
+    T[ensemble-orchestrator router] -.->|claims ready issues| R & P & D & E
 ```
+
+Linear: the source PRD stays in Handoff until decompose succeeds.
 
 ## Five levels of mastering AI agents
 

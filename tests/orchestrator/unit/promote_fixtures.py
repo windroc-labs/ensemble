@@ -59,7 +59,8 @@ CONFIG = (
 )
 
 # the packaged workflow: pm hands off to engineer, needing no instructions
-PM_NEXT = CONFIG.replace(PM_LAST, "")
+DECOMPOSE_LABEL = "00000000-0000-4000-8000-000000000299"
+PM_NEXT = f'linear.task_labels.decompose = "{DECOMPOSE_LABEL}"\n' + CONFIG.replace(PM_LAST, "")
 
 
 def ago(minutes):

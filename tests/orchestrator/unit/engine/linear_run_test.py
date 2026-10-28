@@ -236,6 +236,7 @@ class Runs(RunCase):
         self.assertEqual(record.resume, ("ensemble-orchestrator", "resume", "TASK-1"))
 
     def test_a_tier_overlays_its_role_after_core(self):
+        self.start()
         for resume in (False, True):
             with self.subTest(resume=resume):
                 owner = LinearRun(
@@ -317,6 +318,7 @@ class Runs(RunCase):
             LinearRun.check_tui(cfg=replace(cfg, delegate_kind="gone"), display=None, events="/e")
 
     def test_a_resumed_run_asks_its_delegate_to_resume_the_session(self):
+        self.start()
         owner = LinearRun(
             "TASK-1",
             "Answer.",
