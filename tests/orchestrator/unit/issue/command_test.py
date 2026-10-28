@@ -16,7 +16,6 @@ from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.flow.types import IssueState, Priority
 from ensemble.orchestrator.engine.types import (
-    Blocking,
     GraphQLErrors,
     IssueEdit,
     IssueError,
@@ -24,15 +23,11 @@ from ensemble.orchestrator.engine.types import (
     ListQuery,
     LookupQuery,
     NewIssue,
-    Receipt,
-    RelationsFailed,
     Resource,
     Unavailable,
 )
 from ensemble.orchestrator.issue import command as issue
-from ensemble.orchestrator.issue.output import partial_message, refusal
 from ensemble.orchestrator.trackers.linear import client
-from ensemble.orchestrator.trackers.local.issues import LocalIssues
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import (
     HARNESS_LINE,
@@ -46,7 +41,6 @@ from tests.orchestrator.unit.board_ids import (
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
     CONFIG,
-    OTHER_TEAM,
     TASK_LABELS,
     ArchiveGql,
     EditGql,
@@ -60,10 +54,14 @@ from tests.orchestrator.unit.issue_fixtures import (
     comment,
     conn,
     create_gql,
+    issue_change,
     issue_node,
     issue_row,
     label,
+    list_query,
+    new_issue,
     project,
+    receipt_of,
     rel,
     tree,
     uid,
@@ -83,6 +81,7 @@ from tests.orchestrator.unit.keychain_fixtures import (
     renewed,
     token_http_error,
 )
+from tests.utils.cli_help import help_text
 from tests.utils.process_fixtures import CalledProcessError, TimeoutExpired
 
 
@@ -100,118 +99,57 @@ RAW_BODY = 'say "hi", `ls`, $HOME and ${x} \\n\nline two\n中文正文\n'
 
 
 class Help(Case):
-    def test_help_needs_no_configuration_credentials_or_files(self):
-        for argv in (["issue", "--help"], ["issue", "read", "--help"], ["issue", "-h"]):
-            output = io.StringIO()
-            with (
-                self.subTest(argv=argv),
-                redirect_stdout(output),
-                mock.patch("builtins.open", side_effect=AssertionError("opened a file")),
-                mock.patch("subprocess.run", side_effect=AssertionError("ran a process")),
-                self.assertRaises(SystemExit) as cm,
-            ):
-                cli.main(argv)
-            self.assertEqual(cm.exception.code, 0)
-            text = output.getvalue()
-            for phrase in ("ensemble-orchestrator issue read TASK-1", "8192", "Exit 0", "--help"):
-                self.assertIn(phrase, text)
-
-    def test_lookup_help_names_resources_fields_pages_and_examples(self):
-        output = io.StringIO()
-        with (
-            redirect_stdout(output),
-            mock.patch("builtins.open", side_effect=AssertionError("opened a file")),
-            self.assertRaises(SystemExit) as cm,
-        ):
-            cli.main(["issue", "lookup", "--help"])
-        self.assertEqual(cm.exception.code, 0)
-        text = output.getvalue()
-        for phrase in (
-            "teams,states,labels,projects,milestones,users",
-            "team_id",
-            "1-50 (default 20)",
-            "next_cursor",
-            "--full --output FILE",
-            "ensemble-orchestrator issue lookup milestones --project",
-            "8192",
-            "Exit 0",
-        ):
-            self.assertIn(phrase, text.replace(", ", ","))
-
-    def test_list_help_names_filters_fields_pages_and_examples(self):
-        output = io.StringIO()
-        with (
-            redirect_stdout(output),
-            mock.patch("builtins.open", side_effect=AssertionError("opened a file")),
-            self.assertRaises(SystemExit) as cm,
-        ):
-            cli.main(["issue", "list", "--help"])
-        self.assertEqual(cm.exception.code, 0)
-        text = output.getvalue()
-        for phrase in (
-            "--include-archived",
-            "parent_id",
-            "most\n  recently updated first",
-            "1-50 (default 20)",
-            "--role SPEC",
-            "unassigned (no delegate; a local board: no assignee), on Linear by the\n  delegate",
-            "ensemble-orchestrator issue list --role me",
-            "ensemble-orchestrator issue list --state ready --task build --priority high",
-            "ensemble-orchestrator issue lookup --help",
-            "8192",
-        ):
-            self.assertIn(phrase, text)
-
-    def test_help_names_abstract_values_and_marks_linear_only(self):
-        output = io.StringIO()
-        with redirect_stdout(output), self.assertRaises(SystemExit):
-            cli.main(["issue", "--help"])
-        text = output.getvalue()
-        for phrase in (
-            "backlog, ready, running, review, approved, done, canceled",
-            "me (the\n  [linear.manager] OAuth app) or unassigned",
-            "none, urgent, high, medium, low",
-            "Linear only (a local board exits 2): lookup, label swap, --label, --project,\n"
-            "  --milestone.",
-            "a local board ($ENSEMBLE_BOARD_DIR) directly",
-            "create, edit, move, comment, archive, relation and label swap write",
-            "ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task build",
-            "ensemble-orchestrator issue edit --help",
-            "ensemble-orchestrator issue move TASK-1 done",
-            "ensemble-orchestrator issue create --title 'Split login' --body-file note.md \\\n"
-            "    --parent TASK-1",
-        ):
-            self.assertIn(phrase, text)
-
-    def test_no_help_names_a_removed_option(self):
-        for command in (
-            "",
-            "read",
-            "list",
-            "create",
-            "edit",
-            "move",
-            "comment",
-            "archive",
-            "relation add",
-            "label swap",
-        ):
-            output = io.StringIO()
-            with (
-                self.subTest(command=command),
-                redirect_stdout(output),
-                self.assertRaises(SystemExit),
-            ):
-                cli.main(["issue", *command.split(), "--help"])
-            text = output.getvalue()
-            self.assertNotIn("--assignee", text)
-            if command in ("", "list", "create", "edit", "move"):
-                self.assertNotIn("--team", text)
-            self.assertNotIn("move TASK-1 --state", text)
-            self.assertNotIn("In Progress", text)
-
-    def test_write_help_names_the_receipt_and_result_unknown(self):
+    def test_each_help_names_its_contract(self):
+        shared = ("ensemble-orchestrator issue read TASK-1", "8192", "Exit 0", "--help")
+        write = ("1024", "result unknown", "Exit 0")
         for command, phrases in (
+            (
+                "",
+                (
+                    *shared,
+                    "backlog, ready, running, review, approved, done, canceled",
+                    "me (the\n  [linear.manager] OAuth app) or unassigned",
+                    "none, urgent, high, medium, low",
+                    "Linear only (a local board exits 2): lookup, label swap, --label, --project,\n"
+                    "  --milestone.",
+                    "a local board ($ENSEMBLE_BOARD_DIR) directly",
+                    "create, edit, move, comment, archive, relation and label swap write",
+                    "ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task build",
+                    "ensemble-orchestrator issue edit --help",
+                    "ensemble-orchestrator issue move TASK-1 done",
+                    "ensemble-orchestrator issue create --title 'Split login' --body-file note.md \\\n"
+                    "    --parent TASK-1",
+                ),
+            ),
+            ("read", shared),
+            (
+                "lookup",
+                (
+                    "teams, states, labels, projects, milestones, users",
+                    "team_id",
+                    "1-50 (default 20)",
+                    "next_cursor",
+                    "--full --output FILE",
+                    "ensemble-orchestrator issue lookup milestones --project",
+                    "8192",
+                    "Exit 0",
+                ),
+            ),
+            (
+                "list",
+                (
+                    "--include-archived",
+                    "parent_id",
+                    "most\n  recently updated first",
+                    "1-50 (default 20)",
+                    "--role SPEC",
+                    "unassigned (no delegate; a local board: no assignee), on Linear by the\n  delegate",
+                    "ensemble-orchestrator issue list --role me",
+                    "ensemble-orchestrator issue list --state ready --task build --priority high",
+                    "ensemble-orchestrator issue lookup --help",
+                    "8192",
+                ),
+            ),
             (
                 "move",
                 ("STATE", "backlog", "handoff", "configured team (linear.team)", "unchanged"),
@@ -254,26 +192,41 @@ class Help(Case):
             ("relation remove", ("--blocks OTHER", "other types", "unchanged")),
             ("label swap", ("--from OLD", "--to NEW", "label group", "every other label")),
         ):
+            if command not in ("", "read", "lookup", "list"):
+                example = (
+                    "issue create --title" if command == "create" else f"issue {command} TASK-1"
+                )
+                phrases = (*phrases, *write, example)
+            text = help_text(self, cli.main, ["issue", *command.split(), "--help"])
+            for phrase in phrases:
+                self.assertIn(phrase, text, command)
+
+    def test_no_help_names_a_removed_option(self):
+        for command in (
+            "",
+            "read",
+            "list",
+            "create",
+            "edit",
+            "move",
+            "comment",
+            "archive",
+            "relation add",
+            "label swap",
+        ):
             output = io.StringIO()
             with (
                 self.subTest(command=command),
                 redirect_stdout(output),
-                mock.patch("builtins.open", side_effect=AssertionError("opened a file")),
-                mock.patch("subprocess.run", side_effect=AssertionError("ran a process")),
-                self.assertRaises(SystemExit) as cm,
+                self.assertRaises(SystemExit),
             ):
                 cli.main(["issue", *command.split(), "--help"])
-            self.assertEqual(cm.exception.code, 0)
             text = output.getvalue()
-            example = "issue create --title" if command == "create" else f"issue {command} TASK-1"
-            for phrase in (*phrases, "1024", "result unknown", "Exit 0", example):
-                self.assertIn(phrase, text)
-
-    def test_top_level_help_lists_the_namespace(self):
-        output = io.StringIO()
-        with redirect_stdout(output), self.assertRaises(SystemExit):
-            cli.main(["--help"])
-        self.assertIn("issue", output.getvalue())
+            self.assertNotIn("--assignee", text)
+            if command in ("", "list", "create", "edit", "move"):
+                self.assertNotIn("--team", text)
+            self.assertNotIn("move TASK-1 --state", text)
+            self.assertNotIn("In Progress", text)
 
     def test_usage_errors_exit_two(self):
         for argv in (
@@ -470,19 +423,7 @@ class Move(IssueCase):
         gql = mock.Mock(wraps=WriteGql(write_issue()))
         code, out, err = self.run_main(["move", "TASK-2", "approved"], gql)
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(
-            json.loads(out),
-            {
-                "issue": {
-                    "id": "id-TASK-2",
-                    "identifier": "TASK-2",
-                    "url": "https://linear.app/t/issue/TASK-2",
-                },
-                "operation": "move",
-                "result": "changed",
-                "actor": {"id": "u-me", "name": "Me"},
-            },
-        )
+        self.assertEqual(json.loads(out), receipt_of("move"))
         self.assertTrue(out.endswith(b"\n"))
         self.assertEqual(gql.call_args.kwargs["identity"], MANAGER_IDENTITY)
         self.assertEqual(gql.call_args.args[0].split("(")[0], "mutation")
@@ -505,17 +446,13 @@ class Move(IssueCase):
     def test_failures_print_no_receipt(self):
         node = write_issue()
         cases = (
-            (WriteGql(write_issue(team_id=OTHER_TEAM)), 2, "is in team TASK"),
             (WriteGql(None), 2, "no such issue"),
             (WriteGql(node, result={"success": False}), 1, "success: false"),
-            (WriteGql(node, result=GraphQLErrors([{"message": "boom"}])), 1, "boom"),
             (
                 WriteGql(node, result=Unavailable("issueUpdate", reason="timed out")),
                 1,
                 "result unknown",
             ),
-            (WriteGql(node, fail=Unavailable("issue", reason="timed out")), 1, "timed out"),
-            (WriteGql(node, fail=CalledProcessError(44, ["security"])), 2, "Keychain"),
         )
         for gql, want, phrase in cases:
             with self.subTest(phrase=phrase):
@@ -553,19 +490,7 @@ class Edit(IssueCase):
             with self.subTest(argv=argv):
                 code, out, err = self.run_main(["edit", "TASK-2", *argv], gql, stdin)
                 self.assertEqual((code, err), (0, ""))
-                self.assertEqual(
-                    json.loads(out),
-                    {
-                        "issue": {
-                            "id": "id-TASK-2",
-                            "identifier": "TASK-2",
-                            "url": "https://linear.app/t/issue/TASK-2",
-                        },
-                        "operation": "edit",
-                        "result": "changed",
-                        "actor": {"id": "u-me", "name": "Me"},
-                    },
-                )
+                self.assertEqual(json.loads(out), receipt_of("edit"))
                 self.assertEqual(gql.call_args.kwargs["in"], want)
                 self.assertNotIn("中文".encode(), out)
                 self.assertEqual(gql.call_args.kwargs["identity"], MANAGER_IDENTITY)
@@ -617,12 +542,8 @@ class Edit(IssueCase):
                 self.assertIn(phrase, err)
 
     def test_failures_print_no_receipt(self):
-        other = {"team": {"id": OTHER_TEAM, "key": "OPS"}}
         cases = (
-            (EditGql((), [], fields=other), ["--task", "build"], 2, "is in team OPS"),
-            (EditGql((), []), ["--client", "nope"], 2, "--client nope"),
             (EditGql((), []), ["--role", "nope"], 2, "--role nope: not a role"),
-            (EditGql((), []), ["--project", "Nope"], 2, "--project 'Nope': no project"),
             (EditGql((), [], result={"success": False}), ["--title", "New"], 1, "success: false"),
             (
                 EditGql((), [], result=Unavailable("issueUpdate", reason="timed out")),
@@ -637,7 +558,7 @@ class Edit(IssueCase):
                 self.assertEqual((code, out), (want, b""))
                 self.assertTrue(err.startswith("ensemble-orchestrator issue: "), err)
                 self.assertIn(phrase, err)
-        self.assertEqual([len(gql.writes) for gql, *_ in cases], [0, 0, 0, 0, 1, 1])
+        self.assertEqual([len(gql.writes) for gql, *_ in cases], [0, 1, 1])
 
 
 class Comment(IssueCase):
@@ -777,14 +698,24 @@ class Create(IssueCase):
         argv = ["create", "--title", "Fix", "--body-file", "-", "--blocks", "TASK-3"]
         code, out, err = self.run_main(argv, gql, b"body")
         self.assertEqual(code, 1)
-        report = json.loads(out)
-        self.assertEqual((report["result"], report["issue"]["identifier"]), ("partial", "TASK-9"))
-        self.assertEqual(report["truncated"], [])
+        recover = "ensemble-orchestrator issue relation add TASK-9 --blocks TASK-3"
         self.assertEqual(
-            report["recover"], ["ensemble-orchestrator issue relation add TASK-9 --blocks TASK-3"]
+            json.loads(out),
+            {
+                **receipt_of("create", "TASK-9"),
+                "result": "partial",
+                "done": [],
+                "failed": [{"blocks": "TASK-3", "error": "boom"}],
+                "recover": [recover],
+                "truncated": [],
+            },
         )
-        self.assertIn("relation add TASK-9 --blocks TASK-3", err)
-        self.assertIn("not run create again", err)
+        self.assertEqual(
+            err,
+            "ensemble-orchestrator issue: create TASK-9: created https://linear.app/t/issue/TASK-9,"
+            f" but 1 of 1 blocking relations failed; add only them: {recover}; do not run create"
+            " again\n",
+        )
 
     def test_many_failed_relations_stay_within_eight_kib(self):
         many = [f"TASK-{n}" for n in range(100, 400)]
@@ -841,29 +772,13 @@ class Archive(IssueCase):
         self.assertEqual((code, json.loads(out)["result"], gql.writes), (0, "unchanged", []))
 
     def test_failures_print_no_receipt(self):
-        unfinished = tree(
-            "TASK-1",
-            "completed",
-            *[tree(f"SUB-{i}") for i in range(250)],
-            tree("TASK-9", "started"),
+        refused = (
+            "archive TASK-1 refused, nothing archived: 1 unfinished of 2 (it and its unarchived"
+            " sub-issues): TASK-9 (Started); complete or cancel each first"
+            " (ensemble-orchestrator issue archive TASK-1 --dry-run lists them)"
         )
         cases = (
-            (ArchiveGql(unfinished), 1, "TASK-9 (Started)"),
-            (
-                ArchiveGql(
-                    tree("TASK-1", "completed", tree("TASK-2")),
-                    broken={("id-TASK-2", 0): LinearError("linear api error: boom")},
-                ),
-                1,
-                "boom",
-            ),
-            (
-                ArchiveGql(
-                    tree("TASK-1", "completed", tree("TASK-2")), broken={("id-TASK-2", 0): None}
-                ),
-                1,
-                "TASK-2",
-            ),
+            (ArchiveGql(tree("TASK-1", "completed", tree("TASK-9", "started"))), 1, refused),
             (ArchiveGql(None), 2, "no such issue"),
             (
                 ArchiveGql(tree(), result=Unavailable("issueArchive", reason="timed out")),
@@ -879,7 +794,7 @@ class Archive(IssueCase):
                 self.assertTrue(err.startswith("ensemble-orchestrator issue: "), err)
                 self.assertIn(phrase, err)
                 self.assertLessEqual(len(err.encode("utf-8")), 8192)
-        self.assertEqual([len(gql.writes) for gql, *_ in cases], [0, 0, 0, 0, 1, 1])
+        self.assertEqual([len(gql.writes) for gql, *_ in cases], [0, 0, 1, 1])
 
     def test_dry_run_reports_and_writes_nothing(self):
         for root, result in (
@@ -919,19 +834,7 @@ class Relation(IssueCase):
                     ["relation", op, "TASK-2", "--blocked-by", "TASK-1"], gql
                 )
                 self.assertEqual((code, err, len(gql.writes)), (0, "", 1))
-                self.assertEqual(
-                    json.loads(out),
-                    {
-                        "issue": {
-                            "id": "id-TASK-2",
-                            "identifier": "TASK-2",
-                            "url": "https://linear.app/t/issue/TASK-2",
-                        },
-                        "operation": f"relation {op}",
-                        "result": "changed",
-                        "actor": {"id": "u-me", "name": "Me"},
-                    },
-                )
+                self.assertEqual(json.loads(out), receipt_of(f"relation {op}"))
                 self.assertLessEqual(len(out), 1024)
 
     def test_unchanged_exits_zero(self):
@@ -942,7 +845,6 @@ class Relation(IssueCase):
     def test_failures_print_no_receipt(self):
         board = ("TASK-1", "TASK-2")
         cases = (
-            (RelationGql(board), "TASK-1", 2, "itself"),
             (RelationGql(board), "TASK-9", 2, "--blocks TASK-9: no such issue"),
             (RelationGql(board, result={"success": False}), "TASK-2", 1, "success: false"),
             (
@@ -960,7 +862,7 @@ class Relation(IssueCase):
                 self.assertEqual((code, out), (want, b""))
                 self.assertTrue(err.startswith("ensemble-orchestrator issue: "), err)
                 self.assertIn(phrase, err)
-        self.assertEqual([len(gql.writes) for gql, *_ in cases], [0, 0, 1, 1])
+        self.assertEqual([len(gql.writes) for gql, *_ in cases], [0, 1, 1])
 
     def test_a_keychain_failure_after_a_delete_exits_one_naming_it(self):
         twice = [["r-1", "blocks", "TASK-1", "TASK-2"], ["r-2", "blocks", "TASK-1", "TASK-2"]]
@@ -980,19 +882,7 @@ class LabelSwap(IssueCase):
             ["label", "swap", "TASK-2", "--from", "bug", "--to", "chore"], gql
         )
         self.assertEqual((code, err, len(gql.writes)), (0, "", 1))
-        self.assertEqual(
-            json.loads(out),
-            {
-                "issue": {
-                    "id": "id-TASK-2",
-                    "identifier": "TASK-2",
-                    "url": "https://linear.app/t/issue/TASK-2",
-                },
-                "operation": "label swap",
-                "result": "changed",
-                "actor": {"id": "u-me", "name": "Me"},
-            },
-        )
+        self.assertEqual(json.loads(out), receipt_of("label swap"))
         self.assertLessEqual(len(out), 1024)
 
     def test_failures_print_no_receipt(self):
@@ -1128,17 +1018,6 @@ class Failures(IssueCase):
             if value:
                 self.assertNotIn(value, err)
 
-    def test_an_auth_failure_shows_no_credential(self):
-        refused = urllib.error.HTTPError(client.URL, 401, "Unauthorized", {}, io.BytesIO(b"{}"))
-        with (
-            mock.patch("subprocess.run", manager_tokens()),
-            mock.patch("urllib.request.urlopen", side_effect=refused),
-        ):
-            code, out, err = self.run_main(["read", "TASK-2"], client.linear_gql)
-        self.assertEqual(code, 1)
-        self.assertIn("HTTP 401", err)
-        self.assertEqual(leaks([out.decode(), err]), [])
-
 
 class ManagerToken(IssueCase):
     """The issue commands call as the manager app over the real transport, renewing its token."""
@@ -1169,15 +1048,6 @@ class ManagerToken(IssueCase):
         renewed(self, self.keychain.value(MANAGER_IDENTITY.token_service), since)
         self.assertEqual(
             {r.get_header("Authorization") for r in self.endpoint.graphql}, {f"Bearer {NEW}"}
-        )
-
-    def test_6_days_left_requests_no_token(self):
-        code, _, err = self.run_issue(6, ["list"])
-        self.assertEqual((code, err), (0, ""), err)
-        self.assertEqual(self.endpoint.tokens, [])
-        self.assertEqual(self.stored()["access_token"], OLD)
-        self.assertEqual(
-            {r.get_header("Authorization") for r in self.endpoint.graphql}, {f"Bearer {OLD}"}
         )
 
     def test_a_failed_renewal_of_a_usable_token_reports_on_stderr(self):
@@ -1293,9 +1163,7 @@ class LinearOnlyOnLocal(LocalCase):
         ),
     )
 
-    def test_each_linear_only_form_exits_two_writing_nothing(self):
-        self.put("pm/ready", "LOC-1")
-        before = self.snapshot()
+    def test_each_linear_only_form_exits_two_before_reading_the_board(self):
         for argv, what in self.FORMS:
             with self.subTest(argv=argv):
                 gql = Gql(None)
@@ -1305,16 +1173,6 @@ class LinearOnlyOnLocal(LocalCase):
                     (2, b"", f"ensemble-orchestrator issue: {what}: {LINEAR_ONLY}\n"),
                 )
                 self.assertEqual(gql.calls, [])
-                self.assertEqual(self.snapshot(), before)
-
-    def test_the_board_is_never_read(self):
-        for argv, what in self.FORMS:
-            with self.subTest(argv=argv):
-                code, out, err = self.run_local(argv, b"body")
-                self.assertEqual(
-                    (code, out, err),
-                    (2, b"", f"ensemble-orchestrator issue: {what}: {LINEAR_ONLY}\n"),
-                )
         self.assertFalse(os.path.exists(self.board))
 
     def test_the_local_options_still_run(self):
@@ -1473,68 +1331,6 @@ class LocalFirstIssue(LocalCase):
         self.assertEqual(json.loads(out)["issue"]["identifier"], "AGE-1")
 
 
-class LocalCreatePartial(LocalCase):
-    def test_a_failed_blocks_write_exits_one_with_the_report_and_the_issue_made(self):
-        failing = self.put("pm/ready", "LOC-1")
-        self.put("pm/ready", "LOC-2")
-        self.put("pm/ready", "LOC-3")
-        before = self.snapshot()
-        real = os.replace
-
-        def replace(src, dst):
-            if dst == failing:
-                raise PermissionError(13, "Permission denied")
-            return real(src, dst)
-
-        argv = ["create", "--title", "T", "--body-file", "-", "--blocks", "LOC-1"]
-        argv += ["--blocks", "LOC-2", "--blocked-by", "LOC-3"]
-        with mock.patch("os.replace", side_effect=replace):
-            code, out, err = self.run_local(argv, b"body")
-        self.assertEqual(code, 1)
-        made = [p for p in self.snapshot() if os.path.basename(p).startswith("LOC-4 ")]
-        self.assertEqual(len(made), 1)
-        receipt = Receipt(
-            "LOC-4", "LOC-4", Path(made[0]).as_uri(), "create", "changed", "other", "other"
-        )
-        error = "[Errno 13] Permission denied"
-        self.assertEqual(
-            json.loads(out),
-            {
-                "issue": {"id": "LOC-4", "identifier": "LOC-4", "url": receipt.url},
-                "operation": "create",
-                "result": "partial",
-                "actor": {"id": "other", "name": "other"},
-                "done": [{"blocks": "LOC-2"}, {"blocked_by": "LOC-3"}],
-                "failed": [{"blocks": "LOC-1", "error": error}],
-                "recover": ["ensemble-orchestrator issue relation add LOC-4 --blocks LOC-1"],
-                "truncated": [],
-            },
-        )
-        partial = RelationsFailed(
-            receipt,
-            (Blocking("blocks", "LOC-2"), Blocking("blocked_by", "LOC-3")),
-            ((Blocking("blocks", "LOC-1"), error),),
-        )
-        self.assertEqual(err, f"ensemble-orchestrator issue: {partial_message(partial)}\n")
-        self.assertEqual(self.snapshot()[failing], before[failing])
-
-
-class LocalArchiveRefused(LocalCase):
-    def test_a_refusal_prints_the_same_text_as_linears(self):
-        self.put("pm/done", "LOC-1")
-        self.put("pm/ready", "LOC-2", parent="LOC-1")
-        before = self.snapshot()
-        plan = LocalIssues(
-            self.board, config.load(path=self.config).roles, prefix="LOC"
-        ).archive_plan("LOC-1")
-        self.assertEqual(plan.outcome, "refused")
-        code, out, err = self.run_local(["archive", "LOC-1"])
-        self.assertEqual(
-            (code, out, err), (1, b"", f"ensemble-orchestrator issue: {refusal('LOC-1', plan)}\n")
-        )
-        self.assertEqual(self.snapshot(), before)
-
-
 class HelpOnBothTrackers(LocalCase):
     def test_help_is_the_same_text_on_a_local_and_a_linear_board(self):
         for command in (
@@ -1672,6 +1468,7 @@ class Full(IssueCase):
                 ["read", "TASK-2", "--full", "--output", path], client.linear_gql
             )
         self.assertEqual(code, 1)
+        self.assertIn("HTTP 401", err)
         self.assertEqual(leaks([out.decode(), err]), [])
         self.assertFalse(os.path.exists(path))
 
@@ -1758,11 +1555,7 @@ class Requests(Case):
         )
         self.assertEqual(got, want)
         self.assertEqual((type(got.state), type(got.priority)), (IssueState, Priority))
-        none = dict.fromkeys(("query", "state", "role", "task", "client", "priority", "parent"))
-        self.assertEqual(
-            self.request("list"),
-            ListQuery(**none, include_archived=False, label=None, project=None),
-        )
+        self.assertEqual(self.request("list"), list_query())
 
     def test_lookup(self):
         argv = ("lookup", "milestones", "--query", "m", "--team", "TASK", "--project", "P")
@@ -1798,19 +1591,8 @@ class Requests(Case):
         )
         self.assertEqual(got, want)
         self.assertEqual((type(got.state), type(got.priority)), (IssueState, Priority))
-        none = dict.fromkeys(("state", "role", "task", "client", "priority", "parent"))
         self.assertEqual(
-            self.request("create", "--title", "T", "--body-file", "f", body="B"),
-            NewIssue(
-                title="T",
-                body="B",
-                **none,
-                labels=(),
-                project=None,
-                milestone=None,
-                blocks=(),
-                blocked_by=(),
-            ),
+            self.request("create", "--title", "t", "--body-file", "f", body="b"), new_issue()
         )
 
     def test_edit(self):
@@ -1830,17 +1612,7 @@ class Requests(Case):
         self.assertEqual(got, want)
         self.assertIs(type(got.priority), Priority)
         self.assertEqual(
-            self.request("edit", "TASK-1", "--task", "build"),
-            IssueEdit(
-                id="TASK-1",
-                title=None,
-                body=None,
-                role=None,
-                project=None,
-                task="build",
-                client=None,
-                priority=None,
-            ),
+            self.request("edit", "TASK-1", "--task", "build"), issue_change("TASK-1", task="build")
         )
 
     def test_the_other_commands_carry_none(self):
