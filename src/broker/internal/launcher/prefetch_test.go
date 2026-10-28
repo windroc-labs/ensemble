@@ -204,10 +204,10 @@ func TestPrefetchFailures(t *testing.T) {
 		{"github refuses", func(_ *world, h Host) {
 			h.GitHub.(*fakeTokens).prefetch = protocol.New(protocol.GitHubFailed, "GitHub App ensemble-broker-bot is not installed on acme/app")
 		}, protocol.GitHubFailed, "not installed on acme/app"},
-		{"no default image", func(_ *world, h Host) {
+		{"no default image or run record", func(_ *world, h Host) {
 			_ = os.Remove(h.recordPath(imageKey))
 			_ = os.WriteFile(h.recordPath(strings.Repeat("c", 64)), []byte(`{"package":"/p","base_image":"dummy-env:test"}`), 0o600)
-		}, protocol.StartFailed, "No default worker image to prefetch with; run ensemble-broker build"},
+		}, protocol.StartFailed, "No default worker image to prefetch with, and no build record of ensemble-worker:" + imageKey + " to build one from; run ensemble-broker build without a base image."},
 		{"workers network missing", func(w *world, _ Host) {
 			w.proxy = labelsEdit(func(l map[string]any) { l["windroc.egress.networks"] = "mini-op" })
 		}, protocol.EgressUnavailable, "has no valid workers network labels"},
@@ -229,6 +229,74 @@ func TestPrefetchFailures(t *testing.T) {
 				t.Fatalf("token calls %q", tokens.calls)
 			}
 		})
+	}
+}
+
+// buildingPrefetchHost is prefetchHost whose Docker also builds, through a buildEnv: the run image's record, the
+// only one, names a base image and e's package, so no default worker image exists until a build makes one.
+func buildingPrefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *buildEnv) {
+	t.Helper()
+	h, base, _ := prefetchHost(t, w)
+	e := newBuildEnv(t)
+	h.Home, h.Lock, h.Releases = e.home, e.lock, e.releases
+	putFile(t, h.recordPath(imageKey), `{"package":"`+e.pkg+`","base_image":"dummy-env:test","plugins":[],"image_plugins":[]}`)
+	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
+		if args[0] == "build" || args[0] == "tag" || args[0] == "container" && args[1] == "ls" ||
+			args[0] == "run" && slices.Contains(args, "none") && !slices.Contains(args, "CHOWN") ||
+			args[0] == "image" && (args[1] != "inspect" || args[len(args)-1] != "ensemble-worker:"+imageKey) {
+			return e.fake.respond(args, stdin)
+		}
+		return base.respond(args, stdin)
+	}}
+	h.Docker = d
+	return h, d, e
+}
+
+func workerBuilds(d *fakeDocker) [][]string {
+	return slices.DeleteFunc(slices.Clone(d.calls), func(c []string) bool {
+		return c[0] != "build" || !strings.HasPrefix(flag(c, "--tag"), "ensemble-worker:")
+	})
+}
+
+func TestPrefetchBuildsMissingDefaultImage(t *testing.T) {
+	w := &world{labels: goodLabels()}
+	h, d, e := buildingPrefetchHost(t, w)
+	if _, err := h.Start(context.Background(), prefetchManifest(t, h, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if builds := workerBuilds(d); len(builds) != 1 || flag(builds[0], "--tag") != "ensemble-worker:"+e.key {
+		t.Fatalf("worker builds %q in %q", builds, d.verbs())
+	}
+	run, _ := helperRun(d)
+	if run == nil || !slices.Contains(run, "sha256:"+strings.Repeat("a", 64)) {
+		t.Fatalf("helper %q not on the built image", run)
+	}
+	if build, helper := callIndex(d, func(c []string) bool { return c[0] == "build" }), callIndex(d, func(c []string) bool { return slices.Equal(c, run) }); build > helper {
+		t.Fatalf("built after the helper: %q", d.verbs())
+	}
+	// The build recorded a default variant, which the next prefetch finds without building.
+	if data, err := os.ReadFile(h.recordPath(e.key)); err != nil || !strings.Contains(string(data), `"base_image":""`) {
+		t.Fatalf("record %s %v", data, err)
+	}
+	if detached(d) == nil {
+		t.Fatalf("no container: %q", d.verbs())
+	}
+}
+
+func TestPrefetchDefaultImageBuildFails(t *testing.T) {
+	w := &world{labels: goodLabels()}
+	h, d, e := buildingPrefetchHost(t, w)
+	e.failStage = "ensemble-worker"
+	_, err := h.Start(context.Background(), prefetchManifest(t, h, nil))
+	want := "No default worker image to prefetch with; building it failed: Building the ensemble image stage failed."
+	if e := protoErr(t, err); e.Code != protocol.StartFailed || e.Message != want || e.Cause != "RUN false" {
+		t.Fatalf("%+v", e)
+	}
+	if len(workerBuilds(d)) != 1 {
+		t.Fatalf("calls %q", d.verbs())
+	}
+	if run, _ := helperRun(d); run != nil || detached(d) != nil || !hasCall(d, "volume rm") || w.volume != "" {
+		t.Fatalf("calls %q", d.verbs())
 	}
 }
 
@@ -395,7 +463,7 @@ func TestDefaultImageNewest(t *testing.T) {
 		labels["ensemble.key"] = key
 		return inspectJSON("sha256:"+strings.Repeat(key[:1], 64), labels, time.Time{}), nil
 	}}
-	info, err := h.defaultImage(context.Background())
+	info, err := h.defaultImage(context.Background(), "ensemble-worker:"+imageKey)
 	if err != nil || info.ID != "sha256:"+strings.Repeat("a", 64) {
 		t.Fatalf("%+v %v", info.ID, err)
 	}
