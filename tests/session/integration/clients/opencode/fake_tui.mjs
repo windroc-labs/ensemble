@@ -8,7 +8,10 @@
 // line "answer" or "dismiss"), {error, recover?} (recovered: the turn goes on, as
 // after a compaction), {unsaved} (an assistant message never completed), {errored} (one that
 // failed), {lateUser: ms} (the whole turn, its user message too, saved ms after its idle),
-// {foreign}, {busy}, {reinit}, {nested}. Each start and nested probe is a FAKE_LOG line.
+// {join: N} (the next N stdin lines saved mid-turn as user messages OpenCode's running loop takes,
+// each then a busy step), {shell} (busy before the turn's user message, as `!cmd` runs),
+// {foreign}, {busy}, {reinit}, {nested}. Scenario "touch": after each idle, every user message
+// of the turn updated again, as OpenCode's summary does. Each start and nested probe is a FAKE_LOG line.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -54,6 +57,7 @@ const messages = [];
 const hidden = new Map();
 const late = []; // [ms after the turn's idle, a message saved then]
 let held = null; // a lateUser turn's messages, saved together later
+let users = []; // the turn's user messages
 function save(message) {
   (held ?? messages).push(message);
 }
@@ -161,6 +165,16 @@ async function step(item) {
       return true;
     }
     await emit("session.status", { sessionID: native, status: { type: "busy" } });
+  } else if ("join" in item) {
+    for (let n = 0; n < item.join; n++) {
+      const text = await next();
+      if (text === null) return true;
+      const joined = { id: `msg_${++part}`, sessionID: native, role: "user", time: { created: Date.now() } };
+      users.push(joined);
+      save({ info: joined, parts: [{ type: "text", text }] });
+      await emit("message.updated", { info: joined });
+      await emit("session.status", { sessionID: native, status: { type: "busy" } });
+    }
   } else if ("foreign" in item) {
     await emit("session.created", { info: { id: FOREIGN } });
     await emit("session.status", { sessionID: FOREIGN, status: { type: "busy" } });
@@ -190,12 +204,16 @@ async function turn(text, steps, first) {
   const user = { id: `msg_${++part}`, sessionID: native, role: "user", time: { created: Date.now() } };
   const lateUser = steps.find((item) => "lateUser" in item)?.lateUser;
   held = lateUser ? [] : null;
+  users = [user];
+  const shell = steps.some((item) => "shell" in item);
+  if (shell) await emit("session.status", { sessionID: native, status: { type: "busy" } });
   save({ info: user, parts: [{ type: "text", text }] });
   await emit("message.updated", { info: user });
-  await emit("session.status", { sessionID: native, status: { type: "busy" } });
+  if (!shell) await emit("session.status", { sessionID: native, status: { type: "busy" } });
   for (const item of steps) if (await step(item)) break;
   await emit("session.status", { sessionID: native, status: { type: "idle" } });
   await emit("session.idle", { sessionID: native });
+  if (scene.touch) for (const info of users) await emit("message.updated", { info });
   for (const [ms, message] of late.splice(0)) setTimeout(() => messages.push(message), ms);
   if (held) {
     const turnMessages = held;
