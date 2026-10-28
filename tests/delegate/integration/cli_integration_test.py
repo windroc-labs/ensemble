@@ -29,8 +29,9 @@ from tests.delegate.integration.cli import (
     WAIT,
     Integration,
 )
-from tests.delegate.replies import bare, block, mark, option, prompt, running
+from tests.delegate.replies import bare, block, mark, option, prompt
 from tests.session import live_tmux
+from tests.utils.sandbox import pid_exists as running
 
 ANSWER = "Say hello."
 DRAFT = "Draft.\n"

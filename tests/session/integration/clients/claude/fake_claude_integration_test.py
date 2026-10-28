@@ -18,6 +18,7 @@ from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine.types import Access, Spec
 from tests.session import case, live_tmux
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.sandbox import gone
 
 FAKE = os.path.abspath(fake_claude.__file__)
 
@@ -39,13 +40,6 @@ def said(content) -> str:
         return content
     (block,) = content
     return block["text"] if block["type"] == "text" else f"{block['type']} {block['name']}"
-
-
-def gone(pid: int) -> bool:
-    res = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=30
-    )
-    return res.stdout.strip() == "" or res.stdout.strip().startswith("Z")
 
 
 class Case(case.Case):

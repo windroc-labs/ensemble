@@ -1,7 +1,6 @@
-"""A run planned and executed in process over
-tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`, the session config's
-Client table), HOME and CLAUDE_CONFIG_DIR temp: the callback order over a real process (FR-17), the
-fix resume (FR-21), a usage limit (FR-58).
+"""A run planned and executed in process over fake_claude.py (on PATH as `claude`, the session
+config's Client table), HOME and CLAUDE_CONFIG_DIR temp: the callback order over a real process
+(FR-17), the fix resume (FR-21), a usage limit (FR-58).
 """
 
 import io
@@ -19,9 +18,10 @@ from ensemble.delegate.engine.runner import FIX
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit
 from tests.delegate.case import Case, packaged
 from tests.delegate.integration.cli import DONE, RESETS, SID, UNSAVED, UNSAVED_ERROR
-from tests.delegate.replies import block, mark, option, prompt, running
+from tests.delegate.replies import block, mark, option, prompt
 from tests.delegate.runner import executed
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.sandbox import pid_exists as running
 
 
 class Base(Case):
@@ -75,8 +75,8 @@ class Base(Case):
             return [json.loads(line) for line in f]
 
     def kinds(self) -> list[str]:
-        """run.jsonl's kinds, the first client_session moved after the input: its session harness
-        may bind the client before the run notes the input.
+        """run.jsonl's kinds, the first client_session moved after the input: its harness may
+        bind the client before the run notes the input.
         """
         with open(os.path.join(Layout(self.work).run, "run.jsonl")) as f:
             kinds = [json.loads(line)["kind"] for line in f]

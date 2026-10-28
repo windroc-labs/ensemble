@@ -23,10 +23,11 @@ from tests.delegate import drives
 from tests.delegate.case import PY, PYTHONPATH, Case
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
-from tests.delegate.replies import block, mark, running
+from tests.delegate.replies import block, mark
 from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.sandbox import pid_exists as running
 
 MANAGER = "mgr"
 ROLE = "dummy-tester"

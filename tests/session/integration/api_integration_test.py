@@ -37,6 +37,8 @@ from tests.session import fake_client
 from tests.session.case import Case
 from tests.session.modules import client_loader
 from tests.session.threads import capture_errors
+from tests.utils.sandbox import kill
+from tests.utils.sandbox import pid_exists as running
 
 WAIT = 20  # s, bound on any wait
 IDLE = 0.3  # s, idle_timeout
@@ -107,20 +109,6 @@ SCRIPT.ScriptClient = ScriptClient
 def out(kind, **fields) -> dict:
     """A scenario step printing record {"type": kind, **fields}."""
     return {"out": {"type": kind, **fields}}
-
-
-def running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def kill(pid: int) -> None:
-    """SIGKILL to a stray process, if any."""
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
 
 
 class Base(Case):

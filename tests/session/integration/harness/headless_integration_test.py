@@ -40,6 +40,7 @@ from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.session.integration.harness import headless_caller
+from tests.utils.sandbox import pid_exists as running
 
 HANDLER = "tests.session.integration.harness.recording_handler"
 TURNS = ("TurnStarted", "TurnFailed", "TurnEnd", "Exited")
@@ -49,14 +50,6 @@ CLAUDE = {
     "tiers": {"4": "haiku"},
     "efforts": {"low": "low"},
 }
-
-
-def running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
 
 
 def harnessed(clients: dict) -> type[HostedSession]:

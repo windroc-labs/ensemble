@@ -9,7 +9,6 @@ session in its process outside a harness.
 """
 
 import dataclasses
-import os
 import subprocess
 import sys
 import uuid
@@ -19,6 +18,7 @@ from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.cli_support import COMMAND, MANAGER, CliCase
 from tests.session.fakes.host import FakeHost
+from tests.utils.sandbox import pid_exists as pid_alive
 
 PROG = "ensemble-session"
 OTHER = "other"
@@ -63,14 +63,6 @@ def live(name: str, state: str, *, cwd: str | None = None, hidden: bool = False)
         cwd=cwd,
         hidden=hidden,
     )
-
-
-def pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
 
 
 class ControlCase(CliCase):

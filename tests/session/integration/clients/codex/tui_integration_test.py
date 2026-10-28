@@ -42,6 +42,8 @@ from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN, PY, REPO, ROOTS, Case, configured
 from tests.session.integration.clients.codex import fake_codex, fake_tui
 from tests.session.unit.clients.codex.support import CHILD, NATIVE, Base
+from tests.utils import sandbox
+from tests.utils.sandbox import running
 
 WAIT = 15
 
@@ -291,14 +293,7 @@ class HookTrustIntegrationTest(Live):
         )
         self.assertFalse((self.codex_home / "config.toml").exists())
 
-    @staticmethod
-    def pid_exists(pid):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        else:
-            return True
+    pid_exists = staticmethod(sandbox.pid_exists)
 
     def test_disabled_unknown_malformed_and_mismatched_catalogs_never_start_interactive(self):
         cases = (
@@ -478,12 +473,6 @@ class HookTrustIntegrationTest(Live):
         def cleanup(pid):
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(pid, signal.SIGKILL)
-
-        def running(pid):
-            result = subprocess.run(
-                ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
-            )
-            return bool(result.stdout.strip()) and not result.stdout.strip().startswith("Z")
 
         for index, action in enumerate(("stop", "term")):
             with self.subTest(action=action):

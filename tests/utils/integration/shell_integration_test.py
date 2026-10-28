@@ -1,6 +1,5 @@
 """Human resume commands preserve exec environment names through the shell."""
 
-import contextlib
 import json
 import os
 import signal
@@ -12,7 +11,7 @@ from unittest import mock
 
 from ensemble.utils import probe, resume_command
 from tests.utils.case import Case
-from tests.utils.sandbox import clean_env
+from tests.utils.sandbox import clean_env, gone, kill
 
 
 class ResumeEnvironment(Case):
@@ -42,23 +41,6 @@ class ResumeEnvironment(Case):
 
 WAIT = 10
 PROBE_TIMEOUT = 2
-
-
-def kill(pid: int) -> None:
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
-
-
-def gone(pid: int) -> bool:
-    """Whether pid has exited: no such process, or a zombie its new parent has not reaped yet."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    stat = subprocess.run(
-        ("ps", "-o", "stat=", "-p", str(pid)), capture_output=True, text=True
-    ).stdout
-    return stat.strip().startswith("Z")
 
 
 def until(check) -> bool:

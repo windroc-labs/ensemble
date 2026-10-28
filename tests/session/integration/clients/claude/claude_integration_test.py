@@ -46,7 +46,8 @@ from ensemble.utils import exhausted
 from tests.session.case import PLUGIN_BIN, PY, Case, child_env
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
 from tests.session.integration.clients.claude import fake_claude
-from tests.utils.sandbox import git
+from tests.utils.sandbox import git, kill
+from tests.utils.sandbox import pid_exists as running
 
 WAIT = 20  # upper bound on any wait, in seconds
 IDLE = 0.5  # idle_timeout, in seconds
@@ -88,20 +89,6 @@ except KeyboardInterrupt:
     print("KeyboardInterrupt", flush=True)
     time.sleep(60)
 """
-
-
-def running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def kill(pid: int) -> None:
-    """SIGKILL to a test's stray process, if it still runs."""
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
 
 
 class Base(Case):

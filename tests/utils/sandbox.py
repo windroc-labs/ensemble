@@ -201,6 +201,34 @@ def reap(proc, timeout=10):
     proc.wait(timeout=timeout)
 
 
+def pid_exists(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def running(pid, timeout=60):
+    found = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.defpath, "LC_ALL": "C"},
+        timeout=timeout,
+    ).stdout.strip()
+    return bool(found) and not found.startswith("Z")
+
+
+def gone(pid, timeout=60):
+    return not running(pid, timeout)
+
+
+def kill(pid):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.kill(pid, signal.SIGKILL)
+
+
 def owned_directory(case, root, *, prefix="fixture-"):
     root = os.path.abspath(root)
     if os.path.realpath(root) != root:
