@@ -34,9 +34,9 @@ ensemble はレイヤーで構成され、各レイヤーは 1 つの役割だ�
 | レイヤー | 役割 | 入口 |
 |---|---|---|
 | Manager | 下位レイヤーのドライバー。対話するエージェントで、worker、role run、ボード run を起動し、監視して報告します。 | [デモ](#デモ1-つの-manager複数の-worker) |
-| Orchestrator | workflow ファイルに従って role を動かし、差し替え可能な tracker で Linear またはローカルの Markdown ボードに接続します。 | [ボード](../architecture.md#board) |
+| Orchestrator | workflow ファイルに従って role を動かし、差し替え可能な tracker で Linear またはローカルの Markdown ボードに接続します。 | [ボード](../board.md) |
 | Delegate（コア） | session を通じて role に 1 つの task を実行させ、チェック済みの結果を返します。単体でも使える Claude Code / Codex プラグインです。 | [インストール](#インストール) |
-| Session | tmux または Docker コンテナでコーディングエージェント（Claude Code、Codex、OpenCode）を起動・監視・再開します。どの client でも同じ方法です。 | [Sessions](../architecture.md#session-settings) |
+| Session | tmux または Docker コンテナでコーディングエージェント（Claude Code、Codex、OpenCode）を起動・監視・再開します。どの client でも同じ方法です。 | [Sessions](../sessions.md#settings-and-trust) |
 
 同梱の workflow は、エージェントがどう働くべきかについての私の考え方です（調査、PRD、ビルドの順に進み、各ステージの間に人間のレビューを挟む）。`[orchestrator] workflow` で別の workflow ファイルを選び、空なら同梱のものを使います。role と task 自体も自由に編集できます（[role と task のカスタマイズ](../customizing-roles-and-tasks.md)）。
 
@@ -82,14 +82,14 @@ ensemble はレイヤーで構成され、各レイヤーは 1 つの役割だ�
 | 必要なもの | 用途 |
 |---|---|
 | `claude` CLI、Python 3.11+ | すべてのエージェント run |
-| [`updraft`](https://github.com/windroc-labs/updraft) プラグイン（host worker の client に）：Claude Code は `/plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `/plugin install updraft@windroc`。Codex は `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `codex plugin add updraft@windroc`. Docker worker はイメージ内で個別にインストールします（[プラグイン](../architecture.md#plugins)）。 | engineer の build task（`/updraft:build`、`/updraft:light-build`）と PM の PRD レビュー（`/updraft:review`）。それ以外では不要。 |
+| [`updraft`](https://github.com/windroc-labs/updraft) プラグイン（host worker の client に）：Claude Code は `/plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `/plugin install updraft@windroc`。Codex は `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `codex plugin add updraft@windroc`. Docker worker はイメージ内で個別にインストールします（[プラグイン](../docker-host.md#plugins)）。 | engineer の build task（`/updraft:build`、`/updraft:light-build`）と PM の PRD レビュー（`/updraft:review`）。それ以外では不要。 |
 | tmux 3.3–3.8 | `tmux` Host 上の tui run |
-| `127.0.0.1` だけで待ち受け、コンテキスト長 65536 以上、tier のモデルを pull 済みの [Ollama](https://ollama.com)。`tmux` ではさらに OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | OpenCode のみ（[Docker host › OpenCode on Docker](../architecture.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)） |
+| `127.0.0.1` だけで待ち受け、コンテキスト長 65536 以上、tier のモデルを pull 済みの [Ollama](https://ollama.com)。`tmux` ではさらに OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | OpenCode のみ（[Docker host › OpenCode on Docker](../docker-host.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)） |
 | `git`、ログイン済みの `gh` | コーディング（checkout、pull request）と GitHub の出力先。それ以外では不要。 |
 | 起動中の iTerm2 | デフォルトの iTerm2 分割 |
-| 起動中の Docker Desktop。broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`）、`sh <plugin dir>/src/broker/install.sh` でインストール（`sudo` とログイン済みの `gh` が必要）。ログインはそれぞれ 1 回：`B login claude`（`claude setup-token` を貼り付け）、`B login github ensemble-broker-bot`、Codex は `sudo B install-codex <version>` の後に `B login codex`。OpenCode は不要 | Docker Host のみ（[Docker host](../architecture.md#docker-host)）。ホストに Node は不要。各認証情報の権限、保存場所、取り消し方法：[Credentials](../architecture.md#credentials)。 |
+| 起動中の Docker Desktop。broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`）、`sh <plugin dir>/src/broker/install.sh` でインストール（`sudo` とログイン済みの `gh` が必要）。ログインはそれぞれ 1 回：`B login claude`（`claude setup-token` を貼り付け）、`B login github ensemble-broker-bot`、Codex は `sudo B install-codex <version>` の後に `B login codex`。OpenCode は不要 | Docker Host のみ（[Docker host](../docker-host.md)）。ホストに Node は不要。各認証情報の権限、保存場所、取り消し方法：[Credentials](../credentials.md)。 |
 
-ensemble が起動する session があなたの設定をどう読み込むか、そしてその中で一部のコマンドが拒否される理由：[Session settings](../architecture.md#session-settings)。
+ensemble が起動する session があなたの設定をどう読み込むか、そしてその中で一部のコマンドが拒否される理由：[Session settings](../sessions.md#settings-and-trust)。
 
 | コマンド | 内容 |
 |---|---|
@@ -104,7 +104,7 @@ ensemble が起動する session があなたの設定をどう読み込むか�
 1. プラグインを[インストール](#インストール)します。
 2. 新しい Claude Code session で確認します：`/ensemble:act-as dummy-tester:echo hello` が `hello` を返します。
 3. role を実行します：`/ensemble:act-as researcher <question>`。ローカル設定がなければ、レポートは `~/.ensemble/adhoc/<date>-researcher-<name>/agent/prompt.md` に保存されます。公開したい場合は role の destination を設定してください（[role と task のカスタマイズ](../customizing-roles-and-tasks.md#change-a-roles-run-settings)）。
-4. Linear またはローカルの Markdown ボードから role を動かすには：[ボード](../architecture.md#board)。
+4. Linear またはローカルの Markdown ボードから role を動かすには：[ボード](../board.md)。
 
 ## role と task のカスタマイズ
 
@@ -121,7 +121,10 @@ ensemble が起動する session があなたの設定をどう読み込むか�
 | ページ | 内容 |
 |---|---|
 | [Customizing roles and tasks](../customizing-roles-and-tasks.md) | 実行設定、team ディレクトリ、role と task のファイル、チェック、OpenCode の session |
-| [Board](../architecture.md#board) | セットアップ、issue の状態と task ラベル、router の運用、Agent ラベル（issue ごとの client）、ローカルボード（`tracker`、`ENSEMBLE_BOARD_DIR`、構成、ファイル形式） |
+| [Board](../board.md) | セットアップ、issue の状態と task ラベル、router の運用、Agent ラベル（issue ごとの client）、ローカルボード（`tracker`、`ENSEMBLE_BOARD_DIR`、構成、ファイル形式） |
 | [Upgrading](../upgrading.md) | アップグレード手順 |
-| [Core architecture](../architecture.md) | レイヤーとパッケージ（開発者向け）；session 設定、`ensemble-session`、role run の client フラグ |
-| [Tests](../architecture.md#tests) | lint、テストスイート、カバレッジ、ローカルモデルで判定できる実機テスト（開発者向け） |
+| [Core architecture](../architecture.md) | レイヤー、実行の流れ、トピック索引 |
+| [Sessions](../sessions.md) | 設定、操作、復旧、会話の再開、拡張契約 |
+| [Credentials](../credentials.md) | 権限、ログイン、更新、セキュリティ上の制約 |
+| [Docker host](../docker-host.md) | Docker の設定、ネットワーク、イメージ、アカウント、作業領域 |
+| [Tests](../testing.md) | lint、テストスイート、カバレッジ、ローカルモデルで判定できる実機テスト（開発者向け） |

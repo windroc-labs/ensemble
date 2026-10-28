@@ -25,8 +25,8 @@ branch = "main"
 dir = "Research/"
 ```
 
-- **Client:** `client` picks it; `ensemble-delegate run --client` overrides it for one run. This applies to every role, including `verifier`. The flags a role run passes its client: [Client policy](architecture.md#client-policy).
-- **Claude account:** none per role: the session picks it (`[session.clients.claude] account`, else the account with the most usage left): [Docker host › Claude accounts](architecture.md#claude-accounts).
+- **Client and policy:** choose the client with this config or `ensemble-delegate run --client`; [session settings](sessions.md#settings-and-trust) covers permissions and flag overrides.
+- **Claude account:** [selection and login alignment](docker-host.md#claude-accounts).
 - **Destination:** `[output]` (`local`, `github` or `pull-request`); a lower level's `[output]` replaces the whole table.
 - **Access:** `read`, `write` and `commands` widen what the agent run may read, write and run; `templates` inlines templates into its prompt.
 - **Board runs:** the same keys under `[orchestrator.core]` (e.g. `[orchestrator.core.roles.engineer]`) apply to board runs only, after the `[delegate]` ones.
@@ -49,7 +49,7 @@ Rules a team dir follows; each break stops the run with an error naming the file
 - **Templates:** any role may name any template, built-in or yours, in `templates`.
 - **Text only:** no front matter (`---`) and no `{{…}}` placeholder; a file may name a method only as a built-in `<team>/methods/<m>.md`.
 - **Tools:** a file in `tools/` runs as `{{role_team}}/tools/<file>` in the role's `commands` (written `<role team>/tools/<file>` in its text).
-- **Out of reach:** the team dir, its files and its `tools/` tree must not overlap the run's workdir, cwd, a write dir, a dir the run adds or a dir the client can write (Codex: its `CODEX_HOME`). Codex's default `danger-full-access` ignores this: [Client policy](architecture.md#client-policy).
+- **Out of reach:** the team dir, its files and its `tools/` tree must not overlap the run's workdir, cwd, a write dir, a dir the run adds or a dir the client can write (Codex: its `CODEX_HOME`). Codex's default `danger-full-access` ignores this: [Client policy](sessions.md#settings-and-trust).
 
 A team dir's role needs no `[delegate.roles.<role>]` table: unset keys take the `[delegate]` values.
 
@@ -147,7 +147,7 @@ context = 204800                          # its context window in tokens; defaul
 1 = "strata/qwen3.8-flash-next"
 ```
 
-Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode on Docker](architecture.md#opencode-on-docker)). A name is up to 64 letters, digits, `.`, `_` or `-`.
+Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode on Docker](docker-host.md#opencode-on-docker)). A name is up to 64 letters, digits, `.`, `_` or `-`.
 
 `scripts/install.sh --docker` with OpenCode selected configures both local OpenCode (including a commander) and
 the broker from one key entry: paste it once at `opencode auth login`, or pass one line with `--opencode-key-stdin`;
@@ -172,9 +172,9 @@ installation created: a configuration, the plugin's added files, and new OpenTUI
 
 Set each provider's `context` and `[clients.opencode] ollama_context` to the server's real context window (Ollama's `OLLAMA_CONTEXT_LENGTH`): a smaller value compacts early, a larger one lets a request overflow. Both default to 65536.
 
-A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`; a role run only under `trusted_dirs`; a board run never (its cwd is the workdir's `agent/`): run OpenCode board runs on the Docker Host ([Board › Agent label](architecture.md#agent-label)).
+A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`. Board client prerequisites: [Task and client labels](board.md#task-and-client-labels).
 
-On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([Docker host › OpenCode on Docker](architecture.md#opencode-on-docker)) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
+On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([Docker host › OpenCode on Docker](docker-host.md#opencode-on-docker)) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
 
 ```bash
 npm install -g --prefix ~/.local/opencode-1 opencode-ai@1.19.3

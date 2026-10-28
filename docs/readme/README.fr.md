@@ -34,9 +34,9 @@ ensemble est construit en couches : chacune fait un seul travail et n'appelle qu
 | Couche | Ce qu'elle fait | Commencer par |
 |---|---|---|
 | Manager | Un pilote pour les couches du dessous : un agent à qui vous parlez, qui lance des workers, des role runs et des runs du tableau, les surveille et vous fait un rapport. | [Démo](#démo--un-manager-plusieurs-workers) |
-| Orchestrator | Fait tourner les roles selon un fichier workflow, avec des trackers interchangeables : Linear ou un tableau local de Markdown. | [Tableaux](../architecture.md#board) |
+| Orchestrator | Fait tourner les roles selon un fichier workflow, avec des trackers interchangeables : Linear ou un tableau local de Markdown. | [Tableaux](../board.md) |
 | Delegate (cœur) | Fait exécuter une task à un role via une session et renvoie un résultat vérifié. Un plugin Claude Code et Codex utilisable seul. | [Installation](#installation) |
-| Session | Démarre, surveille et reprend un agent de code (Claude Code, Codex, OpenCode) dans tmux ou un conteneur Docker, de la même façon pour chaque client. | [Sessions](../architecture.md#session-settings) |
+| Session | Démarre, surveille et reprend un agent de code (Claude Code, Codex, OpenCode) dans tmux ou un conteneur Docker, de la même façon pour chaque client. | [Sessions](../sessions.md#settings-and-trust) |
 
 Le workflow fourni reflète ma philosophie de la façon dont les agents devraient travailler (recherche, puis un PRD, puis un build, avec une relecture humaine entre chaque étape). `[orchestrator] workflow` sélectionne un autre fichier workflow ; une valeur vide utilise celui fourni. Les roles et les tasks sont aussi à vous de modifier ([Personnaliser les roles et les tasks](../customizing-roles-and-tasks.md)).
 
@@ -82,14 +82,14 @@ Rien de tout cela n'est vérifié. S'il en manque un, le run de l'agent échoue.
 | Prérequis | Pour |
 |---|---|
 | CLI `claude`, Python 3.11+ | chaque run d'agent |
-| le plugin [`updraft`](https://github.com/windroc-labs/updraft), pour les workers sur le host : Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, puis `/plugin install updraft@windroc` ; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, puis `codex plugin add updraft@windroc`. Les workers Docker l’installent dans l’image ([plugins](../architecture.md#plugins)). | les build tasks de l'engineer (`/updraft:build`, `/updraft:light-build`) et la revue du PRD par le PM (`/updraft:review`). Inutile sinon. |
+| le plugin [`updraft`](https://github.com/windroc-labs/updraft), pour les workers sur le host : Claude Code `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, puis `/plugin install updraft@windroc` ; Codex `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, puis `codex plugin add updraft@windroc`. Les workers Docker l’installent dans l’image ([plugins](../docker-host.md#plugins)). | les build tasks de l'engineer (`/updraft:build`, `/updraft:light-build`) et la revue du PRD par le PM (`/updraft:review`). Inutile sinon. |
 | tmux 3.3–3.8 | les tui runs sur le Host `tmux` |
-| [Ollama](https://ollama.com) sur `127.0.0.1` seulement, contexte d'au moins 65536, modèle du tier téléchargé ; sur `tmux` aussi OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode seulement ([Docker host › OpenCode on Docker](../architecture.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)) |
+| [Ollama](https://ollama.com) sur `127.0.0.1` seulement, contexte d'au moins 65536, modèle du tier téléchargé ; sur `tmux` aussi OpenCode 1.x (`npm install -g opencode-ai@1.19.3`) | OpenCode seulement ([Docker host › OpenCode on Docker](../docker-host.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)) |
 | `git`, `gh` connecté | coder (checkouts, pull requests) et destinations GitHub. Inutile sinon. |
 | iTerm2 lancé | le split iTerm2 par défaut |
-| Docker Desktop lancé ; le broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), installé par `sh <plugin dir>/src/broker/install.sh` (demande `sudo` et `gh` connecté) ; une connexion chacun : `B login claude` (collez un `claude setup-token`), `B login github ensemble-broker-bot` et, pour Codex, `sudo B install-codex <version>` puis `B login codex` ; OpenCode n'en demande aucune | le Docker Host seulement ([Docker host](../architecture.md#docker-host)) ; pas de Node sur l'hôte. Ce que permet chaque identifiant, où il est stocké et comment le révoquer : [Credentials](../architecture.md#credentials). |
+| Docker Desktop lancé ; le broker `B` (`/usr/local/libexec/ensemble/ensemble-broker`), installé par `sh <plugin dir>/src/broker/install.sh` (demande `sudo` et `gh` connecté) ; une connexion chacun : `B login claude` (collez un `claude setup-token`), `B login github ensemble-broker-bot` et, pour Codex, `sudo B install-codex <version>` puis `B login codex` ; OpenCode n'en demande aucune | le Docker Host seulement ([Docker host](../docker-host.md)) ; pas de Node sur l'hôte. Ce que permet chaque identifiant, où il est stocké et comment le révoquer : [Credentials](../credentials.md). |
 
-Comment les sessions lancées par ensemble chargent vos réglages, et pourquoi certaines commandes y refusent de s'exécuter : [Session settings](../architecture.md#session-settings).
+Comment les sessions lancées par ensemble chargent vos réglages, et pourquoi certaines commandes y refusent de s'exécuter : [Session settings](../sessions.md#settings-and-trust).
 
 | Commande | Rôle |
 |---|---|
@@ -104,7 +104,7 @@ Comment les sessions lancées par ensemble chargent vos réglages, et pourquoi c
 1. [Installez](#installation) le plugin.
 2. Dans une nouvelle session Claude Code, vérifiez-le : `/ensemble:act-as dummy-tester:echo hello` renvoie `hello`.
 3. Lancez un role : `/ensemble:act-as researcher <question>`. Sans configuration locale, le rapport est enregistré dans `~/.ensemble/adhoc/<date>-researcher-<name>/agent/prompt.md` ; pour le publier, définissez la destination du role ([Personnaliser les roles et les tasks](../customizing-roles-and-tasks.md#change-a-roles-run-settings)).
-4. Pour faire tourner les roles depuis un tableau Linear ou un tableau local de Markdown : [Tableaux](../architecture.md#board).
+4. Pour faire tourner les roles depuis un tableau Linear ou un tableau local de Markdown : [Tableaux](../board.md).
 
 ## Personnaliser les roles et les tasks
 
@@ -121,7 +121,10 @@ Ces pages sont en anglais.
 | Page | Contenu |
 |---|---|
 | [Customizing roles and tasks](../customizing-roles-and-tasks.md) | réglages de run, répertoires de team, fichiers de role et de task, vérifications, sessions OpenCode |
-| [Board](../architecture.md#board) | mise en place, états d'issue et labels de task, exploitation du router, labels Agent (client par issue), tableau local (`tracker`, `ENSEMBLE_BOARD_DIR`, arborescence, format des fichiers) |
+| [Board](../board.md) | mise en place, états d'issue et labels de task, exploitation du router, labels Agent (client par issue), tableau local (`tracker`, `ENSEMBLE_BOARD_DIR`, arborescence, format des fichiers) |
 | [Upgrading](../upgrading.md) | étapes de mise à jour |
-| [Core architecture](../architecture.md) | couches et paquets (développeurs) ; réglages de session, `ensemble-session`, flags de client des role runs |
-| [Tests](../architecture.md#tests) | lint, suites de tests, couverture, tests réels qu'un modèle local peut valider (développeurs) |
+| [Core architecture](../architecture.md) | couches, parcours d’une exécution et index des sujets |
+| [Sessions](../sessions.md) | réglages, contrôle, récupération, rappel et contrats d’extension |
+| [Credentials](../credentials.md) | droits, connexions, rotation et limites de sécurité |
+| [Docker host](../docker-host.md) | configuration Docker, réseau, images, comptes et espaces de travail |
+| [Tests](../testing.md) | lint, suites de tests, couverture, tests réels qu'un modèle local peut valider (développeurs) |
