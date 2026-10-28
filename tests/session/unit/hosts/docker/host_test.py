@@ -275,7 +275,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '32'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '33'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/architecture.md#docker-install", str(caught.exception)

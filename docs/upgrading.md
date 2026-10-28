@@ -1,5 +1,15 @@
 # Upgrading
 
+## Broker protocol 33: short-lived credentials off the Keychain
+
+Broker protocol 33 keeps no short-lived credential in the Keychain: GitHub tokens are issued and written per command
+and revoked from memory or, at `close`, read back from the container; Codex logins keep no per-container record
+([Credentials](architecture.md#credentials)). `ensemble-broker status` loses `revocations`, and `status --cleanup` is
+gone. Run `scripts/install.sh --docker`: before `broker re-trust` it deletes the leftover `ensemble-broker-tokens`,
+`ensemble-broker-revocations` and `ensemble-broker-codex-grants` items and prints how many. Then close and resume every
+running Docker session: one an older broker started fails its next renewal. A token an older broker recorded is no
+longer revoked and expires within the hour.
+
 ## Broker protocol 32: the guard is the Docker container's main process
 
 The broker now starts each worker container with the guard as its main process, and the harness reaches it over
@@ -32,16 +42,6 @@ older release started, so before upgrading:
 
 Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
 listed, and the next Docker start removes its container as debris.
-
-## Broker protocol 32: short-lived credentials off the Keychain
-
-Broker protocol 32 keeps no short-lived credential in the Keychain: GitHub tokens are issued and written per command
-and revoked from memory or, at `close`, read back from the container; Codex logins keep no per-container record
-([Credentials](architecture.md#credentials)). `ensemble-broker status` loses `revocations`, and `status --cleanup` is
-gone. Run `scripts/install.sh --docker`: before `broker re-trust` it deletes the leftover `ensemble-broker-tokens`,
-`ensemble-broker-revocations` and `ensemble-broker-codex-grants` items and prints how many. Then close and resume every
-running Docker session: one an older broker started fails its next renewal. A token an older broker recorded is no
-longer revoked and expires within the hour.
 
 ## Broker protocol 31: output-repo token beside prefetch
 

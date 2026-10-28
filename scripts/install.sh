@@ -2262,7 +2262,7 @@ token_screen_leave() {
   fi
 }
 
-# Deletes every item of the services brokers before protocol 32 kept per container, on every run: delete calls only,
+# Deletes every item of the services brokers before protocol 33 kept per container, on every run: delete calls only,
 # which decrypt nothing.
 retired_broker_items() {
   local service count rc n=0
