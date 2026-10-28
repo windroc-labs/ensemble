@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -22,6 +23,30 @@ func TestCredentialSpecFixtures(t *testing.T) {
 				t.Fatalf("valid=%v problem=%q", valid, problem)
 			}
 		})
+	}
+}
+
+func TestCredentialSizeLimits(t *testing.T) {
+	check := func(value any, valid bool) {
+		t.Helper()
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		envelope, _ := json.Marshal(string(raw))
+		if _, problem := parseCredentialEnvelope(envelope, credentialKinds); (problem == "") != valid {
+			t.Fatalf("valid=%v problem=%q value=%s", valid, problem, raw)
+		}
+	}
+	for _, count := range []int{0, 1, 16, 17} {
+		items := make([]map[string]string, count)
+		for i := range count {
+			items[i] = map[string]string{"item": "ensemble-broker-env/a", "file": fmt.Sprintf("file-%d", i)}
+		}
+		check(map[string]any{"env": items}, count >= 1 && count <= 16)
+	}
+	for _, length := range []int{255, 256} {
+		check(map[string]any{"env": []map[string]string{{"item": "ensemble-broker-env/a", "file": strings.Repeat("a", length)}}}, length == 255)
 	}
 }
 

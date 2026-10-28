@@ -156,6 +156,22 @@ class DockerBrokerProtocol(Case):
                         Path(path).is_relative_to(other) or Path(other).is_relative_to(path)
                     )
 
+    def test_credential_size_limits(self):
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        validator = Draft202012Validator({**schema, "$ref": "#/$defs/credential_spec"})
+        for count, valid in ((0, False), (1, True), (16, True), (17, False)):
+            with self.subTest(count=count):
+                spec = {
+                    "env": [
+                        {"item": "ensemble-broker-env/a", "file": f"file-{i}"} for i in range(count)
+                    ]
+                }
+                self.assertEqual(validator.is_valid(spec), valid)
+        for length, valid in ((255, True), (256, False)):
+            with self.subTest(length=length):
+                spec = {"env": [{"item": "ensemble-broker-env/a", "file": "a" * length}]}
+                self.assertEqual(validator.is_valid(spec), valid)
+
     def test_a_broker_only_fixture_kind_is_transported_unchanged(self):
         fixture = json.loads((PROTOCOL / "fixtures/credential-spec-test-kind.json").read_text())
         extension = json.loads((PROTOCOL / "test-kind.schema.json").read_text())
