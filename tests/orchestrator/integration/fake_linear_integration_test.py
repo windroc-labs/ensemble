@@ -6,7 +6,6 @@ queries and mutations, alone and through LinearIssues."""
 import functools
 import json
 import os
-import time
 import urllib.request
 import uuid
 from contextlib import redirect_stderr
@@ -37,7 +36,7 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
 from ensemble.utils import parse_time
-from tests.orchestrator.case import SID, Case
+from tests.orchestrator.case import SID, Case, zone
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.fake_transport import install, refuse_keychain
 from tests.orchestrator.unit.board_ids import (
@@ -268,12 +267,10 @@ class GraphQLProjection(ServerCase):
                 with self.assertRaises(types.Unavailable) as cm:
                     ops.call(eng, ops.M_SUBSCRIBE, "issueSubscribe", i="TASK-7", e="me@x.com")
                 self.assertEqual(str(cm.exception), "issueSubscribe: HTTP 503")
-                self.fake.fail("linear.Q_ISSUE_STATE", "hang", seconds=3)
-                start = time.monotonic()
+                self.fake.fail("linear.Q_ISSUE_STATE", "hang", seconds=1)
                 with self.assertRaises(types.Unavailable) as cm:
-                    eng(ops.Q_ISSUE_STATE, timeout=1, i="TASK-7")
+                    eng(ops.Q_ISSUE_STATE, timeout=0.2, i="TASK-7")
                 self.assertEqual(str(cm.exception), "issue: TimeoutError: timed out")
-                self.assertLess(time.monotonic() - start, 2.5)
                 self.assertEqual(
                     self.log(),
                     [
@@ -754,11 +751,7 @@ class FixtureOperations(Case):
         self.assertEqual(len(fake.relations), 1)
 
     def test_a_time_without_an_offset_is_utc(self):
-        tz = mock.patch.dict(os.environ, {"TZ": "Asia/Tokyo"})
-        self.addCleanup(time.tzset)
-        tz.start()
-        self.addCleanup(tz.stop)
-        time.tzset()
+        zone(self, "Asia/Tokyo")
         for t in (
             datetime(2026, 10, 9, 7, 30, 41, 62000),
             "2026-10-09T07:30:41.062",

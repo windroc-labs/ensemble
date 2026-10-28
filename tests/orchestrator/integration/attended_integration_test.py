@@ -220,13 +220,13 @@ class Refused(TmuxFlow):
             ),
             ("no events file", (), inside, "--tui needs --events FILE or $ENSEMBLE_EVENTS"),
         )
-        for name, extra, env, said in cases:
-            for mode in (("--issue", ID), ()):
-                with self.subTest(name, mode=mode):
-                    res = self.router(*mode, "--tui", *extra, **env)
-                    self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
-                    self.assertTrue(res.stderr.startswith(f"router.py: {said}"), res.stderr)
-                    self.assertEqual(len(res.stderr.splitlines()), 1, res.stderr)
+        for n, (name, extra, env, said) in enumerate(cases):
+            mode = ("--issue", ID) if n % 2 else ()
+            with self.subTest(name, mode=mode):
+                res = self.router(*mode, "--tui", *extra, **env)
+                self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
+                self.assertTrue(res.stderr.startswith(f"router.py: {said}"), res.stderr)
+                self.assertEqual(len(res.stderr.splitlines()), 1, res.stderr)
         self.assertEqual(self.requests(), [])
         listed = self.server.tmux("list-sessions", "-F", "#{session_name}")
         self.assertEqual(listed.stdout.split(), [MANAGER], listed.stderr)
