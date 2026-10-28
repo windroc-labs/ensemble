@@ -126,7 +126,7 @@ PYTHON_CODE_ALLOWED = {
     ): "engine.config.load() in a copied-package deployment interpreter; no public loader, and CLI commands that load config go on to call Linear.",
     (
         "tests/orchestrator/integration/linear_run_extension_integration_test.py",
-        "341c66f3420ffd966f8481cf15f0eca595a67f71b765d16cbee1793a768d98a9",
+        "ac68989e9a05e3e31de2aea5fcc574c87e31a95598d88bcb9ba43e6a2ac5fd1b",
     ): "Creating a pipeline run with a config-loaded external Delegate needs engine.config.load() and runs.note; no public loader.",
 }
 
