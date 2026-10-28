@@ -11,6 +11,7 @@ from ensemble.orchestrator.engine.flow.types import Stage
 PACKAGED = "src/ensemble/orchestrator/engine/flow/workflow.toml"
 # Literal: values; else type
 TYPES = {k: get_args(t) or t for k, t in get_type_hints(Stage).items()}
+TYPES["input"] = tuple(value for value in TYPES["input"] if value != "decompose")
 
 
 class Workflow(Mapping[str, Stage]):
