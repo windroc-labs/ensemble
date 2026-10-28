@@ -566,7 +566,8 @@ flowchart LR
     R -->|Revise| T
     R -->|"resume or pane follow-up"| P
     H -->|"promote, after 10 min: next role's Todo issue"| D[Done]
-    D & C[Canceled] -->|"Finish, 2 h later"| X[cleaned up]
+    D -->|"Finish, 2 h later"| X[cleaned up]
+    C[Canceled] -->|"Finish, next tick"| X
 ```
 
 - **New work:** a Todo issue in the product's project, delegated to a role app (Linear's Agent field); the description is the brief. Add `Repo: <owner>/<name>` unless the project's `[orchestrator.linear.project_repos]` entry names it. The router claims by priority, then later role, then oldest; a blocked issue waits for its blockers to be Done, Canceled or Duplicate. On first claim it lists possible duplicates under `## Related work` in the agent's input, and inlines linked configured documents up to 50,000 bytes.
