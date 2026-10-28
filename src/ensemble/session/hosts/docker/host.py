@@ -1,5 +1,5 @@
-"""DockerHost: a broker-made container per session, its guard (worker.py) run by `docker exec -i`
-(docs/architecture.md#docker-host).
+"""DockerHost: a broker-made container per session, its main process the guard (worker.py), reached
+by `docker attach` (docs/architecture.md#docker-host).
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ from ensemble.session.engine.types import (
     StatusState,
     Unanswered,
 )
+from ensemble.session.harness import guard
 from ensemble.session.hosts.base import (
-    GUARD_HOOK_SOCKET,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -79,7 +79,7 @@ from ensemble.session.hosts.docker.mounts import (
     workspace_volume,
 )
 from ensemble.session.hosts.docker.types import GEN, Started
-from ensemble.session.hosts.docker.worker import GUARD, RUN, DockerWorker
+from ensemble.session.hosts.docker.worker import GUARD, DockerWorker
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     DOCKER_STATE,
@@ -884,8 +884,8 @@ class DockerHost(Host):
         events: str | None,
         metadata: Mapping[str, str] | None,
     ) -> DockerWorker:
-        """Holds the owner lock; a live or unknown earlier generation refuses (SessionBusy), an
-        ended one is removed first.
+        """Holds the owner lock; a live or unknown earlier guarded generation refuses (SessionBusy),
+        an ended one is removed first.
         """
         if why := display_error(display):
             raise ConfigError(why)
@@ -946,8 +946,7 @@ class DockerHost(Host):
         created = self._container(
             name, launch, stops, laps, metadata, environment=environment, github=github
         )
-        container, generation, hook, _, cwd, _, _, _ = created
-        run = f"{RUN}/{generation}"
+        container, generation, hook, _, _, _, _, _ = created
         handle = proc = None
         try:
             stops.check()
@@ -966,28 +965,20 @@ class DockerHost(Host):
                     "environment": None if environment is None else environment.persisted(),
                 },
             )
-            env = {
-                **self._exec_env(launch, created.started, github[0]),
-                GUARD_HOOK_SOCKET: f"{run}/hook",
+            handoff = {
+                "argv": [
+                    *("with-secrets", "--client", metadata["home_field"].removesuffix("_dir")),
+                    *launch.argv,
+                ],
+                "env": self._exec_env(launch, created.started, github[0]),
+                "terminal": terminal,
+                "generation": generation,
+                "size": "{}x{}".format(*self.tui_settings().hidden_size),
             }
-            size = "{}x{}".format(*self.tui_settings().hidden_size)
-            shown = (
-                ("--terminal", "--display-socket", f"{run}/display", "--size", size)
-                if terminal
-                else ()
-            )
-            argv, docker_env = docker_call(
-                self.docker,
-                *("exec", "-i", "--workdir", cwd),
-                *(arg for key in env for arg in ("--env", key)),
-                *(container, IMAGE_PYTHON, "-I", GUARD, *shown),
-                *("--hook-socket", f"{run}/hook", "--lease", f"{run}/lease", "--"),
-                *("with-secrets", "--client", metadata["home_field"].removesuffix("_dir")),
-                *launch.argv,
-            )
+            argv, docker_env = docker_call(self.docker, "attach", "--sig-proxy=false", container)
             proc = subprocess.Popen(
                 argv,
-                env={**docker_env, **env},
+                env=docker_env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -1021,6 +1012,7 @@ class DockerHost(Host):
                 terminal=terminal,
             )
             made.append(handle)
+            handle.launch(handoff)
             handle.await_start()
             handle.begin()
             laps("client")
@@ -1090,7 +1082,7 @@ class DockerHost(Host):
         argv, env = docker_call(
             self.docker,
             *("exec", "-i", row.container, IMAGE_PYTHON, "-I", GUARD),
-            *("--probe", f"{RUN}/{row.generation}"),
+            *("--probe", guard.run_paths(row.generation)["dir"]),
         )
         try:
             res = self.run(argv, env, timeout=RUN_TIMEOUT)
@@ -1216,7 +1208,7 @@ class DockerHost(Host):
         argv = docker_call(
             self.docker,
             *("exec", "-it", found.container, IMAGE_PYTHON, "-I", GUARD),
-            *("--attach", f"{RUN}/{found.generation}/display"),
+            *("--attach", guard.run_paths(found.generation)["display"]),
         )[0]
         return CommandView(
             printed=shlex.join(argv),
