@@ -908,21 +908,18 @@ class RosterTest(RosterCase):
         self.roster.advance(1, 0)
         fd = os.open(path, os.O_WRONLY | os.O_APPEND)
         self.addCleanup(os.close, fd)
-        barrier = threading.Event()
+        original, appended = os.replace, []
 
-        def append():
-            deadline = time.monotonic() + 5
-            while not os.path.exists(path + ".1") and time.monotonic() < deadline:
-                time.sleep(0.01)
-            os.write(fd, b"inflight\n")
-            append_line(path, "new\n")
-            barrier.set()
+        def append(source, destination):
+            original(source, destination)
+            if os.fspath(destination) == path + ".1":
+                os.write(fd, b"inflight\n")
+                append_line(path, "new\n")
+                appended.append(destination)
 
-        thread = threading.Thread(target=append)
-        thread.start()
-        self.assertTrue(self.roster.rotate_events())
-        thread.join(5)
-        self.assertTrue(barrier.is_set())
+        with mock.patch.object(os, "replace", side_effect=append):
+            self.assertTrue(self.roster.rotate_events())
+        self.assertTrue(appended)
         self.assertCountEqual(self.roster.backlog()[2], ["old", "inflight", "new"])
 
     def test_an_events_fifo_is_refused(self):

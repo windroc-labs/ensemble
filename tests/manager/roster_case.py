@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from unittest import mock
 from uuid import uuid4
 
 from ensemble.manager.engine.roster import Roster
@@ -20,6 +21,7 @@ def mark(roster: Roster, name: str, state: State) -> None:
 
 class RosterCase(Case):
     def setUp(self):
+        self.enterContext(mock.patch("ensemble.manager.engine.events.SETTLE", 0))
         self.directory = os.path.join(self.ensemble, "managers", "manager")
         self.roster = Roster(self.directory)
         self.record = Record(

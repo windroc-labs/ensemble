@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from unittest import mock
 
 from ensemble.manager.engine.events import EVENTS_MAX, Events
 from ensemble.utils import append_line, file_lock, save
@@ -11,6 +12,7 @@ from tests.manager.case import Case
 
 class EventsCase(Case):
     def setUp(self):
+        self.enterContext(mock.patch("ensemble.manager.engine.events.SETTLE", 0))
         self.directory = os.path.join(self.home, "events-test")
         os.mkdir(self.directory, 0o700)
         self.events = Events(self.directory)
