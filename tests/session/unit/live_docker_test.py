@@ -3,7 +3,6 @@
 import io
 import json
 import os
-import re
 import types
 import unittest
 from contextlib import nullcontext
@@ -17,7 +16,6 @@ G1, G2 = "a" * 32, "b" * 32
 FAKE = "ghs_" + "x" * 36
 CWD = "/Users/u/work/live"
 CLAUDE_DIR = "/Users/u/.ensemble/docker-state/live/claude"
-DOCS = os.path.join(os.path.dirname(gate.__file__), "..", "..", "docs", "architecture.md")
 
 
 def token(result, account="acme", installation=1, **extra):
@@ -671,19 +669,6 @@ class BotPrTest(Case):
 
     def test_without_refresh(self):
         self.assertEqual(gate.bot_pr(view(), ["ready_for_review"], None, need_refresh=False), [])
-
-
-class UnreachableDocTest(Case):
-    def test_gate_runs_the_documented_commands(self):
-        with open(DOCS, encoding="utf-8") as f:
-            text = f.read()
-        section = text.split("### What a container cannot reach\n", 1)[1].split("\n#", 1)[0]
-        documented = {}
-        for row in section.splitlines():
-            found = re.match(r"\| (.+?) \| `docker exec \"\$C\" sh -c '(.+)'` \|", row)
-            if found:
-                documented[found[1]] = found[2].replace("\\|", "|")
-        self.assertEqual(documented, gate.UNREACHABLE)
 
 
 class NoSecretTest(Case):

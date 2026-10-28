@@ -1,7 +1,6 @@
 """The session harness, `python3 -P -s -m ensemble.session.harness.process [--caller FD] <dir>`:
-owns one worker from start to close (docs/architecture.md › Session harness). SIGTERM, SIGHUP and
-EOF on FD (a headless start's caller pipe, channel.Tie) close. SIGNALS a caller held over its spawn
-are unblocked once handled.
+owns one worker from start to close. SIGTERM, SIGHUP and EOF on FD (a headless start's caller
+pipe, channel.Tie) close. SIGNALS a caller held over its spawn are unblocked once handled.
 """
 
 from __future__ import annotations

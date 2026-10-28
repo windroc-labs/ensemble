@@ -222,7 +222,7 @@ def tui_lock(name: str) -> str:
 
 
 class InteractiveProcess(ABC):
-    """A managed worker's handle (docs/architecture.md › Session harness interfaces)."""
+    """A managed worker's handle."""
 
     name: str
     generation: str

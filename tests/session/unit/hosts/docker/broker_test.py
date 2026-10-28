@@ -512,7 +512,7 @@ class ResponseTest(Case):
         ):
             with self.subTest(result=result):
                 fake = FakeBroker(result)
-                with self.assertRaisesRegex(SessionError, "#docker-install") as raised:
+                with self.assertRaisesRegex(SessionError, "broker/install.sh .*retrust") as raised:
                     Broker(fake).version()
                 self.assertIn(BROKER, str(raised.exception))
                 self.assertEqual(fake.calls, [argv("version")])
