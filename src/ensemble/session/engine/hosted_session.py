@@ -1,4 +1,4 @@
-"""HostedSession, the Session of a Client run in a Mode on a Host (an owned worker's view:
+"""The Session of a Client run in a Mode on a Host (an owned worker's view:
 harness/view.py's OwnedSession). events() yields its events, Stderr and IdleTimeout (none while
 Blocked) up to its Exited, recording `stderr` and each ClientBound as `client_session`.
 """
@@ -129,8 +129,6 @@ def _built(cls: type[Host], name: str, settings: Mapping) -> Host:
 
 
 class HarnessStart(NamedTuple):
-    """A session harness's start, from its request."""
-
     spec: Spec
     display: Display
     host: str | None
@@ -216,7 +214,6 @@ def _read_usage(
 
 
 def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, Usage | None] | None:
-    """Each account's reading when `client` has two or more and `host` runs containers."""
     probes = client._usage_probes()
     if probes is None or len(probes) < 2 or host._client_context().container is None:
         return None
@@ -224,7 +221,6 @@ def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, U
 
 
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
-    """spec, selecting the pool's best account when it selects none."""
     if spec.env.get(ACCOUNT_ENV) or (pool := _pooled(setup, name, client, host)) is None:
         return spec
     if (account := accounts.best(pool)) is None:
@@ -338,20 +334,55 @@ def _resume_check(spec: Spec, client: Client, name: str, on: Host) -> None:
 
 
 def _start_error(channel: Channel, status: Mapping) -> SessionError | ConfigError:
-    """From harness.json, else its log's last line."""
     error = status.get("error")
     if isinstance(error, Mapping) and isinstance(message := error.get("message"), str):
         kind, lock, holder = error.get("type"), error.get("lock"), error.get("holder")
         if kind == "SessionBusy" and isinstance(lock, str) and isinstance(holder, str):
             return SessionBusy(lock, holder)
         return (ConfigError if kind == "ConfigError" else SessionError)(message)
+    return SessionError(f"session harness {channel.directory} did not start: {_last_line(channel)}")
+
+
+def _last_line(channel: Channel) -> str:
     try:
         with open(channel.log, encoding="utf-8", errors="replace") as log:
             lines = [line.strip() for line in log if line.strip()]
     except OSError:
         lines = []
-    last = lines[-1][:500] if lines else "no output"
-    return SessionError(f"session harness {channel.directory} did not start: {last}")
+    return lines[-1][:500] if lines else "no output"
+
+
+def _await_start(
+    channel: Channel,
+    ended: Callable[[], bool],
+    *,
+    clock: Callable[[], float] | None = None,
+    pause: Callable[[float], None] | None = None,
+) -> dict:
+    """harness.json once its harness runs the worker; a phase it names adds its `phase_wait`."""
+    clock, pause = clock or time.monotonic, pause or time.sleep
+    began = clock()
+    phase, deadline = (None, None), began + START_WAIT
+    while True:
+        gone = ended()  # first: a dead harness's status is final
+        status = channel.status()
+        if status.get("state") in ("running", "draining", "exited"):  # its end at once
+            return status
+        if status.get("state") == "failed" or gone:
+            raise _start_error(channel, status)
+        now = clock()
+        if (status.get("phase"), status.get("phase_wait")) != phase:
+            phase = (status.get("phase"), wait := status.get("phase_wait"))
+            deadline = (
+                now + START_WAIT + (wait if isinstance(wait, int | float) and wait > 0 else 0)
+            )
+        if now > deadline:
+            doing = phase[0] if isinstance(phase[0], str) else "starting"
+            raise SessionError(
+                f"session harness {channel.directory} did not start: timed out after "
+                f"{now - began:.0f} s while {doing[:200]}; its log's last line: {_last_line(channel)}"
+            )
+        pause(SLICE)
 
 
 class HostedSession(Session):
@@ -405,7 +436,6 @@ class HostedSession(Session):
         viewer: Mapping | None = None,
         viewer_factory: ViewerFactory = Viewer,
     ) -> None:
-        """host_factory(cls, name, settings) builds a configured Host."""
         if not isinstance(hosts, Hosts):
             raise ConfigError("hosts: want parsed Hosts (Host.parse_hosts)")
         if viewer is not None and not isinstance(viewer, Mapping):
@@ -478,8 +508,8 @@ class HostedSession(Session):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
-        """spec.sid: its id, else a new one; display: kept by its Host. Every start runs under a
-        session harness of its own and returns its control view.
+        """display: kept by its Host. Every start runs under its own session harness and returns
+        its control view.
         """
         setup = cls._config()
         client_name, mode = _request(spec, idle_timeout)
@@ -559,18 +589,7 @@ class HostedSession(Session):
             signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a stop held over Popen lands here
             if tie is not None:
                 tie.handed()
-            deadline = time.monotonic() + START_WAIT
-            while True:
-                status = channel.status()
-                if status.get("state") in ("running", "draining", "exited"):  # its end at once
-                    break
-                if (
-                    status.get("state") == "failed"
-                    or harness.poll() is not None
-                    or time.monotonic() > deadline
-                ):
-                    raise _start_error(channel, status)
-                time.sleep(SLICE)
+            status = _await_start(channel, lambda: harness.poll() is not None)
             generation = status.get("generation")
             if (status.get("name"), status.get("sid")) != (spec.name, spec.sid) or not isinstance(
                 generation, str
@@ -1091,7 +1110,7 @@ class HostedSession(Session):
 
     @classmethod
     def viewer(cls) -> Viewer:
-        """The Viewer [viewer] configures, built once per class."""
+        """Built once per class."""
         setup = cls._config()
         if not setup.viewers:
             setup.viewers.append(setup.viewer_factory(setup.viewer))
@@ -1099,7 +1118,7 @@ class HostedSession(Session):
 
     @classmethod
     def host(cls, name: str | None = None) -> Host:
-        """[hosts.<name>] (None: the default), built once per class."""
+        """[hosts.<name>], built once per class."""
         setup = cls._config()
         name = setup.hosts.default if name is None else name
         if not isinstance(name, str) or name not in setup.hosts.tables:
@@ -1174,7 +1193,6 @@ class HostedSession(Session):
             raise
 
     def _step(self, wait: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:
-        """One poll: new events (never Exited), and whether it ended."""
         if self._closed:
             return [], True
         found, self._closed = self._running.poll(wait)
@@ -1198,7 +1216,7 @@ class HostedSession(Session):
             self._refresh_metadata()
 
     def _fold(self, event: SessionEvent | Stderr | ClientBound, *, replayed: bool = False) -> None:
-        """What an event, live or replayed on attach, changes: bound, reply, blocked."""
+        """What an event, live or replayed on attach, changes."""
         if isinstance(event, ClientBound):
             self._bound = True
             return
@@ -1318,7 +1336,6 @@ class HostedSession(Session):
         return host_resume(self._host, self.name, cwd)
 
     def record(self) -> Record | None:
-        """Its crew Record, stored in its worker dir for its generation."""
         self._running.state()
         name, generation = self._tui(), self._running.generation
         return None if name is None or generation is None else stored_record(name, generation)
@@ -1394,19 +1411,16 @@ class Owned:
         self._session._record(event)
 
     def stop(self, timeout: float = CLOSE_WAIT) -> list[SessionEvent | Stderr | ClientBound]:
-        """Its last read's events, then stopped; headless: up to its end."""
         final = self._final()
         self._session.stop()
         return final + self._ending(timeout)
 
     def close(self, timeout: float = CLOSE_WAIT) -> list[SessionEvent | Stderr | ClientBound]:
-        """Its last read's events, then closed; headless: up to its end."""
         final = self._final()
         self._session.close()
         return final + self._ending(timeout)
 
     def _ending(self, timeout: float) -> list[SessionEvent | Stderr | ClientBound]:
-        """A headless run's reads up to its end, within `timeout`."""
         found: list[SessionEvent | Stderr | ClientBound] = []
         deadline = time.monotonic() + timeout
         while _terminal_less(self._session.mode) and (left := deadline - time.monotonic()) > 0:
