@@ -88,8 +88,8 @@ func TestIssueAuditRepositoriesFail(t *testing.T) {
 	r := newRig(t, "acme")
 	r.api.reposFail = 500
 	rec, sink := r.audited("start", ctr)
-	issued(t, r)
-	if len(r.exec.argv) != 1 {
+	commands := issued(t, r)
+	if len(commands) != 1 {
 		t.Fatal("a failed listing stops the issue")
 	}
 	c := flush(t, rec, sink)[0].Credentials[0]
@@ -102,7 +102,7 @@ func TestIssueFailureAudit(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	r.api.issueFail = map[int]int{2: 500}
 	rec, sink := r.audited("start", ctr)
-	if _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err == nil {
+	if _, _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr); err == nil {
 		t.Fatal("no error")
 	}
 	if got := resultsOf(flush(t, rec, sink)[0]); !slices.Equal(got, []string{audit.Issued, audit.Revoked}) {
@@ -142,7 +142,7 @@ func TestFailedRevocationAuditedUnrevoked(t *testing.T) {
 		r.api.tokenOf, r.api.revokeMsg = opaque, echo
 		r.api.revokeErr = func(string) int { return 500 }
 		rec, sink := r.audited("start", ctr)
-		revoke, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+		_, revoke, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +157,7 @@ func TestFailedRevocationAuditedUnrevoked(t *testing.T) {
 	t.Run("start rollback offline", func(t *testing.T) {
 		r := newRig(t, "acme")
 		rec, sink := r.audited("start", ctr)
-		revoke, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+		_, revoke, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
 		if err != nil {
 			t.Fatal(err)
 		}

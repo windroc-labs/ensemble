@@ -232,30 +232,39 @@ func expiries(tokens []credential.Material) []protocol.Expiry {
 	return out
 }
 
-// Issue writes container one token per installation of app, limited to permissions, or with repo ("": none) one token
-// for repo alone. On any failure it has revoked every token it issued. On success revoke revokes them, once, on a
-// context of its own.
-func (g GitHub) Issue(ctx context.Context, _, repo string, permissions map[string]string, container string, exec func([]string, []byte) error) (revoke func(), _ []protocol.Expiry, _ error) {
+// Issue prepares every installation token; the caller owns delivery and rollback after success.
+func (g GitHub) Issue(ctx context.Context, _, repo string, permissions map[string]string, container string) (commands []credential.Command, revoke func(), _ []protocol.Expiry, err error) {
 	jwt, targets, err := g.targets(ctx, repo)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var issued []credential.Material
-	for _, in := range targets {
-		m, err := g.issue(ctx, jwt, repo, in, permissions, container, audit.Issued)
-		if err == nil {
-			issued = append(issued, m)
-			err = write(exec, m)
-		}
+	defer func() {
 		if err != nil {
+			for _, command := range commands {
+				command.Erase()
+			}
+			commands = nil
 			rctx, cancel := detached(ctx)
 			defer cancel()
 			g.revoke(rctx, container, issued)
-			return nil, nil, redacted(err, append(tokens(issued), jwt)...)
+			err = redacted(err, append(tokens(issued), jwt)...)
 		}
+	}()
+	for _, in := range targets {
+		m, issueErr := g.issue(ctx, jwt, repo, in, permissions, container, audit.Issued)
+		if issueErr != nil {
+			return commands, nil, nil, issueErr
+		}
+		issued = append(issued, m)
+		command, prepErr := credential.Prepare(credential.File{Dir: tokenDir, Name: m.Account, Replace: true}, []byte(m.Token))
+		if prepErr != nil {
+			return commands, nil, nil, writeError(prepErr)
+		}
+		commands = append(commands, command)
 	}
 	var once sync.Once
-	return func() {
+	return commands, func() {
 		once.Do(func() {
 			rctx, cancel := context.WithTimeout(context.Background(), revocationTimeout)
 			defer cancel()

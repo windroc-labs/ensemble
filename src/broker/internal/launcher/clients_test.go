@@ -274,11 +274,11 @@ func TestCheckClientsRebuildFailureKeepsImage(t *testing.T) {
 	failing, next := images[0], images[1]
 	before := e.built[failing]
 	inner := e.fake.respond
-	e.fake.respond = func(args []string) ([]byte, error) {
+	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" && args[slices.Index(args, "--tag")+1] == failing {
 			return nil, &docker.CommandError{Exit: 1, Stderr: "step 3 failed\nRUN false"}
 		}
-		return inner(args)
+		return inner(args, stdin)
 	}
 	e.releases.latest["@openai/codex"] = "0.171.0"
 	got, err := e.host().CheckClients(context.Background())

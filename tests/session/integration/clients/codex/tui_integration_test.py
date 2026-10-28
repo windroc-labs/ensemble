@@ -301,7 +301,7 @@ class HookTrustIntegrationTest(Live):
                     )
                     try:
                         live_tmux.wait(
-                            lambda pane=pane: "review it" in pane().stdout,
+                            lambda pane=pane: "review it" in pane().stdout.replace("\n", ""),
                             WAIT,
                             what="user hook trust diagnostic",
                         )
