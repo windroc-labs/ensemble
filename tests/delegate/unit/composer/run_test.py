@@ -790,7 +790,7 @@ class Real(RealConfig):
                 None,
                 ("[PM rules](#pm) > your task file's rules", "# Template: `templates/prd.md`"),
                 lambda run: (run.output["dir"], run.read, run.write),
-                ("Product Design/", [], []),
+                ("Product Design/", ["{{team}}"], []),
             ),
             (
                 "engineer",
@@ -818,4 +818,4 @@ class Real(RealConfig):
             if "<team>/methods/" in text:
                 named.append(role)
                 self.assertIn("{{team}}", resolve(role).read, role)
-        self.assertEqual(named, ["researcher", "engineer"])
+        self.assertEqual(named, ["researcher"])

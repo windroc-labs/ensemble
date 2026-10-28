@@ -27,6 +27,7 @@ from tests.delegate.unit.composer.shipped import (
     Packaged,
     RealConfig,
     catalog,
+    expanded,
     guide,
     role_tasks,
     roles,
@@ -50,54 +51,6 @@ NO_COMMENTS = (
     "what the ticket should get goes in the outcome (`summary`; `questions` for `needs_input`), "
     "which write-back posts.\n"
 )
-
-PSTACK_FIX_ROOT_CAUSES = """
-# Fix Root Causes
-
-When debugging, do not fix symptoms. Trace every problem to its root cause and fix it there.
-
-**Why:** Symptom fixes accumulate. Each workaround makes the system harder to reason about, and the real bug remains. Root-cause fixes are slower upfront but reduce total debugging time.
-
-**Pattern:**
-- Reproduce first
-- Ask "why" until you hit the root cause
-- Do not add guards (adding a nil check to silence a crash is a symptom fix)
-- If a workaround needs a paragraph-long comment to justify it, the code is wrong (fix the code, not the comment)
-- Check for the pattern, not just the instance (grep for the same pattern, fix all instances)
-- When stuck, instrument. Don't guess (add logging, read the actual error)
-
-**Restart bugs: suspect state before code**
-
-When something "fails after restart," suspect stale persistent state first: config files, caches, lock files, serialized state. If clearing a state file restores behavior, prioritize state validation as the fix.
-"""
-
-
-PSTACK_SUBTRACT_BEFORE_YOU_ADD = """# Subtract Before You Add
-
-When evolving a system, remove complexity first, then build. Default to subtraction.
-
-Make simplification a continual investment. Leave the design slightly simpler and more capable behind the same or smaller surface than you found it.
-
-- Sequence removal before construction
-- Cut before you polish (get to the minimum before investing in quality)
-- Design for observed usage, not speculative edge cases
-- No speculative validators, parsers, or guards beyond what the spec demands
-- Simplify prompts (remove redundant instructions, excessive templates)
-- When a reference has no novel content, delete it rather than leaving a stub
-"""
-
-
-PSTACK_REDESIGN_FROM_FIRST_PRINCIPLES = """# Redesign From First Principles
-
-When integrating a change, don't bolt it onto the existing design. Redesign as if the requirement had been a foundational assumption from the start.
-
-- Read all affected files and understand the current design
-- Ask: "if we were writing this from scratch with this new requirement, what would we build?"
-- Propagate the change through every reference: types, docs, examples, rationale sections
-- Think about the whole redesign, then deliver it incrementally
-
-This is the method for preserving option value when integrating changes into an existing design.
-"""
 
 
 def destined(role, output, *, docker=False):
@@ -716,45 +669,6 @@ class Real(RealConfig):
         ):
             self.assertIn(phrase, task_text("deep-research"))
 
-    def test_engineers_follow_the_pinned_method_files(self):
-        prompt, _ = composed("engineer")
-        self.assertEqual(parameters(prompt)["<team>"], f"`{TEAM}`")
-        rules = section(prompt, "Rules")
-        labels = re.findall(r"^- \*\*(.*?)\*\*", rules, re.MULTILINE)
-        methods = (
-            ("Fix root causes", "fix-root-causes.md", PSTACK_FIX_ROOT_CAUSES, 1),
-            (
-                "Subtract before you add",
-                "subtract-before-you-add.md",
-                PSTACK_SUBTRACT_BEFORE_YOU_ADD,
-                2,
-            ),
-            (
-                "Redesign from first principles",
-                "redesign-from-first-principles.md",
-                PSTACK_REDESIGN_FROM_FIRST_PRINCIPLES,
-                3,
-            ),
-        )
-        for label, method_file, pinned_text, rule_order in methods:
-            with self.subTest(method=method_file):
-                method = method_file.removesuffix(".md")
-                when = "when debugging" if method == "fix-root-causes" else "for every change"
-                self.assertEqual(
-                    item(rules, label),
-                    f": {when}, read and follow the **{method} method** "
-                    f"`<team>/methods/{method_file}`. Every brief to a sub-agent "
-                    "(producer, reviewer) names that file for the sub-agent to read.\n",
-                )
-                self.assertEqual(
-                    labels.index(label), labels.index("No mutation testing") + rule_order
-                )
-                with open(os.path.join(TEAM, "methods", method_file), encoding="utf-8") as f:
-                    self.assertEqual(f.read(), pinned_text)
-                for role, task in runs():
-                    if role != "engineer":
-                        self.assertNotIn(method, composed(role, task)[0], (role, task))
-
     def test_the_summary_is_short_and_details_go_in_the_deliverable(self):
         for role, task in runs():
             with self.subTest(role=role, task=task):
@@ -984,3 +898,93 @@ class Real(RealConfig):
             "steps 1–2 again, then, with a build left, [Engineer › Repo › Merge](#repo), then",
             item(repo_, "Resume"),
         )
+
+
+UNIVERSAL = {
+    "guard-the-context-window",
+    "never-block-on-the-human",
+    "attack-the-premise",
+    "build-the-lever",
+    "prove-it-works",
+    "explain-the-number",
+}
+BUILD = {
+    "laziness-protocol",
+    "foundational-thinking",
+    "redesign-from-first-principles",
+    "subtract-before-you-add",
+    "minimize-reader-load",
+    "outcome-oriented-execution",
+    "model-the-domain",
+    "boundary-discipline",
+    "type-system-discipline",
+    "make-operations-idempotent",
+    "migrate-callers-then-delete-legacy-apis",
+    "separate-before-serializing-shared-state",
+    "fix-root-causes",
+    "sequence-verifiable-units",
+    "test-behavior-not-implementation",
+    "encode-lessons-in-structure",
+    "exhaust-the-design-space",
+}
+
+
+class Principles(Packaged):
+    def test_index_covers_each_leaf_once_and_resolves_in_every_role(self):
+        index = section(team_texts()["principles.md"], "Principle index")
+        leaves = {
+            name.removesuffix(".md")
+            for name in os.listdir(os.path.join(TEAM, "principles"))
+            if name.endswith(".md") and name != "README.md"
+        }
+        self.assertEqual(len(leaves), 24)
+        self.assertEqual(set(re.findall(r"<team>/principles/([\w-]+)\.md", index)), leaves)
+        for name in leaves:
+            self.assertEqual(index.count(f"<team>/principles/{name}.md"), 1)
+        for role in roles():
+            prompt, run = composed(role)
+            self.assertIn(os.path.join(TEAM, "principles", "fix-root-causes.md"), expanded(prompt))
+            self.assertIn("{{team}}", run.read)
+
+    def test_tasks_select_principles_and_roles_select_none(self):
+        expected = {
+            "build": BUILD,
+            "light-build": BUILD,
+            "product-design": {
+                "experience-first",
+                "exhaust-the-design-space",
+                "redesign-from-first-principles",
+                "subtract-before-you-add",
+            },
+            "verify": {"test-behavior-not-implementation"},
+        }
+        names = BUILD | UNIVERSAL | {"experience-first"}
+        for task in os.listdir(os.path.join(TEAM, "tasks")):
+            text = task_text(task.removesuffix(".md"))
+            selected = {name for name in names if f"`{name}`" in text}
+            self.assertEqual(selected, expected.get(task.removesuffix(".md"), set()), task)
+            if selected:
+                self.assertIn("[Principles › Principle index](#principle-index)", text)
+        for role in roles():
+            with open(os.path.join(TEAM, "roles", f"{role}.md")) as f:
+                text = f.read()
+            self.assertFalse(any(name in text for name in names), role)
+        universal = section(team_texts()["principles.md"], "Principle index").split(
+            "| Principle", 1
+        )[0]
+        for name in UNIVERSAL:
+            self.assertIn(f"`{name}`", universal)
+
+    def test_shared_contract_keeps_outcomes_and_independent_review(self):
+        text = team_texts()["principles.md"]
+        self.assertIn("`needs_input`", section(text, "Autonomy"))
+        self.assertIn("never a direct question", section(text, "Autonomy"))
+        self.assertIn("independent reviewer", section(text, "Subagents"))
+        self.assertIn("Stop abandoned subagents", section(text, "Subagents"))
+        self.assertIn("Read each principle's file in full", section(text, "Principle index"))
+        for name in (
+            "fix-root-causes",
+            "redesign-from-first-principles",
+            "subtract-before-you-add",
+        ):
+            self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", f"{name}.md")))

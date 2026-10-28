@@ -2,6 +2,10 @@
 
 Run one check on the Mac mini with the `mini-op` skill, then report its verdict.
 
+## Applicable principles
+
+Use `test-behavior-not-implementation` at its trigger in [Principles › Principle index](#principle-index).
+
 ## Input processing
 
 [Verifier › Input processing](#input-processing).

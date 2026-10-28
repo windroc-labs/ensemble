@@ -2,6 +2,10 @@
 
 Turn the input into a reviewed PRD.
 
+## Applicable principles
+
+Use `experience-first`, `exhaust-the-design-space`, `redesign-from-first-principles` and `subtract-before-you-add` at their triggers in [Principles › Principle index](#principle-index).
+
 ## Steps
 
 1. **Read** the input. Precedence: the **user's later words** (their messages after the **brief**, the request) > the brief > reports.

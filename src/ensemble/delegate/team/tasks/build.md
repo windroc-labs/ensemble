@@ -2,6 +2,15 @@
 
 Build the PRD with `/updraft:build`, then open a pull request.
 
+## Applicable principles
+
+Use [Principles › Principle index](#principle-index) for these triggers and files.
+- For every change: `redesign-from-first-principles` (`<team>/principles/redesign-from-first-principles.md`) and `subtract-before-you-add` (`<team>/principles/subtract-before-you-add.md`). When debugging: `fix-root-causes` (`<team>/principles/fix-root-causes.md`).
+- `laziness-protocol`, `foundational-thinking`, `minimize-reader-load`, `outcome-oriented-execution`.
+- `model-the-domain`, `boundary-discipline`, `type-system-discipline`, `make-operations-idempotent`.
+- `migrate-callers-then-delete-legacy-apis`, `separate-before-serializing-shared-state`.
+- `sequence-verifiable-units`, `test-behavior-not-implementation`, `encode-lessons-in-structure`, `exhaust-the-design-space`.
+
 ## Input processing
 
 [Engineer › Input processing](#input-processing), the requirement being the PRD (a path or its text).

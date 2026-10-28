@@ -54,7 +54,7 @@ effort = "high"
 client = "claude"
 language = "English"
 templates = []
-read = []
+read = ["{{team}}"]
 write = []
 commands = []
 cwd = ""
@@ -117,7 +117,6 @@ host = ""
 # ── Researcher ──────────────────────────────────────────
 [roles.researcher]
 templates = ["research-report"]
-read = ["{{team}}"]
 commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *", "python3 -P {{team}}/tools/svg_check.py *", "python3 -P {{team}}/tools/report_check.py *"]
 # local: [delegate.roles.researcher]
 # local: cwd = "~/src/<name>"
@@ -140,7 +139,6 @@ commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *"
 # ── Engineer ────────────────────────────────────────────
 [roles.engineer]
 effort = "xhigh"
-read = ["{{team}}"]
 commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *", "python3 -P {{team}}/tools/repo.py status --dir {{workdir}}/src *"]
 
 [roles.engineer.output]

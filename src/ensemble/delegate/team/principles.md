@@ -11,16 +11,83 @@
 - **Checkout**: `[--name <checkout>]` in a command → `--name <checkout>`, `<checkout>` the input's `Checkout:`; no `Checkout:` → drop it.
 - Temp files go in `<Workdir>/tmp/`.
 
+## Non-negotiables
+
+Follow your task's steps, chosen from your role's task list, including its tool and delegation limits.
+Work, Writing, Overlap and [Output](#output)'s contract take precedence over imported guidance.
+
+- **Goal first**: your first progress report states the user's goal, the problem and, for a change, the smallest change expected to solve it. Proceed without confirmation. If evidence rules out the requested change, show it and stop through the outcome contract. Open each PR's Why and each final deliverable with the goal, except a fully specified one-line edit. Progress and final replies keep [Output](#output)'s format.
+- For a nontrivial change, architecture decision or uncertainty, investigate the affected design and compare options before implementing. Explore designs in parallel before implementing code crossing a function boundary; use independent adversarial review for contested designs.
+- Before writing code, name its data shape and organizing structure.
+- Before parallel work, plan coverage and exploration partitions, account for races and isolate competing implementations before comparing them.
+- For nontrivial multi-step work, record a **throughput checkpoint** with four items: blocking gates before fan-out; independent workstreams; shared mutable state and how to separate it; the smallest safe decomposition, including why one worker is best when it is. Keep an inapplicable item with `n/a: <reason>` and update the checkpoint at phase boundaries.
+- For a UI, IDE or CLI bug, reproduce it yourself on that surface before fixing it. Hand an unrun check to the user only when the task explicitly allows it.
+- Assess automated review comments skeptically. Verify each in the source, fix real defects, dismiss noise with a concrete reason, and route an unresolved user decision through [Autonomy](#autonomy).
+- If a skill breaks mid-task, report it and separate its repair from the current work within the role's authorized scope. Continue independent work; never silently work around the failure.
+- Keep a decision trail for long, autonomous or multi-phase work and when the user will review later. Commit it when an auditable record is needed and the task permits; otherwise keep it local.
+
 ## Writing
 
-Documents and prompts you write: fewest words, full information.
+Prose you write, including documents, prompts, replies, PR descriptions, commits and comments: fewest words, full information. Write cleanly as you draft.
 - Cut what the reader does by default, already knows, or can look up (point to it).
 - Keep exact commands and literals, guards, and qualifiers of who, when and which (`the user`, `this session`, `existing`).
 - Keep a reason only where it prevents a likely mistake.
 - Name each recurring idea once, in bold, then reuse the name.
 - Say what to do; use a ban only for a hard guardrail.
+- Use short declarative sentences, one thought per sentence. Avoid long dashes and mid-sentence colons in prose; required literals, fixed labels and templates keep their exact form. Brevity keeps every required detail, tradeoff, choice and open decision.
+- Lead with what changes for the consumer, then what the maintainer inherits, before implementation details.
+- Link only artifacts produced or read this session. Each factual claim carries its evidence or its label (measured, inferred or guess) in the same sentence; predictions and unseen causes are guesses. Run checks you can run yourself.
+- In the deliverable, name each principle that shaped a decision and the specific choice it changed; cite only files read this session.
+- Keep a comment only for a non-obvious reason the code cannot show. Assertions and log messages explain test or verification steps; omit phase-narrating comments. Apply this to subagents' changes too.
 - **Diagrams and tables**: a flow of 3+ steps or with branches, a structure, a sequence or a timeline → a Mermaid diagram (`flowchart`, `sequenceDiagram` or `timeline` only; short node labels); a comparison of several items → a table; anything simpler → a list or `X → Y`, not prose. Right after a diagram, a caption saying only what it can't carry (sources, confidence, what an edge means, reading order), from facts already in that section, never restating its nodes; delete the text the diagram replaces. A research report: its Template's Body rule instead.
 - Reports and PRDs, headings and fixed labels included, are in {{language}}; a `<X, translated>` in a template or task is X in {{language}}. Ids (`FR-<n>`, `NFR-<n>`, `[n]`, `primary`, `secondary`, `code`, `high`, `medium`, `low`, `single-source`, `unverified`), proper nouns and acronyms stay English. A term's first mention adds one gloss, its {{language}} rendering (for an acronym, of its full name); none when the term is common in {{language}}, and none in a heading. Later mentions: just the English.
+
+## Principle index
+
+Read each principle's file in full before applying it; each entry gives its trigger. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. Task files select additional principles here; roles select none. These rules adapt pstack; its MIT notice is `<team>/principles/LICENSE`.
+
+| Principle | When it applies | File |
+|---|---|---|
+| **laziness-protocol** | Refactoring, sizing a diff or considering abstractions; prefer deletion and the smallest solution. | `<team>/principles/laziness-protocol.md` |
+| **foundational-thinking** | Before logic, choose core types, data structures, scaffolding order and shared state. | `<team>/principles/foundational-thinking.md` |
+| **redesign-from-first-principles** | Integrating a requirement; design as if it had been foundational. | `<team>/principles/redesign-from-first-principles.md` |
+| **attack-the-premise** | Two fixes sharing a premise fail the same gate; test that premise before another fix. | `<team>/principles/attack-the-premise.md` |
+| **subtract-before-you-add** | Adding, refactoring or rewriting; remove dead weight first. | `<team>/principles/subtract-before-you-add.md` |
+| **minimize-reader-load** | Shaping or reviewing hard-to-trace code; reduce layers and hidden state. | `<team>/principles/minimize-reader-load.md` |
+| **outcome-oriented-execution** | Phased rewrites or migrations; converge on the target without throwaway compatibility states. | `<team>/principles/outcome-oriented-execution.md` |
+| **experience-first** | Product, UX or scope tradeoffs; choose user delight over implementation convenience. | `<team>/principles/experience-first.md` |
+| **exhaust-the-design-space** | Novel interactions or architectural decisions without precedent; compare competing prototypes. | `<team>/principles/exhaust-the-design-space.md` |
+| **build-the-lever** | Nontrivial work; build the smallest rerunnable tool that does or proves it. | `<team>/principles/build-the-lever.md` |
+| **model-the-domain** | Stateful or branching logic and repeated shape assumptions; encode the domain in a structure. | `<team>/principles/model-the-domain.md` |
+| **boundary-discipline** | Validation, error handling or adapters; guard boundaries and keep business logic pure. | `<team>/principles/boundary-discipline.md` |
+| **type-system-discipline** | Types or signatures; make illegal states unrepresentable and parse external data. | `<team>/principles/type-system-discipline.md` |
+| **make-operations-idempotent** | Commands, lifecycle steps or retrying loops; converge after crashes and retries. | `<team>/principles/make-operations-idempotent.md` |
+| **migrate-callers-then-delete-legacy-apis** | Replacing an internal API; migrate callers and delete the old API in one wave. | `<team>/principles/migrate-callers-then-delete-legacy-apis.md` |
+| **separate-before-serializing-shared-state** | Concurrent actors write the same target; remove sharing first. | `<team>/principles/separate-before-serializing-shared-state.md` |
+| **prove-it-works** | After a task and before declaring done; verify the real artifact. | `<team>/principles/prove-it-works.md` |
+| **fix-root-causes** | Debugging; fix the first wrong state, using guards only for legitimate states. | `<team>/principles/fix-root-causes.md` |
+| **sequence-verifiable-units** | Sweeps, migrations or multi-step work; verify each small unit before the next. | `<team>/principles/sequence-verifiable-units.md` |
+| **test-behavior-not-implementation** | Writing, changing or retaining tests; assert observable behavior. | `<team>/principles/test-behavior-not-implementation.md` |
+| **explain-the-number** | Before measuring or trusting a measured number; identify its limit and rule out confounders. | `<team>/principles/explain-the-number.md` |
+| **guard-the-context-window** | Large outputs, long files, repeated reads or fan-out planning; route bulk to allowed subagents and keep summaries. | `<team>/principles/guard-the-context-window.md` |
+| **never-block-on-the-human** | Considering permission for reversible work; proceed and let the user course-correct. | `<team>/principles/never-block-on-the-human.md` |
+| **encode-lessons-in-structure** | Repeating an instruction; encode it in a lint, flag, runtime check or script. | `<team>/principles/encode-lessons-in-structure.md` |
+
+## Autonomy
+
+- Use available tools and complete reversible work within the user's authorization and the role's scope. External actions still obey the role, task and [Output](#output)'s rules.
+- Settle observable questions by running a check. A read-only investigation stays read-only. Reserve user decisions for product or preference calls no experiment can settle.
+- Under a full-autonomy grant, decide calls it covers and proceed. For an operator-only call outside an explicit gate, apply a reversible default when authorized, explain it and how the user can change it; never demand a shorthand reply token.
+- Irreversible writes require authorization, including force-pushing a shared branch, deployments, data deletion and customer messages. Session grants to continue do not erase explicit gates.
+- A missing decision or authorization that prevents progress goes in a `needs_input` outcome with `questions`, never a direct question. Continue independent work first.
+- Give your real judgment when asked whether to proceed or add scope. Decline an approach that does not earn its place; recommendations are judgments, not automatic agreement.
+
+## Subagents
+
+- Use a fresh subagent for each new task, fix, retry or queue item, with consolidated scope, later directives, the prior report and branch. Reuse one only for costly live state such as its checkout, uncommitted work or a running process; stop and hold orders are not reuse.
+- Each brief states the user's goal, scope, file paths, success criteria and the task's applicable principle files for the subagent to read in full. Prefer file pointers to inlined bulk and background dispatch when supported so other reports can arrive.
+- Own every subagent's work. Read its diff and write your own summary. For a second opinion, keep the prompt the same; agreement from an independent perspective is evidence, not a substitute for checking.
+- Stop abandoned subagents. Keep the review gate closed without an independent reviewer; report missing or inconclusive review rather than declaring it passed.
 
 ## Overlap
 
