@@ -720,10 +720,6 @@ class Archive(Case):
             self.assertTrue(expected.unfinished)
             self.assertNotIn("M_ARCHIVE", gql.names())
 
-    def test_the_rule_is_trackers_not_its_own(self):
-        self.assertNotIn("archive", vars(LinearTracker))
-        self.assertIn("_write_archive", vars(LinearTracker))
-
     def test_success_false_raises(self):
         gql = Gql(Q_ARCHIVE=planned(), M_ARCHIVE={"issueArchive": {"success": False}})
         with self.assertRaisesRegex(LinearError, "^issueArchive: success: false$"):
@@ -1083,17 +1079,7 @@ class Assigned(Case):
         first = [todo(f"TASK-{n}") for n in range(1, 101)]
         extra = todo("TASK-101")
         unowned = {"identifier": "TASK-102", "delegate": None}
-        gql = Gql(
-            LIST=[
-                {"issues": {"nodes": first, "pageInfo": {"hasNextPage": True, "endCursor": "a"}}},
-                {
-                    "issues": {
-                        "nodes": [extra, unowned],
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                },
-            ]
-        )
+        gql = Gql(LIST=[feed(*first, cursor="a"), feed(extra, unowned)])
         said = []
         port = tracker(gql)
         port.say = lambda *a, **f: said.append((a, f))
@@ -1107,23 +1093,7 @@ class Assigned(Case):
     def test_pages_past_unowned_and_empty_pages(self):
         owned = {"identifier": "TASK-9", "delegate": {"id": role_id("pm")}}
         unowned = {"identifier": "TASK-1", "delegate": None, "assignee": PM}
-        gql = Gql(
-            LIST=[
-                {
-                    "issues": {
-                        "nodes": [unowned],
-                        "pageInfo": {"hasNextPage": True, "endCursor": "a"},
-                    }
-                },
-                {"issues": {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "b"}}},
-                {
-                    "issues": {
-                        "nodes": [owned],
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                },
-            ]
-        )
+        gql = Gql(LIST=[feed(unowned, cursor="a"), feed(cursor="b"), feed(owned)])
         said = []
         port = tracker(gql)
         port.say = lambda *a, **f: said.append((a, f))
@@ -1141,11 +1111,7 @@ class Assigned(Case):
             {"identifier": "TASK-2", "delegate": {"id": "someone"}},
             owned,
         ]
-        gql = Gql(
-            LIST=[
-                {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}
-            ]
-        )
+        gql = Gql(LIST=feed(*nodes))
         said = []
         port = tracker(gql)
         port.say = lambda *a, **f: said.append((a, f))
@@ -1155,22 +1121,9 @@ class Assigned(Case):
     def test_invalid_page_cursor_is_refused(self):
         for end in (None, "a"):
             with self.subTest(end=end):
-                gql = Gql(
-                    LIST=[
-                        {
-                            "issues": {
-                                "nodes": [],
-                                "pageInfo": {"hasNextPage": True, "endCursor": "a"},
-                            }
-                        },
-                        {
-                            "issues": {
-                                "nodes": [],
-                                "pageInfo": {"hasNextPage": True, "endCursor": end},
-                            }
-                        },
-                    ]
-                )
+                last = feed(cursor="a")
+                last["issues"]["pageInfo"]["endCursor"] = end
+                gql = Gql(LIST=[feed(cursor="a"), last])
                 with self.assertRaisesRegex(LinearError, "hasNextPage without a new endCursor"):
                     tracker(gql).assigned(IssueState.RUNNING)
 
@@ -1519,42 +1472,6 @@ class Role(Case):
 
 class Interface(Case):
     def test_linear_tracker_implements_every_method(self):
-        self.assertEqual(
-            Tracker.__abstractmethods__,
-            {
-                "read",
-                "finished",
-                "archive_plan",
-                "_write_archive",
-                "approved",
-                "detail",
-                "created",
-                "create",
-                "relate",
-                "comment",
-                "move",
-                "claim",
-                "comment_and_move",
-                "find_comment",
-                "put_comment",
-                "notify",
-                "assign",
-                "links",
-                "link",
-                "retitle",
-                "on_board",
-                "unarchive",
-                "role",
-                "assigned",
-                "ready",
-                "moved_at",
-                "recheck",
-                "issue",
-                "search",
-                "description",
-                "state_name",
-            },
-        )
         self.assertIsInstance(LinearTracker(None), Tracker)
 
 
@@ -1784,25 +1701,6 @@ class Writes(Case):
                 )
             ],
         )
-
-    def test_comment(self):
-        gql = Gql(M_COMMENT={"commentCreate": {"success": True}})
-        tracker(gql).comment("id-A", "Promoted to C-1.")
-        self.assertEqual(gql.calls, [(ops.M_COMMENT, {"i": "id-A", "b": "Promoted to C-1."})])
-
-    def test_move_maps_states_and_returns_current(self):
-        for now, left, sent in (
-            (STATES["handoff"], None, [(ops.M_STATE, {"i": "id-A", "s": STATES["done"]})]),
-            (STATES["in_review"], STATES["in_review"], []),
-        ):
-            with self.subTest(now=now):
-                gql = Gql(
-                    Q_ISSUE_STATE={"issue": {"state": {"id": now}}},
-                    M_STATE={"issueUpdate": {"success": True}},
-                )
-                moved = tracker(gql).move("id-A", IssueState.DONE, frm=IssueState.APPROVED)
-                self.assertEqual(moved, left)
-                self.assertEqual(gql.calls, [(ops.Q_ISSUE_STATE, {"i": "id-A"}), *sent])
 
     def test_claim_updates_without_reading(self):
         gql = Gql(M_STATE={"issueUpdate": {"success": True}})

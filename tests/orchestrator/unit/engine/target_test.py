@@ -18,7 +18,7 @@ from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import Case
 from tests.orchestrator.config_fixtures import HARNESS_DELEGATE
-from tests.orchestrator.target_fixtures import LOCAL
+from tests.orchestrator.target_fixtures import LOCAL, REMOTE
 from tests.orchestrator.unit.target_fixtures import FakeRun, api, ok
 
 PROJ = "121166b1-191a-4461-bec4-42f1c2dc0ddd"
@@ -223,17 +223,13 @@ class TargetValidation(Case):
         self.workdir = os.path.join(self.work, "TASK-26")
         self.clone = checkout_path(self.workdir, "acme", "ensemble", "TASK-26")
         self.src = os.path.dirname(os.path.dirname(self.clone))
-        self.ls_remote = [
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "credential.helper=!gh auth git-credential",
+        self.ls_remote = (
+            *REMOTE,
             "ls-remote",
             "--heads",
             "https://github.com/acme/ensemble.git",
             "TASK-26-*",
-        ]
+        )
 
     def git_dir(self):
         os.makedirs(os.path.join(self.clone, ".git"))
@@ -318,7 +314,7 @@ class TargetValidation(Case):
             self.run_.calls,
             [
                 (("gh", "api", "repos/acme/ensemble"), SHORT),
-                (tuple(self.ls_remote), SHORT),
+                (self.ls_remote, SHORT),
             ],
         )
 
@@ -361,7 +357,7 @@ class TargetValidation(Case):
         def at(*parts):
             return lambda: os.makedirs(os.path.join(self.src, *parts))
 
-        local, remote = [(self.branch_list(), SHORT)], [(tuple(self.ls_remote), SHORT)]
+        local, remote = [(self.branch_list(), SHORT)], [(self.ls_remote, SHORT)]
         cases = [
             ("clone with branches", self.git_dir, "TASK-26-local", local),
             ("clone without branches", self.git_dir, "", local + remote),
@@ -417,9 +413,7 @@ class TargetValidation(Case):
                 self.assertEqual(
                     self.check(local=ok(out)), target.Target("acme", "ensemble", branch)
                 )
-                self.assertEqual(
-                    self.argvs()[1:], [self.branch_list()] + [tuple(self.ls_remote)] * remote
-                )
+                self.assertEqual(self.argvs()[1:], [self.branch_list()] + [self.ls_remote] * remote)
 
     def test_slug_default_and_branch_validation(self):
         self.git_dir()
@@ -622,15 +616,7 @@ class StageKeys(Case):
     """target.check with a stage's ref and mapped_only keys."""
 
     REPOS = {PROJ: "acme/ensemble"}
-    BRANCHES = (
-        "git",
-        "-c",
-        "credential.helper=",
-        "-c",
-        "credential.helper=!gh auth git-credential",
-        "ls-remote",
-        "--heads",
-    )
+    BRANCHES = (*REMOTE, "ls-remote", "--heads")
 
     def check(self, desc, *, project: str | None = PROJ, repos=REPOS, api_=None, **keys):
         self.run_ = FakeRun(

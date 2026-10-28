@@ -5,6 +5,7 @@ import unittest
 
 from tests.orchestrator import case
 from tests.orchestrator.integration import fake_gh
+from tests.orchestrator.target_fixtures import REMOTE
 from tests.utils.sandbox import scratch
 
 REPO = {"full_name": "acme/widgets", "default_branch": "main", "permissions": {"push": True}}
@@ -484,15 +485,7 @@ class Bare(Case):
         fake_gh.bare(self.repos, "acme", "widgets", ["TASK-7-x"])
         fake_gh.gitconfig(self.home, self.repos)
         res = self.run_cmd(
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "credential.helper=!gh auth git-credential",
-            "ls-remote",
-            "--heads",
-            "https://github.com/acme/widgets.git",
-            "TASK-7-*",
+            *REMOTE, "ls-remote", "--heads", "https://github.com/acme/widgets.git", "TASK-7-*"
         )
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         self.assertIn("refs/heads/TASK-7-x", res.stdout)

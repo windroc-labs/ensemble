@@ -28,6 +28,7 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from ensemble.session import SessionStatus
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV
+from tests.orchestrator.target_fixtures import REMOTE
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import (
     HARNESS_USER,
@@ -171,17 +172,7 @@ def issue(
     }
 
 
-LS_REMOTE = (
-    "git",
-    "-c",
-    "credential.helper=",
-    "-c",
-    "credential.helper=!gh auth git-credential",
-    "ls-remote",
-    "--heads",
-    "https://github.com/Acme/Ensemble.git",
-    "TASK-7-*",
-)
+LS_REMOTE = (*REMOTE, "ls-remote", "--heads", "https://github.com/Acme/Ensemble.git", "TASK-7-*")
 
 
 LISTING = ("gh", "api", "repos/windroc/team-docs/contents/Research?ref=main")

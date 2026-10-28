@@ -1,9 +1,6 @@
 """Local issue file parsing: the format and each refusal's reason."""
 
-import os
-import time
 from datetime import UTC, datetime, timedelta, timezone
-from unittest import mock
 
 from ensemble.orchestrator.engine.types import TrackerFileError
 from ensemble.orchestrator.trackers.local import issue_file
@@ -14,7 +11,7 @@ from ensemble.orchestrator.trackers.local.types import (
     Note,
     Source,
 )
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import Case, zone
 
 PATH = "/board/pm/ready/LOC-12 x.md"
 MTIME = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
@@ -65,21 +62,16 @@ def parse(text, *, assignee="pm", state=LocalState.READY):
     return issue_file.parse(PATH, text, assignee=assignee, state=state, mtime=MTIME)
 
 
+def keyed(line):
+    return FRONT.replace("title: x", "title: x\n" + line)
+
+
 class Zoned(Case):
     def setUp(self):
-        zone = mock.patch.dict(os.environ, {"TZ": "XXX+03"})
-        zone.start()
-        self.addCleanup(time.tzset)
-        self.addCleanup(zone.stop)
-        time.tzset()
+        zone(self, "XXX+03")
 
 
 class Parse(Zoned):
-    def refuses(self, text, reason):
-        with self.assertRaises(TrackerFileError) as caught:
-            parse(text)
-        self.assertEqual((caught.exception.path, caught.exception.reason), (PATH, reason))
-
     def test_sample(self):
         got = parse(SAMPLE)
         self.assertEqual(
@@ -142,31 +134,23 @@ class Parse(Zoned):
         )
         self.assertEqual(got.created, datetime(2026, 10, 19, 14, 2, tzinfo=UTC))
 
-    def test_bare_comment_is_other_at_mtime(self):
-        got = parse(FRONT + "\n### Comments\n\n###\nlooks fine\n\nship it\n")
-        self.assertEqual(got.comments, (Note(MTIME, Source.OTHER, "looks fine\n\nship it", None),))
+    def test_comment_body_is_one_other_note_at_mtime(self):
+        for text, body in (
+            ("\n### Comments\n\n###\nlooks fine\n\nship it\n", "looks fine\n\nship it"),
+            ("### Comments\n###\nplan:\n#### Steps\n1. read\n", "plan:\n#### Steps\n1. read"),
+            (
+                "### Comments\n###\nplan:\n#### Design · v2\n1. read\n",
+                "plan:\n#### Design · v2\n1. read",
+            ),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    parse(FRONT + text).comments, (Note(MTIME, Source.OTHER, body, None),)
+                )
 
     def test_empty_json_string_is_none(self):
         got = parse(FRONT[:-4] + 'task: ""\nclient: ""\nparent: ""\n---\n')
         self.assertEqual((got.task, got.client, got.parent), (None, None, None))
-
-    def test_heading_in_comment_body(self):
-        got = parse(FRONT + "### Comments\n###\nplan:\n#### Steps\n1. read\n")
-        self.assertEqual(
-            got.comments, (Note(MTIME, Source.OTHER, "plan:\n#### Steps\n1. read", None),)
-        )
-
-    def test_heading_with_other_word_in_comment_body(self):
-        got = parse(FRONT + "### Comments\n###\nplan:\n#### Design · v2\n1. read\n")
-        self.assertEqual(
-            got.comments, (Note(MTIME, Source.OTHER, "plan:\n#### Design · v2\n1. read", None),)
-        )
-
-    def test_bad_header_after_a_comment(self):
-        self.refuses(
-            FRONT + "### Comments\n###\nhi\n#### other · 2026-13-19 14:05\nyo\n",
-            "bad comment header '#### other · 2026-13-19 14:05'",
-        )
 
     def test_hidden_id_and_key(self):
         got = parse(
@@ -196,102 +180,54 @@ class Parse(Zoned):
         self.assertEqual(parse(FRONT + history, assignee=None, state=None).state, LocalState.DONE)
         self.assertIsNone(parse(FRONT, assignee=None, state=None).state)
 
-    def test_no_front_matter(self):
-        self.refuses("id: LOC-1\n", "no front matter")
-
-    def test_front_matter_not_closed(self):
-        self.refuses("---\nid: LOC-1\n", "front matter has no closing '---'")
-
-    def test_bad_front_matter_line(self):
-        self.refuses(FRONT.replace("title: x", "Title = x"), "bad front-matter line 'Title = x'")
-
-    def test_unknown_key(self):
-        self.refuses(FRONT.replace("title: x", "title: x\nstatus: ready"), "unknown key 'status'")
-
-    def test_duplicate_key(self):
-        self.refuses(FRONT.replace("title: x", "title: x\ntitle: y"), "duplicate key 'title'")
-
-    def test_missing_id(self):
-        self.refuses(FRONT.replace("id: LOC-12\n", ""), "missing id")
-
-    def test_missing_title(self):
-        self.refuses(FRONT.replace("title: x", "title:"), "missing title")
-
-    def test_missing_created(self):
-        self.refuses(FRONT.replace("created: 2026-10-19T14:02:00-04:00\n", ""), "missing created")
-
-    def test_bad_id(self):
-        self.refuses(FRONT.replace("LOC-12", "loc-12"), "bad id 'loc-12'")
-        self.refuses(FRONT.replace("LOC-12", "LOC-12/x"), "bad id 'LOC-12/x'")
-
-    def test_bad_priority(self):
-        self.refuses(FRONT.replace("title: x", "title: x\npriority: 5"), "bad priority '5'")
-
-    def test_bad_created(self):
-        self.refuses(
-            FRONT.replace("2026-10-19T14:02:00-04:00", "2026-10-19 14:02"),
-            "bad created '2026-10-19 14:02': want ISO 8601 with an offset or Z",
-        )
-        self.refuses(
-            FRONT.replace("2026-10-19T14:02:00-04:00", "soon"),
-            "bad created 'soon': want ISO 8601 with an offset or Z",
-        )
-
-    def test_bad_string(self):
-        self.refuses(FRONT.replace("title: x", 'title: "x'), "bad string '\"x'")
-
-    def test_bad_list(self):
-        self.refuses(
-            FRONT.replace("title: x", "title: x\nrelated: LOC-1"), "bad list related: 'LOC-1'"
-        )
-
-    def test_bad_list_item(self):
-        self.refuses(
-            FRONT.replace("title: x", "title: x\nblocked_by: [LOC-1, ../x]"),
-            "bad blocked_by id '../x'",
-        )
-
-    def test_bad_parent(self):
-        self.refuses(FRONT.replace("title: x", "title: x\nparent: LOC 5"), "bad parent 'LOC 5'")
-
-    def test_bad_links_line(self):
-        self.refuses(
-            FRONT.replace("title: x", "title: x\nlinks:\n  - url: u"), "bad links line '  - url: u'"
-        )
-        self.refuses(
-            FRONT.replace("title: x", "title: x\nlinks:\n  - title: t\n    url:"),
-            "bad links line '    url:'",
-        )
-
-    def test_text_before_first_section(self):
-        self.refuses(FRONT + "hello\n### Description\n", "text before the first section: 'hello'")
-
-    def test_section_order(self):
-        self.refuses(FRONT + "### History\n### Comments\n", "section 'Comments' after 'History'")
-
-    def test_duplicate_section(self):
-        self.refuses(
-            FRONT + "### Description\n### Description\n", "duplicate section 'Description'"
-        )
-
-    def test_bad_comment_header(self):
-        self.refuses(
-            FRONT + "### Comments\n#### someone · 2026-10-19 14:05\nhi\n",
-            "bad comment header '#### someone · 2026-10-19 14:05'",
-        )
-        self.refuses(
-            FRONT + "### Comments\n#### other · 2026-13-19 14:05\nhi\n",
-            "bad comment header '#### other · 2026-13-19 14:05'",
-        )
-
-    def test_text_before_first_comment(self):
-        self.refuses(FRONT + "### Comments\nhi\n", "bad comment header 'hi'")
-
-    def test_bad_history_line(self):
-        self.refuses(
-            FRONT + "### History\n- 2026-10-19 14:02 todo other\n",
-            "bad History line '- 2026-10-19 14:02 todo other'",
-        )
+    def test_refusals(self):
+        created = "2026-10-19T14:02:00-04:00"
+        header = "bad comment header '#### other · 2026-13-19 14:05'"
+        for text, reason in (
+            ("id: LOC-1\n", "no front matter"),
+            ("---\nid: LOC-1\n", "front matter has no closing '---'"),
+            (FRONT.replace("title: x", "Title = x"), "bad front-matter line 'Title = x'"),
+            (keyed("status: ready"), "unknown key 'status'"),
+            (keyed("title: y"), "duplicate key 'title'"),
+            (FRONT.replace("id: LOC-12\n", ""), "missing id"),
+            (FRONT.replace("title: x", "title:"), "missing title"),
+            (FRONT.replace(f"created: {created}\n", ""), "missing created"),
+            (FRONT.replace("LOC-12", "loc-12"), "bad id 'loc-12'"),
+            (FRONT.replace("LOC-12", "LOC-12/x"), "bad id 'LOC-12/x'"),
+            (keyed("priority: 5"), "bad priority '5'"),
+            (
+                FRONT.replace(created, "2026-10-19 14:02"),
+                "bad created '2026-10-19 14:02': want ISO 8601 with an offset or Z",
+            ),
+            (
+                FRONT.replace(created, "soon"),
+                "bad created 'soon': want ISO 8601 with an offset or Z",
+            ),
+            (FRONT.replace("title: x", 'title: "x'), "bad string '\"x'"),
+            (keyed("related: LOC-1"), "bad list related: 'LOC-1'"),
+            (keyed("blocked_by: [LOC-1, ../x]"), "bad blocked_by id '../x'"),
+            (keyed("parent: LOC 5"), "bad parent 'LOC 5'"),
+            (keyed("links:\n  - url: u"), "bad links line '  - url: u'"),
+            (keyed("links:\n  - title: t\n    url:"), "bad links line '    url:'"),
+            (FRONT + "hello\n### Description\n", "text before the first section: 'hello'"),
+            (FRONT + "### History\n### Comments\n", "section 'Comments' after 'History'"),
+            (FRONT + "### Description\n### Description\n", "duplicate section 'Description'"),
+            (
+                FRONT + "### Comments\n#### someone · 2026-10-19 14:05\nhi\n",
+                "bad comment header '#### someone · 2026-10-19 14:05'",
+            ),
+            (FRONT + "### Comments\n#### other · 2026-13-19 14:05\nhi\n", header),
+            (FRONT + "### Comments\n###\nhi\n#### other · 2026-13-19 14:05\nyo\n", header),
+            (FRONT + "### Comments\nhi\n", "bad comment header 'hi'"),
+            (
+                FRONT + "### History\n- 2026-10-19 14:02 todo other\n",
+                "bad History line '- 2026-10-19 14:02 todo other'",
+            ),
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(TrackerFileError) as caught:
+                    parse(text)
+                self.assertEqual((caught.exception.path, caught.exception.reason), (PATH, reason))
 
 
 class Edits(Zoned):
