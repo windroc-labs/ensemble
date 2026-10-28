@@ -41,9 +41,7 @@ class Outer(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class Layout:
-    """A run's workdir (Spec.workdir): `agent`, the agent's cwd and only write grant; `run`, the
-    harness's state and records.
-    """
+    """`agent`: the agent's cwd and only write grant; `run`: the harness's state."""
 
     workdir: str
 
@@ -64,7 +62,7 @@ class Layout:
 
     @property
     def scratch(self) -> tuple[str, ...]:
-        """`agent`'s checkouts (`src`, the report repo's clone `publish`) and temp files."""
+        """`publish`: the report repo's clone."""
         return (os.path.join(self.agent, "src"), os.path.join(self.agent, "publish"), self.tmp)
 
     @property
@@ -73,11 +71,9 @@ class Layout:
 
     @property
     def out(self) -> str:
-        """A session run's default `out`."""
         return os.path.join(self.run, "out.md")
 
     def in_place(self) -> bool:
-        """Whether `agent` is a real directory where it belongs, reached through no symlink."""
         real = os.path.join(
             os.path.realpath(os.path.dirname(self.workdir)),
             os.path.relpath(self.agent, os.path.dirname(self.workdir)),
@@ -89,7 +85,7 @@ class Layout:
         )
 
     def checkouts(self) -> tuple[str, ...] | None:
-        """Delegate.checkouts: the dirs at `agent`/src/<owner>/<name> that are their own real path."""
+        """Delegate.checkouts."""
         if not os.path.lexists(self.agent):
             return None
         if not self.in_place():
@@ -105,12 +101,10 @@ class Layout:
 
 @dataclass(frozen=True)
 class Spec:
-    """One run to start: `workdir` is the run's workdir (Layout); `resume` resumes session `sid`;
-    client None: the role's; `out` None: `<run>/out.md` for a session run, else nothing is saved;
-    `team` None: the built-in one. name and events: tui only for plan(); HarnessDelegate takes them
-    in every mode (`name`: its agent session, `<name>-drive` its harness's; `events`: also the
-    detached harness's outcome line). `credentials`: the run's part of its credential request,
-    set only by the orchestrator (docs/architecture.md › Credentials).
+    """None: client, the role's; out, `<run>/out.md` for a session run, else unsaved.
+
+    name, events: tui only for plan(), every mode for HarnessDelegate. credentials: set only by
+    the orchestrator (docs/architecture.md › Credentials).
     """
 
     input: str
@@ -145,9 +139,7 @@ class DriverSpec:
 
 @dataclass(frozen=True)
 class Plan:
-    """`spec` resolved: its client, sid and team set, its paths absolute; `session` the session's
-    Spec; `docker` whether the agent runs in a container, then `repo` its Reference repo.
-    """
+    """`spec` resolved; `repo`: a docker run's Reference repo."""
 
     spec: Spec
     session: SessionSpec
@@ -190,7 +182,7 @@ class Plan:
 
 @dataclass(frozen=True)
 class Preview:
-    """A construction's plan and placement; agent None: unnamed."""
+    """agent None: unnamed."""
 
     plan: Plan
     agent: str | None
@@ -200,7 +192,7 @@ class Preview:
 
 @dataclass(frozen=True)
 class Limit:
-    """resets_at: epoch seconds or None."""
+    """resets_at: epoch seconds."""
 
     resets_at: float | None
 
@@ -239,7 +231,7 @@ Event = Begun | Progress | Finished
 
 
 class GateStatus(StrEnum):
-    """The ready gate's act; drafted: a failed or needs_input run's PR put back in draft."""
+    """drafted: a failed or needs_input run's PR put back in draft."""
 
     SKIPPED = "skipped"
     PASSED = "passed"
@@ -257,17 +249,14 @@ class Gated:
 
 @dataclass(frozen=True)
 class Resolved:
-    """A run's environment from the config layers (engine/environment.py)."""
-
     spec: EnvironmentSpec
     prefetch: bool
 
 
 @dataclass(frozen=True)
 class DelegateState:
-    """delegate.json's run state (engine/record.py); previous: attempt - 1's Result once a
-    follow-up opened attempt; bound: an owned attempt's worker took it (its owner phase);
-    closing: a close stopped its worker (no follow-up); drive: its ProcessControl path.
+    """delegate.json (engine/record.py); previous: attempt - 1's Result; bound: an owned
+    attempt's worker took it; closing: a close stopped its worker; drive: a ProcessControl path.
     """
 
     role: str

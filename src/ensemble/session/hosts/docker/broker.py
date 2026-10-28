@@ -1,4 +1,4 @@
-"""The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, maintain,
+"""The root-owned broker at the PROTOCOL version (SCHEMA): version, build, start, maintain,
 close, workspace-rm and probe-provider with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
@@ -520,7 +520,7 @@ def notice_key(root: str) -> re.Pattern:
 
 
 def manifest_credentials(request: CredentialRequest, app: str) -> dict:
-    """The manifest form of request ($defs.credentials): each grant names app."""
+    """$defs.credentials: each grant names app."""
     found = request.persisted()
     if "github" in found:
         if not app:
@@ -551,9 +551,7 @@ def write_manifest(
     repo: str = "",
     credentials: CredentialRequest | None = None,
 ) -> None:
-    """github: the App, and the legacy github's unless credentials names github (then null).
-    One source per kind: ConfigError on a double.
-    """
+    """github: the App's; null when credentials names github. One source per kind."""
     request = credentials or CredentialRequest()
     if request.github and (permissions is not None or repo):
         raise ConfigError("credentials github: the request's grants, not permissions or repo")
