@@ -187,7 +187,7 @@ ITERM_FILES = (
     "HTTPStorages/com.googlecode.iterm2.binarycookies",
 )
 SECRET_Q = r"password data for new item:"
-SLOTS = ("harness", "manager", "researcher", "pm", "engineer")
+SLOTS = ("harness", "manager", "reader", "researcher", "pm", "engineer")
 STATES = ("Backlog", "Todo", "In Progress", "In Review", "Handoff", "Done", "Canceled")
 
 
@@ -205,7 +205,7 @@ def app_config(slot):
 
 
 def app_table(slot):
-    table = slot if slot in ("harness", "manager") else f"roles.{slot}"
+    table = slot if slot in ("harness", "manager", "reader") else f"roles.{slot}"
     return f"\n[orchestrator.linear.{table}]\n" + "".join(
         f'{key} = "{value}"\n' for key, value in app_config(slot).items()
     )
@@ -623,7 +623,7 @@ class InstallTest(Case):
             answers.append((SECRET_Q, f"k-SENTINEL-{slot}"))
             app = (
                 linear.get(slot, {})
-                if slot in ("harness", "manager")
+                if slot in ("harness", "manager", "reader")
                 else linear.get("roles", {}).get(slot, {})
             )
             if not app.get("client_id"):
@@ -4155,7 +4155,7 @@ exec /bin/rm "$@"
             "linear",
             "--launchd",
             then=[
-                *self.secrets("harness", "manager"),
+                *self.secrets("harness", "manager", "reader"),
                 (SECRET_Q, "k-SENTINEL-wrong"),
                 ("Linear OAuth Client ID for researcher:", "client-researcher"),
             ],
@@ -4759,7 +4759,7 @@ exec /bin/rm "$@"
                 for role in ("researcher", "engineer", "reviewer")
             )
         )
-        slots = ("harness", "manager", "researcher", "engineer", "reviewer")
+        slots = ("harness", "manager", "reader", "researcher", "engineer", "reviewer")
         board = [(PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")]  # no document role: no docs repo
         result = self.configured(
             '[orchestrator]\nworkflow = "~/wf.toml"\n', then=[*self.secrets(*slots), *board]
@@ -4786,7 +4786,7 @@ exec /bin/rm "$@"
             "# Reviewer\n\n## Tasks\n\n- `triage`: Review.\n\n## Rules\n- `build`: ignored.\n"
         )
         Path(self.home, "wf.toml").write_text('[[stage]]\nrole = "reviewer"\ninput = "build"\n')
-        slots = ("harness", "manager", "reviewer")
+        slots = ("harness", "manager", "reader", "reviewer")
         result = self.configured(
             '[delegate]\nteam_dirs = ["~/custom-team"]\n[orchestrator]\nworkflow = "~/wf.toml"\n',
             then=[*self.secrets(*slots), (PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")],
@@ -4838,7 +4838,7 @@ exec /bin/rm "$@"
         self.assertEqual(linear["human_members"], ["me@example.com"])
         self.assertEqual(
             linear["roles"],
-            {r: app_config(r) for r in SLOTS[2:]},
+            {r: app_config(r) for r in SLOTS[3:]},
         )
         self.assertEqual(linear["project_repos"], {uuid(30): "acme/widget"})
         # the config gates of router --dry-run, promote --dry-run and issue list

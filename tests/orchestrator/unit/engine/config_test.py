@@ -55,7 +55,9 @@ AGENT_GROUP = "00000000-0000-4000-8000-000000000023"
 P1, P2 = "a0000000-0000-4000-8000-000000000031", "b0000000-0000-4000-8000-000000000032"
 
 
-STATES_LINE = HEADER[HEADER.index("linear.states = ") : HEADER.index("linear.task_label_group")]
+STATES_LINE = next(
+    line for line in HEADER.splitlines(keepends=True) if line.startswith("linear.states = ")
+)
 
 
 def missing(keys):
@@ -167,6 +169,7 @@ LINEAR_DEFAULTS = {
     **dict.fromkeys(("team", "assignee_id", "task_label_group", "agent_label_group"), ""),
     "harness": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "manager": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
+    "reader": {**dict.fromkeys(config.AppKey, ""), "renewal": "broker"},
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
@@ -1622,6 +1625,26 @@ class TuiSessionNames(Case):
 
 
 class CredentialDeclarations(ConfigFile, Case):
+    def test_reader_missing_refuses_launch_credentials_but_host_config_loads(self):
+        text = (
+            "\n".join(
+                line for line in PIPELINE.splitlines() if not line.startswith("linear.reader")
+            )
+            + "\n"
+        )
+        cfg = self.load(text)
+        self.assertIsNone(cfg.linear.reader)
+        with self.assertRaisesRegex(config.ConfigError, "distinct.*linear.reader"):
+            config.credentials(cfg, "engineer", "build")
+
+    def test_reader_cannot_alias_a_write_app(self):
+        for source in ("client-harness", "client-engineer", "client-manager"):
+            with (
+                self.subTest(source=source),
+                self.assertRaisesRegex(config.ConfigError, "linear.reader.client_id.*also"),
+            ):
+                self.load((MANAGER_LINE + PIPELINE).replace("client-reader", source))
+
     def test_task_replaces_whole_kinds_and_keeps_unrelated_role_references(self):
         cfg = self.load(
             PIPELINE

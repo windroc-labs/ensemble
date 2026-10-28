@@ -413,22 +413,15 @@ workspace files cannot replace a resumed run's saved values.
 
 Board runs (`router`, including `ensemble-crew issue`) resolve `[orchestrator.roles.<role>.credentials]`
 and `[orchestrator.roles.<role>.tasks.<task>.credentials]`: each task value replaces the whole role value of
-the same kind, retaining other kinds. A run without a task uses only role values; no declarations yields `{}`. New runs pass
+the same kind, retaining other kinds. A run without a task uses role values, including default read-only tracker access. New runs pass
 the result as JSON text; resumes omit it and keep the saved spec. Issue bodies and comments never supply it.
 `router --dry-run` prints the resolved object in each new-run preview; a resume supplies no replacement.
 Credentials in the orchestrator's `[core]` or `[core.roles.<role>]` overlays are configuration errors.
 
-Declarations check JSON-compatible table shape, the role's task index and the orchestrator-only `linear = "role"` shorthand;
-broker owns kind names and values. The shorthand expands to that role's app references and only the board keys
-listed below, without reading any secret. Local boards omit this shorthand; explicit reference objects stay opaque.
-For example, to declare the engineer app for `light-build` on a configured Linear board:
-
-```toml
-[orchestrator.roles.engineer.tasks.light-build.credentials]
-linear = "role"
-```
-
-The packaged engineer `decompose` task declares `linear = "role"`; other packaged declarations are empty.
+Declarations check JSON-compatible table shape, the role's task index and the orchestrator-only `linear = "read"` and `linear = "role"` shorthands;
+broker owns kind names and values. Every remote-board role defaults to `read`; the packaged engineer `decompose` task explicitly selects `role`.
+The read shorthand selects the reader app; the role shorthand selects that role's app. Both include the selected scopes and the board keys below, without reading secrets.
+Local boards omit these shorthands; explicit reference objects stay opaque.
 Installer-written GitHub grants are follow-up work.
 
 The broker alone interprets kinds: both declarations require independent
@@ -443,11 +436,11 @@ production schema is `src/broker/protocol/docker-broker/protocol.schema.json` (`
 | Kind | Reference | Container path (github/env serving pending) |
 |---|---|---|
 | `github` | One `{app, permissions, repo?}` object, using the existing App/repo/permission rules; omitted `repo` keeps the App's installation scope | `/run/ensemble/secrets/github/<owner>` |
-| `linear` | `{app, board}`; app contains `role`, `client_id`, `user_id`, `secret_service`, `token_service`; board contains only `team`, `states`, `labels`, `project_repos`, `human_members` | `/run/ensemble/secrets/linear/` |
+| `linear` | `{app, board, scopes}`; app contains `role`, `client_id`, `user_id`, `secret_service`, `token_service`; board contains only `team`, `states`, `labels`, `project_repos`, `human_members`, `role_users`, `task_label_group`, `agent_label_group` | `/run/ensemble/secrets/linear/` |
 | `env` | 1–16 `{item, file}` entries; only `ensemble-broker-env/*` items, unique safe basenames of at most 255 UTF-8 bytes | `/run/ensemble/secrets/env/<file>` |
 
 `board.states` contains the seven workflow-state keys; `board.labels` contains `task_labels` and `agent_labels`
-string maps. All five board keys are required; label and project maps and the human-member list may be empty.
+string maps. All eight board keys are required; `role_users` maps role names to app user IDs; the task and agent group IDs support child assignment. The agent group may be empty when client labels are disabled; label and project maps and the human-member list may be empty.
 The schema excludes `harness` and `manager` role labels. Issuance also binds every supplied app reference to the broker's exact active enrolled role identity, including refusal of disguised harness/manager apps before container creation.
 A missing or unreadable enrollment returns `login_required`. Request `github` and `env` values are validated but
 do not populate or conflict with legacy manifest `github` and `secrets` fields; those keep their existing behavior.
@@ -457,9 +450,11 @@ changing either Python layer. Production rejects that test kind. All paths remai
 
 ### Linear container credentials
 
-Linear writes `token.json` (`access_token`, `expires_at`) and `board.json` (only the validated board object) under
+Docker issue runs use `ensemble-orchestrator issue read` with the board settings and scoped token delivered by the broker in `/run/ensemble/secrets/linear/`. The orchestrator resolves the separate `[linear.reader]` app with fixed `read` scope by default for every remote-board role, including custom roles and runs without an explicit task. The `decompose` task keeps its explicit full role grant for creating child issues. The broker issues separate container tokens with the identity's fixed scope on issuance and renewal; host tokens keep their existing scopes. OAuth scope enforces read-only access at the tracker; the worker CLI also refuses writes under a read-only grant. Missing, invalid or expired worker files fail explicitly without falling back to the local board. The manager can deliver the current description and comments through the run's existing input channel while access is restored.
+
+Linear writes `token.json` (`access_token`, `expires_at`) and `board.json` (the validated board object plus `scopes`) under
 its directory, both 0400. The app reference and root secret are never copied into the container. It requests a separate
-client_credentials token with the role app's existing scopes, leaving the host token and its write-back untouched.
+client_credentials token with the request's scopes (`read` or the explicit full role grant), leaving the host token and its write-back untouched.
 The existing maintenance tick renews it ten minutes before expiry, atomically replaces the token file, then revokes
 the old token. A failed write revokes the new token; a failed start revokes everything it issued. Before delivery,
 the broker records issued tokens through its existing broker-only Keychain store, at `ensemble-broker-linear` /
@@ -472,8 +467,7 @@ once all tokens are revoked or expired. A failed revocation returns a fixed erro
 revocation-and-retention path before returning an error. A container never closed leaves its token to expire (up to 30 days). Token values never
 appear in responses or audit logs.
 [Linear's OAuth contract](https://linear.app/developers/oauth-2-0-authentication) permits parallel client_credentials
-tokens with identical scopes and individual revocation. Enable client credentials for the role app; changing its
-scopes invalidates its other tokens. Host renewal keeps using its existing shared token path.
+tokens with identical scopes and individual revocation. A different scope revokes the app's existing tokens; the reader app therefore has a distinct Client ID from every write app. Enable client credentials for both reader and role apps. Host renewal keeps using its existing shared token path.
 
 Protocol 34 errors name the source and kind without echoing values. Existing global GitHub, verifier output-repo and environment-secret paths still operate;
 an empty new spec does not yet remove their implicit grants.
@@ -907,6 +901,7 @@ The main-process guard's kill, launch-deadline, `needs_input`, lock and log case
 The installer's proxy, Linear preset and Linear app checks stay manual ([Upgrading › Live checks](upgrading.md#live-checks)).
 
 ## Tests
+
 
 ```bash
 export PYTHONPATH=.:.github:src   # from the repo root

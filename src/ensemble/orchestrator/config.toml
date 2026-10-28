@@ -166,6 +166,22 @@ user_id = ""
 # local: token_service = "linear-app-manager-token"
 # local: user_id = "00000000-0000-4000-8000-000000000001"
 
+# Worker reads use a separate OAuth app: different scopes on a write app revoke its existing tokens.
+# Configure and enroll this reader on the host before launching ordinary Docker issue runs.
+[linear.reader]
+renewal = "broker"
+client_id = ""
+secret_service = ""
+token_service = ""
+user_id = ""
+
+# local: [orchestrator.linear.reader]
+# local: renewal = "broker"
+# local: client_id = "reader-client-id"
+# local: secret_service = "linear-app-reader-secret"
+# local: token_service = "linear-app-reader-token"
+# local: user_id = "00000000-0000-4000-8000-000000000003"
+
 # The team's workflow states the code uses.
 #   <state>  local, required for each of backlog, todo, in_progress, in_review, handoff, done, canceled: its Linear state id
 [linear.states]

@@ -226,6 +226,7 @@ class LinearAppInstall(Case):
         for slot, table, kind in (
             ("harness", "harness", AppKind.HARNESS),
             ("manager", "manager", AppKind.MANAGER),
+            ("reader", "reader", AppKind.READER),
             ("pm", "roles.pm", AppKind.ROLE),
         ):
             with self.subTest(slot=slot):

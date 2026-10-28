@@ -30,12 +30,8 @@ TYPES = {
 }
 FINISHED = frozenset({STATES["done"], STATES["canceled"], DUPLICATE})
 TASK_GROUP = "00000000-0000-4000-8000-000000000002"
-# The Linear tracker, then dotted keys and inline tables: fixtures may append top-level keys (a
-# Linear one as linear.<key>) or tables ([linear.<table>] included) after it.
 HARNESS_USER = "00000000-0000-4000-8000-000000000201"
-# The manager app's user: [linear.manager] user_id where a fixture sets it.
 MANAGER_USER = "00000000-0000-4000-8000-000000000202"
-# The harness app: its token entry is "linear-app-harness-token", what a fake transport keys the harness by.
 HARNESS_APP = {
     "client_id": "client-harness",
     "secret_service": "linear-app-harness-secret",
@@ -46,8 +42,6 @@ HARNESS_IDENTITY = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HAR
 HARNESS_LINE = "linear.harness = {{ {} }}\n".format(
     ", ".join(f'{k} = "{v}"' for k, v in HARNESS_APP.items())
 )
-# The manager app: its token entry is "linear-app-manager-token"; HEADER leaves it out (the issue command's
-# fixtures prepend MANAGER_LINE).
 MANAGER_APP = {
     "client_id": "client-manager",
     "secret_service": "linear-app-manager-secret",
@@ -55,7 +49,6 @@ MANAGER_APP = {
     "user_id": MANAGER_USER,
 }
 MANAGER_IDENTITY = LinearApp("manager", AppKind.MANAGER, "linear.manager", **MANAGER_APP)
-# LinearSettings.manager when [linear.manager] is unset.
 NO_MANAGER = LinearApp("manager", AppKind.MANAGER, "linear.manager", "", "", "", "")
 MANAGER_LINE = "linear.manager = {{ {} }}\n".format(
     ", ".join(f'{k} = "{v}"' for k, v in MANAGER_APP.items())
@@ -65,6 +58,7 @@ HEADER = (
     + 'linear.team = "{}"\n{}linear.states = {{ {} }}\n'.format(
         TEAM, HARNESS_LINE, ", ".join(f'{k} = "{v}"' for k, v in STATES.items())
     )
+    + 'linear.reader = { client_id = "client-reader", secret_service = "linear-app-reader-secret", token_service = "linear-app-reader-token", user_id = "00000000-0000-4000-8000-000000000203", renewal = "broker" }\n'
     + f'linear.task_label_group = "{TASK_GROUP}"\n'
     + 'delegates = { default = "harness", harness = { implementation = "ensemble.delegate:HarnessDelegate" } }\n'
     + 'local.issue_prefix = "LOC"\n'
@@ -80,7 +74,6 @@ STATE_NAMES = dict(
 ROLES = ("researcher", "pm", "engineer")
 
 
-# the packaged workflow's text, for a fixture that changes it
 PACKAGED_FLOW = files("ensemble.orchestrator.engine.flow").joinpath("workflow.toml").read_text()
 _FLOWS = tempfile.mkdtemp(prefix="ensemble-test-workflows-")
 atexit.register(shutil.rmtree, _FLOWS, ignore_errors=True)

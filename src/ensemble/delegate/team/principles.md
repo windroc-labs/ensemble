@@ -10,6 +10,7 @@
 - **Worktree**: check out a target repo `<repo>` with `python3 -P <team>/tools/repo.py worktree --dir <Workdir>/src --branch <branch> [--name <checkout>] [--base <Base:>] <repo>`, `<repo>` verbatim, `<branch>` as your role or task names it, `<Base:>` the input's `Base:` (none → drop `[--base <Base:>]`); use that repo only inside the JSON's `worktree`.
 - **Checkout**: `[--name <checkout>]` in a command → `--name <checkout>`, `<checkout>` the input's `Checkout:`; no `Checkout:` → drop it.
 - Temp files go in `<Workdir>/tmp/`.
+- **Issue updates**: re-read the current description and comments with `ensemble-orchestrator issue read <id> --full --output <Workdir>/tmp/<id>.json`. Ordinary runs have read-only board access; tasks with an explicit write grant keep it. If access fails, ask the manager to send the current description and comments through the run's existing input channel.
 
 ## Writing
 

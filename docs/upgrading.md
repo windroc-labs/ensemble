@@ -14,6 +14,18 @@ or `ensemble-crew worker NAME --credentials JSON`. For role runs, put `--task` a
 
 ### Linear container credentials
 
+Ordinary issue runs now need a separate read-only app in `[orchestrator.linear.reader]`; run
+`scripts/install.sh --board linear` to configure it, or set `client_id`, `secret_service`, `token_service`,
+`user_id` and `renewal = "broker"` there yourself. Enable client credentials on that app. Enroll it through
+`ensemble-broker login linear` with `name = reader`, `kind = reader` and those public app fields, following
+[Linear broker renewal](#linear-broker-renewal). Its Client ID and Keychain services must differ from every
+write app's: requesting different scopes on the same app revokes its existing tokens. Reader maintenance and
+container issuance always use `read`. No client secret is delivered to a worker.
+
+The orchestrator uses this reader by default; the `decompose` task keeps its existing explicit role write grant.
+Restart existing workers after enrollment so their saved credential specs include access. A failed re-read
+reports an error; the manager sends the current description and comments through the run's existing input channel.
+
 Before declaring a role app in `linear`:
 
 1. Enable client credentials on the existing role app; keep the same scopes for host and container.
@@ -21,7 +33,7 @@ Before declaring a role app in `linear`:
    `kind = role`, and `renewal = "broker"` for its host transport. Complete the cutover before starting callers.
 
 For request validation, delivery paths and modes, the maintenance swap, and revocation, see
-[Linear container credentials](architecture.md#linear-container-credentials). Container CLI consumption ships separately.
+[Linear container credentials](architecture.md#linear-container-credentials). The worker CLI consumes these files directly.
 
 ## Claude account selection is the session's
 

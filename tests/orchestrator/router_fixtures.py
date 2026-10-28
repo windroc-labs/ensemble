@@ -760,7 +760,9 @@ class OuterBase(TickBase):
             sid=sid,
             resume=resume,
             name=f"{role}-{ID}-{sid[:8]}",
-            credentials=None if resume else "{}",
+            credentials=None
+            if resume
+            else json.dumps(config.credentials(config.load(path=self.config_path), role, task)),
         )
 
     def input(self, **kw):

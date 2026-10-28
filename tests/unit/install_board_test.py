@@ -47,7 +47,7 @@ class BoardContract(Case):
             (
                 [
                     f"{slot}\tlinear-app-{slot}-token\tlinear-app-{slot}-secret"
-                    for slot in ("harness", "manager", "pm")
+                    for slot in ("harness", "manager", "reader", "pm")
                 ],
                 None,
             ),

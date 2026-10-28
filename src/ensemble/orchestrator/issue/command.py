@@ -55,6 +55,7 @@ from ensemble.orchestrator.issue.output import (
 )
 from ensemble.orchestrator.trackers.linear.client import linear_gql, messages, use
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
+from ensemble.orchestrator.trackers.linear.worker import backend as worker_backend
 from ensemble.orchestrator.trackers.local.issues import LocalIssues
 
 STATES = [str(state) for state in IssueState]
@@ -67,6 +68,8 @@ _RULES = (
     "  a failed renewal of a usable token printing token-error on stderr);\n"
     "  a local board ($ENSEMBLE_BOARD_DIR) directly, writing as other. An issue\n"
     "  needs no recorded run. Help needs no credentials or services.\n"
+    "  Workers use broker-delivered board settings and tokens; ordinary tasks\n"
+    "  are read-only. Missing or expired access fails without local fallback.\n"
     "  stdout: one JSON object of at most 8192 bytes; diagnostics go to stderr.\n"
     "  Exit 0: success; 1: the board failed (Linear: GraphQL errors, HTTP,\n"
     "  timeout); 2: usage, configuration, Keychain, a board that cannot be\n"
@@ -843,22 +846,27 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
         except IssueError as error:
             diagnose(err, error)
             return USAGE
-    try:
-        cfg = config.load(path=config_path)
-    except (ConfigError, DelegateConfigError, ValueError, OSError) as error:
-        diagnose(err, error)
-        return USAGE
     request = _request(args, body)
-    if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args.command, request)):
-        diagnose(err, _LINEAR_ONLY.format(what))
-        return USAGE
     try:
-        board = (
-            LocalIssues(cfg.board, cfg.roles, prefix=cfg.local_prefix)
-            if cfg.tracker is TrackerKind.LOCAL
-            else _linear(cfg, gql, err)
-        )
-    except (ConfigError, TrackerFileError) as error:
+        board = worker_backend(args.command)
+        if board is None:
+            cfg = config.load(path=config_path)
+            if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args.command, request)):
+                diagnose(err, _LINEAR_ONLY.format(what))
+                return USAGE
+            board = (
+                LocalIssues(cfg.board, cfg.roles, prefix=cfg.local_prefix)
+                if cfg.tracker is TrackerKind.LOCAL
+                else _linear(cfg, gql, err)
+            )
+    except (
+        ConfigError,
+        DelegateConfigError,
+        TrackerFileError,
+        IssueError,
+        ValueError,
+        OSError,
+    ) as error:
         diagnose(err, error)
         return USAGE
     try:

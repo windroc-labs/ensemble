@@ -16,7 +16,7 @@ TOKEN_URL = "https://api.linear.app/oauth/token"
 GRAPHQL_URL = "https://api.linear.app/graphql"
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 # engine/types.py SCOPES by slot; any other slot is a role
-SCOPES = {"harness": "read,write", "manager": "read,write,app:assignable"}
+SCOPES = {"harness": "read,write", "manager": "read,write,app:assignable", "reader": "read"}
 ROLE_SCOPES = "read,write,app:assignable,app:mentionable"
 
 

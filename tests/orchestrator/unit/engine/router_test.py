@@ -733,7 +733,7 @@ class IssueBlockers(Base):
                 f"TASK-2 https://linear.app/x/TASK-2 {PD}",
                 [
                     "pick TASK-2 queue=1",
-                    "preview TASK-2 client=b client_source=default credentials={}",
+                    f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 ],
             ),
             ("plan", "new", []),
@@ -1620,7 +1620,10 @@ class LabelClients(TickBase):
                 events = [json.loads(line) for line in self.raw.splitlines()]
                 plan = next(event for event in events if event["kind"] == "plan")
                 self.assertEqual((plan["mode"], plan["client"]), ("new", "a"))
-                self.assertEqual(plan["credentials"], {"future": {"ref": "current"}})
+                self.assertEqual(
+                    plan["credentials"],
+                    config.credentials(config.load(path=self.config_path), "researcher", None),
+                )
                 self.unchanged(fake)
 
     def test_a_usage_blocked_restart_logs_only_its_usage_skip(self):
@@ -1854,7 +1857,7 @@ class RouterLocking(TickBase):
                 [
                     "plan mode=new queue=1",
                     "pick TASK-1 queue=1",
-                    "preview TASK-1 client=a client_source=default credentials={}",
+                    f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 ],
             )
             self.assertRegex(self.said()[-1], "^usage client=a ")
@@ -1863,7 +1866,7 @@ class RouterLocking(TickBase):
                 self.said(),
                 [
                     "pick TASK-1 queue=1",
-                    "preview TASK-1 client=a client_source=default credentials={}",
+                    f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 ],
             )
             out = io.StringIO()
@@ -2213,11 +2216,11 @@ class ClaimUsageGates(Base):
             self.said(),
             [
                 "pick TASK-1 queue=2",
-                "preview TASK-1 client=a client_source=default credentials={}",
+                f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 "usage client=a usage=unknown allowed=false",
                 "usage-skip TASK-1 client=a reason=usage unknown",
                 "pick TASK-2 queue=2",
-                "preview TASK-2 client=b client_source=default credentials={}",
+                f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 "usage client=b usage=five_hour=10% weekly=10% allowed=true",
             ],
         )
@@ -2731,7 +2734,8 @@ class ScheduledUsageGates(TickBase):
                         self.assertIn("client=b client_source=label", said)
                     if not explicit:
                         self.assertIn(
-                            "preview TASK-2 client=a client_source=default credentials={}", said
+                            f"preview TASK-2 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
+                            said,
                         )
                     expected = ["TASK-1"] if explicit else ["TASK-1", "TASK-2"]
                     self.assertEqual([v["i"] for q, v in fake.queries if q == RECHECK], expected)
@@ -2866,7 +2870,7 @@ class ScheduledUsageGates(TickBase):
                     "usage-skip TASK-1 client=a reason=usage unknown",
                     "plan mode=new queue=1",
                     "pick TASK-2 queue=1",
-                    "preview TASK-2 client=b client_source=default credentials={}",
+                    f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                     b,
                 ],
                 ["a", "b"],
@@ -2879,7 +2883,7 @@ class ScheduledUsageGates(TickBase):
                     "plan TASK-1 mode=resume sid=a",
                     "plan mode=new queue=1",
                     "pick TASK-2 queue=1",
-                    "preview TASK-2 client=b client_source=default credentials={}",
+                    f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                     b,
                 ],
                 ["a", "b"],
@@ -4034,7 +4038,7 @@ class ExplicitIssueRuns(TickBase):
                 todo,
                 [
                     "pick TASK-1 queue=1",
-                    "preview TASK-1 client=a client_source=default credentials={}",
+                    f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 ],
             ),
             (
@@ -4083,21 +4087,22 @@ class ExplicitIssueRuns(TickBase):
 
         light = [label("Light Research", LIGHT)]
         deep = [label("Deep Research", DEEP)]
+        self.write_config(tiers)
         cases = (
             (
                 "listed",
                 lambda: todo(light),
-                "preview TASK-1 client=a client_source=default tier=3 credentials={}",
+                f"preview TASK-1 client=a client_source=default tier=3 credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
             ),
             (
                 "unlisted",
                 lambda: todo(deep),
-                "preview TASK-1 client=a client_source=default credentials={}",
+                f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
             ),
             (
                 "no task",
                 lambda: todo([]),
-                "preview TASK-1 client=a client_source=default credentials={}",
+                f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
             ),
             ("resume", lambda: resumable("light-research"), "plan TASK-1 mode=resume sid=a tier=3"),
             (
@@ -5479,12 +5484,12 @@ class ScheduledRuns(TickScenario):
                 "plan mode=new queue=4",
                 "claim-skip TASK-3 to=in_review reason=reached 4 attempts",
                 "pick TASK-5 queue=4",
-                "preview TASK-5 client=a client_source=default credentials={}",
+                f"preview TASK-5 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 "usage client=a usage=five_hour=10% weekly=10% allowed=true",
                 "pick TASK-6 queue=4",
-                "preview TASK-6 client=a client_source=default credentials={}",
+                f"preview TASK-6 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 "pick TASK-4 queue=4",
-                "preview TASK-4 client=b client_source=default credentials={}",
+                f"preview TASK-4 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 "usage client=b usage=five_hour=10% weekly=10% allowed=true",
             ],
         )
@@ -5504,7 +5509,7 @@ class ScheduledRuns(TickScenario):
             [
                 "plan mode=new queue=1",
                 "pick TASK-1 queue=1",
-                "preview TASK-1 client=a client_source=default credentials={}",
+                f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 f"usage client=a {why} allowed=false",
                 f"usage-skip TASK-1 client=a reason=usage {why}",
                 "pick-none reason=nothing claimable",
@@ -5528,7 +5533,7 @@ class ScheduledRuns(TickScenario):
             [
                 'plan mode=new queue=1 live={"engineer": "1/1", "pm": "1/1"}',
                 "pick TASK-2 queue=1",
-                "preview TASK-2 client=a client_source=default credentials={}",
+                f"preview TASK-2 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 "usage client=a usage=five_hour=10% weekly=10% allowed=true",
             ],
         )

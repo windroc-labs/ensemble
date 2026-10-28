@@ -56,6 +56,7 @@ LINEAR_KEYS = {
     "assignee_id",
     "harness",
     "manager",
+    "reader",
     "task_label_group",
     "task_labels",
     "agent_label_group",
@@ -313,6 +314,11 @@ def _linear_settings(linear):
             **{k.value: linear["manager"].get(k, "") for k in AppKey},
             renewal=linear["manager"].get("renewal", "transport"),
         ),
+        reader=(
+            LinearApp("reader", AppKind.READER, "linear.reader", **linear["reader"])
+            if all(linear["reader"].get(k) for k in AppKey)
+            else None
+        ),
         task_label_group=linear["task_label_group"],
         agent_label_group=linear["agent_label_group"],
         roles=MappingProxyType(
@@ -408,6 +414,7 @@ def _load_config(cfg, local, board):
 def _linear(cfg, local):
     _app_table(cfg["linear"], "harness")
     _app_table(cfg["linear"], "manager")
+    _app_table(cfg["linear"], "reader")
     if missing := utils.unset(cfg, REQUIRED):
         raise ConfigError(
             f"orchestrator/config.toml: required, unset: {', '.join(missing)}: set them in {local} (orchestrator/config.toml's `# local:` lines)"
@@ -415,7 +422,9 @@ def _linear(cfg, local):
     linear = cfg["linear"]
     _check_ids(linear)
     _app(linear, "harness")
-    _manager(linear, _linear_roles(linear))
+    owners = _linear_roles(linear)
+    _manager(linear, owners)
+    _manager(linear, owners, "reader")
     _project_repos(linear)
     _task_labels(linear)
     _agent_labels(linear)
@@ -478,19 +487,20 @@ def _harness_services(linear):
     }
 
 
-def _manager(linear, owners):
+def _manager(linear, owners, name="manager"):
     """[linear.manager]: its set keys, each valid and no other app's (owners: _linear_roles');
     unset ones refuse only the issue commands (manager_app)."""
-    table = linear["manager"]
+    table = linear[name]
     given = tuple(k for k in AppKey if table.get(k, "") != "")
-    _app(linear, "manager", given)
+    _app(linear, name, given)
     for key in given:
         taken = owners["service" if key in _SERVICES else key]
         if table[key] in taken:
             raise ConfigError(
-                f"orchestrator/config.toml: linear.manager.{key} {table[key]!r} is also "
+                f"orchestrator/config.toml: linear.{name}.{key} {table[key]!r} is also "
                 f"{taken[table[key]]}"
             )
+        taken[table[key]] = f"linear.{name}.{key}"
 
 
 _SERVICES = (AppKey.SECRET_SERVICE, AppKey.TOKEN_SERVICE)
@@ -775,9 +785,11 @@ def _credential_table(cfg, role, table, where, *, default=False):
         else:
             linear = cfg["linear"]
             scopes = "read" if out["linear"] == "read" else SCOPES[AppKind.ROLE]
+            app_role = "reader" if scopes == "read" else role
+            app = linear["reader"] if scopes == "read" else linear["roles"][role]
             out["linear"] = {
                 "scopes": scopes,
-                "app": {"role": role, **{k.value: linear["roles"][role][k] for k in AppKey}},
+                "app": {"role": app_role, **{k.value: app.get(k, "") for k in AppKey}},
                 "board": {
                     **{k: linear[k] for k in ("team", "states", "project_repos")},
                     "human_members": linear.get("human_members", []),
@@ -799,7 +811,18 @@ def _credential_table(cfg, role, table, where, *, default=False):
 def credentials(cfg: Config, role, task: str | None) -> dict:
     """A fresh spec: task values replace whole same-kind role values."""
     settings = cfg.roles[role]
-    return utils.thaw({**settings.credentials, **settings.task_credentials.get(task or "", {})})
+    result = utils.thaw({**settings.credentials, **settings.task_credentials.get(task or "", {})})
+    grant = result.get("linear")
+    if (
+        isinstance(grant, dict)
+        and grant.get("scopes") == "read"
+        and cfg.linear
+        and cfg.linear.reader is None
+    ):
+        raise ConfigError(
+            "Worker issue reads require a distinct [orchestrator.linear.reader] app; configure client_id, secret_service, token_service and user_id, then enroll it with ensemble-broker login linear on the host."
+        )
+    return result
 
 
 def _runnable_inputs(cfg, roles):

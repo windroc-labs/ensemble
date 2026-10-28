@@ -2151,7 +2151,42 @@
             "board",
             "scopes"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "scopes": {
+                    "const": "read"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "app": {
+                    "properties": {
+                      "role": {
+                        "const": "reader"
+                      }
+                    }
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "app": {
+                    "properties": {
+                      "role": {
+                        "not": {
+                          "const": "reader"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
         },
         "env": {
           "type": "array",
