@@ -394,7 +394,21 @@ second is the selected environment's declaration. They never parse, validate, in
 Their records preserve both strings. The start manifest reserves two optional JSON strings, omitting only `None`;
 decoding the outer manifest recovers the original UTF-8 JSON text, including whitespace and escapes.
 This envelope keeps malformed opaque text from changing the surrounding manifest. There is no Python credential
-type or kind registry. tmux does not inject from these fields.
+type or kind registry. tmux ignores these fields; in_process refuses either field's presence, even empty text.
+
+`ensemble-delegate run --credentials JSON` and `ensemble-session start --credentials JSON` take the caller's
+declaration as raw text, defaulting to absent. Crew forwards this option after the role or worker name:
+`ensemble-crew role ROLE --credentials JSON --input TEXT` or
+`ensemble-crew worker NAME --client CLIENT --credentials JSON`. Caller overlays cannot carry `credentials`.
+Without an explicit `--credentials`, crew role queries `ensemble-orchestrator credentials --role ROLE [--task TASK]`
+for its declarations; an undeclared role yields `{}`. An explicit option replaces that whole default without a query.
+The query reads configuration only, without tracker or credential calls. Crew resumes replay saved values.
+
+Worker state, delegate records and Docker `host.json` live on the host, outside the container's writable workspace.
+Resume, restart and crew reopen reuse the saved declarations in each new start manifest. A caller may omit them or
+restate the identical text; different text, including different JSON whitespace, fails before container start.
+A new start uses its supplied values, replacing any previous session's declarations. Configuration changes and
+workspace files cannot replace a resumed run's saved values.
 
 Board runs (`router`, including `ensemble-crew issue`) resolve `[orchestrator.roles.<role>.credentials]`
 and `[orchestrator.roles.<role>.tasks.<task>.credentials]`: each task value replaces the whole role value of
@@ -439,8 +453,8 @@ changing either Python layer. Production rejects that test kind. All paths remai
 
 Protocol 34 accepts absent declarations or JSON-text empty objects and refuses every nonempty declaration before
 side effects, without interpreting kinds. Malformed envelopes and non-object contents also fail with
-`manifest_rejected`; errors name the source without echoing values. Host lifecycle, CLI and manifest-writer wiring
-remain follow-up work. Existing global GitHub, verifier output-repo and environment-secret paths still operate;
+`manifest_rejected`; errors name the source without echoing values.
+Existing global GitHub, verifier output-repo and environment-secret paths still operate;
 an empty new spec does not yet remove their implicit grants.
 
 | Credential | Host | Purpose | Stored at | Readers | Lifetime | Revoke |

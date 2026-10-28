@@ -106,6 +106,13 @@ class Detach(Base):
     def detaches(self, *extra, events=None, **kw):
         return self.runs("--sid", SID, "--detach", "--events", events or self.events, *extra, **kw)
 
+    def test_credentials_reach_the_delegate_without_decoding(self):
+        for value in (' {"future-kind": [1]}\n', "{", "{}", ""):
+            with self.subTest(value=value):
+                code, _, err = self.detaches("--credentials", value)
+                self.assertEqual(code, 0, err)
+                self.assertEqual(Detaching.made[-1][1].credentials, value)
+
     def test_inside_an_agent_session_a_run_detached_or_not_exits_2_and_constructs_nothing(self):
         with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
             for code, out, err in (self.detaches(), self.runs("--sid", SID)):

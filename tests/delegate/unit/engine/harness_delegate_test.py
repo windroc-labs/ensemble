@@ -2681,6 +2681,17 @@ class EnvironmentTest(HarnessCase):
                 self.stop(view.resume(mode=mode))
                 self.assertEqual(self.metadata()["plan"]["session"]["environment"], stored)
 
+    def test_resume_keeps_credential_declarations_outside_the_workspace(self):
+        values = {"credentials": ' {"future-kind": [1]}\n', "environment_credentials": "{"}
+        view = self.make(spec=self.spec(**values), host="docker")
+        with open(os.path.join(self.work, "agent", "credentials.json"), "w") as f:
+            f.write('{"replacement": true}')
+        self.append('[delegate.environment.docker]\ngateway = "changed"\n')
+        self.stop(self.answered(view))
+        for key, value in values.items():
+            self.assertEqual(self.metadata()["plan"]["session"][key], value)
+            self.assertEqual(getattr(HarnessSession.preflights[-1]["spec"], key), value)
+
     def test_pre_upgrade_state_resumes_without_environment(self):
         view = self.make(role="engineer", spec=self.spec(task="build"), host="docker")
         data = self.metadata()

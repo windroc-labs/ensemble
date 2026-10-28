@@ -114,6 +114,8 @@ class WorkerState:
     events: str | None = None
     display: Display = None
     environment: EnvironmentSpec | None = None
+    credentials: str | None = None
+    environment_credentials: str | None = None
 
     def __post_init__(self):
         checks = {
@@ -204,6 +206,8 @@ class WorkerState:
             flags=self.flags,
             env=self.env,
             environment=self.environment,
+            credentials=self.credentials,
+            environment_credentials=self.environment_credentials,
         )
 
 

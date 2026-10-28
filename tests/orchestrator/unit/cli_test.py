@@ -41,6 +41,26 @@ class Commands(Case):
         self.assertEqual(cli.TRACKERS[TrackerKind.LINEAR].connect, LinearTracker.connect)
 
 
+class CredentialQuery(run_fixtures.Base):
+    def test_query_uses_the_role_task_resolver_without_tracker_calls(self):
+        with open(self.local, "a") as f:
+            f.write(
+                "\n[orchestrator.roles.engineer.credentials]\nfuture = {value = 1}\nother = [2]\n[orchestrator.roles.engineer.tasks.build.credentials]\nfuture = {value = 3}\n"
+            )
+        for extra, expected in (
+            ([], {"future": {"value": 1}, "other": [2]}),
+            (["--task", "build"], {"future": {"value": 3}, "other": [2]}),
+        ):
+            code, out, err = _call(["credentials", "--role", "engineer", *extra])
+            self.assertEqual((code, err), (0, ""))
+            self.assertEqual(json.loads(out), expected)
+        self.assertFalse(os.path.exists(self.logs))
+
+    def test_undeclared_role_has_no_defaults(self):
+        code, out, err = _call(["credentials", "--role", "custom-role"])
+        self.assertEqual((code, json.loads(out), err), (0, {}, ""))
+
+
 class Wirings(run_fixtures.Base):
     """Each tracker kind's engine wiring: its run reader, role apps and write-back writers."""
 
@@ -274,7 +294,7 @@ class Wirings(run_fixtures.Base):
                 "reaches Linear as the [linear.harness] OAuth app, whose token any command renews"
                 " before a call when under 5 days are left (the issue commands: the [linear.manager]"
                 " OAuth app)",
-                "{router,promote,prune,issue,status,show,hide,close,attach-command,resume,content,writeback}",
+                "{router,promote,prune,issue,credentials,status,show,hide,close,attach-command,resume,content,writeback}",
             ),
             "router": (
                 "ensemble-orchestrator router",
