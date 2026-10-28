@@ -332,7 +332,7 @@ class Wirings(run_fixtures.Base):
             "prune": (
                 "ensemble-orchestrator prune",
                 "--dry-run",
-                "2 hours",
+                "1 hour",
                 "7 days",
                 "uncommitted",
                 "read",
