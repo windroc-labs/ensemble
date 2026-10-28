@@ -125,6 +125,9 @@ class HostDefaults(Case):
         self.assertIsNone(MinimalHost("m")._client_context().container)
         self.assertIsNone(LOCAL_CONTEXT.container)
 
+    def test_a_host_without_workspaces_removes_none(self):
+        self.assertEqual(MinimalHost("m").remove_workspaces("/w/TASK-1/agent"), [])
+
     def test_a_handle_cannot_show_its_screen_unless_its_host_reads_one(self):
         for lines in (None, 5):
             with self.subTest(lines=lines), self.assertRaises(NotShowable) as caught:

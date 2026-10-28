@@ -532,6 +532,20 @@ class DockerHost(Host):
         )
         return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
 
+    def remove_workspaces(self, cwd: str) -> list[str]:
+        """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept."""
+        rows = self._workspaces()
+        if rows is None:
+            raise SessionError(f"host {self.name}: workspaces unknown (no Docker CLI or socket)")
+        anchor, removed = os.path.realpath(cwd), []
+        for volume in sorted(v for v, a in rows if a == anchor):
+            try:
+                if self.broker.workspace_rm(volume, force=True):
+                    removed.append(volume)
+            except SessionError as error:
+                raise SessionError(f"docker workspace {volume} kept: {error}") from None
+        return removed
+
     def _reclaim(self) -> None:
         rows = self._workspaces()
         if rows is None:

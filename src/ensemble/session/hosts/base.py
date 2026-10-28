@@ -348,6 +348,10 @@ class Host(ABC):
     def worker_liveness(self, name: str, generation: str) -> Liveness:
         raise SessionError(f"host {self.name} runs no managed worker")
 
+    def remove_workspaces(self, cwd: str) -> list[str]:
+        """cwd's workspaces, force-removed."""
+        return []
+
     def _release(self, name: str, generation: str) -> None:
         """Removes `generation`'s leftovers once worker_liveness is ABSENT; override with worker."""
         return None
