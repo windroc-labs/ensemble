@@ -1464,6 +1464,8 @@ class HarnessDelegate(Delegate):
                     name=named,
                     # stored, never re-resolved (FR-62)
                     environment=state.plan.session.environment,
+                    credentials=state.plan.session.credentials,
+                    environment_credentials=state.plan.session.environment_credentials,
                     access=replace(
                         accepted.session.access, cwd=original.cwd, project=original.project
                     ),

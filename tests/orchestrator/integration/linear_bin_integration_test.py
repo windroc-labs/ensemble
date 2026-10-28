@@ -19,6 +19,7 @@ COMMANDS = [
     "promote",
     "prune",
     "issue",
+    "credentials",
     "status",
     "show",
     "hide",

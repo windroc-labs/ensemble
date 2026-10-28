@@ -473,6 +473,8 @@ Examples:
             """ROLE selects a persona; downstream --task optionally selects its work type.
 Crew supplies --role ROLE --detach --name NAME, identity and events file.
 Requires configured role/client and downstream --input. Prints a Record.
+Without --credentials JSON, resolves the role/task's orchestrator declaration.
+An explicit value replaces that declaration entirely; resumes reuse the saved value.
 
 Examples:
   With the built-in pm role and its client configured:

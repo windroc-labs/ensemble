@@ -1,7 +1,4 @@
-"""BaseMode, a Mode's running session, and what the modes share to start one. The class's
-start() fixes a Prepared before anything starts, has `record` write the session line, then starts
-and returns the session, so none exists unstarted. stop() is idempotent.
-"""
+"""Shared mode lifecycle: prepare, record, then launch; stop() is idempotent."""
 
 import json
 import os
@@ -111,7 +108,6 @@ class BaseMode(ABC):
     kind: ClassVar[Mode]
 
     def __init__(self, prepared: Prepared) -> None:
-        """Built by start (TuiMode.attach too) from what it started."""
         self._prepared = prepared
 
     @property
@@ -216,6 +212,11 @@ class BaseMode(ABC):
         """spec with `host`'s client env for `name`, and the metadata its Host keeps."""
         home = host._client_env(name, spec.client or "", client_home, resume=spec.resume)
         metadata = {
+            **{
+                key: value
+                for key in ("credentials", "environment_credentials")
+                if (value := getattr(spec, key)) is not None
+            },
             **(
                 {"environment": json.dumps(spec.environment.persisted())}
                 if spec.environment is not None

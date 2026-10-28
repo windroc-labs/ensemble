@@ -496,6 +496,14 @@ class Overlays(Fake):
                     self.assertTrue(message.startswith(f"{source}: {table.format(t=where)}: "))
                     self.assertIn(trusted, message)
 
+    def test_credentials_are_refused_in_all_caller_overlays(self):
+        for overlay in ({"credentials": {}}, {"roles": {"writer": {"credentials": {}}}}):
+            for label in (("run overlay", "overlay"), ("orchestrator.toml", "orchestrator")):
+                with self.subTest(overlay=overlay, label=label):
+                    self.assertIn(
+                        "unknown key 'credentials'", self.refused(overlays=(overlay,), label=label)
+                    )
+
 
 class OldKeys(Fake):
     def test_task_tables_or_default_task_in_any_role_table(self):

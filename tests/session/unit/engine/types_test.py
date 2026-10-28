@@ -41,6 +41,15 @@ from tests.session.case import Case
 
 
 class EnvironmentSources(Case):
+    def test_in_process_refuses_any_present_credential_declaration(self):
+        for field in ("credentials", "environment_credentials"):
+            for value in ("", "{}", "null", "{"):
+                with (
+                    self.subTest(field=field, value=value),
+                    self.assertRaisesRegex(ConfigError, field + ": in_process"),
+                ):
+                    Spec(workdir="/w", access=Access(cwd="/w"), mode="in_process", **{field: value})
+
     def test_spec_accepts_both_environment_sources(self):
         spec = Spec(workdir="/w", access=Access(cwd="/w", env={"A": "1"}), env={"B": "2"})
         self.assertEqual((spec.access.env, dict(spec.env)), ({"A": "1"}, {"B": "2"}))

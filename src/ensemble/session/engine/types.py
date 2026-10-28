@@ -462,6 +462,10 @@ class Spec(ProcessOptions):
             raise ConfigError("client must be None or a string")
         if self.mode is not None:
             object.__setattr__(self, "mode", _member(Mode, "mode", self.mode))
+        if self.mode == Mode.IN_PROCESS:
+            for name in ("credentials", "environment_credentials"):
+                if getattr(self, name) is not None:
+                    raise ConfigError(f"{name}: in_process mode runs on no Host")
         if not isinstance(self.prompt, str):
             raise ConfigError("prompt must be a string")
         if not isinstance(self.resume, bool):

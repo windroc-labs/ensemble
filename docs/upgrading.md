@@ -2,8 +2,11 @@
 
 ## Broker protocol 34: credential requests
 
+Before upgrading, close workers started before this release; they cannot be resumed after it.
 Close running Docker sessions, then run `scripts/install.sh --docker` to install the protocol 34 broker.
 Existing GitHub/env configuration stays in place until WDRC-350 and WDRC-351 migrate it.
+For `--credentials JSON` options, defaults, host-side state and resume rules, see
+[Credential spec](architecture.md#credentials).
 
 ### Linear container credentials
 
@@ -14,7 +17,7 @@ Before declaring a role app in `linear`:
    `kind = role`, and `renewal = "broker"` for its host transport. Complete the cutover before starting callers.
 
 For request validation, delivery paths and modes, the maintenance swap, and revocation, see
-[Linear container credentials](architecture.md#linear-container-credentials). Declaration plumbing and CLI consumption ship separately.
+[Linear container credentials](architecture.md#linear-container-credentials). Container CLI consumption ships separately.
 
 ## Claude account selection is the session's
 
