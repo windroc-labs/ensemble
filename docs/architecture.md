@@ -419,11 +419,13 @@ Installer-written GitHub grants are follow-up work.
 The broker alone interprets kinds: both declarations require independent
 validation; the caller's whole value replaces an environment value of the same kind, retaining other kinds.
 Duplicate JSON keys, trailing content, non-objects and unknown or invalid kinds must fail with `manifest_rejected`
-(exit 3) before container or credential operations. The broker serves all three kinds through its existing credential delivery batch; Linear joins the token maintenance scheduler. The
+(exit 3) before container or credential operations. Each source is parsed once into typed kind values. The broker
+currently serves only `linear` through its existing credential delivery batch and token maintenance scheduler;
+serving request `github` and `env` belongs to WDRC-350 and WDRC-351. The
 production schema is `src/broker/protocol/docker-broker/protocol.schema.json` (`credentials`: text envelope;
 `credential_spec`: decoded object); JSON Schema's `contentSchema` is an annotation, so broker validation is mandatory.
 
-| Kind | Reference | Container path |
+| Kind | Reference | Container path (github/env serving pending) |
 |---|---|---|
 | `github` | One `{app, permissions, repo?}` object, using the existing App/repo/permission rules; omitted `repo` keeps the App's installation scope | `/run/ensemble/secrets/github/<owner>` |
 | `linear` | `{app, board}`; app contains `role`, `client_id`, `user_id`, `secret_service`, `token_service`; board contains only `team`, `states`, `labels`, `project_repos`, `human_members` | `/run/ensemble/secrets/linear/` |
@@ -432,19 +434,23 @@ production schema is `src/broker/protocol/docker-broker/protocol.schema.json` (`
 `board.states` contains the seven workflow-state keys; `board.labels` contains `task_labels` and `agent_labels`
 string maps. All five board keys are required; label and project maps and the human-member list may be empty.
 The schema excludes `harness` and `manager` role labels. Issuance also binds every supplied app reference to the broker's exact active enrolled role identity, including refusal of disguised harness/manager apps before container creation.
-A missing or unreadable enrollment returns `login_required`. New declarations conflict with a non-null legacy `github`
-or a legacy `secrets` field of the same kind; the broker refuses that ambiguity.
+A missing or unreadable enrollment returns `login_required`. Request `github` and `env` values are validated but
+do not populate or conflict with legacy manifest `github` and `secrets` fields; those keep their existing behavior.
 The shared `credential-spec-test-kind.json` and test-only `test-kind.schema.json` exercise a broker extension without
 changing either Python layer. Production rejects that test kind. All paths remain on the secrets tmpfs; the
 `credential-dirs.json` fixture fixes their non-overlapping roots. Client/account login credentials stay separate.
+
+### Linear container credentials
 
 Linear writes `token.json` (`access_token`, `expires_at`) and `board.json` (only the validated board object) under
 its directory, both 0400. The app reference and root secret are never copied into the container. It requests a separate
 client_credentials token with the role app's existing scopes, leaving the host token and its write-back untouched.
 The existing maintenance tick renews it ten minutes before expiry, atomically replaces the token file, then revokes
 the old token. A failed write revokes the new token; a failed start revokes everything it issued. Before delivery,
-the broker records issued tokens in 0600 files under its private `~/.ensemble/linear/containers/` directory (0700),
-outside the container and workspace. One per-container lock serializes issuance, renewal and close. Close marks
+the broker records issued tokens through its existing broker-only Keychain store, at `ensemble-broker-linear` /
+`container/<container>`, separate from the host app record and outside the container and workspace. One per-container
+lock serializes issuance, renewal and close. Close of a container without a Linear record takes no Linear lock and
+creates no lock file. Close marks
 the record closed before revoking all recorded tokens, so it works after the guard/container stops and queued
 maintenance cannot issue another token. Records retain failed revocations for a repeated close and are deleted
 once all tokens are revoked or expired. Close removes the container even if revocation fails, returning a fixed
@@ -518,7 +524,7 @@ upgrade](#docker-install)), the `linear.*` services are not.
 | `ensemble-broker-bot` | App ID | `[session.hosts.docker.github] app` | App private key | the user; access set by `<B> login github ensemble-broker-bot` | the broker, once logged in |
 | `ensemble-broker-github-users` | `ensemble-broker-bot` | — | the App's slug and its bot user's ID, for git identity (not a secret) | `<B> login github ensemble-broker-bot` | the broker |
 | `ensemble-broker-codex` | `auth` | — | the full Codex login | `<B> login codex`; renewals at `start`, `maintain` | the broker |
-| `ensemble-broker-linear` | `registry`, `app/<token_service>` | — | `registry`: enrolled identities, no client ID, user ID or root/token service shared; `app/<token_service>`: that identity's binding and authoritative access token; no client secret copy | `<B> login linear`, `linear-maintain` | the broker |
+| `ensemble-broker-linear` | `registry`, `app/<token_service>`, `container/<container>` | — | `registry`: enrolled identities, no client ID, user ID or root/token service shared; `app/<token_service>`: that identity's binding and authoritative host access token; `container/<container>`: independent container tokens pending revocation; no client secret copy | `<B> login linear`, `linear-maintain`, `start`, `maintain`, `close` | the broker |
 | `ensemble-broker-linear-grants` | `host/<token_service>` | — | a host app's prepared/delivered access-token grant | `<B> linear-maintain` | the broker |
 | `ensemble-broker-opencode` | provider name | `[session.clients.opencode.providers.<name>]` | that OpenCode provider's API key | `<B> login opencode <name>` | the broker |
 | `ensemble-broker-env/<name>` | `<name>` | — | that environment secret | `<B> login env <name>` | the broker |

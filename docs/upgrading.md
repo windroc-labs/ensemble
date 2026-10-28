@@ -2,36 +2,19 @@
 
 ## Broker protocol 34: credential requests
 
-Broker protocol 34 adds optional `credentials` and `environment_credentials` JSON-text strings to the start manifest.
-Delegate and session carry both unchanged. The broker validates each, merges whole kinds with the caller winning,
-and serves GitHub, env and Linear through the existing delivery batch.
-The decoded contract is `{github: {app, permissions, repo?}, linear: {app, board}, env: [{item, file}]}`; every kind is
-optional. New board runs send the orchestrator's resolved declarations (an empty object when none are configured);
-resumes keep the stored spec. Unknown kinds and invalid values are refused before Docker operations. Empty objects add nothing.
-Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
-refuses an older protocol's broker. The broker change alone requires no migration of existing GitHub/env configuration. The existing
-`[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal,
-`--credentials`, and the no-implicit-credentials rule are not enabled here. Orchestrator role/task declarations
-are available as described in [Credential spec](architecture.md#credentials).
-GitHub grants (including verifier output) will move to orchestrator/CLI declarations; environment secrets will move
-to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
-errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for the contract.
+Close running Docker sessions, then run `scripts/install.sh --docker` to install the protocol 34 broker.
+Existing GitHub/env configuration stays in place until WDRC-350 and WDRC-351 migrate it.
 
 ### Linear container credentials
 
-Before declaring a role app in `linear`, enroll it using [Linear broker renewal](#linear-broker-renewal):
-use that role's name and public app values, `kind = role`, and select `renewal = "broker"` for its host transport.
-Do not enroll a second app for the task. The broker requires the exact active binding, rejecting harness/manager
-apps even when relabeled. Complete the existing enrollment cutover before starting callers; startup never prompts
-or changes Keychain trust. Enable client credentials on the app and keep the same scopes for host and container.
+Before declaring a role app in `linear`:
 
-The validated `board` object is written as `/run/ensemble/secrets/linear/board.json`; the independently issued
-`{"access_token": "…", "expires_at": "…"}` is `/run/ensemble/secrets/linear/token.json`. Both are 0400 on tmpfs,
-with no `config.local.toml` or app entries. No `linear` request means neither file. Maintenance replaces only the
-token file; close revokes that token without disturbing host write-back, even after the container stops.
-The broker retains a private host revocation record until all issued tokens are revoked or expired; failed
-revocation returns an error and a repeated close retries it. CLI consumption and declaration plumbing
-ship separately. See [Credential spec](architecture.md#credentials) for merging and lifecycle details.
+1. Enable client credentials on the existing role app; keep the same scopes for host and container.
+2. Enroll it using [Linear broker renewal](#linear-broker-renewal), with that role's name and public app values,
+   `kind = role`, and `renewal = "broker"` for its host transport. Complete the cutover before starting callers.
+
+For request validation, delivery paths and modes, the maintenance swap, and revocation, see
+[Linear container credentials](architecture.md#linear-container-credentials). Declaration plumbing and CLI consumption ship separately.
 
 ## Claude account selection is the session's
 
