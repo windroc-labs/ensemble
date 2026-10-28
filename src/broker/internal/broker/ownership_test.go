@@ -20,7 +20,7 @@ func TestOpenCodeOwnershipRecovery(t *testing.T) {
 			case "apps":
 				k.appsErr = ErrInvalidOwnerEdit
 			}
-			_, err := loginOpencode(t, k, &askOnce{}, apiKey)
+			_, err := storeLogin(t, "opencode", k, &askOnce{}, apiKey)
 			assertOwnershipRecovery(t, err, "ensemble-broker-opencode/strata")
 		})
 	}

@@ -69,21 +69,28 @@ func (k *fakeSecrets) DeleteSecret(service, account string) error {
 	return nil
 }
 
-// loginOpencode runs LoginOpencode for provider strata with key; it fails t when a secret reaches an error or output.
-func loginOpencode(t *testing.T, k *fakeSecrets, ask *askOnce, key string) (string, error) {
+// storeLogin runs login env dummy (kind "env") or login opencode strata with secret; it fails t when the secret or
+// password reaches an error or output, or a buffer stays unerased.
+func storeLogin(t *testing.T, kind string, k *fakeSecrets, ask *askOnce, secret string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	read := []byte(key)
-	err := LoginOpencode("strata", func() ([]byte, error) { return read, nil }, ask.read, k, &out)
+	read := []byte(secret)
+	value := func() ([]byte, error) { return read, nil }
+	var err error
+	if kind == "env" {
+		err = LoginEnv("dummy", value, ask.read, k, &out)
+	} else {
+		err = LoginOpencode("strata", value, ask.read, k, &out)
+	}
 	text := out.String()
 	if err != nil {
 		text += err.Error()
 	}
-	if key != "" && strings.Contains(text, key) || strings.Contains(text, keychainPass) {
+	if secret != "" && strings.Contains(text, secret) || strings.Contains(text, keychainPass) {
 		t.Fatalf("secret in %q", text)
 	}
 	if !bytes.Equal(read, make([]byte, len(read))) {
-		t.Fatal("key buffer not erased")
+		t.Fatal("secret buffer not erased")
 	}
 	for _, b := range k.returned {
 		if !bytes.Equal(b, make([]byte, len(b))) {
@@ -96,7 +103,7 @@ func loginOpencode(t *testing.T, k *fakeSecrets, ask *askOnce, key string) (stri
 func TestLoginOpencode(t *testing.T) {
 	k := &fakeSecrets{}
 	ask := &askOnce{}
-	out, err := loginOpencode(t, k, ask, apiKey)
+	out, err := storeLogin(t, "opencode", k, ask, apiKey)
 	if err != nil || out != "OpenCode provider strata API key saved; keychain trusts only the broker\n" {
 		t.Fatalf("%v %q", err, out)
 	}
@@ -112,7 +119,7 @@ func TestLoginOpencodeRefusesKey(t *testing.T) {
 	for _, bad := range []string{"", "has space", "tab\there", "nul\x00", "new\nline", strings.Repeat("a", 16385)} {
 		k := &fakeSecrets{}
 		ask := &askOnce{}
-		if _, err := loginOpencode(t, k, ask, bad); err == nil || len(k.puts) != 0 || ask.calls != 0 {
+		if _, err := storeLogin(t, "opencode", k, ask, bad); err == nil || len(k.puts) != 0 || ask.calls != 0 {
 			t.Fatalf("%q accepted: %v", bad, err)
 		}
 	}
@@ -147,7 +154,7 @@ func TestLoginOpencodeTrustsOnlyBroker(t *testing.T) {
 	} {
 		k := &fakeSecrets{fakeApps: fakeApps{access: tc.access, partitionErr: tc.partitionErr}}
 		ask := &askOnce{}
-		_, err := loginOpencode(t, k, ask, apiKey)
+		_, err := storeLogin(t, "opencode", k, ask, apiKey)
 		if ask.calls != 1 || !slices.Equal(k.steps, tc.steps) {
 			t.Fatalf("%s: asked %d, steps %q", name, ask.calls, k.steps)
 		}
@@ -170,7 +177,7 @@ func TestLoginOpencodeReadsBack(t *testing.T) {
 		"put fails": {&fakeSecrets{putErr: errors.New("keychain status -25299")},
 			"keychain item ensemble-broker-opencode strata: saving it failed: keychain status -25299; rerun ensemble-broker login opencode strata"},
 	} {
-		if _, err := loginOpencode(t, tc.k, &askOnce{}, apiKey); err == nil || err.Error() != tc.fails {
+		if _, err := storeLogin(t, "opencode", tc.k, &askOnce{}, apiKey); err == nil || err.Error() != tc.fails {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
