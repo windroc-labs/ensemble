@@ -115,7 +115,7 @@ Account operation: [Session account configuration](../src/ensemble/session/confi
 ## Verifier reports on GitHub; orchestrator destination removed
 
 The `verifier` now publishes its report with the `github` destination, to `Verification/` on `main` of a repo you name,
-and its outcome carries only the verdict (`Pass:` or `Fail:` and one line) and the report's `url`. Before the next
+and its outcome carries only the verdict (its ✅, ❌ or ⚠️ mark and one line) and the report's `url`. Before the next
 verifier run:
 
 1. Name the repo in `~/.ensemble/config.local.toml`; without it every verifier run and `ensemble-delegate run --list`
