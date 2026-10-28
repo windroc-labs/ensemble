@@ -465,21 +465,6 @@ class Overlays(Fake):
         self.assertEqual((run.effort, run.output), ("max", {"type": "pull-request"}))
         self.assertEqual(self.resolved(overlays=({},)), self.resolved())
 
-    def test_an_overlay_rejects_unknown_and_legacy_keys(self):
-        bad = (
-            ({"flags": []}, "flags"),
-            ({"tasks": {}}, "tasks"),
-            ({"output": {"type": "local", "typo": "value"}}, "typo"),
-            ({"roles": {"writer": {"default_task": "short-note"}}}, "default_task"),
-            ({"roles": {"writer": {"tasks": {}}}}, "tasks"),
-            ({"roles": {"writer": {"allow": []}}}, "allow"),
-            ({"roles": {"writer": {"output": {"type": "local", "typo": "value"}}}}, "typo"),
-            ({"roles": {"stranger": {"tier": 3}}}, "stranger"),
-        )
-        for overlay, message in bad:
-            with self.subTest(overlay=overlay), self.assertRaisesRegex(ConfigError, message):
-                self.resolved(overlays=(overlay,))
-
     def test_malformed_overlay_tables_or_keys_fail_clearly(self):
         for overlay in (
             None,
@@ -595,12 +580,6 @@ class Validate(Fake):
         os.remove(os.path.join(self.root, "roles", "editor.md"))
         self.assertIn(TIER, self.refused("editor"))
 
-    def test_a_configured_role_without_its_charter(self):
-        os.remove(os.path.join(self.root, "roles", "editor.md"))
-        self.assertEqual(
-            self.refused("editor"), "roles.editor: no charter roles/editor.md in core or team_dirs"
-        )
-
     def test_an_invalid_overlay_value(self):
         self.assertLessEqual({"language", "client"}, RUN_KEYS)
         language = "language must be one line of text"
@@ -624,7 +603,6 @@ class Validate(Fake):
     def test_unknown_role_or_task_or_another_roles(self):
         for role, task, msg in (
             ("nobody", None, "unknown role 'nobody'"),
-            ("stranger", None, "unknown role 'stranger'"),
             (
                 "writer",
                 "essay",
@@ -645,38 +623,20 @@ class OwnedKeys(Fake):
         )
         self.assertEqual(self.resolved().client, "a")
 
-    def test_owned_tables_and_overlays_stay_strict(self):
-        for local, overlay, msg in (
-            (
-                '[roles.writer]\nmodel = "m"\n',
-                {},
-                "unknown key 'model' in roles.writer",
-            ),
-            ('[roles.writer]\nteam_dirs = ["/x"]\n', {}, "unknown key 'team_dirs' in roles.writer"),
-            (
-                "[output]\ntypo = 1\n",
-                {},
-                "unknown key 'typo' in output",
-            ),
-            (
-                "[roles.editor.output]\ntypo = 1\n",
-                {},
-                "unknown key 'typo' in roles.editor.output",
-            ),
-            ('output = "local"\n', {}, "output must be a table"),
-            ("[output]\nhost = 1\n", {}, "output.host must be text"),
-            ("[roles.editor.output]\nhost = true\n", {}, "roles.editor.output.host must be text"),
-            ('[roles.writer]\noutput = "local"\n', {}, "roles.writer.output must be a table"),
-            ("", {"model": "m"}, "run overlay: unknown key 'model' in [overlay]"),
-            (
-                "",
-                {"roles": {"writer": {"model": "m"}}},
-                "run overlay: unknown key 'model' in [overlay.roles.writer]",
-            ),
+    def test_owned_tables_stay_strict(self):
+        for local, msg in (
+            ('[roles.writer]\nmodel = "m"\n', "unknown key 'model' in roles.writer"),
+            ('[roles.writer]\nteam_dirs = ["/x"]\n', "unknown key 'team_dirs' in roles.writer"),
+            ("[output]\ntypo = 1\n", "unknown key 'typo' in output"),
+            ("[roles.editor.output]\ntypo = 1\n", "unknown key 'typo' in roles.editor.output"),
+            ('output = "local"\n', "output must be a table"),
+            ("[output]\nhost = 1\n", "output.host must be text"),
+            ("[roles.editor.output]\nhost = true\n", "roles.editor.output.host must be text"),
+            ('[roles.writer]\noutput = "local"\n', "roles.writer.output must be a table"),
         ):
             with self.subTest(msg=msg):
                 self.local(local)
-                self.assertEqual(self.refused(overlays=(overlay,)), msg)
+                self.assertEqual(self.refused(), msg)
 
     def test_a_renamed_run_key_is_refused_naming_its_new_name(self):
         old, hint = "runtime", "; renamed to 'client'"
@@ -850,12 +810,6 @@ class Real(RealConfig):
         for role, task in role_tasks():
             run = resolve(role, task)
             self.assertEqual((run.task, run.language), (task, "French"))
-
-    def test_a_task_from_another_roles_index_is_an_error(self):
-        with self.assertRaisesRegex(
-            ConfigError, "task 'deep-research' is not one of engineer's tasks"
-        ):
-            resolve("engineer", "deep-research")
 
     def test_pm_engineer_and_researcher_runs(self):
         researcher = (

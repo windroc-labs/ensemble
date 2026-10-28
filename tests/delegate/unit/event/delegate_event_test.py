@@ -38,6 +38,15 @@ STAMPS = [
 ]
 LIMIT = 'limit: want null or {"resets_at": a number or null}'
 OUTCOME = "outcome: want the fields deliverable, files, questions, status, summary, title, url"
+FULL = {
+    "status": "done",
+    "title": "T",
+    "summary": "S",
+    "questions": [],
+    "url": "",
+    "files": [],
+    "deliverable": "",
+}
 
 
 def line(**data) -> str:
@@ -46,15 +55,7 @@ def line(**data) -> str:
 
 class EventLine(Case):
     def test_parse_produces_a_complete_typed_outcome(self):
-        outcome = {
-            "status": "needs_input",
-            "title": "T",
-            "summary": "S",
-            "questions": ["Q"],
-            "url": "",
-            "files": [],
-            "deliverable": "",
-        }
+        outcome = {**FULL, "status": "needs_input", "questions": ["Q"]}
         parsed = DelegateEvent.parse(
             line(v=1, kind="finished", returncode=0, outcome=outcome, **RUN)
         )
@@ -63,27 +64,17 @@ class EventLine(Case):
         self.assertEqual(json.loads(parsed.to_line())["outcome"], outcome)
 
     def test_parse_rejects_incomplete_or_mistyped_outcomes(self):
-        outcome = {
-            "status": "done",
-            "title": "T",
-            "summary": "S",
-            "questions": [],
-            "url": "",
-            "files": [],
-            "deliverable": "",
-        }
         invalid = [
-            {key: value for key, value in outcome.items() if key != missing} for missing in outcome
+            {key: value for key, value in FULL.items() if key != missing} for missing in FULL
         ]
         invalid += [
-            {**outcome, key: value}
+            {**FULL, key: value}
             for key, value in (
                 ("status", "x"),
                 ("title", 1),
                 ("title", "T" * 201),
                 ("title", "two\nlines"),
                 ("summary", None),
-                ("summary", "S" * 4001),
                 ("questions", [1]),
                 ("questions", ["Q"] * 5),
                 ("url", False),
@@ -98,15 +89,7 @@ class EventLine(Case):
 
     def test_a_finished_summary_over_300_characters_is_refused(self):
         # A run begun before the limit fell from 4000 may still send one.
-        outcome = {
-            "status": "done",
-            "title": "T",
-            "summary": "S" * 300,
-            "questions": [],
-            "url": "",
-            "files": [],
-            "deliverable": "",
-        }
+        outcome = {**FULL, "summary": "S" * 300}
         parsed = DelegateEvent.parse(
             line(v=1, kind="finished", returncode=0, outcome=outcome, **RUN)
         )

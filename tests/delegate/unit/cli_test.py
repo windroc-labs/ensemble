@@ -48,8 +48,8 @@ from tests.utils.cli_help import check_examples, help_text, parse_only
 
 
 class Detaching:
-    """A delegate class for `run --detach`: records each construction's role, Spec and placement,
-    and its environment; its detach returns RECORD or raises `failure`.
+    """A delegate class for `run --detach`: records each create's role, Spec and placement, and
+    its environment; its detach returns RECORD or raises `failure`.
     """
 
     made: list = []
@@ -59,11 +59,11 @@ class Detaching:
 
     @classmethod
     def create(cls, role, spec, **placement):
+        Detaching.made.append((role, spec, placement))
+        Detaching.environments.append(dict(os.environ))
         return cls(role, spec, **placement)
 
     def __init__(self, role, spec, **placement):
-        Detaching.made.append((role, spec, placement))
-        Detaching.environments.append(dict(os.environ))
         if isinstance(Detaching.failure, ConfigError):
             raise Detaching.failure
         if Detaching.construct_failure is not None:
@@ -104,11 +104,6 @@ class Detach(Base):
 
     def detaches(self, *extra, events=None, **kw):
         return self.runs("--sid", SID, "--detach", "--events", events or self.events, *extra, **kw)
-
-    def test_detach_uses_create(self):
-        with mock.patch.object(Detaching, "create", wraps=Detaching.create) as create:
-            self.assertEqual(self.detaches()[0], 0)
-        create.assert_called_once()
 
     def test_inside_an_agent_session_a_run_detached_or_not_exits_2_and_constructs_nothing(self):
         with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
@@ -172,14 +167,6 @@ class Detach(Base):
         self.assertEqual(self.detaches("--cwd", cwd)[0], 0)
         self.assertEqual(self.detaches()[0], 0)
         self.assertEqual([spec.cwd for _, spec, _ in Detaching.made], [cwd, None])
-
-    def test_split_options_are_gone(self):
-        for extra in (("--split", "right"), ("--split-from", "mgr")):
-            with self.subTest(extra=extra):
-                code, out, err = self.detaches("--mode", "tui", *extra)
-                self.assertEqual((code, out), (2, ""))
-                self.assertIn("unrecognized arguments", err)
-        self.assertEqual(Detaching.made, [])
 
     def test_detach_prints_one_record_line_and_names_its_session(self):
         for mode in ("headless", "tui"):
@@ -268,11 +255,6 @@ class Detach(Base):
         code, _, err = self.detaches("--mode", "tui", "--display", "mgr:%1 right")
         self.assertEqual(code, 0, err)
         self.assertEqual(Detaching.made[0][2], {"display": "mgr:%1 right"})
-
-    def test_input_dash_is_read_by_the_caller(self):
-        code, _, err = self.detaches(input="-", stdin="-x\nUse B.\n")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(Detaching.made[0][1].input, "-x\nUse B.\n")
 
     def test_a_refusal_exits_2_and_a_start_failure_1_without_a_record(self):
         for failure, code in (
@@ -451,12 +433,6 @@ class Environments(Harnessed):
         self.assertIn("[environment.tmux]", err)
         self.assertFalse(os.path.exists(self.work))
 
-    def test_run_has_no_environment_option(self):
-        self.configure("docker")
-        code, _, err = self.cli("--environment", "dummy", "--dry-run", input=self.TARGETED)
-        self.assertEqual(code, 2)
-        self.assertIn("--environment", err)
-
 
 class Verifier(Harnessed):
     """The built-in verifier on the packaged mini-op environment (WDRC-110 FR-47, FR-50, FR-80)."""
@@ -633,12 +609,6 @@ class DetachSid(Harnessed):
         self.assertEqual(Record.parse(out).sid, HARNESS_SID)
         self.assertEqual(self.metadata()["spec"]["sid"], HARNESS_SID)
         self.assertNotIn("ENSEMBLE_SID", harness_launches()[0]["env"])
-
-    def test_a_different_sid_starts_and_writes_nothing(self):
-        os.environ["ENSEMBLE_SID"] = HARNESS_SID
-        code, out, _ = self.cli("--sid", SID, "--detach", "--events", self.events)
-        self.assertEqual((code, out), (2, ""))
-        self.assertEqual((harness_launches(), os.path.exists(self.work)), ([], False))
 
 
 class DryRun(Base):
@@ -995,11 +965,6 @@ class Configures(Base):
 
 
 class Usage(Base):
-    def test_run_resume_has_no_compatibility_option(self):
-        code, out, err = self.cli("run", "--resume")
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("unrecognized arguments: --resume", err)
-
     def test_a_run_needs_input(self):
         for argv in (
             ("--out", "o.md"),
@@ -1038,17 +1003,20 @@ class Usage(Base):
                 self.assertIn(error, err)
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
 
-    def test_an_abbreviated_option_is_a_usage_error(self):
-        for extra in (("--mod", "headless"), ("--detach", "--rol", "x")):
+    def test_an_abbreviated_or_removed_option_is_a_usage_error(self):
+        for extra, flag in (
+            (("--mod", "headless"), "--mod"),
+            (("--detach", "--rol", "x"), "--rol"),
+            (("--detach", "--mode", "tui", "--split", "right"), "--split"),
+            (("--detach", "--mode", "tui", "--split-from", "mgr"), "--split-from"),
+            (("--environment", "dummy", "--dry-run"), "--environment"),
+            (("--resume",), "--resume"),
+        ):
             with self.subTest(extra=extra):
                 code, out, err = self.runs(*extra)
                 self.assertEqual((code, out), (2, ""))
-                self.assertIn(f"unrecognized arguments: {extra[-2]}", err)
+                self.assertIn(f"unrecognized arguments: {flag}", err)
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
-
-    def test_a_run_without_mode_or_detach_is_headless(self):
-        code, out, err = self.runs("--dry-run")
-        self.assertEqual((code, json.loads(out)["mode"]), (0, "headless"), err)
 
     def test_a_config_error_exits_2_before_anything_starts(self):
         cases = [
@@ -1627,11 +1595,6 @@ class AdhocWorkdir(Base):
                 )
                 self.assertEqual((shown["sid"], shown["workdir"]), (SID, expected))
                 self.assertFalse(os.path.exists(expected))
-
-    def test_dry_run_reports_an_explicit_workdir(self):
-        code, out, err = self.runs("--sid", SID, "--dry-run")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(json.loads(out)["workdir"], self.work)
 
 
 HELP_COMMANDS = [

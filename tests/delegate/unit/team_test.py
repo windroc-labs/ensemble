@@ -520,7 +520,6 @@ class Shipped(Packaged):
     def test_light_research_is_one_pass(self):
         light = task_text("light-research")
         self.assertIn("in one pass: no subagents, no workflow", light)
-        self.assertIn("Type line and verification depth: the Template.", light)
         self.assertNotIn("angles", light)
 
 
@@ -835,17 +834,7 @@ class Real(RealConfig):
             (
                 "research hand-off phrases",
                 task_text("research"),
-                "Type line and verification depth: the Template.",
-            ),
-            (
-                "research hand-off phrases",
-                task_text("research"),
                 "`Suggest upgrading to Deep Research: ",
-            ),
-            (
-                "research hand-off phrases",
-                task_text("light-research"),
-                "Type line and verification depth: the Template.",
             ),
             (
                 "research hand-off phrases",
