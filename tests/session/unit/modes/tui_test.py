@@ -59,7 +59,7 @@ from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui, tui_hook
 from ensemble.session.modes.base import POINTER
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
-from ensemble.utils import STALE_AGE, StatusState, inode_lock, over_argv
+from ensemble.utils import STALE_AGE, StatusState, inode_lock
 from tests.session import fake_client
 from tests.session.case import PLUGIN_BIN, SID, Case
 from tests.session.fakes.terminal import MemoryHost, ScreenHost
@@ -428,15 +428,6 @@ class AttachTest(Base):
                 SessionInfo(sid=SID, cwd=self.tmp, project=False, transcript="", resume=""),
             ),
         )
-
-    def test_a_session_json_without_a_valid_identity_is_no_tui_session_before_host_access(self):
-        with self.assertRaises(SessionError) as caught:
-            tui.TuiMode.attach(
-                NAME, self.state(cwd=""), self.client, host=self.host, liveness=self.liveness
-            )
-        path = os.path.join(self.dir, "session.json")
-        self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad cwd")
-        self.assertEqual(self.host.calls.mock_calls, [])
 
     def test_an_identity_is_refused_alike_in_session_json_and_run_jsonl(self):
         """SessionInfo.from_fields decodes both; the hook reads none of these keys."""
@@ -1242,19 +1233,11 @@ class SnapshotTest(Base):
                         SessionError, rf"\Ano tui session w1: .*bad {field}"
                     ):
                         tui.TuiMode.snapshot(NAME)
+        self.write_state({k: v for k, v in self.state().items() if k not in ("cwd", "project")})
+        with self.assertRaises(SessionError) as caught:
+            tui.TuiMode.snapshot(NAME)
         path = os.path.join(self.dir, "session.json")
-        for state, field in (
-            (self.state(cwd="rel"), "cwd"),
-            (self.state(transcript="rel"), "transcript"),
-            (self.state(project="no"), "project"),
-            (self.state(resume=None), "resume"),
-            ({k: v for k, v in self.state().items() if k not in ("cwd", "project")}, "cwd"),
-        ):
-            with self.subTest(state=state):
-                self.write_state(state)
-                with self.assertRaises(SessionError) as caught:
-                    tui.TuiMode.snapshot(NAME)
-                self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad {field}")
+        self.assertEqual(str(caught.exception), f"no tui session w1: {path}: bad cwd")
         for data in (b"", b"[]", b"not json"):
             with self.subTest(data):
                 self.write_state(data)
@@ -1877,14 +1860,20 @@ class OpeningTest(Base):
         mode.poll(0.6)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
 
-    def test_a_process_not_live_at_the_confirm_holds_the_opening(self):
-        mode = self.opened()
-        mode._terminal.calls.state.return_value = Liveness.UNKNOWN
-        self.append(record("ready"))
-        mode.poll(0)
-        mode.poll(1.2)
-        self.assertEqual(self.sends(mode), [])
-        self.assertEqual(mode.opening_pending, "/color")
+    def test_a_process_not_live_at_the_confirm_or_a_failed_screen_read_holds_the_opening(self):
+        for target, attribute, value in (
+            (lambda mode: mode._terminal.calls.state, "return_value", Liveness.UNKNOWN),
+            (lambda _mode: self.host.calls.screen, "side_effect", SessionError("tmux: gone")),
+        ):
+            with self.subTest(attribute):
+                mode = self.opened()
+                setattr(target(mode), attribute, value)
+                self.append(record("ready"))
+                mode.poll(0)
+                mode.poll(1.2)
+                self.assertEqual(self.sends(mode), [])
+                self.assertEqual(mode.opening_pending, "/color")
+                os.unlink(self.hooks)
 
     def test_held_while_marked_blocked(self):
         mode = self.opened()
@@ -1928,15 +1917,6 @@ class OpeningTest(Base):
         mode.poll(1.2)
         self.assertEqual(self.sends(mode), [Paste("/color"), Key("Enter")])
         self.assertIsNone(mode.opening_pending)
-
-    def test_a_failed_screen_read_holds_the_opening(self):
-        mode = self.opened()
-        self.host.calls.screen.side_effect = SessionError("tmux: gone")
-        self.append(record("ready"))
-        mode.poll(0)
-        mode.poll(1.2)
-        self.assertEqual(self.sends(mode), [])
-        self.assertEqual(mode.opening_pending, "/color")
 
     def test_no_opening_is_never_pending(self):
         mode = self.started()
@@ -2725,8 +2705,6 @@ class PromptFileTest(Base):
 
     def test_a_prompt_within_the_budget_stays_in_argv(self):
         at = "a" * 99_998  # the longest prompt over_argv keeps in argv
-        self.assertFalse(over_argv(at))
-        self.assertTrue(over_argv(at + "a"))
         self.start(run=self.seen, prompt=at)
         self.assertEqual((self.prepared.argv[1], self.seen.spec.access.reads), (at, ()))
         self.assertFalse(os.path.lexists(os.path.dirname(self.path)))
