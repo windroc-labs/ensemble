@@ -352,6 +352,7 @@ class PullRequestTest(Tree):
 
 
 WORKFLOW = guard.ROOT / ".github/workflows/test.yml"
+PR_TEXT = guard.ROOT / ".github/workflows/mini-op-pr-text.yml"
 
 
 def job_block(text, name):
@@ -363,20 +364,41 @@ def job_block(text, name):
 class WorkflowTest(unittest.TestCase):
     def test_triggers_and_job(self):
         text = WORKFLOW.read_text()
-        self.assertRegex(
-            text, r"(?m)^  pull_request:\n    types: \[opened, synchronize, reopened, edited\]$"
-        )
         block = job_block(text, "mini-op")
         self.assertRegex(block, r"(?m)^    name: mini-op guard$")
-        for key in ("if", "needs", "permissions"):
+        for key in ("needs", "permissions"):
             self.assertNotRegex(block, rf"(?m)^    {key}:")
         self.assertIn("persist-credentials: false", block)
-        self.assertIn("fetch-depth: 0", block)
         self.assertRegex(block, r"(?m)^        run: python3 \.github/mini_op_guard\.py$")
         self.assertNotIn("secrets.", block)
         self.assertNotIn("github.event.pull_request", block)
         ci = job_block(text, "ci")
         self.assertRegex(ci, r"(?m)^    needs: \[.*\bmini-op\b.*\]$")
+
+    def test_pr_text_has_its_own_workflow(self):
+        text = PR_TEXT.read_text()
+        self.assertIn("name: mini-op PR text\n", text)
+        self.assertIn(
+            "on:\n  pull_request:\n    types: [opened, synchronize, reopened, edited]\n"
+            "  merge_group:\n    types: [checks_requested]\n",
+            text,
+        )
+        self.assertIn(
+            "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+            text,
+        )
+        self.assertIn("permissions:\n  contents: read\n", text)
+        block = job_block(text, "pr-text")
+        self.assertRegex(block, r"(?m)^    name: mini-op PR text$")
+        self.assertIn("    if: ${{ github.event_name == 'pull_request' }}\n", block)
+        self.assertNotRegex(block, r"(?m)^    (needs|permissions):")
+        self.assertIn("persist-credentials: false", block)
+        self.assertIn("fetch-depth: 0", block)
+        self.assertRegex(block, r"(?m)^        run: python3 \.github/mini_op_guard\.py --pr-text$")
+        self.assertNotIn("secrets.", text)
+        self.assertNotIn("github.event.pull_request", text)
+        self.assertNotIn("--pr-text", WORKFLOW.read_text())
 
 
 if __name__ == "__main__":

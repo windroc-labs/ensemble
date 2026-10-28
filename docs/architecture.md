@@ -828,7 +828,7 @@ typos --config pyproject.toml
 
 `.github/comment_budget.py` judges each `.py` file changed since its merge-base with `--base` (default `origin/main`; CI: the PR's base, else the previous base commit): its comments and docstrings may reach 10% of its code (5% under `tests/` or in `*_test.py`) plus 300 characters.
 
-`.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local` host names and literal keychain item names under `.mini-op/` (and, on a PR changing it, in the PR's title, body and commits); its findings never print the matched text.
+`.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local` host names and literal keychain item names under `.mini-op/`; with `--pr-text`, on a PR changing `.mini-op/`, it scans the PR's title, body and commits instead (workflow `mini-op PR text`, which a title or body edit reruns alone). Its findings never print the matched text.
 
 Pre-commit hook, once per clone: `git config core.hooksPath .githooks`. `.githooks/pre-commit` runs `ruff check --fix` and `ruff format` on each staged `.py` file at CI's `ruff==` pin and re-stages it. Docker Host checkouts run it (the worker image sets `core.hooksPath`).
 
@@ -862,6 +862,7 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 | PR touching only root `*.md` files and/or `docs/` but `docs/architecture.md` (read by repository checks) | upper skill unit tests in `Lint style` only | skipped |
 | PR changing only the release `version` of the plugin manifests and `package.json` | skipped; every lint runs | skipped |
 | anything else, a push to `main` or `merge_group` | all layers | run |
+| PR title or body edit (`edited` without a base change) | none: every job skips and the gate reports as `CI skipped on a PR text edit`, so the code run's `CI` stands | skipped |
 
 The required `CI` aggregate accepts only the skips its scope allows. `Broker ubuntu-24.04` runs the Go checks for full scope; the `Broker macOS` and `Installer macOS` workflows run apart and never block `CI`. `Worker image` (`.github/workflows/worker-image.yml`) builds the real image when a PR changes an image input.
 

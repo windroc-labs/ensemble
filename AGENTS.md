@@ -33,7 +33,7 @@ The main CI workflow has no macOS job. Installer PRs run the separate `Installer
 workflow with fake credentials. The independent `Broker macOS` workflow
 (`.github/workflows/broker-macos.yml`) runs on pushes to `main`, pull requests that change
 `src/broker/` or the workflow, and manual dispatch, preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
-Require `CI`, never `Broker macos-15` separately.
+Require `CI` and `mini-op PR text` (`.github/workflows/mini-op-pr-text.yml`, the PR title, body and commits scan, which a title or body edit reruns alone), never `Broker macos-15` separately.
 
 ## Releasing
 
