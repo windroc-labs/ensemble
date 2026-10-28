@@ -420,6 +420,9 @@ class ResponseTest(Case):
         self.assertFalse(
             Broker(FakeBroker(success("workspace-rm-absent.json"))).workspace_rm(VOLUME)
         )
+        forced = FakeBroker(success("workspace-rm-output.json"))
+        self.assertTrue(Broker(forced).workspace_rm(VOLUME, force=True))
+        self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-force.json")["argv"]]])
         other = (0, json.dumps({"volume": "ensemble-ws-other", "removed": True}), "")
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
             Broker(FakeBroker(other)).workspace_rm(VOLUME)

@@ -525,15 +525,34 @@ class DockerHost(Host):
         except (SessionError, OSError) as error:
             LOG.warning("docker reclaim: %s", error)
 
-    def _reclaim(self) -> None:
+    def _workspaces(self) -> list[tuple[str, str]] | None:
+        """Run workspace volumes with their cwd label; None without a daemon socket or CLI."""
         rows = self._listed(
             "volume", "ls", "--filter", f"label={KIND_LABEL}", "--format", VOLUME_FORMAT
         )
+        return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
+
+    def remove_workspaces(self, cwd: str) -> list[str]:
+        """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept."""
+        rows = self._workspaces()
+        if rows is None:
+            raise SessionError(f"host {self.name}: workspaces unknown (no Docker CLI or socket)")
+        anchor, removed = os.path.realpath(cwd), []
+        for volume in sorted(v for v, a in rows if a == anchor):
+            try:
+                if self.broker.workspace_rm(volume, force=True):
+                    removed.append(volume)
+            except SessionError as error:
+                raise SessionError(f"docker workspace {volume} kept: {error}") from None
+        return removed
+
+    def _reclaim(self) -> None:
+        rows = self._workspaces()
         if rows is None:
             return
         gone = [
             volume
-            for volume, anchor in (row for row in rows if len(row) == 2)
+            for volume, anchor in rows
             if os.path.isabs(anchor) and not os.path.lexists(anchor)
         ]
         kept = os.path.expanduser(KEPT)
@@ -702,10 +721,7 @@ class DockerHost(Host):
 
     def _move_workspace(self, name: str, volume: str, cwd: str) -> None:
         """Deletes a new start's workspace volume made at another cwd, unless it has unsaved work."""
-        rows = self._listed(
-            "volume", "ls", "--filter", f"label={KIND_LABEL}", "--format", VOLUME_FORMAT
-        )
-        anchor = next((row[1] for row in rows or () if len(row) == 2 and row[0] == volume), cwd)
+        anchor = next((a for v, a in self._workspaces() or () if v == volume), cwd)
         if anchor == cwd:
             return
         try:

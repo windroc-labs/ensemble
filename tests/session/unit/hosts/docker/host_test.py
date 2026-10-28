@@ -158,8 +158,10 @@ class FakeBroker:
         self.closed.append(container)
         return True
 
-    def workspace_rm(self, volume):
-        self.order.append(("workspace_rm", volume))
+    def workspace_rm(self, volume, *, force=False):
+        self.order.append(
+            ("workspace_rm", volume, "--force") if force else ("workspace_rm", volume)
+        )
         if "workspace_rm" in self.failing:
             raise self.failing["workspace_rm"]
         return True
@@ -2111,6 +2113,58 @@ class ReclaimTest(Base):
         self.docker.volumes = self.docker.volumes[1:]
         self.host.reclaim_volumes()
         self.assertFalse(os.path.exists(self.kept))
+
+
+class RemoveWorkspacesTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.agent = os.path.join(self.account, "work", "TASK-1", "agent")
+        os.makedirs(self.agent)
+        self.docker.volumes = [
+            f"ensemble-ws-engineer-TASK-1-0b6f2c1e\t{self.agent}",
+            f"ensemble-ws-other-TASK-2-7c1d9e2f\t{self.account}/work/TASK-2/agent",
+            f"ensemble-ws-pm-TASK-1-1a2b3c4d\t{self.agent}",
+            "ensemble-ws-bare",
+        ]
+
+    def removals(self):
+        return [step for step in self.order if isinstance(step, tuple)]
+
+    def test_remove_workspaces_forces_out_every_volume_of_the_cwd(self):
+        linked = os.path.join(self.account, "linked")
+        os.symlink(os.path.join(self.account, "work"), linked)
+        removed = self.host.remove_workspaces(os.path.join(linked, "TASK-1", "agent"))
+        self.assertEqual(
+            removed, ["ensemble-ws-engineer-TASK-1-0b6f2c1e", "ensemble-ws-pm-TASK-1-1a2b3c4d"]
+        )
+        self.assertEqual(
+            self.removals(),
+            [("workspace_rm", volume, "--force") for volume in removed],
+        )
+
+    def test_remove_workspaces_stops_at_a_refusal(self):
+        self.broker.failing["workspace_rm"] = BrokerError(
+            14, "workspace_failed", "volume is in use", "not_needed", None
+        )
+        with self.assertRaisesRegex(
+            SessionError,
+            "docker workspace ensemble-ws-engineer-TASK-1-0b6f2c1e kept: broker: volume is in use",
+        ):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(
+            self.removals(),
+            [("workspace_rm", "ensemble-ws-engineer-TASK-1-0b6f2c1e", "--force")],
+        )
+
+    def test_remove_workspaces_without_docker_refuses(self):
+        os.remove(self.ep.removeprefix("unix://"))
+        with self.assertRaisesRegex(SessionError, "workspaces unknown"):
+            self.host.remove_workspaces(self.agent)
+        self.assertEqual(self.removals(), [])
+
+    def test_no_workspace_of_the_cwd_removes_none(self):
+        self.assertEqual(self.host.remove_workspaces(os.path.join(self.account, "none")), [])
+        self.assertEqual(self.removals(), [])
 
 
 class ListTest(Base):

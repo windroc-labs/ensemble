@@ -566,7 +566,8 @@ flowchart LR
     R -->|Revise| T
     R -->|"resume or pane follow-up"| P
     H -->|"promote, after 10 min: next role's Todo issue"| D[Done]
-    D & C[Canceled] -->|"Finish, 2 h later"| X[cleaned up]
+    D -->|"Finish, 2 h later"| X[cleaned up]
+    C[Canceled] -->|"Finish, next tick"| X
 ```
 
 - **New work:** a Todo issue in the product's project, delegated to a role app (Linear's Agent field); the description is the brief. Add `Repo: <owner>/<name>` unless the project's `[orchestrator.linear.project_repos]` entry names it. The router claims by priority, then later role, then oldest; a blocked issue waits for its blockers to be Done, Canceled or Duplicate. On first claim it lists possible duplicates under `## Related work` in the agent's input, and inlines linked configured documents up to 50,000 bytes.
@@ -574,7 +575,7 @@ flowchart LR
 - **Revise:** comment and move back to Todo; the agent resumes. An engineer issue's PR comments and reviews count too. After 4 attempts the issue goes to In Review; moving it to Todo restarts the count.
 - **Who counts as you:** every Linear user but the harness and role apps and automation; the manager's app counts as you. Your comments are instructions: keep the team's membership and guest access tight.
 - **Runs without an outcome** are written back as failures with the reason; a stopped or interrupted attempt stays In Progress for Recover.
-- **Finish:** set Done, Canceled or Duplicate. 2 hours later prune closes the run, deletes its `agent/` dir and pushed branches, and archives the issue (Done only for pm or engineer issues; never while a sub-issue would stay); 7 days later it deletes the issue's workdir. An issue left in another state but Todo or In Progress for 7 days loses its checkouts and temp files (`agent/src`, `agent/publish`, `agent/tmp`). Uncommitted and unpushed work is lost.
+- **Finish:** set Done, Canceled or Duplicate. On its next tick for Canceled or Duplicate, 2 hours later for Done, prune closes the run, removes its Docker workspace volumes, deletes its `agent/` dir and pushed branches, and archives the issue (Done only for pm or engineer issues; never while a sub-issue would stay); 7 days later it deletes the issue's workdir. An issue left in another state but Todo or In Progress for 7 days loses its checkouts and temp files (`agent/src`, `agent/publish`, `agent/tmp`). Uncommitted and unpushed work is lost.
 
 ### Task labels
 
@@ -656,7 +657,7 @@ ensemble keeps its state in `~/.ensemble/` (`work/` and `logs/` in `<work_dir>`,
 | Entry | Safe to delete by hand |
 |---|---|
 | `config.local.toml`, `logs/runs.jsonl`, board issue files and `.next-id`, `docker/worker/` | never |
-| `work/<ID>/agent/` | no: prune also drops its worktrees and pushed branches |
+| `work/<ID>/agent/` | no: prune also drops its worktrees, pushed branches and Docker workspace volumes |
 | `work/<ID>/run/`, `work/<ID>/writeback.json` | once you won't resume or recover the run |
 | `logs/orchestrator.jsonl`, `logs/prune.json`, `probe/`, `bin/`, `hidden/<name>.json` | any time (keep `logs/`) |
 | `logs/router.lock`, `logs/router-starts.lock`, `logs/router/`, `board/.lock` | while no router runs, no program writes the board |
@@ -760,7 +761,7 @@ A role's environment comes only from the trusted delegate config, never a run's 
 
 ### Workspace volumes
 
-A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cwd; work reaches the host only through GitHub. A new start of the same name keeps it; `close` reclaims volumes whose cwd is gone, keeping any with unsaved work (warnings in `~/.ensemble/docker-state/reclaim.log`). Remove one with `"$B" workspace-rm --volume <volume>` (exit 12 `workspace_dirty` names unpushed repos; `--force` skips the check). The check sees only git: ignored files (updraft plan docs, progress logs) go with the volume. A board issue that switches client gets a new name and an empty volume; the old one goes when the issue is pruned, so fetch its unpushed work by hand. A kept dirty volume takes disk until you act; anyone with Docker access can read volumes.
+A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cwd; work reaches the host only through GitHub. A new start of the same name keeps it. Prune, cleaning a finished issue, first force-removes every volume at its `agent/` dir on its latest run's Host, unsaved work included, so a Canceled or Duplicate move cannot be undone for that work after prune's next tick; a refusal (`prune-error`) keeps the agent files for the next tick. `close` reclaims other volumes whose cwd is gone, keeping any with unsaved work (warnings in `~/.ensemble/docker-state/reclaim.log`). Remove one with `"$B" workspace-rm --volume <volume>` (exit 12 `workspace_dirty` names unpushed repos; `--force` skips the check). The check sees only git: ignored files (updraft plan docs, progress logs) go with the volume. A board issue that switches client gets a new name and an empty volume; the old one goes when the issue is pruned, so fetch its unpushed work by hand. A kept dirty volume takes disk until you act; anyone with Docker access can read volumes.
 
 ### Docker recovery
 

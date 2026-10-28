@@ -436,8 +436,10 @@ class Broker:
         )
         return found["removed"]
 
-    def workspace_rm(self, volume: str) -> bool:
-        """Whether it removed workspace `volume` after its check found no unsaved work; False: none."""
+    def workspace_rm(self, volume: str, *, force: bool = False) -> bool:
+        """Whether it removed workspace `volume` after its check found no unsaved work (force: with
+        no check); False: none.
+        """
         found = self._parsed(
             "workspace-rm",
             lambda d: (
@@ -447,6 +449,7 @@ class Broker:
             ),
             "--volume",
             volume,
+            *(["--force"] if force else []),
         )
         return found["removed"]
 

@@ -108,14 +108,11 @@ def gql_for(
     changed=None,
     elsewhere=(),
 ):
-    """owners: delegate app user ids by issue, independent of assignee.
-    children: sub-issue state types by parent, any depth, as Linear lists them (archived ones
-    left out), archived with their parent; stamps: canceledAt and completedAt, hours before NOW, by issue (none: null);
-    reread: the state an issue's archive read finds, by issue (none: its own); changed: the idents
-    the change feed lists (gql.changed, settable later; None: every issue), each updated just now,
-    or "since": those updated after the feed's updatedAt.gt, at their time; an issue's updatedAt:
-    its latest move or stamp, else OLD; elsewhere: issues the batched read leaves out (another
-    team's). gql.read: the idents read, in order."""
+    """owners: delegate app user ids by issue. children: sub-issue state types by parent, any
+    depth, archived with it; stamps: canceledAt/completedAt hours before NOW (none: null); reread:
+    the state an issue's archive read finds; changed: the idents the feed lists (gql.changed; None:
+    all), updated now, or "since": those updated after updatedAt.gt; updatedAt: latest move or
+    stamp, else OLD; elsewhere: issues the batched read leaves out. gql.read: idents read."""
     owners, children, stamps, reread = owners or {}, children or {}, stamps or {}, reread or {}
 
     def at(ident):
@@ -203,6 +200,7 @@ def gql_for(
                             "id": f"id-{i}",
                             "identifier": i,
                             "updatedAt": updated(i),
+                            "state": {"id": STATE_IDS[issues[i][0]]},
                             "history": history(i),
                             **at(i),
                         }
