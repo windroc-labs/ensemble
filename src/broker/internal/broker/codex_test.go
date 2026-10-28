@@ -272,6 +272,10 @@ func TestCodexWriteFailureCodeAndCause(t *testing.T) {
 				if !errors.As(err, &e) || e.Code != want || e.Cause != tc.cause || e.Message != "Writing Codex credentials into the container failed" {
 					t.Fatalf("%#v", err)
 				}
+				// The reply and the audit line carry the whole error; the forged and other rows' stderr hold "secret".
+				if response, _ := json.Marshal(e); strings.Contains(err.Error()+string(response), "secret") {
+					t.Fatalf("secret leaked: %s", response)
+				}
 			})
 		}
 	}
