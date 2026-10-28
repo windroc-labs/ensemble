@@ -121,9 +121,6 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 	}
 	if m.Linear != nil {
-		if h.Linear == nil {
-			return StartResult{}, protocol.New(protocol.StartFailed, "Linear provider unavailable.")
-		}
 		if err := h.Linear.Ready(m.Linear.App); err != nil {
 			return StartResult{}, injected(err, protocol.StartFailed, "Preparing Linear credentials failed.")
 		}
@@ -460,13 +457,8 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 	}
 	lap("credentials")
-	if err := h.startTokens(m, codexExpiry, expiries); err != nil {
+	if err := h.startTokens(m, codexExpiry, expiries, linearExpiry); err != nil {
 		return StartResult{}, held, err
-	}
-	if linearExpiry != "" {
-		if err := h.recordTokens(m, credential.Linear, []string{linearExpiry}, nil); err != nil {
-			return StartResult{}, held, protocol.New(protocol.StartFailed, tokensFailed(m).Message)
-		}
 	}
 	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
 	if linearExpiry != "" {
@@ -482,13 +474,16 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 }
 
 // startTokens records the expiries a start delivered.
-func (h Host) startTokens(m Manifest, codexExpiry *string, github []protocol.Expiry) error {
+func (h Host) startTokens(m Manifest, codexExpiry *string, github []protocol.Expiry, linearExpiry string) error {
 	var err error
 	if codexExpiry != nil {
 		err = h.recordTokens(m, credential.Codex, []string{*codexExpiry}, nil)
 	}
 	if err == nil && m.GitHubApp != "" {
 		err = h.recordTokens(m, credential.GitHub, expiryTimes(github), nil)
+	}
+	if err == nil && linearExpiry != "" {
+		err = h.recordTokens(m, credential.Linear, []string{linearExpiry}, nil)
 	}
 	if err == nil {
 		return nil

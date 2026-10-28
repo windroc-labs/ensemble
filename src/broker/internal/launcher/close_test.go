@@ -24,7 +24,7 @@ func TestClose(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return []byte(tc.out), tc.err }}
-			got, err := Host{Docker: d, GitHub: &fakeTokens{}}.Close(context.Background(), container)
+			got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: &fakeTokens{}}.Close(context.Background(), container)
 			if len(d.calls) != 1 || !slices.Equal(d.calls[0], []string{"rm", "--force", container}) {
 				t.Fatalf("%q", d.calls)
 			}
@@ -49,7 +49,7 @@ func TestCloseMakesNoCodexCall(t *testing.T) {
 			log = append(log, args[0])
 			return []byte(container + "\n"), removal
 		}}
-		h := Host{Docker: d, GitHub: &fakeTokens{}, Codex: &fakeCodexCreds{log: &log}}
+		h := Host{Docker: d, Linear: &fakeLinear{}, GitHub: &fakeTokens{}, Codex: &fakeCodexCreds{log: &log}}
 		got, err := h.Close(context.Background(), container)
 		if !slices.Equal(log, []string{"rm"}) {
 			t.Fatalf("calls %q", log)
@@ -70,7 +70,7 @@ func TestCloseRevokesBeforeRemove(t *testing.T) {
 		return []byte(container + "\n"), nil
 	}}
 	tokens := &fakeTokens{readFiles: true}
-	got, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
+	got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: tokens}.Close(context.Background(), container)
 	if err != nil || got != (CloseResult{Container: container, Removed: true}) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -91,7 +91,7 @@ func TestCloseAbsentContainer(t *testing.T) {
 	absent := &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such container: " + container}
 	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, absent }}
 	tokens := &fakeTokens{readFiles: true}
-	got, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
+	got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: tokens}.Close(context.Background(), container)
 	if err != nil || got != (CloseResult{Container: container, Removed: false}) || !docker.Absent(tokens.readErr) {
 		t.Fatalf("%+v %v read %v", got, err, tokens.readErr)
 	}
@@ -107,7 +107,7 @@ func TestCloseRemovesWhenReadFails(t *testing.T) {
 			return []byte(container + "\n"), nil
 		}}
 		tokens := &fakeTokens{readFiles: true}
-		got, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
+		got, err := Host{Docker: d, Linear: &fakeLinear{}, GitHub: tokens}.Close(context.Background(), container)
 		if err != nil || got != (CloseResult{Container: container, Removed: true}) || tokens.readErr == nil || !hasCall(d, "rm") {
 			t.Fatalf("%v: %+v %v", readErr, got, err)
 		}

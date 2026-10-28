@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -15,6 +16,14 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
+// linearContainerRecord keeps revocation possible after the guard and tmpfs stop.
+// Closed blocks queued maintenance; Tokens retains failed revocations beside Current.
+type linearContainerRecord struct {
+	Closed  bool           `json:"closed"`
+	Current linearAccess   `json:"current"`
+	Tokens  []linearAccess `json:"tokens"`
+}
+
 func roleIdentity(a credential.LinearApp) LinearIdentity {
 	return LinearIdentity{Name: a.Role, Kind: "role", ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
 }
@@ -22,9 +31,6 @@ func roleIdentity(a credential.LinearApp) LinearIdentity {
 // containerAccount accepts only the exact active role binding enrolled on the host.
 func (l Linear) containerAccount(app credential.LinearApp) (linearAccount, error) {
 	a := roleIdentity(app)
-	if a.Name == "manager" || a.Name == "harness" || a.check() != nil {
-		return linearAccount{}, errLinear
-	}
 	var registry []LinearIdentity
 	var account linearAccount
 	if l.read("registry", &registry) != nil || !slices.Contains(registry, a) || l.read("app/"+a.TokenService, &account) != nil || account.Version != 1 || !account.Active || account.Identity != a {
@@ -59,10 +65,11 @@ func (l Linear) containerToken(ctx context.Context, app credential.LinearApp) (l
 	return token, err
 }
 
-func linearCommand(token linearAccess, replace bool) (credential.Command, error) {
+func linearCommand(token linearAccess, replace bool) credential.Command {
 	data, _ := json.Marshal(token)
 	defer erase(data)
-	return credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "token.json", Replace: replace}, data)
+	command, _ := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "token.json", Replace: replace}, data)
+	return command
 }
 
 func (l Linear) noteContainer(c, result, reason string, token linearAccess) {
@@ -107,7 +114,13 @@ func (l Linear) retireContainer(ctx context.Context, c string, record *linearCon
 		}
 	}
 	record.Tokens = pending
-	if l.writeContainer(c, *record) != nil || failed {
+	var err error
+	if len(pending) == 0 {
+		err = l.keys.DeleteSecret(linearService, "container/"+c)
+	} else {
+		err = l.save("container/"+c, record)
+	}
+	if err != nil || failed {
 		return errLinear
 	}
 	return nil
@@ -119,7 +132,8 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 		return nil, nil, "", errLinear
 	}
 	defer unlock()
-	if _, exists, err := l.readContainer(c); err != nil || exists {
+	var existing linearContainerRecord
+	if err := l.read("container/"+c, &existing); !errors.Is(err, ErrNotFound) {
 		return nil, nil, "", errLinear
 	}
 	token, err := l.containerToken(ctx, r.App)
@@ -128,21 +142,14 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 	}
 	l.noteContainer(c, audit.Issued, "", token)
 	record := linearContainerRecord{Current: token, Tokens: []linearAccess{token}}
-	if l.writeContainer(c, record) != nil {
+	if l.save("container/"+c, record) != nil {
 		l.revokeContainerToken(ctx, c, token)
 		return nil, nil, "", errLinear
 	}
-	command, err := linearCommand(token, false)
+	command := linearCommand(token, false)
 	board, _ := json.Marshal(r.Board)
 	defer erase(board)
-	config, configErr := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "board.json"}, board)
-	if err != nil || configErr != nil {
-		command.Erase()
-		config.Erase()
-		record.Closed = true
-		_ = l.retireContainer(ctx, c, &record, "")
-		return nil, nil, "", errLinear
-	}
+	config, _ := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "board.json"}, board)
 	return []credential.Command{command, config}, func() { _ = l.Revoke(ctx, c) }, token.ExpiresAt, nil
 }
 
@@ -152,8 +159,8 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 		return "", errLinear
 	}
 	defer unlock()
-	record, exists, err := l.readContainer(c)
-	if err != nil || !exists || record.Closed {
+	var record linearContainerRecord
+	if l.read("container/"+c, &record) != nil || record.Closed {
 		return "", errLinear
 	}
 	token, err := l.containerToken(ctx, r.App)
@@ -162,21 +169,18 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 	}
 	l.noteContainer(c, audit.Renewed, "", token)
 	record.Tokens = append(record.Tokens, token)
-	if l.writeContainer(c, record) != nil {
+	if l.save("container/"+c, record) != nil {
 		l.revokeContainerToken(ctx, c, token)
 		return "", errLinear
 	}
-	command, err := linearCommand(token, true)
-	if err == nil {
-		defer command.Erase()
-		err = exec(command.Argv, command.Stdin)
-	}
-	if err != nil {
+	command := linearCommand(token, true)
+	defer command.Erase()
+	if err := exec(command.Argv, command.Stdin); err != nil {
 		_ = l.retireContainer(ctx, c, &record, record.Current.AccessToken)
 		return "", errLinear
 	}
 	record.Current = token
-	if l.writeContainer(c, record) != nil {
+	if l.save("container/"+c, record) != nil {
 		return "", errLinear
 	}
 	if l.retireContainer(ctx, c, &record, token.AccessToken) != nil {
@@ -188,20 +192,24 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 // Revoke survives a stopped or absent container. Closed is durable before revocation,
 // so maintenance queued behind close cannot issue or deliver another token.
 func (l Linear) Revoke(ctx context.Context, c string) error {
+	var record linearContainerRecord
+	if err := l.read("container/"+c, &record); errors.Is(err, ErrNotFound) {
+		return nil
+	} else if err != nil {
+		return errLinear
+	}
 	unlock, err := l.lock("container/" + c)()
 	if err != nil {
 		return errLinear
 	}
 	defer unlock()
-	record, exists, err := l.readContainer(c)
-	if err != nil {
+	if err := l.read("container/"+c, &record); errors.Is(err, ErrNotFound) {
+		return nil
+	} else if err != nil {
 		return errLinear
 	}
-	if !exists {
-		return nil
-	}
 	record.Closed = true
-	if l.writeContainer(c, record) != nil {
+	if l.save("container/"+c, record) != nil {
 		return errLinear
 	}
 	return l.retireContainer(ctx, c, &record, "")

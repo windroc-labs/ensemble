@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -82,6 +81,10 @@ func TestLinearContainerLifecycle(t *testing.T) {
 	}
 	if requests[0].Get("scope") != a.scopes() {
 		t.Fatal("scope changed")
+	}
+	var stored linearContainerRecord
+	if l.read("container/container", &stored) != nil || stored.Current.AccessToken != "CONTAINER-TOKEN-1" {
+		t.Fatal("container record missing from Keychain")
 	}
 	var token linearAccess
 	if json.Unmarshal(commands[0].Stdin, &token) != nil || token.AccessToken != "CONTAINER-TOKEN-1" {
@@ -252,17 +255,13 @@ func TestLinearRevocationRecordRetry(t *testing.T) {
 	for _, command := range commands {
 		command.Erase()
 	}
-	info, err := os.Stat(l.containerFile("retry"))
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatal("record must be private")
-	}
 	transport := l.http.Transport
 	l.http.Transport = linearRoundTrip(func(*http.Request) (*http.Response, error) { return nil, errors.New("TOKEN-1 ROOT-SENTINEL") })
 	if l.Revoke(context.Background(), "retry") == nil {
 		t.Fatal("revocation failure hidden")
 	}
-	record, exists, err := l.readContainer("retry")
-	if err != nil || !exists || !record.Closed || len(record.Tokens) != 1 {
+	var record linearContainerRecord
+	if l.read("container/retry", &record) != nil || !record.Closed || len(record.Tokens) != 1 {
 		t.Fatal("lost revocation reference")
 	}
 	if _, err := l.Refresh(context.Background(), request, "retry", func([]string, []byte) error { return nil }); err == nil {
@@ -272,7 +271,18 @@ func TestLinearRevocationRecordRetry(t *testing.T) {
 	if err := l.Revoke(context.Background(), "retry"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(l.containerFile("retry")); !os.IsNotExist(err) {
+	if !errors.Is(l.read("container/retry", &record), ErrNotFound) {
 		t.Fatal("revoked token retained")
+	}
+}
+
+func TestLinearUndeclaredCloseDoesNotLock(t *testing.T) {
+	l, _, _, _ := linearRig(t)
+	l.lock = func(string) func() (func(), error) {
+		t.Fatal("undeclared Linear close acquired a lock")
+		return nil
+	}
+	if err := l.Revoke(context.Background(), "undeclared"); err != nil {
+		t.Fatal(err)
 	}
 }

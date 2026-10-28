@@ -149,19 +149,18 @@ type linearAccount struct {
 
 // Linear owns enrolled accounts, host grants and per-container revocation records; the launcher delivers its commands.
 type Linear struct {
-	containerDir string
-	Audit        *audit.Recorder
-	keys         linearKeys
-	host         linearHost
-	http         *http.Client
-	lock         func(string) func() (func(), error)
-	now          func() time.Time
-	password     func() ([]byte, error)
+	Audit    *audit.Recorder
+	keys     linearKeys
+	host     linearHost
+	http     *http.Client
+	lock     func(string) func() (func(), error)
+	now      func() time.Time
+	password func() ([]byte, error)
 }
 
 // NewLinear is Linear for the account at home, its items in k.
 func NewLinear(home string, k SystemKeychain, password func() ([]byte, error)) Linear {
-	return Linear{containerDir: filepath.Join(home, ".ensemble/linear/containers"), keys: k, host: linearHostEntries{home: home, run: runLinearSecurity, access: k.AppAccess},
+	return Linear{keys: k, host: linearHostEntries{home: home, run: runLinearSecurity, access: k.AppAccess},
 		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now, password: password,
 		lock: func(id string) func() (func(), error) {
 			return FileLock(filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(id)))))
