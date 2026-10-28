@@ -944,7 +944,7 @@ class Principles(Packaged):
         for role in roles():
             prompt, run = composed(role)
             self.assertIn(os.path.join(TEAM, "principles", "fix-root-causes.md"), expanded(prompt))
-            self.assertIn("{{team}}", run.read)
+            self.assertEqual(run.read, [])
 
     def test_tasks_select_principles_and_roles_select_none(self):
         expected = {

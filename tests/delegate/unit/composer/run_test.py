@@ -174,6 +174,23 @@ class Access(Fake):
             team=found or team(self.root),
         )
 
+    def test_team_reads_survive_role_local_and_runtime_read_overrides(self):
+        self.write({"principles/example.md": "Original principle.\n"})
+        self.configure(RUN_CONFIG.replace('read = ["repo"]', ""))
+        for local, overlays in (
+            ('[roles.writer]\nread = ["/extra"]\n', []),
+            ('read = ["/extra"]\n', []),
+            ("", [{"read": ["/extra"]}]),
+            ("", [{"roles": {"writer": {"read": ["/extra"]}}}]),
+        ):
+            with self.subTest(local=local, overlays=overlays):
+                self.local(local)
+                run = self.resolved(overlays=overlays)
+                self.assertEqual(run.read, ["/extra"])
+                intent = access(run, self.work, cwd=self.work, project=False, team=team(self.root))
+                self.assertEqual(intent.reads, (self.tasks, self.root, "/extra"))
+                self.assertEqual(intent.writes, ())
+
     def test_dirs_reads_writes_commands_filled_the_gate_apart_verbatim_and_the_session_env(self):
         gate, home = "python3 /u/usage.py {{workdir}} *", os.path.expanduser("~/w")
         env = {"PYTHONPATH": SRC["delegate"]}
@@ -184,20 +201,20 @@ class Access(Fake):
                 {"commands": ["python3 -P -m x *"], "gate": gate},
                 None,
                 [],
-                [self.tasks],
+                [self.tasks, self.root],
                 [],
                 ["python3 -P -m x *"],
                 gate,
                 env,
             ),
-            ("no gate", {"commands": ["x"]}, None, [], [self.tasks], [], ["x"], "", env),
-            ("a gate alone", {"gate": gate}, None, [], [self.tasks], [], [], gate, env),
+            ("no gate", {"commands": ["x"]}, None, [], [self.tasks, self.root], [], ["x"], "", env),
+            ("a gate alone", {"gate": gate}, None, [], [self.tasks, self.root], [], [], gate, env),
             (
                 "repo entry binds to the repo dir",
                 {"write": ["repo"], "commands": ["x --dir {{workdir}}/src *"]},
                 self.repo,
                 [self.repo],
-                [self.tasks],
+                [self.tasks, self.root],
                 [self.repo],
                 [f"x --dir {self.work}/src *"],
                 "",
@@ -208,7 +225,7 @@ class Access(Fake):
                 {"commands": ["python3 -P {{team}}/tools/x.py --dir {{workdir}}/src *"]},
                 None,
                 [],
-                [self.tasks],
+                [self.tasks, self.root],
                 [],
                 [f"python3 -P {self.root}/tools/x.py --dir {self.work}/src *"],
                 "",
@@ -219,7 +236,7 @@ class Access(Fake):
                 {"read": ["repo"], "write": ["repo", "~/w", "~/w"]},
                 None,
                 [home],
-                [self.tasks],
+                [self.tasks, self.root],
                 [home],
                 [],
                 "",
@@ -227,7 +244,7 @@ class Access(Fake):
             ),
             (
                 "read dirs after the tasks dir, deduped",
-                {"read": ["{{team}}", "repo", self.tasks, "{{team}}"]},
+                {"read": ["{{role_team}}", "repo", self.tasks, "{{role_team}}"]},
                 self.repo,
                 [],
                 [self.tasks, self.root, self.repo],
@@ -238,7 +255,7 @@ class Access(Fake):
             ),
             (
                 "team fills read and write, deduped, write wins",
-                {"read": ["{{team}}", self.tasks], "write": ["{{team}}/out", "{{team}}"]},
+                {"read": ["{{role_team}}", self.tasks], "write": ["{{team}}/out", "{{team}}"]},
                 None,
                 [out, self.root],
                 [self.tasks],
@@ -252,7 +269,7 @@ class Access(Fake):
                 {"write": [self.tasks]},
                 None,
                 [self.tasks],
-                [],
+                [self.root],
                 [self.tasks],
                 [],
                 "",
@@ -284,7 +301,7 @@ class Access(Fake):
             write=["{{role_team}}/out"],
             commands=["python3 -P {{role_team}}/tools/t.py *", "echo 'a b' {{workdir}}"],
         )
-        self.assertEqual((intent.reads[1:], intent.writes), ((top,), (f"{top}/out",)))
+        self.assertEqual((intent.reads[2:], intent.writes), ((top,), (f"{top}/out",)))
         self.assertEqual(
             intent.commands,
             (f"python3 -P {top}/tools/t.py *", f"echo 'a b' {shlex.quote(self.work)}"),
@@ -299,11 +316,11 @@ class Access(Fake):
         os.symlink(shared, link)
         os.symlink(self.tasks, tasks_link)
         for read, write, dirs, reads in (
-            ([shared], [shared], (shared,), (self.tasks,)),
-            ([link], [shared], (shared,), (self.tasks,)),
-            ([shared], [link], (link,), (self.tasks,)),
-            ([], [tasks_link], (tasks_link,), ()),
-            ([link, shared], [], (), (self.tasks, link)),
+            ([shared], [shared], (shared,), (self.tasks, self.root)),
+            ([link], [shared], (shared,), (self.tasks, self.root)),
+            ([shared], [link], (link,), (self.tasks, self.root)),
+            ([], [tasks_link], (tasks_link,), (self.root,)),
+            ([link, shared], [], (), (self.tasks, self.root, link)),
         ):
             with self.subTest(read=read, write=write):
                 got = self.intent(read=read, write=write)
@@ -315,9 +332,9 @@ class Access(Fake):
             os.makedirs(d)
         os.symlink(self.work, link)
         for cwd, dirs, reads in (
-            (self.work, (self.repo,), (self.tasks, link)),
-            (link, (self.repo,), (self.tasks, link)),
-            (other, (self.work, self.repo), (self.tasks,)),
+            (self.work, (self.repo,), (self.tasks, self.root, link)),
+            (link, (self.repo,), (self.tasks, self.root, link)),
+            (other, (self.work, self.repo), (self.tasks, self.root)),
         ):
             with self.subTest(cwd=cwd):
                 got = self.intent(cwd=cwd, project=True, read=[link], write=[self.repo])
@@ -335,7 +352,7 @@ class Access(Fake):
     def test_a_team_dir_roles_tasks_dir_is_read_not_added(self):
         found, top = self.team_dir({"roles/poet.md": POET, "tasks/verse.md": VERSE})
         got = self.intent(found=found, role="poet")
-        self.assertEqual((got.dirs, got.reads), ((), (os.path.join(top, "tasks"),)))
+        self.assertEqual((got.dirs, got.reads), ((), (os.path.join(top, "tasks"), self.root, top)))
 
     def test_an_unknown_placeholder(self):
         for key in ("read", "write", "commands"):
@@ -782,7 +799,7 @@ class Real(RealConfig):
                 "`windroc/team-docs`",
             ),
             lambda run: (run.tier, run.effort, run.read),
-            (2, "high", ["{{team}}"]),
+            (2, "high", []),
         )
         for role, task, literals, got, want in (
             (
@@ -790,7 +807,7 @@ class Real(RealConfig):
                 None,
                 ("[PM rules](#pm) > your task file's rules", "# Template: `templates/prd.md`"),
                 lambda run: (run.output["dir"], run.read, run.write),
-                ("Product Design/", ["{{team}}"], []),
+                ("Product Design/", [], []),
             ),
             (
                 "engineer",
@@ -817,5 +834,7 @@ class Real(RealConfig):
                 text = f.read() + "".join(task_text(t) for t in catalog()[role])
             if "<team>/methods/" in text:
                 named.append(role)
-                self.assertIn("{{team}}", resolve(role).read, role)
+                self.assertIn(
+                    TEAM, access(resolve(role), "/work", cwd="/work", project=False).reads, role
+                )
         self.assertEqual(named, ["researcher"])

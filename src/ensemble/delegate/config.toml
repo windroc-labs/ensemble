@@ -54,7 +54,7 @@ effort = "high"
 client = "claude"
 language = "English"
 templates = []
-read = ["{{team}}"]
+read = []
 write = []
 commands = []
 cwd = ""
@@ -93,10 +93,11 @@ host = ""
 # Roles: [roles.<role>], a role's run keys; its tasks are its charter's index (core's team/roles/<role>.md › Tasks). A
 # role table holding task-level keys (default_task, a tasks table) is an error.
 #   templates     names of team/templates/*.md inlined into the prompt; [] → none
-#   read          extra dirs the agent run needs to read; `repo` is the caller's repo dir, {{team}} core's team/,
-#                 {{role_team}} the role's team root (its team dir: team_dirs; core's team/ for a core role);
-#                 the role's tasks dir (core's team/tasks/, or a team dir's: team_dirs) is always
-#                 included; [] → none. Read-only: never --add-dir. Claude gets a Read(//<dir>/**) allow rule each
+#   read          extra dirs the agent run needs to read; `repo` is the caller's repo dir.
+#                 Delegate always grants reads of core's team/, the role's team root and its tasks dir,
+#                 independently of config and overlays; [] → no extra dirs. {{role_team}} is the role's team
+#                 root (its team dir: team_dirs; core's team/ for a core role).
+#                 Read-only: never --add-dir. Claude gets a Read(//<dir>/**) allow rule each
 #                 (Read; Grep and Glob best-effort), so a file-tool write there is denied headless (-p) and prompts in
 #                 tui mode, but in the shipped auto mode goes to Claude's classifier; a broad dir such
 #                 as ~ pre-approves reads of its whole tree; a path with any of *?[]{}()\, refuses the run. Codex adds
@@ -108,8 +109,8 @@ host = ""
 #                 On the Docker Host a run reads only the image's team and writes only <workdir>/agent: any other
 #                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it
 #   commands      requested shell commands (a trailing ` *` matches any arguments); the Client decides how
-#                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}}
-#                 as in read; a word holding one is shell-quoted once filled, and a prompt text writing the command
+#                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}} the
+#                 role's team root; a word holding one is shell-quoted once filled, and a prompt text writing the command
 #                 with <Workdir>, <team> or <role team> gets it as approved when that quoting changed it; [] → none
 # A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role

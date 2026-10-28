@@ -5,7 +5,7 @@ Test boundaries and commands: `docs/architecture.md` › Tests.
 ## Gotchas
 
 - Every real-machine test (a real Keychain, real OS services, anything beyond fakes) is a mini-op runbook run on the test Mac mini (`.mini-op/runbooks/`), never on a developer's or user's Mac; `keychain_free_tests` (`tests/guard_checks/keychain.py`) fails a test file that calls a real credential store.
-- This file never loads in an agent run outside a trusted cwd (`docs/architecture.md` › Session settings). An agent run reaches only its cwd, `<work_dir>/work/<ID>/agent/` and the config's `read`/`write` dirs: give a task a new path there, or it stalls on a permission nobody can grant.
+- This file never loads in an agent run outside a trusted cwd (`docs/architecture.md` › Session settings). An agent run reaches its cwd, `<work_dir>/work/<ID>/agent/`, the core and role team directories (read-only) and the config's extra `read`/`write` dirs: give a task a new writable path there, or it stalls on a permission nobody can grant.
 - Input rendering and write-back changes: `tests/orchestrator/unit/engine/inputs_test.py` and `tests/orchestrator/unit/engine/writeback_test.py` pin input text and Linear calls.
 - Every task has exactly one `[ensemble-progress:start]` line and no `budget` one, which start replaced (`tests/delegate/unit/team_test.py` checks): without the start report the Delegate logs `missing progress mark: start`, write-back posts no start comment, and a build's `issues.build_cutoff` loses its `Build started` cutoff.
 - Never name Linear in the team text (`src/ensemble/delegate/team/`), in `/ensemble:act-as` and `/ensemble:manage`, or in `/ensemble:board` (`skills/board/SKILL.md`) outside its `## Linear` section: only that section, the Linear layer's, does.
