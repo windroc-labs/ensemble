@@ -10,7 +10,9 @@ from unittest import mock
 from ensemble.session import Viewer
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch
+from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.tmux import TmuxHost
+from ensemble.session.hosts.types import CommandView
 from tests.session import live_tmux
 from tests.session.case import Case
 from tests.session.tmux_fixtures import placed
@@ -109,3 +111,13 @@ class ShowTest(Case):
             self.assertEqual(f.read(), "worker")
         self.assertEqual(set(self.server.panes("=mgr:")), before)
         self.assertEqual(self.server.option("worker", "@pane"), "")
+
+    def test_a_docker_tui_view_shows_the_tmux_status_line_by_default(self):
+        host = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
+        with mock.patch.object(
+            host, "attach_target", return_value=CommandView("cat -", live_tmux.IDLE)
+        ):
+            self.assertIsNone(Viewer().show("docker-worker", host, command="true"))
+        status = self.server.tmux("show", "-t", "=docker-worker", "status")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertEqual(status.stdout.strip(), "status on")
