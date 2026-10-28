@@ -60,8 +60,8 @@ func (h Host) Close(ctx context.Context, container string) (CloseResult, error) 
 	h.Audit.Begin(container, nil)
 	kind, secrets := h.held(ctx, container)
 	h.GitHub.Revoke(ctx, container, h.agentRead(container))
-	revokeErr := h.Linear.Revoke(ctx, container)
 	removed, err := h.remove(ctx, container)
+	revokeErr := h.Linear.Revoke(ctx, container)
 	if removed {
 		if kind != "" {
 			h.Audit.Add(container, audit.Credential{Kind: kind, Result: audit.Withdrawn})

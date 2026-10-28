@@ -350,3 +350,114 @@ func TestLinearCloseWaitsForIssuance(t *testing.T) {
 		t.Fatalf("close missed issued token: %v", err)
 	}
 }
+
+type failedContainerSave struct {
+	linearKeys
+	remaining int
+}
+
+func (k *failedContainerSave) UpdateSecret(service, account string, data []byte) error {
+	if strings.HasPrefix(account, "container/") && k.remaining > 0 {
+		k.remaining--
+		return errors.New("temporary storage failure")
+	}
+	return k.linearKeys.UpdateSecret(service, account, data)
+}
+
+func TestLinearFailedSaveRetainsUnrevokedToken(t *testing.T) {
+	for _, phase := range []string{"issue", "refresh"} {
+		t.Run(phase, func(t *testing.T) {
+			l, k, _, calls := linearRig(t)
+			a := linearApp("engineer")
+			enrollLinear(t, l, k, a)
+			request := credential.LinearRequest{App: containerApp(a)}
+			count := 1
+			if phase == "refresh" {
+				commands, _, _, err := l.Issue(context.Background(), request, "save-failure")
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, command := range commands {
+					command.Erase()
+				}
+				count = 2
+			}
+			l.keys = &failedContainerSave{linearKeys: l.keys, remaining: 1}
+			transport := l.http.Transport
+			l.http.Transport = linearRoundTrip(func(r *http.Request) (*http.Response, error) {
+				if strings.HasSuffix(r.URL.Path, "/revoke") {
+					return nil, errors.New("revocation unavailable")
+				}
+				return transport.RoundTrip(r)
+			})
+			var err error
+			if phase == "issue" {
+				_, _, _, err = l.Issue(context.Background(), request, "save-failure")
+			} else {
+				_, err = l.Refresh(context.Background(), request, "save-failure", func([]string, []byte) error { t.Fatal("delivered unsaved token"); return nil })
+			}
+			if err == nil {
+				t.Fatal("save failure hidden")
+			}
+			var record linearContainerRecord
+			if err := l.read("container/save-failure", &record); err != nil || len(record.Tokens) != count {
+				t.Fatalf("unrevoked token reference lost: %v", err)
+			}
+			l.http.Transport = transport
+			if err := l.Revoke(context.Background(), "save-failure"); err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(l.read("container/save-failure", &record), ErrNotFound) {
+				t.Fatal("revoked record retained")
+			}
+			var revoked []string
+			for _, call := range *calls {
+				if token := call.Get("token"); token != "" {
+					revoked = append(revoked, token)
+				}
+			}
+			if len(revoked) != count {
+				t.Fatalf("close revoked %d of %d tokens", len(revoked), count)
+			}
+		})
+	}
+}
+
+func TestLinearRefreshRevocationRetry(t *testing.T) {
+	l, k, _, calls := linearRig(t)
+	a := linearApp("engineer")
+	enrollLinear(t, l, k, a)
+	request := credential.LinearRequest{App: containerApp(a)}
+	commands, _, _, err := l.Issue(context.Background(), request, "refresh-retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands {
+		command.Erase()
+	}
+	transport := l.http.Transport
+	l.http.Transport = linearRoundTrip(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/revoke") {
+			return nil, errors.New("revocation unavailable")
+		}
+		return transport.RoundTrip(r)
+	})
+	delivered := false
+	if _, err := l.Refresh(context.Background(), request, "refresh-retry", func([]string, []byte) error { delivered = true; return nil }); err == nil || !delivered {
+		t.Fatal("expected delivered replacement with failed old-token revocation")
+	}
+	var record linearContainerRecord
+	if l.read("container/refresh-retry", &record) != nil || len(record.Tokens) != 2 || record.Current.AccessToken != "TOKEN-2" {
+		t.Fatal("lost current or unrevoked token")
+	}
+	l.http.Transport = transport
+	if err := l.Revoke(context.Background(), "refresh-retry"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 4 || (*calls)[2].Get("token") != "TOKEN-1" || (*calls)[3].Get("token") != "TOKEN-2" {
+		t.Fatal("close did not revoke both tokens")
+	}
+	if !errors.Is(l.read("container/refresh-retry", &record), ErrNotFound) {
+		t.Fatal("revoked record retained")
+	}
+}

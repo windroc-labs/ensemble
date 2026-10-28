@@ -144,7 +144,8 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 	l.noteContainer(c, audit.Issued, "", token)
 	record := linearContainerRecord{Current: token, Tokens: []linearAccess{token}}
 	if l.save("container/"+c, record) != nil {
-		l.revokeContainerToken(ctx, c, token)
+		record.Closed = true
+		_ = l.retireContainer(ctx, c, &record, "")
 		return nil, nil, "", errLinear
 	}
 	command := linearCommand(token, false)
@@ -171,7 +172,7 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 	l.noteContainer(c, audit.Renewed, "", token)
 	record.Tokens = append(record.Tokens, token)
 	if l.save("container/"+c, record) != nil {
-		l.revokeContainerToken(ctx, c, token)
+		_ = l.retireContainer(ctx, c, &record, record.Current.AccessToken)
 		return "", errLinear
 	}
 	command := linearCommand(token, true)

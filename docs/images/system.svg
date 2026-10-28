@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="670" viewBox="0 0 1200 670" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
 <title id="t">Flexible hosts: local or Docker</title>
-<desc id="d">Each session runs on a Host you pick. You talk to the manager (Claude Code, Codex or OpenCode), which starts workers through ensemble-session; workers use the same clients. On the Local Host, tmux, the client runs on your machine as you: not isolated, auto mode. On the Docker Host the session asks ensemble-broker to start and close its own container: isolated, so its client runs in yolo mode by default. The broker, root-owned, reads its own login keychain items, which only it reads once logged in; the App key and the Codex refresh token stay with it. At start it writes the container's own credentials to a tmpfs: GitHub tokens valid an hour, renewed and revoked at close; a Codex access token without its refresh token; a Claude setup-token copy deleted with the container. The container's workspace volume is kept across restart and resume. It cannot reach the host keychain, the optional Linear app tokens (a local board needs none), the host gh login or the Docker socket, and reaches public destinations through the egress proxy; local/LAN services need explicit host:port exceptions. It clones, pushes and opens draft pull requests on GitHub as the App bot; its work reaches the Mac only through GitHub.</desc>
+<desc id="d">Each session runs on a Host you pick. You talk to the manager (Claude Code, Codex or OpenCode), which starts workers through ensemble-session; workers use the same clients. On the Local Host, tmux, the client runs on your machine as you: not isolated, auto mode. On the Docker Host the session asks ensemble-broker to start and close its own container: isolated, so its client runs in yolo mode by default. The broker, root-owned, reads its own login keychain items, which only it reads once logged in; the App key and the Codex refresh token stay with it. At start it writes the container's own credentials to a tmpfs: GitHub tokens valid an hour, renewed and revoked at close; a Codex access token without its refresh token; a Claude setup-token copy deleted with the container; a separate Linear role-app token only when declared. The container's workspace volume is kept across restart and resume. It cannot reach the host keychain, the host Linear app tokens (a local board needs none), the host gh login or the Docker socket, and reaches public destinations through the egress proxy; local/LAN services need explicit host:port exceptions. It clones, pushes and opens draft pull requests on GitHub as the App bot; its work reaches the Mac only through GitHub.</desc>
 <defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f8fafc"/><stop offset="1" stop-color="#eef2f7"/></linearGradient>
 <linearGradient id="heroBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#effcfa"/><stop offset="0.5" stop-color="#ffffff"/></linearGradient>
@@ -87,19 +87,20 @@
 <rect x="988" y="258" width="110" height="22" rx="7" fill="#e8ecf2"/><circle cx="1000" cy="269" r="3.5" fill="#475569"/>
 <text x="1010" y="273" font-size="10.5" fill="#334155" font-weight="600" text-anchor="start">OpenCode</text>
 <text x="1128" y="246" font-size="10.5" fill="#334155" font-weight="600" text-anchor="end">yolo by default</text>
-<rect x="792" y="294" width="336" height="92" rx="10" fill="#f0fdfa" stroke="#5eead4"/>
+<rect x="792" y="294" width="336" height="100" rx="10" fill="#f0fdfa" stroke="#5eead4"/>
 <text x="806" y="313" font-size="10.5" fill="#0f766e" font-weight="700" text-anchor="start">its own credentials · tmpfs</text>
-<text x="806" y="334" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">GitHub tokens</tspan> · 1 h, renewed · revoked at close</text>
-<text x="806" y="352" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">Codex access token</tspan> · no refresh token</text>
-<text x="806" y="370" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">Claude setup-token copy</tspan> · deleted with the container</text>
+<text x="806" y="331" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">GitHub tokens</tspan> · 1 h, renewed · revoked at close</text>
+<text x="806" y="348" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">Codex access token</tspan> · no refresh token</text>
+<text x="806" y="365" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">Claude setup-token copy</tspan> · deleted with the container</text>
+<text x="806" y="382" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">Linear role token</tspan> · only when declared</text>
 <rect x="792" y="398" width="336" height="28" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
 <text x="806" y="416" font-size="10.5" fill="#475569" font-weight="500" text-anchor="start"><tspan fill="#0f172a" font-weight="700">workspace volume</tspan> · kept across restart and resume</text>
-<text x="1128" y="446" font-size="9" fill="#64748b" font-weight="500" text-anchor="end">* Linear tracker only · local board needs none</text>
+<text x="1128" y="446" font-size="9" fill="#64748b" font-weight="500" text-anchor="end">* Host app tokens; requested role token is on tmpfs</text>
 <text x="792" y="446" font-size="9.5" fill="#94a3b8" font-weight="700" text-anchor="start" letter-spacing="0.6">CANNOT REACH</text>
 <rect x="792" y="454" width="82" height="18" rx="5" fill="#ffffff" stroke="#94a3b8" stroke-dasharray="4 3"/>
 <text x="833" y="466.2" font-size="9" fill="#64748b" font-weight="600" text-anchor="middle">host keychain</text>
 <rect x="880" y="454" width="68" height="18" rx="5" fill="#ffffff" stroke="#94a3b8" stroke-dasharray="4 3"/>
-<text x="914" y="466.2" font-size="9" fill="#64748b" font-weight="600" text-anchor="middle">Linear tokens*</text>
+<text x="914" y="466.2" font-size="9" fill="#64748b" font-weight="600" text-anchor="middle">Host Linear*</text>
 <rect x="954" y="454" width="82" height="18" rx="5" fill="#ffffff" stroke="#94a3b8" stroke-dasharray="4 3"/>
 <text x="995" y="466.2" font-size="9" fill="#64748b" font-weight="600" text-anchor="middle">host gh login</text>
 <rect x="1042" y="454" width="82" height="18" rx="5" fill="#ffffff" stroke="#94a3b8" stroke-dasharray="4 3"/>

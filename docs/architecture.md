@@ -464,11 +464,11 @@ the old token. A failed write revokes the new token; a failed start revokes ever
 the broker records issued tokens through its existing broker-only Keychain store, at `ensemble-broker-linear` /
 `container/<container>`, separate from the host app record and outside the container and workspace. One per-container
 lock serializes issuance, renewal and close. Close of a container that never declared Linear takes no Linear lock and creates no lock file.
-For a declared container, close waits on its existing lock even while initial issuance has not yet saved a record. Close marks
+For a declared container, close waits on its existing lock even while initial issuance has not yet saved a record. Close removes the container before revocation to include credentials delivered during initial startup, then marks
 the record closed before revoking all recorded tokens, so it works after the guard/container stops and queued
 maintenance cannot issue another token. Records retain failed revocations for a repeated close and are deleted
-once all tokens are revoked or expired. Close removes the container even if revocation fails, returning a fixed
-error so callers retry. A container never closed leaves its token to expire (up to 30 days). Token values never
+once all tokens are revoked or expired. A failed revocation returns a fixed error so callers retry; transient record-write failures also use this
+revocation-and-retention path before returning an error. A container never closed leaves its token to expire (up to 30 days). Token values never
 appear in responses or audit logs.
 [Linear's OAuth contract](https://linear.app/developers/oauth-2-0-authentication) permits parallel client_credentials
 tokens with identical scopes and individual revocation. Enable client credentials for the role app; changing its

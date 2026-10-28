@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ type fakeLinear struct {
 	calls    []string
 	prepared [][]byte
 	fail     string
+	onRevoke func() error
 }
 
 func (f *fakeLinear) Ready(credential.LinearApp) error {
@@ -42,6 +44,9 @@ func (f *fakeLinear) Refresh(context.Context, credential.LinearRequest, string, 
 }
 func (f *fakeLinear) Revoke(context.Context, string) error {
 	f.calls = append(f.calls, "revoke")
+	if f.onRevoke != nil {
+		return f.onRevoke()
+	}
 	return nil
 }
 
@@ -128,3 +133,42 @@ func TestLinearMaintenance(t *testing.T) {
 }
 
 func resultErrorText(r MaintainResult) string { data, _ := json.Marshal(r); return string(data) }
+
+func TestLinearCloseIncludesStartupDelivery(t *testing.T) {
+	held := false
+	f := &fakeLinear{onRevoke: func() error { held = false; return nil }}
+	d := &fakeDocker{respond: func(args []string, _ []byte) ([]byte, error) {
+		if args[0] == "rm" {
+			// Initial startup delivers while close is about to remove its container.
+			held = true
+			return []byte(container + "\n"), nil
+		}
+		return nil, nil
+	}}
+	h := Host{Docker: d, GitHub: &fakeTokens{}, Linear: f}
+	if _, err := h.Close(context.Background(), container); err != nil {
+		t.Fatal(err)
+	}
+	if held {
+		t.Fatal("close missed credentials delivered during startup")
+	}
+}
+
+func TestLinearStartRecordsExpiry(t *testing.T) {
+	h, _, parent, _, _, _ := tokenStartHost(t)
+	h.Linear = &fakeLinear{}
+	path := codexManifest(t, func(f map[string]any) {
+		f["codex_dir"] = filepath.Join(parent, "codex")
+		f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
+		f["credentials"] = string(fixtureBytes(t, "credential-spec-linear.json"))
+	})
+	if _, err := h.Start(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	got := h.Schedule.Read(Manifest{Name: "worker_1", Generation: tokensGeneration})
+	if !slices.Equal(got.Expires[credential.Linear], []string{"2026-11-18T12:00:00Z"}) ||
+		!slices.Equal(got.Expires[credential.Codex], []string{"2026-10-18T12:00:00Z"}) ||
+		!slices.Equal(got.Expires[credential.GitHub], []string{expiry[0].ExpiresAt}) {
+		t.Fatalf("wrong delivered expiries: %+v", got.Expires)
+	}
+}
