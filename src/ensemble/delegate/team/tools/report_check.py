@@ -8,9 +8,11 @@ import unicodedata
 
 LINE_LIMIT = 80
 CELL_LIMIT = 30
+FINDINGS_LIMIT = 6000
 _TAG = r"</?[A-Za-z][^>]*>"
 _LIST = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?")
 _TYPE = re.compile(r"^[^:：]+[:：].*·\s*(?:web|local|mixed)(?:\s*·.*)?$")
+_FINDINGS = re.compile(r"<details\b[^>]*\bid=[\"']?findings\b")
 _LINK = re.compile(r"!?\[([^\]]*)\]\((?:[^()\n]|\([^()\n]*\))*\)")
 
 
@@ -80,12 +82,22 @@ def check(text):
     failures = []
     pending = []
     start, kind = 0, "paragraph"
+    budget = None
+    depth = 0
 
     def measure(line, category, value, limit):
         value = _plain(value)
         width = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in value)
-        if width > limit:
+        if budget:
+            budget[1] += width
+            budget[2].append(value)
+        elif width > limit:
             failures.append(f"line {line}: {category} {width}>{limit}: {value[:60]}")
+
+    def close(line, width, texts):
+        if width > FINDINGS_LIMIT:
+            text = " ".join(texts)[:60]
+            failures.append(f"line {line}: findings {width}>{FINDINGS_LIMIT}: {text}")
 
     def flush():
         if pending:
@@ -134,14 +146,22 @@ def check(text):
             after_title = False
             continue
         after_title = False
+        tags = re.fullmatch(rf"(?:{_TAG}\s*)+", line)
         if (
-            re.fullmatch(rf"(?:{_TAG}\s*)+", line)
+            tags
             or re.fullmatch(r"\[![A-Z]+\]", line)
             or re.match(r"^\[[^\]]+\]:\s*\S", line)
             or re.fullmatch(r"(?:[-*_]\s*){3,}", line)
         ):
             flush()
             table = False
+            if tags and not budget and _FINDINGS.search(line):
+                budget, depth = [number, 0, []], 0
+            if tags and budget:
+                depth += line.count("<details") - line.count("</details")
+                if depth <= 0:
+                    close(*budget)
+                    budget = None
             continue
         item = _LIST.match(line)
         if item:
@@ -176,6 +196,8 @@ def check(text):
                 start, kind = number, "paragraph"
             pending.append(line)
     flush()
+    if budget:
+        close(*budget)
     return failures
 
 

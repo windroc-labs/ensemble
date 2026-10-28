@@ -146,6 +146,34 @@ class ReportCheck(Case):
                 self.assertIn(f"line 1: {kind} 81>80:", self.check(text)[1])
         self.assertEqual(self.check("- " + "a" * 80 + "\n- " + "b" * 80), (0, "ok\n"))
 
+    def test_findings_block_has_one_budget_instead_of_line_caps(self):
+        limit = report_check.FINDINGS_LIMIT
+        label = "Findings (1)"
+
+        def findings(body, tag='<details id="findings">'):
+            return f"## Findings\n\n{tag}\n<summary>{label}</summary>\n\n{body}\n\n</details>"
+
+        self.assertEqual(self.check(findings("**claim**\n\n" + "中" * 250)), (0, "ok\n"))
+        rest = "x" * (limit - len(label) - 10)
+        self.assertEqual(self.check(findings("- " + "y" * 10 + "\n\n" + rest)), (0, "ok\n"))
+        code, out = self.check(findings("- " + "y" * 11 + "\n\n" + rest))
+        self.assertEqual(code, 1)
+        first = f"{label} {'y' * 11} {'x' * 35}"
+        self.assertEqual(out, f"line 3: findings {limit + 1}>{limit}: {first}\n")
+        half = "x" * (limit // 2)
+        table = f"| A | B |\n|---|---|\n| {half} | {half} |"
+        self.assertIn(f"findings {limit + len(label) + 2}>{limit}", self.check(findings(table))[1])
+        exempt = f"### {rest}\n\n```mermaid\n{rest}\n```\n\n<p>\n\nok"
+        self.assertEqual(self.check(findings(exempt)), (0, "ok\n"))
+        nested = "<details>\n<summary>More</summary>\n\nok\n\n</details>\n\n" + "x" * 100
+        self.assertEqual(self.check(findings(nested)), (0, "ok\n"))
+        for after, kind in (("x" * 81, "paragraph"), ("<details>\n\n- " + "x" * 81, "list")):
+            with self.subTest(after=after):
+                self.assertIn(f"{kind} 81>80:", self.check(findings("ok") + "\n\n" + after)[1])
+        self.assertIn("paragraph 81>80:", self.check(findings("x" * 81, tag="<details>"))[1])
+        unclosed = findings("x" * limit).removesuffix("\n\n</details>")
+        self.assertIn(f"findings {limit + len(label)}>{limit}", self.check(unclosed)[1])
+
     def test_usage_read_errors_and_entrypoint(self):
         for args in ([], ["a", "b"], [os.path.join(self.home, "missing")], [self.home]):
             with self.subTest(args=args):
