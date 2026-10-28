@@ -825,6 +825,8 @@ actionlint -shellcheck= -pyflakes=
 typos --config pyproject.toml
 ```
 
+`.github/comment_budget.py` judges each `.py` file changed since its merge-base with `--base` (default `origin/main`; CI: the PR's base, else the previous base commit): its comments and docstrings may reach 10% of its code (5% under `tests/` or in `*_test.py`) plus 300 characters.
+
 `.github/mini_op_guard.py` rejects private and CGNAT IPv4 addresses, email addresses, UUIDs, `.local` host names and literal keychain item names under `.mini-op/` (and, on a PR changing it, in the PR's title, body and commits); its findings never print the matched text.
 
 Pre-commit hook, once per clone: `git config core.hooksPath .githooks`. `.githooks/pre-commit` runs `ruff check --fix` and `ruff format` on each staged `.py` file at CI's `ruff==` pin and re-stages it. Docker Host checkouts run it (the worker image sets `core.hooksPath`).
