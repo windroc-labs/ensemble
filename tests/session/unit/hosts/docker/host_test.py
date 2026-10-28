@@ -40,10 +40,11 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import Host, tui_lock
+from ensemble.session.hosts.base import Host, phase_reporter, tui_lock
 from ensemble.session.hosts.docker import worker as worker_module
 from ensemble.session.hosts.docker.broker import (
     BROKER,
+    TIMEOUT,
     Broker,
     BrokerError,
     client_keys,
@@ -1537,6 +1538,15 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.broker.plugins, (HOST_SOURCE, ENV_SOURCE))
         self.assertEqual(
             self.broker.built, {"base_image": "dummy-env:test", "image_plugins": ("dummy-plugin",)}
+        )
+
+    def test_the_build_is_its_harness_start_phase(self):
+        with phase_reporter(lambda phase, wait: self.order.append(("phase", phase, wait))):
+            self.start(environment=carried(ENVIRONMENT))
+        built = self.order.index(("build", REPO))
+        self.assertEqual(
+            self.order[built - 1 : built + 2],
+            [("phase", "building the worker image", TIMEOUT), ("build", REPO), ("phase", None, 0)],
         )
 
     def test_worker_image_sends_no_base_image(self):

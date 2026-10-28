@@ -99,6 +99,7 @@ from tests.utils.sandbox import owned_directory
 
 UNCONFIGURED = "session not configured: call Session.configure first"
 FAKE_HOSTS = {"fake": {"implementation": "tests.session.fakes.host:FakeHost"}}
+BUILDING = {"state": "starting", "phase": "building the worker image", "phase_wait": 1800}
 
 
 def own(case, client="fake", mode="tui", prompt="hello", spec=None, **fields) -> HostedSession:
@@ -3478,6 +3479,53 @@ class OwnedStartTest(Case):
             self.session_cls.start(self.spec())
         self.popen.return_value.kill.assert_called_once_with()
         self.assertFalse(os.path.exists(self.spawned[2].directory))
+
+    def scripted(self, *steps):
+        """A harness writing `starting`, then at each pause the next (clock, harness.json) step."""
+        self.harness_writes({"state": "starting"}, log=b"#17 exporting layers\n")
+        clock, steps = [0.0], list(steps)
+
+        def pause(_seconds):
+            clock[0], status = steps.pop(0)
+            self.spawned[2].write_status(status)
+
+        self.enterContext(mock.patch("time.monotonic", side_effect=lambda: clock[0]))
+        self.enterContext(mock.patch("time.sleep", side_effect=pause))
+
+    def timed_out(self, message):
+        with self.assertRaises(SessionError) as caught:
+            self.session_cls.start(self.spec())
+        directory = self.spawned[2].directory
+        self.assertEqual(
+            str(caught.exception),
+            f"session harness {directory} did not start: timed out after {message}; "
+            "its log's last line: #17 exporting layers",
+        )
+        self.popen.return_value.kill.assert_called_once_with()
+        self.assertFalse(os.path.exists(directory))
+
+    def test_a_build_past_the_start_wait_still_starts(self):
+        self.scripted(
+            (1.0, BUILDING),
+            (1800.0, BUILDING),
+            (1840.0, {"state": "starting"}),
+            (1890.0, {"state": "running", "name": "w1", "sid": SID, "generation": "g7"}),
+        )
+        self.assertIsInstance(self.session_cls.start(self.spec()), OwnedSession)
+        self.popen.return_value.kill.assert_not_called()
+
+    def test_a_harness_that_never_progresses_times_out_saying_so(self):
+        self.scripted((30.0, {"state": "starting"}), (61.0, {"state": "starting"}))
+        self.timed_out("61 s while starting")
+
+    def test_a_phase_past_its_own_wait_times_out_naming_it(self):
+        self.scripted((1.0, BUILDING), (1862.0, BUILDING))
+        self.timed_out("1862 s while building the worker image")
+
+    def test_a_phase_that_ends_leaves_a_fresh_start_wait(self):
+        starting = {"state": "starting"}
+        self.scripted((1.0, BUILDING), (100.0, starting), (161.0, starting))
+        self.timed_out("161 s while starting")
 
     def test_an_interrupted_start_kills_its_harness_and_its_dir_goes(self):
         self.harness_writes({"state": "starting"})
