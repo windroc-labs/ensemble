@@ -18,7 +18,7 @@ class ExtensionDelegate(FakeDelegate):
     ROLES = {
         "researcher": {"deep-research": "research"},
         "pm": {"product-design": "design"},
-        "engineer": {"build": "build"},
+        "engineer": {"build": "build", "decompose": "decompose"},
     }
 
     @classmethod
@@ -47,12 +47,12 @@ class NewDefault(ExtensionDelegate):
 
 
 START = """import sys
-from ensemble.orchestrator import LinearRun
+from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine import config, runs
 issue, sid = sys.argv[1:]
 cfg = config.load()
 owner = LinearRun(issue, "Echo.", cfg.issue_workdir(issue), cfg=cfg, role="engineer", sid=sid, display="opaque display")
-runs.note(cfg.runs_log, "start", issue=issue, sid=sid, role="engineer", client="fake", delegate_kind=cfg.delegate_kind)
+runs.note(cfg.runs_log, "start", issue=issue, sid=sid, role="engineer", client="fake", delegate_kind=cfg.delegate_kind, uuid=issue, project=None, target=None, task=None)
 print(owner.detach().to_line())
 """
 

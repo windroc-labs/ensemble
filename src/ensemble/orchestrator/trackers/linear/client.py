@@ -67,6 +67,10 @@ def operation(query):
 def linear_gql(query, *, identity: LinearApp, timeout=30, **variables):
     # a clean secret only: urllib's header error would echo it
     secret = _token(identity, timeout)
+    return graphql(query, secret=secret, timeout=timeout, **variables)
+
+
+def graphql(query, *, secret, timeout=30, **variables):
     req = urllib.request.Request(
         URL,
         data=json.dumps({"query": query, "variables": variables}).encode(),

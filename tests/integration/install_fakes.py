@@ -170,9 +170,11 @@ def linear_token(args):
     workspace = load(FAKES / "linear.json", {})
     client = form.get("client_id", [""])[0]
     app = workspace.get("apps", {}).get(client)
-    scope = {"client-harness": "read,write", "client-manager": "read,write,app:assignable"}.get(
-        client, "read,write,app:assignable,app:mentionable"
-    )
+    scope = {
+        "client-harness": "read,write",
+        "client-manager": "read,write,app:assignable",
+        "client-reader": "read",
+    }.get(client, "read,write,app:assignable,app:mentionable")
     if (
         app is None
         or form.get("grant_type") != ["client_credentials"]

@@ -339,17 +339,13 @@ class _Laps:
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
 
 
-def _accept_started(
-    name: str, generation: str, started: Started, container: str, github: str
-) -> None:
+def _accept_started(name: str, generation: str, started: Started, container: str) -> None:
     """Checks the broker's start reply; saves its deadline for the credential tick."""
     if (started.endpoint, started.container) != (endpoint(), container):
         raise SessionError(
             f"broker: started {started.container} at {started.endpoint},"
             f" want {container} at {endpoint()}"
         )
-    if (started.github_user_id is None) == bool(github):
-        raise SessionError("broker: bad response to start: github_user_id")
     save(
         maintenance.deadline_file(state_dir(name), generation),
         json.dumps(started.deadline),
@@ -368,9 +364,7 @@ def _held(marker: str) -> bool:
 
 
 class DockerHost(Host):
-    """settings: docker, the CLI's absolute path; plugins, sources installed in its image; and
-    github.app, the GitHub App whose tokens every session gets ("" or absent: none).
-    """
+    """settings: docker CLI absolute path and pinned plugin sources installed in its image."""
 
     _inherit_env = False  # the container gets only the launch's own env (D10)
     attachable = True
@@ -387,7 +381,7 @@ class DockerHost(Host):
         broker: Broker | None = None,
     ) -> None:
         super().__init__(name, settings)
-        if extra := sorted(set(self.settings) - {"docker", "github", "plugins"}):
+        if extra := sorted(set(self.settings) - {"docker", "plugins"}):
             removed = "; delete it: workspaces are volumes" if extra[0] == "mount_roots" else ""
             raise ConfigError(f"unknown key {extra[0]!r} in [hosts.{name}]{removed}")
         self.docker = self.settings.get("docker")
@@ -403,25 +397,6 @@ class DockerHost(Host):
                 f"[hosts.{name}] plugins: want unique name@owner/repo#40-hex-commit sources, optionally ::owner/repo#40-hex-commit"
             )
         self.plugins: tuple[str, ...] = tuple(plugins)
-        github = self.settings.get("github", {"app": ""})
-        if not isinstance(github, Mapping):
-            raise ConfigError(f"[hosts.{name}] github: want a table")
-        if extra := sorted(set(github) - {"app", "permissions"}):
-            raise ConfigError(f"unknown key {extra[0]!r} in [hosts.{name}.github]")
-        app = github.get("app")
-        if not isinstance(app, str):
-            raise ConfigError(f"[hosts.{name}.github] app: want a string")
-        permissions = github.get("permissions", {})
-        if not isinstance(permissions, Mapping) or not all(
-            isinstance(level, str) for level in permissions.values()
-        ):
-            raise ConfigError(
-                f"[hosts.{name}.github] permissions: want a table of permission = level strings"
-            )
-        if app and not permissions:
-            raise ConfigError(f"[hosts.{name}.github] permissions: want at least one with app set")
-        self.github = app
-        self.github_permissions: dict[str, str] = dict(permissions)
         self.run = run
         self.broker = Broker() if broker is None else broker
         self._workers: dict[str, DockerWorker] = {}
@@ -628,6 +603,7 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; start does lock and credential checks."""
+        self._credentials(name, metadata or {})
         environment = self._environment(name, metadata)
         if environment is None:
             self.validate(name, launch, missing_ok=True)
@@ -642,11 +618,27 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; the start builds and locks."""
+        self._credentials(name, metadata or {})
         if self._environment(name, metadata) is None:
             self.validate(name, launch)
             return
         self._check_cwd(name, launch)
         self.broker.version()
+
+    def _credentials(self, name: str, metadata: Mapping[str, str]) -> dict[str, str]:
+        record = _record(name)
+        resumed = metadata.get("resume") == "1" and record.get("sid") == metadata.get("sid")
+        values = {}
+        for key in ("credentials", "environment_credentials"):
+            given = metadata.get(key)
+            value = record.get(key) if resumed else given
+            if resumed and given is not None and given != value:
+                raise ConfigError(
+                    f"docker session {name}: resume: {key} differs from the one it was started with"
+                )
+            if value is not None:
+                values[key] = value
+        return values
 
     def _environment(self, name: str, metadata: Mapping[str, str] | None) -> EnvironmentSpec | None:
         """A resume's is its stored one (FR-62): taken if none is given, refused if the given one
@@ -666,19 +658,6 @@ class DockerHost(Host):
                 f"docker session {name}: resume: environment differs from the one it was started with"
             )
         return stored
-
-    def _github(self, environment: EnvironmentSpec | None) -> tuple[str, Mapping[str, str], str]:
-        """A start's GitHub (App, permissions, repo): none with a bare prefetch (FR-52)."""
-        if environment is not None and environment.github_repo:
-            if not self.github:
-                raise ConfigError(
-                    f"environment github_repo {environment.github_repo}:"
-                    " needs [hosts.docker.github] app"
-                )
-            return self.github, {"contents": "write"}, environment.github_repo
-        if environment is not None and environment.prefetch:
-            return "", {}, ""
-        return self.github, self.github_permissions, ""
 
     def validate(self, name: str, launch: Launch, *, missing_ok: bool = False) -> None:
         """The preflight, before any container: cwd (`missing_ok`: or none yet) and build."""
@@ -746,10 +725,8 @@ class DockerHost(Host):
         metadata: Mapping[str, str],
         *,
         environment: EnvironmentSpec | None,
-        github: tuple[str, Mapping[str, str], str],
     ) -> _Container:
         """Checks, image, workspace, home and plan, then the start; rolled back on transport failure."""
-        app, permissions, repo = github
         generation, field, home_dir, credential = (
             metadata.get(key) for key in ("generation", "home_field", "home_dir", "credential")
         )
@@ -804,15 +781,13 @@ class DockerHost(Host):
             workspace=volume,
             home=(field, home),
             hook_path=hook,
-            github=app,
-            permissions=permissions,
-            repo=repo,
             providers=tuple(json.loads(metadata.get("home_providers") or "[]")),
             account=metadata.get("home_account", ""),
+            credentials=metadata.get("credentials"),
+            environment_credentials=metadata.get("environment_credentials"),
             **(
                 {
                     "gateway": environment.gateway,
-                    "secrets": environment.secrets,
                     "lock": environment.lock,
                     "lock_owner": name,
                     "prefetch": environment.prefetch,
@@ -843,7 +818,7 @@ class DockerHost(Host):
         began = timestamp()
         try:
             started = self.broker.start(manifest, clients=clients)
-            _accept_started(name, generation, started, container, app)
+            _accept_started(name, generation, started, container)
             ended = timestamp()
             laps("start")
             created = _Container(container, generation, hook, image, cwd, started, began, ended)
@@ -918,6 +893,7 @@ class DockerHost(Host):
         self._check_cwd(name, launch)
         events = created_events(events)
         metadata = metadata or {}
+        metadata = {**metadata, **self._credentials(name, metadata)}
         environment = self._environment(name, metadata)
         owner = _take_owner(name)
         if owner is None:
@@ -963,10 +939,7 @@ class DockerHost(Host):
         environment: EnvironmentSpec | None,
     ) -> DockerWorker:
         laps = _Laps()
-        github = self._github(environment)
-        created = self._container(
-            name, launch, stops, laps, metadata, environment=environment, github=github
-        )
+        created = self._container(name, launch, stops, laps, metadata, environment=environment)
         container, generation, hook, _, _, _, _, _ = created
         handle = proc = None
         try:
@@ -984,6 +957,11 @@ class DockerHost(Host):
                     "events": events,
                     "kind": Kind.TUI if terminal else Kind.HEADLESS,
                     "environment": None if environment is None else environment.persisted(),
+                    **{
+                        key: metadata[key]
+                        for key in ("credentials", "environment_credentials")
+                        if key in metadata
+                    },
                     **({} if terminal else {"owner": metadata.get("harness"), "host": self.name}),
                 },
             )
@@ -992,7 +970,8 @@ class DockerHost(Host):
                     *("with-secrets", "--client", metadata["home_field"].removesuffix("_dir")),
                     *launch.argv,
                 ],
-                "env": self._exec_env(launch, created.started, github[0]),
+                "env": {k: v for k, v in launch.env.items() if k != "PATH"}
+                | dict(created.started.env),
                 "terminal": terminal,
                 "generation": generation,
                 "size": "{}x{}".format(*self.tui_settings().hidden_size),
@@ -1172,21 +1151,6 @@ class DockerHost(Host):
             raise SessionError(
                 f"staging prompt file: {why[-1] if why else f'exit status {result.returncode}'}"
             )
-
-    def _exec_env(self, launch: Launch, started: Started, app: str) -> dict[str, str]:
-        """With a GitHub App, its bot is PR author and git identity."""
-        env = {k: v for k, v in launch.env.items() if k != "PATH"}
-        if app:
-            bot = f"{app}[bot]"
-            email = f"{started.github_user_id}+{bot}@users.noreply.github.com"
-            env |= {
-                "ENSEMBLE_PR_AUTHOR": bot,
-                "GIT_AUTHOR_NAME": bot,
-                "GIT_AUTHOR_EMAIL": email,
-                "GIT_COMMITTER_NAME": bot,
-                "GIT_COMMITTER_EMAIL": email,
-            }
-        return env
 
     def _roll_back(self, container: str) -> str:
         try:

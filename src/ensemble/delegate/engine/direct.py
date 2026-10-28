@@ -54,6 +54,8 @@ def open_worker(
         argv += [flag, value]
     if resolved is not None:
         argv += ["--environment-spec", json.dumps(resolved.spec.persisted())]
+        if resolved.credentials is not None:
+            argv += ["--environment-credentials", resolved.credentials]
     for flag, value in (("--account", account), ("--display", display)):
         if value is not None:
             argv.append(f"{flag}={value}")

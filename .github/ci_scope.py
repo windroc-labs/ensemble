@@ -70,7 +70,7 @@ def _docs(path: str) -> bool:
     return _owner(path) == "docs" or (_owner(path) == path and path.endswith(".md"))
 
 
-# The release PR's files (tests/guard_checks/plugin.py MANIFESTS); AGENTS.md › Releasing.
+# The release PR's files (tests/guard_checks/plugin.py MANIFESTS).
 VERSION_FILES = (".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "package.json")
 RELEASE_VERSION = re.compile(r"\d+\.\d+\.\d+")
 

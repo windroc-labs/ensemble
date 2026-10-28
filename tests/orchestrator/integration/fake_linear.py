@@ -126,9 +126,10 @@ CREATE = {
     "priority",
     "title",
     "description",
+    "labelIds",
 }
 
-ISSUE_CREATE = CREATE | {"labelIds", "parentId"}
+ISSUE_CREATE = CREATE | {"parentId"}
 
 UPDATE = {
     "title",

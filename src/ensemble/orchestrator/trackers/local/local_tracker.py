@@ -322,7 +322,7 @@ class LocalTracker(Tracker):
         )
         return None if found is None else Ref(found.id, found.id)
 
-    def create(self, once, *, home, owner, priority, title, description):
+    def create(self, once, *, home, owner, priority, title, description, task=None):
         """once's issue if it exists by now; a taken id or path is skipped."""
 
         def render(ident):
@@ -334,6 +334,7 @@ class LocalTracker(Tracker):
                 created=now,
                 parent=home or None,
                 description=description,
+                task=task,
                 note_at=now,
                 note=PROMOTED,
                 note_key=issue_file.ref_key(once),

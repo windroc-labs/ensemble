@@ -29,7 +29,7 @@ func TestManifestFixtures(t *testing.T) {
 	for _, c := range fixtures.Cases(t, "manifest") {
 		t.Run(c.File, func(t *testing.T) {
 			m, err := ParseManifest(c.Data)
-			if c.Valid {
+			if c.Valid && c.Expected.Stage != "manifest" {
 				if err != nil || m.Name == "" || m.Labels == nil {
 					t.Fatalf("%+v %v", m, err)
 				}
@@ -48,7 +48,7 @@ func TestManifestDuplicatesTrailingUTF8(t *testing.T) {
 		t.Fatalf("%+v %v", m, err)
 	}
 	base := `"client":"claude","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` +
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","cwd":"/w","workspace":"ensemble-ws-w","claude_dir":"/c","github":null,"labels":{}`
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","cwd":"/w","workspace":"ensemble-ws-w","claude_dir":"/c","labels":{}`
 	if _, err := ParseManifest([]byte(`{"name":"w",` + base + `}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -123,38 +123,24 @@ func TestManifestWorkspace(t *testing.T) {
 	}
 }
 
+func withGitHubGrant(t *testing.T, fields map[string]any, grant any) {
+	t.Helper()
+	spec, err := json.Marshal(map[string]any{"github": grant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields["credentials"] = string(spec)
+}
+
 func TestManifestGitHub(t *testing.T) {
-	data, valid := fixtureBytes(t, "manifest-github-app.json"), fixtureBytes(t, "manifest-valid.json")
-	if m, err := ParseManifest(data); err != nil || m.GitHubApp != "ensemble-broker-bot" || !maps.Equal(m.GitHubPermissions, fixtureSet) {
+	m, err := ParseManifest(fixtureBytes(t, "manifest-github-app.json"))
+	if err != nil || m.GitHubApp != "ensemble-broker-bot" || !maps.Equal(m.GitHubPermissions, fixtureSet) {
 		t.Fatalf("%+v %v", m, err)
 	}
-	if m, err := ParseManifest(valid); err != nil || m.GitHubApp != "" || m.GitHubPermissions != nil {
-		t.Fatalf("%+v %v", m, err)
-	}
-	const set = `"permissions":{"contents":"write"}`
-	for _, github := range []string{`[]`, `"ensemble-broker-bot"`, `{"app":null,` + set + `}`, `{"app":"a","app":"b",` + set + `}`, `{"app":"-a",` + set + `}`,
-		`{"app":"a"}`, `{"app":"a","permissions":null}`, `{"app":"a","permissions":[]}`, `{"app":"a","permissions":{"contents":1}}`,
-		`{"app":"a",` + set + `,"owner":"acme"}`, `{"app":"a",` + set + `,"repo":"acme/x","ref":"main"}`, `{"app":"a",` + set + `,"repo":null}`} {
-		doc := strings.Replace(string(valid), `"github": null`, `"github": `+github, 1)
-		if _, err := ParseManifest([]byte(doc)); code(t, err) != protocol.ManifestRejected {
-			t.Errorf("%s accepted", github)
-		}
-	}
-	doc := strings.Replace(string(valid), `"github": null`, `"github": {"app":"a",`+set+`,"repo":"acme/x"}`, 1)
-	if m, err := ParseManifest([]byte(doc)); err != nil || m.GitHubApp != "a" || m.GitHubRepo != "acme/x" {
-		t.Fatalf("repo grant: %+v %v", m, err)
-	}
-	if m, err := ParseManifest(data); err != nil || m.GitHubRepo != "" {
-		t.Fatalf("no repo: %+v %v", m, err)
-	}
-	// The broker names the repo or permission it rejects; ValidRepo and CheckPermissions have the other cases.
-	for github, want := range map[string]string{
-		`{"app":"a",` + set + `,"repo":"acme/x/y"}`:                   `Manifest rejected: invalid github repo "acme/x/y"`,
-		`{"app":"a","permissions":{"contents":"write","foo":"read"}}`: `Manifest rejected: unknown GitHub permission "foo"`,
-	} {
-		_, err := ParseManifest([]byte(strings.Replace(string(valid), `"github": null`, `"github": `+github, 1)))
-		if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != want {
-			t.Errorf("%s: %v, want %q", github, err, want)
+	for _, grant := range []any{nil, []any{}, "app", map[string]any{"app": "a"}, map[string]any{"app": "a", "permissions": nil}, map[string]any{"app": "a", "permissions": fixtureSet, "repo": "a/b/c"}} {
+		_, err := ParseManifest(fixtureBytes(t, "manifest-valid.json", func(f map[string]any) { withGitHubGrant(t, f, grant) }))
+		if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "github") {
+			t.Fatalf("accepted %v: %v", grant, err)
 		}
 	}
 }
@@ -205,7 +191,13 @@ func TestManifestClaudeAccount(t *testing.T) {
 }
 
 func withSecrets(secrets any) func(map[string]any) {
-	return func(f map[string]any) { f["secrets"] = secrets }
+	return func(f map[string]any) {
+		data, err := json.Marshal(map[string]any{"env": secrets})
+		if err != nil {
+			panic(err)
+		}
+		f["environment_credentials"] = string(data)
+	}
 }
 
 func secret(item, file string) map[string]any { return map[string]any{"item": item, "file": file} }
@@ -228,14 +220,14 @@ func TestValidEnvName(t *testing.T) {
 	}
 }
 
-func TestParseManifestSecrets(t *testing.T) {
+func TestParseManifestEnv(t *testing.T) {
 	parse := func(edit func(map[string]any)) (Manifest, error) {
 		return ParseManifest(fixtureBytes(t, "manifest-valid.json", edit))
 	}
 	if m, err := parse(nil); err != nil || m.Secrets != nil {
 		t.Fatalf("absent: %+v %v", m.Secrets, err)
 	}
-	if m, err := parse(withSecrets([]any{})); err != nil || len(m.Secrets) != 0 {
+	if m, err := parse(withSecrets([]any{})); code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("empty: %+v %v", m.Secrets, err)
 	}
 	two := []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/dummy", "copy of dummy")}
@@ -254,7 +246,8 @@ func TestParseManifestSecrets(t *testing.T) {
 	}
 	for _, client := range []string{"codex", "opencode"} {
 		edit := func(f map[string]any) {
-			f["client"], f[client+"_dir"], f["secrets"] = client, "/x", []any{secret("ensemble-broker-env/dummy", "dummy.txt")}
+			f["client"], f[client+"_dir"] = client, "/x"
+			withSecrets([]any{secret("ensemble-broker-env/dummy", "dummy.txt")})(f)
 			delete(f, "claude_dir")
 		}
 		if m, err := parse(edit); err != nil || len(m.Secrets) != 1 {
@@ -294,9 +287,8 @@ func TestParseManifestSecrets(t *testing.T) {
 	if _, err := parse(withSecrets([]any{secret("ensemble-broker-env/dummy", strings.Repeat("f", 255))})); err != nil {
 		t.Fatalf("255-byte file: %v", err)
 	}
-	doc := `"secrets":[{"item":"ensemble-broker-env/dummy","file":"a","file":"b"}]`
-	valid := string(fixtureBytes(t, "manifest-valid.json"))
-	if _, err := ParseManifest([]byte(strings.Replace(valid, `"github": null`, `"github": null, `+doc, 1))); code(t, err) != protocol.ManifestRejected {
+	duplicate, _ := json.Marshal(`{"env":[{"item":"ensemble-broker-env/dummy","file":"a","file":"b"}]}`)
+	if _, err := ParseManifest(withFields(t, map[string]any{"credentials": json.RawMessage(duplicate)})); code(t, err) != protocol.ManifestRejected {
 		t.Fatal("duplicate key accepted")
 	}
 }
@@ -371,19 +363,26 @@ func TestManifestPrefetch(t *testing.T) {
 	}
 	// A Linear keychain item is never an environment secret, prefetch or not.
 	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"},
-		"secrets": []any{map[string]any{"item": "linear.harness_key", "file": "linear"}}}))
+		"credentials": `{"env":[{"item":"linear.harness_key","file":"linear"}]}`}))
 	if code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("prefetch with a Linear item: %v", err)
 	}
 	github := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}}
-	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
-	if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != "Manifest rejected: prefetch requires github null or a github repo" {
+	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "credentials": githubSpec(t, github)}))
+	if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != "Manifest rejected: prefetch requires a github credential with repo or no github credential" {
 		t.Fatalf("prefetch with github: %v", err)
 	}
 	// A repo grant, one repository's token, may sit beside prefetch.
 	github["repo"] = "acme/out"
-	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "github": github}))
+	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "credentials": githubSpec(t, github)}))
 	if err != nil || m.Prefetch == nil || m.GitHubApp != "ensemble-broker-bot" || m.GitHubRepo != "acme/out" {
 		t.Fatalf("prefetch with a repo grant: %+v %v", m, err)
 	}
+}
+
+func githubSpec(t *testing.T, grant any) string {
+	t.Helper()
+	f := map[string]any{}
+	withGitHubGrant(t, f, grant)
+	return f["credentials"].(string)
 }

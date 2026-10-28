@@ -495,7 +495,7 @@ func TestStartOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := StartResult{Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
+	want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
 		Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v", got)
@@ -701,7 +701,7 @@ func TestManifestUnreadable(t *testing.T) {
 
 func TestHookUnderUncleanCWD(t *testing.T) {
 	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` + imageKey +
-		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","hook_path":"` + home + `/src/project/hook","github":null,"labels":{}}`
+		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","hook_path":"` + home + `/src/project/hook","labels":{}}`
 	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	_, err := h.Start(context.Background(), writeManifest(t, []byte(m)))
 	if protoErr(t, err).Code != protocol.MountRejected || hasCall(d, "run") {
@@ -801,6 +801,32 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 				t.Fatal("no secret reached the container on stdin")
 			}
 		})
+	}
+}
+
+func TestStartRefusesCredentialRequest(t *testing.T) {
+	for _, field := range []string{"credentials", "environment_credentials"} {
+		for _, spec := range []any{
+			`{"future_kind":"private-value"}`,
+			`{"future_kind":false,"future_kind":{}}`,
+			`[]`, `null`, ``, `{} {}`, `{"broken":`,
+			nil, 1, map[string]any{},
+		} {
+			w := &world{labels: goodLabels()}
+			creds := &fakeCreds{}
+			h, d := startHost(w, creds)
+			_, err := h.Start(context.Background(), editedManifest(t, func(f map[string]any) { f[field] = spec }))
+			if e := protoErr(t, err); e.Code != protocol.ManifestRejected || !strings.Contains(err.Error(), field+":") || strings.Contains(err.Error(), "private-value") || len(d.calls) != 0 || len(creds.calls) != 0 {
+				t.Fatalf("%s: %+v %q %q", field, e, d.calls, creds.calls)
+			}
+		}
+	}
+	h, _ := startHost(&world{labels: goodLabels()}, &fakeCreds{})
+	if _, err := h.Start(context.Background(), editedManifest(t, func(f map[string]any) {
+		f["credentials"] = " {} \n"
+		f["environment_credentials"] = "\n{} "
+	})); err != nil {
+		t.Fatalf("empty credential declarations: %v", err)
 	}
 }
 

@@ -69,6 +69,16 @@ var tokenProviders = []tokenProvider{
 		deadline: "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume.",
 	},
 	{kind: credential.GitHub, renew: renewGitHub, failed: "Writing a GitHub token into %s failed."},
+	{kind: credential.Linear, renew: renewLinear, failed: "Writing a Linear token into %s failed.", deadline: "Linear authentication expired; resume after restoring the host role app's access."},
+}
+
+func renewLinear(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
+	expiry, err := h.Linear.Refresh(ctx, *m.Linear, container, h.agentExec(ctx, container))
+	if err != nil {
+		return nil, err
+	}
+	times := []string{expiry}
+	return times, record(times)
 }
 
 // renewCodex renews the login only when due and no concurrent run has, and records the expiry as Codex's
@@ -181,17 +191,20 @@ func (h Host) Maintain(ctx context.Context, container, path string, delivered []
 	return result, nil
 }
 
-// deadlineOf is the first held kind's with a deadline whose expiry is recorded; nil for none.
+// deadlineOf is the earliest recorded expiry among held kinds with a deadline; nil for none.
 func deadlineOf(record TokenRecord, held []credential.Kind) *Deadline {
+	var deadline *Deadline
+	var first time.Time
 	for _, p := range tokenProviders {
 		if p.deadline == "" || !slices.Contains(held, p.kind) {
 			continue
 		}
-		if at := earliest(record.Expires[p.kind]); at != nil {
-			return &Deadline{At: at.UTC().Format(time.RFC3339), Action: "close", Reason: p.deadline}
+		if at := earliest(record.Expires[p.kind]); at != nil && (deadline == nil || at.Before(first)) {
+			first = *at
+			deadline = &Deadline{At: at.UTC().Format(time.RFC3339), Action: "close", Reason: p.deadline}
 		}
 	}
-	return nil
+	return deadline
 }
 
 // dueAt is when kind is next due: once its retry time has passed, RefreshAhead before its earliest recorded expiry;

@@ -3,6 +3,7 @@
 trusted_dirs().
 """
 
+import json
 import os
 import re
 import tomllib
@@ -172,7 +173,7 @@ image = "dummy-env:test"
 plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
-[[delegate.environments.dummy.secrets]]
+[[delegate.environments.dummy.credentials.env]]
 item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 """
@@ -202,7 +203,6 @@ class EnvironmentCheckTest(Case):
                 "image": "@worker",
                 "gateway": "workers",
                 "plugins": [],
-                "secrets": [],
                 "prefetch": False,
             },
         )
@@ -217,10 +217,12 @@ class EnvironmentCheckTest(Case):
                 "gateway": "mini-op",
                 "plugins": [],
                 "lock": "mini-op",
-                "secrets": [
-                    {"item": "ensemble-broker-env/mini-op-password", "file": "mini-password"},
-                    {"item": "ensemble-broker-env/mini-op-ssh-key", "file": "mini-ssh-key"},
-                ],
+                "credentials": {
+                    "env": [
+                        {"item": "ensemble-broker-env/mini-op-password", "file": "mini-password"},
+                        {"item": "ensemble-broker-env/mini-op-ssh-key", "file": "mini-ssh-key"},
+                    ]
+                },
             },
         )
         spec = resolve_fields(
@@ -243,7 +245,44 @@ class EnvironmentCheckTest(Case):
         )
         self.assertEqual(found["roles"]["dummy-tester"]["environment"]["name"], "dummy")
 
+    def test_local_credential_values_are_preserved_whole(self):
+        for source, expected in (("{}", {}), ("{ future_kind = {} }", {"future_kind": {}})):
+            for table in (
+                "delegate.environment.docker",
+                "delegate.environments.mini-op",
+                "delegate.roles.dummy-tester.environment",
+            ):
+                with self.subTest(table=table, source=source):
+                    found = self.loaded(
+                        f"[{table}]\ncredentials = {source}\n"
+                        + (
+                            'name = "mini-op"\n'
+                            if table == "delegate.roles.dummy-tester.environment"
+                            else ""
+                        )
+                    )
+                    overrides = dict(
+                        found.get("roles", {}).get("dummy-tester", {}).get("environment", {})
+                    )
+                    name = overrides.pop(
+                        "name", "mini-op" if table == "delegate.environments.mini-op" else None
+                    )
+                    resolved = resolve_fields(
+                        found,
+                        host="docker",
+                        name=name,
+                        overrides=overrides,
+                        packaged=delegate.packaged_environments(),
+                    )
+                    assert resolved is not None
+                    self.assertEqual(json.loads(resolved.credentials), expected)
+
     def test_unknown_keys_are_refused_naming_the_table(self):
+        self.refused(
+            "[delegate.environments.mini-op]\nsecrets = []",
+            "unknown key 'secrets'",
+            "[environments.mini-op]",
+        )
         for text, table, key in (
             ('[delegate.environment.docker]\nports = ["80"]\n', "[environment.docker]", "ports"),
             ('[delegate.environments.dummy]\nmounts = ["/x"]\n', "[environments.dummy]", "mounts"),
@@ -255,8 +294,8 @@ class EnvironmentCheckTest(Case):
             (
                 '[[delegate.environments.e.secrets]]\nitem = "ensemble-broker-env/e"\nfile = "f"\n'
                 'value = "v"\n',
-                "[environments.e] secrets 1",
-                "value",
+                "[environments.e]",
+                "secrets",
             ),
         ):
             with self.subTest(table):
@@ -301,10 +340,6 @@ class EnvironmentCheckTest(Case):
             ('[delegate.environments.e]\nprefetch = "yes"\n', "[environments.e]"),
             ('[delegate.environments.e]\nlock = "A B"\n', "[environments.e]"),
             ('[delegate.environments.e]\nplugins = "x"\n', "[environments.e]"),
-            (
-                '[[delegate.environments.e.secrets]]\nitem = "ensemble-broker-bot"\nfile = "f"\n',
-                "[environments.e]",
-            ),
             ('[delegate.environment.docker]\ngateway = "No Such"\n', "[environment.docker]"),
             (
                 "[delegate.roles.dummy-tester]\nenvironment = 3\n",

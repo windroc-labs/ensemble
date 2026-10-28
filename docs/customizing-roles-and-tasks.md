@@ -25,8 +25,8 @@ branch = "main"
 dir = "Research/"
 ```
 
-- **Client:** `client` picks it; `ensemble-delegate run --client` overrides it for one run. This applies to every role, including `verifier`. The flags a role run passes its client: [Client policy](architecture.md#client-policy).
-- **Claude account:** none per role: the session picks it (`[session.clients.claude] account`, else the account with the most usage left): [Docker host › Claude accounts](architecture.md#claude-accounts).
+- **Client and policy:** choose the client with this config or `ensemble-delegate run --client`; [Delegate configuration](../src/ensemble/delegate/config.toml) covers permissions and flag overrides.
+- **Claude account:** [Session account configuration](../src/ensemble/session/config.toml).
 - **Destination:** `[output]` (`local`, `github` or `pull-request`); a lower level's `[output]` replaces the whole table.
 - **Access:** Delegate always grants reads of the core team directory, the role's team directory and its tasks directory, even when a role or overlay replaces `read`. `read` adds only extra directories; `write` and `commands` widen writes and commands; `templates` inlines templates into the prompt.
 - **Board runs:** the same keys under `[orchestrator.core]` (e.g. `[orchestrator.core.roles.engineer]`) apply to board runs only, after the `[delegate]` ones.
@@ -49,7 +49,7 @@ Rules a team dir follows; each break stops the run with an error naming the file
 - **Templates:** any role may name any template, built-in or yours, in `templates`.
 - **Text only:** no front matter (`---`) and no `{{…}}` placeholder; a file may name a method only as a built-in `<team>/methods/<m>.md`.
 - **Tools:** a file in `tools/` runs as `{{role_team}}/tools/<file>` in the role's `commands` (written `<role team>/tools/<file>` in its text).
-- **Out of reach:** the team dir, its files and its `tools/` tree must not overlap the run's workdir, cwd, a write dir, a dir the run adds or a dir the client can write (Codex: its `CODEX_HOME`). Codex's default `danger-full-access` ignores this: [Client policy](architecture.md#client-policy).
+- **Out of reach:** the team dir, its files and its `tools/` tree must not overlap the run's workdir, cwd, a write dir, a dir the run adds or a dir the client can write (Codex: its `CODEX_HOME`). Codex's default `danger-full-access` ignores this: [Delegate configuration](../src/ensemble/delegate/config.toml).
 
 A team dir's role needs no `[delegate.roles.<role>]` table: unset keys take the `[delegate]` values.
 
@@ -97,7 +97,7 @@ token_service = "linear-app-analyst-token"
 user_id = "<analyst app user UUID>"
 ```
 
-A stage needs only `role` and `input` (`research`, `design` or `build`: the layout its input takes):
+A stage needs only `role` and `input` (`research`, `design` or `build`: its input layout):
 
 ```toml
 [[stage]]
@@ -106,7 +106,7 @@ input = "research"
 next = "pm"           # promote hands its Handoff issues to pm
 ```
 
-- The role's charter (`roles/<role>.md`, here in a team dir) says where its output goes. Its runs end as every stage's do: done or a question → In Review, a failure → `first_failure`, a failure after a resume → In Review.
+- The role's charter (`roles/<role>.md`, here in a team dir) says where its output goes. A done run or a question goes to In Review; a failure follows `first_failure`, and a failure after resume goes to In Review. Engineer `decompose` uses local ticket-table output and completes itself and its source PRD on done; questions and failures leave the PRD unchanged.
 - `[orchestrator.roles.<role>] max_runs` is optional: no table → 1.
 - Every `ensemble-orchestrator` command checks the file when it loads it and exits 2 naming the file and stage: an unknown or ill-typed key, a role the Delegate does not know, a `next` that names no other stage, a `next` chain with a cycle.
 - At least one stage's role must still publish documents to GitHub (its `[output]`), as the packaged researcher and pm do.
@@ -147,7 +147,7 @@ context = 204800                          # its context window in tokens; defaul
 1 = "strata/qwen3.8-flash-next"
 ```
 
-Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([Docker host › OpenCode on Docker](architecture.md#opencode-on-docker)). A name is up to 64 letters, digits, `.`, `_` or `-`.
+Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([OpenCode operating limits](customizing-roles-and-tasks.md#opencode-operating-limits)). A name is up to 64 letters, digits, `.`, `_` or `-`.
 
 `scripts/install.sh --docker` with OpenCode selected configures both local OpenCode (including a commander) and
 the broker from one key entry: paste it once at `opencode auth login`, or pass one line with `--opencode-key-stdin`;
@@ -172,9 +172,9 @@ installation created: a configuration, the plugin's added files, and new OpenTUI
 
 Set each provider's `context` and `[clients.opencode] ollama_context` to the server's real context window (Ollama's `OLLAMA_CONTEXT_LENGTH`): a smaller value compacts early, a larger one lets a request overflow. Both default to 65536.
 
-A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`; a role run only under `trusted_dirs`; a board run never (its cwd is the workdir's `agent/`): run OpenCode board runs on the Docker Host ([Board › Agent label](architecture.md#agent-label)).
+A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`. Board client prerequisites: [Board configuration](../src/ensemble/orchestrator/config.toml).
 
-On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([Docker host › OpenCode on Docker](architecture.md#opencode-on-docker)) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
+On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([OpenCode operating limits](customizing-roles-and-tasks.md#opencode-operating-limits)) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
 
 ```bash
 npm install -g --prefix ~/.local/opencode-1 opencode-ai@1.19.3
@@ -196,3 +196,23 @@ python3 -I src/ensemble/session/clients/opencode/transcript.py <ses_id> [--db <p
 ```
 
 It prints the session's newest `N` (default 100) user and assistant texts, oldest first, one JSON line each: `{"time": "2026-10-18T12:00:00.123Z", "role": "user", "text": "…"}`. A missing db or unknown session: exit 1 and one `opencode transcript: …` line on stderr. The `ses_…` id is the last `client_session` line's `client_id` in the run's `<workdir>/run/run.jsonl`.
+
+### OpenCode operating limits
+
+OpenCode's pre-approved commands permit redirections: allowing `git status` also allows `git status > FILE`.
+Except for `.git`, permission paths are case-sensitive: on a case-insensitive disk a differently cased read
+directory or `OPENCODE.JSON` can bypass edit denies. Its GPT `apply_patch` checks only a moved file's source,
+not its destination. Use Docker containment for untrusted work rather than relying on these rules to constrain writes.
+Write through a directory alias using its resolved path; read grants cover both spellings, write grants only the resolved one.
+
+OpenCode's own permissions apply to ensemble commands; skill `allowed-tools` and `disable-model-invocation`
+do not. Commander monitoring is manual: OpenCode has no Monitor, background shell or completion notification
+to wake an idle commander. Follow `/ensemble:manage`'s monitoring contract.
+
+To set host Ollama's context window, use `launchctl setenv OLLAMA_CONTEXT_LENGTH 65536` (or the required
+larger window), reopen the app, and pull every configured model.
+Docker access to local/LAN providers needs each `host:port` (Ollama: `host.docker.internal:11434`) in
+`networks.workers.exceptions` of `~/.egress/config.local.yaml`, then `~/.egress/current/start.sh`.
+The installer does not add these exceptions; host-side `probe-provider` bypasses the proxy and can pass while
+a worker still lacks access. macOS Local Network permission may also be needed. An `http://` provider URL
+sends its key in plaintext.

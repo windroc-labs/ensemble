@@ -35,8 +35,11 @@ BIN = os.path.join(WORKTREE, "bin", "ensemble-orchestrator")
 LAUNCH, PROMOTE, ROUTER = ((ENTRY, n) for n in ("launch", "promote", "router"))
 
 LIGHT_RESEARCH = "00000000-0000-4000-8000-000000000021"
+DECOMPOSE = "00000000-0000-4000-8000-000000000022"
 
-TASK_LABELS = f'[linear.task_labels]\nlight-research = "{LIGHT_RESEARCH}"\n'
+TASK_LABELS = (
+    f'[linear.task_labels]\nlight-research = "{LIGHT_RESEARCH}"\ndecompose = "{DECOMPOSE}"\n'
+)
 
 _CFG = tomllib.loads(run_fixtures.local("/") + TASK_LABELS)
 
@@ -144,7 +147,11 @@ class Flow(Case):
         for r in ROLES:
             self.fake.user(r.title(), TOKENS[r], uid=_LINEAR["roles"][r]["user_id"])
         self.ids = {HUMAN: self.fake.user("Me", email=HUMAN)}
-        self.fake.label_group(board_ids.TASK_GROUP, "Tasks", {LIGHT_RESEARCH: "Light Research"})
+        self.fake.label_group(
+            board_ids.TASK_GROUP,
+            "Tasks",
+            {LIGHT_RESEARCH: "Light Research", DECOMPOSE: "Decompose"},
+        )
         self.seam = fake_linear.seam(self, self.fake, fake_linear.serve(self, self.fake))
         self.bin = os.path.join(self.root, "bin")
         os.mkdir(self.bin)

@@ -23,6 +23,13 @@ const (
 	capture    = 65536
 )
 
+// A credential request kind's directory in a container (protocol fixture credential-dirs.json).
+const (
+	GitHubDir = SecretsDir + "/github"
+	LinearDir = SecretsDir + "/linear"
+	EnvDir    = SecretsDir + "/env"
+)
+
 type Runner interface {
 	Run(ctx context.Context, args []string, stdin []byte) ([]byte, error)
 }

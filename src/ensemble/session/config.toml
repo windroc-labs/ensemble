@@ -191,8 +191,6 @@ max = "max"
 #   docker            the docker CLI, an absolute path
 #   plugins           pinned sources: name@owner/repo#commit[::marketplace-owner/repo#commit]; []: none
 #                     Both commits are full 40-hex hashes.
-#   github.app        the slug of the GitHub App whose installation tokens every Docker session gets, the one
-#                     `ensemble-broker login github ensemble-broker-bot` saved (scripts/install.sh writes it); "": none
 [hosts]
 default = "tmux"
 hidden_size = "80x24"
@@ -213,16 +211,6 @@ implementation = "ensemble.session.hosts.docker.host:DockerHost"
 docker = "/usr/local/bin/docker"
 plugins = ["updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43"]
 isolated = true
-
-[hosts.docker.github]
-app = ""
-# permissions: every installation token's repository permissions, <name> = "read" | "write" as GitHub names them; the
-# broker rejects an unknown name or level, and the App itself must hold each. A local table merges key by key: it sets
-# or adds a permission, never removes one.
-permissions = { contents = "write", pull_requests = "write", workflows = "write", checks = "read", actions = "read", statuses = "read" }
-# local: [session.hosts.docker.github]
-# local: app = "<your App's slug>"
-# local: permissions.statuses = "write"
 
 # ── Viewer ──────────────────────────────────────────────
 # [viewer]            how the Viewer (src/ensemble/session/viewer/viewer.py) shows every Host's sessions:

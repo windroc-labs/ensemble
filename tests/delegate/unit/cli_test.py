@@ -106,6 +106,13 @@ class Detach(Base):
     def detaches(self, *extra, events=None, **kw):
         return self.runs("--sid", SID, "--detach", "--events", events or self.events, *extra, **kw)
 
+    def test_credentials_reach_the_delegate_without_decoding(self):
+        for value in (' {"future-kind": [1]}\n', "{", "{}", ""):
+            with self.subTest(value=value):
+                code, _, err = self.detaches("--credentials", value)
+                self.assertEqual(code, 0, err)
+                self.assertEqual(Detaching.made[-1][1].credentials, value)
+
     def test_inside_an_agent_session_a_run_detached_or_not_exits_2_and_constructs_nothing(self):
         with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
             for code, out, err in (self.detaches(), self.runs("--sid", SID)):
@@ -387,7 +394,7 @@ image = "dummy-env:test"
 plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
-[[delegate.environments.dummy.secrets]]
+[[delegate.environments.dummy.credentials.env]]
 item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
@@ -418,11 +425,9 @@ class Environments(Harnessed):
             {
                 "image": "dummy-env:test",
                 "gateway": "workers",
-                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "plugins": ["dummy-plugin"],
                 "lock": "dummy-lock",
                 "prefetch": {"repo": "acme/app", "ref": "release/1"},
-                "github_repo": None,
             },
         )
         self.assertFalse(os.path.exists(self.work))
@@ -457,14 +462,9 @@ class Verifier(Harnessed):
             {
                 "image": "mini-op:env",
                 "gateway": "mini-op",
-                "secrets": [
-                    {"item": "ensemble-broker-env/mini-op-password", "file": "mini-password"},
-                    {"item": "ensemble-broker-env/mini-op-ssh-key", "file": "mini-ssh-key"},
-                ],
                 "plugins": [],
                 "lock": "mini-op",
                 "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
-                "github_repo": "windroc/team-docs",
             },
         )
         self.assertIn("`mini-op` skill", shown["prompt"])
@@ -1031,7 +1031,7 @@ class Usage(Base):
                 "a task off the index",
                 {"role": "engineer", "task": "deep-research"},
                 "",
-                "task 'deep-research' is not one of engineer's tasks (build, light-build)",
+                "task 'deep-research' is not one of engineer's tasks (build, light-build, decompose)",
             ),
             (
                 "a bad team_dirs",

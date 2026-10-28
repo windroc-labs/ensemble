@@ -64,6 +64,45 @@ func TestStartRejectsSecretManifest(t *testing.T) {
 	}
 }
 
+func TestStartEnvRequestSources(t *testing.T) {
+	base := `{"env":[{"item":"ensemble-broker-env/base","file":"base"}]}`
+	caller := `{"env":[{"item":"ensemble-broker-env/caller","file":"caller"}]}`
+	linear := string(fixtureBytes(t, "credential-spec-linear.json"))
+	for _, tc := range []struct {
+		environment, caller, item, file string
+	}{
+		{base, "", "base", "base"},
+		{"", caller, "caller", "caller"},
+		{base, caller, "caller", "caller"},
+		{base, linear, "base", "base"},
+	} {
+		env := &fakeEnv{}
+		h, d, _ := envHost(&world{labels: goodLabels()}, env)
+		h.Linear = &fakeLinear{}
+		path := editedManifest(t, func(m map[string]any) {
+			for key, value := range map[string]string{"environment_credentials": tc.environment, "credentials": tc.caller} {
+				if value != "" {
+					m[key] = value
+				}
+			}
+		})
+		if _, err := h.Start(context.Background(), path); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(env.calls, []string{"ready ensemble-broker-env/" + tc.item, "inject ensemble-broker-env/" + tc.item + " " + tc.file}) {
+			t.Fatalf("wrong env delivery: %v", env.calls)
+		}
+		commands := startCommands(t, d)
+		want := 2
+		if tc.caller == linear {
+			want = 4
+		}
+		if len(commands) != want {
+			t.Fatalf("wrong batch size %d, want %d", len(commands), want)
+		}
+	}
+}
+
 func TestStartEnvNotReady(t *testing.T) {
 	missing := protocol.New(protocol.LoginRequired, "No keychain item ensemble-broker-env/ssh: run ensemble-broker login env ssh.")
 	env := &fakeEnv{ready: missing}
@@ -110,7 +149,7 @@ func TestStartEnvSecrets(t *testing.T) {
 	if got, want := secretsTmpfs(t, d), docker.SecretsDir+":rw,noexec,nosuid,nodev,size=102400,mode=0700,uid=1001,gid=1002"; got != want {
 		t.Fatalf("tmpfs %q, want %q", got, want)
 	}
-	for _, edit := range []func(map[string]any){nil, withSecrets([]any{})} {
+	for _, edit := range []func(map[string]any){nil, func(m map[string]any) { m["credentials"] = "{}" }} {
 		env := &fakeEnv{}
 		h, d, _ := envHost(&world{labels: goodLabels()}, env)
 		if _, err := h.Start(context.Background(), editedManifest(t, edit)); err != nil || len(env.calls) != 0 {

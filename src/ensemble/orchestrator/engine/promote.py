@@ -16,6 +16,7 @@ from ensemble.orchestrator.engine.types import (
     ConfigError,
     LinearError,
     TrackerFileError,
+    TrackerKind,
     Unavailable,
 )
 from ensemble.utils import one_line, parse_time
@@ -59,8 +60,11 @@ Prerequisites and effects:
   create that next role's issue in the same project, delegated to its app,
   with an empty assignee,
   in Todo with source links and the user's instructions (comments by anyone but
-  the harness and role apps); relate the issues and move the source to
-  Done. Existing next-stage issues are reused. Required instructions absent:
+  the harness and role apps); relate the issues. On Linear, pm to engineer
+  creates a decompose-task issue and keeps the source in Handoff until that run
+  succeeds; linear.task_labels.decompose must be configured. Other promotions,
+  including local pm handoffs, move the source to Done.
+  Existing next-stage issues are reused. Required instructions absent:
   return the source to In Review with a comment.
   Every tick also prunes: close finished runs, delete agent files and archive
   finished issues (Done ones of pm/engineer only). This includes uncommitted
@@ -181,6 +185,7 @@ class Promoter:
 
     def promote(self, handoff: Promotion):
         src, detail, role, nxt = handoff.source, handoff.detail, handoff.role, handoff.next
+        decompose = self.cfg.tracker == TrackerKind.LINEAR and role == "pm" and nxt == "engineer"
         comments = self.instructions(detail, handoff.cutoff)
         if not comments and self.tasks[role].require_instructions:
             if self.comment_and_move(
@@ -209,9 +214,13 @@ class Promoter:
                     src.title,
                 ),
                 description=self.description(src, comments, detail),
+                task="decompose" if decompose else None,
             )
         if child.key not in detail.related and not self.dry:
             self.tracker.relate(src.key, child.key)
+        if decompose:
+            self.say("promote", src.ident, to=child.ident)
+            return
         if not self.move(src, IssueState.DONE, "promote"):
             return
         self.say("promote", src.ident, to=child.ident)

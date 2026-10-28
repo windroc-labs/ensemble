@@ -1,5 +1,6 @@
 """A run's EnvironmentSpec from the config layers and its prefetch target from the input."""
 
+import json
 from collections.abc import Mapping
 
 from ensemble.delegate.engine.container import reference_lines
@@ -44,17 +45,25 @@ def resolve_fields(
             raise ConfigError(f"{by}: no [environments.{name}]")
         named = environments[name]
     fields = {**default, **named, **overrides}
+    credentials = json.dumps(fields.pop("credentials")) if "credentials" in fields else None
     prefetch = fields.pop("prefetch", False)
     spec = _spec(fields, f"{by} on Host {host}")
     base = packaged.get(host)
-    if not prefetch and base is not None and spec == _spec(base, f"[environment.{host}]"):
+    if (
+        credentials is None
+        and not prefetch
+        and base is not None
+        and spec == _spec(base, f"[environment.{host}]")
+    ):
         return None
-    return Resolved(spec, prefetch)
+    return Resolved(spec, prefetch, credentials)
 
 
 def _spec(fields: Mapping, where: str) -> EnvironmentSpec:
     try:
-        return EnvironmentSpec.from_fields({k: v for k, v in fields.items() if k != "prefetch"})
+        return EnvironmentSpec.from_fields(
+            {k: v for k, v in fields.items() if k not in ("prefetch", "credentials")}
+        )
     except SessionConfigError as error:
         raise ConfigError(f"{where}: {error}") from None
 

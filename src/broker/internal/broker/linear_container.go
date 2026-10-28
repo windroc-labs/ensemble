@@ -1,0 +1,237 @@
+package broker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"slices"
+	"strings"
+	"time"
+
+	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
+	"ensemble/broker/internal/protocol"
+)
+
+// linearContainerRecord keeps revocation possible after the guard and tmpfs stop.
+// Closed blocks queued maintenance; Tokens retains every unrevoked issuance.
+type linearContainerRecord struct {
+	Closed bool           `json:"closed"`
+	Shared bool           `json:"shared,omitempty"`
+	Tokens []linearAccess `json:"tokens"`
+}
+
+func roleIdentity(a credential.LinearApp) LinearIdentity {
+	return LinearIdentity{Name: a.Role, Kind: "role", ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
+}
+
+// containerAccount accepts only the exact active role binding enrolled on the host.
+func (l Linear) containerAccount(app credential.LinearApp) (linearAccount, error) {
+	a := roleIdentity(app)
+	var registry []LinearIdentity
+	var account linearAccount
+	if l.read("registry", &registry) != nil || !slices.Contains(registry, a) || l.read("app/"+a.TokenService, &account) != nil || account.Version != 1 || !account.Active || account.Identity != a {
+		return linearAccount{}, errLinear
+	}
+	trusted, err := trustedItem(l.keys, a.SecretService, account.RootAccount)
+	if err != nil || !trusted {
+		return linearAccount{}, errLinear
+	}
+	return account, nil
+}
+
+func (l Linear) Ready(app credential.LinearApp) error {
+	if app.Renewal == "transport" {
+		if _, err := l.transportToken(context.Background(), app); err != nil {
+			return protocol.New(protocol.LoginRequired, "Linear role token is missing, invalid or expired; restore the host role app's access.")
+		}
+		return nil
+	}
+	if _, err := l.containerAccount(app); err != nil {
+		return protocol.New(protocol.LoginRequired, "Linear role app is not enrolled or readable; run ensemble-broker login linear on the host.")
+	}
+	return nil
+}
+
+// containerToken follows the app's renewal owner without changing host credentials.
+func (l Linear) containerToken(ctx context.Context, app credential.LinearApp) (linearAccess, error) {
+	if app.Renewal == "transport" {
+		return l.transportToken(ctx, app)
+	}
+	account, err := l.containerAccount(app)
+	if err != nil {
+		return linearAccess{}, errLinear
+	}
+	secret, err := l.keys.Secret(app.SecretService, account.RootAccount)
+	defer erase(secret)
+	if err != nil || !linearClean(string(secret)) {
+		return linearAccess{}, errLinear
+	}
+	token, _, err := l.request(ctx, account.Identity, string(secret))
+	return token, err
+}
+
+func linearCommand(token linearAccess, replace bool) credential.Command {
+	data, _ := json.Marshal(token)
+	defer erase(data)
+	command, _ := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "token.json", Replace: replace}, data)
+	return command
+}
+
+func (l Linear) noteContainer(c, result, reason string, token linearAccess) {
+	l.Audit.Add(c, audit.Credential{Kind: audit.LinearAccessToken, Result: result, Reason: reason, ExpiresAt: &token.ExpiresAt})
+}
+
+func (l Linear) revokeContainerToken(ctx context.Context, c string, token linearAccess) bool {
+	if expiry, err := time.Parse(time.RFC3339, token.ExpiresAt); err == nil && !l.now().Before(expiry) {
+		l.noteContainer(c, audit.Withdrawn, "", token)
+		return true
+	}
+	rctx, cancel := detached(ctx)
+	defer cancel()
+	form := url.Values{"token": {token.AccessToken}}
+	req, err := http.NewRequestWithContext(rctx, http.MethodPost, "https://api.linear.app/oauth/revoke", strings.NewReader(form.Encode()))
+	result, reason := audit.Unrevoked, "token revocation failed"
+	if err == nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := l.http.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusUnauthorized {
+				result, reason = audit.Revoked, ""
+			}
+		}
+	}
+	l.noteContainer(c, result, reason, token)
+	return result == audit.Revoked
+}
+
+// retireContainer keeps the supplied tokens and every failed revocation.
+func (l Linear) retireContainer(ctx context.Context, c string, record *linearContainerRecord, keep []linearAccess) error {
+	pending := make([]linearAccess, 0, len(record.Tokens))
+	failed := false
+	for _, token := range record.Tokens {
+		if slices.ContainsFunc(keep, func(k linearAccess) bool { return k.AccessToken == token.AccessToken }) {
+			pending = append(pending, token)
+		} else if !l.revokeContainerToken(ctx, c, token) {
+			pending = append(pending, token)
+			failed = true
+		}
+	}
+	record.Tokens = pending
+	var err error
+	if len(pending) == 0 {
+		err = l.keys.DeleteSecret(linearService, "container/"+c)
+		if err == nil {
+			err = l.removeLock("container/" + c)
+		}
+	} else {
+		err = l.save("container/"+c, record)
+	}
+	if err != nil || failed {
+		return errLinear
+	}
+	return nil
+}
+
+func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string) ([]credential.Command, func(), string, error) {
+	unlock, err := l.lock("container/"+c, true)()
+	if err != nil {
+		return nil, nil, "", errLinear
+	}
+	defer unlock()
+	var existing linearContainerRecord
+	if err := l.read("container/"+c, &existing); !errors.Is(err, ErrNotFound) {
+		return nil, nil, "", errLinear
+	}
+	token, err := l.containerToken(ctx, r.App)
+	if err != nil {
+		return nil, nil, "", errLinear
+	}
+	l.noteContainer(c, audit.Issued, "", token)
+	record := linearContainerRecord{Shared: r.App.Renewal == "transport"}
+	if !record.Shared {
+		record.Tokens = []linearAccess{token}
+	}
+	if l.save("container/"+c, record) != nil {
+		record.Closed = true
+		_ = l.retireContainer(ctx, c, &record, nil)
+		return nil, nil, "", errLinear
+	}
+	command := linearCommand(token, false)
+	board, _ := json.Marshal(r.Board)
+	defer erase(board)
+	config, _ := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "board.json"}, board)
+	return []credential.Command{command, config}, func() { _ = l.Revoke(ctx, c) }, token.ExpiresAt, nil
+}
+
+func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c string, exec func([]string, []byte) error) (string, error) {
+	unlock, err := l.lock("container/"+c, false)()
+	if err != nil {
+		return "", errLinear
+	}
+	defer unlock()
+	var record linearContainerRecord
+	if l.read("container/"+c, &record) != nil || record.Closed || record.Shared != (r.App.Renewal == "transport") {
+		return "", errLinear
+	}
+	token, err := l.containerToken(ctx, r.App)
+	if err != nil {
+		return "", errLinear
+	}
+	if record.Shared {
+		command := linearCommand(token, true)
+		defer command.Erase()
+		if err := exec(command.Argv, command.Stdin); err != nil {
+			return "", errLinear
+		}
+		return token.ExpiresAt, nil
+	}
+	l.noteContainer(c, audit.Renewed, "", token)
+	previous := record.Tokens
+	record.Tokens = append(record.Tokens, token)
+	if l.save("container/"+c, record) != nil {
+		_ = l.retireContainer(ctx, c, &record, previous)
+		return "", errLinear
+	}
+	command := linearCommand(token, true)
+	defer command.Erase()
+	if err := exec(command.Argv, command.Stdin); err != nil {
+		_ = l.retireContainer(ctx, c, &record, previous)
+		return "", errLinear
+	}
+	if l.retireContainer(ctx, c, &record, []linearAccess{token}) != nil {
+		return "", errLinear
+	}
+	return token.ExpiresAt, nil
+}
+
+// Revoke survives a stopped or absent container. Closed is durable before revocation,
+// so maintenance queued behind close cannot issue or deliver another token.
+func (l Linear) Revoke(ctx context.Context, c string) error {
+	// An existing lock also covers issuance still waiting for its first token.
+	unlock, err := l.lock("container/"+c, false)()
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return errLinear
+	}
+	defer unlock()
+	var record linearContainerRecord
+	if err := l.read("container/"+c, &record); errors.Is(err, ErrNotFound) {
+		return l.removeLock("container/" + c)
+	} else if err != nil {
+		return errLinear
+	}
+	record.Closed = true
+	if l.save("container/"+c, record) != nil {
+		return errLinear
+	}
+	return l.retireContainer(ctx, c, &record, nil)
+}
