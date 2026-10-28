@@ -1,4 +1,7 @@
+import base64
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +15,10 @@ def docker(*args, **kwargs):
 
 
 def main(image):
+    if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Linux":
+        sys.exit("container startup checks run only in Linux CI")
+    if not re.fullmatch(r"ensemble-worker:[0-9a-f]{64}", image):
+        sys.exit("container startup checks require a broker-built worker image")
     labels = json.loads(docker("image", "inspect", image))[0]["Config"]["Labels"]
     uid, gid = labels["ensemble.agent-uid"], labels["ensemble.agent-gid"]
     for client, hook in (
@@ -79,6 +86,31 @@ def main(image):
                 uid,
                 gid,
                 input=(ROOT / ".github/worker_start_probe.py").read_bytes(),
+            )
+            value = b"synthetic-start-credential\x00\xff"
+            payload = json.dumps(
+                [
+                    {
+                        "argv": ["/usr/bin/tee", "/tmp/ci-state/credential"],
+                        "stdin": base64.b64encode(value).decode(),
+                    }
+                ]
+            ).encode()
+            result = docker(
+                "exec",
+                "--interactive",
+                "--user",
+                "agent",
+                container,
+                "/opt/ensemble/venv/bin/python",
+                "-I",
+                "/opt/ensemble/lib/credential-batch.py",
+                input=payload,
+            )
+            assert json.loads(result) == {"completed": 1}
+            assert (
+                docker("exec", "--user", "agent", container, "cat", "/tmp/ci-state/credential")
+                == value
             )
         finally:
             docker("rm", "--force", container)

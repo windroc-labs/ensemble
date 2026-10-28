@@ -376,10 +376,8 @@ func TestEnvironmentWithoutPrefetchKeepsGitHub(t *testing.T) {
 	if run, _ := helperRun(d); run != nil {
 		t.Fatalf("helper ran: %q", run)
 	}
-	i := slices.IndexFunc(d.calls, func(c []string) bool {
-		return slices.Equal(c, []string{"exec", "--interactive", "--user", "agent", container, "write"})
-	})
-	if i < 0 || string(d.stdin[i]) != "ghs_token" {
+	commands := startCommands(t, d)
+	if len(commands) != 3 || commands[2].Argv[0] != "write" || string(commands[2].Stdin) != "ghs_token" {
 		t.Fatalf("no GitHub token write in %q", d.verbs())
 	}
 }

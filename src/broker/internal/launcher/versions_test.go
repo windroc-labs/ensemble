@@ -58,12 +58,7 @@ func TestClaudeStartsWithoutCodexVersionPreparation(t *testing.T) {
 			if strings.Contains(progress.String(), "update-codex") {
 				t.Fatal(progress.String())
 			}
-			secrets := 0
-			for _, call := range d.calls {
-				if slices.Contains(call, "inject") || slices.Contains(call, "write") {
-					secrets++
-				}
-			}
+			secrets := len(startCommands(t, d))
 			if secrets != 2 {
 				t.Fatalf("Claude/GitHub injection count %d", secrets)
 			}

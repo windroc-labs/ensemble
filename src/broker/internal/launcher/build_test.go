@@ -30,7 +30,20 @@ func (f *fakeDocker) Run(ctx context.Context, args []string, stdin []byte) ([]by
 	f.stdin = append(f.stdin, slices.Clone(stdin))
 	f.ctxErrs = append(f.ctxErrs, ctx.Err())
 	if f.respond != nil {
-		return f.respond(args)
+		out, err := f.respond(args)
+		if slices.Contains(args, credentialBatch) && out == nil && err == nil {
+			var commands []startCommand
+			if err := json.Unmarshal(stdin, &commands); err != nil {
+				return nil, err
+			}
+			for i, command := range commands {
+				if _, err := f.respond(append([]string{"exec", "--interactive", "--user", "agent", container}, command.Argv...)); err != nil {
+					return json.Marshal(map[string]int{"completed": i})
+				}
+			}
+			return json.Marshal(map[string]int{"completed": len(commands)})
+		}
+		return out, err
 	}
 	return nil, nil
 }
@@ -559,7 +572,7 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 	for _, want := range []string{
 		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/python3 ",
 		"install -d -o agent -g agent -m 0700 /run/ensemble\n",
-		"COPY bootstrap.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
+		"COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
 		`python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients`,
 		"ln -s /opt/ensemble/clients/bin/opencode /opt/ensemble/bin/opencode",
 		"python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex ",

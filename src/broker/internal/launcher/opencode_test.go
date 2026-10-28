@@ -152,20 +152,9 @@ func TestStartOpencodeProviders(t *testing.T) {
 	if !slices.Equal(keys.calls, []string{"ready strata,lab", "inject strata,lab"}) {
 		t.Fatalf("%q", keys.calls)
 	}
-	created, injected := -1, -1
-	for i, c := range d.calls {
-		if c[0] == "run" && created < 0 {
-			created = i
-		}
-		if slices.Contains(c, "inject-opencode") && injected < 0 {
-			injected = i
-			if !slices.Equal(c, []string{"exec", "--interactive", "--user", "agent", container, "inject-opencode", "strata"}) {
-				t.Fatalf("%q", c)
-			}
-		}
-	}
-	if created < 0 || injected < created {
-		t.Fatalf("injected before create: %q", d.calls)
+	commands := startCommands(t, d)
+	if len(commands) != 2 || !slices.Equal(commands[0].Argv, []string{"inject-opencode", "strata"}) || commands[1].Argv[1] != "lab" {
+		t.Fatalf("provider commands: %+v", commands)
 	}
 	for _, edit := range []func(map[string]any){nil, withProviders()} {
 		h, _, _ := opencodeHost(&world{labels: goodLabels()}, &fakeTokens{})

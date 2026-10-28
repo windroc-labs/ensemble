@@ -18,6 +18,7 @@ var expiry = []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00
 // fakeTokens records the launcher's Tokens calls; each err field fails its method. An issued set's revocation is the
 // call "revoke <container>"; close's Revoke is "read-revoke <container>", reading the token files when readFiles.
 type fakeTokens struct {
+	owners                      []string
 	calls                       []string
 	ready, user, issue, refresh error
 	prefetch                    error
@@ -47,8 +48,14 @@ func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[
 	if f.issue != nil {
 		return nil, nil, f.issue
 	}
-	if err := exec([]string{"write"}, []byte("ghs_token")); err != nil {
-		return nil, nil, err
+	owners := f.owners
+	if len(owners) == 0 {
+		owners = []string{"acme"}
+	}
+	for _, owner := range owners {
+		if err := exec([]string{"write", owner}, []byte("ghs_token")); err != nil {
+			return nil, nil, err
+		}
 	}
 	return func() {
 		f.calls = append(f.calls, "revoke "+c)
@@ -108,13 +115,9 @@ func TestStartGitHub(t *testing.T) {
 	if out, _ := json.Marshal(got); !strings.Contains(string(out), `"github_user_id":343764394`) {
 		t.Fatalf("%s", out)
 	}
-	last := d.calls[len(d.calls)-1]
-	if !slices.Equal(last, []string{"exec", "--interactive", "--user", "agent", container, "write"}) || string(d.stdin[len(d.stdin)-1]) != "ghs_token" {
-		t.Fatalf("write %q", last)
-	}
-	inject := slices.IndexFunc(d.calls, func(c []string) bool { return slices.Contains(c, "inject") })
-	if inject < 0 || inject > len(d.calls)-2 {
-		t.Fatal("tokens written before the Claude token")
+	commands := startCommands(t, d)
+	if len(commands) != 2 || commands[0].Argv[0] != "inject" || !slices.Equal(commands[1].Argv, []string{"write", "acme"}) || string(commands[1].Stdin) != "ghs_token" {
+		t.Fatalf("credential order or bytes: %+v", commands)
 	}
 }
 

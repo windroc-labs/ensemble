@@ -503,7 +503,7 @@ func TestStartOrder(t *testing.T) {
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
 	}
-	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, "inject"}) {
+	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, Python, "-I", credentialBatch}) {
 		t.Fatalf("inject %q", inject)
 	}
 	boot := d.calls[11]
@@ -769,6 +769,11 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 						t.Fatalf("docker %q carries a secret", args)
 					}
 					delivered = delivered || strings.Contains(string(d.stdin[i]), s)
+				}
+			}
+			for _, command := range startCommands(t, d) {
+				for _, secret := range secrets {
+					delivered = delivered || strings.Contains(string(command.Stdin), secret)
 				}
 			}
 			if !delivered {

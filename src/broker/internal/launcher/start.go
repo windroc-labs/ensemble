@@ -362,7 +362,9 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if err != nil {
 		return StartResult{}, held, err
 	}
-	exec := h.agentExec(ctx, c)
+	var batch startDelivery
+	defer batch.erase()
+	exec := batch.queue
 	// Read again just before the Keychain reads, the closest to the versions injected.
 	var record *injectedRecord
 	if refs := staticRefs(m); h.Static != nil && len(refs) > 0 {
@@ -392,16 +394,37 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 			}
 		}
 	}
-	if kind := clientKind(m.Client); kind != "" {
-		held.client = true
-		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry})
-	}
-	for _, s := range m.Secrets {
-		if err := h.Env.Inject(s, exec); err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Writing "+s.Item+" into the container failed.")
+	clientMessage := map[string]string{
+		"codex":    "Injecting Codex credentials failed.",
+		"claude":   "Injecting the Claude token failed.",
+		"opencode": "Injecting the OpenCode provider API keys failed.",
+	}[m.Client]
+	batch.step(clientMessage, func() {
+		if kind := clientKind(m.Client); kind != "" {
+			held.client = true
+			h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry})
 		}
-		held.secrets = append(held.secrets, s.Item)
-		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
+	})
+	for _, s := range m.Secrets {
+		message := "Writing " + s.Item + " into the container failed."
+		if err := h.Env.Inject(s, exec); err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, message)
+		}
+		batch.step(message, func() {
+			held.secrets = append(held.secrets, s.Item)
+			h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
+		})
+	}
+	expiries := []protocol.Expiry{}
+	if m.GitHubApp != "" {
+		if held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c, exec); err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the GitHub tokens failed.")
+		}
+		batch.step("Injecting the GitHub tokens failed.", nil)
+		lap("github")
+	}
+	if err := h.deliverStart(ctx, c, &batch); err != nil {
+		return StartResult{}, held, err
 	}
 	if record != nil {
 		if err := h.writeInjected(m, *record, protocol.StartFailed); err != nil {
@@ -409,13 +432,6 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 	}
 	lap("credentials")
-	expiries := []protocol.Expiry{}
-	if m.GitHubApp != "" {
-		if held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c, exec); err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the GitHub tokens failed.")
-		}
-		lap("github")
-	}
 	if err := h.startTokens(m, codexExpiry, expiries); err != nil {
 		return StartResult{}, held, err
 	}

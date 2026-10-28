@@ -21,7 +21,7 @@ func TestStartCombinedBootstrap(t *testing.T) {
 		}
 		var setup [][]string
 		for i, args := range d.calls {
-			if args[0] == "exec" && !slices.Contains(args, "inject") {
+			if args[0] == "exec" && !slices.Contains(args, credentialBatch) {
 				setup = append(setup, args)
 				if !slices.Contains(args, "/usr/bin/python3") || !slices.Contains(args, "-I") || !strings.Contains(string(d.stdin[i]), "subprocess.run") {
 					t.Fatalf("bootstrap must use isolated system Python over stdin: %q", args)
