@@ -210,7 +210,7 @@ class Detach(RunReads, Case):
         return self.server.tmux("has-session", "-t", f"={name}").returncode == 0
 
     def until(self, check, what: str, *, diagnostics=None):
-        """diagnostics: a timeout's AssertionError ends with its text (default: drive.log)."""
+        """A timeout's AssertionError ends with `diagnostics` (default: drive.log)."""
 
         def poked():
             self.poke()
@@ -247,7 +247,7 @@ class Detach(RunReads, Case):
         return [line for line in shaped if line != "turn end"]
 
     def records(self):
-        """run.jsonl's complete lines; a line still being written waits for a later read."""
+        """run.jsonl's complete lines; a partial line waits."""
         try:
             with open(os.path.join(Layout(self.work).run, "run.jsonl")) as stream:
                 return [json.loads(line) for line in stream if line.endswith("\n")]

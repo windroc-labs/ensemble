@@ -1,4 +1,4 @@
-"""CallbackChild, a subprocess.Popen for a run's callback: hands its event line to `deliver`, exits 0."""
+"""CallbackChild, a callback's subprocess.Popen: hands its event line to `deliver`, exits 0."""
 
 from collections.abc import Callable
 

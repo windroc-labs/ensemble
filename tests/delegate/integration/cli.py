@@ -1,8 +1,4 @@
-"""Public CLI runs and answers as subprocesses: Integration over
-tests/session/integration/clients/claude/fake_claude.py, CodexIntegration over
-tests/session/integration/clients/codex/fake_codex.py, OpenCodeIntegration over
-tests/session/integration/clients/opencode/fake_opencode.py, their outcomes.
-"""
+"""Public CLI runs and answers as subprocesses over the fake claude, codex and opencode."""
 
 import contextlib
 import json
@@ -39,7 +35,7 @@ ASKING = {
 }
 UNSAVED = {k: v for k, v in DONE.items() if k != "deliverable"}
 UNSAVED_ERROR = "done with a local destination must carry the deliverable"
-TEAMS = os.path.join(REPO, "work")  # the repo's gitignored work/
+TEAMS = os.path.join(REPO, "work")
 
 
 def owned_team(case, files=TEAM_FILES, *, root=TEAMS, prefix="team-") -> str:
@@ -54,8 +50,7 @@ class Runs(RunReads, Case):
     """A CLI run's records in `work` and the fake client's calls in `log`."""
 
     def records(self) -> list[dict]:
-        with open(os.path.join(self.work, "run", "run.jsonl")) as f:
-            return input_first(list(map(json.loads, f)))
+        return input_first(super().records())
 
     def calls(self) -> list[dict]:
         if not os.path.exists(self.log):
@@ -108,9 +103,7 @@ class Runs(RunReads, Case):
 
 
 class Integration(Runs):
-    """ROLE over the fake `claude`: a HOME of the test's own, the CLI run from `proj`, workdir
-    `work`, the agent's cwd its agent dir `agent`, --sid SID.
-    """
+    """ROLE over the fake `claude`: own HOME, CLI cwd `proj`, workdir `work`, agent cwd `agent`."""
 
     ROLE = "dummy-tester"
 
@@ -224,7 +217,7 @@ CODEX_END = {"out": {"type": "turn.completed"}}
 
 
 def codex_said(*texts) -> list[dict]:
-    """The fake's steps: an agent message per text, then the turn's end."""
+    """Fake steps: an agent message per text, then the turn end."""
     return [*map(fake_codex.message, texts), CODEX_END]
 
 
@@ -306,9 +299,8 @@ class CodexIntegration(Runs):
 
 
 class OpenCodeIntegration(CodexIntegration):
-    """ROLE's TASK, --client opencode over fake_opencode on PATH; HOME, its session bindings,
-    outside the temp dirs. A run's cwd is `proj`, in trusted_dirs (the tmux Host starts OpenCode
-    only in a trusted cwd).
+    """ROLE's TASK, --client opencode over fake_opencode on PATH; HOME outside the temp dirs; cwd
+    `proj`, trusted.
     """
 
     CLIENT = "opencode"

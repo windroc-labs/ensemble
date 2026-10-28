@@ -371,7 +371,7 @@ class Start(Base):
         )
 
     def test_a_destination_decides_the_url_and_each_saves_a_deliverable(self):
-        url, pr_url = "https://github.com/o/docs/blob/main/x.md", "https://github.com/o/n/pull/7"
+        url, pr_url = "https://github.com/o/notes/blob/main/x.md", "https://github.com/o/n/pull/7"
         for output, data, want_url, saved in (
             ({"type": "local"}, DONE, self.out, "# Doc\n"),
             (GH, {**DONE, "url": url}, url, "# Doc\n"),
@@ -408,7 +408,7 @@ class Start(Base):
             (f"stopped: PermissionError: {denied}", False),
         )
         for output, url, gated in (
-            (GH, "https://github.com/o/docs/blob/main/x.md", []),
+            (GH, "https://github.com/o/notes/blob/main/x.md", []),
             (PR, "https://github.com/o/n/pull/7", ["ready_gate"]),
         ):
             with self.subTest(output=output):

@@ -578,7 +578,7 @@ class Parameters(Fake):
     def test_github_output_its_used_keys(self):
         names = parameters(self.compose("editor")[0])
         self.assertEqual(
-            list(names.items())[2:], [("<out-repo>", "`o/docs`"), ("<out-branch>", "`main`")]
+            list(names.items())[2:], [("<out-repo>", "`o/notes`"), ("<out-branch>", "`main`")]
         )
 
     def test_an_unset_host_is_github_com(self):
@@ -651,7 +651,7 @@ class Errors(Fake):
                 "editor",
             ),
             (
-                'repo = "o/docs"\n',
+                'repo = "o/notes"\n',
                 "",
                 "<out-repo> is used in destinations/github.md but Parameters doesn't define "
                 "it (output.repo is not set)",

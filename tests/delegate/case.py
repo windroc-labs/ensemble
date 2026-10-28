@@ -1,6 +1,5 @@
-"""Case, every delegate test's base; FakeClientCase, a Case over the fake client; RunReads, a
-run's records; committed, packaged; PY, child_env; SID; import roots (REPO, SRC, ROOTS,
-PYTHONPATH).
+"""Case, every delegate test's base; FakeClientCase; RunReads; committed, packaged; PY,
+child_env; SID; import roots.
 """
 
 import os
@@ -36,9 +35,7 @@ def packaged(**dependencies) -> type[Session]:
 
 
 class Case(TreeCase):
-    """Minus CALLER_SESSION; also self.session_cls and its self.driver; starts run their harness
-    on a thread (harnesses.Threaded), joined at its end.
-    """
+    """Minus CALLER_SESSION; self.session_cls, self.driver; harnesses run on joined threads."""
 
     def _case_foreign(self) -> str | None:
         return _foreign()
@@ -56,9 +53,7 @@ class Case(TreeCase):
 
 
 class FakeClientCase(Case):
-    """The fake client registered as `fake` (its scenario `scenario`, its log `log`) in a scratch
-    dir `tmp`; workdir `work` (not made), out `out` in it.
-    """
+    """The fake client as `fake`, its files in scratch `tmp`."""
 
     def setUp(self):
         self.tmp = scratch(self)
@@ -86,7 +81,7 @@ class FakeClientCase(Case):
 
 
 class RunReads:
-    """records() of workdir `work`'s run log; kinds() and last(kind) of them."""
+    """Reads of `work`'s run log."""
 
     work: str
 

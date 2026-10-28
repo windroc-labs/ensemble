@@ -348,7 +348,7 @@ class Access(Fake):
 class Resolve(Fake):
     def test_role_overrides_global_output_is_replaced_whole_and_lists_default_empty(self):
         for role, tier, effort, output in (
-            ("editor", 1, "high", {"type": "github", "repo": "o/docs", "branch": "main"}),
+            ("editor", 1, "high", {"type": "github", "repo": "o/notes", "branch": "main"}),
             ("writer", 2, "medium", {"type": "local"}),
         ):
             with self.subTest(role=role):
@@ -405,7 +405,7 @@ class Resolve(Fake):
             (run.language, run.cwd, run.tier, run.effort),
             ("French", "/srv", 3, "high"),
         )
-        self.assertEqual(run.output, {"type": "github", "repo": "o/docs", "branch": "trunk"})
+        self.assertEqual(run.output, {"type": "github", "repo": "o/notes", "branch": "trunk"})
         self.assertEqual(self.resolved().read, ["/data"])
 
 

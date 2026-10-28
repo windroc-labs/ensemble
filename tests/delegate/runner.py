@@ -32,7 +32,7 @@ INVALID = {**DONE, "status": "maybe"}
 INVALID_ERROR = "status 'maybe' is not one of done, needs_input, failed"
 
 
-GH = {"type": "github", "repo": "o/docs", "branch": "main", "dir": "R/"}
+GH = {"type": "github", "repo": "o/notes", "branch": "main", "dir": "R/"}
 
 
 PR = {"type": "pull-request"}

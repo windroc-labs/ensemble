@@ -37,7 +37,7 @@ from tests.delegate.unit.composer.teams import INTRO
 
 PUBLISHING = (
     {"type": "pull-request"},
-    {"type": "github", "repo": "o/docs", "branch": "main", "dir": "reports/"},
+    {"type": "github", "repo": "o/notes", "branch": "main", "dir": "reports/"},
 )
 
 WRITE_ONCE = (

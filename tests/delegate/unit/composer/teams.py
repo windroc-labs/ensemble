@@ -71,7 +71,7 @@ tier = 1
 
 [roles.editor.output]
 type = "github"
-repo = "o/docs"
+repo = "o/notes"
 branch = "main"
 """
 

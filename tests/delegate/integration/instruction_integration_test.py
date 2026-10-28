@@ -92,7 +92,7 @@ class Instruction(Case):
             for destination in (
                 None,
                 {"type": "local"},
-                {"type": "github", "repo": "o/docs", "branch": "main", "dir": "reports"},
+                {"type": "github", "repo": "o/notes", "branch": "main", "dir": "reports"},
                 {"type": "pull-request"},
             ):
                 with self.subTest(role=role, destination=destination):
