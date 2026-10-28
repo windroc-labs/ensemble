@@ -39,10 +39,8 @@ class UnitImports(Case):
         root = Path(REPO)
         files = sorted(
             str(path)
-            for path in root.rglob("*.py")
-            if "tests" in path.relative_to(root).parts
-            or path.parent == root / ".github"
-            and path.name.endswith("_test.py")
+            for pattern in ("tests/**/*.py", ".github/*_test.py")
+            for path in root.glob(pattern)
         )
         sample = Path(self.home, "gate.py")
         sample.write_text("import isolation\nfrom isolation import Gate\n")

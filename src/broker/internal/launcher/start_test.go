@@ -804,6 +804,32 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 	}
 }
 
+func TestStartRefusesCredentialRequest(t *testing.T) {
+	for _, field := range []string{"credentials", "environment_credentials"} {
+		for _, spec := range []any{
+			`{"future_kind":"private-value"}`,
+			`{"future_kind":false,"future_kind":{}}`,
+			`[]`, `null`, ``, `{} {}`, `{"broken":`,
+			nil, 1, map[string]any{},
+		} {
+			w := &world{labels: goodLabels()}
+			creds := &fakeCreds{}
+			h, d := startHost(w, creds)
+			_, err := h.Start(context.Background(), editedManifest(t, func(f map[string]any) { f[field] = spec }))
+			if e := protoErr(t, err); e.Code != protocol.ManifestRejected || !strings.Contains(err.Error(), field+":") || strings.Contains(err.Error(), "private-value") || len(d.calls) != 0 || len(creds.calls) != 0 {
+				t.Fatalf("%s: %+v %q %q", field, e, d.calls, creds.calls)
+			}
+		}
+	}
+	h, _ := startHost(&world{labels: goodLabels()}, &fakeCreds{})
+	if _, err := h.Start(context.Background(), editedManifest(t, func(f map[string]any) {
+		f["credentials"] = " {} \n"
+		f["environment_credentials"] = "\n{} "
+	})); err != nil {
+		t.Fatalf("empty credential declarations: %v", err)
+	}
+}
+
 // A start reaches GitHub only to issue its own tokens: no revocation precedes it (no backlog).
 func TestStartMakesNoRevocationBeforeIssue(t *testing.T) {
 	tokens := &fakeTokens{}

@@ -29,7 +29,7 @@ import (
 // them.
 const (
 	usersService = "ensemble-broker-github-users"
-	tokenDir     = docker.SecretsDir + "/github"
+	tokenDir     = docker.GitHubDir
 )
 
 // revocationTimeout bounds each in-command step that must end whatever the caller's context: a rollback's or close's

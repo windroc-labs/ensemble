@@ -1,5 +1,5 @@
 {
-  "protocol_version": "33",
+  "protocol_version": "34",
   "cases": [
     {
       "file": "manifest-valid.json",
@@ -2649,6 +2649,176 @@
         "stage": "response",
         "exit_code": null,
         "error_code": null
+      }
+    },
+    {
+      "file": "credential-spec-all.json",
+      "definition": "credential_spec",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": ""
+      }
+    },
+    {
+      "file": "credential-spec-empty.json",
+      "definition": "credential_spec",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": ""
+      }
+    },
+    {
+      "file": "credential-spec-github.json",
+      "definition": "credential_spec",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": ""
+      }
+    },
+    {
+      "file": "credential-spec-linear.json",
+      "definition": "credential_spec",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": ""
+      }
+    },
+    {
+      "file": "credential-spec-env.json",
+      "definition": "credential_spec",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": ""
+      }
+    },
+    {
+      "file": "credential-spec-invalid-unknown-kind.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-invalid-not-table.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-invalid-linear-shorthand.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-invalid-linear-manager.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-invalid-linear-secret.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-invalid-linear-labels.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-credentials-two-values.json",
+      "definition": "manifest",
+      "valid": true,
+      "expected": {
+        "stage": "manifest",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-credentials-wrong-envelope.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "manifest-environment-credentials-wrong-envelope.json",
+      "definition": "manifest",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-test-kind.json",
+      "definition": "test_kind_fixture",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": ""
+      }
+    },
+    {
+      "file": "credential-spec-linear-missing-state.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-members-not-array.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
       }
     }
   ]

@@ -424,6 +424,8 @@ class Spec(ProcessOptions):
     resume: bool = False  # resume session sid
     events: str | None = None
     environment: EnvironmentSpec | None = None
+    credentials: str | None = None
+    environment_credentials: str | None = None
     handlers: tuple[HookCallback, ...] = ()  # ordered on_event modules (FR-5)
 
     def __post_init__(self):

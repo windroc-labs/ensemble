@@ -82,7 +82,7 @@ class DockerBrokerProtocol(Case):
         Draft202012Validator.check_schema(schema)
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())
         self.assertTrue(index["cases"])
-        self.assertEqual(index["protocol_version"], "33")
+        self.assertEqual(index["protocol_version"], "34")
         self.assertEqual(
             index["protocol_version"],
             schema["$defs"]["version_output"]["properties"]["protocol_version"]["const"],
@@ -91,7 +91,8 @@ class DockerBrokerProtocol(Case):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(
             set(names),
-            {p.name for p in (PROTOCOL / "fixtures").glob("*.json")} - {"index.json"},
+            {p.name for p in (PROTOCOL / "fixtures").glob("*.json")}
+            - {"index.json", "credential-dirs.json"},
         )
         covered = set()
         for case in index["cases"]:
@@ -106,6 +107,7 @@ class DockerBrokerProtocol(Case):
                 covered.add((definition, case["valid"]))
         for definition in (
             "manifest",
+            "credential_spec",
             "version_input",
             "version_output",
             "build_input",
@@ -130,6 +132,33 @@ class DockerBrokerProtocol(Case):
         ):
             for valid in (True, False):
                 self.assertIn((definition, valid), covered)
+
+    def test_credential_size_limits(self):
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        validator = Draft202012Validator({**schema, "$ref": "#/$defs/credential_spec"})
+        for count, valid in ((0, False), (1, True), (16, True), (17, False)):
+            with self.subTest(count=count):
+                spec = {
+                    "env": [
+                        {"item": "ensemble-broker-env/a", "file": f"file-{i}"} for i in range(count)
+                    ]
+                }
+                self.assertEqual(validator.is_valid(spec), valid)
+        for length, valid in ((255, True), (256, False)):
+            with self.subTest(length=length):
+                spec = {"env": [{"item": "ensemble-broker-env/a", "file": "a" * length}]}
+                self.assertEqual(validator.is_valid(spec), valid)
+
+    def test_a_broker_only_fixture_kind_fits_the_manifest_envelopes(self):
+        fixture = json.loads((PROTOCOL / "fixtures/credential-spec-test-kind.json").read_text())
+        extension = json.loads((PROTOCOL / "test-kind.schema.json").read_text())
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        production = Draft202012Validator({**schema, "$ref": "#/$defs/credential_spec"})
+        for value in fixture.values():
+            self.assertTrue(Draft202012Validator(extension).is_valid(json.loads(value)))
+            self.assertFalse(production.is_valid(json.loads(value)))
+        manifest = json.loads((PROTOCOL / "fixtures/manifest-valid.json").read_text())
+        self.assertTrue(Draft202012Validator(schema).is_valid({**manifest, **fixture}))
 
     def test_manifest_required_fields_and_rejected_unknown_fields_are_exercised(self):
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())

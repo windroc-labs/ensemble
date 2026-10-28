@@ -3203,6 +3203,26 @@ class HarnessRequestTest(HostedTuiBase):
         fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
         self.assertEqual(fresh.from_harness_request(request).spec, spec)
 
+    def test_opaque_credentials_round_trip(self):
+        for value in (None, "", "not JSON", ' { "fixture_test": {"file": "test"} } '):
+            spec = self.spec(
+                client="fake",
+                mode="tui",
+                name="w1",
+                sid=SID,
+                credentials=value,
+                environment_credentials=' {"other": 1} ',
+            )
+            request = json.loads(
+                json.dumps(self.session.harness_request(spec, display=None, host="d2", roots=()))
+            )
+            self.assertEqual(request["spec"]["credentials"], value)
+            self.assertEqual(
+                request["spec"]["environment_credentials"], spec.environment_credentials
+            )
+            fresh = type("Fresh", (HostedSession,), {"__module__": __name__})
+            self.assertEqual(fresh.from_harness_request(request).spec, spec)
+
     def test_a_caller_without_pythonpath_sends_none(self):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         with mock.patch.dict(os.environ, env, clear=True):

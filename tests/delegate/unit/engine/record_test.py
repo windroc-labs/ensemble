@@ -12,6 +12,7 @@ from ensemble.delegate.engine.record import HANDLER, RunRecord, worker
 from ensemble.delegate.engine.types import Layout, Limit, Result
 from ensemble.session import EnvironmentSpec, HookCallback
 from ensemble.utils import OutcomeStatus
+from tests.delegate.case import REPO
 from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.harness import SID, HarnessCase
 
@@ -54,6 +55,43 @@ class RunRecordTest(HarnessCase):
         record.save(full)
         self.assertEqual(self.metadata()["plan"]["session"]["environment"], environment.persisted())
         self.assertEqual(record.read(), full)
+
+    def test_opaque_values_round_trip_on_both_specs(self):
+        self.make()
+        record = self.record()
+        state = record.read()
+        with open(
+            os.path.join(
+                REPO, "src/broker/protocol/docker-broker/fixtures/credential-spec-test-kind.json"
+            )
+        ) as file:
+            fixture = json.load(file)
+        for value in (
+            fixture["credentials"],
+            None,
+            "",
+            "not JSON",
+            ' { "fixture_test": {"file": "test"} } ',
+        ):
+            environment = '{"fixture_test": {"file": "environment"}}'
+            carried = replace(
+                state,
+                plan=replace(
+                    state.plan,
+                    spec=replace(
+                        state.plan.spec, credentials=value, environment_credentials=environment
+                    ),
+                    session=replace(
+                        state.plan.session, credentials=value, environment_credentials=environment
+                    ),
+                ),
+            )
+            record.save(carried)
+            self.assertEqual(record.read(), carried)
+            data = self.metadata()
+            for spec in (data["spec"], data["plan"]["session"]):
+                self.assertEqual(spec["credentials"], value)
+                self.assertEqual(spec["environment_credentials"], environment)
 
     def test_a_bad_record_is_a_config_error(self):
         self.make()

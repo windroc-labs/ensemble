@@ -1,5 +1,3 @@
-"""The Delegate's shared types."""
-
 import contextlib
 import os
 from collections.abc import Mapping, Sequence
@@ -41,9 +39,7 @@ class Outer(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class Layout:
-    """A run's workdir (Spec.workdir): `agent`, the agent's cwd and only write grant; `run`, the
-    harness's state and records.
-    """
+    """Spec.workdir: agent is cwd/only write grant; run holds harness state."""
 
     workdir: str
 
@@ -64,7 +60,6 @@ class Layout:
 
     @property
     def scratch(self) -> tuple[str, ...]:
-        """`agent`'s checkouts (`src`, the report repo's clone `publish`) and temp files."""
         return (os.path.join(self.agent, "src"), os.path.join(self.agent, "publish"), self.tmp)
 
     @property
@@ -73,11 +68,10 @@ class Layout:
 
     @property
     def out(self) -> str:
-        """A session run's default `out`."""
         return os.path.join(self.run, "out.md")
 
     def in_place(self) -> bool:
-        """Whether `agent` is a real directory where it belongs, reached through no symlink."""
+        """agent is in place, without symlinks."""
         real = os.path.join(
             os.path.realpath(os.path.dirname(self.workdir)),
             os.path.relpath(self.agent, os.path.dirname(self.workdir)),
@@ -89,7 +83,7 @@ class Layout:
         )
 
     def checkouts(self) -> tuple[str, ...] | None:
-        """Delegate.checkouts: the dirs at `agent`/src/<owner>/<name> that are their own real path."""
+        """agent/src/<owner>/<name> dirs whose paths are real."""
         if not os.path.lexists(self.agent):
             return None
         if not self.in_place():
@@ -105,11 +99,9 @@ class Layout:
 
 @dataclass(frozen=True)
 class Spec:
-    """One run to start: `workdir` is the run's workdir (Layout); `resume` resumes session `sid`;
-    client None: the role's; `out` None: `<run>/out.md` for a session run, else nothing is saved;
-    `team` None: the built-in one. name and events: tui only for plan(); HarnessDelegate takes them
-    in every mode (`name`: its agent session, `<name>-drive` its harness's; `events`: also the
-    detached harness's outcome line).
+    """One run: workdir=Layout; resume uses sid. None: client=role, team=built-in,
+    out=<run>/out.md for sessions, else unsaved. name/events: tui in plan(), all modes in
+    HarnessDelegate (agent name, harness <name>-drive, detached outcome events).
     """
 
     input: str
@@ -125,6 +117,8 @@ class Spec:
     repo: str | None = None
     cwd: str | None = None
     team: Team | None = None
+    credentials: str | None = None
+    environment_credentials: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,8 +129,8 @@ class DriverSpec:
 
 @dataclass(frozen=True)
 class Plan:
-    """`spec` resolved: its client, sid and team set, its paths absolute; `session` the session's
-    Spec; `docker` whether the agent runs in a container, then `repo` its Reference repo.
+    """spec: client/sid/team set, paths absolute; session: SessionSpec; docker: container,
+    repo: then its Reference repo.
     """
 
     spec: Spec
@@ -180,8 +174,6 @@ class Plan:
 
 @dataclass(frozen=True)
 class Preview:
-    """A construction's plan and placement; agent None: unnamed."""
-
     plan: Plan
     agent: str | None
     host: str
@@ -229,7 +221,7 @@ Event = Begun | Progress | Finished
 
 
 class GateStatus(StrEnum):
-    """The ready gate's act; drafted: a failed or needs_input run's PR put back in draft."""
+    """DRAFTED: failed/needs_input PR returned to draft."""
 
     SKIPPED = "skipped"
     PASSED = "passed"
@@ -247,17 +239,14 @@ class Gated:
 
 @dataclass(frozen=True)
 class Resolved:
-    """A run's environment from the config layers (engine/environment.py)."""
-
     spec: EnvironmentSpec
     prefetch: bool
 
 
 @dataclass(frozen=True)
 class DelegateState:
-    """delegate.json's run state (engine/record.py); previous: attempt - 1's Result once a
-    follow-up opened attempt; bound: an owned attempt's worker took it (its owner phase);
-    closing: a close stopped its worker (no follow-up); drive: its ProcessControl path.
+    """delegate.json: previous=attempt-1 Result after follow-up; bound=owned worker took attempt;
+    closing=close stopped worker, no follow-up; drive=ProcessControl path.
     """
 
     role: str

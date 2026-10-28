@@ -196,7 +196,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		"cwd": &m.CWD, "workspace": &m.Workspace, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
 		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath, "lock": &m.Lock, "lock_owner": &m.LockOwner, "gateway": &m.Gateway}
 	for key, raw := range fields {
-		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" || key == "secrets" || key == "prefetch" {
+		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" || key == "secrets" || key == "prefetch" || key == "credentials" || key == "environment_credentials" {
 			continue
 		}
 		target, ok := targets[key]
@@ -343,6 +343,24 @@ func ParseManifest(data []byte) (Manifest, error) {
 			return reject("prefetch requires github null or a github repo")
 		}
 		m.Prefetch = &Prefetch{Repo: repo, Ref: ref}
+	}
+
+	for _, source := range []string{"environment_credentials", "credentials"} {
+		raw, present := fields[source]
+		if !present {
+			continue
+		}
+		var text string
+		if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &text) != nil {
+			return reject("%s: want JSON text", source)
+		}
+		var spec map[string]json.RawMessage
+		if json.Unmarshal([]byte(text), &spec) != nil || spec == nil {
+			return reject("%s: want a JSON object", source)
+		}
+		if len(spec) > 0 {
+			return reject("%s: not served by this broker", source)
+		}
 	}
 
 	var labels map[string]json.RawMessage
