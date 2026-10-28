@@ -246,8 +246,8 @@ dependencies = []
 
 [tool.typos.files]
 ignore-hidden = false
-# Translated READMEs: typos checks English spelling only.
-extend-exclude = ["docs/readme/"]
+# Translated READMEs: typos checks English spelling only. Git's own files hold branch names.
+extend-exclude = ["docs/readme/", ".git/"]
 
 [tool.typos.default]
 # Unicode code point ranges (U+0100-02BA) in inlined font CSS are hex, not words.
