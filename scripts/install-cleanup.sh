@@ -366,6 +366,7 @@ broker_files() {
     return
   fi
   sudo -A rm -rf "$root/usr/local/libexec/ensemble"
+  # install.sh --docker deletes these too; this covers a Mac that never ran an install.sh that does.
   for service in ensemble-broker-tokens ensemble-broker-revocations ensemble-broker-codex-grants; do
     count=0
     while delete_item "$service"; do

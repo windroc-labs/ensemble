@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +32,7 @@ func statusHost(t *testing.T) (Host, credential.StaticStore) {
 
 func TestStaticStatus(t *testing.T) {
 	h, _ := statusHost(t)
-	got, err := h.StaticStatus(false, map[string]bool{"ensemble-broker-claude/default": true})
+	got, err := h.StaticStatus(map[string]bool{"ensemble-broker-claude/default": true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +44,10 @@ func TestStaticStatus(t *testing.T) {
 	if os.Getuid() != 0 && string(encoded) != want {
 		t.Fatalf("%s\nwant\n%s", encoded, want)
 	}
-	if got, err := h.StaticStatus(false, map[string]bool{"ensemble-broker-claude/default": false}); err != nil || len(got) != 3 {
+	if got, err := h.StaticStatus(map[string]bool{"ensemble-broker-claude/default": false}); err != nil || len(got) != 3 {
 		t.Fatalf("an unusable legacy token is not listed: %+v %v", got, err)
 	}
-	if got, err := (Host{}).StaticStatus(false, nil); err != nil || got != nil {
+	if got, err := (Host{}).StaticStatus(nil); err != nil || got != nil {
 		t.Fatalf("no store: %+v %v", got, err)
 	}
 }
@@ -57,7 +56,7 @@ func TestStaticStatusReadOnly(t *testing.T) {
 	h, store := statusHost(t)
 	before, _ := os.ReadFile(store.Path)
 	_, logPath := audited(t, &h, "status", "")
-	if _, err := h.StaticStatus(false, nil); err != nil {
+	if _, err := h.StaticStatus(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Audit.Flush(nil); err != nil {
@@ -72,42 +71,9 @@ func TestStaticStatusReadOnly(t *testing.T) {
 	}
 }
 
-func TestStatusCleanupNotifiesOnce(t *testing.T) {
-	h, store := statusHost(t)
-	_, logPath := audited(t, &h, "status", "")
-	for range 2 {
-		if _, err := h.StaticStatus(true, nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	login(t, store, "ensemble-broker-env/later", credential.Registration{Expires: noticeNow.Add(24 * time.Hour)}, noticeNow)
-	if err := store.DeliverHost("ensemble-broker-env/later", noticeNow, func(credential.Notice) {}); err != nil { // as login does
-		t.Fatal(err)
-	}
-	if _, err := h.StaticStatus(true, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.Audit.Flush(nil); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 1 || !strings.Contains(lines[0], `"command":"status","event":"credential-notice"`) ||
-		!strings.Contains(lines[0], `"item":"ensemble-broker-claude/work","notice":"7d"`) {
-		t.Fatalf("%q", lines)
-	}
-	records, _ := store.Load()
-	if n := records["ensemble-broker-claude/work"].Notified; len(n) != 1 || n[0] != "7d" {
-		t.Fatalf("%q", n)
-	}
-}
-
 func TestStaticStatusStoreFails(t *testing.T) {
 	h := Host{Static: &fakeStatic{err: &credential.StoreError{Path: "/x/static-secrets.json", Reason: "cannot read"}}}
-	_, err := h.StaticStatus(false, nil)
+	_, err := h.StaticStatus(nil)
 	if e := protoErr(t, err); e.Code != protocol.InternalError || e.Message != "/x/static-secrets.json: cannot read." {
 		t.Fatalf("%+v", e)
 	}

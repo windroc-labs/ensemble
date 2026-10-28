@@ -65,62 +65,40 @@ func equal(a, b []string) bool {
 
 func TestNilRecorder(t *testing.T) {
 	var r *Recorder
-	r.Add(ctr, Credential{Kind: GitHubToken, Result: Issued}, "k")
+	r.Add(ctr, Credential{Kind: GitHubToken, Result: Issued})
 	r.Flush(nil)
 }
 
 func TestRouting(t *testing.T) {
 	r, s := recorder("close", ctr)
 	gh := func(result string) Credential { return Credential{Kind: GitHubToken, Result: result, Account: "acme"} }
-	r.Add(ctr, gh(Pending), "own")
-	r.Add(other, gh(Pending), "o1")
-	r.Add(other, gh(Revoked), "o2")
-	r.Add(other, gh(ExpiredUnrevoked), "o3")
-	r.Add(ctr, gh(Revoked), "own")
-	r.Add(ctr, Credential{Kind: ClaudeSetupToken, Result: Withdrawn}, "")
+	r.Add(ctr, gh(Issued))
+	r.Add(other, gh(Revoked))
+	r.Add(ctr, gh(Unrevoked))
+	r.Add(ctr, gh(Revoked))
+	r.Add(ctr, Credential{Kind: ClaudeSetupToken, Result: Withdrawn})
 	r.Flush(nil)
 	lines := s.decoded(t)
-	if len(lines) != 2 || s.calls != 1 {
-		t.Fatalf("one append of the retry line, then the command line: %d lines, %d calls", len(lines), s.calls)
+	if len(lines) != 1 || s.calls != 1 {
+		t.Fatalf("only the command line: %d lines, %d calls", len(lines), s.calls)
 	}
-	retry, own := lines[0], lines[1]
-	if retry["event"] != "revocation-retry" || retry["command"] != "close" || retry["container"] != other || retry["session"] != "worker_2" {
-		t.Fatal(retry)
-	}
-	if !equal(results(retry), []string{Revoked, ExpiredUnrevoked}) {
-		t.Fatalf("another container keeps only revoked and expired outcomes: %v", results(retry))
-	}
+	own := lines[0]
 	if own["event"] != "close" || own["session"] != "worker_1" || own["error"] != nil {
 		t.Fatal(own)
 	}
-	if !equal(results(own), []string{Revoked, Withdrawn}) {
-		t.Fatalf("a later outcome replaces the token's pending entry: %v", results(own))
-	}
-}
-
-func TestKeyedOutcomesKeepHistory(t *testing.T) {
-	r, s := recorder("start", ctr)
-	r.Add(ctr, Credential{Kind: GitHubToken, Result: Issued}, "k")
-	r.Add(ctr, Credential{Kind: GitHubToken, Result: Pending, Reason: "queued"}, "k")
-	r.Add(ctr, Credential{Kind: GitHubToken, Result: Revoked}, "k")
-	r.Add(ctr, Credential{Kind: GitHubToken, Result: Revoked}, "")
-	r.Flush(nil)
-	if got := results(s.decoded(t)[0]); !equal(got, []string{Issued, Revoked, Revoked}) {
-		t.Fatalf("issued stays; pending is replaced: %v", got)
+	if !equal(results(own), []string{Issued, Unrevoked, Revoked, Withdrawn}) {
+		t.Fatalf("every own outcome kept in order, another container's dropped: %v", results(own))
 	}
 }
 
 func TestNoContainerYet(t *testing.T) {
 	r, s := recorder("start", "")
-	r.Add("", Credential{Kind: GitHubToken, Result: Revoked}, "")
-	r.Add(other, Credential{Kind: GitHubToken, Result: Revoked}, "")
+	r.Add("", Credential{Kind: GitHubToken, Result: Revoked})
+	r.Add(other, Credential{Kind: GitHubToken, Result: Revoked})
 	r.Flush(protocol.New(protocol.ManifestRejected, "Manifest rejected: x"))
 	lines := s.decoded(t)
-	if len(lines) != 2 || lines[0]["container"] != other {
+	if len(lines) != 1 || lines[0]["container"] != nil || lines[0]["error"] != "manifest_rejected" || len(results(lines[0])) != 0 {
 		t.Fatalf("%v", lines)
-	}
-	if lines[1]["container"] != nil || lines[1]["error"] != "manifest_rejected" || len(results(lines[1])) != 0 {
-		t.Fatal(lines[1])
 	}
 }
 
@@ -136,20 +114,14 @@ func TestFlushError(t *testing.T) {
 	}
 }
 
-func TestStatusWritesOnlyRetryLines(t *testing.T) {
+func TestStatusWritesNothing(t *testing.T) {
 	for _, command := range []string{"status", "build", "workspace-rm"} {
 		r, s := recorder(command, "")
+		r.Add(other, Credential{Kind: GitHubToken, Result: Revoked})
 		r.Flush(nil)
 		if s.calls != 0 {
 			t.Fatalf("%s wrote %d lines", command, len(s.lines))
 		}
-	}
-	r, s := recorder("status", "")
-	r.Add(other, Credential{Kind: GitHubToken, Result: Pending}, "")
-	r.Add(other, Credential{Kind: GitHubToken, Result: Revoked}, "")
-	r.Flush(nil)
-	if lines := s.decoded(t); len(lines) != 1 || lines[0]["event"] != "revocation-retry" {
-		t.Fatalf("%v", lines)
 	}
 }
 

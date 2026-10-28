@@ -143,17 +143,11 @@ func TestStartLine(t *testing.T) {
 // reportingTokens adds what a real token store would, so the test sees where the recorder routes it.
 type reportingTokens struct {
 	*fakeTokens
-	rec            *audit.Recorder
-	retryContainer string
+	rec *audit.Recorder
 }
 
-func (r *reportingTokens) Retry(ctx context.Context) ([]protocol.Pending, error) {
-	r.retryContainer = r.rec.Container
-	return r.fakeTokens.Retry(ctx)
-}
-
-func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	r.rec.Add(c, audit.Credential{Kind: audit.GitHubToken, Result: audit.Issued, Account: "acme"}, "k")
+func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) (func(), []protocol.Expiry, error) {
+	r.rec.Add(c, audit.Credential{Kind: audit.GitHubToken, Result: audit.Issued, Account: "acme"})
 	return r.fakeTokens.Issue(ctx, app, repo, permissions, c, exec)
 }
 
@@ -166,9 +160,6 @@ func TestStartLineHoldsItsOwnTokens(t *testing.T) {
 	rec.Flush(err)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if tokens.retryContainer != container {
-		t.Fatalf("the recorder knew %q at the backlog retry", tokens.retryContainer)
 	}
 	if got := kinds(readLines(t, path)[0]); !slices.Equal(got, []string{"claude-setup-token issued", "github-installation-token issued"}) {
 		t.Fatal(got)

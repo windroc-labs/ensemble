@@ -17,10 +17,11 @@ import (
 var clock = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 
 const (
-	records  = "test-tokens"
-	backlogS = "test-revocations"
-	ctrA     = "ensemble-a-00000000000000000000000000000001"
-	ctrB     = "ensemble-b-00000000000000000000000000000002"
+	records = "test-grants"
+	hostA   = "linear-a"
+	hostB   = "linear-b"
+	idA     = "host/" + hostA
+	idB     = "host/" + hostB
 )
 
 var errMissing = errors.New("missing")
@@ -91,17 +92,6 @@ func (s *memStore) record(t *testing.T, id string) (Record, bool) {
 	return rec, ok
 }
 
-func (s *memStore) backlog(t *testing.T) []Pending {
-	t.Helper()
-	var list []Pending
-	if v, ok := s.items[backlogS+"/pending"]; ok {
-		if err := json.Unmarshal(v, &list); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return list
-}
-
 func (s *memStore) seed(t *testing.T, id string, rec Record) {
 	t.Helper()
 	data, err := json.Marshal(rec)
@@ -111,43 +101,33 @@ func (s *memStore) seed(t *testing.T, id string, rec Record) {
 	s.items[records+"/"+id] = data
 }
 
-// fakeProvider issues tok_<n> per Issue call, one target per account, and revokes by p.revoke (nil: revoked). It
-// fails the test if a lifecycle lock is held across one of its requests.
+// fakeProvider issues tok_<n> per Issue call (or fixed, as an account not renewed meanwhile), one target per account.
+// It fails the test if a lifecycle lock is held across one of its requests.
 type fakeProvider struct {
-	t             *testing.T
-	kind          Kind
-	now           time.Time
-	targets       []Material
-	n             int
-	issueErr      func(n int) error
-	onIssue       func(n int)
-	revoke        func(token string) Revocation
-	revoked       []string
-	calls         []string
-	held          *bool
-	scopes        []map[string]string // each Issue's
-	targetsIssued []Material          // each Issue's target
-	fixed         string              // non-empty: every Issue returns this token, as a shared account does
-	log           *[]string
+	t        *testing.T
+	kind     Kind
+	now      time.Time
+	targets  []Material
+	n        int
+	issueErr func(n int) error
+	onIssue  func(n int)
+	calls    []string
+	held     *bool
+	scopes   []map[string]string // each Issue's
+	fixed    string
+	log      *[]string
 }
 
 func newProvider(t *testing.T, accounts ...string) *fakeProvider {
-	p := &fakeProvider{t: t, kind: GitHub, now: clock}
+	p := &fakeProvider{t: t, kind: Linear, now: clock}
 	for i, a := range accounts {
 		p.targets = append(p.targets, Material{Account: a, Target: int64(i + 1)})
 	}
 	return p
 }
 
-func (p *fakeProvider) unlocked(what string) {
-	if p.held != nil && *p.held {
-		p.t.Errorf("%s while a lifecycle lock is held", what)
-	}
-}
-
 func (p *fakeProvider) Kind() Kind        { return p.kind }
 func (p *fakeProvider) AuditKind() string { return "test-token" }
-func (p *fakeProvider) Now() time.Time    { return p.now }
 func (p *fakeProvider) Secret() string    { return "jwt_ISSUER_SECRET" }
 
 func (p *fakeProvider) Begin(context.Context, string) (Issuer, error) {
@@ -157,10 +137,11 @@ func (p *fakeProvider) Begin(context.Context, string) (Issuer, error) {
 
 func (p *fakeProvider) Targets(context.Context) ([]Material, error) { return p.targets, nil }
 
-func (p *fakeProvider) Issue(_ context.Context, scope map[string]string, target Material) (Material, error) {
-	p.unlocked("issue")
+func (p *fakeProvider) Issue(_ context.Context, scope map[string]string) (Material, error) {
+	if p.held != nil && *p.held {
+		p.t.Error("issue while a lifecycle lock is held")
+	}
 	p.scopes = append(p.scopes, scope)
-	p.targetsIssued = append(p.targetsIssued, target)
 	p.n++
 	if p.onIssue != nil {
 		p.onIssue(p.n)
@@ -178,82 +159,7 @@ func (p *fakeProvider) Issue(_ context.Context, scope map[string]string, target 
 	if p.log != nil {
 		*p.log = append(*p.log, "issue "+token)
 	}
-	return Material{Account: target.Account, Target: target.Target, Token: token, ExpiresAt: p.now.Add(time.Hour).Format(time.RFC3339)}, nil
-}
-
-func (p *fakeProvider) File(m Material) (File, error) {
-	if m.Account == "bad/account" {
-		return File{}, errors.New("account refused")
-	}
-	return File{Dir: "/run/test", Name: m.Account, Replace: true}, nil
-}
-
-func (p *fakeProvider) Revoke(_ context.Context, m Material) Revocation {
-	p.unlocked("revoke")
-	p.calls = append(p.calls, "revoke "+m.Token)
-	if p.log != nil {
-		*p.log = append(*p.log, "revoke "+m.Token)
-	}
-	r := Revocation{Outcome: Revoked}
-	if p.revoke != nil {
-		r = p.revoke(m.Token)
-	}
-	if r.Outcome == Revoked || r.Outcome == AlreadyInvalid {
-		p.revoked = append(p.revoked, m.Token)
-	}
-	return r
-}
-
-func (p *fakeProvider) revokes() int {
-	return len(slices.DeleteFunc(slices.Clone(p.calls), func(c string) bool { return !strings.HasPrefix(c, "revoke ") }))
-}
-
-type sharedProvider struct{ *fakeProvider }
-
-func (sharedProvider) SharedAccount() bool { return true }
-
-// endingProvider's issuer is an Ender: it counts End calls and returns endErr.
-type endingProvider struct {
-	*fakeProvider
-	ends   int
-	endErr error
-}
-
-type endingIssuer struct{ p *endingProvider }
-
-func (p *endingProvider) Begin(ctx context.Context, subject string) (Issuer, error) {
-	if _, err := p.fakeProvider.Begin(ctx, subject); err != nil {
-		return nil, err
-	}
-	return endingIssuer{p}, nil
-}
-
-func (i endingIssuer) Targets(ctx context.Context) ([]Material, error) { return i.p.Targets(ctx) }
-func (i endingIssuer) Secret() string                                  { return i.p.Secret() }
-func (i endingIssuer) Issue(ctx context.Context, scope map[string]string, target Material) (Material, error) {
-	return i.p.Issue(ctx, scope, target)
-}
-
-func (i endingIssuer) End() error {
-	i.p.ends++
-	return i.p.endErr
-}
-
-// writingProvider's issuer is a Writer: it writes "carrier-<token>" through exec itself.
-type writingProvider struct{ *fakeProvider }
-
-type writingIssuer struct{ *fakeProvider }
-
-func (p writingProvider) Begin(context.Context, string) (Issuer, error) {
-	return writingIssuer(p), nil
-}
-
-func (i writingIssuer) Write(exec func([]string, []byte) error, m Material) error {
-	return exec([]string{"write", m.Account}, []byte("carrier-"+m.Token))
-}
-
-func failRevoke(string) Revocation {
-	return Revocation{Outcome: Retryable, Err: errors.New("GitHub 503")}
+	return Material{Token: token, ExpiresAt: p.now.Add(time.Hour).Format(time.RFC3339)}, nil
 }
 
 // lines is the audit log a recorder flushes to.
@@ -268,10 +174,11 @@ func (l *lines) Append(b ...[]byte) error {
 
 func (l *lines) text() string { return strings.Join(l.data, "\n") }
 
-func recorder(container string) (*audit.Recorder, *lines) {
+func recorder(id string) (*audit.Recorder, *lines) {
 	l := &lines{}
-	r := &audit.Recorder{Command: "close", Log: l, Now: func() time.Time { return clock }}
-	r.Begin(container, nil)
+	r := &audit.Recorder{Command: "linear-maintain", Log: l, Now: func() time.Time { return clock }}
+	r.Begin(id, nil)
+	r.Renewing("")
 	return r, l
 }
 
@@ -281,7 +188,6 @@ func lifecycle(store *memStore, p Provider, rec *audit.Recorder) Lifecycle {
 		Store:    store,
 		NotFound: errMissing,
 		Records:  records,
-		Backlog:  [2]string{backlogS, "pending"},
 		Lock:     func() (func(), error) { return func() {}, nil },
 		Audit:    rec,
 	}
@@ -295,44 +201,40 @@ func heldLock(held *bool) func() (func(), error) {
 	}
 }
 
-// container is an exec into one container: it records each delivery and fails while fail says so.
-type container struct {
-	files map[string]string
-	argv  [][]string
-	fail  func(n int) bool
-	log   *[]string
+// publisher records each publication and fails while fail says so.
+type publisher struct {
+	published []string
+	fail      func(n int) bool
+	calls     int
+	log       *[]string
 }
 
-func newContainer() *container { return &container{files: map[string]string{}} }
-
-func (c *container) exec(argv []string, stdin []byte) error {
-	c.argv = append(c.argv, argv)
-	if c.fail != nil && c.fail(len(c.argv)) {
-		return errors.New("exec failed: " + string(stdin))
+func (p *publisher) publish(m Material) error {
+	p.calls++
+	if p.fail != nil && p.fail(p.calls) {
+		return errors.New("publish failed: " + m.Token)
 	}
-	if c.log != nil {
-		*c.log = append(*c.log, "deliver "+string(stdin))
+	if p.log != nil {
+		*p.log = append(*p.log, "publish "+m.Token)
 	}
-	c.files[argv[len(argv)-1]] = string(stdin)
+	p.published = append(p.published, m.Token)
 	return nil
 }
 
-func to(id string, c *container) Delivery {
-	return Delivery{Consumer: Consumer{Container: id}, Exec: c.exec}
+func to(host string, p *publisher) Delivery {
+	d := Delivery{Consumer: Consumer{Host: host}}
+	if p != nil {
+		d.Publish = p.publish
+	}
+	return d
 }
+
+func failing() *publisher { return &publisher{fail: func(int) bool { return true }} }
 
 func tokens(rec Record) map[string]State {
 	out := map[string]State{}
 	for _, m := range rec.Tokens {
 		out[m.Token] = m.State
-	}
-	return out
-}
-
-func pendingTokens(list []Pending) []string {
-	out := []string{}
-	for _, p := range list {
-		out = append(out, p.Token)
 	}
 	return out
 }

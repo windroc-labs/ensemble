@@ -160,18 +160,6 @@ func (k *fakeCodexKeychain) WriteCodex(data []byte) error {
 
 var codexNow = time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 
-// codexContainer is the consumer the single-container Codex tests grant to.
-const codexContainer = "ensemble-codex_1-0123456789abcdef0123456789abcdef"
-
-// mutexLock is an in-process lock for the grant records, which concurrent tests edit from several goroutines.
-func mutexLock() func() (func(), error) {
-	var mu sync.Mutex
-	return func() (func(), error) {
-		mu.Lock()
-		return mu.Unlock, nil
-	}
-}
-
 func codexAuth(exp int64) []byte {
 	payload, _ := json.Marshal(map[string]int64{"exp": exp})
 	token := "eyJhbGciOiJSUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(payload) + ".signature"
@@ -188,7 +176,7 @@ func codexFixture(t *testing.T) (Codex, *fakeCodexNative, *fakeCodexKeychain) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Codex{native: n, keychain: k, grants: &secrets{items: map[string][]byte{}}, grantsLock: mutexLock(), tempRoot: root, revisionDir: filepath.Join(root, "codex-coordination"), now: func() time.Time { return codexNow }, uid: func() int { return 501 }, password: func() ([]byte, error) { return []byte(keychainPass), nil }}, n, k
+	return Codex{native: n, keychain: k, tempRoot: root, revisionDir: filepath.Join(root, "codex-coordination"), now: func() time.Time { return codexNow }, uid: func() int { return 501 }, password: func() ([]byte, error) { return []byte(keychainPass), nil }}, n, k
 }
 
 func TestCodexContainerCredential(t *testing.T) {
@@ -198,7 +186,7 @@ func TestCodexContainerCredential(t *testing.T) {
 	}
 	original := slices.Clone(k.data)
 	var payload []byte
-	expiry, err := c.Inject(context.Background(), codexContainer, func(argv []string, stdin []byte) error {
+	expiry, err := c.Inject(context.Background(), func(argv []string, stdin []byte) error {
 		if !n.locked || bytes.Contains([]byte(strings.Join(argv, " ")), []byte("secret")) {
 			t.Fatal("unlocked injection or secret argv")
 		}
@@ -235,7 +223,7 @@ func TestCodexContainerPreflightFailures(t *testing.T) {
 				k.access = added()
 			}
 			called := false
-			_, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error {
+			_, err := c.Inject(context.Background(), func([]string, []byte) error {
 				called = true
 				return errors.New("fake-refresh-secret")
 			})
@@ -275,10 +263,10 @@ func TestCodexWriteFailureCodeAndCause(t *testing.T) {
 				var err error
 				want := protocol.StartFailed
 				if command == "start" {
-					_, err = c.Inject(context.Background(), codexContainer, exec)
+					_, err = c.Inject(context.Background(), exec)
 				} else {
 					want = protocol.RefreshFailed
-					_, err = c.Refresh(context.Background(), codexContainer, exec, func(string) error { return nil })
+					_, err = c.Refresh(context.Background(), exec, func(string) error { return nil })
 				}
 				var e *protocol.Error
 				if !errors.As(err, &e) || e.Code != want || e.Cause != tc.cause || e.Message != "Writing Codex credentials into the container failed" {
@@ -291,7 +279,7 @@ func TestCodexWriteFailureCodeAndCause(t *testing.T) {
 	if err := c.Login(context.Background(), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	_, err := c.Refresh(context.Background(), codexContainer, func([]string, []byte) error { return docker.ErrUnreachable }, func(string) error { return nil })
+	_, err := c.Refresh(context.Background(), func([]string, []byte) error { return docker.ErrUnreachable }, func(string) error { return nil })
 	if !errors.Is(err, docker.ErrUnreachable) {
 		t.Fatalf("unreachable daemon reclassified: %v", err)
 	}
@@ -678,6 +666,86 @@ func TestCodexStatusEarlierBuildRepairsWithRetrust(t *testing.T) {
 		}
 		if err := c.Ready(context.Background()); err == nil || !strings.HasSuffix(err.Error(), "Codex login unavailable; run "+want) {
 			t.Fatalf("Ready: %v, want run %q", err, want)
+		}
+	}
+}
+
+// loggedCodexKeychain is k with every call Codex makes logged as "<method> <service>".
+type loggedCodexKeychain struct {
+	*fakeCodexKeychain
+	calls *[]string
+}
+
+func (k loggedCodexKeychain) note(method, service string) {
+	*k.calls = append(*k.calls, method+" "+service)
+}
+
+func (k loggedCodexKeychain) AppAccess(service, account string) (AppAccess, error) {
+	k.note("AppAccess", service)
+	return k.fakeCodexKeychain.AppAccess(service, account)
+}
+
+func (k loggedCodexKeychain) AppAccount(service string) (string, error) {
+	k.note("AppAccount", service)
+	return k.fakeCodexKeychain.AppAccount(service)
+}
+
+func (k loggedCodexKeychain) AppKey(service, account string) ([]byte, error) {
+	k.note("AppKey", service)
+	return k.fakeCodexKeychain.AppKey(service, account)
+}
+
+func (k loggedCodexKeychain) TrustApps(service, account string, password []byte) error {
+	k.note("TrustApps", service)
+	return k.fakeCodexKeychain.TrustApps(service, account, password)
+}
+
+func (k loggedCodexKeychain) TrustAppsByDialog(service, account string) error {
+	k.note("TrustAppsByDialog", service)
+	return k.fakeCodexKeychain.TrustAppsByDialog(service, account)
+}
+
+func (k loggedCodexKeychain) TrustPartition(service, account string, password []byte) error {
+	k.note("TrustPartition", service)
+	return k.fakeCodexKeychain.TrustPartition(service, account, password)
+}
+
+func (k loggedCodexKeychain) Secret(service, account string) ([]byte, error) {
+	k.note("Secret", service)
+	return k.fakeCodexKeychain.Secret(service, account)
+}
+
+func (k loggedCodexKeychain) CreateCodex() error {
+	k.note("CreateCodex", codexService)
+	return k.fakeCodexKeychain.CreateCodex()
+}
+
+func (k loggedCodexKeychain) WriteCodex(data []byte) error {
+	k.note("WriteCodex", codexService)
+	return k.fakeCodexKeychain.WriteCodex(data)
+}
+
+// TestCodexStartMaintainCloseTouchNoGrantItem: a start and a maintain that renews the login touch only the login
+// item, never an ensemble-broker-codex-grants one; close has no Codex call (launcher's TestCloseMakesNoCodexCall).
+func TestCodexStartMaintainCloseTouchNoGrantItem(t *testing.T) {
+	c, n, k := renewalFixture(t)
+	var calls []string
+	c.keychain = loggedCodexKeychain{k, &calls}
+	due := k.data
+	k.data = codexAuth(codexNow.Add(time.Hour).Unix())
+	if _, err := c.Inject(context.Background(), nopExec); err != nil {
+		t.Fatal(err)
+	}
+	k.data = due
+	if _, err := c.Refresh(context.Background(), nopExec, nopPublish); err != nil || n.refreshes != 1 {
+		t.Fatalf("refreshes %d: %v", n.refreshes, err)
+	}
+	if len(calls) == 0 {
+		t.Fatal("no keychain call logged")
+	}
+	for _, call := range calls {
+		if strings.HasSuffix(call, " ensemble-broker-codex-grants") || !strings.HasSuffix(call, " "+codexService) {
+			t.Fatalf("Codex called %q; all calls %q", call, calls)
 		}
 	}
 }

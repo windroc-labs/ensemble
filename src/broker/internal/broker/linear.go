@@ -347,14 +347,6 @@ type linearProvider struct {
 
 func (*linearProvider) Kind() credential.Kind { return credential.Linear }
 func (*linearProvider) AuditKind() string     { return audit.LinearAccessToken }
-func (*linearProvider) SharedAccount() bool   { return true }
-func (p *linearProvider) Now() time.Time      { return p.owner.now() }
-func (*linearProvider) File(credential.Material) (credential.File, error) {
-	return credential.File{}, credential.ErrConsumer
-}
-func (*linearProvider) Revoke(context.Context, credential.Material) credential.Revocation {
-	return credential.Revocation{Outcome: credential.Unsupported}
-}
 func (p *linearProvider) Begin(_ context.Context, subject string) (credential.Issuer, error) {
 	if subject != p.account.Identity.TokenService {
 		return nil, errLinear
@@ -370,7 +362,7 @@ func linearClean(s string) bool {
 	return len(s) > 0 && len(s) <= maxToken && !strings.ContainsFunc(s, func(r rune) bool { return r <= 0x20 || r > 0x7e })
 }
 
-func (p *linearProvider) Issue(ctx context.Context, scope map[string]string, _ credential.Material) (credential.Material, error) {
+func (p *linearProvider) Issue(ctx context.Context, scope map[string]string) (credential.Material, error) {
 	a, l := p.account, p.owner
 	if scope["scope"] != a.Identity.scopes() {
 		return credential.Material{}, errLinear

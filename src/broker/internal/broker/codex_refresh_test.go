@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ensemble/broker/internal/codex"
+	"ensemble/broker/internal/docker"
 )
 
 type refreshingNative struct {
@@ -64,7 +65,7 @@ func TestCodexRefreshConcurrentDelayedWaiter(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	result := make(chan error, 2)
 	go func() {
-		_, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error {
+		_, err := c.Inject(context.Background(), func([]string, []byte) error {
 			close(entered)
 			<-release
 			clock = clock.Add(61 * time.Second)
@@ -75,7 +76,7 @@ func TestCodexRefreshConcurrentDelayedWaiter(t *testing.T) {
 	<-n.enter
 	<-entered
 	go func() {
-		_, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error { return nil })
+		_, err := c.Inject(context.Background(), func([]string, []byte) error { return nil })
 		result <- err
 	}()
 	<-n.enter
@@ -92,7 +93,7 @@ func TestCodexRefreshConcurrentDelayedWaiter(t *testing.T) {
 	n.refresh = func(home string) error {
 		return os.WriteFile(filepath.Join(home, "auth.json"), codexAuth(clock.Add(time.Hour).Unix()), 0o600)
 	}
-	if _, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error { return nil }); err != nil {
+	if _, err := c.Inject(context.Background(), func([]string, []byte) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n.refreshes != 2 {
@@ -126,7 +127,7 @@ func TestCodexRenewalValidationAndCleanup(t *testing.T) {
 			if failure == "write" {
 				k.writeErr = errors.New("fake-refresh-secret")
 			}
-			_, err := c.Inject(ctx, codexContainer, func([]string, []byte) error { t.Fatal("injected failed renewal"); return nil })
+			_, err := c.Inject(ctx, func([]string, []byte) error { t.Fatal("injected failed renewal"); return nil })
 			if err == nil || strings.Contains(err.Error(), "fake-refresh-secret") {
 				t.Fatalf("unsafe failure: %v", err)
 			}
@@ -145,7 +146,7 @@ func TestCodexRenewalValidationAndCleanup(t *testing.T) {
 func TestCodexManagedCarrierAndPublicationLock(t *testing.T) {
 	c, n, _ := renewalFixture(t)
 	var auth codexAuthDocument
-	_, err := c.Inject(context.Background(), codexContainer, func(_ []string, data []byte) error {
+	_, err := c.Inject(context.Background(), func(_ []string, data []byte) error {
 		if !n.locked {
 			t.Fatal("publication outside account lock")
 		}
@@ -159,16 +160,15 @@ func TestCodexManagedCarrierAndPublicationLock(t *testing.T) {
 	}
 }
 
+// TestCodexPublicationFailureRepairsWithoutRotation: a maintain whose publication fails after renewing the login
+// leaves it renewed; its retry publishes that login's expiry, under the lock, with no renewal.
 func TestCodexPublicationFailureRepairsWithoutRotation(t *testing.T) {
 	c, n, _ := renewalFixture(t)
-	n.refresh = func(home string) error {
-		return os.WriteFile(filepath.Join(home, "auth.json"), codexAuth(codexNow.Add(120*time.Second).Unix()), 0o600)
-	}
-	if _, err := c.Refresh(context.Background(), codexContainer, func([]string, []byte) error { return nil }, func(string) error { return errors.New("deadline write failed") }); err == nil {
+	if _, err := c.Refresh(context.Background(), func([]string, []byte) error { return nil }, func(string) error { return errors.New("deadline write failed") }); err == nil {
 		t.Fatal("accepted failed publication")
 	}
 	var expiry string
-	if _, err := c.Refresh(context.Background(), codexContainer, func([]string, []byte) error { return nil }, func(value string) error {
+	if _, err := c.Refresh(context.Background(), func([]string, []byte) error { return nil }, func(value string) error {
 		if !n.locked {
 			t.Fatal("unlocked deadline")
 		}
@@ -177,8 +177,100 @@ func TestCodexPublicationFailureRepairsWithoutRotation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if n.refreshes != 1 || expiry != codexNow.Add(120*time.Second).Format(time.RFC3339) {
+	if n.refreshes != 1 || expiry != codexNow.Add(time.Hour).Format(time.RFC3339) {
 		t.Fatal("failed to repair publication independently")
+	}
+}
+
+// TestConcurrentMaintainRenewsOnce: two maintains due at once renew the login once; the one queued on the account
+// lock delivers and publishes the login the first renewed.
+func TestConcurrentMaintainRenewsOnce(t *testing.T) {
+	c, n, _ := renewalFixture(t)
+	n.enter = make(chan struct{}, 2)
+	entered, release := make(chan struct{}), make(chan struct{})
+	published, result := make(chan string, 2), make(chan error, 2)
+	payloads := make([][]byte, 2)
+	publish := func(expiry string) error { published <- expiry; return nil }
+	go func() {
+		_, err := c.Refresh(context.Background(), func(_ []string, stdin []byte) error {
+			payloads[0] = bytes.Clone(stdin)
+			close(entered)
+			<-release
+			return nil
+		}, publish)
+		result <- err
+	}()
+	<-n.enter
+	<-entered
+	go func() {
+		_, err := c.Refresh(context.Background(), func(_ []string, stdin []byte) error {
+			payloads[1] = bytes.Clone(stdin)
+			return nil
+		}, publish)
+		result <- err
+	}()
+	<-n.enter
+	close(release)
+	for range 2 {
+		if err := <-result; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n.refreshes != 1 {
+		t.Fatalf("native refresh count %d", n.refreshes)
+	}
+	want := codexNow.Add(time.Hour).Format(time.RFC3339)
+	if a, b := <-published, <-published; a != want || b != want {
+		t.Fatalf("published %s and %s, want %s", a, b, want)
+	}
+	if len(payloads[0]) == 0 || !bytes.Equal(payloads[0], payloads[1]) {
+		t.Fatal("the maintains delivered different logins")
+	}
+}
+
+// TestRetryAfterFailedDeliveryRenewsNothing: a maintain whose write fails after renewing the due login leaves it
+// renewed, failing no sibling queued on the lock; its retry delivers that login with no renewal.
+func TestRetryAfterFailedDeliveryRenewsNothing(t *testing.T) {
+	c, n, k := renewalFixture(t)
+	n.enter = make(chan struct{}, 2)
+	entered, release := make(chan struct{}), make(chan struct{})
+	resultA, resultB := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := c.Refresh(context.Background(), func([]string, []byte) error {
+			close(entered)
+			<-release
+			return &docker.CommandError{Exit: 1, Stderr: "bootstrap: invalid Codex home\n"}
+		}, nopPublish)
+		resultA <- err
+	}()
+	<-n.enter
+	<-entered
+	go func() {
+		_, err := c.Refresh(context.Background(), nopExec, nopPublish)
+		resultB <- err
+	}()
+	<-n.enter
+	close(release)
+	if err := <-resultA; err == nil {
+		t.Fatal("refresh succeeded")
+	}
+	if err := <-resultB; err != nil || n.refreshes != 1 {
+		t.Fatalf("sibling: refreshes %d: %v", n.refreshes, err)
+	}
+	var payload []byte
+	var published string
+	expiry, err := c.Refresh(context.Background(), func(_ []string, stdin []byte) error {
+		payload = bytes.Clone(stdin)
+		return nil
+	}, func(value string) error { published = value; return nil })
+	var auth codexAuthDocument
+	if json.Unmarshal(k.data, &auth) != nil {
+		t.Fatal("login unreadable")
+	}
+	current, _ := codexCarrier(auth)
+	want := codexNow.Add(time.Hour).Format(time.RFC3339)
+	if err != nil || n.refreshes != 1 || expiry != want || published != want || !bytes.Equal(payload, current) {
+		t.Fatalf("retry: refreshes %d, expiry %s, published %s: %v", n.refreshes, expiry, published, err)
 	}
 }
 
@@ -193,7 +285,7 @@ func TestCodexLoginWinsAgainstQueuedRefresh(t *testing.T) {
 	<-n.enter
 	<-loginStarted
 	go func() {
-		_, err := c.Inject(context.Background(), codexContainer, func([]string, []byte) error { return nil })
+		_, err := c.Inject(context.Background(), func([]string, []byte) error { return nil })
 		result <- err
 	}()
 	<-n.enter

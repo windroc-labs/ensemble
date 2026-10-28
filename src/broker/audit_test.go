@@ -49,7 +49,7 @@ func TestSuccessfulAuditDoesNotMaskRecoveryFailure(t *testing.T) {
 
 func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 	const container = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
-	for _, command := range []string{"start", "maintain", "close", "status"} {
+	for _, command := range []string{"start", "maintain", "close"} {
 		for _, failed := range []bool{false, true} {
 			t.Run(command+"/"+map[bool]string{false: "success", true: "failure"}[failed], func(t *testing.T) {
 				sink := &failedAudit{}
@@ -68,16 +68,13 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 					if command == "maintain" {
 						rec.Renewing("")
 					}
-					if command == "status" {
-						rec.Add("ensemble-other-0123456789abcdef0123456789abcdef", audit.Credential{Kind: audit.GitHubToken, Result: audit.Revoked}, "")
-					}
 					return map[string]any{"container": container, "removed": true, "github_user_id": int64(9007199254740993)}, operationErr
 				}
 				step := func(context.Context, keys, string, io.Writer) (any, error) { return withAudit(rec, f) }
 				a := app{start: step, close: step, maintain: func(ctx context.Context, _ keys, c, _ string, _ []string, _ bool) (any, error) {
 					return step(ctx, keys{}, c, nil)
-				}, status: func(ctx context.Context, _ keys, _ bool) (any, error) { return step(ctx, keys{}, "", nil) }}
-				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "maintain": {"maintain", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container}, "status": {"status", "--cleanup"}}[command]
+				}}
+				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "maintain": {"maintain", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container}}[command]
 				code, out, errOut := invoke(a, args...)
 				wire := out
 				if failed {
@@ -102,7 +99,7 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 
 func TestNoAuditWarningWithoutWrite(t *testing.T) {
 	for _, rec := range []*audit.Recorder{nil, {Command: "status", Log: &failedAudit{}}} {
-		result, err := withAudit(rec, func() (any, error) { return launcher.StatusResult{Revocations: []protocol.Pending{}}, nil })
+		result, err := withAudit(rec, func() (any, error) { return launcher.StatusResult{}, nil })
 		wire, _ := json.Marshal(result)
 		if err != nil || strings.Contains(string(wire), "audit_warning") {
 			t.Fatalf("query produced an audit warning: %s %v", wire, err)

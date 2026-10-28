@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"time"
 
 	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
@@ -16,7 +15,6 @@ import (
 // never sees a secret through it.
 type StaticMeta interface {
 	Load() (map[string]credential.Static, error)
-	DeliverHost(ref string, now time.Time, emit func(credential.Notice)) error
 }
 
 // staticRefs are the references of the static secrets m's container gets: its Claude token or OpenCode keys, then its
@@ -143,9 +141,9 @@ type StaticStatus struct {
 	Notice     *string               `json:"notice"` // the most urgent notice reached, or a Claude token's unknown expiry
 }
 
-// StaticStatus lists every recorded static secret, plus each legacy reference that is usable and unrecorded. Only
-// cleanup changes anything: it tells the host of each notice due to it once, recording and auditing it.
-func (h Host) StaticStatus(cleanup bool, legacy map[string]bool) ([]StaticStatus, error) {
+// StaticStatus lists every recorded static secret, plus each legacy reference that is usable and unrecorded. It changes
+// nothing: login tells the host of a notice due to it.
+func (h Host) StaticStatus(legacy map[string]bool) ([]StaticStatus, error) {
 	if h.Static == nil {
 		return nil, nil
 	}
@@ -167,11 +165,6 @@ func (h Host) StaticStatus(cleanup bool, legacy map[string]bool) ([]StaticStatus
 	out := make([]StaticStatus, 0, len(refs))
 	for _, ref := range refs {
 		r := records[ref]
-		if cleanup {
-			if err := h.Static.DeliverHost(ref, now, func(n credential.Notice) { h.Audit.Notice("", n.Audit()) }); err != nil {
-				return nil, storeFailed(err, protocol.InternalError)
-			}
-		}
 		s := StaticStatus{Reference: ref, Version: r.Version, Provenance: credential.Unknown}
 		kind, _, _ := credential.StaticKind(ref)
 		if th := credential.Threshold(r, now); th != "" {

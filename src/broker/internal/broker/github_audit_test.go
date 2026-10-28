@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -10,8 +11,6 @@ import (
 
 	"ensemble/broker/internal/audit"
 )
-
-const ctr2 = "ensemble-worker_2-fedcba9876543210fedcba9876543210"
 
 type lines struct{ got [][]byte }
 
@@ -35,7 +34,7 @@ type logLine struct {
 		Reason       string    `json:"reason"`
 		Account      string    `json:"account"`
 		Installation int64     `json:"installation"`
-		ExpiresAt    string    `json:"expires_at"`
+		ExpiresAt    string    `json:"expires_at"` // "": null
 		Selection    *string   `json:"repository_selection"`
 		Repositories *[]string `json:"repositories"`
 		ReposError   string    `json:"repositories_error"`
@@ -47,7 +46,7 @@ func flush(t *testing.T, rec *audit.Recorder, sink *lines) []logLine {
 	rec.Flush(nil)
 	var out []logLine
 	for _, l := range sink.got {
-		if strings.Contains(string(l), "ghs_") {
+		if strings.Contains(string(l), "ghs_") || strings.Contains(string(l), "SECRET") {
 			t.Fatalf("line holds a token: %s", l)
 		}
 		var v logLine
@@ -90,7 +89,7 @@ func TestIssueAuditRepositoriesFail(t *testing.T) {
 	r.api.reposFail = 500
 	rec, sink := r.audited("start", ctr)
 	issued(t, r)
-	if _, ok := r.record(t); !ok {
+	if len(r.exec.argv) != 1 {
 		t.Fatal("a failed listing stops the issue")
 	}
 	c := flush(t, rec, sink)[0].Credentials[0]
@@ -103,7 +102,7 @@ func TestIssueFailureAudit(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	r.api.issueFail = map[int]int{2: 500}
 	rec, sink := r.audited("start", ctr)
-	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err == nil {
+	if _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err == nil {
 		t.Fatal("no error")
 	}
 	if got := resultsOf(flush(t, rec, sink)[0]); !slices.Equal(got, []string{audit.Issued, audit.Revoked}) {
@@ -119,175 +118,76 @@ func TestRefreshAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := flush(t, rec, sink)[0]
-	if !slices.Equal(resultsOf(got), []string{audit.Renewed, audit.Revoked}) || got.Credentials[0].Repositories == nil {
+	if !slices.Equal(resultsOf(got), []string{audit.Renewed}) || got.Credentials[0].Repositories == nil || got.Credentials[0].Installation != 1 {
 		t.Fatalf("%+v", got)
 	}
-
-	r = newRig(t, "acme")
-	issued(t, r)
-	r.api.revokeErr = func(token string) int {
-		if token == "ghs_1_1" {
-			return 502
-		}
-		return 0
-	}
-	rec, sink = r.audited("refresh", ctr)
-	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
-		t.Fatal(err)
-	}
-	got = flush(t, rec, sink)[0]
-	if !slices.Equal(resultsOf(got), []string{audit.Renewed, audit.Pending}) || got.Credentials[1].Reason != "GitHub answered HTTP 502 to DELETE /installation/token" {
-		t.Fatalf("the old token stays pending with the retry's reason: %+v", got)
-	}
 }
 
-func TestRevokeAudit(t *testing.T) {
-	r := newRig(t, "acme", "other")
-	issued(t, r)
-	rec, sink := r.audited("close", ctr)
-	if err := r.g.Release(context.Background(), ctr); err != nil {
-		t.Fatal(err)
-	}
-	if got := resultsOf(flush(t, rec, sink)[0]); !slices.Equal(got, []string{audit.Revoked, audit.Revoked}) {
-		t.Fatal(got)
-	}
-}
+// opaque is a token GitHub could issue in another shape: only the bearer redaction keeps it out of the audit.
+func opaque(id string, n int) string { return fmt.Sprintf("opaqueSECRET%s0%d", id, n) }
 
-func TestRevokeAuditOffline(t *testing.T) {
-	r := newRig(t, "acme", "other")
-	issued(t, r)
-	rec, sink := r.audited("close", ctr)
-	r.srv.Close()
-	if err := r.g.Release(context.Background(), ctr); err != nil {
-		t.Fatal(err)
-	}
-	got := flush(t, rec, sink)[0]
-	if !slices.Equal(resultsOf(got), []string{audit.Pending, audit.Pending}) {
-		t.Fatal(resultsOf(got))
-	}
-	for _, c := range got.Credentials {
-		if !strings.HasPrefix(c.Reason, "GitHub unreachable") || c.ExpiresAt == "" || c.Account == "" {
+// AC7: a failed in-command revocation is audited unrevoked with its reason and expiry, without the token, and leaves
+// the command's result as it was.
+func TestFailedRevocationAuditedUnrevoked(t *testing.T) {
+	const echo = "Bad credentials for %s"
+	unrevoked := func(t *testing.T, l logLine, reason, expires string) {
+		t.Helper()
+		c := l.Credentials[len(l.Credentials)-1]
+		if c.Result != audit.Unrevoked || c.Reason != reason || c.ExpiresAt != expires || c.Account != "acme" {
 			t.Fatalf("%+v", c)
 		}
 	}
-}
-
-func TestRevokeAuditLockFails(t *testing.T) {
-	r := newRig(t, "acme")
-	issued(t, r)
-	r.api.revokeErr = func(string) int { return 500 }
-	r.lockFails(0)
-	rec, sink := r.audited("close", ctr)
-	_ = r.g.Release(context.Background(), ctr)
-	got := flush(t, rec, sink)[0]
-	if !slices.Equal(resultsOf(got), []string{audit.Pending}) || got.Credentials[0].Reason != "GitHub answered HTTP 500 to DELETE /installation/token" {
-		t.Fatalf("a direct revoke that fails, then is queued: %+v", got)
-	}
-}
-
-// flakySecrets fails reads of service after the first ok.
-type flakySecrets struct {
-	*secrets
-	service string
-	ok, n   int
-}
-
-func (f *flakySecrets) Secret(service, account string) ([]byte, error) {
-	if service == f.service {
-		if f.n++; f.n > f.ok {
-			return nil, errLeaky
+	t.Run("start rollback", func(t *testing.T) {
+		r := newRig(t, "acme")
+		r.api.tokenOf, r.api.revokeMsg = opaque, echo
+		r.api.revokeErr = func(string) int { return 500 }
+		rec, sink := r.audited("start", ctr)
+		revoke, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	return f.secrets.Secret(service, account)
-}
-
-func TestDiscardRecordsQueuedTokens(t *testing.T) {
-	r := newRig(t, "acme", "other")
-	issued(t, r)
-	r.g.Keychain = &flakySecrets{secrets: r.keys, service: revocationsService, ok: 1}
-	rec, sink := r.audited("close", ctr)
-	if err := r.g.Release(context.Background(), ctr); err != nil {
-		t.Fatal(err)
-	}
-	got := flush(t, rec, sink)[0]
-	if !slices.Equal(resultsOf(got), []string{audit.Pending, audit.Pending}) || got.Credentials[0].Reason != "queued for revocation" {
-		t.Fatalf("queued tokens stay on the line when the retry cannot read the backlog: %+v", got)
-	}
-}
-
-func TestRetryAudit(t *testing.T) {
-	r := newRig(t)
-	list := []pending{
-		{Container: ctr2, Account: "a", Token: "ghs_expired", ExpiresAt: "2026-10-17T11:59:59Z"},
-		{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"},
-		{Container: ctr2, Account: "c", Token: "ghs_refused", ExpiresAt: "2026-10-17T12:30:00Z"},
-	}
-	data, _ := json.Marshal(list)
-	r.keys.items[revocationsService+"/"+revocationsAccount] = data
-	r.api.revokeErr = func(token string) int {
-		if token == "ghs_refused" {
-			return 500
+		revoke()
+		got := flush(t, rec, sink)[0]
+		if !slices.Equal(resultsOf(got), []string{audit.Issued, audit.Unrevoked}) {
+			t.Fatalf("%+v", got)
 		}
-		return 0
-	}
-	rec, sink := r.audited("status", "")
-	if _, err := r.g.Retry(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	got := flush(t, rec, sink)
-	if len(got) != 1 || got[0].Event != "revocation-retry" || got[0].Container != ctr2 || got[0].Session != "worker_2" {
-		t.Fatalf("%+v", got)
-	}
-	if !slices.Equal(resultsOf(got[0]), []string{audit.ExpiredUnrevoked, audit.Revoked}) {
-		t.Fatalf("a still-pending entry adds nothing: %v", resultsOf(got[0]))
-	}
-	if c := got[0].Credentials[1]; c.Account != "b" || c.ExpiresAt != "2026-10-17T12:30:00Z" || c.Kind != audit.GitHubToken {
-		t.Fatalf("%+v", c)
-	}
-}
-
-func TestListingFollowsTheRecord(t *testing.T) {
-	r := newRig(t, "acme", "other")
-	var unrecorded []string
-	r.api.onRepos = func(token string) {
-		rec, _ := r.record(t)
-		if !slices.ContainsFunc(rec.Tokens, func(e tokenEntry) bool { return e.Token == token }) {
-			unrecorded = append(unrecorded, token)
+		unrevoked(t, got, `GitHub answered HTTP 500 to DELETE /installation/token: "Bad credentials for [redacted]"`, "2026-10-17T13:00:00Z")
+		r.noKeychain(t)
+	})
+	t.Run("start rollback offline", func(t *testing.T) {
+		r := newRig(t, "acme")
+		rec, sink := r.audited("start", ctr)
+		revoke, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	r.audited("start", ctr)
-	issued(t, r)
-	if _, err := r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
-		t.Fatal(err)
-	}
-	if r.api.issued != 4 || len(unrecorded) != 0 {
-		t.Fatalf("listed %v before recording them", unrecorded)
-	}
-}
-
-func TestUnrecordedTokenAudit(t *testing.T) {
-	r := newRig(t, "acme")
-	r.lockFails(0)
-	rec, sink := r.audited("start", ctr)
-	if _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err == nil {
-		t.Fatal("no error")
-	}
-	got := flush(t, rec, sink)[0]
-	if !slices.Equal(resultsOf(got), []string{audit.Issued, audit.Revoked}) || got.Credentials[0].ReposError != "not listed: the token could not be recorded" {
-		t.Fatalf("%+v", got)
-	}
-}
-
-func TestRetryAuditNotesAfterRemoval(t *testing.T) {
-	r := newRig(t)
-	data, _ := json.Marshal([]pending{{Container: ctr2, Account: "b", Token: "ghs_live", ExpiresAt: "2026-10-17T12:30:00Z"}})
-	r.keys.items[revocationsService+"/"+revocationsAccount] = data
-	r.lockFails(1)
-	rec, sink := r.audited("status", "")
-	if _, err := r.g.Retry(context.Background()); err == nil {
-		t.Fatal("removal under a failing lock succeeded")
-	}
-	if got := flush(t, rec, sink); len(got) != 0 {
-		t.Fatalf("an entry the backlog still holds is noted: %+v", got)
-	}
+		r.srv.Close()
+		revoke()
+		unrevoked(t, flush(t, rec, sink)[0], "GitHub unreachable: DELETE /installation/token", "2026-10-17T13:00:00Z")
+	})
+	t.Run("close", func(t *testing.T) {
+		r := newRig(t, "acme")
+		r.api.revokeMsg = echo
+		r.api.revokeErr = func(string) int { return 502 }
+		rec, sink := r.audited("close", ctr)
+		mtime := clock.Add(-10 * time.Minute)
+		r.g.Revoke(context.Background(), ctr, files(fmt.Sprintf("acme %d ghs_ClosedTok1\n", mtime.Unix())))
+		unrevoked(t, flush(t, rec, sink)[0], `GitHub answered HTTP 502 to DELETE /installation/token: "Bad credentials for [redacted]"`,
+			mtime.Add(time.Hour).Format(time.RFC3339))
+		r.noKeychain(t)
+	})
+	t.Run("prefetch", func(t *testing.T) {
+		r, a := prefetchRig(t, installed())
+		r.api.tokenOf, r.api.revokeMsg = opaque, echo
+		r.api.revokeErr = func(string) int { return 500 }
+		if err := r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, r.exec.run); err != nil {
+			t.Fatalf("a failed revocation failed the prefetch: %v", err)
+		}
+		got := flush(t, a.rec, a.sink)[0]
+		if !slices.Equal(resultsOf(got), []string{audit.Issued, audit.Unrevoked}) {
+			t.Fatalf("%+v", got)
+		}
+		unrevoked(t, got, `GitHub answered HTTP 500 to DELETE /installation/token: "Bad credentials for [redacted]"`, "2026-10-17T13:00:00Z")
+		r.noKeychain(t)
+	})
 }
