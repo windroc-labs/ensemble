@@ -4054,7 +4054,10 @@ exec /bin/rm "$@"
             "--board",
             "linear",
             "--launchd",
-            answers=[*self.secrets("harness", "researcher", "pm", "engineer"), (WRITE_Q, "y")],
+            answers=[
+                *self.secrets("harness", "reader", "researcher", "pm", "engineer"),
+                (WRITE_Q, "y"),
+            ],
         )
         self.assert_ok(result)
         self.assertEqual(

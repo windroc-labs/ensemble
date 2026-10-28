@@ -8,7 +8,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
-from ensemble.orchestrator.engine.config import BOARD_ENV
+from ensemble.orchestrator.engine.config import BOARD_ENV, credentials, load
 from ensemble.orchestrator.engine.router import CAP
 from tests.orchestrator.integration.flow_fixtures import (
     BIN,
@@ -262,6 +262,15 @@ class LocalBoard(BinFlow):
             json.loads(re.sub(r"\bLOC-(\d+)", r"TASK-\1", json.dumps(e))) for e in on_board
         ]
         next(e for e in normalized if e["kind"] == "would comment")["body"] = linear_comment["body"]
+        remote_credentials = credentials(load(), "engineer", None)
+        for event in normalized:
+            if "credentials" in event:
+                self.assertEqual(event["credentials"], {})
+        for event in on_linear:
+            if "credentials" in event:
+                self.assertEqual(event["credentials"], remote_credentials)
+                self.assertEqual(event["credentials"]["linear"]["scopes"], "read")
+                event["credentials"] = {}
         self.assertEqual(normalized, on_linear)
 
     def test_parse_error_exit_2(self):
