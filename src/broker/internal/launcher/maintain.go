@@ -69,7 +69,7 @@ var tokenProviders = []tokenProvider{
 		deadline: "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume.",
 	},
 	{kind: credential.GitHub, renew: renewGitHub, failed: "Writing a GitHub token into %s failed."},
-	{kind: credential.Linear, renew: renewLinear, failed: "Writing a Linear token into %s failed.", deadline: "Linear authentication expired; resume after fixing the role app's broker enrollment."},
+	{kind: credential.Linear, renew: renewLinear, failed: "Writing a Linear token into %s failed.", deadline: "Linear authentication expired; resume after restoring the host role app's access."},
 }
 
 func renewLinear(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {

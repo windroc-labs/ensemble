@@ -58,6 +58,9 @@ and processes running as you remain trusted; a container separates the worker fr
 Orchestrated Docker workers re-read current descriptions and comments with `ensemble-orchestrator issue read`,
 using tracker settings and each role’s existing app grant delivered through the broker.
 Tracker selection and credential specs stay in Orchestrator; existing installations need no configuration change.
+For transport-owned apps, the broker copies the current host role token and verifies its identity and expiry;
+the transport keeps renewal ownership, and closing a worker never revokes that shared token.
+Broker-owned apps keep separate container issuance and revocation.
 
 Docker networking goes through the external [egress proxy](https://github.com/windroc-labs/egress-proxy),
 whose [label contract](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md)

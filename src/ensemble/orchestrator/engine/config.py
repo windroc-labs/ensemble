@@ -779,7 +779,11 @@ def _credential_table(cfg, role, table, where, *, default=False):
             app = linear["roles"][role]
             out["linear"] = {
                 "scopes": SCOPES[AppKind.ROLE],
-                "app": {"role": role, **{k.value: app[k] for k in AppKey}},
+                "app": {
+                    "role": role,
+                    "renewal": app.get("renewal", "transport"),
+                    **{k.value: app[k] for k in AppKey},
+                },
                 "board": {
                     **{k: linear[k] for k in ("team", "states", "project_repos")},
                     "human_members": linear.get("human_members", []),

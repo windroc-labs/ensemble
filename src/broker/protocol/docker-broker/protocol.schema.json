@@ -1998,6 +1998,12 @@
                       ".."
                     ]
                   }
+                },
+                "renewal": {
+                  "enum": [
+                    "transport",
+                    "broker"
+                  ]
                 }
               },
               "required": [

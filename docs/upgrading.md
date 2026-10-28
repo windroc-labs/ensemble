@@ -24,6 +24,8 @@ Issue runs use their role app’s existing grant and board settings through the 
 Existing installations need no new app, configuration, installation or upgrade step for issue re-reads.
 No client secret is delivered to a worker. A failed re-read reports an error; the manager sends the current
 description and comments through the run’s existing input channel.
+Transport-owned apps keep their existing host renewal; the broker copies the current role token without enrollment
+or root-secret access. Worker close does not revoke this shared token. Broker-owned apps keep separate worker tokens.
 
 For request validation, delivery paths and modes, the maintenance swap, and revocation, see
 [Broker credential implementation](../src/broker/internal/credential). The worker CLI consumes these files directly.

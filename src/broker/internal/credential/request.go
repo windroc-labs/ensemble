@@ -9,6 +9,7 @@ type LinearApp struct {
 	UserID        string `json:"user_id"`
 	SecretService string `json:"secret_service"`
 	TokenService  string `json:"token_service"`
+	Renewal       string `json:"renewal,omitempty"`
 }
 
 // LinearBoard contains only the non-secret board settings a run can use.

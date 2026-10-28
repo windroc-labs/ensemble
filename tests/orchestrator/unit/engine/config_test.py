@@ -1634,7 +1634,11 @@ class CredentialDeclarations(ConfigFile, Case):
                     self.assertEqual(grant["scopes"], app.scopes)
                     self.assertEqual(
                         grant["app"],
-                        {"role": name, **{key.value: getattr(app, key) for key in config.AppKey}},
+                        {
+                            "role": name,
+                            "renewal": app.renewal,
+                            **{key.value: getattr(app, key) for key in config.AppKey},
+                        },
                     )
 
     def test_task_replaces_whole_kinds_and_keeps_unrelated_role_references(self):
@@ -1692,6 +1696,7 @@ class CredentialDeclarations(ConfigFile, Case):
             "scopes": app.scopes,
             "app": {
                 "role": "engineer",
+                "renewal": app.renewal,
                 **{k.value: getattr(app, k) for k in config.AppKey},
             },
             "board": {
