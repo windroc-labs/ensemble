@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from ensemble.delegate import Delegate, Spec
 from ensemble.orchestrator.engine import config, runs
+from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import (
     ISSUE_ID,
 )
@@ -46,9 +47,14 @@ class LinearRun:
         self.delegate_kind = delegate_kind or cfg.delegate_kind
         provider = delegate_cls or self.kind_cls(cfg, self.delegate_kind)
         overlays = (cfg.core,)
-        stage = config.TASKS.get(role)
+        effective_task = runs.claim(cfg.runs_log, issue, sid).task if resume else task
+        stage = (
+            workflow.for_task(config.TASKS, role, effective_task) if role in config.TASKS else None
+        )
         output = cfg.roles[role].run.output if stage else {}
-        if stage and (stage.input == "build" or output["type"] == "github"):
+        if stage and stage.input == "decompose":
+            overlays += ({"roles": {role: {"output": {"type": "local"}}}},)
+        elif stage and (stage.input == "build" or output["type"] == "github"):
             host = cfg.repo_host(role)
             if host != "github.com" or output.get("host"):
                 overlays += ({"roles": {role: {"output": dict(output) | {"host": host}}}},)

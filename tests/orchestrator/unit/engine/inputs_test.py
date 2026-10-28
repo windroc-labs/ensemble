@@ -126,6 +126,7 @@ class LocalDocuments(Case):
         path.write_text("# Local PRD\nBuild local delivery.\n")
         ctx = SimpleNamespace(
             role="pm",
+            task=None,
             document=str(path),
             repos={},
             project=None,
@@ -248,6 +249,41 @@ class LocalDocuments(Case):
             issue(f"{BASE}Research/report.md\n{path.as_uri()}"), "engineer", docs, run=run
         )
         self.assertEqual({d.text for d in src.docs}, {"Local PRD", "GitHub report"})
+
+
+class DecomposeInputs(Case):
+    def test_handoff_prd_replies_and_mapping_without_a_repo_branch(self):
+        url = BASE + "Product%20Design/prd.md"
+        desc = handoff.handoff(
+            "PRD-3",
+            "https://linear.app/t/issue/PRD-3",
+            sources=[("PRD", url)],
+            instructions=[("Ann", "2026-09-02", "Split queues.")],
+            comments=[("Ann", "2026-09-02", "Use the smaller scope.")],
+        )
+        work = issue(desc, ident="ENG-7", notes=(note("Use option B.", "2026-09-03", ANN),))
+        run = Gh({endpoint("Product%20Design/prd.md"): ok("# Queue PRD")})
+        sources = inputs.gather(work, "engineer", DOCS, run=run, task="decompose")
+        text = inputs.render(
+            work,
+            "engineer",
+            sources,
+            target=None,
+            docs=DOCS,
+            task="decompose",
+            project_repos={"p-1": "acme/queue"},
+        )
+        for expected in (
+            "Source PRD: PRD-3",
+            "Split queues.",
+            "Use the smaller scope.",
+            "Use option B.",
+            "# Queue PRD",
+            '"p-1": "acme/queue"',
+        ):
+            self.assertIn(expected, text)
+        self.assertNotIn("Branch:", text)
+        self.assertNotIn("Checkout:", text)
 
 
 class BuildInputs(Case):

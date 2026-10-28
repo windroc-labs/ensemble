@@ -253,11 +253,11 @@ is `client_id` in `[orchestrator.linear.roles.pm]`).
 | the team | `linear.team` |
 | workflow states Backlog, Todo, In Progress, In Review, Handoff, Done, Canceled | `linear.states.<state>`: `backlog`, `todo`, `in_progress`, `in_review`, `handoff`, `done`, `canceled` |
 | a `Tasks` label group, its id from `issueLabels { nodes { id name isGroup } }` | `linear.task_label_group` |
-| one label per task under `Tasks` (`build`, `light-build`, …), optional | `linear.task_labels` |
+| `decompose` under `Tasks`, required for PM promotion; other task labels (`build`, `light-build`, …) optional | `linear.task_labels.decompose`, `linear.task_labels.<task>` |
 | an `Agent` label group and one label per client, optional; both or neither | `linear.agent_label_group`, `linear.agent_labels` |
 | the harness's, the manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
 | the humans subscribed on In Review | `linear.human_members` |
-| the human a PM question's issue is assigned to, optional: their Linear user id | `linear.assignee_id` |
+| the human PM and decompose questions are assigned to, optional: their Linear user id | `linear.assignee_id` |
 | the Linear project of each product repo, optional | `linear.project_repos` |
 
 Each OAuth app:

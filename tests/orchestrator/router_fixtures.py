@@ -425,7 +425,10 @@ class Base(run_fixtures.Base):
                 "role": role,
                 "client": client or CLIENTS.get(role, "a"),
                 "delegate_kind": "harness",
-                **({"task": task} if task else {}),
+                "uuid": UUID,
+                "project": PROJECT,
+                "target": None,
+                "task": task,
             }
         )
 
@@ -681,7 +684,10 @@ class OuterBase(TickBase):
                 role=role or "engineer",
                 client=client,
                 delegate_kind="harness",
-                **({"task": started_task} if started_task else {}),
+                uuid=UUID,
+                project=PROJECT,
+                target=None,
+                task=started_task,
             )
         a = Spec(
             uuid=UUID,

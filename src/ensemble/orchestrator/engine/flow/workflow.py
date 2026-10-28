@@ -2,6 +2,7 @@
 
 import tomllib
 from collections.abc import Iterator, Mapping
+from dataclasses import replace
 from importlib import resources
 from typing import get_args, get_type_hints
 
@@ -10,6 +11,7 @@ from ensemble.orchestrator.engine.flow.types import Stage
 PACKAGED = "src/ensemble/orchestrator/engine/flow/workflow.toml"
 # Literal: values; else type
 TYPES = {k: get_args(t) or t for k, t in get_type_hints(Stage).items()}
+TYPES["input"] = tuple(value for value in TYPES["input"] if value != "decompose")
 
 
 class Workflow(Mapping[str, Stage]):
@@ -48,6 +50,27 @@ class Workflow(Mapping[str, Stage]):
 
     def _read(self) -> Mapping[str, Stage]:
         return self._stages if self._stages is not None else self.load()
+
+
+def for_task(stages: Mapping[str, Stage], role: str, task: str | None = None) -> Stage:
+    base = stages[role]
+    if (role, task) != ("engineer", "decompose"):
+        return base
+    return replace(
+        base,
+        input="decompose",
+        start="Decompose started:",
+        done="Decompose done:",
+        failed="Decompose failed:",
+        files=False,
+        deliverable=True,
+        assign=True,
+        approve=False,
+        retitle=False,
+        hint="",
+        ref=False,
+        mapped_only=False,
+    )
 
 
 def stage(table: Mapping, at: str = "stage") -> Stage:

@@ -97,6 +97,7 @@ NAMES = {
     linear_tracker.Q_ATTACHED: "read",
     ops.Q_ISSUE_STATE: "reread",
     linear_tracker.Q_ID: "id",
+    linear_tracker.Q_UPSTREAM: "description",
 }
 
 FIELDS = {
@@ -200,6 +201,8 @@ class Gql:
         fail=lambda _name, _v: None,
         issue=None,
         comments=None,
+        *,
+        description=None,
     ):
         self.calls, self.states, self.attachments, self.fail, self.issue = (
             [],
@@ -209,6 +212,7 @@ class Gql:
             issue,
         )
         self.comments = dict(comments or {})
+        self.description = description
 
     def __call__(self, query, **v):
         if query == linear_tracker.Q_STATE_NAME:
@@ -225,6 +229,8 @@ class Gql:
             return {"issue": {"state": {"id": s}}}
         if name == "id":
             return {"issue": self.issue}
+        if name == "description":
+            return {"issue": {"description": self.description}}
         if name == "find":
             c = self.comments.get(v["c"])
             if c is None:
@@ -415,6 +421,129 @@ class ProgressReporting(Base):
         (record,) = logged()
         self.assertIn("in progress", record["traceback"])
         self.assertIn("KeyError: 'nope'", record["traceback"])
+
+
+class DecomposeCompletion(Base):
+    TABLE = "| Issue | Repo | Requirements |\n| ENG-8 | acme/queue | FR-1 |\n"
+
+    def prepared(self):
+        port = mock.Mock()
+        port.links.return_value = set()
+        port.description.return_value = HANDOFF
+        port.on_board.return_value = SRC_UUID
+        port.move.return_value = None
+        port.find_comment.return_value = None
+        ctx = replace(self.ctx(), task="decompose", tracker=port)
+        self.write(ctx, "run/out.md", self.TABLE)
+        return ctx, port
+
+    def test_done_posts_table_and_completes_source_before_decompose_once(self):
+        ctx, port = self.prepared()
+        done = Outcome(status="done", title="Queues", summary="Created ENG-8", url=PR)
+        self.assertTrue(writeback.finish(ctx, done))
+        self.assertEqual(
+            port.move.call_args_list,
+            [
+                mock.call(SRC_UUID, writeback.IssueState.DONE, frm=writeback.IssueState.APPROVED),
+                mock.call(UUID, writeback.IssueState.DONE, frm=writeback.IssueState.RUNNING),
+            ],
+        )
+        self.assertIn(
+            mock.call(UUID, self.TABLE, (SID, "deliverable")), port.comment.call_args_list
+        )
+        port.link.assert_not_called()
+        self.assertTrue(writeback.finish(ctx, done))
+        self.assertEqual(port.move.call_count, 2)
+        self.assertEqual(port.comment.call_count, 2)
+
+    def test_missing_table_or_source_does_not_complete(self):
+        for missing in ("table", "handoff", "source"):
+            with self.subTest(missing=missing):
+                ctx, port = self.prepared()
+                if missing == "table":
+                    os.remove(os.path.join(ctx.workdir, "run/out.md"))
+                elif missing == "handoff":
+                    port.description.return_value = "No handoff"
+                else:
+                    port.on_board.return_value = None
+                self.assertFalse(
+                    writeback.finish(ctx, Outcome(status="done", title="Queues", summary="ENG-8"))
+                )
+                port.move.assert_not_called()
+                self.assertNotIn("outcome", writeback._done(ctx))
+
+    def test_source_state_change_is_preserved_and_done_is_retryable(self):
+        for state, okay in ((STATES["in_review"], False), (STATES["done"], True)):
+            with self.subTest(state=state):
+                ctx, port = self.prepared()
+                port.move.side_effect = [state, None]
+                self.assertEqual(
+                    writeback.finish(ctx, Outcome(status="done", title="Queues", summary="ENG-8")),
+                    okay,
+                )
+                self.assertEqual(port.move.call_count, 2 if okay else 1)
+                self.assertEqual("outcome" in self.steps(ctx)[SID], okay)
+
+    def test_retry_after_second_move_failure_preserves_table_and_source_step(self):
+        ctx, port = self.prepared()
+        port.move.side_effect = [None, LinearError("offline"), None]
+        done = Outcome(status="done", title="Queues", summary="ENG-8")
+        self.assertFalse(writeback.finish(ctx, done))
+        self.assertTrue(writeback.finish(ctx, done))
+        self.assertEqual(
+            port.move.call_args_list.count(
+                mock.call(SRC_UUID, writeback.IssueState.DONE, frm=writeback.IssueState.APPROVED)
+            ),
+            1,
+        )
+        self.assertEqual(port.comment.call_count, 2)
+
+    def test_stale_outcome_does_not_move_either_issue(self):
+        ctx, port = self.prepared()
+        self.assertTrue(
+            writeback.finish(
+                ctx, Outcome(status="done", title="Queues", summary="ENG-8"), move=False
+            )
+        )
+        port.move.assert_not_called()
+
+    def test_needs_input_assigns_and_failure_keeps_engineer_rules_without_source_reads(self):
+        for status, resumed, first_failure, state in (
+            ("needs_input", False, "review", "in_review"),
+            ("failed", False, "ready", "todo"),
+            ("failed", True, "ready", "in_review"),
+        ):
+            with self.subTest(status=status, resumed=resumed):
+                ctx, port = self.prepared()
+                ctx = replace(ctx, resume=resumed, assignee="human-id")
+                port.notify.return_value = ""
+                port.state_name.return_value = "Todo"
+                flow = board_ids.PACKAGED_FLOW.replace(
+                    'role = "engineer"', f'role = "engineer"\nfirst_failure = "{first_failure}"'
+                )
+                config.TASKS.load(board_ids.workflow_file(flow))
+                try:
+                    self.assertTrue(
+                        writeback.finish(
+                            ctx,
+                            Outcome(
+                                status=status,
+                                title="Queues",
+                                summary="Check",
+                                questions=("Which scope?",),
+                            ),
+                        )
+                    )
+                finally:
+                    config.TASKS.load()
+                port.description.assert_not_called()
+                port.on_board.assert_not_called()
+                port.move.assert_called_once_with(
+                    UUID, writeback.MOVES[state], frm=writeback.IssueState.RUNNING
+                )
+                if status == "needs_input":
+                    port.assign.assert_called_once_with(UUID, "human-id")
+                    self.assertIn("Which scope?", port.comment.call_args.args[1])
 
 
 class CompletionFailures(Base):
@@ -664,6 +793,40 @@ WRITERS = Writers(tracker(Gql()), LinearTracker(Gql()), STATES, HUMANS, {PROJECT
 
 
 class WritebackContext(run_fixtures.Base):
+    def test_production_writer_completes_decompose_and_recovers_a_failed_move(self):
+        cfg = config.load()
+        failures = []
+
+        def fail(name, variables):
+            if name == "state" and variables["i"] == UUID and not failures:
+                failures.append(name)
+                raise LinearError("offline")
+            return None
+
+        gql = Gql(
+            states=(STATES["handoff"], STATES["in_progress"]),
+            issue={"id": SRC_UUID, "team": {"id": cfg.linear.team}},
+            description=HANDOFF,
+            fail=fail,
+        )
+        writers = cli.TRACKERS[cfg.tracker].writers(gql, cfg, cfg.linear.roles["engineer"])
+        spec = SimpleNamespace(
+            issue=ID, uuid=UUID, sid=SID, mode="new", project=PROJECT, task="decompose"
+        )
+        ctx = writeback.for_run(cfg, "engineer", spec, writers)
+        self.write(os.path.join(ctx.workdir, "run", "out.md"), DecomposeCompletion.TABLE)
+        done = Outcome(status="done", title="Queues", summary="ENG-8")
+        self.assertFalse(writeback.finish(ctx, done))
+        self.assertTrue(writeback.finish(ctx, done))
+        moves = [(v["i"], v["s"]) for name, v in gql.calls if name == "state"]
+        self.assertEqual(
+            moves, [(SRC_UUID, STATES["done"]), (UUID, STATES["done"]), (UUID, STATES["done"])]
+        )
+        self.assertEqual(
+            sum(name == "comment" and v["b"] == DecomposeCompletion.TABLE for name, v in gql.calls),
+            1,
+        )
+
     def test_context_resolves_the_output_host_and_github_blob_prefix(self):
         cfg = config.load()
         cfg = replace(cfg, docs=replace(cfg.docs, host="ghe.example.com"))
@@ -749,10 +912,16 @@ class WritebackContext(run_fixtures.Base):
 
     def test_a_run_writes_with_the_writers_it_is_given(self):
         cfg = config.load()
+        runs.note(
+            cfg.runs_log,
+            "start",
+            **vars(replace(CLAIM, issue=ID, sid=SID, target=None, task="decompose")),
+        )
         spec = SimpleNamespace(issue=ID, uuid=UUID, sid=SID, mode="resume", project=PROJECT)
         ctx = writeback.for_run(cfg, "engineer", spec, WRITERS)
         self.assertIs(ctx.tracker, WRITERS.tracker)
         self.assertIs(ctx.harness, WRITERS.harness)
+        self.assertEqual(ctx.task, "decompose")
         self.assertEqual(
             (ctx.ident, ctx.issue_id, ctx.sid, ctx.resume, ctx.project, ctx.target),
             (ID, UUID, SID, True, PROJECT, None),
@@ -1833,7 +2002,7 @@ class Events(RunCase):
         self.addCleanup(info.stop)
         self.now = iter((STARTED, RESTARTED, LATER, LATEST))
 
-    def claim(self, sid=RUN_SID, role="engineer", **fields):
+    def claim(self, sid=RUN_SID, role="engineer", task=None, **fields):
         runs.note(
             self.cfg.runs_log,
             "start",
@@ -1846,6 +2015,7 @@ class Events(RunCase):
             uuid=UUID,
             project="p1",
             target="acme/ensemble",
+            task=task,
             **fields,
         )
 
@@ -1901,6 +2071,14 @@ class Events(RunCase):
 
 
 class ForClaim(RunCase):
+    def test_recorded_task_selects_decompose_for_recovery(self):
+        ctx = writeback.for_claim(self.cfg, replace(CLAIM, task="decompose"), WRITERS, attempt=2)
+        self.assertEqual(ctx.task, "decompose")
+        body, state, url = writeback._completion_body(
+            ctx, Outcome(status="done", title="Queue", summary="ENG-8")
+        )
+        self.assertEqual((body, state, url), ("Decompose done: ENG-8", "done", ""))
+
     def test_writes_as_the_writers_it_is_given(self):
         ctx = writeback.for_claim(self.cfg, CLAIM, WRITERS, attempt=1)
         self.assertEqual((ctx.tracker, ctx.harness), (WRITERS.tracker, WRITERS.harness))
