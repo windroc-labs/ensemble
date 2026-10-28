@@ -175,7 +175,7 @@ func (l Linear) read(account string, into any) error {
 	if err != nil {
 		return err
 	}
-	if json.Unmarshal(b, into) != nil {
+	if len(b) > 1<<20 || json.Unmarshal(b, into) != nil {
 		return errLinear
 	}
 	return nil
