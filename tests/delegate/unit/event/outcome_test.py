@@ -193,9 +193,9 @@ class Validate(Base):
         self.assertEqual(self.check({**DONE, "url": url}, pr, ghe).url, url)
 
     def test_files_are_md_files_under_the_workdir(self):
-        plan = self.touch("docs", "plan.md")
+        plan = self.touch("notes", "plan.md")
         self.assertEqual(
-            self.check({**DONE, "files": [plan, "docs/plan.md"]}).files,
+            self.check({**DONE, "files": [plan, "notes/plan.md"]}).files,
             [os.path.realpath(plan)] * 2,
         )
         os.makedirs(self.work + "2")

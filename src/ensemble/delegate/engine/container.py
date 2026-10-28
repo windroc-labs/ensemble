@@ -1,4 +1,4 @@
-"""Docker Host runs (docs/architecture.md): Host test, Reference repo, users."""
+"""Docker Host runs: Host test, Reference repo, users."""
 
 import itertools
 import json

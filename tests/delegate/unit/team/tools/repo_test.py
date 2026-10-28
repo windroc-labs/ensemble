@@ -96,7 +96,7 @@ class PlanDocs(Case):
         open_ = doc(".updraft/b-plan.md", "phase=S5 worktree=/w branch=b")
         doc(".updraft/c-plan.md", "phase=S5 worktree=/w branch=other")
         doc(".updraft/a-spec.md", "phase=S5 worktree=/w branch=b")
-        doc("docs/a-plan.md", "phase=S7 worktree=/w branch=b")
+        doc("design/a-plan.md", "phase=S7 worktree=/w branch=b")
         os.utime(open_, (1_000, 1_000))
         os.utime(done, (2_000, 2_000))
         self.assertEqual(
