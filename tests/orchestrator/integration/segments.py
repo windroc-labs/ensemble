@@ -92,12 +92,18 @@ def lookup(caller):
 
 
 def tui_scene(script):
-    """script as a TUI's turns: its reply in one turn; none: then turn ends until it gives up;
-    open: then the run waits on.
+    """script as a TUI's turns: its reply in one turn, consecutive texts one step; none: then turn
+    ends until it gives up; open: then the run waits on.
     """
     if script.outcome == "none":
         return {"steps": script.steps, "turns": [[STOP] * (GIVE_UP - 1)]}
-    return {"steps": ["\n".join(script.steps)]}
+    steps = []
+    for step in script.steps:
+        if isinstance(step, str) and steps and isinstance(steps[-1], str):
+            steps[-1] += "\n" + step
+        else:
+            steps.append(step)
+    return {"steps": steps}
 
 
 def agent_calls(calls):
