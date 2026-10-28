@@ -26,6 +26,10 @@ Listed = Literal[IssueState.READY, IssueState.RUNNING]
 class Tracker(ABC):
     batch = 1  # snapshots' idents per call
 
+    @property
+    def kept(self) -> frozenset[str]:
+        return frozenset()
+
     @abstractmethod
     def state_name(self, state: IssueState) -> str: ...
 

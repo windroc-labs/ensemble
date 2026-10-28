@@ -787,6 +787,21 @@ class GraphQLQueries(ServerCase):
         cfg = SimpleNamespace(team=TEAM, states=STATES)
         self.assertEqual(ops.team(self.gql, cfg).states, STATES)
 
+    def test_the_team_read_lists_the_issues_carrying_the_keep_label(self):
+        self.fake.label_group(TASK_GROUP, "Tasks", {LABEL: "Keep"})
+        kept = self.fake.issue("Kept", state="done", labels=[LABEL])
+        self.fake.issue("Other", state="done")
+        for keep in (LABEL, "Keep"):
+            with self.subTest(keep=keep):
+                cfg = SimpleNamespace(team=TEAM, states=STATES, roles={}, keep_label=keep)
+                team, _ = ops.team_and_roles(self.gql, cfg)
+                self.assertEqual(
+                    (team.states, team.kept), (STATES, frozenset({kept["identifier"]}))
+                )
+        cfg = SimpleNamespace(team=TEAM, states=STATES, roles={}, keep_label="keep")
+        unknown = ops.team_and_roles(self.gql, cfg)[0].kept
+        self.assertRegex(str(unknown), "linear.keep_label 'keep' is no label")
+
     def test_a_backlog_issue_is_not_in_a_todo_list(self):
         later = self.fake.issue(
             "Later",

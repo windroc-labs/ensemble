@@ -47,11 +47,72 @@ class TeamAndRoles(Case):
 
         for roles in ({}, {"pm": SimpleNamespace(user_id="app-pm")}):
             calls.clear()
-            linear = SimpleNamespace(team=TEAM, states=dict(STATES), roles=roles)
+            linear = SimpleNamespace(team=TEAM, states=dict(STATES), roles=roles, keep_label="")
             found, ids = ops.team_and_roles(gql, linear)
             self.assertEqual(found, ops.Team(TEAM, "Team", dict(STATES), FINISHED))
             self.assertEqual(ids, {app.user_id: r for r, app in roles.items()})
             self.assertEqual(calls, [(ops.Q_TEAM, {"t": TEAM})])
+
+
+class KeepLabel(Case):
+    def gql(self, labels, idents, *, more=False):
+        calls = []
+
+        def gql(query, **v):
+            calls.append((query, v))
+            return {
+                "teams": {"nodes": [team_node()]},
+                "issueLabels": {"nodes": labels},
+                "issues": {
+                    "nodes": [{"identifier": i} for i in idents],
+                    "pageInfo": {"hasNextPage": more},
+                },
+            }
+
+        gql.calls = calls
+        return gql
+
+    def read(self, gql, keep):
+        linear = SimpleNamespace(team=TEAM, states=dict(STATES), roles={}, keep_label=keep)
+        return ops.team_and_roles(gql, linear)[0]
+
+    def test_the_team_read_lists_the_issues_carrying_it(self):
+        for keep, match in ((LABEL1, {"id": {"eq": LABEL1}}), ("Keep", {"name": {"eq": "Keep"}})):
+            for owner in (None, {"id": TEAM}):
+                with self.subTest(keep=keep, owner=owner):
+                    gql = self.gql([{"id": LABEL1, "team": owner}], ["TASK-1", "TASK-2"])
+                    self.assertEqual(
+                        self.read(gql, keep),
+                        ops.Team(
+                            TEAM, "Team", dict(STATES), FINISHED, frozenset({"TASK-1", "TASK-2"})
+                        ),
+                    )
+                    flt = {"team": {"id": {"eq": TEAM}}, "labels": {"some": match}}
+                    self.assertEqual(
+                        gql.calls, [(ops.Q_TEAM_KEEP, {"t": TEAM, "l": match, "k": flt})]
+                    )
+
+    def test_a_label_the_team_cannot_carry_is_kept_as_the_error(self):
+        for labels in ([], [{"id": LABEL2, "team": {"id": "other-team"}}]):
+            with self.subTest(labels=labels):
+                found = self.read(self.gql(labels, ["TASK-1"]), "Keep")
+                self.assertEqual(found.states, dict(STATES))
+                self.assertIsInstance(found.kept, LinearError)
+                self.assertEqual(
+                    str(found.kept),
+                    "orchestrator/config.toml: linear.keep_label 'Keep' is no label of team "
+                    "'Team' or the workspace",
+                )
+
+    def test_more_kept_issues_than_one_page_is_kept_as_the_error(self):
+        gql = self.gql([{"id": LABEL1, "team": None}], ["TASK-1"], more=True)
+        found = self.read(gql, LABEL1)
+        self.assertIsInstance(found.kept, LinearError)
+        self.assertEqual(
+            str(found.kept),
+            f"orchestrator/config.toml: linear.keep_label {LABEL1!r}: over 250 issues carry it, "
+            "more than prune reads: remove it from some",
+        )
 
 
 class TeamCheck(Case):
