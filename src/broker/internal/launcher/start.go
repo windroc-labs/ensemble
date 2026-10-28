@@ -284,10 +284,6 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	// Stdin open for the harness's docker attach; no log driver, so no channel data lands in docker logs.
 	args := append([]string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
 		route.args()...)
-	if m.HasHook {
-		// Only the root bootstrap helper switches identities; agent stays unprivileged with no-new-privileges.
-		args = append(args, "--cap-add", "SETUID", "--cap-add", "SETGID")
-	}
 	args = append(args, "--workdir", m.CWD)
 	switch m.Client {
 	case "codex":

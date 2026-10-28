@@ -260,5 +260,3 @@ caf = "caf"
 nd = "nd"
 
 [tool.typos.default.extend-identifiers]
-# Linux /proc status capability field.
-CapInh = "CapInh"

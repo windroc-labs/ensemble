@@ -390,7 +390,6 @@ func TestRunArguments(t *testing.T) {
 		"--network", workersNetwork, "--env", "HTTP_PROXY=" + workersProxy, "--env", "HTTPS_PROXY=" + workersProxy,
 		"--env", "http_proxy=" + workersProxy, "--env", "https_proxy=" + workersProxy,
 		"--env", "NO_PROXY=localhost,127.0.0.1,::1", "--env", "no_proxy=localhost,127.0.0.1,::1",
-		"--cap-add", "SETUID", "--cap-add", "SETGID",
 		"--workdir", cwd, "--env", "CLAUDE_CONFIG_DIR=" + claude,
 		"--env", "npm_config_cache=" + cwd + "/.ensemble-cache", "--env", "UV_CACHE_DIR=" + cwd + "/.ensemble-cache", "--env", "PIP_CACHE_DIR=" + cwd + "/.ensemble-cache",
 		"--label", "ensemble.session=worker_1", "--label", "ensemble.generation=0123456789abcdef0123456789abcdef", "--label", "ensemble.client=claude", "--label", "team=crew",
@@ -491,6 +490,8 @@ func TestStartOrder(t *testing.T) {
 			step = "credentials"
 			if slices.Contains(c, "/usr/bin/python3") {
 				step = "bootstrap"
+			} else if slices.Contains(c, "hook") {
+				step = "hook"
 			}
 		}
 		if len(d.stdin[i]) > 0 && c[1] != "--interactive" {
@@ -499,7 +500,7 @@ func TestStartOrder(t *testing.T) {
 		steps = append(steps, step)
 	}
 	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm", "run --detach",
-		"bootstrap", "credentials"}
+		"bootstrap", "hook", "credentials"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
 	}
@@ -507,7 +508,7 @@ func TestStartOrder(t *testing.T) {
 		t.Fatalf("inject %q", inject)
 	}
 	boot := d.calls[11]
-	if !slices.Equal(boot[8:12], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project", "/usr/local/bin/ensemble-session"}) {
+	if !slices.Equal(boot[8:11], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) {
 		t.Fatalf("bootstrap %q", boot)
 	}
 	h, d = startHost(&world{labels: goodLabels()}, &fakeCreds{})
@@ -530,7 +531,7 @@ func TestStartUnreadableImage(t *testing.T) {
 						if unreachable {
 							return docker.ErrUnreachable
 						}
-						return &docker.CommandError{Exit: 1, Stderr: "synthetic permission denied"}
+						return &docker.CommandError{Exit: contentFailed, Stderr: "synthetic permission denied"}
 					}
 					return nil
 				}}
@@ -612,7 +613,7 @@ func TestRollback(t *testing.T) {
 		cleanup string
 	}{
 		"bootstrap":           {&world{execErr: failOn("claude", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
-		"hook":                {&world{execErr: failOn("/usr/bin/python3", &docker.CommandError{Exit: 43, Stderr: "boom"})}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
+		"hook":                {&world{execErr: failOn("hook", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"inject":              {&world{}, &fakeCreds{injectErr: errors.New("opaque")}, protocol.StartFailed, protocol.Removed},
 		"inject unreachable":  {&world{}, &fakeCreds{injectErr: docker.ErrUnreachable}, protocol.DockerUnreachable, protocol.Removed},
 		"inject keychain":     {&world{}, &fakeCreds{injectErr: protocol.New(protocol.KeychainFailed, "denied")}, protocol.KeychainFailed, protocol.Removed},
