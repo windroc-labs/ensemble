@@ -96,6 +96,7 @@ from tests.session.hosted_support import (
     listed,
 )
 from tests.session.threads import capture_errors
+from tests.utils.clock import FakeClock
 from tests.utils.sandbox import owned_directory
 
 UNCONFIGURED = "session not configured: call Session.configure first"
@@ -1096,19 +1097,8 @@ class InProcessTest(Base):
         self.assertEqual(found[-2:], [Reply("b"), Exited(0)])
 
 
-class Clock:
-    """The session's clock and time.monotonic's stand-in: `now` moves only when a StubMode
-    waits.
-    """
-
-    now = 0.0
-
-    def monotonic(self) -> float:
-        return self.now
-
-
 class StubMode:
-    """A BaseMode on a Clock: poll(timeout) gives the next script item (at, events, ended) once the
+    """A BaseMode on a FakeClock: poll(timeout) gives the next script item (at, events, ended) once the
     clock reaches `at`, else ([], False), moving the clock to `at` or on by timeout, whichever is
     sooner; past LATE s it raises, so a session that never ends fails. returncode() gives `code`;
     every call is logged in `calls`.
@@ -1159,9 +1149,9 @@ class EventsOverAModeTest(Case):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dir = tmp.name
-        self.clock = Clock()
+        self.clock = FakeClock()
         self.configured = harnesses.Threaded.configured(
-            clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock.monotonic
+            clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock
         )
 
     def session(self, *script, code=0, idle_timeout=None, **kwargs) -> HostedSession:

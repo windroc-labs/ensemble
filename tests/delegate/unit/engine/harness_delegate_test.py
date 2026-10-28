@@ -66,10 +66,11 @@ from tests.delegate.fakes.harness_session import (
 )
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block
-from tests.delegate.unit.engine.orphans import Clock, Orphan
+from tests.delegate.unit.engine.orphans import Orphan
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN
 from tests.session.unit.hosts.docker import support
+from tests.utils.clock import FakeClock
 from tests.utils.process_fixtures import DEVNULL, STDOUT
 
 ORPHAN = 4242
@@ -1270,7 +1271,7 @@ class AttendedBusyTest(HarnessCase):
 class LaunchColorTest(HarnessCase):
     def setUp(self):
         super().setUp()
-        self.clock = Clock(self)
+        self.clock = FakeClock().patch(self)
 
     def launched(
         self, agent: mock.Mock, *, drive: Callable[[], bool] = lambda: True
@@ -2039,7 +2040,7 @@ class SweepTest(HarnessCase):
 
     def setUp(self):
         super().setUp()
-        Clock(self)
+        FakeClock().patch(self)
         self.killpg = self.enterContext(mock.patch("os.killpg"))
         self.seen = []
 
@@ -2891,7 +2892,7 @@ class OwnedRun(HarnessCase):
         self.assert_stopped_start_left_nothing(view)
 
     def test_an_opening_attempt_past_its_idle_timeout_is_given_up(self):
-        Clock(self)
+        FakeClock().patch(self)
         view = self.owned(idle=5)
         result = view.run()
         self.assertEqual(result, Result(0, None, "the agent run returned no outcome"))
@@ -2905,12 +2906,11 @@ class OwnedRun(HarnessCase):
         self.assertTrue(view.driver.session.alive())
 
     def test_a_bound_attempt_is_never_given_up_by_its_drive(self):
-        clock = Clock(self)
+        clock = FakeClock().patch(self)
         view = self.owned(idle=5)
-        advance = clock.advance
 
         def later(seconds):
-            advance(seconds)
+            clock.sleep(seconds)
             if clock.now >= 20 and not self.record.read().completed:
                 self.record.complete(1, self.NEEDS, sid=SID)
 
@@ -2920,7 +2920,7 @@ class OwnedRun(HarnessCase):
         self.assertNotIn("give_up", self.kinds())
 
     def test_a_gone_worker_ends_the_attempt_after_the_drain_wait(self):
-        clock = Clock(self)
+        clock = FakeClock().patch(self)
         view = self.owned()
 
         def gone():
@@ -2935,7 +2935,7 @@ class OwnedRun(HarnessCase):
         self.assertEqual(self.sent(), ["begun", "finished"])
 
     def test_a_locked_give_up_leaves_the_session_open(self):
-        Clock(self)
+        FakeClock().patch(self)
         view = self.owned(idle=5, lock="dummy-lock")
         view.run()
         self.assertTrue(view.driver.session.alive())

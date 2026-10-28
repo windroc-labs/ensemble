@@ -12,19 +12,7 @@ from unittest import mock
 from ensemble.session.clients import replies
 from ensemble.utils import STALE_AGE, file_lock, read_reply
 from tests.session.case import Case
-
-
-class Clock:
-    """A fake monotonic clock that sleep advances."""
-
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.now += seconds
+from tests.utils.clock import FakeClock
 
 
 class SharedBase(Case):
@@ -78,7 +66,7 @@ class StateTest(SharedBase):
         self.assertEqual(sorted(os.listdir(self.root)), ["events", "young.json", "young.json.lock"])
 
     def test_locked_waits_until_its_deadline(self):
-        clock = Clock()
+        clock = FakeClock(1000.0)
         with (
             file_lock(self.path, wait=False),
             self.assertRaises(TimeoutError),

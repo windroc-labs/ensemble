@@ -25,7 +25,8 @@ from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Resul
 from ensemble.utils import OutcomeStatus, Stopped
 from tests.delegate.case import Case
 from tests.delegate.harness import SID
-from tests.delegate.unit.engine.orphans import Clock, Orphan
+from tests.delegate.unit.engine.orphans import Orphan
+from tests.utils.clock import FakeClock
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 RUN = {"sid": SID, "attempt": 3}
@@ -303,7 +304,7 @@ class Delivery(Case):
 
     def test_a_callback_lock_held_5_s_spawns_nothing_and_is_one_callback_error_row(self):
         self.hold()
-        clock = Clock(self)
+        clock = FakeClock().patch(self)
         self.assertIsNone(self.callback(Begun(SID)))
         self.assertEqual(Child.calls, [])
         self.assertGreaterEqual(clock.now, CALLBACK_STOP_WAIT)
@@ -349,7 +350,7 @@ class Delivery(Case):
 class Sweep(Case):
     def setUp(self):
         self.store = store(os.path.join(self.home, "w"))
-        self.clock = Clock(self)
+        self.clock = FakeClock().patch(self)
         self.killpg = self.enterContext(mock.patch("os.killpg"))
 
     def orphan(self, text: str = f"{PID} {PARENT}\n") -> Orphan:
