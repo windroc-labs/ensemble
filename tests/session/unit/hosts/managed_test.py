@@ -206,7 +206,10 @@ class ManagedProcessTest(Case):
             channel.close()
 
     def test_reader_rejects_malformed_protocol_and_continues_drain(self):
-        for wire in (guard.frame(b"z", b"{}"), b"o" + (guard.FRAME_MAX + 1).to_bytes(4, "big")):
+        for wire in (
+            guard.json_frame(b"s", {"pid": 1}) + guard.frame(b"z", b"{}"),
+            b"o" + (guard.FRAME_MAX + 1).to_bytes(4, "big"),
+        ):
             channel = self.channel()
             channel.proc.stdout.read.side_effect = [wire, b"more", b""]
             channel.pump()

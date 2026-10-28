@@ -860,10 +860,14 @@ class SessionStatusTest(Base):
     def test_unreadable_store_and_session_are_unknown(self):
         self.bound()
         self.rollout()
-        with mock.patch("os.scandir", side_effect=PermissionError("denied")):
-            self.assertEqual(
-                self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
-            )
+        for name in ("os.scandir", "os.open"):
+            with (
+                mock.patch(name, side_effect=PermissionError("denied")),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
+                )
         path = self.rollout()
         original = os.open
 
