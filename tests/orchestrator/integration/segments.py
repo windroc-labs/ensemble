@@ -286,14 +286,13 @@ class Segment(TmuxFlow):
         steps = [mark("start", f"Starting run #{n}.")]
         if outcome in ("none", "open"):
             return Script(outcome, steps, None, {})
+        decompose = role == "engineer" and DECOMPOSE in self.issue(ident)["labels"]
         report = {
             "status": outcome,
             "title": f"Session registry run {n}",
-            "summary": f"Summary #{n}.",
+            "summary": f"Created RUN-{n}; reused none" if decompose else f"Summary #{n}.",
         }
-        if outcome == "done" and not (
-            role == "engineer" and DECOMPOSE in self.issue(ident)["labels"]
-        ):
+        if outcome == "done" and not decompose:
             report["url"] = url or (
                 f"https://github.com/{REPO}/pull/{n}"
                 if config.TASKS[role].input == "build"
