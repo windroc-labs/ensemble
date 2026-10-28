@@ -1,10 +1,10 @@
 {
-  "run": "https://github.com/windroc-labs/ensemble/actions/runs/40651052817/attempts/1",
-  "head_sha": "cc98b8dfcd8780f90d0affb5cc21eaaa6e1ce9f0",
+  "run": "https://github.com/windroc-labs/ensemble/actions/runs/40661805555/attempts/1",
+  "head_sha": "6c2f9338999a4e0dee1d783e99abdcf8a7456da7",
   "runner": "ubuntu-24.04",
-  "unit": "Per-test seconds in unit-coverage-40651052817-1-{1,2}/shard-*/durations.jsonl.",
-  "repository": "Per-test seconds in repository-40651052817-1-{1,2,3,4,5,6}/shard-*/durations.jsonl.",
-  "selection": "Hints retain measurements >=0.1s from 6511 unit tests and 373 repository tests, each recorded once.",
+  "unit": "Per-test seconds in unit-coverage-40661805555-1-{1,2}/shard-*/durations.jsonl.",
+  "repository": "Per-test seconds in repository-40661805555-1-{1,2,3,4,5,6}/shard-*/durations.jsonl.",
+  "selection": "Hints retain measurements >=0.1s from 6292 unit tests and 373 repository tests, each recorded once.",
   "membership": "Current discovery is authoritative. New IDs default to 0.01s; stale IDs never select tests. Hints affect order and assignment only.",
   "result": "The full PR workflow completed successfully: lint, unit, coverage, repository, integration, broker, mini-op guard and CI."
 }

@@ -6,7 +6,7 @@
       "attempt": 1,
       "cpus": 4,
       "event": "pull_request",
-      "head_sha": "cc98b8dfcd8780f90d0affb5cc21eaaa6e1ce9f0",
+      "head_sha": "6c2f9338999a4e0dee1d783e99abdcf8a7456da7",
       "matrix_jobs": [
         "1",
         "2",
@@ -18,9 +18,9 @@
         "8"
       ],
       "python": "3.11.17",
-      "run_id": "40651052817",
+      "run_id": "40661805555",
       "runner": "ubuntu-24.04",
-      "sha": "2ad61b2d7fe721dbb8abdf260e681ede3e3732dd",
+      "sha": "863cb7a0616086f362a8ef27bd7ec6efccf9b715",
       "shard_count": 32,
       "shards": [
         "1",
@@ -57,7 +57,7 @@
         "32"
       ],
       "tmux": "tmux 3.4",
-      "url": "https://github.com/windroc-labs/ensemble/actions/runs/40651052817/attempts/1"
+      "url": "https://github.com/windroc-labs/ensemble/actions/runs/40661805555/attempts/1"
     }
   ]
 }
