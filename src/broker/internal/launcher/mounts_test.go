@@ -18,6 +18,7 @@ func mountHost(missing ...string) Host {
 		IsDir:    func(p string) bool { return !slices.Contains(missing, p) },
 		Safe:     func(string) error { return nil },
 		GitHub:   &fakeTokens{},
+		Linear:   &fakeLinear{},
 		Versions: defaultVersions(),
 	}
 }

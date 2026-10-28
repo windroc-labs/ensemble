@@ -2766,9 +2766,9 @@
       "definition": "manifest",
       "valid": true,
       "expected": {
-        "stage": "manifest",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
       }
     },
     {
@@ -2813,6 +2813,76 @@
     },
     {
       "file": "credential-spec-linear-members-not-array.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-reference-space.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-reference-non-ascii.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-reference-long.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-wrong-key-app.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-wrong-key-role.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-wrong-key-team.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 3,
+        "error_code": "manifest_rejected"
+      }
+    },
+    {
+      "file": "credential-spec-linear-wrong-key-task-labels.json",
       "definition": "credential_spec",
       "valid": false,
       "expected": {

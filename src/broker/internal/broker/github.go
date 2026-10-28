@@ -88,22 +88,43 @@ type GitHub struct {
 	Audit    *audit.Recorder
 }
 
-// FileLock is an exclusive flock on path, created 0600 in a 0700 directory.
-func FileLock(path string) func() (func(), error) {
+// FileLock is an exclusive flock on path; create adds a missing 0600 file in a 0700 directory.
+func FileLock(path string, create bool) func() (func(), error) {
 	return func() (func(), error) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-			return nil, err
+		flags := os.O_RDWR
+		if create {
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				return nil, err
+			}
+			flags |= os.O_CREATE
 		}
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		f, err := os.OpenFile(path, flags, 0o600)
 		if err != nil {
 			return nil, err
 		}
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-			f.Close()
-			return nil, err
-		}
-		return func() { f.Close() }, nil
+		return lockFile(f)
 	}
+}
+
+func lockFile(f *os.File) (func(), error) {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	// A waiting opener may hold an inode retired by container close.
+	held, err := f.Stat()
+	if err == nil {
+		var current os.FileInfo
+		current, err = os.Stat(f.Name())
+		if err == nil && !os.SameFile(held, current) {
+			err = os.ErrNotExist
+		}
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { f.Close() }, nil
 }
 
 func apiError(err error) *protocol.Error {

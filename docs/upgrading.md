@@ -1,17 +1,27 @@
 # Upgrading
 
-## Broker protocol 34: opaque credential spec interface
+## Broker protocol 34: credential requests
 
-For this release:
+Before upgrading, close workers started before this release; they cannot be resumed after it.
+Close running Docker sessions, then run `scripts/install.sh --docker` to install the protocol 34 broker.
+Existing GitHub/env configuration stays in place until WDRC-350 and WDRC-351 migrate it.
+For `--credentials JSON` options, defaults, host-side state and resume rules, see
+[Credential spec](architecture.md#credentials).
 
-1. Before upgrading, close workers started before this release; they cannot be resumed after it.
-2. Before upgrading the broker, close every running Docker session, then run `scripts/install.sh --docker`.
-3. Keep the existing `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets`
-   configuration until their migrations ship. Leave new credential declarations empty until broker kind issuance ships.
-4. To supply references for a new run, use `--credentials JSON` on `ensemble-delegate run`, `ensemble-session start`,
-   or `ensemble-crew worker NAME --credentials JSON`. For role runs, put `--task` and `--credentials` before ROLE:
-   `ensemble-crew role [--task TASK] [--credentials JSON] ROLE --input TEXT`.
-   See [Credential spec](architecture.md#credentials) for defaults, host-side state, resume and refusal rules.
+To supply references for a new run, use `--credentials JSON` on `ensemble-delegate run`, `ensemble-session start`,
+or `ensemble-crew worker NAME --credentials JSON`. For role runs, put `--task` and `--credentials` before ROLE:
+`ensemble-crew role [--task TASK] [--credentials JSON] ROLE --input TEXT`.
+
+### Linear container credentials
+
+Before declaring a role app in `linear`:
+
+1. Enable client credentials on the existing role app; keep the same scopes for host and container.
+2. Enroll it using [Linear broker renewal](#linear-broker-renewal), with that role's name and public app values,
+   `kind = role`, and `renewal = "broker"` for its host transport. Complete the cutover before starting callers.
+
+For request validation, delivery paths and modes, the maintenance swap, and revocation, see
+[Linear container credentials](architecture.md#linear-container-credentials). Container CLI consumption ships separately.
 
 ## Claude account selection is the session's
 
@@ -316,7 +326,7 @@ flowchart LR
     M --> R[Restart callers]
 ```
 Stop launchd router/promote jobs, manual host commands and active role write-back before enrollment so no old process
-holds a root secret in memory. Docker workers themselves receive no Linear material.
+holds a root secret in memory. Docker workers receive Linear material only when their credential request declares it.
 
 Copy the identity's six public values from its config table into a local `linear-identity.json` (no secret):
 

@@ -270,7 +270,7 @@ func TestCloseLine(t *testing.T) {
 				}
 				return []byte(tc.rm + "\n"), nil
 			}}
-			h := Host{Docker: d, GitHub: &fakeTokens{}}
+			h := Host{Docker: d, GitHub: &fakeTokens{}, Linear: &fakeLinear{}}
 			rec, path := audited(t, &h, "close", container)
 			got, err := h.Close(context.Background(), container)
 			rec.Flush(err)

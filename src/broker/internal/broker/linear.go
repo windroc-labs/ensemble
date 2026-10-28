@@ -10,8 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -27,8 +27,6 @@ const (
 	linearTokenURL      = "https://api.linear.app/oauth/token"
 )
 
-var linearName = regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,128}$`)
-var linearUser = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var errLinear = errors.New("Linear broker maintenance failed; check enrollment and broker installation, then rerun")
 
 // ErrLinearStale is linear-maintain meeting a broker Linear item an earlier broker build wrote, which retrust repairs.
@@ -56,10 +54,10 @@ func (a LinearIdentity) scopes() string {
 	return ""
 }
 
-func linearSafe(s string) bool { return linearName.MatchString(s) && s != "." && s != ".." }
+func linearSafe(s string) bool { return credential.ValidLinearService(s) }
 
 func (a LinearIdentity) check() error {
-	if !linearSafe(a.Name) || !linearSafe(a.SecretService) || !linearSafe(a.TokenService) || a.SecretService == a.TokenService || a.scopes() == "" || !linearUser.MatchString(a.UserID) || len(a.ClientID) == 0 || len(a.ClientID) > 256 || strings.ContainsFunc(a.ClientID, func(r rune) bool { return r <= 0x20 || r > 0x7e }) {
+	if a.Kind == "role" && !credential.ValidLinearRole(a.Name) || !linearSafe(a.Name) || !linearSafe(a.SecretService) || !linearSafe(a.TokenService) || a.SecretService == a.TokenService || a.scopes() == "" || !credential.ValidLinearUser(a.UserID) || len(a.ClientID) == 0 || len(a.ClientID) > 256 || strings.ContainsFunc(a.ClientID, func(r rune) bool { return r <= 0x20 || r > 0x7e }) {
 		return errLinear
 	}
 	for _, service := range []string{a.SecretService, a.TokenService} {
@@ -147,24 +145,28 @@ type linearAccount struct {
 	RenewAt      string         `json:"renew_at"`
 }
 
-// Linear owns an enrolled host identity's account and its persistent host grant. No Docker access is involved.
+// Linear owns enrolled accounts, host grants and per-container revocation records; the launcher delivers its commands.
 type Linear struct {
-	Audit    *audit.Recorder
-	keys     linearKeys
-	host     linearHost
-	http     *http.Client
-	lock     func(string) func() (func(), error)
-	now      func() time.Time
-	password func() ([]byte, error)
+	Audit      *audit.Recorder
+	keys       linearKeys
+	host       linearHost
+	http       *http.Client
+	lock       func(string, bool) func() (func(), error)
+	removeLock func(string) error
+	now        func() time.Time
+	password   func() ([]byte, error)
 }
 
 // NewLinear is Linear for the account at home, its items in k.
 func NewLinear(home string, k SystemKeychain, password func() ([]byte, error)) Linear {
+	lockPath := func(id string) string {
+		return filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(id))))
+	}
 	return Linear{keys: k, host: linearHostEntries{home: home, run: runLinearSecurity, access: k.AppAccess},
 		http: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now, password: password,
-		lock: func(id string) func() (func(), error) {
-			return FileLock(filepath.Join(home, ".ensemble", "linear", fmt.Sprintf("%x.lock", sha256.Sum256([]byte(id)))))
-		}}
+		lock: func(id string, create bool) func() (func(), error) {
+			return FileLock(lockPath(id), create)
+		}, removeLock: func(id string) error { return os.Remove(lockPath(id)) }}
 }
 
 func (l Linear) read(account string, into any) error {
@@ -193,7 +195,7 @@ func (l Linear) Enroll(a LinearIdentity) error {
 	if a.check() != nil {
 		return errLinear
 	}
-	unlock, err := l.lock("account/" + a.TokenService)()
+	unlock, err := l.lock("account/"+a.TokenService, true)()
 	if err != nil {
 		return errLinear
 	}
@@ -236,7 +238,7 @@ func (l Linear) Enroll(a LinearIdentity) error {
 
 // reserve is a short registry transaction. It never waits for another account, calls a provider or prompts.
 func (l Linear) reserve(a LinearIdentity) (linearAccount, error) {
-	unlock, err := l.lock("registry")()
+	unlock, err := l.lock("registry", true)()
 	if err != nil {
 		return linearAccount{}, errLinear
 	}
@@ -299,7 +301,7 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 	if a.check() != nil {
 		return LinearResult{}, errLinear
 	}
-	unlock, err := l.lock("account/" + a.TokenService)()
+	unlock, err := l.lock("account/"+a.TokenService, true)()
 	if err != nil {
 		return LinearResult{}, errLinear
 	}
@@ -322,7 +324,7 @@ func (l Linear) Maintain(ctx context.Context, a LinearIdentity) (LinearResult, e
 		return LinearResult{}, errLinear
 	}
 	p := &linearProvider{owner: l, account: &account}
-	lifecycle := credential.Lifecycle{Provider: p, Store: linearStore{l.keys}, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/" + a.TokenService), Audit: l.Audit}
+	lifecycle := credential.Lifecycle{Provider: p, Store: linearStore{l.keys}, NotFound: ErrNotFound, Records: linearGrantsService, Lock: l.lock("grant/"+a.TokenService, true), Audit: l.Audit}
 	d := credential.Delivery{Consumer: credential.Consumer{Host: a.TokenService}, Publish: func(m credential.Material) error {
 		value, _ := json.Marshal(linearAccess{AccessToken: m.Token, ExpiresAt: m.ExpiresAt})
 		defer erase(value)
