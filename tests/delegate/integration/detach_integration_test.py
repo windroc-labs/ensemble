@@ -130,7 +130,9 @@ class Detach(Case):
         )
 
     def said(self, res: subprocess.CompletedProcess, *, tui: bool) -> Record:
-        """The Record line; its sessions and drive live on return; the drive's log 0600."""
+        """The Record line; its sessions and drive (tui: unless its attempt ended) live on return;
+        the drive's log 0600.
+        """
         drive = self.drive_running()
         live = {TUI: self.live(TUI)} if tui else {}
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -146,7 +148,8 @@ class Detach(Case):
             (("ensemble-delegate",), ("ensemble-delegate", "resume", self.work)),
         )
         self.assertTrue(all(live.values()), live)
-        self.assertTrue(drive, self.metadata())
+        ended = tui and self.metadata().get("result") is not None
+        self.assertTrue(drive or ended, self.metadata())
         self.assertEqual(self.metadata()["detached"], True)
         if tui:
             self.assertFalse(self.live(DRIVE))

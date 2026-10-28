@@ -29,7 +29,7 @@ from ensemble.delegate import ConfigError, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
-from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
+from ensemble.delegate.engine.harness_delegate import COLOR_WAIT, DRAIN_WAIT, HarnessDelegate
 from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
 from ensemble.delegate.engine.runner import STOP_LIMIT, report
 from ensemble.delegate.engine.state import RunState
@@ -1265,6 +1265,66 @@ class AttendedBusyTest(HarnessCase):
                 self.started(error, lock)
             self.assertNotIsInstance(caught.exception, SessionBusy)
             self.assertRegex(str(caught.exception), r"^tui session \S+ did not start\b")
+
+
+class LaunchColorTest(HarnessCase):
+    def setUp(self):
+        super().setUp()
+        self.clock = Clock(self)
+
+    def launched(
+        self, agent: mock.Mock, *, drive: Callable[[], bool] = lambda: True
+    ) -> tuple[str, str]:
+        """The stderr of a tui launch whose agent `agent` is live at once (unless its alive is set)
+        and whose drive runs while `drive()`, and its agent name.
+        """
+        err = self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
+        delegate = self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID))
+        if agent.alive.side_effect is None:
+            agent.alive.return_value = True
+        with (
+            mock.patch.object(delegate, "_probed_agent", return_value=(agent, None)),
+            mock.patch.object(delegate, "_publish_record"),
+            mock.patch.object(delegate, "_running", side_effect=lambda _drive: drive()),
+        ):
+            delegate._started(delegate._state)
+        return err.getvalue(), delegate._state.agent_name
+
+    def opening(self, *pending: str | None) -> mock.Mock:
+        """A live agent whose opening_pending gives `pending`, then its last for good."""
+        agent = mock.Mock(spec=["alive", "status", "opening_pending"])
+        values = itertools.chain(pending, itertools.repeat(pending[-1]))
+        type(agent).opening_pending = mock.PropertyMock(side_effect=lambda: next(values))
+        return agent
+
+    def test_an_opening_unsent_at_the_color_wait_is_said(self):
+        said, name = self.launched(self.opening("/color"))
+        self.assertEqual(
+            said,
+            f"delegate: session {name}: color not set: not ready within {COLOR_WAIT} s; "
+            f"ensemble-session send {name} /color\n",
+        )
+
+    def test_an_opening_sent_in_time_or_none_is_not_said(self):
+        for agent in (
+            self.opening("/color", "/color", None),
+            mock.Mock(spec=["alive", "status"]),
+        ):
+            with self.subTest(agent=agent):
+                self.assertEqual(self.launched(agent)[0], "")
+
+    def test_its_drive_or_tui_gone_ends_the_wait_at_once_unsaid(self):
+        def soon() -> bool:
+            return self.clock.now < 2
+
+        for gone in ("drive", "tui"):
+            with self.subTest(gone=gone):
+                self.clock.now = 0.0
+                agent = self.opening("/color")
+                if gone == "tui":
+                    agent.alive.side_effect = soon
+                said, _name = self.launched(agent, drive=soon if gone == "drive" else lambda: True)
+                self.assertEqual((said, self.clock.now < 3), ("", True), self.clock.now)
 
 
 class LaunchTest(HarnessCase):

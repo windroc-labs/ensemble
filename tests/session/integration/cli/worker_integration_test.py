@@ -1,7 +1,7 @@
 """ensemble-session's worker lifecycle through bin/ensemble-session on a private tmux server: the
 client's exact cwd, argv and env from start (Q03), reply from another process (Q09), a client
 that exits at once (Q10, D3), a start whose early watch ends on a dialog (a Claude hook, the
-Codex trust screen), and a Claude start's /color: quiet once sent or behind its launch turn, said
+Codex trust screen), and a Claude start's /color: quiet once sent, into its launch turn too, said
 when a dialog holds it.
 """
 
@@ -185,8 +185,20 @@ class ColorTest(WorkerCase):
             [(c["pid"], c["line"], c["dialog"]) for c in colored], [(call["pid"], "/color", False)]
         )
 
+    def test_a_launch_turn_that_starts_first_still_colors_quietly(self):
+        # its launch turn ends only once input arrives: /color, typed into that turn
+        res = self.start("w1", steps=[{"kind": "input"}, "Colored."])
+        self.assertEqual((self.record(res).name, res.stderr), ("w1", ATTACH + "\n"))
+        (call,) = self.calls("w1")
+        colored = live_tmux.wait(lambda: self.commands("w1"), what="w1's /color")
+        self.assertEqual(
+            [(c["pid"], c["line"], c["dialog"]) for c in colored], [(call["pid"], "/color", False)]
+        )
+        self.wait_event("w1", "done")
+        self.assertEqual(self.ok(self.session("reply", "w1")).stdout, "Colored.\n")
+
     def test_exit_in_the_launch_turn_still_fails_start(self):
-        # exits in its launch prompt's turn, its /color still behind it: inside the early watch
+        # exits in its launch prompt's turn, inside the early watch
         res = self.start("w1", steps=[{"kind": "exit"}])
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
         lines = res.stderr.splitlines()

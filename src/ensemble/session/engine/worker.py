@@ -1,9 +1,8 @@
 """Worker, a plain tui session started by name (FR-20): WorkerState in
 ~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record in its worker dir
 (~/.ensemble/tui/<name>/record, for its current generation) once its early watch passes, whatever
-its Host can store. Its session harness owns it: it resumes through its running owner, which
-reopens its display if gone, else starts a new harness through the tui gate, closing nothing;
-restart closes it through that owner. Callers hold locked() around start, resume and restart.
+its Host can store. Its session harness owns it. Callers hold locked() around start, resume and
+restart.
 """
 
 from __future__ import annotations
@@ -35,7 +34,6 @@ from ensemble.session.engine.types import (
     Mode,
     SessionError,
     Spec,
-    TurnStarted,
 )
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
@@ -312,9 +310,8 @@ class Worker:
 
     def start(self, *, prompt: str, resume: bool, hidden: bool | None = None) -> Record:
         """hidden: True hides, False shows, None keeps its Host's. Watches until its client is up
-        (and its opening sent, up to COLOR_CAP s), then stores and returns its Record. A failed
-        save or start puts its files back; its client exiting first: SessionError with its last
-        lines, its terminal kept, no Record.
+        (and its opening sent, up to COLOR_CAP s), then stores and returns its Record; its client
+        exiting first: SessionError with its last lines, no Record.
         """
         name = self.state.name
         self._drop_stale()
@@ -367,8 +364,8 @@ class Worker:
 
     def _resume_owned(self, owner: Channel | None) -> Record:
         """Its running owner's: its Record, stored again, its display reopened by that owner if
-        gone (shown then as a resumed start's); else a new harness through the gate (it waits out a
-        reaping guard, refuses a live or unknown one).
+        gone; else a new harness through the gate (it waits out a reaping guard, refuses a live or
+        unknown one).
         """
         record = self.state.record()
         if owner is None:
@@ -411,7 +408,7 @@ class Worker:
 
     def _drop_stale(self) -> None:
         """Removes each workers/<sid>/ no by-name/ entry names, whose worker.json is over STALE_AGE
-        old and whose lock nobody holds; an error is said, never raised.
+        old and whose lock nobody holds.
         """
         root = os.path.dirname(self.state.workdir())
         pointers = os.path.join(root, BY_NAME)
@@ -511,13 +508,12 @@ class Worker:
             self.say(f"session {name}: not {'hidden' if hidden else 'shown'}: {error}")
 
     def _watch(self, session: Session) -> None:
-        began, turned = self.clock(), False  # turned: its opening follows that turn
+        began = self.clock()
         for event in session.events():
             if isinstance(event, Exited):
                 raise SessionError(self._died(session, event.returncode))
-            turned = turned or isinstance(event, TurnStarted)
             if isinstance(event, Blocked):
-                self._waits(session, event.reason, turned=turned)
+                self._waits(session, event.reason)
                 return
             elapsed = self.clock() - began
             if not _up(session, elapsed):
@@ -525,15 +521,14 @@ class Worker:
             if elapsed < COLOR_CAP and _pending(session) is not None:
                 continue
             if (dialog := _dialog(session)) is not None:
-                self._waits(session, dialog, turned=turned)
-            elif elapsed >= COLOR_CAP and not turned:
+                self._waits(session, dialog)
+            elif elapsed >= COLOR_CAP:
                 self._uncolored(session, f"not ready within {COLOR_CAP} s")
             return
 
-    def _waits(self, session: Session, dialog: str, *, turned: bool) -> None:
+    def _waits(self, session: Session, dialog: str) -> None:
         self.say(f"session {self.state.name}: waits on a dialog: {dialog}")
-        if not turned:
-            self._uncolored(session, "waits on a dialog")
+        self._uncolored(session, "waits on a dialog")
 
     def _uncolored(self, session: Session, reason: str) -> None:
         text = _pending(session)

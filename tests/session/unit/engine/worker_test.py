@@ -663,8 +663,11 @@ class ColorWatchTest(Base):
                 self.assertEqual(self.said, said)
                 self.assertEqual(self.stored(), state().record())
 
-    def test_a_started_turn_keeps_the_watch_as_long_and_never_says_unset(self):
-        for sent, ticks in ((8, 9), (float("inf"), worker.COLOR_CAP + 1)):
+    def test_a_started_turn_keeps_the_watch_as_long_and_says_unset_at_the_cap(self):
+        for sent, ticks, said in (
+            (8, 9, []),
+            (float("inf"), worker.COLOR_CAP + 1, [self.UNSET.format("not ready within 15 s")]),
+        ):
             with self.subTest(sent=sent):
                 self.said.clear()
                 with contextlib.suppress(FileNotFoundError):
@@ -673,7 +676,7 @@ class ColorWatchTest(Base):
                     [TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK))
                 )
                 self.assertEqual(self.watch(sent, events=events), ticks)
-                self.assertEqual(self.said, [])  # its opening follows that turn
+                self.assertEqual(self.said, said)
                 self.assertEqual(self.stored(), state().record())
 
     def test_a_dialog_just_after_a_turn_started_once_up_is_said(self):
@@ -682,7 +685,10 @@ class ColorWatchTest(Base):
             [idle] * (worker.EARLY + 1), [TurnStarted(), Blocked("Edit")], itertools.repeat(idle)
         )
         self.watch(float("inf"), events=events)
-        self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
+        self.assertEqual(
+            self.said,
+            ["session w1: waits on a dialog: Edit", self.UNSET.format("waits on a dialog")],
+        )
         self.assertEqual(self.stored(), state().record())
 
     def test_a_dialog_in_its_state_is_said_wherever_the_watch_ends(self):
@@ -700,7 +706,13 @@ class ColorWatchTest(Base):
                 worker.COLOR_CAP + 1,
                 [said, self.UNSET.format("waits on a dialog")],
             ),
-            ("at the cap, a turn started", float("inf"), True, worker.COLOR_CAP + 1, [said]),
+            (
+                "at the cap, a turn started",
+                float("inf"),
+                True,
+                worker.COLOR_CAP + 1,
+                [said, self.UNSET.format("waits on a dialog")],
+            ),
         ):
             with self.subTest(case=case):
                 self.said.clear()

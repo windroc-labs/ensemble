@@ -6,6 +6,7 @@ import contextlib
 import errno
 import json
 import os
+import shlex
 import signal
 import stat
 import subprocess
@@ -99,6 +100,12 @@ class _Publishes(Protocol):
     def publish(self, record: Record) -> None: ...
 
 
+@runtime_checkable
+class _Opens(Protocol):
+    @property
+    def opening_pending(self) -> str | None: ...
+
+
 class _Ended(Enum):
     """_drive_end's compare-and-set."""
 
@@ -135,6 +142,7 @@ DOCKER_START_TIMEOUT = 120  # seconds, container start included
 TUI_POLL = 0.1  # seconds
 DRAIN_WAIT = 35  # s a gone worker waits before its drive ends the attempt; past the harness's drain
 GONE_EVERY = 1.0  # seconds between the drive's worker checks
+COLOR_WAIT = 15  # seconds
 WIND_DOWN_WAIT = 30.0  # seconds
 DRIVE_STOP_WAIT = 5.0  # seconds after SIGTERM, then SIGKILL
 ENDING = "previous worker generation (live or unknown)"
@@ -1227,7 +1235,8 @@ class HarnessDelegate(Delegate):
         if state.plan.spec.mode != Mode.TUI:
             return
         limit = DOCKER_START_TIMEOUT if self.driver.docker else TUI_START_TIMEOUT
-        deadline = time.monotonic() + limit
+        began = time.monotonic()
+        deadline = began + limit
         agent = unanswered = None
         ended = False
         try:
@@ -1236,6 +1245,7 @@ class HarnessDelegate(Delegate):
                 try:
                     if agent is not None and agent.alive() and agent.status().alive:
                         self._publish_record(state)
+                        self._colored(agent, state, began)
                         return
                 except Unanswered as error:
                     unanswered = error
@@ -1267,6 +1277,21 @@ class HarnessDelegate(Delegate):
         if busy := self._busy(state):
             raise SessionError(str(busy))
         raise SessionError(message)
+
+    def _colored(self, agent: Session, state: DelegateState, began: float) -> None:
+        name = state.agent_name
+        try:
+            while isinstance(agent, _Opens) and (text := agent.opening_pending) is not None:
+                if not (self._running(state.drive) and agent.alive()):
+                    return
+                if time.monotonic() - began >= COLOR_WAIT:
+                    send = shlex.join(("ensemble-session", "send", name, text))
+                    why = f"not ready within {COLOR_WAIT} s"
+                    say(f"delegate: session {name}: color not set: {why}; {send}")
+                    return
+                time.sleep(TUI_POLL)
+        except SessionError:
+            return
 
     def _publish_record(self, state: DelegateState) -> None:
         """Its Record in its agent session's worker dir, through that view."""
