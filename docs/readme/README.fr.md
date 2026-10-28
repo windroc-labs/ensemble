@@ -8,7 +8,7 @@ ou laissez un tableau répartir le travail entre les rôles. Claude Code, Codex 
 <a id="what"></a>
 ## Ce que vous pouvez exécuter
 
-![Trois points d’entrée : un agent exécutant seul, un rôle avec une tâche ou un flux de travail sur tableau](../images/levels.svg)
+![Cinq disciplines : Drive, Equip, Systematize, Orchestrate et Master](../images/levels.svg)
 
 Choisissez le périmètre dont vous avez besoin. Un agent exécutant correspond à une conversation avec un client ; un rôle y ajoute une charte, une tâche et un résultat ;
 un tableau planifie les exécutions des rôles et reporte leurs résultats dans les tickets. Le tableau peut être Linear ou du Markdown local.
@@ -16,7 +16,7 @@ un tableau planifie les exécutions des rôles et reporte leurs résultats dans 
 <a id="why"></a>
 ## Pourquoi une équipe
 
-![Coordination directe d’agents exécutants séparés, comparée à un commandant pilotant une équipe](../images/compare.svg)
+![Un agent, plusieurs agents coordonnés manuellement et des équipes ensemble coordonnées par des commandants](../images/compare.svg)
 
 Des exécutions d’agents indépendantes demandent à quelqu’un de répartir le travail et de suivre leurs réponses. Un commandant utilise Crew pour lancer,
 inspecter et reprendre ces exécutions depuis une seule conversation. Vous décidez toujours du travail à autoriser et à vérifier.

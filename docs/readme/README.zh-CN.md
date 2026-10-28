@@ -8,7 +8,7 @@ Ensemble 让你与编程智能体以团队方式协作。你可以与指挥官�
 <a id="what"></a>
 ## 可以运行什么
 
-![三个入口：单独的工作者、角色与任务，或看板工作流](../images/levels.svg)
+![五个实践层次：Drive、Equip、Systematize、Orchestrate 和 Master](../images/levels.svg)
 
 选择所需的范围。工作者是一段客户端对话；角色在此基础上增加职责约定、任务和结果；
 看板安排角色运行，并将结果写回 issue。看板可以使用 Linear 或本地 Markdown。
@@ -16,7 +16,7 @@ Ensemble 让你与编程智能体以团队方式协作。你可以与指挥官�
 <a id="why"></a>
 ## 为什么使用团队
 
-![直接协调多个独立工作者，与由一名指挥官控制团队的方式对比](../images/compare.svg)
+![单个代理、手动协调多个代理，以及由指挥官协调的 ensemble 团队](../images/compare.svg)
 
 分别运行智能体时，需要有人分派工作并跟进回复。指挥官通过 Crew，在一段对话中启动、
 检查和恢复这些运行。哪些工作可以授权、哪些需要审查，仍由你决定。

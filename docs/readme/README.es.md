@@ -8,7 +8,7 @@ o deja que un tablero distribuya el trabajo entre roles. Claude Code, Codex y Op
 <a id="what"></a>
 ## Qué puedes ejecutar
 
-![Tres puntos de entrada: un trabajador sin rol, un rol con una tarea o un flujo de trabajo con tablero](../images/levels.svg)
+![Cinco disciplinas: Drive, Equip, Systematize, Orchestrate y Master](../images/levels.svg)
 
 Elige el alcance que necesitas. Un trabajador es una conversación con un cliente; un rol añade un mandato, una tarea y un resultado;
 un tablero programa ejecuciones de roles y registra sus resultados en las incidencias. El tablero puede ser Linear o Markdown local.
@@ -16,7 +16,7 @@ un tablero programa ejecuciones de roles y registra sus resultados en las incide
 <a id="why"></a>
 ## Por qué trabajar en equipo
 
-![Coordinación directa de trabajadores separados frente a un comandante que controla un equipo](../images/compare.svg)
+![Un agente, varios agentes coordinados a mano y equipos de ensemble coordinados por comandantes](../images/compare.svg)
 
 Las ejecuciones independientes de agentes necesitan a alguien que distribuya el trabajo y siga sus respuestas. Un comandante usa Crew para iniciar,
 inspeccionar y reanudar esas ejecuciones desde una sola conversación. Tú sigues decidiendo qué trabajo autorizar y revisar.

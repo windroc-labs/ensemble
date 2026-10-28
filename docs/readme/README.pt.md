@@ -8,7 +8,7 @@ ou deixe um quadro distribuir o trabalho entre os papéis. Claude Code, Codex e 
 <a id="what"></a>
 ## O que você pode executar
 
-![Três pontos de entrada: um trabalhador sem papel, um papel com uma tarefa ou um fluxo de trabalho com quadro](../images/levels.svg)
+![Cinco disciplinas: Drive, Equip, Systematize, Orchestrate e Master](../images/levels.svg)
 
 Escolha o escopo de que precisa. Um trabalhador é uma conversa com um cliente; um papel acrescenta uma definição de responsabilidades, uma tarefa e um resultado;
 um quadro agenda execuções de papéis e registra seus resultados nas issues. O quadro pode ser Linear ou Markdown local.
@@ -16,7 +16,7 @@ um quadro agenda execuções de papéis e registra seus resultados nas issues. O
 <a id="why"></a>
 ## Por que uma equipe
 
-![Coordenação direta de trabalhadores separados em comparação com um comandante que controla uma equipe](../images/compare.svg)
+![Um agente, vários agentes coordenados manualmente e equipes ensemble coordenadas por comandantes](../images/compare.svg)
 
 Execuções separadas de agentes precisam de alguém para distribuir o trabalho e acompanhar as respostas. Um comandante usa Crew para iniciar,
 inspecionar e retomar essas execuções a partir de uma única conversa. Você continua decidindo qual trabalho autorizar e revisar.

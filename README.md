@@ -8,7 +8,7 @@ or let a board route work across roles. Claude Code, Codex and OpenCode share th
 <a id="what"></a>
 ## What you can run
 
-![Three entry points: a plain worker, a role and task, or a board workflow](docs/images/levels.svg)
+![Five disciplines: Drive, Equip, Systematize, Orchestrate and Master](docs/images/levels.svg)
 
 Choose the scope you need. A worker is a client conversation; a role adds a charter, task and outcome;
 a board schedules role runs and writes their results back to issues. The board can be Linear or local Markdown.
@@ -16,7 +16,7 @@ a board schedules role runs and writes their results back to issues. The board c
 <a id="why"></a>
 ## Why a crew
 
-![Direct coordination of separate workers compared with one commander controlling a crew](docs/images/compare.svg)
+![One agent, many agents coordinated by hand, and managers coordinating ensemble crews](docs/images/compare.svg)
 
 Separate agent runs need someone to route work and follow their replies. A commander uses Crew to launch,
 inspect and resume those runs from one conversation. You still decide what work to authorize and review.
