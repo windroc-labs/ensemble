@@ -18,7 +18,7 @@ class ExtensionDelegate(FakeDelegate):
     ROLES = {
         "researcher": {"deep-research": "research"},
         "pm": {"product-design": "design"},
-        "engineer": {"build": "build"},
+        "engineer": {"build": "build", "decompose": "decompose"},
     }
 
     @classmethod
