@@ -32,6 +32,7 @@ from ensemble.delegate import DelegateEvent
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import SIGNALS
 from ensemble.utils import ProcessControl, Record, Status
+from tests.delegate import drives
 from tests.delegate.case import PY, PYTHONPATH, Case
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
@@ -74,7 +75,7 @@ class Detach(Case):
         self.events, self.scenario = (
             os.path.join(self.dir, f) for f in ("events", "scenario.json")
         )
-        self.addCleanup(self.stop_drive)
+        self.addCleanup(drives.end, self.dir)
 
     def tmux(self) -> live_tmux.Server:
         """The private tmux server a tui run needs, started on first use."""
@@ -209,14 +210,7 @@ class Detach(Case):
         """SIGKILL to the drive's process group; returns once its control saw the group end."""
         _, group = self.drive_group()
         os.killpg(group, signal.SIGKILL)
-        self.until(lambda: not self.drive_running(), f"{DRIVE} ended")
-
-    def stop_drive(self) -> None:
-        """A drive a test left running, killed before the temp dirs go."""
-        control = self.control()
-        if control is not None and control.running():
-            control.kill()
-            live_tmux.wait(lambda: not control.live(), WAIT, what="the left drive gone")
+        drives.stop(self.control())
 
     def poke(self) -> None:
         # tmux on Linux (CI: 3.4) can leave an exited pane's process unreaped until another child of

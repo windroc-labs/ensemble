@@ -18,6 +18,7 @@ from unittest import mock
 from ensemble.manager import Entry, Roster, State
 from ensemble.manager.engine.crew import RECOVERY_AGE
 from ensemble.utils import ProcessControl, Record
+from tests.delegate import drives
 from tests.manager.case import PY, REPO, SRC, Case
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
@@ -71,6 +72,7 @@ class LiveCrew(Case):
         tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         self.addCleanup(tmp.cleanup)
         self.root = os.path.realpath(tmp.name)
+        self.addCleanup(drives.end, self.root)
         self.home = os.path.join(self.root, "home")
         self.ensemble = os.path.join(self.home, ".ensemble")
         self.cwd = os.path.join(self.root, "work")
@@ -258,7 +260,7 @@ class LiveCrew(Case):
         self.assertEqual(len(groups), 1, ps.stdout)
         self.assertNotEqual(groups[0], os.getpgrp())
         os.killpg(groups[0], signal.SIGKILL)
-        self.until(lambda: not self.drive_running(record), f"{record.name}'s drive ended")
+        drives.stop(self.drive(record))
 
     def killed(self, name: str, record: Record) -> None:
         """SIGKILLs tui run `name`'s drive group, harness and client after its first turn; attach:
