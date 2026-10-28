@@ -43,6 +43,7 @@ from tests.delegate.fakes.harness_session import (
 )
 from tests.delegate.fakes.session import SessionClass
 from tests.delegate.harness import SID, HarnessCase
+from tests.delegate.integration.cli import TEAMS, owned_team
 from tests.delegate.replies import block, mark
 from tests.delegate.unit.runs import DONE
 
@@ -368,7 +369,9 @@ class Views(HarnessCase):
         self.assertEqual(self.metadata()["attempt"], 3)
 
     def test_resume_uses_attach_config_snapshot(self):
-        team = self.team_dir()
+        team = os.path.realpath(
+            owned_team(self, {}, root=os.environ.get("ENSEMBLE_TEST_TMP", TEAMS))
+        )
         self.settings(team_dirs=(team,))
         self.make(spec=Spec("input", self.work, task="echo", client="fake", sid=SID))
         self.settings(language="French", team_dirs=(team,))

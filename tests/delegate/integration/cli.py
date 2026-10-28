@@ -16,14 +16,15 @@ import tempfile
 import time
 
 from ensemble.utils import SID_ENV, Record, Status
-from tests.delegate.case import PY, REPO, Case, child_env
+from tests.delegate.case import PY, REPO, Case, RunReads, child_env
+from tests.delegate.plans import TEAM_FILES, write_team
 from tests.delegate.workdir import input_first
 from tests.session import harnesses, live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.utils.case import local_section
-from tests.utils.sandbox import reap
+from tests.utils.sandbox import owned_directory, reap
 
 RUN = (*PY, "-m", "ensemble.delegate.cli", "run")
 SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
@@ -38,20 +39,23 @@ ASKING = {
 }
 UNSAVED = {k: v for k, v in DONE.items() if k != "deliverable"}
 UNSAVED_ERROR = "done with a local destination must carry the deliverable"
+TEAMS = os.path.join(REPO, "work")  # the repo's gitignored work/
 
 
-class Runs(Case):
+def owned_team(case, files=TEAM_FILES, *, root=TEAMS, prefix="team-") -> str:
+    """A team dir of `files` under `root`, removed after `case`'s test."""
+    team = owned_directory(case, root, prefix=prefix)
+    os.chmod(team, 0o755)
+    write_team(team, files)
+    return team
+
+
+class Runs(RunReads, Case):
     """A CLI run's records in `work` and the fake client's calls in `log`."""
 
     def records(self) -> list[dict]:
         with open(os.path.join(self.work, "run", "run.jsonl")) as f:
             return input_first(list(map(json.loads, f)))
-
-    def kinds(self) -> list[str]:
-        return [e["kind"] for e in self.records()]
-
-    def last(self, kind: str) -> dict:
-        return [e for e in self.records() if e["kind"] == kind][-1]
 
     def calls(self) -> list[dict]:
         if not os.path.exists(self.log):

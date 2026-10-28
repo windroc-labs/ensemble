@@ -8,7 +8,7 @@ import shlex
 from dataclasses import fields, replace
 from unittest import mock
 
-from ensemble.delegate.composer import ConfigError, RunConfig, RunParams
+from ensemble.delegate.composer import ConfigError, RunParams
 from ensemble.delegate.composer.base import TEAM
 from ensemble.delegate.composer.run import (
     RUN_KEYS,
@@ -34,40 +34,14 @@ from tests.delegate.unit.composer.shipped import (
     role_tasks,
     roles,
 )
-from tests.delegate.unit.composer.teams import EDITOR, FILES, POET, RUN_CONFIG, VERSE
-from tests.utils.case import local_section
+from tests.delegate.unit.composer.teams import EDITOR, POET, RUN_CONFIG, VERSE, FakeTeam, run_config
 from tests.utils.sandbox import scratch
 
 TIER = "tier must be an integer 1–4"
 CLIENT = "client must be a non-empty one-line name, got "
 
 
-class Fake(Case):
-    """A team root, config and local file in a temp dir; a HOME of the test's own."""
-
-    def setUp(self):
-        self.tmp = scratch(self, real=False)
-        self.root = os.path.join(self.tmp, "team")
-        self.config = os.path.join(self.tmp, "config.toml")
-        self.local_file = os.path.join(self.tmp, "config.local.toml")
-        self.write(FILES)
-        self.configure(RUN_CONFIG)
-
-    def write(self, files, top=None):
-        for rel, text in files.items():
-            path = os.path.join(top or self.root, rel)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                f.write(text)
-
-    def configure(self, text):
-        with open(self.config, "w") as f:
-            f.write(text)
-
-    def local(self, text):
-        with open(self.local_file, "w") as f:
-            f.write(local_section(text, "delegate"))
-
+class Fake(FakeTeam):
     def team_dir(self, files):
         """The Team of the team root and one team dir of `files`, <tmp>/mine, and that dir."""
         top = os.path.join(self.tmp, "mine")
@@ -190,18 +164,7 @@ class Access(Fake):
         self.tasks = os.path.join(self.root, "tasks")
 
     def intent(self, cwd=None, *, project=False, repo_dir=None, found=None, **kw):
-        run = RunConfig(
-            **{
-                "role": "writer",
-                "tier": 2,
-                "effort": "high",
-                "client": "a",
-                "output": {"type": "local"},
-                "idle_timeout": 60,
-                "show": "",
-                **kw,
-            }
-        )
+        run = run_config(**kw)
         return access(
             run,
             self.work,

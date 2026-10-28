@@ -19,7 +19,7 @@ from ensemble.delegate.engine.types import Layout
 from ensemble.session import SIGNALS
 from ensemble.utils import ProcessControl, Record, Status
 from tests.delegate import drives
-from tests.delegate.case import PY, PYTHONPATH, Case
+from tests.delegate.case import PY, PYTHONPATH, Case, RunReads
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
 from tests.delegate.replies import block, mark
@@ -45,7 +45,7 @@ SECRET = "sk-fake-441"
 RESUME = (*RUN[:-1], "resume")
 
 
-class Detach(Case):
+class Detach(RunReads, Case):
     def setUp(self):
         self.dir = scratch(self)
         self.server = None
@@ -253,12 +253,6 @@ class Detach(Case):
                 return [json.loads(line) for line in stream if line.endswith("\n")]
         except FileNotFoundError:
             return []
-
-    def kinds(self) -> list[str]:
-        return [e["kind"] for e in self.records()]
-
-    def last(self, kind: str) -> dict:
-        return [e for e in self.records() if e["kind"] == kind][-1]
 
     def read(self, path: str) -> str:
         with open(path) as f:

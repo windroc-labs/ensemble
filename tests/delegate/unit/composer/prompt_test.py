@@ -59,10 +59,10 @@ from tests.delegate.unit.composer.teams import (
     STEPS,
     VERSE,
     WRITER,
+    FakeTeam,
 )
 from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
-from tests.utils.sandbox import scratch
 
 TEXTS = {
     "guide.md": (
@@ -78,32 +78,8 @@ PARAMS = RunParams(input="Research X.", out="/w/out.md", workdir="/w")
 METHOD_NAMES = ("deep-research", "ultracode")
 
 
-class Fake(Case):
-    """A team root, config and local file in a temp dir; a HOME of the test's own for team dirs."""
-
-    def setUp(self):
-        self.tmp = scratch(self, real=False)
-        self.root = os.path.join(self.tmp, "team")
-        self.config = os.path.join(self.tmp, "config.toml")
-        self.local_file = os.path.join(self.tmp, "config.local.toml")
-        self.write(FILES | TEXTS)
-        with open(self.config, "w") as f:
-            f.write(RUN_CONFIG)
-
-    def write(self, files, top=None):
-        for rel, text in files.items():
-            path = os.path.join(top or self.root, rel)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                f.write(text)
-
-    def configure(self, text):
-        with open(self.config, "w") as f:
-            f.write(text)
-
-    def local(self, text):
-        with open(self.local_file, "w") as f:
-            f.write(local_section(text, "delegate"))
+class Fake(FakeTeam):
+    files = FILES | TEXTS
 
     def run_of(self, role="writer", task=None, overlays=(), found=None):
         return self.composition(found).resolve(role, task, overlays=overlays)

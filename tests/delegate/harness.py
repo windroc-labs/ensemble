@@ -7,7 +7,7 @@ from ensemble.delegate import Spec
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import Exited, Reply
-from tests.delegate.case import REPO, Case
+from tests.delegate.case import Case
 from tests.delegate.fakes.harness_session import (
     DrivenDelegate,
     FakeControl,
@@ -20,7 +20,6 @@ from tests.delegate.unit.runs import DONE
 from tests.delegate.verifier import VERIFIER
 from tests.session.case import SID
 from tests.utils.case import local_section
-from tests.utils.sandbox import owned_directory
 
 
 class ViewedHarnessDelegate(DrivenDelegate):
@@ -69,15 +68,6 @@ class HarnessCase(Case):
                     f"[session.hosts.{host}]\n"
                     'implementation = "tests.delegate.fakes.harness_session:RecordingHost"\n'
                 )
-
-    def team_dir(self):
-        team = owned_directory(
-            self,
-            os.environ.get("ENSEMBLE_TEST_TMP", os.path.join(REPO, "work")),
-            prefix="harness-team-",
-        )
-        os.chmod(team, 0o755)
-        return os.path.realpath(team)
 
     def make(self, *, role="dummy-tester", spec=None, session_cls=HarnessSession, **kw):
         kw.setdefault("viewer", FakeViewer())

@@ -23,6 +23,7 @@ from ensemble.session import NotShowable, SessionBusy, SessionError
 from ensemble.utils import Record, Status
 from tests.delegate.case import SID, Case, committed
 from tests.delegate.cli_case import (
+    COMMANDS,
     HARNESS,
     HEADS,
     KEYS,
@@ -1266,22 +1267,7 @@ class Commands(Base):
     def test_help_lists_all_subcommands(self):
         code, out, err = self.cli("--help")
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(
-            re.search(r"\{([a-z,-]+)\}", out)[1].split(","),
-            [
-                "run",
-                "open",
-                "status",
-                "content",
-                "outcome",
-                "resume",
-                "show",
-                "hide",
-                "close",
-                "attach-command",
-                "prompt",
-            ],
-        )
+        self.assertEqual(re.search(r"\{([a-z,-]+)\}", out)[1].split(","), COMMANDS)
 
     def test_an_unknown_missing_or_flat_command_exits_2(self):
         for argv, want in (
@@ -1597,21 +1583,6 @@ class AdhocWorkdir(Base):
                 self.assertFalse(os.path.exists(expected))
 
 
-HELP_COMMANDS = [
-    "run",
-    "open",
-    "status",
-    "content",
-    "outcome",
-    "resume",
-    "show",
-    "hide",
-    "close",
-    "attach-command",
-    "prompt",
-]
-
-
 class HelpContracts(Case):
     def test_published_operation_examples_use_real_parser_before_dispatch(self):
         def check(command):
@@ -1619,7 +1590,7 @@ class HelpContracts(Case):
             if args is not None and args.command == "run" and not args.list:
                 cli._check(args)
 
-        check_examples(self, self.help, [None, *HELP_COMMANDS], check=check)
+        check_examples(self, self.help, [None, *COMMANDS], check=check)
 
     def help(self, command=None, flag="--help"):
         return help_text(self, cli.main, ([] if command is None else [command]) + [flag])
@@ -1634,7 +1605,7 @@ class HelpContracts(Case):
             mock.patch("subprocess.Popen") as popen,
             mock.patch("subprocess.run") as run,
         ):
-            for command in [None, *HELP_COMMANDS]:
+            for command in [None, *COMMANDS]:
                 for flag in ("--help", "-h"):
                     with self.subTest(command=command, flag=flag):
                         text = self.help(command, flag)
@@ -1668,7 +1639,7 @@ class HelpContracts(Case):
         self.assertIn("--input, --out and --workdir", self.help("prompt"))
 
     def test_every_query_explains_cardinality_and_record_input(self):
-        for name in HELP_COMMANDS:
+        for name in COMMANDS:
             if name in {"run", "open", "prompt"}:
                 continue
             with self.subTest(name=name):

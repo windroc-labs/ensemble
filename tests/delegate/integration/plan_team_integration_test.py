@@ -6,11 +6,8 @@ from unittest import mock
 
 from ensemble.delegate.composer import teams
 from ensemble.delegate.composer.base import TEAM
-from tests.delegate.case import REPO
-from tests.delegate.plans import TASKS, TASKS_PARAM, Base, write_team
-from tests.utils.sandbox import owned_directory
-
-TEAMS = os.path.join(REPO, "work")
+from tests.delegate.integration.cli import owned_team
+from tests.delegate.plans import TASKS, TASKS_PARAM, Base
 
 
 class CustomTeam(Base):
@@ -18,9 +15,7 @@ class CustomTeam(Base):
 
     def setUp(self):
         super().setUp()
-        self.team = owned_directory(self, TEAMS, prefix="team-")
-        os.chmod(self.team, 0o755)
-        write_team(self.team)
+        self.team = owned_team(self)
         self.tasks = os.path.join(self.team, "tasks")
         self.found = teams.team(TEAM, [self.team])
 

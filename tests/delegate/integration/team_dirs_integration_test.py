@@ -18,15 +18,13 @@ from tests.delegate.integration.cli import (
     CodexIntegration,
     Integration,
     codex_said,
+    owned_team,
 )
 from tests.delegate.integration.composer import child
 from tests.delegate.replies import block, mark
 from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
-from tests.utils.sandbox import owned_directory
 
-# the repo's gitignored work/
-TEAMS = os.path.join(REPO, "work")
 CORE_TASKS = os.path.join(REPO, "src", "ensemble", "delegate", "team", "tasks")
 MARK = "[ensemble-progress:start] the topic"
 NOTE = (
@@ -42,20 +40,6 @@ TEAM = {"roles/writer.md": WRITER, "tasks/note.md": NOTE}
 TASKS_PARAM = re.compile(r"\n- `<tasks>`: `([^`]+)`\n")
 
 
-def make_team(case: unittest.TestCase) -> str:
-    """A team dir of TEAM's files under TEAMS, removed after `case`'s test."""
-    team = owned_directory(case, TEAMS, prefix="team-")
-    os.chmod(team, 0o755)
-    for rel, text in TEAM.items():
-        path = os.path.join(team, rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        os.chmod(os.path.dirname(path), 0o755)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.chmod(path, 0o644)
-    return team
-
-
 class ComposerTeamDirs(child.Case):
     """The Composer in a child process over role `writer` of a team dir of TEAM as the local
     `team_dirs`.
@@ -63,7 +47,7 @@ class ComposerTeamDirs(child.Case):
 
     def setUp(self):
         super().setUp()
-        self.team = make_team(self)
+        self.team = owned_team(self, TEAM)
         self.tasks = os.path.join(self.team, "tasks")
         self.local(
             f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
@@ -144,7 +128,7 @@ class TeamDirs(Integration):
 
     def setUp(self):
         super().setUp()
-        self.team = make_team(self)
+        self.team = owned_team(self, TEAM)
         self.tasks = os.path.join(self.team, "tasks")
         with open(os.path.join(self.env["HOME"], ".ensemble", "config.local.toml"), "w") as f:
             f.write(
@@ -195,7 +179,7 @@ class CodexTeamDirs(CodexIntegration):
 
     def setUp(self):
         super().setUp()
-        self.team = make_team(self)
+        self.team = owned_team(self, TEAM)
         self.tasks = os.path.join(self.team, "tasks")
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
         with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:

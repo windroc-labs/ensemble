@@ -5,23 +5,11 @@ import re
 import shutil
 
 from tests.delegate.case import REPO, Case
+from tests.delegate.cli_case import COMMANDS
 from tests.utils.bin_fixtures import MINIMAL, minimal, probe_copy, run
 from tests.utils.sandbox import scratch
 
 BIN = os.path.join(REPO, "bin", "ensemble-delegate")
-COMMANDS = [
-    "run",
-    "open",
-    "status",
-    "content",
-    "outcome",
-    "resume",
-    "show",
-    "hide",
-    "close",
-    "attach-command",
-    "prompt",
-]
 
 
 class Command(Case):
