@@ -84,7 +84,7 @@ func TestLinearContainerLifecycle(t *testing.T) {
 		t.Fatal("scope changed")
 	}
 	var stored linearContainerRecord
-	if l.read("container/container", &stored) != nil || stored.Current.AccessToken != "CONTAINER-TOKEN-1" {
+	if l.read("container/container", &stored) != nil || len(stored.Tokens) != 1 || stored.Tokens[0].AccessToken != "CONTAINER-TOKEN-1" {
 		t.Fatal("container record missing from Keychain")
 	}
 	var token linearAccess
@@ -354,14 +354,53 @@ func TestLinearCloseWaitsForIssuance(t *testing.T) {
 type failedContainerSave struct {
 	linearKeys
 	remaining int
+	skip      int
 }
 
 func (k *failedContainerSave) UpdateSecret(service, account string, data []byte) error {
+	if strings.HasPrefix(account, "container/") && k.skip > 0 {
+		k.skip--
+		return k.linearKeys.UpdateSecret(service, account, data)
+	}
 	if strings.HasPrefix(account, "container/") && k.remaining > 0 {
 		k.remaining--
 		return errors.New("temporary storage failure")
 	}
 	return k.linearKeys.UpdateSecret(service, account, data)
+}
+
+func TestLinearFailedRefreshPreservesPreviouslyDeliveredToken(t *testing.T) {
+	l, k, _, calls := linearRig(t)
+	a := linearApp("engineer")
+	enrollLinear(t, l, k, a)
+	request := credential.LinearRequest{App: containerApp(a)}
+	commands, _, _, err := l.Issue(context.Background(), request, "delivered")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range commands {
+		command.Erase()
+	}
+	l.keys = &failedContainerSave{linearKeys: l.keys, skip: 1, remaining: 1}
+	var installed linearAccess
+	if _, err := l.Refresh(context.Background(), request, "delivered", func(_ []string, data []byte) error {
+		return json.Unmarshal(data, &installed)
+	}); err == nil || installed.AccessToken == "" {
+		t.Fatal("expected successful delivery followed by failed record update")
+	}
+	if _, err := l.Refresh(context.Background(), request, "delivered", func([]string, []byte) error {
+		return errors.New("delivery failed before replacement")
+	}); err == nil {
+		t.Fatal("delivery failure hidden")
+	}
+	for _, call := range *calls {
+		if call.Get("token") == installed.AccessToken {
+			t.Fatal("failed refresh revoked the token still installed")
+		}
+	}
+	if err := l.Revoke(context.Background(), "delivered"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLinearFailedSaveRetainsUnrevokedToken(t *testing.T) {
@@ -447,7 +486,7 @@ func TestLinearRefreshRevocationRetry(t *testing.T) {
 		t.Fatal("expected delivered replacement with failed old-token revocation")
 	}
 	var record linearContainerRecord
-	if l.read("container/refresh-retry", &record) != nil || len(record.Tokens) != 2 || record.Current.AccessToken != "TOKEN-2" {
+	if l.read("container/refresh-retry", &record) != nil || len(record.Tokens) != 2 || record.Tokens[1].AccessToken != "TOKEN-2" {
 		t.Fatal("lost current or unrevoked token")
 	}
 	l.http.Transport = transport

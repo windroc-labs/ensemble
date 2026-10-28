@@ -18,11 +18,10 @@ import (
 )
 
 // linearContainerRecord keeps revocation possible after the guard and tmpfs stop.
-// Closed blocks queued maintenance; Tokens retains failed revocations beside Current.
+// Closed blocks queued maintenance; Tokens retains every unrevoked issuance.
 type linearContainerRecord struct {
-	Closed  bool           `json:"closed"`
-	Current linearAccess   `json:"current"`
-	Tokens  []linearAccess `json:"tokens"`
+	Closed bool           `json:"closed"`
+	Tokens []linearAccess `json:"tokens"`
 }
 
 func roleIdentity(a credential.LinearApp) LinearIdentity {
@@ -102,12 +101,12 @@ func (l Linear) revokeContainerToken(ctx context.Context, c string, token linear
 	return result == audit.Revoked
 }
 
-// retireContainer keeps every failed revocation and the active token, if any.
-func (l Linear) retireContainer(ctx context.Context, c string, record *linearContainerRecord, keep string) error {
+// retireContainer keeps the supplied tokens and every failed revocation.
+func (l Linear) retireContainer(ctx context.Context, c string, record *linearContainerRecord, keep []linearAccess) error {
 	pending := make([]linearAccess, 0, len(record.Tokens))
 	failed := false
 	for _, token := range record.Tokens {
-		if token.AccessToken == keep {
+		if slices.ContainsFunc(keep, func(k linearAccess) bool { return k.AccessToken == token.AccessToken }) {
 			pending = append(pending, token)
 		} else if !l.revokeContainerToken(ctx, c, token) {
 			pending = append(pending, token)
@@ -142,10 +141,10 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 		return nil, nil, "", errLinear
 	}
 	l.noteContainer(c, audit.Issued, "", token)
-	record := linearContainerRecord{Current: token, Tokens: []linearAccess{token}}
+	record := linearContainerRecord{Tokens: []linearAccess{token}}
 	if l.save("container/"+c, record) != nil {
 		record.Closed = true
-		_ = l.retireContainer(ctx, c, &record, "")
+		_ = l.retireContainer(ctx, c, &record, nil)
 		return nil, nil, "", errLinear
 	}
 	command := linearCommand(token, false)
@@ -170,22 +169,19 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 		return "", errLinear
 	}
 	l.noteContainer(c, audit.Renewed, "", token)
+	previous := record.Tokens
 	record.Tokens = append(record.Tokens, token)
 	if l.save("container/"+c, record) != nil {
-		_ = l.retireContainer(ctx, c, &record, record.Current.AccessToken)
+		_ = l.retireContainer(ctx, c, &record, previous)
 		return "", errLinear
 	}
 	command := linearCommand(token, true)
 	defer command.Erase()
 	if err := exec(command.Argv, command.Stdin); err != nil {
-		_ = l.retireContainer(ctx, c, &record, record.Current.AccessToken)
+		_ = l.retireContainer(ctx, c, &record, previous)
 		return "", errLinear
 	}
-	record.Current = token
-	if l.save("container/"+c, record) != nil {
-		return "", errLinear
-	}
-	if l.retireContainer(ctx, c, &record, token.AccessToken) != nil {
+	if l.retireContainer(ctx, c, &record, []linearAccess{token}) != nil {
 		return "", errLinear
 	}
 	return token.ExpiresAt, nil
@@ -213,5 +209,5 @@ func (l Linear) Revoke(ctx context.Context, c string) error {
 	if l.save("container/"+c, record) != nil {
 		return errLinear
 	}
-	return l.retireContainer(ctx, c, &record, "")
+	return l.retireContainer(ctx, c, &record, nil)
 }
