@@ -111,6 +111,23 @@ class RepositoryCleanup(PruneScenario):
         self.assertEqual(clean.call_args.kwargs, {"dry": False})
         self.assertTrue(os.path.isfile(os.path.join(wt, ".git")))
 
+    def test_a_workspace_refusal_is_an_error_and_retried_next_tick(self):
+        path = self.mkc("TASK-49")
+        gql = gql_for({"TASK-49": ("Canceled", [(1 / 60, "Canceled")])})
+        refusal = SessionError("docker workspace ensemble-ws-a kept: in use")
+        with mock.patch.object(PruneDelegate, "clean", side_effect=refusal):
+            code, out = self.prune(gql)
+        self.assertEqual(code, 3)
+        self.assertIn(
+            "prune-error TASK-49 error=clean: SessionError: docker workspace ensemble-ws-a kept:"
+            " in use",
+            out.splitlines(),
+        )
+        self.assertTrue(os.path.isdir(path))
+        code, out = self.prune(gql)
+        self.assertIn("prune-removed TASK-49 what=agent dir", out.splitlines())
+        self.assertIsNone(self.checkouts("TASK-49"))
+
     def test_a_session_error_in_clean_is_an_error(self):
         self.fake_clone()
         wt = self.mkg("TASK-49")
@@ -190,6 +207,49 @@ class RepositoryCleanup(PruneScenario):
         self.assertEqual(self.prune(gql), (0, ""))
         self.assertTrue(os.path.isdir(path) and os.path.isdir(busy))
         self.assertEqual(self.api.order, [])
+
+    def test_a_canceled_issue_is_cleaned_and_archived_on_the_next_tick(self):
+        for ident in ("TASK-48", "TASK-49"):
+            self.mkc(ident)
+        gql = gql_for(
+            {
+                "TASK-48": ("Duplicate", [(30, "In Progress"), (1 / 60, "Duplicate")]),
+                "TASK-49": ("Canceled", [(30, "In Progress"), (1 / 60, "Canceled")]),
+            },
+            owners={"TASK-48": role_id("engineer"), "TASK-49": None},
+        )
+        code, out = self.prune(gql)
+        self.assertEqual(
+            (code, out.splitlines()),
+            (
+                0,
+                [
+                    "prune-removed TASK-48 what=agent dir",
+                    "prune-removed TASK-49 what=agent dir",
+                    "prune-archived TASK-48",
+                    "prune-archived TASK-49",
+                ],
+            ),
+        )
+        self.assertIsNone(self.checkouts("TASK-48"))
+        self.assertIsNone(self.checkouts("TASK-49"))
+
+    def test_a_done_issue_waits_2_hours_to_be_cleaned(self):
+        path = self.mkc("TASK-49")
+        for hours, out in ((2 - 1 / 60, ""), (2, "prune-removed TASK-49 what=agent dir")):
+            with self.subTest(hours=hours):
+                gql = gql_for({"TASK-49": ("Done", [(hours, "Done")])})
+                self.assertEqual(self.prune(gql), (0, out))
+        self.assertFalse(os.path.isdir(path))
+
+    def test_a_canceled_issue_of_unknown_finish_time_is_cleaned_and_archived(self):
+        self.mkc("TASK-49")
+        gql = gql_for({"TASK-49": ("Canceled", [])})
+        self.assertEqual(
+            self.prune(gql),
+            (0, "prune-removed TASK-49 what=agent dir\nprune-archived TASK-49"),
+        )
+        self.assertIsNone(self.checkouts("TASK-49"))
 
     def test_unknown_finish_time_skipped(self):
         path = self.mkc("TASK-49")
@@ -331,7 +391,9 @@ class RetentionCleanup(PruneScenario):
         )
         code, out = self.prune(gql)
         self.assertEqual(code, 0)
-        self.assertEqual(gql.archived, ["id-TASK-1", "id-TASK-2", "id-TASK-3", "id-TASK-4"])
+        self.assertEqual(
+            gql.archived, ["id-TASK-1", "id-TASK-2", "id-TASK-3", "id-TASK-4", "id-TASK-5"]
+        )
         self.assertEqual(
             out.splitlines(),
             [
@@ -339,6 +401,7 @@ class RetentionCleanup(PruneScenario):
                 "prune-archived TASK-2",
                 "prune-archived TASK-3",
                 "prune-archived TASK-4",
+                "prune-archived TASK-5",
                 "prune-skip TASK-6 reason=archive: sub-issue TASK-7 not finished",
             ],
         )
@@ -350,15 +413,15 @@ class RetentionCleanup(PruneScenario):
             {
                 "TASK-1": ("Duplicate", [(40, "In Progress")]),
                 "TASK-2": ("Done", []),
-                "TASK-3": ("Duplicate", []),
-                "TASK-4": ("Canceled", [(30, "Canceled")]),
+                "TASK-3": ("Done", []),
+                "TASK-4": ("Done", [(30, "Done")]),
             },
-            owners={"TASK-2": role_id("pm")},
+            owners={ident: role_id("pm") for ident in ("TASK-2", "TASK-3", "TASK-4")},
             stamps={
                 "TASK-1": {"canceledAt": 30},
                 "TASK-2": {"completedAt": 30},
-                "TASK-3": {"canceledAt": 1},
-                "TASK-4": {"canceledAt": 1},
+                "TASK-3": {"completedAt": 1},
+                "TASK-4": {"completedAt": 1},
             },
         )
         code, out = self.prune(gql)
@@ -533,6 +596,15 @@ class RetentionCleanup(PruneScenario):
                 "TASK-3": role_id("researcher"),
             },
             children={"TASK-1": {"TASK-2": "completed"}, "TASK-2": {"TASK-3": "canceled"}},
+        )
+        self.assertEqual(self.prune(gql), (0, "prune-archived TASK-1"))
+        self.assertEqual(gql.archived, ["id-TASK-1"])
+
+    def test_a_just_canceled_sub_issue_lets_its_due_parent_go(self):
+        gql = gql_for(
+            {"TASK-1": ("Done", [(30, "Done")]), "TASK-2": ("Canceled", [(1 / 60, "Canceled")])},
+            owners={"TASK-1": role_id("pm"), "TASK-2": None},
+            children={"TASK-1": {"TASK-2": "canceled"}},
         )
         self.assertEqual(self.prune(gql), (0, "prune-archived TASK-1"))
         self.assertEqual(gql.archived, ["id-TASK-1"])
@@ -1969,6 +2041,11 @@ class LocalBoardPrune(PruneScenario):
         self.issue("pm/done", "LOC-1", history="- 2026-09-27 14:00 done self\n")
         self.assertEqual(self.run_prune()[0], 0)
         self.assertEqual(self.archived(), [])
+
+    def test_archives_a_canceled_issue_on_the_next_tick(self):
+        self.issue("pm/canceled", "LOC-1", history="- 2026-09-27 14:59 canceled self\n")
+        self.assertEqual(self.run_prune()[0], 0)
+        self.assertEqual(self.archived(), ["LOC-1 x.md"])
 
     def test_an_unreadable_board_exits_2(self):
         self.assertEqual(

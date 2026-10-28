@@ -331,7 +331,16 @@ class Wirings(run_fixtures.Base):
                 "TUI (text user interface)",
             ),
             "promote": ("10-minute", "Todo", "Done", "prune", "read", "repeat", "Keychain"),
-            "prune": ("2 hours", "7 days", "uncommitted", "read", "repeat", "Keychain"),
+            "prune": (
+                "2 hours",
+                "7 days",
+                "uncommitted",
+                "read",
+                "repeat",
+                "Keychain",
+                "Canceled/Duplicate (any canceled-type state) on the next run",
+                "Docker workspace volumes",
+            ),
             "writeback": ("Automation", "one DelegateEvent", "--issue", "--workdir", "Exit"),
         }
         for command, phrases in expected.items():

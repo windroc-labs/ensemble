@@ -574,7 +574,7 @@ flowchart LR
 - **Revise:** comment and move back to Todo; the agent resumes. An engineer issue's PR comments and reviews count too. After 4 attempts the issue goes to In Review; moving it to Todo restarts the count.
 - **Who counts as you:** every Linear user but the harness and role apps and automation; the manager's app counts as you. Your comments are instructions: keep the team's membership and guest access tight.
 - **Runs without an outcome** are written back as failures with the reason; a stopped or interrupted attempt stays In Progress for Recover.
-- **Finish:** set Done, Canceled or Duplicate. 2 hours later prune closes the run, deletes its `agent/` dir and pushed branches, and archives the issue (Done only for pm or engineer issues; never while a sub-issue would stay); 7 days later it deletes the issue's workdir. An issue left in another state but Todo or In Progress for 7 days loses its checkouts and temp files (`agent/src`, `agent/publish`, `agent/tmp`). Uncommitted and unpushed work is lost.
+- **Finish:** set Done, Canceled or Duplicate. On its next tick for Canceled or Duplicate, 2 hours later for Done, prune closes the run, removes its Docker workspace volumes, deletes its `agent/` dir and pushed branches, and archives the issue (Done only for pm or engineer issues; never while a sub-issue would stay); 7 days later it deletes the issue's workdir. An issue left in another state but Todo or In Progress for 7 days loses its checkouts and temp files (`agent/src`, `agent/publish`, `agent/tmp`). Uncommitted and unpushed work is lost.
 
 ### Task labels
 

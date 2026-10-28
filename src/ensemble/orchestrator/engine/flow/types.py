@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 UNREADABLE = "(unreadable)"
-IssueRecord = dict[str, Any]  # opaque until 第 2 阶段
+IssueRecord = dict[str, Any]
 # self: the engine; other: user or manager
 Origin = Literal["self", "other"]
 
@@ -31,7 +31,6 @@ class Priority(StrEnum):
     LOW = "low"
 
 
-# a priority as an issue stores it
 PRIORITY_NUMBERS = MappingProxyType(
     {Priority.NONE: 0, Priority.URGENT: 1, Priority.HIGH: 2, Priority.MEDIUM: 3, Priority.LOW: 4}
 )
@@ -40,8 +39,7 @@ COMMENTS, COMMENT_CHARS, DESCRIPTION_CHARS, COLUMN = 5, 300, 600, 10
 
 @dataclass(frozen=True)
 class Snapshot:
-    """state None: outside the machine; since: finished at, else last moved into its tracker state;
-    None: unknown."""
+    """state None: outside the machine; since: finished at, else moved into its state; None: unknown."""
 
     state: IssueState | None
     since: datetime | None
@@ -92,6 +90,7 @@ class Finished:
     ident: str
     since: datetime | None
     updated: datetime | None = None
+    canceled: bool = False
 
 
 @dataclass(frozen=True)
@@ -158,9 +157,7 @@ class Pick:
 
 @dataclass(frozen=True)
 class Recheck:
-    """ready: still READY; role: the delegate's (local: assignee's), or None; refused: None, or why
-    not claimable, a skip reason shown as-is; assignee, home: opaque, for the claim; task, client:
-    the picks."""
+    """role: the delegate's (local: assignee's); refused: why not claimable, shown as-is."""
 
     ready: bool
     role: str | None
@@ -256,8 +253,6 @@ class Issue:
 
 
 class Group(IntEnum):
-    """Related work's rank: its state's place in the section."""
-
     DONE = 0
     IN_REVIEW = 1
     IN_PROGRESS = 2

@@ -517,7 +517,7 @@ class Reads(Board):
         self.assertEqual(
             self.tracker.finished({"pm"}),
             [
-                Finished("LOC-4", "LOC-4", MTIME),
+                Finished("LOC-4", "LOC-4", MTIME, canceled=True),
                 Finished("LOC-1", "LOC-1", at(16, 10)),
             ],
         )

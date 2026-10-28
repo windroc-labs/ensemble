@@ -75,8 +75,8 @@ from tests.orchestrator.unit.board_ids import (
 BASE = {
     # its state's type and updatedAt
     "Q_ISSUE": "176947979d752d5bbfd43f0a6fae9d57b76222c1d68b91c67fc4db0ecf00bb52",
-    # updatedAt
-    "Q_FINISHED": "f8be6e566b829a2e8276129335ec9b75690d4561539f9d2d0b46e461bc7ec51f",
+    # updatedAt and state id
+    "Q_FINISHED": "077e071010bd9ca107a4202a79e9fa2afc277096cc01bda3b878e0f4ec0b18f4",
     # each sub-issue's first child, so a leaf is not read, and updatedAt
     "Q_ARCHIVE": "0a19726cff83adff30e527ac21e2832ea2ed120ec6880e03772006c3b899a209",
     "Q_CHILDREN": "91955ba5094f94357fc88a229f81f5b6f79249d3d3154a460514a787f610b7c5",
@@ -474,11 +474,12 @@ class Changed(Case):
 
 
 class FinishedIssues(Case):
-    def node(self, ident, completed=2):
+    def node(self, ident, completed=2, state="done"):
         return {
             "id": f"id-{ident}",
             "identifier": ident,
             "updatedAt": UPDATED.isoformat(),
+            "state": {"id": STATES.get(state, state)},
             "canceledAt": None,
             "completedAt": ago(completed).isoformat(),
             "history": moves(),
@@ -511,6 +512,16 @@ class FinishedIssues(Case):
                 Finished("id-TASK-2", "TASK-2", ago(3), UPDATED),
             ],
         )
+
+    def test_a_canceled_type_state_marks_the_issue_canceled(self):
+        nodes = [
+            self.node("TASK-1"),
+            self.node("TASK-2", state="canceled"),
+            self.node("TASK-3", state=DUPLICATE),
+        ]
+        gql = Gql(Q_FINISHED=self.page(nodes, None, more=False))
+        found = tracker(gql).finished(("pm",))
+        self.assertEqual([f.canceled for f in found], [False, True, True])
 
     def test_stops_on_repeated_or_empty_cursor(self):
         for pages in (
