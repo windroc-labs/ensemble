@@ -126,6 +126,9 @@ class LauncherTest(Case):
     def test_the_watch_stops_a_run_whose_reader_hangs(self):
         class Stuck(io.BytesIO):
             def write(self, data):
+                watch = Timers.made[0].function.__self__
+                held = watch.lock  # its timed wait cut to 0.01 s
+                watch.lock = mock.Mock(acquire=lambda **_: held.acquire(timeout=0.01))
                 Timers.made[0].function()  # the watch fires while this write holds its lock
                 return super().write(data)
 

@@ -4,18 +4,16 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 from ensemble.session.clients.opencode import transcript
 from tests.session.case import Case
 from tests.session.unit.clients.opencode.support import SES, make_db, text
+from tests.utils.sandbox import scratch
 
 
 class TranscriptScript(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.data = os.path.realpath(tmp.name)
+        self.data = scratch(self)
         self.db = os.path.join(self.data, "opencode", "opencode.db")
 
     def run_script(self, *argv):

@@ -1,5 +1,4 @@
-"""The engine Tracker on a local board (docs/architecture.md › Local board): its reads, and its writes, each
-one locked rewrite of one issue file."""
+"""The engine Tracker on a local board."""
 
 import os
 import re
@@ -71,9 +70,8 @@ UNNAMED = re.compile(r"[/\x00-\x1f\x7f]")
 
 
 class LocalTracker(Tracker):
-    """board: its realpath'd dir, scanned once on first use; roles: the role dirs listed; now: the
-    time writes record. Keys and identifiers are front-matter ids; an issue's home is its parent
-    ("" none)."""
+    """board: its realpath'd dir, scanned on first use; roles: role dirs listed; now: the time
+    writes record. Keys, identifiers: front-matter ids; home: the parent ("" none)."""
 
     def __init__(
         self,
@@ -101,7 +99,7 @@ class LocalTracker(Tracker):
         return found
 
     def _in(self, *states, owners=None):
-        """Role dirs' (owners' when given) issues located in states."""
+        """Role (or owner) dirs' issues in states."""
         return [
             each
             for each in self.files().values()
@@ -214,7 +212,12 @@ class LocalTracker(Tracker):
 
     def finished(self, owners):
         return [
-            Finished(each.id, each.id, _last(each, each.state))
+            Finished(
+                each.id,
+                each.id,
+                _last(each, each.state),
+                canceled=each.state == LocalState.CANCELED,
+            )
             for each in self._in(LocalState.DONE, LocalState.CANCELED)
             if each.state == LocalState.CANCELED or each.assignee in owners
         ]
@@ -320,7 +323,7 @@ class LocalTracker(Tracker):
         return None if found is None else Ref(found.id, found.id)
 
     def create(self, once, *, home, owner, priority, title, description):
-        """once's issue if one exists by now; a number whose id or path is taken is skipped."""
+        """once's issue if it exists by now; a taken id or path is skipped."""
 
         def render(ident):
             now = self.now()
@@ -397,10 +400,9 @@ class LocalTracker(Tracker):
         return True
 
     def write(self, key, change):
-        """Under the board lock, issue key's file read fresh and Stamped, then change(text, found):
-        None, or (text, None or the (assignee, state) dirs it moves to, (None, None) archive/);
-        written when either changes and the file still holds what was read. A file a person moved
-        or deleted meanwhile is read again. Returns the file as the deciding change saw it."""
+        """Locked: key's file read fresh, then change(text, found): None, or (text, None or the
+        (assignee, state) dirs to move to; (None, None): archive/), written if changed and unmoved
+        since read, else read again. Returns the file the deciding change saw."""
         with store.locked(self.board):
             return self._write_locked(key, change)
 
@@ -452,8 +454,7 @@ class LocalTracker(Tracker):
         return folder
 
     def _rename(self, issue, assignee, state):
-        """issue's file moved, its name kept, into <assignee>/<state>/ (no assignee: archive/), made
-        if absent; None: it was no longer there."""
+        """issue's file moved into <assignee>/<state>/ (no assignee: archive/); None: gone."""
         folder = self._folder(assignee, state.value) if assignee else self._folder(ARCHIVE)
         target = os.path.join(folder, os.path.basename(issue.path))
         if os.path.lexists(target):

@@ -100,7 +100,7 @@ Q_FINISHED = (
     """query($t: ID, $d: [ID!], $s: [ID!], $a: [ID!], $c: String, $after: String) {
   issues(filter: { team: { id: { eq: $t } }, or: [{ state: { id: { in: $d } }, delegate: { id: { in: $a } } },
   { state: { id: { in: $s } } }] }, first: 50, after: $c) {
-  nodes { id identifier updatedAt """
+  nodes { id identifier updatedAt state { id } """
     + STAMPS
     + " "
     + HISTORY
@@ -592,13 +592,14 @@ class LinearTracker(Tracker):
         roles, ended = _need("roles", self.roles), _need("finished", self.finished_ids)
         ids = [uid for uid, role in roles.items() if role in owners]
         done = sorted(ended & {states[State.DONE]})
+        others = ended.difference(done)
         nodes, cursor = [], None
         while True:
             page = self.gql(
                 Q_FINISHED,
                 t=team,
                 d=done,
-                s=sorted(ended.difference(done)),
+                s=sorted(others),
                 a=ids,
                 c=cursor,
             )["issues"]
@@ -608,7 +609,13 @@ class LinearTracker(Tracker):
                 break
             cursor = end
         return [
-            Finished(n["id"], n["identifier"], finished_at(n, ended), parse_time(n["updatedAt"]))
+            Finished(
+                n["id"],
+                n["identifier"],
+                finished_at(n, ended),
+                parse_time(n["updatedAt"]),
+                canceled=n["state"]["id"] in others,
+            )
             for n in nodes
         ]
 

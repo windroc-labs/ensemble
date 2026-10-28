@@ -56,7 +56,7 @@ BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
 OLLAMA_PORT = 11434
 OLLAMA_CONTEXT = 65536
-# OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER (docs/customizing-roles-and-tasks.md).
+# OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER.
 REPLY, BUFFER = 32000, 20000
 # OpenCode sets them for its children.
 IDENTITY = ("OPENCODE", "OPENCODE_PID", "OPENCODE_TERMINAL")

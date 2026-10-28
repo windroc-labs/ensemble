@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import tempfile
 import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -29,6 +28,7 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from ensemble.session import SessionStatus
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV
+from tests.orchestrator.target_fixtures import REMOTE
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import (
     HARNESS_USER,
@@ -58,11 +58,12 @@ from tests.orchestrator.unit.run_fixtures import (
 from tests.orchestrator.unit.streams import Stderr
 from tests.orchestrator.unit.target_fixtures import FakeRun, ok
 from tests.orchestrator.unit.target_fixtures import api as repo_info
+from tests.utils.sandbox import scratch
 
 NOW = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
 
 
-EAST, WEST = timezone(timedelta(hours=8)), timezone(timedelta(hours=-4))
+WEST = timezone(timedelta(hours=-4))
 
 
 AGENT, USER, MANAGER, BOT = "agent", "user", "manager", "bot"
@@ -171,17 +172,7 @@ def issue(
     }
 
 
-LS_REMOTE = (
-    "git",
-    "-c",
-    "credential.helper=",
-    "-c",
-    "credential.helper=!gh auth git-credential",
-    "ls-remote",
-    "--heads",
-    "https://github.com/Acme/Ensemble.git",
-    "TASK-7-*",
-)
+LS_REMOTE = (*REMOTE, "ls-remote", "--heads", "https://github.com/Acme/Ensemble.git", "TASK-7-*")
 
 
 LISTING = ("gh", "api", "repos/windroc/team-docs/contents/Research?ref=main")
@@ -391,9 +382,7 @@ class Base(run_fixtures.Base):
         super().setUp()
         self.keychain_calls = []
         self.write_local(f'work_dir = "{self.work}"\n')
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.config_path = os.path.join(self.tmp, "config.toml")
         self.write_config(CONFIG)
         self.lines, self.hist, self.names = [], {}, {}
@@ -450,21 +439,6 @@ class Base(run_fixtures.Base):
                 client,
                 task=task,
                 minutes=minutes_ago,
-            )
-        )
-
-    def limit(self, client, resets_at, ident="TASK-9"):
-        self.lines.append(
-            json.dumps(
-                {
-                    "ts": NOW.astimezone(WEST).isoformat(timespec="seconds"),
-                    "kind": "limit",
-                    "issue": ident,
-                    "sid": self.sid("limited"),
-                    "client": client,
-                    "resets_at": resets_at,
-                    "delegate_kind": "harness",
-                }
             )
         )
 
@@ -642,6 +616,10 @@ class TickBase(Base):
 
     def before(self):
         return self.unmap("".join(f"{line}\n" for line in self.lines))
+
+    def unchanged(self, fake):
+        """The tick changed nothing: no Linear write, no launch, runs.jsonl as written."""
+        self.assertEqual((fake.mutations, self.start.launches, self.state), ([], [], self.before()))
 
     def last_run(self):
         """runs.jsonl's last row, a start or resume row."""

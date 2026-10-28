@@ -5,7 +5,6 @@ TeamRuns).
 
 import os
 import re
-import tempfile
 from unittest import mock
 
 from ensemble.delegate.composer import Composer, ConfigError
@@ -31,8 +30,7 @@ from ensemble.delegate.composer.teams import (
 from ensemble.delegate.engine.config import read_config
 from tests.delegate.case import Case
 from tests.delegate.unit.composer.shipped import catalog
-from tests.delegate.unit.composer.teams import FILES, INTRO, POET, STEPS, VERSE, WRITER
-from tests.utils.case import local_section
+from tests.delegate.unit.composer.teams import INTRO, POET, STEPS, VERSE, WRITER, FakeTeam
 
 CONFIG = """\
 tier = 2
@@ -61,34 +59,8 @@ TINY_LINE = "- `tiny-note` (`<tasks>/tiny-note.md`): a tiny note; rarely; light.
 FRONT = '---\ncommands: ["rm *"]\n---\n'
 
 
-class Fake(Case):
-    """A team root, config and local file in a temp dir; a HOME of the test's own for team dirs."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
-        self.root = os.path.join(tmp.name, "team")
-        self.config = os.path.join(tmp.name, "config.toml")
-        self.local_file = os.path.join(tmp.name, "config.local.toml")
-        self.write(self.root, FILES)
-        self.configure(CONFIG)
-
-    @staticmethod
-    def write(top, files):
-        for rel, text in files.items():
-            path = os.path.join(top, rel)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                f.write(text)
-
-    def configure(self, text):
-        with open(self.config, "w") as f:
-            f.write(text)
-
-    def local(self, text):
-        with open(self.local_file, "w") as f:
-            f.write(local_section(text, "delegate"))
+class Fake(FakeTeam):
+    config_text = CONFIG
 
     def cfg(self):
         return read_config(path=self.config, local=self.local_file)
@@ -113,7 +85,7 @@ class Fake(Case):
     def team_dir(self, files, name="team"):
         """Writes {rel: text} under ~/.ensemble/<name> and returns its real path."""
         top = os.path.realpath(os.path.join(self.ensemble, name))
-        self.write(top, files)
+        self.write(files, top)
         return top
 
     def with_dir(self, files, name="team"):
@@ -137,7 +109,7 @@ class Index(Fake):
             + "## Style\n\n- `short-note` (`<tasks>/short-note.md`): a.\n",
         ):
             with self.subTest(text=text):
-                self.write(self.root, {"roles/writer.md": text})
+                self.write({"roles/writer.md": text})
                 with self.assertRaisesRegex(ConfigError, r"^roles/writer\.md: no task index"):
                     self.tasks_of("writer")
 
@@ -151,7 +123,7 @@ class Index(Fake):
         ):
             with self.subTest(path=path):
                 new = "- `long-note`: " if path is None else f"- `long-note` ({path}): "
-                self.write(self.root, {"roles/writer.md": WRITER.replace(line, new)})
+                self.write({"roles/writer.md": WRITER.replace(line, new)})
                 self.assertEqual(
                     self.refused(self.tasks_of, "writer"),
                     f"roles/writer.md: 'long-note' has path {wrong}, not '<tasks>/long-note.md'",
@@ -169,7 +141,7 @@ class Index(Fake):
             ("", "## Tasks opens without its default"),
         ):
             with self.subTest(new=new):
-                self.write(self.root, {"roles/writer.md": WRITER.replace(intro, new)})
+                self.write({"roles/writer.md": WRITER.replace(intro, new)})
                 with self.assertRaisesRegex(
                     ConfigError, "^" + re.escape(f"roles/writer.md: {msg}")
                 ):
@@ -198,7 +170,7 @@ class Catalog(Fake):
         self.assertEqual(list(found), ["writer", "editor"])
 
     def test_roles_core_configured_then_core_sorted_then_each_team_dir_sorted(self):
-        self.write(self.root, {"roles/aide.md": "# Aide\n", "roles/assistant.md": "# Assistant\n"})
+        self.write({"roles/aide.md": "# Aide\n", "roles/assistant.md": "# Assistant\n"})
         a = self.team_dir({"roles/poet.md": POET, "roles/bard.md": POET}, "a")
         b = self.team_dir({"roles/zed.md": POET}, "b")
         self.assertEqual(
@@ -337,7 +309,6 @@ class TeamDirs(Fake):
             with self.subTest(msg=msg):
                 self.assertEqual(self.refused(self.tasks_of, "poet", team(self.root, dirs)), msg)
         self.write(
-            self.root,
             {"roles/writer.md": WRITER.replace("\n\n## Style", "\n" + TINY_LINE + "\n## Style")},
         )
         self.assertEqual(
@@ -345,7 +316,7 @@ class TeamDirs(Fake):
             f"roles/writer.md: lists 'tiny-note', whose file {c}/tasks/tiny-note.md is not in core "
             "team/tasks: a role runs only its own tasks",
         )
-        self.write(self.root, {"roles/writer.md": WRITER})
+        self.write({"roles/writer.md": WRITER})
         found = self.with_dir(
             {"roles/writer.md": "## Tasks\n\n" + TINY_LINE, "tasks/tiny-note.md": TINY}, "ext"
         )
@@ -560,7 +531,7 @@ class TeamDirChecks(Fake):
         return self.refused(check_team_dirs, [self.top], writes=list(writes))
 
     def test_team_paths_are_the_dir_its_kind_subdirs_and_their_md_files(self):
-        self.write(self.top, {"tasks/notes.txt": "x", "methods/m.md": "# M\n"})
+        self.write({"tasks/notes.txt": "x", "methods/m.md": "# M\n"}, self.top)
         self.assertEqual(
             team_paths(self.top),
             [
@@ -635,8 +606,8 @@ class TeamDirChecks(Fake):
     def test_its_tools_tree_is_checked_by_real_path(self):
         work = os.path.realpath(os.path.join(self.tmp, "work"))
         os.makedirs(os.path.join(work, "bin"))
-        self.write(work, {"bin/t.py": ""})
-        self.write(self.top, {"tools/own.py": "", "tools/sub/x.py": ""})
+        self.write({"bin/t.py": ""}, work)
+        self.write({"tools/own.py": "", "tools/sub/x.py": ""}, self.top)
         link = self.path("tools/sub/t.py")
         os.symlink(os.path.join(work, "bin", "t.py"), link)
         os.symlink(self.path("tools"), self.path("tools/sub/loop"))

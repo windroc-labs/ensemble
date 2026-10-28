@@ -26,7 +26,7 @@ from ensemble.delegate.event.reply import OUTCOME, PROGRESS
 from ensemble.session import Access, EnvironmentSpec, Mode, RunLog
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
-from ensemble.utils import ACCOUNT_ENV, Invalid, Repo, sh, thaw, under
+from ensemble.utils import Invalid, Repo, sh, thaw, under
 
 
 def _own(f):
@@ -89,7 +89,6 @@ def plan(
     *,
     driver: Driver,
     composition: Composer,
-    accounts: Mapping[str, str] | None = None,
     environment: Resolved | None = None,
 ) -> Plan:
     if not driver.session_based and spec.resume:
@@ -164,8 +163,6 @@ def plan(
     flags, env = driver.policy(client)
     if docker:
         env = env | users_env(thaw(composition.config.values).get("users", []))
-    if account := (accounts or {}).get(client):
-        env = env | {ACCOUNT_ENV: account}
     session = SessionSpec(
         workdir=layout.run,
         client=client,

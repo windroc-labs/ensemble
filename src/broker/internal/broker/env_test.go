@@ -15,34 +15,9 @@ import (
 
 const envValue = "mini-PASSWORD with spaces"
 
-// loginEnv runs LoginEnv for dummy with value; it fails t when the value or password reaches an error or output, or
-// a buffer stays unerased.
-func loginEnv(t *testing.T, k *fakeSecrets, ask *askOnce, value string) (string, error) {
-	t.Helper()
-	var out bytes.Buffer
-	read := []byte(value)
-	err := LoginEnv("dummy", func() ([]byte, error) { return read, nil }, ask.read, k, &out)
-	text := out.String()
-	if err != nil {
-		text += err.Error()
-	}
-	if value != "" && strings.Contains(text, value) || strings.Contains(text, keychainPass) {
-		t.Fatalf("secret in %q", text)
-	}
-	if !bytes.Equal(read, make([]byte, len(read))) {
-		t.Fatal("value buffer not erased")
-	}
-	for _, b := range k.returned {
-		if !bytes.Equal(b, make([]byte, len(b))) {
-			t.Fatal("read buffer not erased")
-		}
-	}
-	return out.String(), err
-}
-
 func TestLoginEnv(t *testing.T) {
 	k := &fakeSecrets{}
-	out, err := loginEnv(t, k, &askOnce{}, envValue)
+	out, err := storeLogin(t, "env", k, &askOnce{}, envValue)
 	if err != nil || out != "Environment secret ensemble-broker-env/dummy saved; keychain trusts only the broker\n" {
 		t.Fatalf("%v %q", err, out)
 	}
@@ -59,14 +34,15 @@ func TestLoginEnv(t *testing.T) {
 func TestLoginEnvTrustsOnlyBroker(t *testing.T) {
 	k := &fakeSecrets{fakeApps: fakeApps{access: halfDone()}}
 	ask := &askOnce{}
-	if _, err := loginEnv(t, k, ask, envValue); err != nil || ask.calls != 1 || !slices.Equal(k.steps, []string{"partition ensemble-broker-env/dummy dummy"}) {
+	_, err := storeLogin(t, "env", k, ask, envValue)
+	if err != nil || ask.calls != 1 || !slices.Equal(k.steps, []string{"partition ensemble-broker-env/dummy dummy"}) {
 		t.Fatalf("%v: asked %d, steps %q", err, ask.calls, k.steps)
 	}
 	if access, _ := k.AppAccess("ensemble-broker-env/dummy", "dummy"); onlyBroker(access) != nil {
 		t.Fatal("item still trusts another application")
 	}
 	k = &fakeSecrets{fakeApps: fakeApps{access: halfDone(), partitionErr: errors.New("keychain status -25293")}}
-	_, err := loginEnv(t, k, &askOnce{}, envValue)
+	_, err = storeLogin(t, "env", k, &askOnce{}, envValue)
 	if err == nil || !strings.Contains(err.Error(), "keychain item ensemble-broker-env/dummy") || !strings.HasSuffix(err.Error(), "rerun ensemble-broker login env dummy to finish") {
 		t.Fatalf("refused: %v", err)
 	}
@@ -75,14 +51,16 @@ func TestLoginEnvTrustsOnlyBroker(t *testing.T) {
 func TestLoginEnvValueLimits(t *testing.T) {
 	for _, value := range []string{"-----BEGIN KEY-----\nline\n-----END KEY-----\n", "x", "\x00\t ", strings.Repeat("v", launcher.MaxSecretBytes)} {
 		k := &fakeSecrets{}
-		if _, err := loginEnv(t, k, &askOnce{}, value); err != nil || string(k.items["ensemble-broker-env/dummy/dummy"]) != value {
+		_, err := storeLogin(t, "env", k, &askOnce{}, value)
+		if err != nil || string(k.items["ensemble-broker-env/dummy/dummy"]) != value {
 			t.Fatalf("%.20q: %v", value, err)
 		}
 	}
 	for _, value := range []string{"", strings.Repeat("v", launcher.MaxSecretBytes+1)} {
 		k := &fakeSecrets{}
 		ask := &askOnce{}
-		if _, err := loginEnv(t, k, ask, value); err == nil || err.Error() != "the value must be 1 to 16384 bytes" || len(k.puts) != 0 || ask.calls != 0 {
+		_, err := storeLogin(t, "env", k, ask, value)
+		if err == nil || err.Error() != "the value must be 1 to 16384 bytes" || len(k.puts) != 0 || ask.calls != 0 {
 			t.Fatalf("%d bytes: %v", len(value), err)
 		}
 	}
@@ -99,24 +77,6 @@ func TestLoginEnvRefusesName(t *testing.T) {
 		var out bytes.Buffer
 		if err := LoginEnv(bad, func() ([]byte, error) { return []byte(envValue), nil }, (&askOnce{}).read, k, &out); err == nil || len(k.puts) != 0 {
 			t.Fatalf("%q accepted: %v", bad, err)
-		}
-	}
-}
-
-func TestLoginEnvReadsBack(t *testing.T) {
-	for name, tc := range map[string]struct {
-		k     *fakeSecrets
-		fails string
-	}{
-		"other bytes": {&fakeSecrets{readBack: []byte("other")},
-			"keychain item ensemble-broker-env/dummy dummy: reading it failed: it holds other bytes; rerun ensemble-broker login env dummy"},
-		"needs dialog": {&fakeSecrets{readErr: ErrNeedsDialog},
-			"keychain item ensemble-broker-env/dummy dummy: reading it failed: keychain status -25308; rerun ensemble-broker login env dummy"},
-		"put fails": {&fakeSecrets{putErr: errors.New("keychain status -25299")},
-			"keychain item ensemble-broker-env/dummy dummy: saving it failed: keychain status -25299; rerun ensemble-broker login env dummy"},
-	} {
-		if _, err := loginEnv(t, tc.k, &askOnce{}, envValue); err == nil || err.Error() != tc.fails {
-			t.Fatalf("%s: %v", name, err)
 		}
 	}
 }

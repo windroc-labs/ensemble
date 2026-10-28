@@ -270,8 +270,7 @@ def main(argv=None):
         if not alive and outcome is not None:
             print(
                 f"ensemble-orchestrator: {view.issue}: run ended ({outcome.status}); nothing"
-                f" resumed; its conversation: ensemble-crew reopen {view.issue}"
-                " (docs/architecture.md › Recall a closed run)",
+                f" resumed; its conversation: ensemble-crew reopen {view.issue}",
                 file=sys.stderr,
             )
         return record

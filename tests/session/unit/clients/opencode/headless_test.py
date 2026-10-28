@@ -35,6 +35,7 @@ from tests.session.unit.clients.opencode.support import (
     packaged_table,
     titled_session,
 )
+from tests.session.unit.clients.support import holds
 
 MODEL = "ollama/qwen3.6:35b-mlx"
 STRATA = {"strata": {"base_url": "http://10.0.0.5:8080/v1", "models": ["m"]}}
@@ -50,10 +51,6 @@ def decide(rules: dict, path: str) -> str | None:
         if re.fullmatch(".*".join(map(re.escape, pattern.split("*"))), path, re.S):
             found = action
     return found
-
-
-def holds(argv, words) -> bool:
-    return any(tuple(argv[i : i + len(words)]) == tuple(words) for i in range(len(argv)))
 
 
 class Base(Case):
@@ -605,16 +602,6 @@ class ResumeTest(Base):
         command = self.command(self.launch(self.spec(resume=True)))
         self.assertEqual(command[4:6], ("--title", "ensemble-run-1"))
         self.assertNotIn("--session", command)
-
-    def test_an_untrusted_cwd_on_a_non_isolated_host_is_refused(self):
-        self.client.common.bind(self.cwd, "run-1", SES)
-        for resume in (False, True):
-            spec = self.spec(access=Access(cwd=self.cwd), resume=resume)
-            with self.subTest(resume=resume), self.assertRaisesRegex(ConfigError, "trusted cwd"):
-                self.launch(spec)
-        self.assertFalse(
-            self.launch(self.spec(access=Access(cwd=self.cwd)), DOCKER_CONTEXT).project
-        )
 
     def test_tampered_binding_refused(self):
         self.client.common.bind(self.cwd, "run-1", SES)

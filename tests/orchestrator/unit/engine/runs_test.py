@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 import threading
 from datetime import UTC, datetime, timedelta, timezone
 from unittest import mock
@@ -10,6 +9,8 @@ from unittest import mock
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.types import Claim, ConfigError
 from tests.orchestrator import case
+from tests.orchestrator.case import SID as SID_A
+from tests.utils.sandbox import scratch
 
 NOW = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
 
@@ -48,9 +49,7 @@ def entry(kind, issue, sid, role, client="a", **ago):
 
 class Case(case.Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.log = os.path.join(self.tmp, "runs.jsonl")
 
     def write(self, lines):
@@ -63,23 +62,6 @@ class Case(case.Case):
 
 
 class Parse(Case):
-    def test_legacy_busy_rows_neither_offset_attempts_nor_survive_trim(self):
-        start = json.loads(row("start", "TASK-1", "s", minutes=30))
-        busy = {
-            "kind": "busy",
-            "ts": stamp(NOW),
-            "issue": "TASK-1",
-            "sid": "s",
-            "cancels": {"kind": "start", "ts": start["ts"]},
-            "attempt": 1,
-        }
-        self.write([json.dumps(start), json.dumps(busy), row("resume", "TASK-1", "s")])
-        self.assertEqual(len(runs.parse_log(self.log)), 2)
-        runs.trim(self.log, now=NOW)
-        self.assertEqual(
-            [json.loads(line)["kind"] for line in self.read().splitlines()], ["start", "resume"]
-        )
-
     def test_parse_log_is_utc_entries_in_file_order(self):
         self.assertEqual(runs.parse_log(os.path.join(self.tmp, "nope")), [])
         self.write(
@@ -122,6 +104,7 @@ class Parse(Case):
             json.dumps({**good, "issue": ["TASK-2"]}),
             json.dumps({**good, "sid": None}),
             json.dumps({**good, "kind": "end"}),
+            json.dumps({**good, "kind": "busy"}),
             json.dumps({**good, "kind": ["start"]}),
             json.dumps({**good, "ts": "yesterday"}),
             json.dumps({**good, "ts": 5}),
@@ -404,7 +387,7 @@ class StartedTask(Case):
         self.assertEqual((runs.claim(self.log, "TASK-1", SID_A), runs.parse_log(self.log)), want)
 
 
-SID_A, SID_B = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d", "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
+SID_B = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
 
 UUID = "11111111-2222-4333-8444-555555555555"
 

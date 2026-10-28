@@ -57,12 +57,6 @@ class Composer:
             cfg=thaw(self.config.values),
         )
 
-    def accounts(self, role: str, *, overlays: Sequence[Mapping] = ()) -> dict[str, str]:
-        """`role`'s accounts table (client name: account name) over `overlays`, as resolve's."""
-        return run.accounts(
-            role, overlays=thaw(freeze(tuple(overlays))), cfg=thaw(self.config.values)
-        )
-
     @overload
     def index(self, role: None = None) -> dict[str, dict[str, str]]: ...
 

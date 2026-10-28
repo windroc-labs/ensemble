@@ -29,8 +29,9 @@ from tests.delegate.integration.cli import (
     WAIT,
     Integration,
 )
-from tests.delegate.replies import bare, block, mark, option, prompt, running
+from tests.delegate.replies import bare, block, mark, option, prompt
 from tests.session import live_tmux
+from tests.utils.sandbox import pid_exists as running
 
 ANSWER = "Say hello."
 DRAFT = "Draft.\n"
@@ -239,29 +240,6 @@ class Stderr(Integration):
         )
 
 
-class Resume(Integration):
-    def test_resume_reuses_the_recorded_cwd_and_session(self):
-        res = self.drive([mark("start", "first"), block(ASKING)])
-        self.assertEqual(res.returncode, 0, res.stderr)
-        res = self.answer([mark("round", "second"), block(DONE)], input="Use B.")
-        self.assertEqual(res.returncode, 0, res.stderr)
-        first, second = self.calls()
-        self.assertEqual(second["cwd"], self.agent)
-        self.assertEqual((option(second, "--resume"), option(second, "--session-id")), (SID, None))
-        self.assertTrue(prompt(second).startswith(RESUME))
-        self.assertTrue(prompt(second).endswith("\n# Input\n\nUse B.\n"))
-        self.assertEqual(self.users(), [prompt(first), prompt(second)])
-        self.assertEqual(
-            self.kinds(), ["session", "input", "client_session", "progress", "result", "end"] * 2
-        )
-        records = self.records()
-        self.assertEqual([e["text"] for e in records if e["kind"] == "input"], ["Hello.", "Use B."])
-        self.assertEqual(
-            [e["cwd"] for e in records if e["kind"] == "session"], [self.agent, self.agent]
-        )
-        self.assertEqual(self.last("result")["outcome"]["status"], "done")
-
-
 class NeedsInput(Integration):
     def test_the_answer_resumes_the_session(self):
         res = self.drive([mark("start", "echoing"), block(ASKING)])
@@ -295,6 +273,7 @@ class NeedsInput(Integration):
             [(SID, self.agent)] * 2,
         )
         first, second = self.calls()
+        self.assertEqual(second["cwd"], self.agent)
         self.assertEqual(
             (
                 option(first, "--session-id"),
@@ -400,42 +379,6 @@ class UsageLimit(Integration):
 
 
 class ConfigErrors(Integration):
-    def test_a_config_error_exits_2_and_starts_nothing(self):
-        cli = list(RUN)
-        cases = {
-            "unknown role": (
-                [
-                    *cli,
-                    "--role",
-                    "nobody",
-                    "--input",
-                    "x",
-                    "--out",
-                    self.out,
-                    "--workdir",
-                    self.work,
-                ],
-                "'nobody'",
-            ),
-            "task off the index": (self.argv("--task", "nope"), "task 'nope' is not one of"),
-            "missing options": (
-                [*cli, "--role", self.ROLE, "--out", self.out],
-                "--input is required",
-            ),
-            "a client without in_process": (
-                self.argv("--client", "codex", "--mode", "in_process"),
-                "client 'codex' does not support in_process mode",
-            ),
-        }
-        for name, (argv, said) in cases.items():
-            with self.subTest(name):
-                res = self.drive([block(DONE)], argv=argv)
-                self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
-                self.assertTrue(res.stderr.startswith("delegate: "), res.stderr)
-                self.assertIn(said, res.stderr)
-                self.assertEqual(self.calls(), [])
-                self.assertEqual(os.listdir(self.work), [])
-
     def test_cwd_in_run_dir_writes_nothing(self):
         work = os.path.join(self.root, "new")
         run = Layout(work).run

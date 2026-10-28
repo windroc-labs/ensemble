@@ -4,7 +4,6 @@ import json
 import os
 import stat
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,19 +18,19 @@ from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
 from tests.session.live_tmux import wait
 from tests.session.tui_support import SID, Live
+from tests.utils.sandbox import scratch
 
 NAME = "w1"
 
 
 class CloseTest(Case):
     def test_close_prevents_a_late_hook_from_recreating_files_during_removal(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        tmp = scratch(self, real=False)
         root, host = os.path.join(self.ensemble, "tui"), ScreenHost()
         tui.TuiMode.start(
             Spec(
-                workdir=tmp.name,
-                access=Access(cwd=tmp.name),
+                workdir=tmp,
+                access=Access(cwd=tmp),
                 name=NAME,
                 client="fake",
                 sid=SID,

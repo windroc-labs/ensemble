@@ -6,8 +6,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -32,7 +30,9 @@ from ensemble.session.engine.types import (
 )
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.codex import fake_codex
-from tests.utils.sandbox import git_run
+from tests.session.threads import drain
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import git_run, scratch
 
 NATIVE = fake_codex.NATIVE
 
@@ -43,9 +43,7 @@ DONE = {"status": "done", "title": "echo", "summary": "Hello.", "deliverable": "
 
 class HeadlessSessions(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home, self.work, self.bin = (self.root / name for name in ("home", "work", "bin"))
         self.cwd, self.extra = self.work / "project", self.root / "extra"
         self.tasks = self.root / "team" / "tasks"
@@ -115,24 +113,7 @@ class HeadlessSessions(Case):
         self.scenario.write_text(json.dumps(fields))
 
     def drain(self, handle, on=lambda _event: None):
-        self.addCleanup(handle.stop)
-        found = []
-
-        def consume():
-            for event in handle.events():
-                found.append(event)
-                on(event)
-
-        executor = ThreadPoolExecutor(max_workers=1)
-        result = executor.submit(consume)
-        try:
-            result.result(timeout=10)
-        except TimeoutError:
-            handle.stop()
-            self.fail("the session did not reach Exited within 10s")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-        return found
+        return drain(self, handle, on, 10)
 
     def start(self, prompt: str, spec: Spec, *, resume: bool = False) -> Session:
         """A headless codex session of `spec` on `prompt`; resume: continue session spec.sid."""
@@ -148,11 +129,7 @@ class HeadlessSessions(Case):
         )
 
     def logged(self):
-        return (
-            [json.loads(line) for line in self.log.read_text().splitlines()]
-            if self.log.exists()
-            else []
-        )
+        return read_jsonl(self.log, missing_ok=True)
 
     def written(self):
         return RunLog(str(self.work)).read()
@@ -468,15 +445,6 @@ class ResumeReferenceIntegrationTest(HeadlessSessions):
 
 
 class HeadlessLaunchIntegrationTest(HeadlessSessions):
-    def test_fixture_cleanup_removes_owned_home_outside_writable_roots(self):
-        self.assertNotEqual(
-            os.path.commonpath((self.home, tempfile.gettempdir())), tempfile.gettempdir()
-        )
-        self.assertNotEqual(os.path.commonpath((self.home, self.work)), str(self.work))
-        root = self.root
-        self.doCleanups()
-        self.assertFalse(root.exists())
-
     def test_fresh_launch_has_exact_flags_prompt_cwd_and_stdin_eof(self):
         prompt = "\n# Input\n\nHello.\n"
         self.drain(self.start(prompt, dataclasses.replace(self.spec, sid=self.sid)))
@@ -570,13 +538,6 @@ class HeadlessLaunchIntegrationTest(HeadlessSessions):
                 self.assertFalse((self.home / ".ensemble").exists())
         self.assertEqual(self.logged(), [])
 
-    def test_tui_factory_is_supported_without_starting_a_process(self):
-        with mock.patch("subprocess.Popen") as spawn:
-            self.assertIsNotNone(self.session_cls._config().registry.client("codex").tui())
-        spawn.assert_not_called()
-        self.assertEqual(self.logged(), [])
-        self.assertFalse((self.work / "run.jsonl").exists())
-
     def test_inherited_session_markers_are_removed_and_headless_defaults_retained(self):
         inherited = {key: "inherited" for key in (*fake_codex.MARKERS, *fake_codex.DEFAULTS)}
         with mock.patch.dict(os.environ, inherited):
@@ -641,9 +602,7 @@ class HeadlessRecoveryIntegrationTest(HeadlessSessions):
             (second["cwd"], second["env"]["CODEX_HOME"], second["resume_id"], second["stdin_eof"]),
             (str(self.cwd), str(self.codex_home), NATIVE, True),
         )
-        transcript = [
-            json.loads(line) for line in fake_codex.session_path(NATIVE).read_text().splitlines()
-        ]
+        transcript = read_jsonl(fake_codex.session_path(NATIVE))
         self.assertEqual(
             [entry["text"] for entry in transcript if entry["type"] == "user"],
             [first["prompt"], second["prompt"]],

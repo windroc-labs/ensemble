@@ -4,14 +4,13 @@ import io
 import json
 import os
 import shutil
-import tempfile
 import threading
 import unittest
 import unittest.mock
 
 from tests.delegate.case import Case
 from tests.delegate.repo import FETCH, LOGIN, URL, Fake, fail, info, ok, pr_list, repo
-from tests.utils.sandbox import git, git_run
+from tests.utils.sandbox import git, git_run, scratch
 
 
 class Real(Fake):
@@ -40,9 +39,7 @@ class Clone(Case):
     """A real clone of a bare repo, its origin reading as github.com/o/n."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.seed, self.bare, self.clone = (
             os.path.join(self.tmp, d) for d in ("seed", "origin.git", "clone")
         )

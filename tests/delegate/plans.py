@@ -3,7 +3,6 @@
 import io
 import os
 import re
-import tempfile
 from contextlib import redirect_stderr
 from dataclasses import replace
 
@@ -16,9 +15,7 @@ from tests.delegate.unit.composer.teams import POET, VERSE
 from tests.session import fake_client
 from tests.session.modules import client_loader
 from tests.utils.case import local_section
-
-SID = "11111111-2222-3333-4444-555555555555"
-
+from tests.utils.sandbox import scratch
 
 TASKS = os.path.join(TEAM, "tasks")
 
@@ -45,9 +42,7 @@ class Base(Case):
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.work = os.path.join(self.tmp, "work")
         self.out = os.path.join(self.work, "out.md")
         self.session_dependencies = {
@@ -71,7 +66,7 @@ class Base(Case):
 
     def planned(self, role="researcher", task="research", *, keys=None, team=None, run=None, **kw):
         kw = {"client": "fake", "mode": "headless", "out": self.out, "input": "Research X.", **kw}
-        workdir, accounts = kw.pop("workdir", self.work), kw.pop("accounts", None)
+        workdir = kw.pop("workdir", self.work)
         environment = kw.pop("environment", None)
         composition = Composer(team=team)
         run = run or replace(composition.resolve(role), **(keys or {}))
@@ -82,7 +77,6 @@ class Base(Case):
                 Spec(kw.pop("input"), workdir, task=task, team=team, **kw),
                 driver=self.driver,
                 composition=composition,
-                **({} if accounts is None else {"accounts": accounts}),
                 **({} if environment is None else {"environment": environment}),
             )
         return got, err.getvalue()

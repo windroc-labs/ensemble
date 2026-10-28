@@ -1,5 +1,5 @@
-"""The issue command's backend on a local board: Linear's output shapes with local values
-(docs/architecture.md › Local board), writing as a person (other)."""
+"""The issue command's backend on a local board: Linear's output shapes with local values,
+writing as a person (other)."""
 
 import re
 from collections.abc import Mapping

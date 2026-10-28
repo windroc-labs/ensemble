@@ -22,7 +22,10 @@ from ensemble.utils import save
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
 PROTOCOL = "34"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
-INSTALL = "install or upgrade it: see docs/architecture.md#docker-install"
+INSTALL = (
+    "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
+    f" gh logged in), then {BROKER} retrust; scripts/install.sh --docker does both"
+)
 TIMEOUT = 1800
 GRACE = 5  # for a broker whose pipes closed by the deadline to be reaped
 
@@ -436,8 +439,10 @@ class Broker:
         )
         return found["removed"]
 
-    def workspace_rm(self, volume: str) -> bool:
-        """Whether it removed workspace `volume` after its check found no unsaved work; False: none."""
+    def workspace_rm(self, volume: str, *, force: bool = False) -> bool:
+        """Whether it removed workspace `volume` after its check found no unsaved work (force: with
+        no check); False: none.
+        """
         found = self._parsed(
             "workspace-rm",
             lambda d: (
@@ -447,6 +452,7 @@ class Broker:
             ),
             "--volume",
             volume,
+            *(["--force"] if force else []),
         )
         return found["removed"]
 

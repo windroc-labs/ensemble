@@ -1,5 +1,4 @@
-"""A local board's issue files, found by walking its layout (docs/architecture.md › Local board). Reads take
-no lock: only writers do."""
+"""A local board's issue files, found by walking its layout. Reads take no lock: only writers do."""
 
 import os
 from datetime import datetime

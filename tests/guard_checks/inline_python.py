@@ -273,15 +273,12 @@ def _stdlib_names(tree):
     return {name for name, stdlib in bound.items() if all(stdlib)}
 
 
-def _violations(code, *, modules=None):
+def _violations(code, *, modules):
     try:
         tree = ast.parse(code)
     except (SyntaxError, ValueError) as error:
         return [f"invalid code: {error}"]
     bound = _bindings(tree)
-    if modules is None:
-        repo = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        modules = _source_modules(repo, PROJECTS)
     found, agent = set(), False
     for node in ast.walk(tree):
         imports = []

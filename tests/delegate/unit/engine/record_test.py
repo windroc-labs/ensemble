@@ -10,7 +10,7 @@ from dataclasses import replace
 from ensemble.delegate import ConfigError, CredentialRequest, Outcome
 from ensemble.delegate.engine.record import HANDLER, RunRecord, worker
 from ensemble.delegate.engine.types import Layout, Limit, Result
-from ensemble.session import HookCallback
+from ensemble.session import EnvironmentSpec, HookCallback
 from ensemble.utils import OutcomeStatus
 from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.harness import SID, HarnessCase
@@ -24,8 +24,18 @@ class RunRecordTest(HarnessCase):
         self.make()
         record = self.record()
         state = record.read()
+        environment = EnvironmentSpec(
+            image="dummy-env:test",
+            gateway="workers",
+            plugins=("dummy-plugin",),
+            secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
+            lock="dummy-lock",
+            prefetch={"repo": "acme/app", "ref": "release/1"},
+        )
         session = replace(
-            state.plan.session, handlers=(HookCallback("pkg.handler", {"worker": 1}, ("/r",)),)
+            state.plan.session,
+            handlers=(HookCallback("pkg.handler", {"worker": 1}, ("/r",)),),
+            environment=environment,
         )
         outcome = Outcome(
             OutcomeStatus.DONE, "title", "summary", url="url", deliverable="deliverable"
@@ -42,6 +52,7 @@ class RunRecordTest(HarnessCase):
             drive="/tmp/apm-group-x",
         )
         record.save(full)
+        self.assertEqual(self.metadata()["plan"]["session"]["environment"], environment.persisted())
         self.assertEqual(record.read(), full)
 
     def test_credential_requests_round_trip_on_both_specs(self):

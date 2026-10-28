@@ -133,7 +133,7 @@ def main():
     found = integration_jobs.run_tests.discover(
         integration_jobs.ROOT, integration_jobs.directories(integration_jobs.ROOT)
     )
-    expected = {test.id() for test in integration_jobs.tests(found)}
+    expected = {test.id() for test in integration_jobs.run_tests.tests(found)}
     durations, sources = aggregate(samples, expected)
     if args.output:
         args.output.write_text(json.dumps(durations, indent=2, sort_keys=True) + "\n")

@@ -7,23 +7,21 @@ import os
 import shlex
 import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import Access, HookCallback, Mode, Spec
+from ensemble.session.engine.types import Access, Mode, Spec
 from ensemble.session.harness.view import OwnedSession
-from ensemble.session.hosts.base import Host
-from tests.session import harnesses, live_tmux
-from tests.session.case import HOSTS, REPO, Case
-from tests.session.cli_support import WorkerCase, logged
+from tests.session import live_tmux
+from tests.session.case import REPO, Case, harnessed
+from tests.session.cli_support import WorkerCase
 from tests.session.integration.clients.codex import fake_tui
 from tests.session.integration.clients.opencode import fake_opencode
+from tests.session.integration.harness.support import Recording
+from tests.utils.sandbox import scratch
 
-HANDLER = "tests.session.integration.harness.recording_handler"
-TURNS = ("TurnStarted", "TurnFailed", "TurnEnd", "Exited")
 TWO_TURNS = ["TurnStarted", "TurnEnd", "TurnStarted", "TurnEnd", "Exited"]
 WAIT = 30
 NODE = shutil.which("node")
@@ -32,24 +30,10 @@ OPENCODE_TUI = os.path.join(
 )
 
 
-def harnessed(clients: dict) -> type[HostedSession]:
-    """A default-configured session class on tmux, so a session harness owns its tui starts."""
-    return harnesses.Threaded.configured(
-        clients=clients, hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"})
-    )
-
-
-class Conversation(unittest.TestCase):
-    """The handler's records in self.out; self.server, the private tmux server."""
+class Conversation(Recording, unittest.TestCase):
+    """self.server, the private tmux server."""
 
     server: live_tmux.Server
-    out: str
-
-    def handlers(self) -> tuple[HookCallback, ...]:
-        return (HookCallback(HANDLER, {"path": self.out}, (REPO,)),)
-
-    def handled(self) -> list[dict]:
-        return [r for r in logged(self.out) if r["type"] in TURNS]
 
     def wait_for(self, kind: str, count: int = 1) -> list[dict]:
         def found():
@@ -104,9 +88,7 @@ class ClaudeTest(Conversation, WorkerCase):
 
 class CodexTest(Conversation, Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name).resolve()
+        root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         home, work = root / "home", root / "work"
         cwd, codex_home = work / "project", home / ".codex"
         for path in (home, cwd, codex_home):
@@ -174,9 +156,7 @@ class CodexTest(Conversation, Case):
 @unittest.skipIf(NODE is None, "node is not on PATH: the OpenCode TUI tests run plugin.js under it")
 class OpenCodeTest(Conversation, Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name).resolve()
+        root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         home, work = root / "home", root / "work"
         cwd = work / "project"
         for path in (home, cwd):

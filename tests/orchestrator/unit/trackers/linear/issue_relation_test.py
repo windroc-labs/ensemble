@@ -12,8 +12,8 @@ from ensemble.orchestrator.engine.types import (
 from ensemble.orchestrator.issue.output import receipt_payload
 from ensemble.orchestrator.trackers.linear import issue_read, issue_relation
 from tests.orchestrator.case import Case
-from tests.orchestrator.process_fixtures import TimeoutExpired
-from tests.orchestrator.unit.issue_fixtures import VIEWER, RelationGql, SecondFails, uid
+from tests.orchestrator.unit.issue_fixtures import RelationGql, SecondFails, receipt_of, uid
+from tests.utils.process_fixtures import TimeoutExpired
 
 BOARD = ("TASK-1", "TASK-2", "TASK-3")
 # the same edge, TASK-1 blocking TASK-2, named from either end
@@ -31,19 +31,7 @@ class Add(Case):
                     gql.writes,
                     [(issue_relation.M_ADD, {"i": "id-TASK-1", "r": "id-TASK-2"})],
                 )
-                self.assertEqual(
-                    receipt_payload(receipt),
-                    {
-                        "issue": {
-                            "id": f"id-{ident}",
-                            "identifier": ident,
-                            "url": f"https://linear.app/t/issue/{ident}",
-                        },
-                        "operation": "relation add",
-                        "result": "changed",
-                        "actor": VIEWER,
-                    },
-                )
+                self.assertEqual(receipt_payload(receipt), receipt_of("relation add", ident))
 
     def test_an_existing_edge_from_either_end_is_unchanged(self):
         for ident, direction, other in SAME_EDGE:

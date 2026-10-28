@@ -6,31 +6,8 @@ import os
 import re
 
 from tests.manager.case import REPO, Case
-from tests.manager.skills.commands import (
-    BIN,
-    body,
-    doc_sections,
-    examples,
-    paths,
-    references,
-    rules,
-    section,
-    sections,
-)
+from tests.manager.skills.commands import body, references, rules, section, sections
 from tests.manager.skills.manage import rule
-
-RETIRED = (
-    "crew.py",
-    "drive.py",
-    "tmux_host.py",
-    "router.py",
-    "--runner",
-    "attach --resume",
-    "ctmux's",
-    "${CLAUDE_SKILL_DIR}/../../src/ensemble/manager",
-    "tmux ls",
-    "ensemble-<role>-<ID>",
-)
 
 
 class Manage(Case):
@@ -42,13 +19,6 @@ class Manage(Case):
         self.assertGreaterEqual(set(cited), {"Start", "Events", "Launch", "Direct", "Recover"})
         for name in cited:
             self.assertIn(name, sections("manage"))
-
-    def test_commands_are_bin_commands_and_no_retired_name(self):
-        for command in examples(body("manage")):
-            self.assertIn(command[0], sorted(os.listdir(BIN)), command)
-        for word in RETIRED:
-            self.assertNotIn(word, body("manage"))
-        self.assertNotIn("## Crew commands", body("manage"))
 
     def test_stale_holder_recovery_restarts_under_hold_without_polling(self):
         lease_free = "env -u ENSEMBLE_HOLDER_ID -u ENSEMBLE_HOLDER_GENERATION"
@@ -176,23 +146,6 @@ class Manage(Case):
         ):
             self.assertIn(literal, proposals, literal)
 
-    def test_the_files_and_doc_sections_it_names_exist(self):
-        self.assertTrue(paths("manage"))
-        for path in paths("manage"):
-            self.assertTrue(os.path.isfile(path), path)
-        cited = doc_sections("manage")
-        self.assertIn(("docs/architecture.md", ["Board", "Using the board", "Finish"]), cited)
-        for path, (top, *inner) in cited:
-            with open(os.path.join(REPO, path), encoding="utf-8") as f:
-                doc = f.read()
-            head = re.search(rf"^(#+) {re.escape(top)}$", doc, re.M)
-            self.assertIsNotNone(head, f"{path} › {top}")
-            rest = doc[head.end() :]
-            end = re.search(rf"^#{{1,{len(head[1])}}} ", rest, re.M)
-            part = rest[: end.start()] if end else rest
-            for name in inner:
-                self.assertRegex(part, rf"(?m)^#+ {re.escape(name)}$|\*\*{re.escape(name)}:\*\*")
-
     def test_a_plugin_update_names_each_clients_command(self):
         update = rule("bumps the ensemble plugin version")
         self.assertIn("`claude plugin update ensemble@windroc`", update)
@@ -209,13 +162,13 @@ class Manage(Case):
         self.assertNotIn("› Rules", flake)
 
     def test_docker_host_workers_start_no_sessions_or_containers(self):
-        [docker] = re.findall(r"^On the Docker Host .*$", body("manage"), re.M)
+        [docker] = re.findall(r"^On the Docker Host\b.*$", body("manage"), re.M)
         for phrase in (
             "Crew starts each worker's and role run's container through the broker",
             "can start no session and no container",
             "no Docker socket and no broker",
             "the same launch commands and client flags as on this machine",
-            "permission mode comes from its Host (`docs/architecture.md` › Client policy)",
+            "permission mode comes from its Host: yolo on the Docker Host",
         ):
             self.assertIn(phrase, docker)
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
@@ -287,7 +240,7 @@ class Manage(Case):
                 "`deliverable` for a `local` destination",
                 "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
                 "else its `url`",
-                "In Review (`docs/architecture.md` › Board › Using the board)",
+                "its normal end state, In Review:",
                 "`ensemble-orchestrator issue move <ID> review`",
             )
         ]

@@ -10,6 +10,7 @@ Test boundaries and commands: `docs/architecture.md` › Tests.
 - Every task has exactly one `[ensemble-progress:start]` line and no `budget` one, which start replaced (`tests/delegate/unit/team_test.py` checks): without the start report the Delegate logs `missing progress mark: start`, write-back posts no start comment, and a build's `issues.build_cutoff` loses its `Build started` cutoff.
 - Never name Linear in the team text (`src/ensemble/delegate/team/`), in `/ensemble:act-as` and `/ensemble:manage`, or in `/ensemble:board` (`skills/board/SKILL.md`) outside its `## Linear` section: only that section, the Linear layer's, does.
 - Skills and `config.toml` comments name a file by its path and a skill by its slash command (`/ensemble:act-as`), never "the act-as skill" or `ensemble:act-as`.
+- Code, comments, messages and skills never reference a document: state the fact in place, or drop the pointer. Documents may reference code.
 - A layer's packaged `config.toml` (`src/ensemble/<package>/config.toml`) holds only its keys, each a real line (a local-only one its empty default, its comment saying what empty means); a `# local:` line only shows a value for `~/.ensemble/config.local.toml` (`tests/guard_checks/configuration.py` `explicit_keys`). Layer sections and merge rules: `src/ensemble/utils/config_file.py`'s docstring.
 - Identify Linear entities by id, never name; role app user ids come from configuration.
 - Linear's lists can lag a just-made state change: re-read an issue's state before acting on it (`src/ensemble/orchestrator/trackers/linear/ops.py:move` does).
@@ -31,8 +32,9 @@ Queue groups run every CI project, including diff coverage against the group's b
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
 The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`
 workflow with fake credentials. The independent `Broker macOS` workflow
-(`.github/workflows/broker-macos.yml`) runs on pushes to `main`, pull requests that change
-`src/broker/` or the workflow, and manual dispatch, preserving macOS checks and the darwin/arm64 build artifact without blocking required CI.
+(`.github/workflows/broker-macos.yml`) runs on pushes to `main` and pull requests that change
+`src/broker/` or the workflow, and on manual dispatch, preserving macOS checks (gofmt runs on
+ubuntu only) and the darwin/arm64 build artifact without blocking required CI.
 Require `CI` and `mini-op PR text` (`.github/workflows/mini-op-pr-text.yml`, the PR title, body and commits scan, which a title or body edit reruns alone), never `Broker macos-15` separately.
 
 ## Releasing

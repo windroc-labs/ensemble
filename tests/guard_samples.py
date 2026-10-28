@@ -3,12 +3,12 @@
 import ast
 import inspect
 import os
-import tempfile
 import unittest
 from pathlib import Path
 
 from tests import guards
 from tests.case import REPO, Case
+from tests.utils.sandbox import scratch
 
 PKG = "src/ensemble"
 FIXTURES = ("setUpClass", "tearDownClass", "setUpModule", "tearDownModule")
@@ -45,14 +45,13 @@ def own_case(test, top):
 
 class Sample(Case):
     def tree(self, files: dict[str, str]) -> str:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        root = scratch(self, real=False)
         for rel, text in files.items():
-            path = os.path.join(tmp.name, rel)
+            path = os.path.join(root, rel)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
-        return tmp.name
+        return root
 
 
 def test_suites(root, top):

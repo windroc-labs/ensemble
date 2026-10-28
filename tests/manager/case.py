@@ -1,5 +1,5 @@
-"""Case, every manager test's base; child helpers (PY, child_env); with_ctl; this tree's import
-roots (REPO, SRC, ROOTS, PYTHONPATH).
+"""Case, every manager test's base; child helpers (PY, child_env); with_ctl; status; own; this
+tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
 """
 
 import contextlib
@@ -7,59 +7,36 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
-import unittest
 import uuid
 from dataclasses import replace
 from unittest import mock
 
 import ensemble
-from ensemble.utils import Record
+from ensemble.manager.engine.types import Spec
+from ensemble.utils import Record, Status
 from tests.session import harnesses
+from tests.utils.case import REPO, ROOTS, RUN_WITH, SRC, TreeCase, foreign
 from tests.utils.fakes import ctl
-from tests.utils.sandbox import clean_env, project_roots
+from tests.utils.sandbox import clean_env
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ROOTS = project_roots(REPO)
-SRC = {
-    name: root
-    for root in ROOTS
-    for name in os.listdir(os.path.join(root, "ensemble"))
-    if os.path.isfile(os.path.join(root, "ensemble", name, "__init__.py"))
-}
 PYTHONPATH = os.pathsep.join(ROOTS)
-RUN_WITH = os.pathsep.join(os.path.relpath(root, REPO) for root in ROOTS)
 PY = (sys.executable, "-P", "-S")
 HERE = ("ensemble-session", "ls", "--here", "--records")
 
 
-class Case(unittest.TestCase):
-    """Fails a test whose ensemble is not exactly this tree's, else runs it (whatever its setUp) in
-    a fresh temp HOME, self.home (self.ensemble: its .ensemble), no shared mutable session settings.
-    """
+class Case(TreeCase):
+    """A TreeCase with no shared mutable session settings."""
 
-    def run(self, result=None):
-        if foreign := _foreign():
-            result = self.defaultTestResult() if result is None else result
-            result.startTest(self)
-            try:
-                self.fail(foreign)
-            except self.failureException:
-                result.addFailure(self, sys.exc_info())
-            result.stopTest(self)
-            return result
-        with (
-            tempfile.TemporaryDirectory() as self.home,
-            mock.patch.dict(
-                os.environ,
-                {**child_env(), "HOME": self.home, "ENSEMBLE_CONTROL_ROOT": self.home},
-                clear=True,
-            ),
-        ):
-            self.ensemble = os.path.join(self.home, ".ensemble")
-            os.mkdir(self.ensemble)
-            self.addCleanup(harnesses.end, self.home)
-            return super().run(result)
+    _case_clear = True
+
+    def _case_foreign(self) -> str | None:
+        return _foreign()
+
+    def _case_env(self) -> dict[str, str]:
+        return {**child_env(), **super()._case_env()}
+
+    def _case_enter(self, stack) -> None:
+        self.addCleanup(harnesses.end, self.home)
 
     def setup_ctl(self) -> str:
         self.ctl_dir = os.path.join(self.home, "ctl")
@@ -90,18 +67,7 @@ class Case(unittest.TestCase):
     def fake_record(
         self, name: str, *, display: str | None = None, sid: str | None = None
     ) -> Record:
-        return Record(
-            1,
-            "fake",
-            name,
-            (name,),
-            sid or str(uuid.uuid4()),
-            None,
-            (ctl.COMMAND,),
-            (ctl.COMMAND, "resume", name),
-            display,
-            None,
-        )
+        return ctl.record(name, display, sid=sid or str(uuid.uuid4()))
 
     @contextlib.contextmanager
     def listed(self, records=()):
@@ -109,9 +75,7 @@ class Case(unittest.TestCase):
 
         def run(argv, **options):
             if tuple(argv) in (HERE, (*HERE, "--descendants")):
-                return subprocess.CompletedProcess(
-                    argv, 0, "".join(record.to_line() + "\n" for record in records), ""
-                )
+                return subprocess.CompletedProcess(argv, 0, ctl.lines(*records), "")
             return real_run(argv, **options)
 
         with mock.patch("subprocess.run", side_effect=run):
@@ -119,31 +83,27 @@ class Case(unittest.TestCase):
 
 
 def _foreign(modules=None) -> str | None:
-    own = {os.path.realpath(os.path.join(r, "ensemble")) for r in ROOTS}
-    for path in ensemble.__path__:
-        if os.path.realpath(path) not in own:
-            return f"ensemble.__path__ holds {path}, not only this tree's: run with PYTHONPATH={RUN_WITH}"
-    if missing := own - {os.path.realpath(p) for p in ensemble.__path__}:
-        return (
-            f"ensemble.__path__ lacks {', '.join(sorted(missing))}: run with PYTHONPATH={RUN_WITH}"
-        )
-    for name, module in list((sys.modules if modules is None else modules).items()):
-        top, _, sub = name.partition(".")
-        where = getattr(module, "__file__", None)
-        if top == "ensemble" and sub and "." not in sub and where:
-            found = os.path.dirname(os.path.dirname(where))
-            found = os.path.dirname(found) if os.path.basename(where) == "__init__.py" else found
-            root = SRC.get(sub)
-            if root is None or os.path.realpath(found) != os.path.realpath(root):
-                return (
-                    f"{name} is imported from {found}, not this tree's {root}: "
-                    f"run with PYTHONPATH={RUN_WITH}"
-                )
-    return None
+    return foreign(ensemble, ROOTS, SRC, RUN_WITH, modules)
 
 
 def with_ctl(record: Record, command: str) -> Record:
     return replace(record, ctl=(command,), resume=(command, "resume", record.name))
+
+
+def status(
+    name, *, alive=True, state="working", outcome=None, attach=None, hidden=False, cwd=None
+) -> Status:
+    return Status(
+        name=name, alive=alive, state=state, outcome=outcome, attach=attach, hidden=hidden, cwd=cwd
+    )
+
+
+def own(roster, record: Record, name=None, note=None) -> Record:
+    """record committed under name (default its own), as if roster launched it."""
+    name = name or record.name
+    roster.begin(Spec(name, ("start",), note), sid=record.sid)
+    roster.commit(name, record)
+    return record
 
 
 def child_env(base=None, *extra: str) -> dict[str, str]:

@@ -1,5 +1,5 @@
 """Role runs through `ensemble-crew run -- ensemble-delegate run … --detach` (FR-18, FR-22, FR-35)
-on the real commands (tests/manager/live_crew.py). Ports main's test_detach_events_default,
+on the real commands (tests/manager/live_crew.py). Ports main's
 test_killed_role_run_gone_then_recovered, test_close_a_role_run_by_its_tui_session and
 test_a_role_run_ended_on_needs_input_is_waiting_and_left_alone_by_attach_resume.
 """
@@ -51,17 +51,6 @@ class RoleCase(LiveCrew):
 
 
 class RoleTest(RoleCase):
-    def test_detach_events_default(self):
-        record = self.started("r", steps=[START], turns=[[block(DONE)]])
-        (tui,) = record.sessions
-        drive = f"{tui}-drive"
-        self.wait_event(drive, "exited")
-        self.wait_event(tui, "done", 2)
-        self.assertEqual(self.words(tui), [["done"], ["done"]])
-        self.assertEqual(self.words(drive), [["outcome", "done"], ["exited", "0"]])
-        self.ok(self.crew("attach"))
-        self.assertEqual(self.roster()["r"].state, State.DONE)
-
     def test_killed_role_run_gone_then_recovered(self):
         record = self.started("r", steps=[START])
         (tui,) = record.sessions
@@ -127,6 +116,9 @@ class RoleTest(RoleCase):
         record = self.record(self.launch("TASK-9", argv, steps=[START], turns=[[block(DONE)]]))
         (tui,) = record.sessions
         self.wait_event(f"{tui}-drive", "exited")
+        self.until(lambda: not self.drive_running(record), f"{tui}-drive ended")
+        self.ok(self.crew("attach"))
+        self.assertEqual(self.roster()["TASK-9"].state, State.DONE)
         self.ok(self.crew("close", "TASK-9"))
         self.until(
             lambda: self.gone(tui) and not self.drive_running(record), f"{tui} and its drive gone"

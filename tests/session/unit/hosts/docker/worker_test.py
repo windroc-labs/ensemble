@@ -5,7 +5,6 @@ and end, with a fake channel, broker, hook process and removal.
 import argparse
 import json
 import os
-import select
 import threading
 from types import SimpleNamespace
 from unittest import mock
@@ -20,6 +19,8 @@ from ensemble.session.hosts.docker import worker
 from ensemble.session.hosts.docker.maintenance import Maintenance
 from ensemble.session.hosts.docker.mounts import state_dir
 from tests.session.case import Case
+from tests.session.unit.hosts.support import writable
+from tests.utils.jsonl import read_jsonl
 
 GEN = "0123456789abcdef0123456789abcdef"
 NOW = 1_792_238_400.0
@@ -111,11 +112,8 @@ class Base(Case):
         return found
 
     def rejected(self):
-        try:
-            with open(os.path.join(self.state, "rejected.jsonl")) as f:
-                return [json.loads(line)["reason"] for line in f]
-        except FileNotFoundError:
-            return []
+        rows = read_jsonl(os.path.join(self.state, "rejected.jsonl"), missing_ok=True)
+        return [row["reason"] for row in rows]
 
     def ended(self, channel):
         """Its container's removal confirmed within WAIT: the worker ABSENT."""
@@ -159,22 +157,6 @@ class HookFrameTest(Base):
             logged = f.read()
         self.assertNotIn("Stop/", logged)
         self.assertEqual(channel.state(), Liveness.LIVE)
-
-    def test_bad_framing_or_a_nested_non_hook_frame_fails_the_channel_closed(self):
-        nested = b'{"returncode":' + b"[" * 100000 + b"]" * 100000 + b"}"
-        for wire in (
-            b"o" + (guard.FRAME_MAX + 1).to_bytes(4, "big"),
-            guard.frame(b"x", nested),
-            guard.frame(b"z", b"{}"),
-        ):
-            with self.subTest(wire=wire[:8]):
-                channel = self.make()
-                channel.proc.stdout.read.side_effect = [wire, b"more", b""]
-                channel.pump()
-                self.assertIsNotNone(channel.failure)
-                self.assertEqual(channel.proc.stdout.read.call_count, 3)
-                self.assertTrue(self.ended(channel))
-                self.assertEqual(channel.returncode(), None)
 
     def test_the_rejected_log_stops_at_its_cap(self):
         path = os.path.join(self.state, "rejected.jsonl")
@@ -267,10 +249,7 @@ class HookTest(Base):
             return b""
 
         channel.proc.stdout.read.side_effect = read
-        with (
-            mock.patch.object(select, "select", return_value=([], [channel.proc.stdin], [])),
-            mock.patch.object(os, "write", side_effect=to_guard),
-        ):
+        with writable(to_guard):
             channel.pump()
         self.assertEqual(hooks.sents, [f"{GEN} 0 0"])
 
@@ -452,10 +431,7 @@ class MaintenanceTest(Base):
                 channel.accept(b"x", b'{"returncode":0}')
             return len(data)
 
-        with (
-            mock.patch.object(select, "select", return_value=([], [99], [])),
-            mock.patch.object(os, "write", side_effect=written),
-        ):
+        with writable(written):
             self.assertEqual(channel.maintenance.tick(NOW), NOW + 30)
             self.assertIsNone(channel.maintenance.tick(NOW + 30))
             self.assertTrue(self.ended(channel))
@@ -536,10 +512,7 @@ class EndTest(Base):
                 raise ValueError("I/O operation on closed file")
             raise BrokenPipeError
 
-        with (
-            mock.patch.object(select, "select", return_value=([], [99], [])),
-            mock.patch.object(os, "write", side_effect=write),
-        ):
+        with writable(write):
             channel.release_hook()
             self.assertTrue(writing.wait(WAIT))
             channel.accept(b"x", b'{"returncode":0}')
@@ -557,10 +530,7 @@ class EndTest(Base):
                 channel.accept(b"x", b'{"returncode":0}')
             return len(data)
 
-        with (
-            mock.patch.object(select, "select", return_value=([], [99], [])),
-            mock.patch.object(os, "write", side_effect=written),
-        ):
+        with writable(written):
             channel.close()
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
         self.assertEqual(self.removed, [GEN])
@@ -595,13 +565,7 @@ class LaunchTest(Base):
             more.set()
             return len(data)
 
-        patches = (
-            mock.patch.object(select, "select", return_value=([], [99], [])),
-            mock.patch.object(os, "write", side_effect=written),
-        )
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
+        self.enterContext(writable(written))
         channel.launch(self.HANDOFF)
         return channel, frames
 

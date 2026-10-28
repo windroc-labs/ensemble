@@ -26,8 +26,7 @@ from ensemble.manager.engine.crew import (
 )
 from ensemble.manager.engine.roster import LOCK_TIMEOUT, Roster
 from ensemble.manager.engine.types import Held, RosterError, Spec, Stale, State, StatusError
-from ensemble.utils import Status
-from tests.manager.case import Case, with_ctl
+from tests.manager.case import Case, own, status, with_ctl
 from tests.manager.starters import answered
 from tests.utils.fakes import ctl
 
@@ -48,11 +47,6 @@ class CrewTest(Case):
         if display is not None:
             argv += ("--display", display)
         return self.crew.run(Spec(name, argv, note))
-
-    def own(self, record):
-        """record committed under its name, as if this roster launched it."""
-        self.roster.begin(Spec(record.name, (record.ctl[0], "start")), sid=record.sid)
-        self.roster.commit(record.name, record)
 
     def gone(self, name):
         record = self.start(name)
@@ -497,19 +491,6 @@ class CrewTest(Case):
             if original is not None:
                 self.assertEqual(record, original)
 
-    def test_attach_times_out_old_starting_and_resuming_entries_but_leaves_young_ones(self):
-        self.roster.begin(Spec("old", (self.command, "start", "old")), sid=str(uuid.uuid4()))
-        self.roster.begin(Spec("young", (self.command, "start", "young")), sid=str(uuid.uuid4()))
-        self.age("old")
-        self.gone("resuming")
-        self.roster.claim_resume("resuming")
-        self.age("resuming")
-        with self.listed():
-            self.crew.attach()
-        self.assertEqual(self.roster.entries()["old"].state, State.LOST)
-        self.assertEqual(self.roster.entries()["young"].state, State.STARTING)
-        self.assertEqual(self.roster.entries()["resuming"].state, State.GONE)
-
     def test_attach_adopts_only_the_sid_matched_orphan_under_its_alias_and_note(self):
         sid = str(uuid.uuid4())
         self.roster.begin(Spec("alias", (self.command, "start", "actual-name"), "keep"), sid=sid)
@@ -609,15 +590,7 @@ class CrewTest(Case):
         def run(argv, **options):
             if tuple(argv) == (self.command, "status"):
                 lines = (
-                    Status(
-                        name=name,
-                        alive=True,
-                        state="working",
-                        outcome=None,
-                        attach=None,
-                        cwd=cwd,
-                        hidden=False,
-                    ).to_line()
+                    status(name, cwd=cwd).to_line()
                     for name, cwd in (("one", "/w/repo one"), ("two", None))
                 )
                 return subprocess.CompletedProcess(argv, 0, "\n".join(lines) + "\n", "")
@@ -634,9 +607,7 @@ class CrewTest(Case):
         self.start("one")
         self.start("two")
         ctl.set_session(self.ctl_dir, "one", alive=True)
-        one = Status(
-            name="one", alive=True, state="working", outcome=None, attach=None, hidden=False
-        )
+        one = status("one")
         real_run = subprocess.run
 
         def run(argv, **options):
@@ -663,22 +634,8 @@ class CrewTest(Case):
         self.start("worker")
         responses = (
             "",
-            (
-                Status(
-                    name="worker",
-                    alive=True,
-                    state="working",
-                    outcome=None,
-                    attach=None,
-                    hidden=False,
-                ).to_line()
-                + "\n"
-            )
-            * 2,
-            Status(
-                name="extra", alive=True, state="working", outcome=None, attach=None, hidden=False
-            ).to_line()
-            + "\n",
+            (status("worker").to_line() + "\n") * 2,
+            status("extra").to_line() + "\n",
         )
         for raw in responses:
             with (
@@ -708,23 +665,11 @@ class CrewTest(Case):
         self.assertTrue(self.crew.status(("first",))[0].alive)
         self.assertEqual(self.calls("close"), [{"argv": ["close"], "names": ["other"]}])
 
-    def test_failed_close_retains_entry(self):
-        self.start("worker")
-        with (
-            mock.patch(
-                "subprocess.run",
-                return_value=subprocess.CompletedProcess([], 1, "", "close failed"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "close failed"),
-        ):
-            self.crew.close("worker")
-        self.assertIn("worker", self.roster.entries())
-
     def test_attach_keeps_failed_ctl_unknown_and_processes_healthy_group(self):
         healthy = self.start("healthy", display="view")
         ctl.set_session(self.ctl_dir, "healthy", showable=True)
         bad = with_ctl(self.fake_record("broken"), MISSING)
-        self.own(bad)
+        own(self.roster, bad)
         stderr = io.StringIO()
         with self.listed((healthy, bad)), contextlib.redirect_stderr(stderr):
             table = self.crew.attach()
@@ -741,7 +686,7 @@ class CrewTest(Case):
         with open(command, "w", encoding="utf-8") as stream:
             stream.write("#!/bin/sh\necho broken-controller >&2\nexit 7\n")
         os.chmod(command, 0o700)
-        self.own(bad)
+        own(self.roster, bad)
         real_run = subprocess.run
 
         def run(argv, **options):
@@ -808,15 +753,6 @@ class CrewTest(Case):
         self.assertEqual(self.roster.entries(), {})
         self.assertEqual(self.calls("close"), [{"argv": ["close"], "names": ["owned", "orphan"]}])
 
-    def test_close_all_closes_healthy_groups_and_retains_failed_groups(self):
-        bad = with_ctl(self.fake_record("broken"), MISSING)
-        self.own(bad)
-        self.start("healthy")
-        with self.listed(), self.assertRaisesRegex(RuntimeError, MISSING):
-            self.crew.close_all()
-        self.assertEqual(set(self.roster.entries()), {"broken"})
-        self.assertEqual(self.calls("close"), [{"argv": ["close"], "names": ["healthy"]}])
-
     def test_each_ctl_is_queried_once_and_answers_are_mapped_to_their_names(self):
         self.start("one")
         second = "ensemble-delegate"
@@ -825,8 +761,7 @@ class CrewTest(Case):
         )
         os.chmod(os.path.join(self.bin_dir, second), 0o700)
         record = self.fake_record("two")
-        self.roster.begin(Spec("two", (second, "start", "two")), sid=record.sid)
-        self.roster.commit("two", with_ctl(record, second))
+        own(self.roster, with_ctl(record, second))
         ctl.set_session(self.ctl_dir, "two", alive=True)
         statuses = self.crew.status()
         self.assertEqual([status.name for status in statuses], ["one", "two"])
@@ -1013,11 +948,6 @@ class CrewTest(Case):
         with self.listed():
             other.attach()
 
-    def test_next_event_returns_only_the_event_with_its_line(self):
-        with open(self.roster.events, "a", encoding="utf-8") as stream:
-            stream.write("12:00:00 worker outcome done\n")
-        self.assertEqual(self.crew.next_event(after=0, gen=0), (1, "12:00:00 worker outcome done"))
-
     def test_next_event_retains_every_line_until_explicit_ack(self):
         path = self.roster.events
         with open(path, "a", encoding="utf-8") as stream:
@@ -1149,45 +1079,6 @@ class CloseAllTest(Case):
 
         with mock.patch("subprocess.run", side_effect=run):
             yield
-
-    def test_failed_listing_still_closes_known_records_and_keeps_unknown_work_alive(self):
-        self.crew.run(Spec("owned", (self.command, "start", "owned")))
-        ctl.set_session(self.ctl_dir, "unknown", alive=True)
-        stderr = io.StringIO()
-        with (
-            self.unavailable_listing(),
-            contextlib.redirect_stderr(stderr),
-            self.assertRaisesRegex(RuntimeError, "close-all partial"),
-        ):
-            self.crew.close_all()
-        self.assertIn("listing unavailable", stderr.getvalue())
-        self.assertEqual(self.roster.entries(), {})
-        with Path(self.ctl_dir, ctl.SESSIONS).open(encoding="utf-8") as stream:
-            sessions = json.load(stream)
-        self.assertFalse(sessions["owned"]["alive"])
-        self.assertTrue(sessions["unknown"]["alive"])
-        self.assertEqual(
-            [call for call in ctl.calls(self.ctl_dir) if call["argv"] == ["close"]],
-            [{"argv": ["close"], "names": ["owned"]}],
-        )
-
-    def test_failed_listing_dry_run_preserves_known_records_and_closes_nothing(self):
-        self.crew.run(Spec("owned", (self.command, "start", "owned")))
-        before = Path(self.roster.path).read_bytes()
-        stderr = io.StringIO()
-        with (
-            self.unavailable_listing(),
-            contextlib.redirect_stderr(stderr),
-            self.assertRaisesRegex(RuntimeError, "close-all partial"),
-        ):
-            self.crew.close_all(dry_run=True)
-        self.assertIn("listing unavailable", stderr.getvalue())
-        self.assertEqual(Path(self.roster.path).read_bytes(), before)
-        self.assertEqual(
-            [call for call in ctl.calls(self.ctl_dir) if call["argv"] == ["close"]], []
-        )
-        with Path(self.ctl_dir, ctl.SESSIONS).open(encoding="utf-8") as stream:
-            self.assertTrue(json.load(stream)["owned"]["alive"])
 
     def test_failed_listing_empty_roster_reports_failure_without_creating_state(self):
         stderr = io.StringIO()

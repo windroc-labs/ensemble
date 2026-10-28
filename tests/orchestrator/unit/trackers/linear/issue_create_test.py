@@ -19,14 +19,13 @@ from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import MANAGER_USER, STATES, TEAM, role_id
 from tests.orchestrator.unit.issue_fixtures import (
     CLIENT_LABELS,
-    NEW,
     TASK_LABELS,
-    VIEWER,
     by_name,
     create_gql,
     label,
     names_cfg,
     new_issue,
+    receipt_of,
     uid,
 )
 
@@ -85,10 +84,7 @@ class Create(Case):
             [r[1] for r in related],
             [relation("id-TASK-9", "id-TASK-3"), relation("id-TASK-4", "id-TASK-9")],
         )
-        self.assertEqual(
-            receipt_payload(receipt),
-            {"issue": NEW, "operation": "create", "result": "changed", "actor": VIEWER},
-        )
+        self.assertEqual(receipt_payload(receipt), receipt_of("create", "TASK-9"))
 
     def test_unset_fields_stay_unset_and_the_state_is_backlog(self):
         fake = create_gql()
@@ -195,10 +191,7 @@ class Create(Case):
         with self.assertRaises(RelationsFailed) as cm:
             run(fake, blocks=("TASK-3", "TASK-5"), blocked_by=("TASK-4",))
         error = cm.exception
-        self.assertEqual(
-            receipt_payload(error.receipt),
-            {"issue": NEW, "operation": "create", "result": "changed", "actor": VIEWER},
-        )
+        self.assertEqual(receipt_payload(error.receipt), receipt_of("create", "TASK-9"))
         self.assertEqual(error.done, (Blocking("blocks", "TASK-3"),))
         self.assertEqual(
             [blocking for blocking, _ in error.failed],

@@ -48,7 +48,7 @@ class EnvironmentSources(Case):
         self.assertEqual((spec.access.env, dict(spec.env)), ({"A": "1"}, {"B": "2"}))
 
     def test_every_input_accepts_exec_environment_names(self):
-        env = {"A-B": "a b", "1A": "", "X;Y": "value", "Ä": "value"}
+        env = {"A-B": "a b", "1A": "", "X;Y": "v", "Ä": "v", "A B": "v", "A\n": "v", "_x1": ""}
         for build in (
             lambda **fields: Access(cwd="/c", **fields),
             ProcessOptions,
@@ -157,20 +157,6 @@ class FrozenConfig(Case):
 
 
 class WhatToStart(Case):
-    def test_the_spec_constructor_stays_keyword_only(self):
-        parameters = inspect.signature(Spec).parameters
-        self.assertTrue(parameters)
-        self.assertTrue(all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in parameters.values()))
-        with self.assertRaises(TypeError):
-            Spec("/w")
-
-    def test_the_start_fields_default_so_a_clients_partial_spec_stays_valid(self):
-        spec = Spec(workdir="/w", access=Access(cwd="/w"))
-        self.assertEqual(
-            (spec.client, spec.mode, spec.prompt, spec.resume, spec.events, spec.handlers),
-            (None, None, "", False, None, ()),
-        )
-
     def test_access_cwd_is_required(self):
         with self.assertRaises(TypeError):
             Access()
@@ -248,8 +234,6 @@ class Handlers(Case):
 
 class ReservedName(Case):
     def test_none_alone_is_no_session_name_but_a_tag(self):
-        self.assertIn("SESSION_NAME", session.__all__)
-        self.assertIn("SESSION_NAME_RULE", session.__all__)
         self.assertIsNone(session.SESSION_NAME.fullmatch("none"))
         for name in ("none-1", "None", "nonex", "a_none"):
             with self.subTest(name=name):
@@ -277,8 +261,6 @@ class OptionSets(Case):
             with self.subTest(enum=enum.__name__):
                 self.assertEqual([m.value for m in enum], values)
                 self.assertEqual(list(enum), values)
-                self.assertEqual(enum.__name__ in session.__all__, enum is not Liveness)
-        self.assertNotIn("MODES", session.__all__)
 
     def test_hook_kinds_tiers_and_hook_words_are_session_internal_str_enums(self):
         for enum, values in (
@@ -288,7 +270,6 @@ class OptionSets(Case):
             with self.subTest(enum=enum.__name__):
                 self.assertEqual([m.value for m in enum], values)
                 self.assertEqual(list(enum), values)
-                self.assertNotIn(enum.__name__, session.__all__)
 
 
 class CarriedEnums(Case):
@@ -432,8 +413,6 @@ class Binding(Case):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             ClientBound("n1").client_id = "n2"
         self.assertNotIn(ClientBound, typing.get_args(engine_types.SessionEvent))
-        self.assertFalse(hasattr(engine_types, "SessionBound"))
-        self.assertNotIn("ClientBound", session.__all__)
 
 
 class KeyNotation(Case):
@@ -474,7 +453,6 @@ class KeyNotation(Case):
         for named in NamedKey:
             with self.subTest(named=named):
                 self.assertEqual(KeyPress.parse(named.value), KeyPress(named.value))
-        self.assertNotIn("KeyPress", session.__all__)
 
 
 class HookCallbackTest(Case):

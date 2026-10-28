@@ -13,7 +13,6 @@ import json
 import operator
 import os
 import sys
-import tempfile
 import tomllib
 import types
 import unittest
@@ -30,8 +29,9 @@ from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import ConfigError, Hosts, TuiSettings
 from ensemble.utils import load_class
 from tests.session import fake_client, harnesses
-from tests.session.case import HOSTS, Case, configured
+from tests.session.case import HOSTS, SID, Case, configured
 from tests.session.modules import client_loader
+from tests.utils.sandbox import scratch
 
 FAKE_CLASS = "ensemble.session.clients.fake:FakeClient"
 FAKE = f'[clients.fake]\nimplementation = "{FAKE_CLASS}"\n'
@@ -569,7 +569,6 @@ class ClientTest(Base):
         )
 
 
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 PLUGIN_OFF = '{"enabledPlugins": {"ensemble@windroc": false}}'
 
 
@@ -588,9 +587,8 @@ class Committed(Case):
                 self.assertEqual({"roles", "output"} & set(table), set())
 
     def test_the_claude_table_builds_a_claude_client(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        patch = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": os.path.join(tmp.name, "config")})
+        tmp = scratch(self, real=False)
+        patch = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": os.path.join(tmp, "config")})
         patch.start()
         self.addCleanup(patch.stop)
         tables = committed()
@@ -601,6 +599,7 @@ class Committed(Case):
                 "max_runs": 0,
                 "flags": ["--settings", PLUGIN_OFF],
                 "allow": [],
+                "account": "",
                 "modes": {
                     "auto": ["--permission-mode", "auto"],
                     "yolo": [
@@ -622,8 +621,8 @@ class Committed(Case):
             client.headless()
             .launch(
                 Spec(
-                    workdir=tmp.name,
-                    access=Access(cwd=tmp.name),
+                    workdir=tmp,
+                    access=Access(cwd=tmp),
                     tier=4,
                     effort="low",
                     sid=SID,
@@ -645,29 +644,14 @@ class Committed(Case):
             ),
         )
 
-    def test_the_claude_flags_comment_says_how_settings_combine(self):
-        config = os.path.join(os.path.dirname(ensemble.session.__file__), "config.toml")
-        with open(config, encoding="utf-8") as f:
-            comments = " ".join(line.lstrip("#").strip() for line in f if line.startswith("#"))
-        for claim in (
-            "claude flags added to every session command and its resume command",
-            "Every --settings here and in a Spec, inline JSON or a settings file's path (relative to"
-            " the session's cwd), merges into one",
-            "A local list replaces it whole",
-        ):
-            self.assertIn(claim, comments)
-
     def test_every_committed_claude_session_turns_the_ensemble_plugin_off(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        tmp = scratch(self, real=False)
         self.enterContext(
-            mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": os.path.join(tmp.name, "config")})
+            mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": os.path.join(tmp, "config")})
         )
         client = registry_of(configured(committed())).client("claude")
         for flags in ((), ("--settings", '{"model": "x"}')):
-            spec = Spec(
-                workdir=tmp.name, access=Access(cwd=tmp.name), sid=SID, prompt="hi", flags=flags
-            )
+            spec = Spec(workdir=tmp, access=Access(cwd=tmp), sid=SID, prompt="hi", flags=flags)
             for launch in (client.headless().launch(spec), client.tui().launch(spec, ("h",))):
                 with self.subTest(flags=flags, argv=launch.argv[1]):
                     argv = launch.argv

@@ -1,10 +1,7 @@
-"""A worker's view through bin/ensemble-session on a private tmux server: `start
---display none` opens no pane, the caller still its opener, and is hidden; show opens it and clears
-hidden; restart and resume keep hidden or shown; a new start of the same sid takes its own view;
-its events still reach the events file; a given hidden part is refused; a Codex worker the same.
-Its viewer killed by hand marks it hidden (its client-detached hook); losing the manager's window,
-or detaching the viewer and then another client, does not, each checked after a control worker's
-killed viewer marks it hidden.
+"""A worker's view through bin/ensemble-session on a private tmux server: `start --display none`
+opens no pane and is hidden; show clears hidden; restart and resume keep it; a new start of the
+same sid takes its own view; a given hidden part is refused; Codex the same. A killed viewer marks
+it hidden; losing the manager's window or detaching its clients does not.
 """
 
 import os
@@ -31,7 +28,7 @@ class HiddenCase(CliCase):
         return found.hidden
 
     def viewer(self, name: str = "w1") -> str:
-        """Its @pane, "" when show opened none for this tmux session."""
+        """Its @pane, "" if none."""
         return self.server.option(name, "@pane")
 
     def shows(self, name: str = "w1", window: str = WINDOW) -> str:
@@ -54,7 +51,7 @@ class HiddenCase(CliCase):
         self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
 
     def crash(self, name: str = "w1") -> None:
-        """kill -9 of its session harness (its guard then ends the client)."""
+        """kill -9 of its session harness (its guard ends the client)."""
         channel = self.owner(name)
         os.kill(channel.status()["pid"], signal.SIGKILL)
         live_tmux.wait(lambda: not channel.alive(), what="the killed harness to let go")
@@ -71,17 +68,14 @@ class HiddenStartTest(HiddenCase):
         listed = self.ok(self.session("ls", "--here", "--records")).stdout.splitlines()
         self.assertIn(record, [Record.parse(line) for line in listed])
 
-    def test_show_opens_the_hidden_worker_and_clears_hidden(self):
+    def test_a_shown_display_none_worker_stays_shown_after_restart(self):
+        before = self.count()
         self.record(self.start("w1", "--display", "none"))
+        self.wait_event("w1", "done")
+        self.assertEqual((self.count(), self.hidden()), (before, True))
         self.ok(self.session("show", "w1"))
         self.shows()
         self.assertFalse(self.hidden())
-
-    def test_a_shown_display_none_worker_stays_shown_after_restart(self):
-        self.record(self.start("w1", "--display", "none"))
-        self.wait_event("w1", "done")
-        self.ok(self.session("show", "w1"))
-        self.shows()
         self.record(self.again("restart"))
         self.shows()
         self.assertFalse(self.hidden())
@@ -114,18 +108,6 @@ class HiddenStartTest(HiddenCase):
         self.assertEqual(self.viewer(), "")
         self.assertTrue(self.hidden())
 
-    def test_a_hidden_workers_events_reach_the_events_file_without_a_pane(self):
-        before = self.count()
-        self.record(self.start("w1", "--display", "none"))
-        self.wait_event("w1", "done")
-        self.assertEqual(self.count(), before)
-        self.assertTrue(self.hidden())
-
-    def test_a_default_start_opens_a_pane_not_hidden(self):
-        self.record(self.start("w1"))
-        self.shows()
-        self.assertFalse(self.hidden())
-
     def test_start_refuses_a_given_hidden_part(self):
         res = self.start("w1", "--display", f"{MANAGER}///hidden")
         self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
@@ -138,15 +120,10 @@ class HookTest(HiddenCase):
         self.ok(self.server.tmux("kill-pane", "-t", self.shows(name, window)))
 
     def control(self, name: str = "c1", window: str = WINDOW, **kw) -> None:
-        """name's viewer killed by hand marks it hidden: hooks run, so an earlier one has run."""
+        """Kills name's viewer: once it shows hidden, earlier hooks have run."""
         self.kill_viewer(name, window)
         live_tmux.wait(lambda: self.hidden(name, **kw), what=f"{name} hidden")
-
-    def test_killing_the_viewer_pane_marks_it_hidden(self):
-        self.record(self.start("w1"))
-        self.kill_viewer("w1")
-        live_tmux.wait(self.hidden, what="w1 hidden")
-        self.assertEqual(self.server.tmux("has-session", "-t", "=w1").returncode, 0)
+        self.assertEqual(self.server.tmux("has-session", "-t", f"={name}").returncode, 0)
 
     def test_hide_if_closed_changes_a_shown_worker_nothing(self):
         self.record(self.start("w1"))
@@ -221,7 +198,7 @@ class CodexHiddenTest(HiddenCase):
             os.mkdir(path)
         shutil.copy2(self.server.program, bin_dir)
         fake_tui.install(bin_dir)
-        # hooks run with the server's environment: one HOME, as outside tests
+        # hooks run with the server's environment: one HOME
         self.ok(self.server.tmux("set-environment", "-g", "HOME", home))
         scenario = os.path.join(root, "w1.codex.json")
         with open(scenario, "w", encoding="utf-8") as f:

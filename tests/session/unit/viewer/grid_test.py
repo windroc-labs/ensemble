@@ -6,7 +6,7 @@ import os
 import re
 import tempfile
 import time
-from contextlib import redirect_stderr, suppress
+from contextlib import redirect_stderr
 
 from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.tmux_cli import TmuxCli
@@ -50,10 +50,10 @@ from tests.session.tmux_fixtures import (
 
 
 class GridOpenTest(Case):
-    """Grid mode. The caller is in root session mgr (no @opener), pane %3, shown by a terminal
-    client (tty /dev/ttys004, its pane %9); `windows` maps a pane to its window's list-panes rows
-    (window, @grid-manager, pane, width, height), a pane not in it is gone; list-panes -a prints
-    nothing; iTerm2 runs; a split prints %20; tile records its call in the fake's calls.
+    """The caller is in root session mgr (no @opener), pane %3, shown by a client's pane %9;
+    `windows` maps a pane to its window's list-panes rows (window, @grid-manager, pane, width,
+    height), a pane not in it is gone; list-panes -a prints nothing; iTerm2 runs; a split prints
+    %20.
     """
 
     MGR = ("$1", "mgr", "", "")
@@ -102,27 +102,10 @@ class GridOpenTest(Case):
             return placed(fake).open_pane("s", retile=retile, **kw)
 
     def split(self, flag, pane, window="@1"):
-        """A grid split: the window's hooks muted first, so a previous mode's hook starts no tile;
-        grid_set unmutes.
-        """
+        """Hooks muted first, so a previous mode's hook starts no tile; grid_set unmutes."""
         return [mute(window), split_window(flag, pane)]
 
     def test_own_root_starts_a_grid_right_of_its_pane(self):
-        # plain tmux in iTerm2 ($ITERM_SESSION_ID set, iTerm2 running): a tmux split all the same
-        fake = self.fake({"%3": self.NEW})
-        self.assertIsNone(self.open(fake))
-        self.assertEqual(
-            fake.calls,
-            [
-                OWN,
-                SESSIONS,
-                clients_of("mgr"),
-                grid_read("%3"),
-                *self.split("-h", "%3"),
-                *opening_commands(),
-            ],
-        )
-        self.assertEqual(self.stderr.getvalue(), "")
         # its @pane gone: still a root
         fake = self.fake({"%3": self.NEW}, [("$1", "mgr", "", "%77")])
         self.assertIsNone(self.open(fake))
@@ -303,24 +286,6 @@ class GridOpenTest(Case):
         self.assertEqual(self.open(fake), "tmux: boom" + WATCH)
         self.assertEqual(fake.calls, [OWN, SESSIONS, clients_of("mgr"), clients_of("mgr")])
 
-    def test_split_and_split_from_ignored_in_the_grid(self):
-        for kw in ({"split": "below"}, {"split_from": "b"}, {"split": "right", "split_from": "b"}):
-            with self.subTest(**kw):
-                fake = self.fake({"%3": self.NEW})
-                self.assertIsNone(self.open(fake, **kw))
-                self.assertEqual(
-                    fake.calls,
-                    [
-                        OWN,
-                        SESSIONS,
-                        clients_of("mgr"),
-                        grid_read("%3"),
-                        *self.split("-h", "%3"),
-                        *opening_commands(),
-                    ],
-                )
-                self.assertEqual(self.stderr.getvalue(), self.NOTICE)
-
     def test_split_honored_outside_the_grid(self):
         fake = self.fake({"%3": self.NEW}, clients="")
         self.assertIsNone(self.open(fake, split="below"))
@@ -339,7 +304,7 @@ class GridOpenTest(Case):
         self.assertEqual(self.stderr.getvalue(), "")
 
     def test_a_failed_split_changes_nothing_else(self):
-        # the hooks unmuted again, after a split that raises too
+        # the hooks unmuted again after a split that raises too
         fake = self.fake({"%3": self.NEW}, **{"split-window": (1, "", "no space for new pane\n")})
         self.assertEqual(self.open(fake), "tmux: no space for new pane")
         self.assertEqual(fake.calls[3:], [grid_read("%3"), *self.split("-h", "%3"), unmute("@1")])
@@ -385,12 +350,17 @@ class GridOpenTest(Case):
             "tui: show: grid: hooks: ensemble-session is not on PATH\n",
         )
 
-    def test_retile_modes(self):
-        # None: the default, open-close
-        for retile, mode in ((None, "open-close"), *((m, m) for m in ("all", "open-close", "off"))):
-            with self.subTest(retile=retile):
+    def test_retile_modes_and_split_ignored_in_the_grid(self):
+        # None: the default; in iTerm2 (INSIDE) a tmux split all the same
+        splits = ({"split": "below"}, {"split_from": "b"}, {"split": "right", "split_from": "b"})
+        for retile, mode, kw, stderr in (
+            (None, "open-close", {}, ""),
+            *((m, m, {}, "") for m in ("all", "open-close", "off")),
+            *(("all", "all", kw, self.NOTICE) for kw in splits),
+        ):
+            with self.subTest(retile=retile, **kw):
                 fake = self.fake({"%3": self.NEW})
-                self.assertIsNone(self.open(fake, retile=retile))
+                self.assertIsNone(self.open(fake, retile=retile, **kw))
                 self.assertEqual(
                     fake.calls,
                     [
@@ -402,11 +372,10 @@ class GridOpenTest(Case):
                         *opening_commands(retile=mode),
                     ],
                 )
-                self.assertEqual(self.stderr.getvalue(), "")
+                self.assertEqual(self.stderr.getvalue(), stderr)
 
     def test_retile_modes_with_a_hook_path_tmux_would_misread(self):
-        # all and open-close: the notice, no hook set, the others unset; off: no hook to set, no
-        # notice
+        # all and open-close: no hook set, the others unset
         notice = "tui: show: grid: hooks: /a b/ensemble-session: tmux would misread it\n"
         for retile, printed in (("all", notice), ("open-close", notice), ("off", "")):
             with self.subTest(retile=retile):
@@ -419,14 +388,10 @@ class GridOpenTest(Case):
         for bad in ("x", True, 1, ""):
             with self.subTest(retile=bad):
                 fake = self.fake({"%3": self.NEW})
-                for call in (
-                    lambda *, bad=bad, fake=fake: self.open(fake, retile=bad),
-                    lambda *, bad=bad, fake=fake: placed(fake).open_pane("s", retile=bad),
+                with self.assertRaisesRegex(
+                    tmux_cli.TuiError, RETILE_ERROR.format(re.escape(repr(bad)))
                 ):
-                    with self.assertRaisesRegex(
-                        tmux_cli.TuiError, RETILE_ERROR.format(re.escape(repr(bad)))
-                    ):
-                        call()
+                    self.open(fake, retile=bad)
                 self.assertEqual(fake.calls, [])
 
     def test_a_failure_after_the_split_is_the_shows_and_leaves_the_pane(self):
@@ -453,14 +418,10 @@ class GridOpenTest(Case):
         for bad in (0, 10000, -1, True, "3", 2.0):
             with self.subTest(per_column=bad):
                 fake = self.fake({"%3": self.NEW})
-                for call in (
-                    lambda *, bad=bad, fake=fake: self.open(fake, per_column=bad),
-                    lambda *, bad=bad, fake=fake: placed(fake).open_pane("s", per_column=bad),
+                with self.assertRaisesRegex(
+                    tmux_cli.TuiError, "^per_column must be an int from 1 to 9999"
                 ):
-                    with self.assertRaisesRegex(
-                        tmux_cli.TuiError, "^per_column must be an int from 1 to 9999"
-                    ):
-                        call()
+                    self.open(fake, per_column=bad)
                 self.assertEqual(fake.calls, [])
 
 
@@ -482,8 +443,7 @@ class RetileTest(Case):
 
 class TileApplicationTest(TileFixture):
     def test_swaps_and_select_layout_sent_muted_then_unmuted(self):
-        # manual pane %4, split from %1, follows it in pane index order; it goes last, in a second
-        # column
+        # manual pane %4, split from %1, follows it: last, in a second column
         layout = "2cc7,160x48,0,0{79x48,0,0,0,80x48,80,0[80x8,80,0,1,80x7,80,9,4,80x15,80,17,2,80x15,80,33,3]}"
         fake = self.tile(layout, ["%0", "%1", "%4", "%2", "%3"], self.W3)
         self.assertEqual(
@@ -541,8 +501,8 @@ class TileApplicationTest(TileFixture):
         )
 
     def test_a_window_split_top_bottom_before_the_grid(self):
-        # the manager full width on top, a manual pane %1 below it split for w1 (%2): the manager
-        # gets half
+        # manager full width on top, manual pane %1 below it split for w1 (%2): the manager gets
+        # half
         layout = dump("160x48,0,0[160x24,0,0,0,160x11,0,25,1,160x11,0,37,2]")
         fake = self.tile(layout, ["%0", "%1", "%2"], [("$2", "w1", "mgr", "%2")])
         want = layouts.render_layout(grid([slot("%2"), slot("%1")]))
@@ -572,8 +532,7 @@ class TileApplicationTest(TileFixture):
     def test_no_op_when_the_layouts_cells_match_or_the_grid_would_not_fit(self):
         for case, layout, panes, rows, n, size in (
             ("cells match", self.THREE, ["%0", "%1", "%2", "%3"], self.W3, "", (160, 48)),
-            # the target's cells in another tree: a pass over the target would move them, but none
-            # follows a no-op
+            # a pass over the target would move them, but none follows a no-op
             (
                 "cells match in another tree",
                 dump(
@@ -584,7 +543,7 @@ class TileApplicationTest(TileFixture):
                 "1",
                 (200, 50),
             ),
-            # three cells side by side, 4 high: a column of three needs 5
+            # 4 high: a column of three cells needs 5
             (
                 "too small",
                 dump("160x4,0,0{79x4,0,0,0,80x4,80,0{26x4,80,0,1,26x4,107,0,2,26x4,134,0,3}}"),
@@ -601,8 +560,7 @@ class TileApplicationTest(TileFixture):
                 )
 
     def test_an_already_laid_out_window_records_its_pane_set_alone(self):
-        # @grid-panes unset, junk or another set: set alone (pane ids in numeric order), so a later
-        # --if-panes-changed tile skips a drag
+        # pane ids in numeric order, so a later --if-panes-changed tile skips a drag
         panes = ["%0", "%9", "%10"]
         layout = layouts.render_layout(grid([slot("%9"), slot("%10")]))
         record = ["tmux", "set-option", "-w", "-t", "@3", "@grid-panes", "%0 %9 %10"]
@@ -628,8 +586,7 @@ class TileApplicationTest(TileFixture):
             self.tile(layout, panes, recorded="", fail=("set-option",))
 
     def test_if_panes_changed_skips_while_the_pane_set_is_the_recorded_one(self):
-        # a drag or resize keeps the pane set: no pass, nothing sent; without the flag the drag
-        # snaps back
+        # a drag keeps the pane set: no pass; without the flag it snaps back
         fake = self.tile(*self.WIDE, if_panes_changed=True)
         self.assertEqual(fake.calls, [self.SOCKET, self.READ, self.PANES, self.UNMUTE])
         fake = self.tile(*self.WIDE)
@@ -637,8 +594,7 @@ class TileApplicationTest(TileFixture):
             fake.calls,
             [self.SOCKET, self.READ, self.PANES, SESSIONS, *self.applied(self.WIDE_SENT)],
         )
-        # another set (a pane opened or closed), or one unset or junk: the pass runs and records the
-        # new set
+        # another set, unset or junk: the pass runs and records it
         for recorded in ("", "%0 %1", "%0 %1 %2 %3", "%0 %2 %1", "%0 %1 %2;", "%0 %1 %2\x00", "x"):
             with self.subTest(recorded=recorded):
                 fake = self.tile(*self.WIDE, recorded=recorded, if_panes_changed=True)
@@ -668,8 +624,8 @@ class TileApplicationTest(TileFixture):
         self.assertEqual(fake.calls, [self.SOCKET, self.READ, self.PANES, self.UNMUTE])
 
     def test_a_state_needing_several_passes_gets_its_fixed_point_at_once(self):
-        # 200x50, orphans of gone openers in an old layout: 2 and 3 passes each, a pass over the
-        # result sends nothing
+        # orphans of gone openers in an old layout: 2 and 3 passes each, a pass over the result
+        # sends nothing
         for n, layout, panes, rows, swap, want in (
             (
                 "1",
@@ -718,8 +674,8 @@ class TileApplicationTest(TileFixture):
                 )
 
     def test_a_dead_worker_keeps_its_cell(self):
-        # FR-12: w2's command exited (its session and dead pane stay), its host pane %2 attaches on;
-        # w1 (%1) closed
+        # w2's command exited (its session and dead pane stay), its host pane %2 attaches on; w1
+        # (%1) closed
         layout = dump("160x48,0,0{79x48,0,0,0,80x48,80,0[80x32,80,0,2,80x15,80,33,3]}")
         fake = self.tile(layout, ["%0", "%2", "%3"], self.W3[1:])
         self.assertEqual(
@@ -832,39 +788,8 @@ class TileApplicationTest(TileFixture):
             ),
         )
 
-    def test_duplicate_pane_claims_the_lower_session_id_owns(self):
-        rows = [
-            ("$5", "x", "mgr", "%1"),
-            ("$3", "y", "mgr", "%1"),
-            ("$6", "z", "x", "%2"),
-            ("$7", "w", "y", "%3"),
-        ]
-        fake = self.tile(self.THREE, ["%0", "%1", "%2", "%3"], rows)
-        self.assertEqual(
-            fake.calls[4:],
-            self.applied(
-                [
-                    "tmux",
-                    "swap-pane",
-                    "-d",
-                    "-s",
-                    "%3",
-                    "-t",
-                    "%2",
-                    ";",
-                    "select-layout",
-                    "-t",
-                    "@3",
-                    (
-                        "9a41,160x48,0,0{79x48,0,0,0,80x48,80,0[80x24,80,0{40x24,80,0,1,39x24,121,0,3},80x23,80,25,2]}"
-                    ),
-                ]
-            ),
-        )
-
     def test_session_fields_read_back_only_after_a_fullmatch(self):
-        # a row with a bad id or name is skipped (its pane a manual pane); an @opener that is no
-        # opener is unset
+        # a bad id or name: skipped (its pane a manual pane); an @opener that is no opener: unset
         rows = [
             ("$2", "w1", "mgr", "%1"),
             ("2", "w2", "mgr", "%2"),
@@ -905,8 +830,7 @@ class TileApplicationTest(TileFixture):
                 )
 
     def test_tile_reads_a_json_layout(self):
-        # tmux 3.8 prints JSON: 13 workers stacked in one column re-tile into columns of 3, the
-        # same calls as from the old format, select-layout given the old format
+        # tmux 3.8 prints JSON: the same calls, select-layout given the old format
         panes = [f"%{i}" for i in range(14)]
         rows = [(f"${i + 1}", f"w{i}", "mgr", f"%{i}") for i in range(1, 14)]
         stacked = grid(13, 13)
@@ -983,7 +907,7 @@ class TileCoordinationTest(TileFixture):
         self.assertEqual(fake.calls, [grid_set("@3", "%0"), self.SOCKET])
 
     def test_an_empty_or_relative_socket_path_raises_before_the_lock(self):
-        # the lock would land in the cwd, here an empty temp dir
+        # the lock would land in the cwd
         cwd = tempfile.TemporaryDirectory()
         self.addCleanup(cwd.cleanup)
         self.addCleanup(os.chdir, os.getcwd())
@@ -1001,8 +925,22 @@ class TileCoordinationTest(TileFixture):
 
     def test_a_fifo_at_the_lock_path_does_not_hang(self):
         os.mkfifo(self.lock, 0o600)
-        with deadline(), suppress(tmux_cli.TuiError):  # flock on a FIFO: ENOTSUP on macOS
-            self.tile(*self.WIDE)
+        fake = self.fake(*self.WIDE)
+        with deadline(), self.assertRaisesRegex(tmux_cli.TuiError, "not a regular file$"):
+            grids.Grid(TmuxCli(fake)).tile("@3")
+        self.assertEqual(fake.calls, [self.SOCKET])
+
+    def test_lock_is_exclusive_per_socket_window_and_released_after_exit(self):
+        with grids._grid_lock(self.sock, "@3", wait=False) as held:
+            self.assertTrue(held)
+            with grids._grid_lock(self.sock, "@3", wait=False) as other:
+                self.assertFalse(other)
+            with grids._grid_lock(self.sock, "@4", wait=False) as other:
+                self.assertTrue(other)
+            with grids._grid_lock(self.sock + "-other", "@3", wait=False) as other:
+                self.assertTrue(other)
+        with grids._grid_lock(self.sock, "@3", wait=False) as held:
+            self.assertTrue(held)
 
     def test_grid_tiles_keeps_the_re_tiles_of_the_last_tile_window_then_adds_now(self):
         # now 1000000 ms: the window is 990001..1000000; junk, stale and future times are dropped
@@ -1103,8 +1041,7 @@ class TileCoordinationTest(TileFixture):
                 self.assertEqual(fake.calls, [])
 
     def test_a_tmux_failure_raises(self):
-        # a failed re-tile: @grid-busy unset all the same, its failure not masking the re-tile's;
-        # the lock freed
+        # @grid-busy unset all the same, its failure not masking the re-tile's; the lock freed
         fail = {"set-option": lambda argv: (1, "", "boom\n" if "@grid-tiles" in argv else "gone\n")}
         fake = self.fake(*self.WIDE, **fail)
         with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):

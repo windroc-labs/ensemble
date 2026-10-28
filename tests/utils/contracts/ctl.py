@@ -9,10 +9,7 @@ import uuid
 from dataclasses import replace
 
 from ensemble.utils.record import Record, Status
-
-
-def lines(*records: Record) -> str:
-    return "".join(record.to_line() + "\n" for record in records)
+from tests.utils.fakes.ctl import lines
 
 
 class CtlContract:

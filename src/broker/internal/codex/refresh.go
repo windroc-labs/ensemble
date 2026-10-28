@@ -21,6 +21,12 @@ var ErrRefreshVersion = errors.New("Codex refresh requires pinned " + MinVersion
 
 var errRefreshExchange = errors.New("pinned Codex refresh exchange failed")
 
+// stopRefresh waits: for a clean exit after stdin closes, then between SIGTERM and SIGKILL.
+var (
+	refreshExitGrace = 2 * time.Second
+	refreshTermGrace = 250 * time.Millisecond
+)
+
 type refreshProcess interface {
 	Input() io.WriteCloser
 	Output() io.ReadCloser
@@ -165,7 +171,7 @@ func stopRefresh(process refreshProcess, finished <-chan error, cancelled bool) 
 	if cancelled {
 		_ = process.Output().Close()
 	}
-	grace := 2 * time.Second
+	grace := refreshExitGrace
 	if cancelled {
 		grace = 0
 	}
@@ -184,7 +190,7 @@ func stopRefresh(process refreshProcess, finished <-chan error, cancelled bool) 
 		return errors.New("pinned Codex refresh cleanup failed")
 	}
 	if !(exited && errors.Is(signalErr, syscall.ESRCH)) {
-		timer.Reset(250 * time.Millisecond)
+		timer.Reset(refreshTermGrace)
 		if exited {
 			<-timer.C
 		} else {

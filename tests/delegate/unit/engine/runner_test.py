@@ -44,7 +44,7 @@ from ensemble.session import (
 )
 from ensemble.session.engine.types import Activity
 from ensemble.utils import Stopped
-from tests.delegate.case import Case
+from tests.delegate.case import SID, Case
 from tests.delegate.replies import bare, block
 from tests.delegate.repo import ok
 from tests.delegate.runner import (
@@ -53,7 +53,6 @@ from tests.delegate.runner import (
     LEFT_OPEN,
     PENDING,
     PR,
-    SID,
     Base,
     executed,
 )
@@ -65,10 +64,10 @@ from tests.delegate.unit.runs import (
     START,
     STOP,
     FakeHandle,
-    no_child,
     said,
     turn,
 )
+from tests.session.case import no_spawn
 
 
 class DeadStream(io.StringIO):
@@ -94,7 +93,7 @@ class InProcess(Base):
         )
 
     def go(self, *steps, **kw) -> Result:
-        with no_child():
+        with no_spawn():
             return super().go(*steps, mode="in_process", **kw)
 
     def test_a_done_run(self):
@@ -355,17 +354,11 @@ class HandleRun(Handles):
             (self.handle.calls, self.kinds()), ([("stop",)], ["input", "limit", "result", "end"])
         )
 
-    def test_a_failed_headless_turn_stops_its_session(self):
-        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(0))
+    def test_a_failed_headless_turn_stops_its_session_keeping_its_exit_status(self):
+        r = self.faked(Reply(START), TurnFailed("overloaded"), Exited(3))
         self.assertEqual(
-            (r.error, self.handle.calls), ("the client's turn failed: overloaded", [("stop",)])
-        )
-
-    def test_headless_failure_retains_the_actual_exit_status(self):
-        result = self.faked(TurnFailed("server_overloaded"), Exited(3))
-        self.assertEqual(
-            (result.returncode, result.outcome, result.error),
-            (3, None, "the client's turn failed: server_overloaded"),
+            (r.returncode, r.outcome, r.error, self.handle.calls),
+            (3, None, "the client's turn failed: overloaded", [("stop",)]),
         )
 
     def test_a_session_exiting_without_an_outcome_is_the_error(self):
@@ -738,7 +731,7 @@ class InstructionRuns(InstructionCase):
             with self.subTest(role=role):
                 args = self.given(role)
                 want, events = plan(*args, driver=self.driver, composition=Composer()).prompt, []
-                with no_child(), redirect_stderr(io.StringIO()):
+                with no_spawn(), redirect_stderr(io.StringIO()):
                     r = executed(*args, on_event=events.append, driver=self.driver)
                 self.assertEqual((r.returncode, r.outcome, r.instruction), (0, None, args[1].out))
                 with open(args[1].out) as f:
@@ -749,7 +742,7 @@ class InstructionRuns(InstructionCase):
 
     def test_an_unconfigured_client_does_not_start_a_session(self):
         args = self.given("dummy-tester", client="unconfigured")
-        with no_child():
+        with no_spawn():
             result = executed(*args, driver=self.driver)
         self.assertEqual(
             (result.returncode, result.outcome, result.instruction), (0, None, args[1].out)
@@ -758,7 +751,7 @@ class InstructionRuns(InstructionCase):
     def test_a_resume_is_refused(self):
         args = self.given("dummy-tester", resume=True)
         with (
-            no_child(),
+            no_spawn(),
             self.assertRaisesRegex(ConfigError, "instruction has no session to resume"),
         ):
             executed(*args, driver=self.driver)

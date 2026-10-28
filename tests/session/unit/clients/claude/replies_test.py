@@ -15,7 +15,8 @@ from ensemble.session.clients.claude.tui import on_hook
 from ensemble.session.engine.types import Access, HookCall, Spec
 from ensemble.utils import file_lock, read_reply
 from tests.session.case import SPAWNS
-from tests.session.unit.clients.claude.support import SID, Base
+from tests.session.unit.clients.claude.support import SID, Base, text, tool
+from tests.utils.clock import FakeClock
 
 NAME = "w1"
 HOOK = ("ensemble-session", "hook", "/x")
@@ -23,14 +24,6 @@ HOOK = ("ensemble-session", "hook", "/x")
 
 def said(*blocks, **extra):
     return {"type": "assistant", "message": {"role": "assistant", "content": list(blocks)}, **extra}
-
-
-def text(value):
-    return {"type": "text", "text": value}
-
-
-def tool(name="Bash"):
-    return {"type": "tool_use", "id": "t1", "name": name, "input": {}}
 
 
 PROMPT = {"type": "user", "message": {"role": "user", "content": "go"}}
@@ -47,19 +40,6 @@ NOTIFIED = {  # a background task's completion, as Claude Code queues it
         "commandMode": "task-notification",
     },
 }
-
-
-class Clock:
-    """A fake monotonic clock that sleep advances."""
-
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.now += seconds
 
 
 class RepliesBase(Base):
@@ -110,7 +90,7 @@ class RepliesBase(Base):
         """Claude runs the prompt's hook, records the prompt, then calls a tool."""
         self.hook("SessionStart", source="startup")
         self.hook("UserPromptSubmit", prompt="go")
-        self.append(PROMPT, said(text("working")), said(tool()))
+        self.append(PROMPT, said(text("working")), said(tool("Bash")))
 
     def stop(self, final):
         self.hook("Stop", last_assistant_message=final)
@@ -133,7 +113,7 @@ class TurnTest(RepliesBase):
         self.open_turn()
         self.append(ENQUEUE, RESULT)
         self.hook("PostToolUse", tool_name="Bash")
-        self.append(QUEUED, said(text("MID ANSWER 6")), said(tool()))
+        self.append(QUEUED, said(text("MID ANSWER 6")), said(tool("Bash")))
         self.hook("PostToolUse", tool_name="Bash")
         self.assertEqual(self.answers(), ["MID ANSWER 6"])
         self.append(RESULT, said(text("SECOND DONE")))
@@ -143,7 +123,7 @@ class TurnTest(RepliesBase):
 
     def test_tool_only_message_is_no_answer(self):
         self.open_turn()
-        self.append(ENQUEUE, RESULT, QUEUED, said(tool()))
+        self.append(ENQUEUE, RESULT, QUEUED, said(tool("Bash")))
         self.hook("PostToolUse", tool_name="Bash")
         self.assertEqual(self.answers(), [])
         self.assertEqual(len(self.state()["turn"]["steers"]), 1)
@@ -309,7 +289,7 @@ class GuardTest(RepliesBase):
 
     def test_a_held_lock_times_out_within_the_deadline(self):
         self.open_turn()
-        clock = Clock()
+        clock = FakeClock(1000.0)
         with (
             mock.patch.object(replies.time, "monotonic", clock),
             mock.patch.object(replies.time, "sleep", clock.sleep),
@@ -351,17 +331,6 @@ class PumpTest(RepliesBase):
         self.assertEqual(self.answers(), ["answer"])
         self.pump()
         self.stop("answer")
-        self.assertEqual(self.answers(), ["answer"])
-
-    def test_a_held_lock_is_left_to_the_next_pump(self):
-        self.open_turn()
-        self.append(ENQUEUE, RESULT)
-        self.hook("PostToolUse", tool_name="Bash")
-        self.append(QUEUED, said(text("answer")))
-        with file_lock(self.state_file, wait=False):
-            self.pump()
-        self.assertEqual(self.answers(), [])
-        self.pump()
         self.assertEqual(self.answers(), ["answer"])
 
     def test_without_a_state_file_the_pump_writes_nothing(self):

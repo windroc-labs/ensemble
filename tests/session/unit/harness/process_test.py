@@ -38,6 +38,8 @@ from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import SIGNALS, start_phase
 from tests.session.case import Case
+from tests.session.harnesses import until
+from tests.utils.jsonl import read_jsonl
 
 GEN = "g1"
 WAIT = 5
@@ -129,15 +131,11 @@ class Base(Case):
 
     def running(self, owned, *handlers, **kw):
         thread = self.run_in_thread(self.harness(owned, *handlers, **kw))
-        while self.channel.status().get("state") != "running":
-            time.sleep(0.01)
+        until(lambda: self.channel.status().get("state") == "running")
         return thread
 
     def logged(self) -> list[dict]:
-        if not os.path.exists(self.channel.events):
-            return []
-        with open(self.channel.events, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.channel.events, missing_ok=True)
 
     def types(self) -> list[str]:
         return [record["type"] for record in self.logged()]
@@ -339,8 +337,7 @@ class CloseRequestTest(Base):
         handler = Handler()
         owned = FakeOwned(([TurnStarted()], False), final=[TurnEnd("last", 0)], code=-1)
         self.run_in_thread(self.harness(owned, handler))
-        while "TurnStarted" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "TurnStarted" in self.types())
         self.assertTrue(self.request(Op.CLOSE))
         self.assertEqual(self.types(), ["TurnStarted", "TurnEnd", "Exited"])
         self.assertEqual(owned.calls, ["close", "confirm_end"])
@@ -355,23 +352,9 @@ class CloseRequestTest(Base):
     def test_a_close_mid_turn_fails_the_turn_first(self):
         owned = FakeOwned(([TurnStarted()], False), code=-1)
         self.run_in_thread(self.harness(owned))
-        while "TurnStarted" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "TurnStarted" in self.types())
         self.assertTrue(self.request(Op.CLOSE))
         self.assertEqual(self.types(), ["TurnStarted", "TurnFailed", "Exited"])
-
-    def test_an_unconfirmed_end_is_answered_unanswered_and_supervision_goes_on(self):
-        owned = FakeOwned(code=None)
-        thread = self.run_in_thread(self.harness(owned))
-        with self.assertRaisesRegex(SessionError, "not confirmed") as caught:
-            self.request(Op.CLOSE)
-        self.assertEqual(type(caught.exception).__name__, "Unanswered")
-        self.assertEqual(self.channel.status()["state"], "running")
-        self.assertFalse(self.channel.status()["remote"])
-        owned.code = 0
-        self.assertTrue(self.request(Op.CLOSE))
-        thread.join(WAIT)
-        self.assertEqual(self.code, 0)
 
     def test_an_unconfirmed_close_is_traced_in_harness_json_and_names_the_harness(self):
         owned = FakeOwned(code=None)
@@ -383,13 +366,17 @@ class CloseRequestTest(Base):
             str(caught.exception),
             f"w1: worker exit not confirmed (session harness {self.channel.directory})",
         )
-        failed = self.channel.status()["close_failed"]
+        self.assertEqual(type(caught.exception).__name__, "Unanswered")
+        status = self.channel.status()
+        self.assertEqual((status["state"], status["remote"]), ("running", False))
+        failed = status["close_failed"]
         self.assertEqual((failed["op"], failed["error"]), ("close", str(caught.exception)))
         self.assertIs(type(failed["at"]), int)
         self.assertGreaterEqual(failed["at"], before)
         owned.code = 0
         self.assertTrue(self.request(Op.CLOSE))
         thread.join(WAIT)
+        self.assertEqual(self.code, 0)
         status = self.channel.status()
         self.assertEqual((status["state"], status["close_failed"]), ("exited", failed))
 
@@ -415,8 +402,7 @@ class CloseRequestTest(Base):
         self.addCleanup(gate.set)
         owned = FakeOwned(([Reply("x")], False))
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=0.2))
-        while "Reply" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Reply" in self.types())
         self.assertTrue(self.request(Op.CLOSE))
         thread.join(WAIT)
         self.assertEqual(self.code, 0)
@@ -426,8 +412,7 @@ class CloseRequestTest(Base):
         owned = FakeOwned()
         harness = self.harness(owned)
         thread = self.run_in_thread(harness)
-        while self.channel.status().get("state") != "running":
-            time.sleep(0.01)
+        until(lambda: self.channel.status().get("state") == "running")
         harness.signalled(15, None)
         thread.join(WAIT)
         self.assertEqual((self.code, owned.calls[0], self.types()), (0, "close", ["Exited"]))
@@ -453,8 +438,7 @@ class CallerTest(Base):
     def test_a_gone_caller_closes_its_worker(self):
         owned = FakeOwned(([TurnStarted()], False), code=-1)
         thread = self.run_in_thread(self.caller_harness(owned))
-        while "TurnStarted" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "TurnStarted" in self.types())
         os.close(self.near)
         thread.join(WAIT)
         self.assertEqual((self.code, owned.calls), (0, ["close", "confirm_end"]))
@@ -463,8 +447,7 @@ class CallerTest(Base):
     def test_a_live_caller_leaves_it_running(self):
         owned = FakeOwned(([TurnStarted()], False), code=0)
         thread = self.run_in_thread(self.caller_harness(owned))
-        while "TurnStarted" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "TurnStarted" in self.types())
         time.sleep(0.1)
         self.assertEqual((owned.calls, self.channel.status()["state"]), ([], "running"))
         self.assertTrue(self.request(Op.CLOSE))
@@ -605,8 +588,7 @@ class DrainTest(Base):
         self.addCleanup(gate.set)
         owned = FakeOwned(([Reply("x")], True))
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=WAIT))
-        while "Exited" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Exited" in self.types())
         self.assertTrue(self.request(Op.CLOSE))
         self.assertTrue(self.request(Op.STOP))
         gate.set()
@@ -629,16 +611,14 @@ class DrainTest(Base):
 
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
-        while "Reply" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Reply" in self.types())
         outside, done = Channel(self.channel.directory), []
         closer = threading.Thread(
             target=lambda: done.append(outside.request(Op.CLOSE, timeout=WAIT)), daemon=True
         )
         owned.close = mock.Mock(side_effect=[[], RuntimeError("bug")])
         closer.start()
-        while "Exited" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Exited" in self.types())
         unanswered = []
         breaking = threading.Thread(  # served in the drain: its RuntimeError ends the harness
             target=lambda: unanswered.append(self.request(Op.CLOSE)), daemon=True
@@ -656,8 +636,7 @@ class DrainTest(Base):
         gate = threading.Event()
         self.addCleanup(gate.set)
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=WAIT))
-        while "Exited" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Exited" in self.types())
         with self.assertRaisesRegex(SessionError, "cannot close w1"):
             self.request(Op.CLOSE)
         failed = self.channel.status()["close_failed"]
@@ -675,8 +654,7 @@ class DrainTest(Base):
         )
         thread.start()
         self.addCleanup(thread.join, WAIT)
-        while "Reply" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Reply" in self.types())
         outside, done = Channel(self.channel.directory), []
 
         def close():
@@ -685,8 +663,7 @@ class DrainTest(Base):
 
         closer = threading.Thread(target=close, daemon=True)
         closer.start()
-        while "Exited" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Exited" in self.types())
         time.sleep(0.1)
         self.assertEqual((done, self.channel.status()["state"]), ([], "draining"))
         gate.set()
@@ -732,11 +709,9 @@ class OpeningTest(Base):
         owned = FakeOwned(([], False), ([], False))
         owned.opening_pending = "/color"
         thread = self.run_in_thread(self.harness(owned))
-        while self.channel.status().get("opening") != "/color":
-            time.sleep(0.01)
+        until(lambda: self.channel.status().get("opening") == "/color")
         owned.opening_pending = None
-        while self.channel.status().get("opening") is not None:
-            time.sleep(0.01)
+        until(lambda: self.channel.status().get("opening") is None)
         owned.ended = True
         thread.join(WAIT)
         self.assertEqual(self.code, 0)
@@ -837,12 +812,10 @@ class UpTest(Base):
     def test_its_client_up_is_in_its_status_once_its_worker_reports_it(self):
         owned = FakeOwned(([], False))
         thread = self.run_in_thread(self.harness(owned))
-        while self.channel.status().get("state") != "running":
-            time.sleep(0.01)
+        until(lambda: self.channel.status().get("state") == "running")
         self.assertNotIn("up", self.channel.status())
         owned.up = True
-        while self.channel.status().get("up") is not True:
-            time.sleep(0.01)
+        until(lambda: self.channel.status().get("up") is True)
         owned.ended = True
         thread.join(WAIT)
         self.assertEqual((self.code, self.channel.status().get("up")), (0, True))
@@ -987,8 +960,7 @@ class RemoteTest(Base):
         self.addCleanup(gate.set)
         owned = RemoteOwned(([Reply("x")], True))
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
-        while "Exited" not in self.types():
-            time.sleep(0.01)
+        until(lambda: "Exited" in self.types())
         with self.assertRaisesRegex(SessionError, "w1: worker exited"):
             self.ask(Op.SEND, {"text": "late"})
         gate.set()
@@ -1027,8 +999,7 @@ class DisplayTest(Base):
         self.addCleanup(gate.set)
         owned = DisplayOwned(([Reply("x")], True))
         thread = self.run_in_thread(self.harness(owned, Handler(hang=gate), drain=2.0))
-        while self.channel.status().get("state") != "draining":
-            time.sleep(0.01)
+        until(lambda: self.channel.status().get("state") == "draining")
         with self.assertRaisesRegex(SessionError, "w1: worker exited"):
             self.ask(Op.DISPLAY, {})
         gate.set()

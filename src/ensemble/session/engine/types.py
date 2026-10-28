@@ -1,4 +1,4 @@
-"""The session layer's shared types; Access.reads are read-only; times are epoch seconds."""
+"""The session layer's shared data types; times are epoch seconds."""
 
 import re
 import signal
@@ -93,8 +93,6 @@ class Mode(StrEnum):
 
 
 class Permission(StrEnum):
-    """[clients.<name>.modes]; yolo skips every permission and approval."""
-
     AUTO = "auto"
     YOLO = "yolo"
 
@@ -125,7 +123,7 @@ class Resumable(StrEnum):
 
 
 class HookKind(StrEnum):
-    """TURN_STARTED: once per accepted turn, never on replay (WDRC-199 FR-10)."""
+    """TURN_STARTED: one TurnStarted per accepted turn, never a replayed record (WDRC-199 FR-10)."""
 
     TURN_END = "turn_end"
     TURN_FAILED = "turn_failed"
@@ -150,10 +148,7 @@ class HookError(Exception):
 
 @dataclass(frozen=True)
 class HookCallback:
-    """Tui: on_hook(HookCall); Host: on_hook(word, HookCall); handlers: on_event(EventCall).
-
-    module resolves over session roots, all callbacks' roots, then sys.path; state: JSON.
-    """
+    """Tui: on_hook(HookCall); Host: on_hook(word, HookCall); Spec.handlers: on_event(EventCall)."""
 
     module: str
     state: Mapping[str, object] = field(default_factory=dict)
@@ -179,9 +174,7 @@ class HookCallback:
 
 @dataclass(frozen=True)
 class ClientHome:
-    """A client's container state dir: field, its record key; dir, its last part; env, its
-    variable. credential: the injected kind; providers: whose keys the broker adds.
-    """
+    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable."""
 
     field: str
     dir: str
@@ -221,7 +214,9 @@ LOCAL_CONTEXT = ClientContext("127.0.0.1", Permission.AUTO)
 
 @dataclass(frozen=True)
 class HookCall:
-    """A client's on_hook returns the payload to journal, or None to journal nothing and stop."""
+    """on_hook(call) returns the payload to journal, or None to journal nothing and stop; a host's
+    on_hook(word, call) runs after the journal line.
+    """
 
     label: str
     payload: dict
@@ -245,7 +240,7 @@ SESSION_NAME_RULE = f"{TAG.pattern} but not {NO_DISPLAY}"
 
 
 COMMAND = "ensemble-session"
-ACCOUNT_SET_BY = f"{ACCOUNT_ENV} is set by --account or a role's accounts table"
+ACCOUNT_SET_BY = f"{ACCOUNT_ENV} is set by --account or [clients.<client>].account"
 DEFAULT_ACCOUNT = "default"
 RESUME = (COMMAND, "resume")
 
@@ -367,7 +362,7 @@ def _prefetch(value) -> bool:
 
 @dataclass(frozen=True, kw_only=True)
 class EnvironmentSpec:
-    """WDRC-109 FR-56; image: local or WORKER (the base); github_repo: the repo its token writes."""
+    """WDRC-109 FR-56; github_repo: the repo its token writes."""
 
     WORKER: ClassVar[str] = "@worker"
     image: str
@@ -713,7 +708,9 @@ _IDENTITY = {
 
 @dataclass(frozen=True)
 class SessionInfo:
-    """The session identity and its codec; read back (agent-writable), a hint to re-validate."""
+    """persisted() and from_fields are its one codec. Read back (agent-writable), it is a status hint,
+    never an authorization, a path to open or argv to run without re-validation.
+    """
 
     sid: str
     cwd: str
@@ -732,7 +729,7 @@ class SessionInfo:
 
     @classmethod
     def from_fields(cls, fields: Mapping, *, strict: bool = False) -> "SessionInfo | None":
-        """Missing transcript or resume: ""; invalid: None, or with strict ValueError(key)."""
+        """persisted()'s inverse; invalid: None, or with strict a ValueError naming its key."""
         found = fields if isinstance(fields, Mapping) else {}
         get = found.get
         for key, ok in _IDENTITY.items():
@@ -747,8 +744,6 @@ class SessionInfo:
 
 @dataclass(frozen=True)
 class Prepared:
-    """A mode's fixed start; argv and env empty for in_process or an attached tui."""
-
     spec: Spec
     info: SessionInfo
     argv: tuple[str, ...] = ()
@@ -760,14 +755,14 @@ class Prepared:
 
 @dataclass(frozen=True)
 class ClientBound:
-    """A run.jsonl client_session line."""
+    """A run.jsonl client_session line, never a SessionEvent."""
 
     client_id: str
 
 
 @dataclass(frozen=True)
 class TurnStarted:
-    """Never a replayed record."""
+    """Never for a replayed record."""
 
 
 @dataclass(frozen=True)
@@ -815,7 +810,7 @@ SessionEvent = TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked |
 
 @dataclass(frozen=True)
 class WorkerHook:
-    """Untrusted (WDRC-199 FR-15, FR-36): check size and shape before use."""
+    """Relayed by a worker's guard (WDRC-199 FR-15); untrusted (FR-36): check size and shape."""
 
     label: str
     payload: Mapping[str, object]
@@ -824,7 +819,7 @@ class WorkerHook:
 
 @dataclass(frozen=True)
 class WorkerOutput:
-    """Parse complete lines only (FR-12, FR-15)."""
+    """FR-12, FR-15: its reader parses complete lines only."""
 
     data: bytes
     stream: str = "stdout"
@@ -832,7 +827,7 @@ class WorkerOutput:
 
 @dataclass(frozen=True)
 class WorkerExit:
-    """returncode: -N when signal N ended it (FR-16)."""
+    """returncode -N: signal N ended it (FR-16)."""
 
     returncode: int
 
@@ -914,7 +909,7 @@ KEY_RULE = (
 
 @dataclass(frozen=True)
 class KeyPress:
-    """`send --key`'s notation: `C-`, `M-` (Alt), `S-` before the key (`C-c`, `S-Up`)."""
+    """`send --key`'s notation, e.g. `C-c`, `S-Up`; M- is Alt."""
 
     key: str
     ctrl: bool = False
@@ -979,7 +974,7 @@ class NoRecordedSession(SessionError):
 
 
 class NotShowable(SessionError):
-    """No attach target, or nothing to show."""
+    """`host <name> cannot show`, or the Delegate's `no showable session`."""
 
 
 @dataclass(frozen=True)
@@ -989,7 +984,7 @@ class IdleTimeout:
 
 @dataclass(frozen=True)
 class SessionRow:
-    """client: a tui session's, else None; display: opaque; shown: "" unnamed, None none."""
+    """display: its Host's, opaque; shown: the session showing it, "" unnamed, None none."""
 
     name: str
     sid: str | None

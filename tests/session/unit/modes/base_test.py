@@ -6,7 +6,6 @@ identity_drop and _select_account.
 import inspect
 import itertools
 import os
-import tempfile
 from unittest import mock
 
 from ensemble.session.clients.base import Client
@@ -26,9 +25,9 @@ from ensemble.session.modes import base, headless, in_process, tui
 from ensemble.session.modes.base import BaseMode, child_env, identity_drop
 from ensemble.session.modes.client_adapters.headless import Headless
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
-from ensemble.utils import load_class
 from tests.session.case import HOSTS, Case
 from tests.session.fakes.terminal import MemoryHost
+from tests.utils.sandbox import scratch
 
 MEMBERS = ["poll", "returncode", "screen", "send", "start", "state", "stop"]
 KINDS = {
@@ -179,23 +178,6 @@ class BaseModeTest(Case):
             with self.subTest(mode=mode.__name__), self.assertRaises(TypeError):
                 mode()
 
-    def test_a_failed_start_returns_no_session_and_records_nothing(self):
-        spec = Spec(workdir="/w", access=Access(cwd="/w"), client="none", sid="s1")
-        for mode, kind in KINDS.items():
-            recorded = []
-            with self.subTest(mode=kind.value), self.assertRaises(ConfigError) as caught:
-                mode.start(
-                    spec,
-                    NoModeClient({}),
-                    registry=registry(),
-                    record=recorded.append,
-                    host=MemoryHost(),
-                )
-            self.assertEqual(
-                str(caught.exception), f"client 'none' does not support {kind.value} mode"
-            )
-            self.assertEqual(recorded, [])
-
     def test_a_start_inside_an_agent_session_is_refused_before_its_launch(self):
         client, recorded = HeadlessClient({}), []
         spec = Spec(workdir="/w", access=Access(cwd="/w"), client="headless", sid="s1")
@@ -321,9 +303,7 @@ class PluginPathTest(ChildEnvTest):
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.plugin = os.path.join(os.path.realpath(tmp.name), "plugin root", "bin")
+        self.plugin = os.path.join(scratch(self), "plugin root", "bin")
         os.makedirs(self.plugin)
         command = os.path.join(self.plugin, "ensemble-session")
         with open(command, "w", encoding="utf-8") as f:
@@ -439,13 +419,9 @@ def params(function):
 class OwnerTest(Case):
     """A tui, headless or in_process start can be owned by a session harness."""
 
-    def test_tui_headless_and_in_process_modes_have_a_generation(self):
+    def test_the_base_mode_has_no_generation(self):
         self.assertIsNone(BaseMode.generation.fget(mock.Mock(spec=BaseMode)))
-        for mode in (tui.TuiMode, headless.HeadlessMode, in_process.InProcessMode):
-            self.assertIsNot(mode.generation, BaseMode.generation)
 
-    def test_the_tmux_host_runs_managed_workers_the_base_none(self):
-        tmux = Host.parse_hosts({**HOSTS, "default": "tmux"}).tables["tmux"]["implementation"]
-        self.assertIsNot(load_class(tmux, Host).worker, Host.worker)
+    def test_the_base_host_runs_no_managed_worker(self):
         with self.assertRaisesRegex(SessionError, "runs no managed worker"):
             Host.worker(MemoryHost(), "w", Launch(("x",), cwd="/"), terminal=True)

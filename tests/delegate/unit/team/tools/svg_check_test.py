@@ -1,19 +1,13 @@
 """svg_check.py verdicts on report figures."""
 
-import importlib.util
 import io
 import os
 import tempfile
 
-from ensemble.delegate.composer.base import TEAM
 from tests.delegate.case import Case
+from tests.delegate.team_tools import tool
 
-SPEC = importlib.util.spec_from_file_location(
-    "svg_check", os.path.join(TEAM, "tools", "svg_check.py")
-)
-assert SPEC and SPEC.loader
-svg_check = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(svg_check)
+svg_check = tool("svg_check")
 
 OPEN = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'
 

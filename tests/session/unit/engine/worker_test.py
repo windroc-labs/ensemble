@@ -6,7 +6,6 @@ files only under the test's HOME).
 import contextlib
 import dataclasses
 import errno
-import fcntl
 import io
 import itertools
 import json
@@ -43,9 +42,9 @@ from ensemble.session.harness.types import Op
 from ensemble.session.hosts.base import stored_record
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
-from tests.session.case import Case
+from tests.session import harnesses
+from tests.session.case import SID, Case
 
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 ENVIRONMENT = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-lock")
 
@@ -147,17 +146,13 @@ class Base(Case):
         harness holds it); a running one answers each request with `answer` (default: nothing
         reopened), its ops in self.asked.
         """
-        channel = Channel.create()
+        owner = harnesses.HeldOwner(self, Channel.create())
         if status is not None:
-            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            self.addCleanup(os.close, fd)
-            channel.write_status(
-                {"state": status, "name": "w1", "sid": sid, "generation": generation}
-            )
+            owner.hold(state=status, name="w1", sid=sid, generation=generation)
         if status == "running":
-            self.serve(channel, answer or {"ok": True, "data": {"reopened": False}})
-        self.write_state(sid, generation=generation, owner=channel.directory)
+            reply = answer or {"ok": True, "data": {"reopened": False}}
+            self.asked = owner.serve(reply, until_cleanup=True)
+        self.write_state(sid, generation=generation, owner=owner.channel.directory)
 
     def write_state(self, sid: str, *, generation: str = "g1", owner: str | None = None) -> None:
         record = {
@@ -176,22 +171,6 @@ class Base(Case):
         }
         with open(os.path.join(self.tui, "session.json"), "w", encoding="utf-8") as f:
             json.dump(record, f)
-
-    def serve(self, channel: Channel, answer: dict) -> None:
-        self.asked: list[Op] = []
-        done = threading.Event()
-
-        def run():
-            while not done.is_set():
-                for ident, op, _ in channel.pending():
-                    self.asked.append(op)
-                    channel.reply(ident, **answer)
-                time.sleep(0.01)
-
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(done.set)
 
 
 class StateTest(Case):
@@ -663,8 +642,11 @@ class ColorWatchTest(Base):
                 self.assertEqual(self.said, said)
                 self.assertEqual(self.stored(), state().record())
 
-    def test_a_started_turn_keeps_the_watch_as_long_and_never_says_unset(self):
-        for sent, ticks in ((8, 9), (float("inf"), worker.COLOR_CAP + 1)):
+    def test_a_started_turn_keeps_the_watch_as_long_and_says_unset_at_the_cap(self):
+        for sent, ticks, said in (
+            (8, 9, []),
+            (float("inf"), worker.COLOR_CAP + 1, [self.UNSET.format("not ready within 15 s")]),
+        ):
             with self.subTest(sent=sent):
                 self.said.clear()
                 with contextlib.suppress(FileNotFoundError):
@@ -673,7 +655,7 @@ class ColorWatchTest(Base):
                     [TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK))
                 )
                 self.assertEqual(self.watch(sent, events=events), ticks)
-                self.assertEqual(self.said, [])  # its opening follows that turn
+                self.assertEqual(self.said, said)
                 self.assertEqual(self.stored(), state().record())
 
     def test_a_dialog_just_after_a_turn_started_once_up_is_said(self):
@@ -682,7 +664,10 @@ class ColorWatchTest(Base):
             [idle] * (worker.EARLY + 1), [TurnStarted(), Blocked("Edit")], itertools.repeat(idle)
         )
         self.watch(float("inf"), events=events)
-        self.assertEqual(self.said, ["session w1: waits on a dialog: Edit"])
+        self.assertEqual(
+            self.said,
+            ["session w1: waits on a dialog: Edit", self.UNSET.format("waits on a dialog")],
+        )
         self.assertEqual(self.stored(), state().record())
 
     def test_a_dialog_in_its_state_is_said_wherever_the_watch_ends(self):
@@ -700,7 +685,13 @@ class ColorWatchTest(Base):
                 worker.COLOR_CAP + 1,
                 [said, self.UNSET.format("waits on a dialog")],
             ),
-            ("at the cap, a turn started", float("inf"), True, worker.COLOR_CAP + 1, [said]),
+            (
+                "at the cap, a turn started",
+                float("inf"),
+                True,
+                worker.COLOR_CAP + 1,
+                [said, self.UNSET.format("waits on a dialog")],
+            ),
         ):
             with self.subTest(case=case):
                 self.said.clear()

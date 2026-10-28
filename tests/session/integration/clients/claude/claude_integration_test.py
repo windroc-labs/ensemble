@@ -14,11 +14,9 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from ensemble.session import Session
@@ -43,15 +41,16 @@ from ensemble.session.engine.types import (
     Window,
 )
 from ensemble.utils import exhausted
-from tests.session.case import PLUGIN_BIN, PY, Case, child_env
+from tests.session.case import PLUGIN_BIN, PY, SID, Case, child_env
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
 from tests.session.integration.clients.claude import fake_claude
-from tests.utils.sandbox import git
+from tests.session.threads import drain
+from tests.utils.sandbox import git, kill, scratch
+from tests.utils.sandbox import pid_exists as running
 
 WAIT = 20  # upper bound on any wait, in seconds
 IDLE = 0.5  # idle_timeout, in seconds
-SETTLE = 0.5  # seconds a caller gets to wait in events() again after printing an event
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+SETTLE = 0.5  # seconds a caller gets to wait in events() again after printing one
 RESETS = 1760000000
 TABLE = {
     "implementation": "ensemble.session.clients.claude:ClaudeClient",
@@ -90,25 +89,9 @@ except KeyboardInterrupt:
 """
 
 
-def running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def kill(pid: int) -> None:
-    """SIGKILL to a test's stray process, if it still runs."""
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
-
-
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.workdir = os.path.join(self.dir, "work")
         self.file = os.path.join(self.dir, "scenario.json")
         self.log = os.path.join(self.dir, "claude.log")
@@ -150,27 +133,7 @@ class Base(Case):
         )
 
     def drain(self, handle, on=lambda _event: None) -> list:
-        """handle.events() to its end, each event passed to on(event) as it comes; fails, stopping
-        the handle, instead of hanging past WAIT.
-        """
-        self.addCleanup(handle.stop)
-        found = []
-
-        def consume():
-            for event in handle.events():
-                found.append(event)
-                on(event)
-
-        executor = ThreadPoolExecutor(max_workers=1)
-        result = executor.submit(consume)
-        try:
-            result.result(timeout=WAIT)
-        except TimeoutError:
-            handle.stop()
-            self.fail(f"events() did not end within {WAIT}s, got {found}")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-        return found
+        return drain(self, handle, on, WAIT)
 
     def logged(self) -> list[dict]:
         with open(self.log, encoding="utf-8") as f:

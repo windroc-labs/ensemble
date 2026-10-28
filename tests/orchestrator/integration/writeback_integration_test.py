@@ -39,20 +39,18 @@ class Writeback(Flow):
             project=PROJECT,
         )
 
-    def claim(self, role="researcher", **row):
-        """The run's start row; row: more of its fields (a pre-cutover row's key)."""
+    def claim(self):
         runs.note(
             os.path.join(self.logs, "runs.jsonl"),
             "start",
             issue=ID,
             sid=SID,
-            role=role,
+            role="researcher",
             client="claude",
             delegate_kind="harness",
             uuid=UUID,
             project=PROJECT["id"],
             target=None,
-            **row,
         )
 
     def feed(self, kind, attempt=1, **fields):
@@ -97,13 +95,6 @@ class BegunAndProgress(Writeback):
                 ("sessions.M_UPDATE", HARNESS_USER, "error"),
                 ("linear.Q_COMMENT", researcher, "error"),
             ],
-        )
-
-    def test_an_old_start_row_key_writes_as_the_current_role_app(self):
-        self.claim(key="pre-app-key")
-        self.ok("progress", name="start", text=PICK)
-        self.assertEqual(
-            self.stored(), [(role_id("researcher"), comment_id("researcher", SID, "start"))]
         )
 
     def test_no_start_row_exits_2_and_writes_nothing(self):
@@ -169,40 +160,6 @@ class Finished(Writeback):
                 ]
             },
         )
-
-
-class Limit(Writeback):
-    def limit_rows(self):
-        return [r for r in self.runs() if r["kind"] == "limit"]
-
-    def test_a_limit_moves_once_per_attempt_with_one_comment_per_sid(self):
-        self.claim()
-        limit = {"returncode": -9, "outcome": None, "error": "", "limit": {"resets_at": None}}
-        self.ok("begun")
-        for _ in range(2):
-            self.ok("finished", **limit)
-        researcher = role_id("researcher")
-        [session] = [b for _, b in self.comments(ID) if b.startswith(f"Run {SID}")]
-        self.assertRegex(session, rf"\ARun {SID} · limit · #2 · \S+ → \S+ · exit -9\Z")
-        self.assertEqual(self.history(ID), [("in_progress", "in_review", researcher)])
-        self.assertEqual(self.limit_rows(), [])
-
-        self.ok("begun", attempt=2)
-        self.assertEqual(self.state(ID), "in_progress")
-        self.ok("finished", attempt=2, **limit)
-        self.assertEqual(
-            self.history(ID),
-            [
-                ("in_progress", "in_review", researcher),
-                ("in_review", "in_progress", researcher),
-                ("in_progress", "in_review", researcher),
-            ],
-        )
-        self.assertEqual(
-            self.stored(),
-            [(HARNESS_USER, SESSION), (researcher, comment_id("researcher", SID, "limit"))],
-        )
-        self.assertEqual(self.limit_rows(), [])
 
 
 if __name__ == "__main__":

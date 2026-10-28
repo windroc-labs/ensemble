@@ -4,7 +4,6 @@ import io
 import json
 import os
 import sys
-import tempfile
 import urllib.request
 from datetime import datetime
 from unittest import mock
@@ -15,6 +14,7 @@ from ensemble.orchestrator.trackers.linear import client, ops
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import STATES
 from tests.orchestrator.unit.streams import Stderr
+from tests.utils.sandbox import scratch
 
 LABEL1, LABEL2 = "00000000-0000-4000-8000-000000000021", "00000000-0000-4000-8000-000000000022"
 
@@ -112,9 +112,7 @@ class Logs(Case):
     TS = datetime.fromisoformat("2026-10-09T00:26:33-04:00").astimezone().isoformat()
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.logs = os.path.join(self.tmp, "logs")
         self.path = os.path.join(self.logs, "orchestrator.jsonl")
         log.use_logs(self.logs)

@@ -2,15 +2,24 @@
 
 import json
 import os
+import time
 from pathlib import Path
+from unittest import mock
 
-from ensemble.manager.engine.events import EVENTS_MAX, Events
+from ensemble.manager.engine.events import EVENTS_MAX, SETTLE, Events
 from ensemble.utils import append_line, file_lock, save
 from tests.manager.case import Case
 
 
+def settle_at_once():
+    """time.sleep patched to return at once for SETTLE and really sleep for any other time."""
+    sleep = time.sleep
+    return mock.patch("time.sleep", side_effect=lambda s: None if s == SETTLE else sleep(s))
+
+
 class EventsCase(Case):
     def setUp(self):
+        self.enterContext(settle_at_once())
         self.directory = os.path.join(self.home, "events-test")
         os.mkdir(self.directory, 0o700)
         self.events = Events(self.directory)

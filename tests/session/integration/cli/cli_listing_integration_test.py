@@ -20,15 +20,12 @@ from ensemble.utils import Record
 from tests.session import harnesses
 from tests.session.cli_support import MANAGER, CliCase
 from tests.session.fakes.host import FakeHost
+from tests.utils.fakes.ctl import lines
 
 HEADER = "name\tstate\tclient\tsid\tdisplay"
 PROG = "ensemble-session"
 OTHER = "other"
 SLEEP = "import time; time.sleep(120)"
-
-
-def lines(*records: Record) -> str:
-    return "".join(record.to_line() + "\n" for record in records)
 
 
 def table(*rows: str) -> str:

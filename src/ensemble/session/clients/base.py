@@ -68,6 +68,9 @@ class Client:
         """The registered account names a session may select; None: the client has no accounts."""
         return None
 
+    def _account(self) -> str:
+        return ""
+
     def _usage_probes(self) -> dict[str, tuple[str, Launch]] | None:
         return None
 

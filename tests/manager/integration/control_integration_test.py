@@ -29,7 +29,7 @@ class Control(Case):
         self.assertEqual(Path(self.roster.path).read_bytes(), ledger)
         result = subprocess.run(
             (self.command, "status"),
-            input="".join(record.to_line() + "\n" for record in self.records),
+            input=ctl.lines(*self.records),
             env=child_env(),
             capture_output=True,
             text=True,

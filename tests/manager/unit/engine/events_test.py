@@ -3,8 +3,6 @@
 import errno
 import os
 import stat
-import threading
-import time
 from pathlib import Path
 from unittest import mock
 
@@ -120,23 +118,19 @@ class EventsTest(EventsCase):
     def test_legacy_settlement_prepends_old_tail_before_fresh_arrivals(self):
         fd = os.open(self.events.path, os.O_WRONLY | os.O_APPEND)
         self.addCleanup(os.close, fd)
-        completed = threading.Event()
+        settled = []
 
-        def append():
-            deadline = time.monotonic() + 5
-            while not os.path.exists(self.events.archive) and time.monotonic() < deadline:
-                time.sleep(0.01)
+        def append(_seconds):
+            if settled:  # only the settle before the candidate
+                return
+            settled.append(_seconds)
             os.write(fd, b"inflight\n")
             append_line(self.events.path, b"fresh\n")
-            completed.set()
 
-        thread = threading.Thread(target=append)
-        thread.start()
-        with file_lock(self.events.path):
+        with file_lock(self.events.path), mock.patch("time.sleep", append):
             self.assertTrue(self.events.rotate(1, 0))
             self.events.recover(1)
-        thread.join(5)
-        self.assertTrue(completed.is_set())
+        self.assertTrue(settled)
         self.assertEqual(Path(self.events.path).read_bytes(), b"old\ninflight\nfresh\n")
 
     def test_a_line_appended_while_the_candidate_publishes_is_kept(self):
@@ -228,35 +222,26 @@ class EventsTest(EventsCase):
 
     def test_rollback_keeps_fresh_bytes_already_in_prepared_candidate(self):
         real_replace = os.replace
-
-        def replace(source, destination):
-            if str(source) == self.events.candidate and str(destination) == self.events.path:
-                real_replace(source, destination)
-                raise OSError(errno.EIO, "publish failed after rename")
-            real_replace(source, destination)
-
         fd = os.open(self.events.path, os.O_WRONLY | os.O_APPEND)
         self.addCleanup(os.close, fd)
-        finished = threading.Event()
+        appended = []
 
-        def append():
-            deadline = time.monotonic() + 5
-            while not os.path.exists(self.events.archive) and time.monotonic() < deadline:
-                time.sleep(0.01)
-            os.write(fd, b"inflight\n")
-            append_line(self.events.path, b"captured\n")
-            finished.set()
+        def replace(source, destination):
+            real_replace(source, destination)
+            if str(destination) == self.events.archive:
+                os.write(fd, b"inflight\n")
+                append_line(self.events.path, b"captured\n")
+                appended.append(destination)
+            elif str(source) == self.events.candidate and str(destination) == self.events.path:
+                raise OSError(errno.EIO, "publish failed after rename")
 
-        thread = threading.Thread(target=append)
-        thread.start()
         with (
             file_lock(self.events.path),
             mock.patch("os.replace", side_effect=replace),
             self.assertRaises(OSError),
         ):
             self.events.rotate(1, 0)
-        thread.join(5)
-        self.assertTrue(finished.is_set())
+        self.assertTrue(appended)
         append_line(self.events.path, b"after\n", locked=True)
         self.recover()
         self.assertEqual(

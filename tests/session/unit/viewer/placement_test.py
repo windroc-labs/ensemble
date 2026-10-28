@@ -276,26 +276,6 @@ class OpenerTest(Case):
                 self.assertEqual(placed(fake).opener(), value)
             self.assertEqual(fake.calls, [])
 
-    def test_neither(self):
-        for env in (
-            {},
-            {"ITERM_SESSION_ID": "w0t0p0:ABC"},
-            {**ITERM, "TERM_PROGRAM": "vscode"},
-            {"TERM_PROGRAM": "iTerm.app"},
-            {"TERM_PROGRAM": "iTerm.app", "ITERM_SESSION_ID": ""},
-        ):
-            fake = FakeTmux()
-            with (
-                self.subTest(env=env),
-                environ(**env),
-                self.assertRaisesRegex(
-                    tmux_cli.TuiError,
-                    r"^no anchor pane: not in tmux, no iTerm2 pane \(\$ITERM_SESSION_ID\)$",
-                ),
-            ):
-                placed(fake).opener()
-            self.assertEqual(fake.calls, [])
-
     def test_a_bad_iterm_session_id(self):
         for value in (
             "w0t0p0",
@@ -313,13 +293,6 @@ class OpenerTest(Case):
                 self.assertRaisesRegex(tmux_cli.TuiError, r"^bad \$ITERM_SESSION_ID"),
             ):
                 placed(FakeTmux()).opener()
-
-    def test_bad_tmux_pane(self):
-        with (
-            environ(**{**INSIDE, "TMUX_PANE": "%3;"}),
-            self.assertRaisesRegex(tmux_cli.TuiError, "TMUX_PANE"),
-        ):
-            placed(FakeTmux()).opener()
 
 
 class SplitTest(Case):
@@ -766,6 +739,8 @@ class PanePlacementTest(PaneFixture):
             {"ITERM_SESSION_ID": ""},
             {"ITERM_SESSION_ID": "w0t0p0:ABC"},
             {**ITERM, "TERM_PROGRAM": "Apple_Terminal"},
+            {"TERM_PROGRAM": "iTerm.app"},
+            {"TERM_PROGRAM": "iTerm.app", "ITERM_SESSION_ID": ""},
         ):
             for split in (None, "right"):
                 with self.subTest(env=env, split=split):

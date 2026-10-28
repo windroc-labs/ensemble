@@ -7,10 +7,10 @@ role's catalog row, rendered, with a workdir), or index.
 import json
 import os
 import subprocess
-import tempfile
 
 from tests.delegate import case
 from tests.delegate.case import PY, child_env
+from tests.utils.sandbox import scratch
 
 TIMEOUT = 60
 PROGRAM = """import dataclasses
@@ -85,9 +85,7 @@ def index():
 
 class Case(case.Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.work, self.proj = os.path.join(self.root, "work"), os.path.join(self.root, "proj")
         for d in (self.work, self.proj):
             os.mkdir(d)

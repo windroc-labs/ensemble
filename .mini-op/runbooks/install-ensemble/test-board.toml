@@ -1,8 +1,7 @@
 # The test board's settings, a template for the mini's ~/.ensemble/config.local.toml: copy it there
 # and fill every <…> (test-accounts.md 4.). Each app's Keychain services default to
 # linear-app-<slot>-secret and -token. install.sh asks each app's client secret and each Linear
-# project's repo, and fills each app's user_id and the team, state and label ids (docs/upgrading.md
-# › Linear presets).
+# project's repo, and fills each app's user_id and the team, state and label ids.
 # The filled values live only on the mini; never commit them.
 [orchestrator]
 tracker = "linear"

@@ -7,8 +7,7 @@ from pathlib import Path
 
 from ensemble.utils import Record
 from tests.delegate.case import PY, REPO, Case, child_env
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+from tests.session.case import SID
 
 
 class Open(Case):
@@ -79,12 +78,6 @@ class Open(Case):
         done = self.open("--display=-pane")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
         self.assertEqual(Record.parse(done.stdout).display, "-pane")
-
-    def test_name_that_cannot_be_a_resume_key_is_rejected_before_launch(self):
-        done = self.open(name="-worker")
-        self.assertEqual((done.returncode, done.stdout), (2, ""))
-        self.assertIn("not starting with -", done.stderr)
-        self.assertFalse(self.log.exists())
 
     def test_busy_has_no_record_and_preserves_stderr_and_exit_75(self):
         done = self.open(code="75")

@@ -1,6 +1,5 @@
 from unittest import mock
 
-from tests.case import REPO
 from tests.guard_checks import suppressions
 from tests.guard_data import NO_COVER_ALLOWED, NOQA_ALLOWED
 from tests.guard_samples import Sample
@@ -41,9 +40,6 @@ class SourceSuppressions(Sample):
             files.pop(replace)
         return suppressions.source_suppressions(self.tree(files))
 
-    def test_the_real_inventory_has_matching_comments(self):
-        self.assertEqual(suppressions.source_suppressions(REPO), [])
-
     def test_each_suppression_needs_its_scopes_inventory_entry_and_reason(self):
         (path, code, scope), reason = next(iter(NOQA_ALLOWED.items()))
         hook = "src/ensemble/session/modes/tui_hook.py"
@@ -82,7 +78,7 @@ class SourceSuppressions(Sample):
             ),
             (
                 {
-                    "docs/unused.py": "# noqa\n",
+                    "other/unused.py": "# noqa\n",
                     "src/ensemble/utils/strings.py": (
                         '"""Example: # noqa and # type: ignore."""\nvalue = \'# noqa: F401\'\n# Suppressions are checked elsewhere.\n'
                     ),
@@ -233,9 +229,6 @@ class CoveragePragmas(Sample):
     def found(self, files, allowed=None):
         with mock.patch.dict(NO_COVER_ALLOWED, allowed or {}, clear=True):
             return suppressions.coverage_pragmas(self.tree(files))
-
-    def test_the_real_inventory_has_matching_comments(self):
-        self.assertEqual(suppressions.coverage_pragmas(REPO), [])
 
     def test_a_registered_function_header_may_carry_the_pragma(self):
         path = "src/ensemble/utils/a.py"

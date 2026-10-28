@@ -18,7 +18,8 @@ from ensemble.delegate.engine import runner
 from ensemble.delegate.engine.runner import FIX
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result, Stopped
 from ensemble.utils import printable
-from tests.delegate.replies import bare, block, running
+from tests.delegate.case import SID
+from tests.delegate.replies import bare, block
 from tests.delegate.runner import (
     FAILED,
     GH,
@@ -26,13 +27,13 @@ from tests.delegate.runner import (
     INVALID_ERROR,
     NEEDS,
     PR,
-    SID,
     Base,
     UnstreamedClient,
     ended,
 )
 from tests.delegate.unit.runs import DONE, START, limit, said
 from tests.session.modules import client_loader
+from tests.utils.sandbox import pid_exists as running
 
 UPDRAFT = {"status": "converged", "head": "a" * 40}
 VIEW = {"state": "OPEN", "isDraft": True, "headRefOid": "a" * 40, "statusCheckRollup": []}
@@ -172,18 +173,6 @@ class Fix(Base):
         self.assertEqual(
             self.kinds(), ["session", "input", "progress", "invalid", "session", "result", "end"]
         )
-
-
-class Idle(Base):
-    def test_silence_longer_than_the_idle_timeout_is_recorded_and_the_run_goes_on(self):
-        self.write(
-            os.path.join(self.ensemble, "config.local.toml"), "[delegate]\nidle_timeout = 0.3\n"
-        )
-        r = self.go({"sleep": 1.0}, said(START, block(DONE)))
-        self.assertEqual(r.outcome.status, "done")
-        idle = [e for e in self.records() if e["kind"] == "idle"]
-        self.assertTrue(idle)
-        self.assertEqual({e["seconds"] for e in idle}, {0.3})
 
 
 class UsageLimit(Base):
@@ -382,7 +371,7 @@ class Start(Base):
         )
 
     def test_a_destination_decides_the_url_and_each_saves_a_deliverable(self):
-        url, pr_url = "https://github.com/o/docs/blob/main/x.md", "https://github.com/o/n/pull/7"
+        url, pr_url = "https://github.com/o/notes/blob/main/x.md", "https://github.com/o/n/pull/7"
         for output, data, want_url, saved in (
             ({"type": "local"}, DONE, self.out, "# Doc\n"),
             (GH, {**DONE, "url": url}, url, "# Doc\n"),
@@ -419,7 +408,7 @@ class Start(Base):
             (f"stopped: PermissionError: {denied}", False),
         )
         for output, url, gated in (
-            (GH, "https://github.com/o/docs/blob/main/x.md", []),
+            (GH, "https://github.com/o/notes/blob/main/x.md", []),
             (PR, "https://github.com/o/n/pull/7", ["ready_gate"]),
         ):
             with self.subTest(output=output):

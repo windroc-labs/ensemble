@@ -121,7 +121,7 @@ COMMAND_SRC = (SESSION_SRC,)
 PYTHON_CODE_ALLOWED = {
     (
         "tests/session/integration/engine/base_integration_test.py",
-        "1a36105f9ea4517947d974b341422a0263475c87d737adc54c4b74455b260c6a",
+        "908492b62bcf187b5700f3cd85ecff3ff7e9180c6f54358ba8e61c192e13b3f7",
     ): "Session class-method dispatch before and after configuration requires a fresh interpreter; Hosts is imported from its defining module after its public export was removed.",
     (
         "tests/session/integration/extension_client_integration_test.py",
@@ -147,10 +147,6 @@ PYTHON_CODE_ALLOWED = {
         "tests/session/integration/extension_client_integration_test.py",
         "ec5dfcbc92032c9ec70596f6a779897ed3305cd4f9acfd399665c83bdcff3d2f",
     ): "Codex tui launch (argv, PYTHONPATH) from an installed-layout site through HostedSession's client registry; no public API returns a configured Client's launch, and only a fresh interpreter on the copied site sees that layout.",
-    (
-        "tests/session/integration/hosted_integration_test.py",
-        "2443c6161954fdc9009fbdde92c6fc001de6e6c6f62f0fde8fb162ae6a0d74d6",
-    ): "HostedSession.list, Session.list and TuiStore.attach refused while HostedSession is unconfigured; tests may not patch HostedSession._setup (test_boundaries), and another test may have configured it in-process, so only a fresh interpreter has it unconfigured.",
     (
         "src/ensemble/session/engine/tmux_cli.py",
         "2353827626a3c6e192d6841bde2f5dfdcdbbc4a8bff857d91303607d99299413",

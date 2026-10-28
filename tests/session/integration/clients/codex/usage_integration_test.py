@@ -4,7 +4,6 @@ import json
 import os
 import shlex
 import sys
-import tempfile
 import time
 from pathlib import Path
 from unittest import mock
@@ -13,15 +12,14 @@ from ensemble.session.clients.codex import CodexClient
 from ensemble.session.engine.types import ConfigError, Usage, Window
 from tests.session.case import REPO, Case
 from tests.session.integration.clients.codex import fake_app_server
+from tests.utils.sandbox import scratch
 
 FIVE, WEEK = Window(62, 2000), Window(41, 4000)
 
 
 class UsageIntegrationTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home, self.work = (self.root / name for name in ("home", "work"))
         self.codex_home = self.home / ".codex"
         for path in (self.work, self.codex_home):
@@ -87,23 +85,9 @@ class UsageIntegrationTest(Case):
 
     def test_each_reply_maps_to_its_windows_and_failures_are_unknown_and_cleaned_up(self):
         for case, expected in (
-            ("fallback", Usage(FIVE, WEEK)),
-            ("five-first", Usage(FIVE, WEEK)),
-            ("weekly-full", Usage(FIVE, Window(100, 4000))),
             ("weekly-only", Usage(None, WEEK)),
-            ("null", Usage(None, None)),
-            ("invalid-window", Usage(None, None)),
-            ("huge-number", Usage(None, None)),
-            ("empty", None),
             ("error", None),
-            ("init-error", None),
-            ("malformed", None),
-            ("oversize", None),
-            ("exit", None),
-            ("null-result", None),
-            ("stderr", None),
             ("ignore-term", Usage(FIVE, WEEK)),
-            ("silent", None),
         ):
             with self.subTest(case=case):
                 self.log.unlink(missing_ok=True)

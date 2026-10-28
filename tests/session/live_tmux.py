@@ -5,6 +5,7 @@ import json
 import os
 import resource
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -12,22 +13,27 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from typing import NamedTuple
 from unittest import mock
 
 from ensemble.session.harness import guard
 from ensemble.session.hosts import base as host_base
+from ensemble.utils import Record
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN, child_env
 from tests.session.grid import GridCheck
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.jsonl import read_jsonl
 
 IDLE = ("cat", "-")
+MANAGER = "mgr"
 TIMEOUT = 10
 POLL = 0.05
 RESEND = 1  # s: a just-listed client may drop input; every POLL would fill its pty
 SOCKET_MAX = 100  # sun_path: 104 bytes (macOS), 108 (Linux)
 HEADROOM = 256
+NPROC_PROBE = os.path.join(os.path.dirname(__file__), "nproc_probe.py")
 PANES = "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
 
 
@@ -157,19 +163,18 @@ class Server:
         }
 
     def start(self, manager: str, width: int = 200, height: int = 50) -> None:
-        """Capped (RLIMIT_NPROC) at the user's processes plus HEADROOM against a fork loop."""
+        """RLIMIT_NPROC: the uid's processes plus HEADROOM, against a fork loop."""
         self.size = width, height
         _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-        uid = str(os.getuid())
-        ps = (
-            ["ps", "-L", "-U", uid, "-o", "lwp="]
-            if sys.platform.startswith("linux")
-            else ["ps", "-U", uid, "-o", "pid="]
-        )
-        cap = (
-            len(subprocess.run(ps, capture_output=True, text=True, check=True).stdout.split())
-            + HEADROOM
-        )
+        if sys.platform.startswith("linux"):
+            probe = [sys.executable, "-I", NPROC_PROBE]
+            used = int(subprocess.run(probe, capture_output=True, text=True, check=True).stdout)
+        else:
+            ps = ["ps", "-U", str(os.getuid()), "-o", "pid="]
+            used = len(
+                subprocess.run(ps, capture_output=True, text=True, check=True).stdout.split()
+            )
+        cap = used + HEADROOM
         cap = cap if hard == resource.RLIM_INFINITY else min(cap, hard)
         subprocess.run(
             [
@@ -331,15 +336,13 @@ def crash_owner(ensemble: str, name: str) -> None:
 
 
 def alive(pid: int) -> bool:
-    """Not ended: a zombie has, its parent (a delegate drive that started it) not reaping it yet."""
+    """Not ended: a zombie has, its parent (e.g. a delegate drive) not reaping it yet."""
     info = guard.process_info(pid)
     return info is not None and not info[2]
 
 
 def activity(name: str, home: str | None = None) -> str | None:
-    """Tui worker `name`'s last mark by its harness, for its current generation (None: none);
-    home: the HOME it ran under, else this process's.
-    """
+    """Tui worker `name`'s harness's last mark this generation, or None; home: its HOME."""
     with mock.patch.dict(os.environ, {} if home is None else {"HOME": home}):
         found = host_base.worker_state(name)
         if found is None or found.generation is None:
@@ -354,6 +357,13 @@ def events(path: str) -> list[str]:
             return f.read().splitlines()
     except FileNotFoundError:
         return []
+
+
+_events = events
+
+
+def logged(path: str) -> list[dict]:
+    return read_jsonl(path, missing_ok=True)
 
 
 def wait(check, timeout: float = TIMEOUT, what: str = "check() to hold"):
@@ -379,3 +389,79 @@ def assert_grid(
 ) -> bool:
     """Assert manager's grid matches columns, including cell ownership and geometry."""
     return GridCheck(case, server, manager, columns).check(manager_width)
+
+
+class Calls:
+    """Its host's setUp sets self.server, self.root, self.events; bins() leads PATH."""
+
+    WAIT = TIMEOUT
+    EVENT = "{count} x {name} {word}"
+
+    def bins(self) -> tuple:
+        return ()
+
+    def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
+        """A caller's in `inside` (None: outside tmux); an extra None drops its key."""
+        env = self.server.env(**(self.server.inside(inside) if inside else {}))
+        env["PATH"] = os.pathsep.join(
+            (*self.bins(), self.server.bin, os.path.dirname(sys.executable), env["PATH"])
+        )
+        for key, value in extra.items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+        return env
+
+    def ok(self, result: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
+        self.assertEqual(result.returncode, 0, self.ok_message(result))
+        return result
+
+    def ok_message(self, result: subprocess.CompletedProcess) -> str:
+        return f"{shlex.join(result.args)}\n{result.stdout}\n{result.stderr}"
+
+    def record(self, result: subprocess.CompletedProcess) -> Record:
+        lines = self.ok(result).stdout.splitlines()
+        self.assertEqual(len(lines), 1, result.stdout)
+        return Record.parse(lines[0])
+
+    def scene(self, name: str, steps=None, turns=(), **more) -> dict[str, str]:
+        """`name`'s fake claude scenario, as env."""
+        path = os.path.join(self.root, f"{name}.claude.json")
+        steps = [f"Hi from {name}."] if steps is None else steps
+        scenario = {"steps": steps, "turns": list(turns), "log": self.log(name)}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({**scenario, "commands": self.log(name, "commands"), **more}, f)
+        return {fake_claude.ENV: path}
+
+    def log(self, name: str, kind: str = "claude") -> str:
+        return os.path.join(self.root, f"{name}.{kind}.jsonl")
+
+    def wait_event(self, name: str, word: str, count: int = 1, events: str | None = None):
+        def found():
+            self.poke()
+            lines = _events(events or self.events)
+            hits = [line for line in lines if line.split(" ")[1:3] == [name, word]]
+            return lines if len(hits) >= count else None
+
+        return wait(found, self.WAIT, what=self.EVENT.format(count=count, name=name, word=word))
+
+    def poke(self) -> None:
+        # a no-op job reaps a dead pane tmux 3.4 may leave
+        self.server.tmux("run-shell", "-b", "true")
+
+    @contextmanager
+    def poking(self):
+        stop = threading.Event()
+
+        def run():
+            while not stop.wait(POLL * 4):
+                self.poke()
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join()

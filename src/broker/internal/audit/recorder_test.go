@@ -66,7 +66,9 @@ func equal(a, b []string) bool {
 func TestNilRecorder(t *testing.T) {
 	var r *Recorder
 	r.Add(ctr, Credential{Kind: GitHubToken, Result: Issued})
-	r.Flush(nil)
+	if err := r.Flush(nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRouting(t *testing.T) {
@@ -118,9 +120,8 @@ func TestStatusWritesNothing(t *testing.T) {
 	for _, command := range []string{"status", "build", "workspace-rm"} {
 		r, s := recorder(command, "")
 		r.Add(other, Credential{Kind: GitHubToken, Result: Revoked})
-		r.Flush(nil)
-		if s.calls != 0 {
-			t.Fatalf("%s wrote %d lines", command, len(s.lines))
+		if err := r.Flush(nil); err != nil || s.calls != 0 {
+			t.Fatalf("%s wrote %d lines: %v", command, len(s.lines), err)
 		}
 	}
 }
@@ -133,18 +134,6 @@ func TestFlushReportsAppendError(t *testing.T) {
 	}
 	if err := r.Flush(nil); err != nil || s.calls != 1 {
 		t.Fatal("a second flush must not retry or create another warning")
-	}
-}
-
-func TestFlushNoWriteHasNoError(t *testing.T) {
-	var r *Recorder
-	if err := r.Flush(nil); err != nil {
-		t.Fatal(err)
-	}
-	r, s := recorder("status", "")
-	s.err = errors.New("must not be called")
-	if err := r.Flush(nil); err != nil || s.calls != 0 {
-		t.Fatal("empty flush attempted a write")
 	}
 }
 

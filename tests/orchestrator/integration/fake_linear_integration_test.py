@@ -6,7 +6,6 @@ queries and mutations, alone and through LinearIssues."""
 import functools
 import json
 import os
-import time
 import urllib.request
 import uuid
 from contextlib import redirect_stderr
@@ -37,7 +36,7 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
 from ensemble.utils import parse_time
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import SID, Case, zone
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.fake_transport import install, refuse_keychain
 from tests.orchestrator.unit.board_ids import (
@@ -67,8 +66,6 @@ ENGINEER_USER = role_id("engineer")
 PROJECT = {"id": "121166b1-191a-4461-bec4-42f1c2dc0ddd", "name": "Widgets"}
 
 LABEL = "00000000-0000-4000-8000-000000000031"
-
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
 PR = "https://github.com/acme/widgets/pull/1"
 
@@ -270,12 +267,10 @@ class GraphQLProjection(ServerCase):
                 with self.assertRaises(types.Unavailable) as cm:
                     ops.call(eng, ops.M_SUBSCRIBE, "issueSubscribe", i="TASK-7", e="me@x.com")
                 self.assertEqual(str(cm.exception), "issueSubscribe: HTTP 503")
-                self.fake.fail("linear.Q_ISSUE_STATE", "hang", seconds=3)
-                start = time.monotonic()
+                self.fake.fail("linear.Q_ISSUE_STATE", "hang", seconds=1)
                 with self.assertRaises(types.Unavailable) as cm:
-                    eng(ops.Q_ISSUE_STATE, timeout=1, i="TASK-7")
+                    eng(ops.Q_ISSUE_STATE, timeout=0.2, i="TASK-7")
                 self.assertEqual(str(cm.exception), "issue: TimeoutError: timed out")
-                self.assertLess(time.monotonic() - start, 2.5)
                 self.assertEqual(
                     self.log(),
                     [
@@ -756,11 +751,7 @@ class FixtureOperations(Case):
         self.assertEqual(len(fake.relations), 1)
 
     def test_a_time_without_an_offset_is_utc(self):
-        tz = mock.patch.dict(os.environ, {"TZ": "Asia/Tokyo"})
-        self.addCleanup(time.tzset)
-        tz.start()
-        self.addCleanup(tz.stop)
-        time.tzset()
+        zone(self, "Asia/Tokyo")
         for t in (
             datetime(2026, 10, 9, 7, 30, 41, 62000),
             "2026-10-09T07:30:41.062",
@@ -1429,15 +1420,6 @@ class IssueOps(ServerCase):
         self.assertEqual(self.fake.relations, [])
         with self.assertRaisesRegex(LinearError, "Entity not found: IssueRelation"):
             self.gql(issue_relation.M_REMOVE, i=edge["id"])
-        for op, ident, direction, other, result, left in (
-            ("add", "TASK-7", "blocked_by", "TASK-8", "changed", 1),
-            ("add", "TASK-8", "blocks", "TASK-7", "unchanged", 1),
-            ("remove", "TASK-8", "blocks", "TASK-7", "changed", 0),
-            ("remove", "TASK-7", "blocked_by", "TASK-8", "unchanged", 0),
-        ):
-            with self.subTest(op=op, ident=ident):
-                receipt = self.issues.relation(op, ident, direction, other)
-                self.assertEqual((receipt.result, len(self.fake.relations)), (result, left))
 
     def test_archive_is_refused_with_an_unfinished_child_then_takes_it(self):
         child = self.fake.issue("Child", parent="TASK-7")

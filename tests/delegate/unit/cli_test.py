@@ -21,13 +21,13 @@ from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import NotShowable, SessionBusy, SessionError
 from ensemble.utils import Record, Status
-from tests.delegate.case import Case, committed
+from tests.delegate.case import SID, Case, committed
 from tests.delegate.cli_case import (
+    COMMANDS,
     HARNESS,
     HEADS,
     KEYS,
     PLACEMENT,
-    SID,
     TUI,
     Base,
     RefusingClient,
@@ -38,18 +38,19 @@ from tests.delegate.fakes.harness_session import (
     RecordingHost,
     harness_launches,
 )
-from tests.delegate.harness import SID as HARNESS_SID
 from tests.delegate.harness import HarnessCase
-from tests.delegate.unit.runs import DONE, no_child
+from tests.delegate.unit.runs import DONE
 from tests.session import fake_client
+from tests.session.case import SID as HARNESS_SID
+from tests.session.case import no_spawn
 from tests.session.modules import client_loader
 from tests.utils.case import local_section
-from tests.utils.cli_help import examples, parse_only
+from tests.utils.cli_help import check_examples, help_text, parse_only
 
 
 class Detaching:
-    """A delegate class for `run --detach`: records each construction's role, Spec and placement,
-    and its environment; its detach returns RECORD or raises `failure`.
+    """A delegate class for `run --detach`: records each create's role, Spec and placement, and
+    its environment; its detach returns RECORD or raises `failure`.
     """
 
     made: list = []
@@ -59,11 +60,11 @@ class Detaching:
 
     @classmethod
     def create(cls, role, spec, **placement):
+        Detaching.made.append((role, spec, placement))
+        Detaching.environments.append(dict(os.environ))
         return cls(role, spec, **placement)
 
     def __init__(self, role, spec, **placement):
-        Detaching.made.append((role, spec, placement))
-        Detaching.environments.append(dict(os.environ))
         if isinstance(Detaching.failure, ConfigError):
             raise Detaching.failure
         if Detaching.construct_failure is not None:
@@ -105,11 +106,6 @@ class Detach(Base):
     def detaches(self, *extra, events=None, **kw):
         return self.runs("--sid", SID, "--detach", "--events", events or self.events, *extra, **kw)
 
-    def test_detach_uses_create(self):
-        with mock.patch.object(Detaching, "create", wraps=Detaching.create) as create:
-            self.assertEqual(self.detaches()[0], 0)
-        create.assert_called_once()
-
     def test_inside_an_agent_session_a_run_detached_or_not_exits_2_and_constructs_nothing(self):
         with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
             for code, out, err in (self.detaches(), self.runs("--sid", SID)):
@@ -143,6 +139,7 @@ class Detach(Base):
         ):
             with self.subTest(argv=argv, out=out):
                 self.assertEqual(self.runs(*argv, out=out), (2, "", f"delegate: {want}\n"))
+                self.assertFalse(os.path.exists(self.work))
         self.assertEqual(Detaching.made, [])
 
     def test_without_out_the_spec_out_is_none(self):
@@ -197,14 +194,6 @@ class Detach(Base):
         self.assertEqual(self.detaches("--cwd", cwd)[0], 0)
         self.assertEqual(self.detaches()[0], 0)
         self.assertEqual([spec.cwd for _, spec, _ in Detaching.made], [cwd, None])
-
-    def test_split_options_are_gone(self):
-        for extra in (("--split", "right"), ("--split-from", "mgr")):
-            with self.subTest(extra=extra):
-                code, out, err = self.detaches("--mode", "tui", *extra)
-                self.assertEqual((code, out), (2, ""))
-                self.assertIn("unrecognized arguments", err)
-        self.assertEqual(Detaching.made, [])
 
     def test_detach_prints_one_record_line_and_names_its_session(self):
         for mode in ("headless", "tui"):
@@ -293,11 +282,6 @@ class Detach(Base):
         code, _, err = self.detaches("--mode", "tui", "--display", "mgr:%1 right")
         self.assertEqual(code, 0, err)
         self.assertEqual(Detaching.made[0][2], {"display": "mgr:%1 right"})
-
-    def test_input_dash_is_read_by_the_caller(self):
-        code, _, err = self.detaches(input="-", stdin="-x\nUse B.\n")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(Detaching.made[0][1].input, "-x\nUse B.\n")
 
     def test_a_refusal_exits_2_and_a_start_failure_1_without_a_record(self):
         for failure, code in (
@@ -476,12 +460,6 @@ class Environments(Harnessed):
         self.assertIn("[environment.tmux]", err)
         self.assertFalse(os.path.exists(self.work))
 
-    def test_run_has_no_environment_option(self):
-        self.configure("docker")
-        code, _, err = self.cli("--environment", "dummy", "--dry-run", input=self.TARGETED)
-        self.assertEqual(code, 2)
-        self.assertIn("--environment", err)
-
 
 class Verifier(Harnessed):
     """The built-in verifier on the packaged mini-op environment (WDRC-110 FR-47, FR-50, FR-80)."""
@@ -659,12 +637,6 @@ class DetachSid(Harnessed):
         self.assertEqual(self.metadata()["spec"]["sid"], HARNESS_SID)
         self.assertNotIn("ENSEMBLE_SID", harness_launches()[0]["env"])
 
-    def test_a_different_sid_starts_and_writes_nothing(self):
-        os.environ["ENSEMBLE_SID"] = HARNESS_SID
-        code, out, _ = self.cli("--sid", SID, "--detach", "--events", self.events)
-        self.assertEqual((code, out), (2, ""))
-        self.assertEqual((harness_launches(), os.path.exists(self.work)), ([], False))
-
 
 class DryRun(Base):
     def test_dry_run_prints_the_plan_and_creates_nothing(self):
@@ -718,7 +690,7 @@ class InProcess(Base):
         with (
             mock.patch("time.strftime", return_value="2026-10-16"),
             mock.patch("uuid.uuid4", return_value=uuid.UUID(SID)),
-            no_child(),
+            no_spawn(),
         ):
             code, out, err = self.cli(
                 "run",
@@ -761,7 +733,7 @@ class InProcess(Base):
         )
 
     def runs(self, *extra, **kw):
-        with no_child():
+        with no_spawn():
             return super().runs(*extra, **kw)
 
     def test_a_run_without_sid_takes_the_launchers(self):
@@ -794,7 +766,7 @@ class InProcess(Base):
         self.assertEqual([(e["sid"], e["pid"]) for e in self.launches()], [(SID, os.getpid())])
 
     def test_a_run_without_out_names_its_default_deliverable_file(self):
-        with no_child():
+        with no_spawn():
             code, out, err = self.cli(
                 "run",
                 "--role",
@@ -999,26 +971,16 @@ class Configures(Base):
                 self.assertEqual((code, out, err), (2, "", f"{want}\n"))
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
 
-    def test_an_unregistered_role_account_exits_2_and_starts_nothing(self):
-        self.configure_session(
-            {
-                "fake": {
-                    "implementation": "ensemble.session.clients.fake:FakeClient",
-                    "scenario": self.scenario,
-                    "log": self.log,
-                    "accounts": {"work": {}},
-                }
-            }
-        )
-        self.local('[roles.dummy-tester.accounts]\nfake = "nope"\n')
+    def test_a_role_accounts_table_exits_2_naming_the_session_key(self):
+        self.local('[roles.dummy-tester.accounts]\nfake = "work"\n')
         code, out, err = self.runs()
         self.assertEqual(
             (code, out, err.splitlines()[-1]),
             (
                 2,
                 "",
-                "delegate: account 'nope': not a registered account of client fake"
-                " ([clients.fake.accounts.nope])",
+                "delegate: unknown key 'accounts' in roles.dummy-tester; moved to"
+                " [session.clients.<client>] account",
             ),
         )
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
@@ -1030,11 +992,6 @@ class Configures(Base):
 
 
 class Usage(Base):
-    def test_run_resume_has_no_compatibility_option(self):
-        code, out, err = self.cli("run", "--resume")
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("unrecognized arguments: --resume", err)
-
     def test_a_run_needs_input(self):
         for argv in (
             ("--out", "o.md"),
@@ -1073,17 +1030,20 @@ class Usage(Base):
                 self.assertIn(error, err)
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
 
-    def test_an_abbreviated_option_is_a_usage_error(self):
-        for extra in (("--mod", "headless"), ("--detach", "--rol", "x")):
+    def test_an_abbreviated_or_removed_option_is_a_usage_error(self):
+        for extra, flag in (
+            (("--mod", "headless"), "--mod"),
+            (("--detach", "--rol", "x"), "--rol"),
+            (("--detach", "--mode", "tui", "--split", "right"), "--split"),
+            (("--detach", "--mode", "tui", "--split-from", "mgr"), "--split-from"),
+            (("--environment", "dummy", "--dry-run"), "--environment"),
+            (("--resume",), "--resume"),
+        ):
             with self.subTest(extra=extra):
                 code, out, err = self.runs(*extra)
                 self.assertEqual((code, out), (2, ""))
-                self.assertIn(f"unrecognized arguments: {extra[-2]}", err)
+                self.assertIn(f"unrecognized arguments: {flag}", err)
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
-
-    def test_a_run_without_mode_or_detach_is_headless(self):
-        code, out, err = self.runs("--dry-run")
-        self.assertEqual((code, json.loads(out)["mode"]), (0, "headless"), err)
 
     def test_a_config_error_exits_2_before_anything_starts(self):
         cases = [
@@ -1215,7 +1175,7 @@ class Prompt(Case):
             with self.subTest(argv=argv):
                 code, out, err = self.prompt(*argv)
                 self.assertEqual((code, out), (2, ""))
-                self.assertIn("unrecognized arguments:", err)
+                self.assertIn(f"unrecognized arguments: {' '.join(argv)}", err)
                 self.assertFalse(os.path.exists(self.work))
 
     def test_list_is_rejected_and_absent_from_prompt_options(self):
@@ -1228,13 +1188,16 @@ class Prompt(Case):
         self.assertFalse(os.path.exists(self.work))
 
     def test_out_dash_is_refused(self):
-        err = io.StringIO()
-        with redirect_stderr(err):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
             code = cli.main(
                 ["prompt", "--role", "dummy-tester", "--input", "x"]
                 + ["--workdir", self.work, "--out", "-"]
             )
-        self.assertEqual((code, err.getvalue()), (2, "delegate: --out takes a PATH, not -\n"))
+        self.assertEqual(
+            (code, out.getvalue(), err.getvalue()),
+            (2, "", "delegate: --out takes a PATH, not -\n"),
+        )
         self.assertFalse(os.path.exists(self.work))
 
     def test_unknown_role_is_a_config_error_before_writes(self):
@@ -1330,6 +1293,9 @@ class Open(Base):
         ):
             with self.subTest(argv=argv):
                 self.assertEqual(self.cli(*argv)[:2], (2, ""))
+        self.assertIn(
+            "not starting with -", self.cli("open", "--environment", "dummy", "--", "-worker")[2]
+        )
         self.opened.assert_not_called()
 
     def test_nested_open_is_refused_and_help_starts_nothing(self):
@@ -1345,22 +1311,7 @@ class Commands(Base):
     def test_help_lists_all_subcommands(self):
         code, out, err = self.cli("--help")
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(
-            re.search(r"\{([a-z,-]+)\}", out)[1].split(","),
-            [
-                "run",
-                "open",
-                "status",
-                "content",
-                "outcome",
-                "resume",
-                "show",
-                "hide",
-                "close",
-                "attach-command",
-                "prompt",
-            ],
-        )
+        self.assertEqual(re.search(r"\{([a-z,-]+)\}", out)[1].split(","), COMMANDS)
 
     def test_an_unknown_missing_or_flat_command_exits_2(self):
         for argv, want in (
@@ -1675,52 +1626,23 @@ class AdhocWorkdir(Base):
                 self.assertEqual((shown["sid"], shown["workdir"]), (SID, expected))
                 self.assertFalse(os.path.exists(expected))
 
-    def test_dry_run_reports_an_explicit_workdir(self):
-        code, out, err = self.runs("--sid", SID, "--dry-run")
-        self.assertEqual(code, 0, err)
-        self.assertEqual(json.loads(out)["workdir"], self.work)
-
-
-HELP_COMMANDS = [
-    "run",
-    "open",
-    "status",
-    "content",
-    "outcome",
-    "resume",
-    "show",
-    "hide",
-    "close",
-    "attach-command",
-    "prompt",
-]
-
 
 class HelpContracts(Case):
     def test_published_operation_examples_use_real_parser_before_dispatch(self):
-        for name in [None, *HELP_COMMANDS]:
-            published = list(examples(self.help(name)))
-            self.assertTrue(published, name)
-            for command in published:
-                with (
-                    self.subTest(name=name, command=command),
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    args = parse_only(cli.main, command[1:])
-                    if args is not None and args.command == "run" and not args.list:
-                        cli._check(args)
+        def check(command):
+            args = parse_only(cli.main, command[1:])
+            if args is not None and args.command == "run" and not args.list:
+                cli._check(args)
+
+        check_examples(self, self.help, [None, *COMMANDS], check=check)
 
     def test_no_option_names_a_credential_request(self):
-        for name in [None, *HELP_COMMANDS]:
+        for name in [None, *COMMANDS]:
             with self.subTest(name=name):
                 self.assertNotIn("credential", self.help(name).lower())
 
     def help(self, command=None, flag="--help"):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as raised:
-            cli.main(([] if command is None else [command]) + [flag])
-        self.assertEqual(raised.exception.code, 0)
-        return out.getvalue()
+        return help_text(self, cli.main, ([] if command is None else [command]) + [flag])
 
     def test_all_help_ignores_stdin_guards_configuration_and_services(self):
         before = sorted(Path(self.home).rglob("*"))
@@ -1732,7 +1654,7 @@ class HelpContracts(Case):
             mock.patch("subprocess.Popen") as popen,
             mock.patch("subprocess.run") as run,
         ):
-            for command in [None, *HELP_COMMANDS]:
+            for command in [None, *COMMANDS]:
                 for flag in ("--help", "-h"):
                     with self.subTest(command=command, flag=flag):
                         text = self.help(command, flag)
@@ -1766,7 +1688,7 @@ class HelpContracts(Case):
         self.assertIn("--input, --out and --workdir", self.help("prompt"))
 
     def test_every_query_explains_cardinality_and_record_input(self):
-        for name in HELP_COMMANDS:
+        for name in COMMANDS:
             if name in {"run", "open", "prompt"}:
                 continue
             with self.subTest(name=name):

@@ -9,7 +9,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 from unittest import mock
 
@@ -18,6 +17,8 @@ from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine.types import Access, Spec
 from tests.session import case, live_tmux
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import gone, scratch
 
 FAKE = os.path.abspath(fake_claude.__file__)
 
@@ -41,18 +42,9 @@ def said(content) -> str:
     return block["text"] if block["type"] == "text" else f"{block['type']} {block['name']}"
 
 
-def gone(pid: int) -> bool:
-    res = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=30
-    )
-    return res.stdout.strip() == "" or res.stdout.strip().startswith("Z")
-
-
 class Case(case.Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.proj, self.config = os.path.join(self.root, "proj"), os.path.join(self.root, "config")
         os.mkdir(self.proj)
         self.scenario, self.hooklog, self.log = (
@@ -363,8 +355,7 @@ class Steps(Case):
             ],
         )
         (path,) = self.transcripts()
-        with open(path, encoding="utf-8") as f:
-            error = [json.loads(line) for line in f][2]
+        error = read_jsonl(path)[2]
         self.assertEqual((error["isApiErrorMessage"], error["error"]), (True, "rate_limit"))
 
     def test_sleep(self):
@@ -376,8 +367,7 @@ class Steps(Case):
 
     def joined(self) -> list[tuple[str, str]]:
         (path,) = self.transcripts()
-        with open(path, encoding="utf-8") as f:
-            records = [json.loads(line) for line in f]
+        records = read_jsonl(path)
         return [
             ("enqueue", r["content"])
             if r["type"] == "queue-operation"

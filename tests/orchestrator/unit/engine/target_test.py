@@ -4,21 +4,19 @@ import json
 import os
 import shutil
 import tempfile
+from functools import partial
 from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.orchestrator.engine import config, target
-from ensemble.orchestrator.engine.flow import handoff
-from ensemble.orchestrator.engine.flow.types import (
-    Issue,
-)
 from ensemble.utils import SHORT, check_ref
 from ensemble.utils import Invalid as RefInvalid
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import Case
 from tests.orchestrator.config_fixtures import HARNESS_DELEGATE
-from tests.orchestrator.target_fixtures import LOCAL
+from tests.orchestrator.target_fixtures import LOCAL, REMOTE
+from tests.orchestrator.unit.run_fixtures import flow_issue
 from tests.orchestrator.unit.target_fixtures import FakeRun, api, ok
 
 PROJ = "121166b1-191a-4461-bec4-42f1c2dc0ddd"
@@ -32,20 +30,7 @@ def roles():
     return {r: SimpleNamespace(tasks=tuple(index[r])) for r in config.TASKS}
 
 
-def issue(description, title="ENG: Session Registry", ident="TASK-26", project=None):
-    return Issue(
-        id="uuid-26",
-        identifier=ident,
-        url=f"https://linear.app/t/issue/{ident}",
-        title=title,
-        description=description,
-        created_at="2026-09-01T00:00:00.000Z",
-        home=project,
-        notes=(),
-        links=(),
-        linked=(),
-        handoff=handoff.parse_handoff(description),
-    )
+issue = partial(flow_issue, ident="TASK-26", title="ENG: Session Registry")
 
 
 class RepositoryDescription(Case):
@@ -156,13 +141,6 @@ class RepositoryDescription(Case):
     def test_no_line_and_messages(self):
         self.assertEqual(target.NO_LINE, NO_LINE)
         self.assertEqual(target.parse_repo(None), NO_LINE)
-        self.assertEqual(
-            target.parse_repo("Repo: nope"), target.Invalid("unreadable Repo line: 'nope'")
-        )
-        self.assertEqual(
-            target.parse_repo("Repo: acme/a\nRepo: acme/b"),
-            target.Invalid("several different Repo: values"),
-        )
 
 
 class RepositorySlug(Case):
@@ -223,17 +201,13 @@ class TargetValidation(Case):
         self.workdir = os.path.join(self.work, "TASK-26")
         self.clone = checkout_path(self.workdir, "acme", "ensemble", "TASK-26")
         self.src = os.path.dirname(os.path.dirname(self.clone))
-        self.ls_remote = [
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "credential.helper=!gh auth git-credential",
+        self.ls_remote = (
+            *REMOTE,
             "ls-remote",
             "--heads",
             "https://github.com/acme/ensemble.git",
             "TASK-26-*",
-        ]
+        )
 
     def git_dir(self):
         os.makedirs(os.path.join(self.clone, ".git"))
@@ -318,7 +292,7 @@ class TargetValidation(Case):
             self.run_.calls,
             [
                 (("gh", "api", "repos/acme/ensemble"), SHORT),
-                (tuple(self.ls_remote), SHORT),
+                (self.ls_remote, SHORT),
             ],
         )
 
@@ -361,7 +335,7 @@ class TargetValidation(Case):
         def at(*parts):
             return lambda: os.makedirs(os.path.join(self.src, *parts))
 
-        local, remote = [(self.branch_list(), SHORT)], [(tuple(self.ls_remote), SHORT)]
+        local, remote = [(self.branch_list(), SHORT)], [(self.ls_remote, SHORT)]
         cases = [
             ("clone with branches", self.git_dir, "TASK-26-local", local),
             ("clone without branches", self.git_dir, "", local + remote),
@@ -417,9 +391,7 @@ class TargetValidation(Case):
                 self.assertEqual(
                     self.check(local=ok(out)), target.Target("acme", "ensemble", branch)
                 )
-                self.assertEqual(
-                    self.argvs()[1:], [self.branch_list()] + [tuple(self.ls_remote)] * remote
-                )
+                self.assertEqual(self.argvs()[1:], [self.branch_list()] + [self.ls_remote] * remote)
 
     def test_slug_default_and_branch_validation(self):
         self.git_dir()
@@ -622,15 +594,7 @@ class StageKeys(Case):
     """target.check with a stage's ref and mapped_only keys."""
 
     REPOS = {PROJ: "acme/ensemble"}
-    BRANCHES = (
-        "git",
-        "-c",
-        "credential.helper=",
-        "-c",
-        "credential.helper=!gh auth git-credential",
-        "ls-remote",
-        "--heads",
-    )
+    BRANCHES = (*REMOTE, "ls-remote", "--heads")
 
     def check(self, desc, *, project: str | None = PROJ, repos=REPOS, api_=None, **keys):
         self.run_ = FakeRun(

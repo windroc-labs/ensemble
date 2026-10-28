@@ -1,11 +1,9 @@
 """Session preflight shares startup validation without creating state, events or runtime work."""
 
-import contextlib
 import itertools
 import json
 import os
 import subprocess
-import tempfile
 from dataclasses import replace
 from unittest import mock
 
@@ -15,9 +13,10 @@ from ensemble.session.engine.types import Liveness
 from ensemble.session.hosts.base import GUARD_WAIT
 from ensemble.session.hosts.tmux import TmuxHost
 from tests.session import harnesses
-from tests.session.case import HOSTS, PY, REPO, SPAWNS, Case, child_env
+from tests.session.case import HOSTS, PY, REPO, SPAWNS, Case, child_env, no_spawn
 from tests.session.fakes.preflight import PreflightClient
 from tests.session.hosted_support import SID, fake_tmux, listed
+from tests.utils.sandbox import scratch
 
 
 class Preflight(Case):
@@ -67,20 +66,11 @@ class Preflight(Case):
         )
         return sorted(path for path in found if path != os.path.join(".ensemble", "harness"))
 
-    @contextlib.contextmanager
     def no_client(self, *, harness=False):
         """No process spawned; nor a thread, unless `harness`: a tui start's own harness thread
         (tests/session/harnesses.py), whose checks refuse it.
         """
-        threads = () if harness else ("threading.Thread.start",)
-        with contextlib.ExitStack() as stack:
-            calls = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in (*SPAWNS, *threads)
-            ]
-            yield
-        for call in calls:
-            call.assert_not_called()
+        return no_spawn(*(() if harness else ("threading.Thread.start",)))
 
     def unchanged(self, before):
         self.assertEqual(self.tree(), before)
@@ -185,9 +175,7 @@ with contextlib.ExitStack() as stack:
     result = Session.preflight(spec)
 print(json.dumps(result))
 """
-        logs = tempfile.TemporaryDirectory()
-        self.addCleanup(logs.cleanup)
-        log = os.path.join(logs.name, "preflight.jsonl")
+        log = os.path.join(scratch(self, real=False), "preflight.jsonl")
         before = self.tree()
         child = subprocess.run(
             [*PY, "-c", code, self.work, SID, log, json.dumps(HOSTS), json.dumps(SPAWNS)],
@@ -383,9 +371,7 @@ print(json.dumps(result))
         self.refusal(self.spec(Mode.TUI), "status_line: want true or false")
 
     def test_codex_oversized_recovery_state_is_refused_before_any_directory_is_created(self):
-        root = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(root.cleanup)
-        self.home = os.path.realpath(root.name)
+        self.home = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         self.work = os.path.join(self.home, "absent-work")
         settings = read_config(local=os.devnull)
         self.session = harnesses.Threaded.configured(

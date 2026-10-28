@@ -12,7 +12,7 @@ from pathlib import Path
 
 from tests.case import REPO, Case
 from tests.session import live_tmux
-from tests.utils.sandbox import clean_env
+from tests.utils.sandbox import clean_env, gone
 
 SCRIPT = """import json, os, subprocess, sys, tempfile
 from pathlib import Path
@@ -172,6 +172,14 @@ def errors(stdout):
 
 
 class SandboxGates(Case):
+    def assert_gone(self, pids, what):
+        for pid in pids:
+            deadline = time.monotonic() + 3
+            while not gone(pid, timeout=5):
+                if time.monotonic() >= deadline:
+                    self.fail(f"{what} tmux server {pid} remains live")
+                time.sleep(0.01)
+
     def test_clean_env_children_cannot_reach_the_parents_private_default_tmux_server(self):
         server = live_tmux.Server(self, self.home)
         server.start("parent")
@@ -349,17 +357,7 @@ print(json.dumps({"directory": str(directory), "pids": pids}))
         self.assertEqual(Path(found["directory"]).parent, Path(env["TMPDIR"]))
         self.assertFalse(Path(found["directory"]).exists())
         self.assertEqual(len(found["pids"]), 2)
-        for pid in found["pids"]:
-            deadline = time.monotonic() + 3
-            while True:
-                state = subprocess.run(
-                    ["ps", "-p", pid, "-o", "stat="], capture_output=True, text=True, timeout=5
-                )
-                if state.returncode == 1 or state.stdout.strip().startswith("Z"):
-                    break
-                if time.monotonic() >= deadline:
-                    self.fail(f"fallback tmux server {pid} remains live: {state.stdout}")
-                time.sleep(0.01)
+        self.assert_gone(found["pids"], "fallback")
         after = kept.tmux("has-session", "-t", "=kept")
         self.assertEqual(after.returncode, 0, after.stderr)
 
@@ -514,17 +512,7 @@ def load_tests(loader, tests, pattern):
         self.assertEqual(leaks[0].count("tmux server "), 4, leaks[0])
         pids = json.loads(marker.read_text())
         self.assertEqual(set(pids), {"default", "named", "other", "clean_env"})
-        for pid in pids.values():
-            deadline = time.monotonic() + 3
-            while True:
-                state = subprocess.run(
-                    ["ps", "-p", pid, "-o", "stat="], capture_output=True, text=True, timeout=5
-                )
-                if state.returncode == 1 or state.stdout.strip().startswith("Z"):
-                    break
-                if time.monotonic() >= deadline:
-                    self.fail(f"private tmux server {pid} remains live: {state.stdout}")
-                time.sleep(0.01)
+        self.assert_gone(pids.values(), "private")
 
     def test_caught_and_background_violations_still_fail_at_stop_test(self):
         package = Path(self.home, "unit")

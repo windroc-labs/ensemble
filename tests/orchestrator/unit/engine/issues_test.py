@@ -1,6 +1,7 @@
 """Issue reading and the Handoff reader-side helpers' boundary behavior."""
 
 import dataclasses
+from functools import partial
 
 from ensemble.orchestrator.engine import config, issues
 from ensemble.orchestrator.engine.flow import handoff
@@ -12,10 +13,9 @@ from ensemble.orchestrator.engine.flow.types import (
 )
 from ensemble.orchestrator.trackers.linear import linear_tracker
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker, Selves
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import SID, Case
 from tests.orchestrator.unit.board_ids import HARNESS_USER, PACKAGED_FLOW, workflow_file
-
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
+from tests.orchestrator.unit.run_fixtures import flow_issue
 
 SELVES = Selves(HARNESS_USER, frozenset())
 
@@ -68,20 +68,7 @@ def note(body, at="2026-09-02T00:00:00.000Z", email=None, name="Agent", origin="
     return Note(body, at, email, name, origin)
 
 
-def issue(description="", created_at="2026-09-01T00:00:00.000Z", notes=()):
-    return Issue(
-        "uuid-7",
-        "ENG-7",
-        URL,
-        "T",
-        description,
-        created_at,
-        "p-1",
-        tuple(notes),
-        (),
-        (),
-        handoff=handoff.parse_handoff(description),
-    )
+issue = partial(flow_issue, ident="ENG-7", title="T", project="p-1")
 
 
 HANDOFF = (

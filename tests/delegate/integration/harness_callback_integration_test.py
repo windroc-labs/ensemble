@@ -20,6 +20,7 @@ from tests.delegate.fakes.harness_session import DrivenDelegate, FailingSession,
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block, mark
 from tests.delegate.unit.runs import DONE
+from tests.utils.jsonl import read_jsonl
 
 PROGRESS = "回显 one"
 OUTCOME = {**DONE, "deliverable": "# 文档\n二\n"}
@@ -37,18 +38,13 @@ class CallbackCase(HarnessCase):
         return [sys.executable, "-P", "-S", callback_recorder.__file__, log or self.log, *rules]
 
     def delivered(self, log=None) -> list[dict]:
-        try:
-            with open(log or self.log, encoding="utf-8") as file:
-                return [json.loads(line) for line in file]
-        except FileNotFoundError:
-            return []
+        return read_jsonl(log or self.log, missing_ok=True)
 
     def events(self, log=None) -> list[DelegateEvent]:
         return [DelegateEvent.parse(entry["line"]) for entry in self.delivered(log)]
 
     def errors(self) -> list[str]:
-        with open(os.path.join(Layout(self.work).run, "run.jsonl"), encoding="utf-8") as file:
-            rows = [json.loads(line) for line in file]
+        rows = read_jsonl(os.path.join(Layout(self.work).run, "run.jsonl"))
         return [row["error"] for row in rows if row["kind"] == "callback_error"]
 
 
@@ -165,7 +161,15 @@ class OneFinished(CallbackCase):
                 self.work = os.path.join(self.home, f"returned-{index}")
                 log = os.path.join(self.home, f"returned-{index}.log")
                 HarnessSession.script = script
-                result = self.make(callback=self.callback(log=log), session_cls=session_cls).run()
+                seen = []
+                delegate = self.make(callback=self.callback(log=log), session_cls=session_cls)
+                result = delegate.run(seen.append)
+                first = Finished if session_cls is FailingSession else Begun
+                self.assertIsInstance(seen[0], first)
+                self.assertEqual(
+                    [event for event in seen if isinstance(event, Finished)], [Finished(result)]
+                )
+                self.assertEqual(seen[-1], Finished(result))
                 events = self.events(log)
                 kinds = [event.kind for event in events]
                 self.assertEqual(kinds.count("finished"), 1)
@@ -180,9 +184,13 @@ class OneFinished(CallbackCase):
                     ),
                 )
                 if script and isinstance(script[0], LimitHit):
+                    self.assertIsNone(result.outcome)
                     self.assertEqual(result.limit, Limit(1767225600.0))
+                    self.assertFalse(HarnessSession.live)
                 if session_cls is FailingSession:
                     self.assertEqual(kinds, ["finished"])
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("fake spawn refused", result.error)
 
     def test_a_raised_run_sends_one_stopped_finished_to_the_callback_and_the_stored_result(self):
         for index, (error, stopped) in enumerate(

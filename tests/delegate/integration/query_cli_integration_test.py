@@ -14,11 +14,6 @@ NAME = f"dummy-tester-{SID[:8]}"
 
 
 class Queries(Integration):
-    def setUp(self):
-        super().setUp()
-        res = self.drive([mark("start", "echoing"), block(DONE)])
-        self.assertEqual(res.returncode, 0, res.stderr)
-
     def query(self, *argv, stdin=""):
         res = subprocess.run(
             (*CLI, *argv),
@@ -31,7 +26,9 @@ class Queries(Integration):
         )
         return res.returncode, res.stdout, res.stderr
 
-    def test_status_and_outcome_answer_from_the_workdir_or_its_record(self):
+    def test_queries_on_a_workdir_a_foreground_run_left(self):
+        res = self.drive([mark("start", "echoing"), block(DONE)])
+        self.assertEqual(res.returncode, 0, res.stderr)
         line = (
             Status(
                 name=NAME,
@@ -54,32 +51,15 @@ class Queries(Integration):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(json.loads(out), {**DONE, "questions": [], "url": self.out, "files": []})
 
-    def test_a_missing_workdir_and_a_repeated_name_exit_2(self):
         missing = os.path.join(self.root, "missing")
         code, out, err = self.query("status", missing, self.work)
-        self.assertEqual(
-            (code, out),
-            (
-                2,
-                Status(
-                    name=NAME,
-                    alive=False,
-                    state="gone",
-                    outcome="done",
-                    attach=None,
-                    cwd=self.agent,
-                    hidden=False,
-                ).to_line()
-                + "\n",
-            ),
-        )
+        self.assertEqual((code, out), (2, line))
         self.assertTrue(err.startswith(f"delegate: {missing}: "), err)
         self.assertEqual(
             self.query("status", self.work, self.work),
             (2, "", f"delegate: name {NAME} given more than once\n"),
         )
 
-    def test_close_twice_succeeds_and_nothing_is_showable(self):
         self.assertEqual(self.query("close", self.work), (0, "", ""))
         self.assertEqual(self.query("close", self.work), (0, "", ""))
         self.assertEqual(

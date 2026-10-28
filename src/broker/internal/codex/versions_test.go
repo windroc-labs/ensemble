@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"testing"
+
+	"ensemble/broker/internal/npm"
 )
 
 func TestVersionOrdering(t *testing.T) {
@@ -40,7 +43,10 @@ func TestSupportedVersion(t *testing.T) {
 
 func TestPlatformArtifacts(t *testing.T) {
 	target := struct{ goos, cpu, triple string }{"darwin", "arm64", "aarch64-apple-darwin"}
-	for _, mode := range []string{"direct", "alias", "missing", "version", "alias_package", "alias_version", "alias_target", "main_integrity", "platform_integrity", "os", "cpu", "entry"} {
+	for _, mode := range []string{
+		"direct", "alias", "missing", "version", "alias_package", "alias_version", "alias_target", "main_integrity",
+		"platform_integrity", "malformed_integrity", "origin", "package", "oversize", "redirect", "os", "cpu", "entry",
+	} {
 		t.Run(target.goos+"-"+target.cpu+"/"+mode, func(t *testing.T) {
 			triple := target.triple
 			if mode == "entry" {
@@ -48,8 +54,15 @@ func TestPlatformArtifacts(t *testing.T) {
 			}
 			r, data := platformFixture(t, target.goos, target.cpu, triple, mode != "direct")
 			mainURL := "https://registry.npmjs.org/@openai%2Fcodex/0.163.0"
-			var main map[string]any
+			platformURL := mainURL + "-" + target.goos + "-" + target.cpu
+			if mode == "direct" {
+				platformURL = npm.Package("@openai/codex-"+target.goos+"-"+target.cpu, "0.163.0")
+			}
+			var main, platform map[string]any
 			if err := json.Unmarshal(data[mainURL], &main); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data[platformURL], &platform); err != nil {
 				t.Fatal(err)
 			}
 			dependencies := main["optionalDependencies"].(map[string]any)
@@ -69,16 +82,24 @@ func TestPlatformArtifacts(t *testing.T) {
 				data["https://registry.npmjs.org/main.tgz"] = []byte("corrupt")
 			case "platform_integrity":
 				data["https://registry.npmjs.org/native.tgz"] = []byte("corrupt")
+			case "malformed_integrity":
+				platform["dist"].(map[string]any)["integrity"] = "sha512-AAAA"
+			case "origin":
+				platform["dist"].(map[string]any)["tarball"] = "https://evil.example/package.tgz"
+			case "package":
+				platform["name"] = "@evil/codex"
+			case "os", "cpu":
+				platform[mode] = []string{"other"}
+			case "redirect":
+				r.http.Transport = roundTrip(func(req *http.Request) (*http.Response, error) {
+					location := http.Header{"Location": []string{"https://evil.example/"}}
+					return &http.Response{StatusCode: 302, Header: location, Body: http.NoBody, Request: req}, nil
+				})
 			}
 			data[mainURL], _ = json.Marshal(main)
-			if mode == "os" || mode == "cpu" {
-				platformURL := mainURL + "-" + target.goos + "-" + target.cpu
-				var platform map[string]any
-				if err := json.Unmarshal(data[platformURL], &platform); err != nil {
-					t.Fatal(err)
-				}
-				platform[mode] = []string{"other"}
-				data[platformURL], _ = json.Marshal(platform)
+			data[platformURL], _ = json.Marshal(platform)
+			if mode == "oversize" {
+				data[platformURL] = bytes.Repeat([]byte(" "), npm.MaxMetadata+1)
 			}
 			var got []byte
 			installed, err := r.Install(context.Background(), "0.163.0", false)

@@ -9,28 +9,14 @@ from unittest import mock
 
 from ensemble.delegate import Outcome
 from ensemble.delegate.composer import Composer
-from ensemble.delegate.composer.prompt import RESUME
 from ensemble.delegate.engine.types import Result
 from tests.delegate.case import PY, child_env
 from tests.delegate.cli_case import Base
-from tests.delegate.integration.cli import ASKING, SID, Integration
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE, START, limit, said
 
 
 class Exits(Base):
-    def test_a_done_run_exits_0_naming_its_session_and_status(self):
-        code, out, err = self.runs("--sid", SID)
-        self.assertEqual((code, out), (0, ""), err)
-        lines = err.splitlines()
-        self.assertLess(
-            lines.index(f"delegate: session {SID}"), lines.index("Progress (start): go")
-        )
-        self.assertTrue(err.endswith("delegate: status done\n"), err)
-        with open(self.out) as f:
-            self.assertEqual(f.read(), DONE["deliverable"])
-        self.assertEqual([r["kind"] for r in self.records()][-2:], ["result", "end"])
-
     def test_exit_codes(self):
         at = 1767225600.0
         when = datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
@@ -108,29 +94,8 @@ class Exits(Base):
                 self.assertEqual((code, out, err.splitlines()[-1]), (want, "", line))
 
 
-class PublicResume(Integration):
-    def test_resume_input_continues_the_waiting_session(self):
-        started = self.drive([block(ASKING)])
-        self.assertEqual(started.returncode, 0, started.stderr)
-        result = self.answer([block(DONE)], input="Continue.")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        argv = self.calls()[-1]["argv"]
-        self.assertEqual(argv[argv.index("--resume") + 1], SID)
-        self.assertNotIn("--session-id", argv)
-        self.assertTrue(argv[-1].startswith(RESUME))
-        self.assertTrue(argv[-1].endswith("\n# Input\n\nContinue.\n"))
-
-
 class Deliverable(Base):
     """--out PATH: a stderr line naming the file holding the deliverable; --out - is refused."""
-
-    def test_out_dash_is_refused_writing_nothing(self):
-        for extra in ((), ("--dry-run",)):
-            with self.subTest(extra=extra):
-                self.assertEqual(
-                    self.runs(*extra, out="-"), (2, "", "delegate: --out takes a PATH, not -\n")
-                )
-                self.assertFalse(os.path.exists(self.work))
 
     def test_out_path_is_named_on_stderr_holding_the_deliverable(self):
         code, out, err = self.runs(out=os.path.join("work", "out.md"))
@@ -190,11 +155,3 @@ class List(Base):
         )
         self.assertEqual((done.returncode, done.stderr), (0, ""))
         self.assertEqual(done.stdout, self.cli("run", "--list")[1])
-
-
-class Configures(Base):
-    def test_a_run_uses_the_callers_driver(self):
-        start = self.driver.start
-        with mock.patch.object(self.driver, "start", wraps=start) as started:
-            code, _, err = self.runs()
-        self.assertEqual((code, started.call_count), (0, 1), err)

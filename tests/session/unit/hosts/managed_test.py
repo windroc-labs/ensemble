@@ -21,6 +21,7 @@ from ensemble.session.harness import guard
 from ensemble.session.hosts import managed
 from ensemble.session.hosts.base import GUARD_WAIT
 from tests.session.case import Case
+from tests.session.unit.hosts.support import writable
 from tests.utils.process_fixtures import TimeoutExpired
 
 WAIT = 5  # seconds for a background thread's step
@@ -64,12 +65,7 @@ class ManagedProcessTest(Case):
             + guard.json_frame(b"x", {"returncode": 7})
         )
         channel.proc.stdout.read.side_effect = [wire[:3], wire[3:], b""]
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)),
-        ):
+        with writable():
             channel.pump()
         self.assertEqual(
             channel.read(0),
@@ -109,12 +105,7 @@ class ManagedProcessTest(Case):
             return len(wire)
 
         channel.proc.stdout.read.side_effect = read
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=write),
-        ):
+        with writable(write):
             channel.pump()
         self.assertTrue(released.is_set())
         releases = [i for i, item in enumerate(order) if item == release]
@@ -159,12 +150,7 @@ class ManagedProcessTest(Case):
 
         channel.proc.stdout.read.side_effect = read
         thread = threading.Thread(target=writer)
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=BrokenPipeError),
-        ):
+        with writable(BrokenPipeError):
             thread.start()
             began = time.monotonic()
             channel.pump()
@@ -187,12 +173,7 @@ class ManagedProcessTest(Case):
                 raise ValueError("I/O operation on closed file")
             raise BrokenPipeError
 
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=write),
-        ):
+        with writable(write):
             channel.release_hook()
             self.assertTrue(writing.wait(WAIT))
             channel.accept(b"x", b'{"returncode":0}')
@@ -206,12 +187,7 @@ class ManagedProcessTest(Case):
         """No exit yet (an unanswered close): ending releases never waits out GUARD_WAIT."""
         channel = self.channel()
         channel.accept(b"s", b'{"pid":1}')
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=lambda _fd, wire: len(wire)),
-        ):
+        with writable():
             channel.release_hook()
             began = time.monotonic()
             channel.end_releases()
@@ -230,7 +206,10 @@ class ManagedProcessTest(Case):
             channel.close()
 
     def test_reader_rejects_malformed_protocol_and_continues_drain(self):
-        for wire in (guard.frame(b"z", b"{}"), b"o" + (guard.FRAME_MAX + 1).to_bytes(4, "big")):
+        for wire in (
+            guard.json_frame(b"s", {"pid": 1}) + guard.frame(b"z", b"{}"),
+            b"o" + (guard.FRAME_MAX + 1).to_bytes(4, "big"),
+        ):
             channel = self.channel()
             channel.proc.stdout.read.side_effect = [wire, b"more", b""]
             channel.pump()
@@ -239,22 +218,14 @@ class ManagedProcessTest(Case):
 
     def test_write_retries_backpressure_and_does_not_spawn(self):
         channel = self.channel()
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=[BlockingIOError, 2, 4]) as written,
-        ):
+        with writable([BlockingIOError, 2, 4]) as written:
             channel.write(b"x")
         self.assertEqual(bytes(written.call_args.args[1]), b"\0\0\x01x")
 
     def test_write_failure_and_timeout_fail_closed(self):
         channel = self.channel()
         with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=BrokenPipeError),
+            writable(BrokenPipeError),
             mock.patch.object(threading.Condition, "wait_for", return_value=False),
             self.assertRaises(Unanswered),
         ):
@@ -272,10 +243,7 @@ class ManagedProcessTest(Case):
         channel.accept(b"s", b'{"pid":123}')
         channel.accept(b"x", b'{"returncode":0}')
         with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=BrokenPipeError),
+            writable(BrokenPipeError),
             self.assertRaisesRegex(SessionError, "exited") as caught,
         ):
             channel.send(Paste("/color"))
@@ -287,14 +255,7 @@ class ManagedProcessTest(Case):
         channel = self.channel()
         channel.accept(b"s", b'{"pid":123}')
         written = []
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(
-                os, "write", side_effect=lambda _fd, data: written.append(bytes(data)) or len(data)
-            ),
-        ):
+        with writable(lambda _fd, data: written.append(bytes(data)) or len(data)):
             channel.write(b"queued")
             channel.write(b"")
             for data in (b"late", b""):
@@ -319,14 +280,7 @@ class ManagedProcessTest(Case):
         channel = self.channel(terminal=True)
         channel.accept(b"s", b'{"pid":123}')
         written = []
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(
-                os, "write", side_effect=lambda _fd, data: written.append(bytes(data)) or len(data)
-            ),
-        ):
+        with writable(lambda _fd, data: written.append(bytes(data)) or len(data)):
             channel.write(b"")
             channel.press([])
             channel.write(b"typed")
@@ -340,26 +294,14 @@ class ManagedProcessTest(Case):
             channel.accept(b"x", b'{"returncode":0}')
             raise BrokenPipeError
 
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=gone),
-        ):
+        with writable(gone):
             channel.close()
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 0))
 
     def test_terminal_input_is_encoded(self):
         channel = self.channel(terminal=True)
         written = []
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(
-                os, "write", side_effect=lambda _fd, data: written.append(bytes(data)) or len(data)
-            ),
-        ):
+        with writable(lambda _fd, data: written.append(bytes(data)) or len(data)):
             channel.send(Paste("hello"))
             channel.send(Key("Enter"))
             channel.press([KeyPress("c", ctrl=True)])
@@ -412,12 +354,7 @@ class ManagedProcessTest(Case):
             return len(data)
 
         channel.accept(b"s", b'{"pid":123}')
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=write),
-        ):
+        with writable(write):
             self.assertEqual(channel.screen(3), "current screen")
 
     def test_screen_timeout_drains_delayed_reply_before_next_query(self):
@@ -437,12 +374,7 @@ class ManagedProcessTest(Case):
                 channel.accept(b"v", json.dumps({"text": next(replies)}).encode())
             return predicate()
 
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=write),
-        ):
+        with writable(write):
             with (
                 mock.patch.object(
                     threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
@@ -467,10 +399,7 @@ class ManagedProcessTest(Case):
             return len(data)
 
         with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=write),
+            writable(write),
             mock.patch.object(
                 threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
             ),
@@ -499,12 +428,7 @@ class ManagedProcessTest(Case):
                 channel.fail("broken transport")
             return predicate()
 
-        with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)) as written,
-        ):
+        with writable() as written:
             with (
                 mock.patch.object(
                     threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
@@ -530,10 +454,7 @@ class ManagedProcessTest(Case):
             return len(data)
 
         with (
-            mock.patch.object(
-                managed.select, "select", return_value=([], [channel.proc.stdin], [])
-            ),
-            mock.patch.object(os, "write", side_effect=write) as written,
+            writable(write) as written,
             mock.patch.object(
                 threading.Condition, "wait_for", side_effect=lambda predicate, _: predicate()
             ),

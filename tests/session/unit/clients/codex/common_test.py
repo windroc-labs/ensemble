@@ -255,22 +255,6 @@ class CommonTest(Base):
         with self.assertRaisesRegex(ConfigError, "missing Codex recovery state"):
             self.common.prepare(elsewhere)
 
-    def test_a_run_started_headless_resumes_as_tui_and_back(self):
-        committed_headless(self.client, dataclasses.replace(self.spec, prompt="hi"))
-        self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        path = self.rollout()
-        for mode in ("tui", "headless"):
-            worker = str(self.root / "reopened" / mode)
-            spec = dataclasses.replace(self.spec, workdir=worker, prompt="again", resume=True)
-            with self.subTest(mode=mode), mock.patch("shutil.which", return_value="/fake/codex"):
-                launch = (
-                    committed_tui(self.client, spec, ("/fake/hook",))
-                    if mode == "tui"
-                    else committed_headless(self.client, spec)
-                )
-                self.assertEqual(launch.transcript, str(path))
-                self.assertIn(NATIVE, launch.resume)
-
     def test_metadata_resolves_the_sids_binding_from_the_store(self):
         info = SessionInfo(self.spec.sid, str(self.cwd), project=False, transcript="", resume="")
         self.assertEqual(self.client.session_metadata(info), info)
@@ -876,10 +860,14 @@ class SessionStatusTest(Base):
     def test_unreadable_store_and_session_are_unknown(self):
         self.bound()
         self.rollout()
-        with mock.patch("os.scandir", side_effect=PermissionError("denied")):
-            self.assertEqual(
-                self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
-            )
+        for name in ("os.scandir", "os.open"):
+            with (
+                mock.patch(name, side_effect=PermissionError("denied")),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    self.common.session_status(self.spec.sid, str(self.cwd)).resumable, "unknown"
+                )
         path = self.rollout()
         original = os.open
 

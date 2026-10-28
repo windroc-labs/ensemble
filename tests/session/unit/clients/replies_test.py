@@ -5,34 +5,20 @@ import contextlib
 import io
 import json
 import os
-import tempfile
 import time
 from unittest import mock
 
 from ensemble.session.clients import replies
 from ensemble.utils import STALE_AGE, file_lock, read_reply
 from tests.session.case import Case
-
-
-class Clock:
-    """A fake monotonic clock that sleep advances."""
-
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.now += seconds
+from tests.utils.clock import FakeClock
+from tests.utils.sandbox import scratch
 
 
 class SharedBase(Case):
     def setUp(self):
         super().setUp()
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.path = os.path.join(self.root, "run.json")
         self.events = os.path.join(self.root, "events")
         open(self.events, "w", encoding="utf-8").close()
@@ -78,7 +64,7 @@ class StateTest(SharedBase):
         self.assertEqual(sorted(os.listdir(self.root)), ["events", "young.json", "young.json.lock"])
 
     def test_locked_waits_until_its_deadline(self):
-        clock = Clock()
+        clock = FakeClock(1000.0)
         with (
             file_lock(self.path, wait=False),
             self.assertRaises(TimeoutError),

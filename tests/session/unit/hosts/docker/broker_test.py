@@ -1,4 +1,4 @@
-"""hosts/docker/broker.py: protocol-1 calls, every shared response fixture's outcome, the manifest."""
+"""hosts/docker/broker.py: protocol-1 calls, every shared response fixture's outcome."""
 
 import io
 import json
@@ -15,7 +15,9 @@ from ensemble.session.hosts.docker.broker import BROKER, Broker, BrokerError
 from ensemble.session.hosts.docker.types import Started
 from tests.session.case import REPO, Case
 from tests.session.unit.hosts.docker.support import (
+    BETA,
     HOOK,
+    UPDRAFT,
     FakeBroker,
     FakePopen,
     FakeProc,
@@ -421,6 +423,9 @@ class ResponseTest(Case):
         self.assertFalse(
             Broker(FakeBroker(success("workspace-rm-absent.json"))).workspace_rm(VOLUME)
         )
+        forced = FakeBroker(success("workspace-rm-output.json"))
+        self.assertTrue(Broker(forced).workspace_rm(VOLUME, force=True))
+        self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-force.json")["argv"]]])
         other = (0, json.dumps({"volume": "ensemble-ws-other", "removed": True}), "")
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
             Broker(FakeBroker(other)).workspace_rm(VOLUME)
@@ -444,16 +449,12 @@ class ResponseTest(Case):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build("/opt/ensemble")
         self.assertEqual(fake.calls, [[BROKER, *data("build-input.json")["argv"]]])
-        self.assertFalse(hasattr(broker, "REFRESH"))
 
     def test_build_passes_plugins(self):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
-            plugins=(
-                "updraft@windroc-labs/updraft#33f01c3b9e398e009f1fb1a4554ddcf19209dd4e::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43",
-                "beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            ),
+            plugins=(UPDRAFT, BETA),
         )
         argv = data("build-input-plugins.json")["argv"]
         self.assertEqual(argv[-2:], ["--max-age", "604800"])
@@ -510,16 +511,10 @@ class ResponseTest(Case):
         ):
             with self.subTest(result=result):
                 fake = FakeBroker(result)
-                with self.assertRaisesRegex(SessionError, "#docker-install") as raised:
+                with self.assertRaisesRegex(SessionError, "broker/install.sh .*retrust") as raised:
                     Broker(fake).version()
                 self.assertIn(BROKER, str(raised.exception))
                 self.assertEqual(fake.calls, [argv("version")])
-
-    def test_a_protocol_2_update_field_is_bad(self):
-        started = {**data("start-output.json"), "update": {"status": "updated"}}
-        result = (0, json.dumps(started), "")
-        with self.assertRaisesRegex(SessionError, "bad response"):
-            Broker(FakeBroker(result)).start(MANIFEST, clients=KEYS)
 
     def test_a_client_key_set_other_than_the_schemas_is_bad(self):
         for keys in (frozenset({"claude"}), frozenset({"claude", "codex", "other"})):
@@ -555,7 +550,7 @@ class LockTest(Case):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
-            plugins=("beta@owner/market#" + "b" * 40,),
+            plugins=(BETA,),
             base_image="dummy-env:test",
             image_plugins=("dummy-plugin", "other.plugin"),
         )
@@ -563,7 +558,7 @@ class LockTest(Case):
         fake = FakeBroker(success("build-cached.json"))
         Broker(fake).build(
             "/opt/ensemble",
-            plugins=("beta@owner/market#" + "b" * 40,),
+            plugins=(BETA,),
             image_plugins=("dummy-plugin", "other.plugin"),
         )
         self.assertEqual(

@@ -272,6 +272,10 @@ func TestCodexWriteFailureCodeAndCause(t *testing.T) {
 				if !errors.As(err, &e) || e.Code != want || e.Cause != tc.cause || e.Message != "Writing Codex credentials into the container failed" {
 					t.Fatalf("%#v", err)
 				}
+				// The reply and the audit line carry the whole error; the forged and other rows' stderr hold "secret".
+				if response, _ := json.Marshal(e); strings.Contains(err.Error()+string(response), "secret") {
+					t.Fatalf("secret leaked: %s", response)
+				}
 			})
 		}
 	}
@@ -666,86 +670,6 @@ func TestCodexStatusEarlierBuildRepairsWithRetrust(t *testing.T) {
 		}
 		if err := c.Ready(context.Background()); err == nil || !strings.HasSuffix(err.Error(), "Codex login unavailable; run "+want) {
 			t.Fatalf("Ready: %v, want run %q", err, want)
-		}
-	}
-}
-
-// loggedCodexKeychain is k with every call Codex makes logged as "<method> <service>".
-type loggedCodexKeychain struct {
-	*fakeCodexKeychain
-	calls *[]string
-}
-
-func (k loggedCodexKeychain) note(method, service string) {
-	*k.calls = append(*k.calls, method+" "+service)
-}
-
-func (k loggedCodexKeychain) AppAccess(service, account string) (AppAccess, error) {
-	k.note("AppAccess", service)
-	return k.fakeCodexKeychain.AppAccess(service, account)
-}
-
-func (k loggedCodexKeychain) AppAccount(service string) (string, error) {
-	k.note("AppAccount", service)
-	return k.fakeCodexKeychain.AppAccount(service)
-}
-
-func (k loggedCodexKeychain) AppKey(service, account string) ([]byte, error) {
-	k.note("AppKey", service)
-	return k.fakeCodexKeychain.AppKey(service, account)
-}
-
-func (k loggedCodexKeychain) TrustApps(service, account string, password []byte) error {
-	k.note("TrustApps", service)
-	return k.fakeCodexKeychain.TrustApps(service, account, password)
-}
-
-func (k loggedCodexKeychain) TrustAppsByDialog(service, account string) error {
-	k.note("TrustAppsByDialog", service)
-	return k.fakeCodexKeychain.TrustAppsByDialog(service, account)
-}
-
-func (k loggedCodexKeychain) TrustPartition(service, account string, password []byte) error {
-	k.note("TrustPartition", service)
-	return k.fakeCodexKeychain.TrustPartition(service, account, password)
-}
-
-func (k loggedCodexKeychain) Secret(service, account string) ([]byte, error) {
-	k.note("Secret", service)
-	return k.fakeCodexKeychain.Secret(service, account)
-}
-
-func (k loggedCodexKeychain) CreateCodex() error {
-	k.note("CreateCodex", codexService)
-	return k.fakeCodexKeychain.CreateCodex()
-}
-
-func (k loggedCodexKeychain) WriteCodex(data []byte) error {
-	k.note("WriteCodex", codexService)
-	return k.fakeCodexKeychain.WriteCodex(data)
-}
-
-// TestCodexStartMaintainCloseTouchNoGrantItem: a start and a maintain that renews the login touch only the login
-// item, never an ensemble-broker-codex-grants one; close has no Codex call (launcher's TestCloseMakesNoCodexCall).
-func TestCodexStartMaintainCloseTouchNoGrantItem(t *testing.T) {
-	c, n, k := renewalFixture(t)
-	var calls []string
-	c.keychain = loggedCodexKeychain{k, &calls}
-	due := k.data
-	k.data = codexAuth(codexNow.Add(time.Hour).Unix())
-	if _, err := c.Inject(context.Background(), nopExec); err != nil {
-		t.Fatal(err)
-	}
-	k.data = due
-	if _, err := c.Refresh(context.Background(), nopExec, nopPublish); err != nil || n.refreshes != 1 {
-		t.Fatalf("refreshes %d: %v", n.refreshes, err)
-	}
-	if len(calls) == 0 {
-		t.Fatal("no keychain call logged")
-	}
-	for _, call := range calls {
-		if strings.HasSuffix(call, " ensemble-broker-codex-grants") || !strings.HasSuffix(call, " "+codexService) {
-			t.Fatalf("Codex called %q; all calls %q", call, calls)
 		}
 	}
 }

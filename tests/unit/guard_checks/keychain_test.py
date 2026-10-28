@@ -1,7 +1,6 @@
 import hashlib
 from pathlib import Path
 
-from tests.case import REPO
 from tests.guard_checks.keychain import keychain_free_tests
 from tests.guard_samples import Sample
 
@@ -28,9 +27,6 @@ def go(body):
 class KeychainFree(Sample):
     def found(self, files, **kwargs):
         return keychain_free_tests(self.tree(files), allowed=kwargs.get("allowed", {}))
-
-    def test_the_repo_is_keychain_free(self):
-        self.assertEqual(keychain_free_tests(REPO), [])
 
     def test_flags_the_old_darwin_test(self):
         found = self.found({GO: OLD.read_text(encoding="utf-8")})

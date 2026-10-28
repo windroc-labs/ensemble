@@ -1,7 +1,5 @@
 """Codex account usage and session inspection queries."""
 
-import contextlib
-import io
 import json
 import os
 import sys
@@ -59,59 +57,13 @@ class SessionStatusTest(Base):
             SessionStatus("yes", recorded.stat().st_mtime, self.common.resume_command(state)),
         )
 
-    def test_missing_and_unreadable_storage_have_distinct_status(self):
-        self.assertEqual(
-            self.client.session_status(
-                SessionInfo(
-                    sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
-                )
-            ),
-            SessionStatus("no", None, ""),
+    def test_an_unrecorded_or_unbound_run_is_no(self):
+        info = SessionInfo(
+            sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
         )
+        self.assertEqual(self.client.session_status(info), SessionStatus("no", None, ""))
         self.prepare()
-        self.assertEqual(
-            self.client.session_status(
-                SessionInfo(
-                    sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
-                )
-            ),
-            SessionStatus("no", None, ""),
-        )
-        self.common.bind(str(self.work), self.spec.sid, NATIVE)
-        self.assertEqual(
-            self.client.session_status(
-                SessionInfo(
-                    sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
-                )
-            ).resumable,
-            "no",
-        )
-        path = self.rollout()
-        with (
-            mock.patch("os.open", side_effect=PermissionError("unreadable")),
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            self.assertEqual(
-                self.client.session_status(
-                    SessionInfo(
-                        sid=self.spec.sid,
-                        cwd=str(self.cwd),
-                        project=False,
-                        transcript="",
-                        resume="",
-                    )
-                ).resumable,
-                "unknown",
-            )
-        path.unlink()
-        self.assertEqual(
-            self.client.session_status(
-                SessionInfo(
-                    sid=self.spec.sid, cwd=str(self.cwd), project=False, transcript="", resume=""
-                )
-            ).resumable,
-            "no",
-        )
+        self.assertEqual(self.client.session_status(info), SessionStatus("no", None, ""))
 
 
 class UsageTest(Case):

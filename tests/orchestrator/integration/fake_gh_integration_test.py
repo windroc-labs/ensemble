@@ -1,11 +1,12 @@
 import json
 import os
 import subprocess
-import tempfile
 import unittest
 
 from tests.orchestrator import case
 from tests.orchestrator.integration import fake_gh
+from tests.orchestrator.target_fixtures import REMOTE
+from tests.utils.sandbox import scratch
 
 REPO = {"full_name": "acme/widgets", "default_branch": "main", "permissions": {"push": True}}
 RAW = "Accept: application/vnd.github.raw+json"
@@ -27,9 +28,7 @@ CONTENTS = {
 
 class Case(case.Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.home, self.bin, self.repos = (
             os.path.join(self.root, d) for d in ("home", "bin", "repos")
         )
@@ -59,6 +58,11 @@ class Case(case.Case):
     def gh(self, *argv, **kw):
         return self.run_cmd("gh", *argv, **kw)
 
+    def refused(self, res, said="fake_gh.py:"):
+        self.assertEqual((res.returncode, res.stdout), (1, ""))
+        self.assertIn(said, res.stderr)
+        return res
+
 
 class Shim(Case):
     def test_install_writes_an_executable_gh(self):
@@ -76,9 +80,7 @@ class Shim(Case):
         self.write({"repos": {"acme/widgets": REPO}})
         for slug in ("acme/nope", "other/widgets", "Acme/widgets"):
             with self.subTest(slug):
-                res = self.gh("api", f"repos/{slug}")
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("HTTP 404", res.stderr)
+                self.refused(self.gh("api", f"repos/{slug}"), "HTTP 404")
 
     def test_any_other_argv_is_a_usage_error(self):
         self.write({"repos": {"acme/widgets": REPO}})
@@ -94,9 +96,7 @@ class Shim(Case):
             ("repo", "view", "acme/widgets"),
         ):
             with self.subTest(argv):
-                res = self.gh(*argv)
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("fake_gh.py:", res.stderr)
+                res = self.refused(self.gh(*argv))
                 self.assertNotIn("HTTP", res.stderr)
 
     def test_a_malformed_scenario_is_an_error(self):
@@ -111,9 +111,7 @@ class Shim(Case):
             with self.subTest(name):
                 with open(self.scenario, "w") as f:
                     f.write(body)
-                res = self.gh("api", "repos/acme/widgets")
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("fake_gh.py:", res.stderr)
+                res = self.refused(self.gh("api", "repos/acme/widgets"))
                 self.assertNotIn("HTTP", res.stderr)
 
     def test_a_missing_or_unreadable_scenario_is_an_error(self):
@@ -123,16 +121,16 @@ class Shim(Case):
         }.items():
             with self.subTest(name):
                 setup()
-                res = self.gh("api", "repos/acme/widgets")
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn(f"fake_gh.py: {fake_gh.ENV}:", res.stderr)
+                res = self.refused(
+                    self.gh("api", "repos/acme/widgets"), f"fake_gh.py: {fake_gh.ENV}:"
+                )
                 self.assertNotIn("HTTP", res.stderr)
 
     def test_an_unset_scenario_is_an_error(self):
         env = {k: v for k, v in self.env.items() if k != fake_gh.ENV}
-        res = self.gh("api", "repos/acme/widgets", env=env)
-        self.assertEqual((res.returncode, res.stdout), (1, ""))
-        self.assertIn(f"fake_gh.py: {fake_gh.ENV} is unset", res.stderr)
+        self.refused(
+            self.gh("api", "repos/acme/widgets", env=env), f"fake_gh.py: {fake_gh.ENV} is unset"
+        )
 
 
 class Contents(Case):
@@ -255,9 +253,7 @@ class Contents(Case):
             ("api", url, url),
         ):
             with self.subTest(argv):
-                res = self.gh(*argv)
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("fake_gh.py:", res.stderr)
+                res = self.refused(self.gh(*argv))
                 self.assertNotIn("HTTP", res.stderr)
 
     def test_a_bad_contents_shape_or_another_key_is_an_error(self):
@@ -276,16 +272,12 @@ class Contents(Case):
                 ("api", "repos/acme/widgets"),
             ):
                 with self.subTest(name, argv=argv):
-                    res = self.gh(*argv)
-                    self.assertEqual((res.returncode, res.stdout), (1, ""))
-                    self.assertIn("fake_gh.py:", res.stderr)
+                    res = self.refused(self.gh(*argv))
                     self.assertNotIn("HTTP", res.stderr)
 
     def test_repos_stays_required(self):
         self.write({"contents": CONTENTS})
-        res = self.gh("api", "repos/acme/docs/contents/README.md?ref=main")
-        self.assertEqual((res.returncode, res.stdout), (1, ""))
-        self.assertIn("fake_gh.py:", res.stderr)
+        self.refused(self.gh("api", "repos/acme/docs/contents/README.md?ref=main"))
 
 
 PR = {
@@ -355,9 +347,7 @@ class Pulls(Case):
             ("pr", "ready", "https://github.com/acme/widgets/pull/1", "--draft"),
         ):
             with self.subTest(argv):
-                res = self.gh(*argv)
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("fake_gh.py:", res.stderr)
+                self.refused(self.gh(*argv))
 
     def test_pr_view_prints_a_views_fields_and_pr_ready_sets_its_draft(self):
         url = "https://github.com/acme/widgets/pull/1"
@@ -376,9 +366,7 @@ class Pulls(Case):
                 )
         for argv in (("view", url + "0", "--json", "state"), ("ready", url + "0")):
             with self.subTest(argv):
-                res = self.gh("pr", *argv)
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("no pull requests found", res.stderr)
+                self.refused(self.gh("pr", *argv), "no pull requests found")
 
     def test_no_login_and_bad_login_pulls_or_threads_are_errors(self):
         repo_api, user_api = ("repos/acme/widgets",), ("--hostname", "github.com", "user")
@@ -399,9 +387,7 @@ class Pulls(Case):
         ):
             with self.subTest(name):
                 self.write({"repos": {"acme/widgets": REPO}, **scenario})
-                res = self.gh("api", *argv)
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("fake_gh.py:", res.stderr)
+                self.refused(self.gh("api", *argv))
 
 
 class Clone(Case):
@@ -427,9 +413,7 @@ class Clone(Case):
             ("repo", "clone", "acme", "wt", "--"),
         ):
             with self.subTest(argv):
-                res = self.gh(*argv)
-                self.assertEqual((res.returncode, res.stdout), (1, ""))
-                self.assertIn("fake_gh.py:", res.stderr)
+                self.refused(self.gh(*argv))
 
 
 class Bare(Case):
@@ -462,42 +446,17 @@ class Bare(Case):
                 f.read(), f'[url "file://{self.repos}/"]\n\tinsteadOf = https://github.com/\n'
             )
 
-    def test_ls_remote_through_the_gitconfig_lists_the_seeded_branch_and_only_it(self):
+    def test_ls_remote_with_the_targets_argv_lists_the_seeded_branch_and_only_it(self):
         fake_gh.bare(self.repos, "acme", "widgets", ["TASK-7-x", "TASK-8-y", "main"])
         fake_gh.bare(self.repos, "acme", "other", ["TASK-7-z"])
+        fake_gh.bare(self.repos, "acme", "empty")
         fake_gh.gitconfig(self.home, self.repos)
-        res = self.run_cmd(
-            "git", "ls-remote", "--heads", "https://github.com/acme/widgets.git", "TASK-7-*"
-        )
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        self.assertEqual(
-            [line.split("\t")[1] for line in res.stdout.splitlines()], ["refs/heads/TASK-7-x"]
-        )
-
-    def test_ls_remote_of_a_repo_without_the_branch_is_empty(self):
-        fake_gh.bare(self.repos, "acme", "widgets")
-        fake_gh.gitconfig(self.home, self.repos)
-        res = self.run_cmd(
-            "git", "ls-remote", "--heads", "https://github.com/acme/widgets.git", "TASK-7-*"
-        )
-        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
-
-    def test_targets_ls_remote_argv_works(self):
-        fake_gh.bare(self.repos, "acme", "widgets", ["TASK-7-x"])
-        fake_gh.gitconfig(self.home, self.repos)
-        res = self.run_cmd(
-            "git",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "credential.helper=!gh auth git-credential",
-            "ls-remote",
-            "--heads",
-            "https://github.com/acme/widgets.git",
-            "TASK-7-*",
-        )
-        self.assertEqual((res.returncode, res.stderr), (0, ""))
-        self.assertIn("refs/heads/TASK-7-x", res.stdout)
+        for name, want in (("widgets", ["refs/heads/TASK-7-x"]), ("empty", [])):
+            with self.subTest(name):
+                url = f"https://github.com/acme/{name}.git"
+                res = self.run_cmd(*REMOTE, "ls-remote", "--heads", url, "TASK-7-*")
+                self.assertEqual((res.returncode, res.stderr), (0, ""))
+                self.assertEqual([line.split("\t")[1] for line in res.stdout.splitlines()], want)
 
 
 if __name__ == "__main__":

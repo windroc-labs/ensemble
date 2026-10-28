@@ -9,7 +9,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from tests.case import REPO, Case
+from tests.case import Case
+from tests.unit.install_script import program
 
 
 class OpenCodeExecutableConfigTest(Case):
@@ -19,9 +20,6 @@ class OpenCodeExecutableConfigTest(Case):
         selected = str(Path(self.home, "selected tools/opencode"))
         if current is not None:
             config.write_text(f"[session.clients.opencode]\nexecutable = {json.dumps(current)}\n")
-        text = Path(REPO, "scripts/install.sh").read_text()
-        body = text.split("config_plan() {\n", 1)[1].split("\n}\n", 1)[0]
-        program = body.split("python3 -I -c '\n", 1)[1].split("' ", 1)[0]
         args = [
             str(config),
             str(output),
@@ -46,7 +44,7 @@ class OpenCodeExecutableConfigTest(Case):
             redirect_stdout(stdout),
             self.assertRaises(SystemExit) as raised,
         ):
-            exec(program, {})
+            exec(program("config_plan"), {})
         self.assertEqual(raised.exception.code, 3)
         data = tomllib.loads(output.read_text())["session"]["clients"]["opencode"]
         return data["executable"], stdout.getvalue(), selected

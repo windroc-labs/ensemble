@@ -8,9 +8,8 @@
 
 #   tracker   local: where issues live: "local", a local board, the directory $ENSEMBLE_BOARD_DIR (default
 #             ~/.ensemble/board/), its runtime state in <board>/.state/; "linear", Linear ([linear] below)
-#   work_dir  local: the Linear tracker's runtime state: agent runs' workdirs <work_dir>/work/<ID>/
-#             (docs/architecture.md › State cleanup), router state and logs in <work_dir>/logs/; absolute or ~, neither in nor containing
-#             a [local_clones] clone
+#   work_dir  local: the Linear tracker's runtime state: agent runs' workdirs <work_dir>/work/<ID>/, router state and
+#             logs in <work_dir>/logs/; absolute or ~, neither in nor containing a [local_clones] clone
 tracker = "local"
 work_dir = "~/.ensemble"
 #   workflow  local: the board's stages: a workflow file (absolute or ~) in place of the packaged one,
@@ -66,7 +65,8 @@ max_runs = 3
 # local: max_runs = 1
 
 # Local clones; optional, an unlisted repo gets a fresh clone.
-# Host-qualified keys and host defaults: docs/architecture.md › Board setup.
+# A bare "<owner>/<name>" is on the build roles' host (their output host, else the documents host); use
+# "<host>/<owner>/<name>" when build hosts differ.
 #   "<owner>/<name>"  local: "<path>" (absolute or ~) of the repo's local clone. The input's Repo: line names the path,
 #                     so the agent run gets a git worktree of the clone; load() checks it is a clone of that
 #                     repo; empty table → none
@@ -109,9 +109,10 @@ agent_label_group = ""
 #   client_id       local, required: the app's Client ID
 #   secret_service  local, required: Keychain service of the app's client secret
 #   token_service   local, required: Keychain service of its token and expiry, written by the selected writer;
-#                   after rotation: for transport ownership delete this item; for broker follow docs/upgrading.md#linear-broker-renewal
+#                   after rotation: for transport ownership delete this item; for broker delete its published token
+#                   and broker items, then rerun ensemble-broker login linear and linear-maintain
 #   user_id         local, required: the app's Linear user id
-# renewal: transport keeps the current writer; broker requires enrollment (docs/upgrading.md#linear-broker-renewal).
+# renewal: transport keeps the current writer; broker requires enrollment first (ensemble-broker login linear).
 [linear.harness]
 renewal = "transport"
 client_id = ""
@@ -132,7 +133,8 @@ user_id = ""
 #   client_id       local, required for issue: the app's Client ID
 #   secret_service  local, required for issue: Keychain service of the app's client secret
 #   token_service   local, required for issue: Keychain service of its token and expiry, written by the selected writer;
-#                   after rotation: for transport ownership delete this item; for broker follow docs/upgrading.md#linear-broker-renewal
+#                   after rotation: for transport ownership delete this item; for broker delete its published token
+#                   and broker items, then rerun ensemble-broker login linear and linear-maintain
 #   user_id         local, required for issue: the app's Linear user id; it matters only for a manager move that
 #                   Linear credits to a botActor, which then counts as other too
 [linear.manager]

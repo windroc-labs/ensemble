@@ -1,5 +1,7 @@
 """Codex account probes run the app-server client by path against a fake native server."""
 
+import ast
+import importlib.util
 import json
 import os
 import shlex
@@ -12,6 +14,18 @@ from pathlib import Path
 from ensemble.session.clients.codex import CodexClient
 from tests.session.case import REPO, SRC, Case
 from tests.session.integration.clients.codex import fake_app_server
+from tests.utils.jsonl import read_jsonl
+
+
+def shadowable(script):
+    """The first module script imports that this Python loads from a file, which a sibling shadows."""
+    return next(
+        alias.name
+        for node in ast.parse(script.read_text()).body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if (spec := importlib.util.find_spec(alias.name)) is not None and spec.has_location
+    )
 
 
 class AppServerIntegrationTest(Case):
@@ -63,11 +77,7 @@ class AppServerIntegrationTest(Case):
             path.rmdir()
 
     def logged(self):
-        return (
-            [json.loads(line) for line in self.log.read_text().splitlines()]
-            if self.log.exists()
-            else []
-        )
+        return read_jsonl(self.log, missing_ok=True)
 
     def probe(self, case="normal", timeout=2, **env):
         self.log.unlink(missing_ok=True)
@@ -125,7 +135,8 @@ class AppServerIntegrationTest(Case):
             ],
         )
 
-    def test_production_probe_isolates_stdlib_from_a_select_sibling(self):
+    def test_production_probe_isolates_stdlib_from_a_shadowing_sibling(self):
+        module = shadowable(self.script)
         launch = CodexClient({}).usage_probe()
         self.assertEqual(Path(launch.argv[-1]), self.script)
         self.assertEqual(launch.argv[:2], (os.path.realpath(sys.executable), "-I"))
@@ -134,8 +145,8 @@ class AppServerIntegrationTest(Case):
             copied_script = folder / "app_server.py"
             copied_script.write_bytes(self.script.read_bytes())
             marker = folder / "shadowed"
-            (folder / "select.py").write_text(
-                f"open({str(marker)!r}, 'w').close()\nraise RuntimeError('shadowed stdlib select')\n"
+            (folder / f"{module}.py").write_text(
+                f"open({str(marker)!r}, 'w').close()\nraise RuntimeError('shadowed stdlib {module}')\n"
             )
             result = subprocess.run(
                 (*launch.argv[:2], str(copied_script), "--timeout", "0"),
@@ -157,7 +168,7 @@ class AppServerIntegrationTest(Case):
             )
             self.assertNotEqual(unisolated.returncode, 0)
             self.assertEqual(unisolated.stdout, "")
-            self.assertIn("shadowed stdlib select", unisolated.stderr)
+            self.assertIn(f"shadowed stdlib {module}", unisolated.stderr)
             self.assertTrue(marker.exists())
 
     def test_partial_null_and_empty_native_snapshots_are_preserved(self):

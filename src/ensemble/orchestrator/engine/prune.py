@@ -1,38 +1,13 @@
-"""Prune, for each finished issue (Done, Canceled, or any other state of type canceled or duplicate,
-such as Duplicate: ops.Team.finished) at least 2 hours ago (linear_tracker.finished_at; unknown: skipped) whose
-workdir <work_dir>/work/<ID> its Delegate (its latest recorded run's kind, else the
-configured one) reports agent files in (Delegate.checkouts not None):
-- closes its recorded run through LinearRun; a failed close leaves the rest for a later tick;
-- deletes its agent files, uncommitted work included, through its Delegate (Delegate.clean; its
-  refusal skips the rest); the run records and the rest of the workdir stay until then;
-- in the local clone of each worktree among its checkouts, unless that clone lies in
-  <work_dir>/work or a temp dir: `worktree prune`, then deletes each <ID>-* branch but the default
-  that origin/<branch> or origin/<default> holds, else keeps and reports it (git reads refs only,
-  so code an agent run planted, such as filters or hooks, never runs outside auto mode's review);
-- archives every finished issue of the team, a Done one only when delegated to the pm or engineer
-  app (a researcher's report stays), any other whatever its assignee, none included, unless
-  it (reopened since) or a sub-issue, at any depth, is unfinished, every page of them read first
-  (Tracker.archive; Linear archives sub-issues with their parent, theirs too): skipped until each
-  is finished or archived. Descendants must be candidates finished at least 2 hours ago;
-  unknown finish times or mismatched candidate/plan versions hold the parent.
+"""Prune: clean finished and stalled issues' runs and files, then archive; the rules: HELP.
 
-For each stalled issue (any state but Todo, In Progress or a finished one) whose latest move into its
-state and latest recorded run are both at least 7 days old, it deletes its agent files' checkouts and
-temp files through its Delegate (Delegate.clean scratch; its refusal, a run or agent session still
-open included, skips it), keeping the rest and its run records, closing no run; then only `worktree
-prune` in each worktree's local clone, keeping every branch (it may back an open PR).
-
-For each issue finished at least 7 days ago whose workdir is a real dir without agent files
-(and of a configured kind), it deletes the whole workdir (run records, write-back ledger) once its
-Delegate's clean finds no live run (its refusal skips it). An issue without agent files is not
-attached; one of a kind no longer configured is neither queried nor logged. Run inventory unknown: an
-error, and no issue is pruned. Each step is logged (event_log.log, src prune); a failure is logged
-and the rest goes on (run returns 3), but Unavailable is raised. Promote prunes after each of its
-ticks; `ensemble-orchestrator prune` (main, HELP) runs one alone.
-
-A tick's requests past its board's setup (Linear: one read): SYNC_PAGES + READ_REQUESTS +
-ARCHIVE_REQUESTS at most, the rest waits (prune-deferred); reads cached in <logs_dir>/prune.json,
-its cursor the tracker's time.
+- An issue's Delegate is its latest recorded run's kind, else the configured one; agent files:
+  Delegate.checkouts not None. Delegate.clean deletes them (its run's workspace volumes first;
+  scratch for a stalled issue); a refusal skips the rest of that issue.
+- Clone cleanup reads refs only (git with GUARD), so code an agent run planted never runs.
+- Archive: Tracker.archive, every page read first (Linear archives sub-issues with their parent).
+- A failed step is logged (event_log.log, src prune) and the rest goes on (run returns 3), but
+  Unavailable is raised. A tick's requests past setup: SYNC_PAGES + READ_REQUESTS +
+  ARCHIVE_REQUESTS at most; reads cached in <logs_dir>/prune.json, its cursor the tracker's time.
 """
 
 import functools
@@ -109,23 +84,26 @@ Prerequisites and effects:
   (or promote) on demand. It archives by moving issue files flat into
   <board>/archive/; an unreadable board exits 2 (prune.py: <path>: <reason>).
   Configuration and executable lookup: ensemble-orchestrator --help
-  For issues Done/Canceled/Duplicate (any canceled-type state) at least 2
-  hours (the latest of their move into one and Linear's canceledAt and
-  completedAt; unknown age is skipped), close recorded runs and
-  delete agent files, including uncommitted work, through their Delegate.
-  Close/cleanup refusal preserves later steps for a future tick. Unknown run
-  inventory prevents run/file pruning; archival still proceeds.
+  For issues Canceled/Duplicate (any canceled-type state) on the next run,
+  and Done ones after 2 hours (the latest of their move into Done and
+  Linear's completedAt; unknown age is skipped), close recorded runs, then
+  remove their Docker workspace volumes and delete agent files through
+  their Delegate, uncommitted and unpushed work included: a cancel cannot be
+  undone for that work after the next run. A close/cleanup refusal is logged
+  and preserves later steps for a future tick. Unknown run inventory
+  prevents run/file pruning; archival still proceeds.
   Prune worktree records in each checkout's local clone and remove pushed
   ISSUE-* branches already contained in origin/branch or origin/default;
   preserve the default branch and unpushed branches. No fetch is performed.
   Clones under work_dir/work or temporary directories are skipped.
-  Archive team issues finished at least 2 hours ago: Canceled/Duplicate
-  whatever the assignee (none or researcher too), Done only when delegated to
-  pm/engineer apps (researcher reports stay). Unknown finish times
-  are skipped, and so is an issue with a sub-issue at any depth that prune
-  would not archive itself: unfinished, finished under 2 hours ago or at an
-  unknown time, or a Done one without a pm/engineer delegate (archiving an issue
-  archives its sub-issues and theirs).
+  Archive team issues once finished: Canceled/Duplicate on the next run
+  whatever the assignee (none or researcher too), Done ones 2 hours later and
+  only when delegated to pm/engineer apps (researcher reports stay). A Done
+  issue of unknown finish time is skipped, and so is an issue with a
+  sub-issue at any depth that prune would not archive itself: unfinished,
+  Done under 2 hours ago or at an unknown time, or Done without a
+  pm/engineer delegate (archiving an issue archives its sub-issues and
+  theirs).
   For issues in any other state but Todo/In Progress, 7 days after both their
   latest move into it and their latest recorded run, delete their checkouts
   and temp files through their Delegate, keeping the other agent files and the
@@ -323,11 +301,11 @@ class Pruner:
         self.see(issue.updated for issue in found)
         due = []
         for issue in found:
-            if issue.since is None:
+            if (ready := _due(self.now, issue.since, issue.canceled)) is None:
                 self.say(
                     "prune-skip", issue.ident, once=True, reason="archive: finish time unknown"
                 )
-            elif self.now - issue.since >= QUARANTINE:
+            elif ready:
                 due.append(issue)
         left = self.budget.left
         if due and left < 2:
@@ -395,10 +373,10 @@ class Pruner:
             candidate = finished[sub.ident]
             if candidate.updated != sub.updated:
                 return sub, CHANGED
-            since = candidate.since
-            if since is None:
+            ready = _due(self.now, candidate.since, candidate.canceled)
+            if ready is None:
                 return sub, "finish time unknown"
-            if self.now - since < QUARANTINE:
+            if not ready:
                 return sub, QUARANTINED
         return None
 
@@ -535,11 +513,14 @@ class Pruner:
             self.prune_stalled(ident, found.since)
             return
         since = found.since
-        if since is None:
-            self.say("prune-skip", ident, once=True, reason="finish time unknown")
-        elif self.has_agent(ident, quiet=True):
-            if self.now - since >= QUARANTINE and self.close_sessions(ident):
+        if self.has_agent(ident, quiet=True):
+            ready = _due(self.now, since, found.state == IssueState.CANCELED)
+            if ready is None:
+                self.say("prune-skip", ident, once=True, reason="finish time unknown")
+            elif ready and self.close_sessions(ident):
                 self.remove_agent(ident)
+        elif since is None:
+            self.say("prune-skip", ident, once=True, reason="finish time unknown")
         elif self.now - since >= RETENTION:
             self.remove_workdir(ident)
 
@@ -634,6 +615,13 @@ class Pruner:
             self.say("prune-removed", ident, what="scratch" if scratch else "agent dir")
         for common in sorted(commons):
             self.clean_clone(ident, common, branches=not scratch)
+
+
+def _due(now, since, canceled):
+    """Whether a finished issue's QUARANTINE is over (canceled-type: none); None: unknown."""
+    if canceled:
+        return True
+    return None if since is None else now - since >= QUARANTINE
 
 
 def _newer(named, ident, version):

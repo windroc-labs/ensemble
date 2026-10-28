@@ -6,6 +6,7 @@ import contextlib
 import errno
 import json
 import os
+import shlex
 import signal
 import stat
 import subprocess
@@ -99,6 +100,12 @@ class _Publishes(Protocol):
     def publish(self, record: Record) -> None: ...
 
 
+@runtime_checkable
+class _Opens(Protocol):
+    @property
+    def opening_pending(self) -> str | None: ...
+
+
 class _Ended(Enum):
     """_drive_end's compare-and-set."""
 
@@ -135,6 +142,7 @@ DOCKER_START_TIMEOUT = 120  # seconds, container start included
 TUI_POLL = 0.1  # seconds
 DRAIN_WAIT = 35  # s a gone worker waits before its drive ends the attempt; past the harness's drain
 GONE_EVERY = 1.0  # seconds between the drive's worker checks
+COLOR_WAIT = 15  # seconds
 WIND_DOWN_WAIT = 30.0  # seconds
 DRIVE_STOP_WAIT = 5.0  # seconds after SIGTERM, then SIGKILL
 ENDING = "previous worker generation (live or unknown)"
@@ -209,7 +217,6 @@ class HarnessDelegate(Delegate):
                 config=DelegateConfig(read_config()), team=spec.team
             )
             run = self.composer.resolve(role, spec.task, overlays=overlays)
-            accounts = self.composer.accounts(role, overlays=overlays)
             self._settings = thaw(self.composer.config.values)
             self.session_cls = session_cls
             self._configure()
@@ -238,7 +245,6 @@ class HarnessDelegate(Delegate):
             ),
             driver=self.driver,
             composition=self.composer,
-            accounts=accounts,
             environment=environment,
         )
         name = spec.name or f"{role}-{accepted.sid[:8]}"
@@ -504,10 +510,29 @@ class HarnessDelegate(Delegate):
             found = [
                 p for p in (layout.scratch if scratch else (layout.agent,)) if os.path.lexists(p)
             ]
+            removed = []
+            if not (dry or scratch) and (host := view._recorded_host(payload)) is not None:
+                removed = host.remove_workspaces(layout.agent)
             if not dry:
                 for path in found:
                     _remove(path)
-            return bool(found)
+            return bool(found or removed)
+
+    def _recorded_host(self, payload: bytes | None) -> Host | None:
+        """The run record's Host, on this view's session class or, unattached, on Session set up
+        from the delegate config; None without a readable record.
+        """
+        state = getattr(self, "_state", None)
+        if state is None:
+            try:
+                state = self._parse(payload)
+            except ConfigError:
+                return None
+            try:
+                self.session_cls.configure_from(thaw(Composer().config.values))
+            except (OSError, ValueError, SessionConfigError) as error:
+                raise ConfigError(str(error)) from None
+        return self._session_host(state.host)
 
     @classmethod
     def check_tui(
@@ -736,6 +761,8 @@ class HarnessDelegate(Delegate):
             live = agent is not None and _live(agent)
             if agent is not None:
                 agent.close()
+            elif unanswered is None:
+                self._close_foreground(state)
         if unanswered is None:
             self._stop_owned(closed=live)
         unchecked = (
@@ -750,6 +777,19 @@ class HarnessDelegate(Delegate):
             raise SessionError(f"{error}{also}") from error
         if unchecked is not None:
             raise Unanswered(unchecked)
+
+    def _close_foreground(self, state: DelegateState) -> None:
+        if state.plan.spec.mode != Mode.HEADLESS or state.detached or not self._alive(state):
+            return
+        if not state.plan.docker:
+            raise SessionError(
+                f"close {state.agent_name}: a foreground headless run off Docker has no close"
+                " route; end it in its terminal"
+            )
+        try:
+            self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
+        except SessionConfigError as error:
+            raise ConfigError(str(error)) from None
 
     def _control(self, path: str | None) -> ProcessControl | None:
         if path is None:
@@ -1212,7 +1252,8 @@ class HarnessDelegate(Delegate):
         if state.plan.spec.mode != Mode.TUI:
             return
         limit = DOCKER_START_TIMEOUT if self.driver.docker else TUI_START_TIMEOUT
-        deadline = time.monotonic() + limit
+        began = time.monotonic()
+        deadline = began + limit
         agent = unanswered = None
         ended = False
         try:
@@ -1221,6 +1262,7 @@ class HarnessDelegate(Delegate):
                 try:
                     if agent is not None and agent.alive() and agent.status().alive:
                         self._publish_record(state)
+                        self._colored(agent, state, began)
                         return
                 except Unanswered as error:
                     unanswered = error
@@ -1252,6 +1294,21 @@ class HarnessDelegate(Delegate):
         if busy := self._busy(state):
             raise SessionError(str(busy))
         raise SessionError(message)
+
+    def _colored(self, agent: Session, state: DelegateState, began: float) -> None:
+        name = state.agent_name
+        try:
+            while isinstance(agent, _Opens) and (text := agent.opening_pending) is not None:
+                if not (self._running(state.drive) and agent.alive()):
+                    return
+                if time.monotonic() - began >= COLOR_WAIT:
+                    send = shlex.join(("ensemble-session", "send", name, text))
+                    why = f"not ready within {COLOR_WAIT} s"
+                    say(f"delegate: session {name}: color not set: {why}; {send}")
+                    return
+                time.sleep(TUI_POLL)
+        except SessionError:
+            return
 
     def _publish_record(self, state: DelegateState) -> None:
         """Its Record in its agent session's worker dir, through that view."""
@@ -1397,7 +1454,6 @@ class HarnessDelegate(Delegate):
                 spec,
                 driver=self.driver,
                 composition=self.composer,
-                accounts=self.composer.accounts(state.role, overlays=state.overlays),
             )
             named = state.agent_name if self._named(mode) else None
             accepted = replace(

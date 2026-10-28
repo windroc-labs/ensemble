@@ -1,5 +1,5 @@
-"""A session harness's dir, HARNESS_ROOT/<32 hex>, and its files (docs/architecture.md › Session
-harness). Readers treat them as untrusted: a malformed line is skipped, a malformed file absent.
+"""A session harness's dir, HARNESS_ROOT/<32 hex>, and its files. Readers treat them as
+untrusted: a malformed line is skipped, a malformed file absent.
 """
 
 from __future__ import annotations
@@ -128,10 +128,8 @@ def _remove(path: str) -> None:
 
 
 class Tie:
-    """A headless start's caller pipe: its harness gets `far`, the caller's view keeps the other
-    end. Every copy of that end closed (the view dropped or its process ended, however) is EOF on
-    `far`, and the harness closes its worker: a headless run dies with its caller, as a piped
-    client did.
+    """A headless start's caller pipe: the harness closes its worker at EOF on `far`, once every
+    copy of the caller's end closed.
     """
 
     def __init__(self) -> None:
@@ -139,7 +137,6 @@ class Tie:
         self.far, self._near = os.pipe()  # neither inheritable
 
     def handed(self) -> None:
-        """The harness has its copy of `far`."""
         self.far = _closed(self.far)
 
     def close(self) -> None:
@@ -156,7 +153,7 @@ def _closed(fd: int) -> int:
 
 
 def hung_up(fd: int) -> bool:
-    """EOF on non-blocking `far`; its caller writes nothing, so anything read is ignored."""
+    """EOF on non-blocking `far`; anything read is ignored."""
     try:
         return os.read(fd, 1 << 10) == b""
     except BlockingIOError:
@@ -166,8 +163,6 @@ def hung_up(fd: int) -> bool:
 
 
 class Channel:
-    """One harness dir: its harness holds its lock; views read its log and send requests."""
-
     def __init__(self, directory: str) -> None:
         self.directory = directory
         self.lock = os.path.join(directory, "harness.lock")
@@ -194,7 +189,6 @@ class Channel:
         return cls(directory)
 
     def write_request(self, request: Mapping) -> None:
-        """0600, never over a file or through a link."""
         data = json.dumps(request)  # before the file: a value JSON cannot hold writes nothing
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         fd = os.open(self._request, flags, 0o600)
@@ -219,7 +213,7 @@ class Channel:
         append_line(self.deliveries, json.dumps(record, ensure_ascii=False) + "\n")
 
     def read(self, cursor: int) -> tuple[list[Logged], int]:
-        """The valid records of the complete lines past `cursor`, and the next cursor."""
+        """Valid records of complete lines past `cursor`, and the next cursor."""
         data = read_regular(self.events, offset=cursor) or b""
         end = data.rfind(b"\n") + 1
         found = []
@@ -248,7 +242,6 @@ class Channel:
         return False
 
     def hold(self) -> None:
-        """SessionError when another holds it."""
         fd = os.open(self.lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -268,10 +261,9 @@ class Channel:
             self._held = None
 
     def request(self, op: Op, timeout: float = END_WAIT) -> bool:
-        """True once done: asked by its holder's handlers, at the worker's confirmed exit; else
-        once the harness answered after its handlers drained and let go of its lock (within
-        `timeout`). False with no harness; Unanswered unconfirmed or unanswered; SessionError
-        refused.
+        """True once done: from its holder's handlers, at the worker's confirmed exit; else once
+        the harness answered after its handlers drained and let go of its lock (within `timeout`).
+        False with no harness; Unanswered unconfirmed or unanswered; SessionError refused.
         """
         if op not in tuple(Op):
             raise ValueError(f"request {op!r}: want one of {', '.join(Op)}")
@@ -283,9 +275,7 @@ class Channel:
         return True
 
     def ask(self, op: Op, data: Mapping, timeout: float = REQUEST_WAIT) -> dict:
-        """A worker's SEND, PRESS, SCREEN or DISPLAY, its answer's data; SessionError refused or
-        with no harness, Unanswered unanswered.
-        """
+        """Its answer's data; SessionError refused or with no harness, Unanswered unanswered."""
         if op not in SERVED:
             raise ValueError(f"ask {op!r}: want one of {', '.join(SERVED)}")
         answer = self._exchange({"op": op, "data": dict(data)}, timeout)
@@ -332,12 +322,11 @@ class Channel:
             time.sleep(SLICE)
 
     def requests(self) -> list[tuple[str, Op]]:
-        """Pending requests (id, op), oldest first, taken; malformed ones deleted."""
         return [(ident, op) for ident, op, _ in self.pending()]
 
     def pending(self) -> list[tuple[str, Op, dict]]:
-        """Pending requests (id, op, data), oldest first, taken; malformed ones deleted. Only the
-        user's processes can write this 0700 dir; no worker or container can.
+        """Pending (id, op, data), oldest first, taken; malformed ones deleted. Only the user's
+        processes can write this 0700 dir; no worker or container can.
         """
         try:
             entries = list(os.scandir(self._requests))
@@ -346,7 +335,7 @@ class Channel:
         found = []
         for entry in entries:
             if entry.name.startswith(SAVING):
-                continue  # still being saved
+                continue
             ident, suffix = entry.name[:-5], entry.name[-5:]
             body = None
             if suffix == ".json" and HEX.fullmatch(ident) and entry.is_file(follow_symlinks=False):
@@ -414,15 +403,12 @@ def bound(name: str, state: Mapping) -> Channel | None:
 
 
 def running(name: str, state: Mapping) -> Channel | None:
-    """Its bound owner while that harness still runs its worker."""
     channel = bound(name, state)
     return channel if channel is not None and channel.status().get("state") == "running" else None
 
 
 def sweep() -> None:
-    """Removes unheld HARNESS_ROOT/<32 hex> dirs whose harness.json is STALE_AGE old (none: a
-    day); errors logged.
-    """
+    """Removes unheld harness dirs older than STALE_AGE (no harness.json: a day)."""
     root = os.path.expanduser(HARNESS_ROOT)
     now = time.time()
     try:

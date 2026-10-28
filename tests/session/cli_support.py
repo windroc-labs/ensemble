@@ -1,8 +1,5 @@
-"""ensemble-session as its users run it: bin/ensemble-session in a subprocess (no PYTHONPATH; the
-running interpreter's directory supplies python3), a fresh cwd and HOME, a private tmux server
-(live_tmux.Server, a control-mode client on MANAGER) and the fake claude on PATH. `module=True` runs
-`python3 -P -m ensemble.session.cli` with this tree's roots instead, for a config naming a test
-Host (tests.session.fakes.host:FakeHost, not attachable).
+"""bin/ensemble-session run as users do: fresh cwd and HOME, private tmux (MANAGER), fake claude.
+`module=True`: `python3 -P -m ensemble.session.cli` instead, for a test Host's config.
 """
 
 import json
@@ -10,9 +7,6 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
-import threading
-from contextlib import contextmanager
 
 from ensemble.session.harness.channel import Channel
 from ensemble.session.hosts.base import stored_record, worker_state
@@ -20,9 +14,10 @@ from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.case import REPO, ROOTS, Case
 from tests.session.integration.clients.claude import fake_claude
+from tests.session.live_tmux import MANAGER, logged
+from tests.utils.sandbox import scratch
 
 COMMAND = os.path.join(REPO, "bin", "ensemble-session")
-MANAGER = "mgr"
 TIMEOUT = 60
 FAKE_HOST = "tests.session.fakes.host:FakeHost"
 CLAUDE_HOOKS = {
@@ -37,22 +32,11 @@ CLAUDE_HOOKS = {
 POLICY = ("--allowedTools", "--add-dir", "--dangerously-skip-permissions")
 
 
-def logged(path: str) -> list[dict]:
-    try:
-        with open(path, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
-    except FileNotFoundError:
-        return []
-
-
-class CliCase(Case):
+class CliCase(live_tmux.Calls, Case):
     ATTACH = True
 
     def setUp(self):
-        parent = os.environ.get("ENSEMBLE_TEST_TMP")
-        tmp = tempfile.TemporaryDirectory(dir=parent)
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP"))
         self.cwd = os.path.join(self.root, "work")
         os.mkdir(self.cwd)
         self.events = os.path.join(self.root, "events")
@@ -62,13 +46,13 @@ class CliCase(Case):
             self.server.attach(MANAGER)
 
     def owner(self, name: str) -> Channel:
-        """Worker `name`'s session harness, as its session.json names it."""
+        """`name`'s session.json owner."""
         path = os.path.join(self.ensemble, "tui", name, "session.json")
         with open(path, encoding="utf-8") as f:
             return Channel(json.load(f)["owner"])
 
     def settled(self, channel: Channel) -> dict:
-        """Its harness.json once it no longer runs a worker (draining, exited or failed)."""
+        """Its harness.json once draining, exited or failed."""
         return live_tmux.wait(
             lambda: (
                 (found := channel.status()).get("state") in ("draining", "exited", "failed")
@@ -77,19 +61,6 @@ class CliCase(Case):
             timeout=40,
             what=f"harness {channel.directory} to leave running",
         )
-
-    def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
-        """A caller's in session `inside` (None: outside tmux); an extra None drops its key."""
-        env = self.server.env(**(self.server.inside(inside) if inside else {}))
-        env["PATH"] = os.pathsep.join(
-            (self.server.bin, os.path.dirname(sys.executable), env["PATH"])
-        )
-        for key, value in extra.items():
-            if value is None:
-                env.pop(key, None)
-            else:
-                env[key] = value
-        return env
 
     def session(
         self,
@@ -116,24 +87,6 @@ class CliCase(Case):
                 text=True,
                 timeout=TIMEOUT,
             )
-
-    def ok(self, result: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
-        self.assertEqual(
-            result.returncode, 0, f"{shlex.join(result.args)}\n{result.stdout}\n{result.stderr}"
-        )
-        return result
-
-    def scene(self, name: str, steps=None, turns=(), **more) -> dict[str, str]:
-        """Worker `name`'s fake claude scenario, as env."""
-        path = os.path.join(self.root, f"{name}.claude.json")
-        steps = [f"Hi from {name}."] if steps is None else steps
-        scenario = {"steps": steps, "turns": list(turns), "log": self.log(name)}
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({**scenario, "commands": self.log(name, "commands"), **more}, f)
-        return {"FAKE_CLAUDE_SCENARIO": path}
-
-    def log(self, name: str, kind: str = "claude") -> str:
-        return os.path.join(self.root, f"{name}.{kind}.jsonl")
 
     def calls(self, name: str) -> list[dict]:
         return logged(self.log(name))
@@ -167,14 +120,8 @@ class CliCase(Case):
             **env,
         )
 
-    def record(self, result: subprocess.CompletedProcess) -> Record:
-        self.ok(result)
-        lines = result.stdout.splitlines()
-        self.assertEqual(len(lines), 1, result.stdout)
-        return Record.parse(lines[0])
-
     def dir_record(self, name: str) -> Record | None:
-        """The Record worker `name`'s dir stores for its session.json's generation."""
+        """`name`'s stored Record for its current generation."""
         found = worker_state(name)
         generation = None if found is None else found.generation
         return None if generation is None else stored_record(name, generation)
@@ -182,34 +129,6 @@ class CliCase(Case):
     def status(self, *names: str, stdin: str | None = None, **kw) -> list[Status]:
         result = self.ok(self.session("status", *names, stdin=stdin, **kw))
         return [Status.parse(line) for line in result.stdout.splitlines()]
-
-    def wait_event(self, name: str, word: str, count: int = 1, events: str | None = None):
-        def found():
-            self.poke()
-            lines = live_tmux.events(events or self.events)
-            hits = [line for line in lines if line.split(" ")[1:3] == [name, word]]
-            return lines if len(hits) >= count else None
-
-        return live_tmux.wait(found, what=f"{count} x {name} {word}")
-
-    def poke(self) -> None:
-        self.server.tmux("run-shell", "-b", "true")
-
-    @contextmanager
-    def poking(self):
-        stop = threading.Event()
-
-        def run():
-            while not stop.wait(live_tmux.POLL * 4):
-                self.poke()
-
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        try:
-            yield
-        finally:
-            stop.set()
-            thread.join()
 
     def local_config(self, text: str) -> None:
         with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
@@ -267,7 +186,7 @@ class WorkerCase(CliCase):
         self.assertFalse([word for word in argv if word.startswith(POLICY)], argv)
 
     def harness_files(self, name: str) -> str:
-        """Its session harness's log, status and events, for a failure message."""
+        """Its harness's log, status and events, for a failure message."""
         try:
             with open(
                 os.path.join(self.ensemble, "tui", name, "session.json"), encoding="utf-8"

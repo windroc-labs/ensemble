@@ -14,7 +14,7 @@ from ensemble.orchestrator.issue.output import receipt_payload
 from ensemble.orchestrator.trackers.linear import issue_label, issue_read
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import TEAM
-from tests.orchestrator.unit.issue_fixtures import OTHER_TEAM, VIEWER, LabelGql, label, uid
+from tests.orchestrator.unit.issue_fixtures import OTHER_TEAM, LabelGql, label, receipt_of, uid
 
 GROUP = uid(10)
 TODO, DOING = label(1, "todo", group=GROUP), label(2, "doing", group=GROUP)
@@ -36,19 +36,7 @@ class Swap(Case):
         )
         self.assertNotIn("labelIds:", issue_label.M_SWAP)
         self.assertEqual(gql.carried, [KEEP["id"], CHORE["id"]])
-        self.assertEqual(
-            receipt_payload(receipt),
-            {
-                "issue": {
-                    "id": "id-TASK-2",
-                    "identifier": "TASK-2",
-                    "url": "https://linear.app/t/issue/TASK-2",
-                },
-                "operation": "label swap",
-                "result": "changed",
-                "actor": VIEWER,
-            },
-        )
+        self.assertEqual(receipt_payload(receipt), receipt_of("label swap"))
 
     def test_a_new_label_already_carried_is_not_added_twice(self):
         gql = gql_of(BUG, CHORE, KEEP)

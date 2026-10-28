@@ -36,7 +36,7 @@ class T(unittest.TestCase):
             subprocess.run(["tmux", "-f", os.devnull, "new-session", "-d", "sleep 60"], check=True)
         self.assertNotEqual({mode!r}, "fail")
 
-code = run_tests.supervise("Unit x")
+code = run_tests.supervise("Unit x", grace=3)
 if code is None:
     if {mode!r} == "early":
         sys.exit(2)

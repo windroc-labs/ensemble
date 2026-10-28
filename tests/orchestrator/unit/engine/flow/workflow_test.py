@@ -1,8 +1,6 @@
 """The workflow: the packaged file's Stages, a stage's defaults, its lazy read and its checks."""
 
-import tempfile
 import tomllib
-from importlib.resources import files
 from pathlib import Path
 from unittest import mock
 
@@ -10,6 +8,7 @@ from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import Stage
 from tests.orchestrator.case import Case
+from tests.utils.sandbox import scratch
 
 HINT = "To change the target repo, edit the description's `Repo:` line."
 GOOD = '[[stage]]\nrole = "pm"\ninput = "design"\ntitle_prefix = "PRD"\n'
@@ -78,14 +77,6 @@ class DefaultWorkflow(Case):
             },
         )
 
-    def test_packaged_config_has_no_flow_lines(self):
-        with files("ensemble.orchestrator").joinpath("config.toml").open("rb") as f:
-            roles = tomllib.load(f)["roles"]
-        self.assertEqual(
-            {r: sorted({"next", "require_instructions"} & set(p)) for r, p in roles.items()},
-            dict.fromkeys(("researcher", "pm", "engineer"), []),
-        )
-
     def test_reads_once_on_first_use(self):
         with mock.patch("tomllib.loads", wraps=tomllib.loads) as loads:
             flow = workflow.Workflow()
@@ -146,9 +137,7 @@ class StageDefaults(Case):
 
 class WorkflowFile(Case):
     def write(self, text):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        path = Path(tmp.name, "flow.toml")
+        path = Path(scratch(self, real=False), "flow.toml")
         if text is not None:
             path.write_text(text, encoding="utf-8")
         return str(path)

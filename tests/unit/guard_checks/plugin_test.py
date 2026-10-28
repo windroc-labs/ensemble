@@ -1,6 +1,5 @@
 import json
 
-from tests.case import REPO
 from tests.guard_checks import plugin
 from tests.guard_samples import Sample
 
@@ -24,9 +23,6 @@ class PluginManifests(Sample):
             **dict(files),
         }
         return self.tree({rel: text for rel, text in files.items() if text is not None})
-
-    def test_the_real_manifests_ship_every_skill(self):
-        self.assertEqual(plugin.plugin_manifests(REPO), [])
 
     def test_both_manifests_must_ship_every_project_skill_under_one_name_and_version(self):
         for name, files, expected in (
@@ -85,9 +81,6 @@ class PluginManifests(Sample):
 
 
 class PluginSkills(Sample):
-    def test_the_real_plugin_ships_exactly_its_two_skills(self):
-        self.assertEqual(plugin.plugin_skills(REPO), [])
-
     def test_a_missing_extra_or_repeated_skill(self):
         root = self.tree(
             {
@@ -106,9 +99,6 @@ class PluginSkills(Sample):
 
 
 class PluginCommandTemplates(Sample):
-    def test_the_real_skills_are_safe_templates(self):
-        self.assertEqual(plugin.plugin_command_templates(REPO), [])
-
     def test_shell_and_positional_placeholders_in_a_body_are_found(self):
         head = '---\nname: m\ndescription: "run !`x` with $1"\n---\n'
         root = self.tree(

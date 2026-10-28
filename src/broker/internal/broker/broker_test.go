@@ -938,7 +938,7 @@ func TestInjectKeychainFailure(t *testing.T) {
 }
 
 // TestKeychainServices: KeychainServices lists exactly the package's ...Service string constants and, each ending in
-// "/", its ...ServicePrefix ones (prefix items), so a new service cannot miss docs/architecture.md.
+// "/", its ...ServicePrefix ones (prefix items), so a new service cannot miss the list.
 func TestKeychainServices(t *testing.T) {
 	services, prefixes := serviceConstants(t)
 	if len(services) < 5 || len(prefixes) < 1 {

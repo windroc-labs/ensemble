@@ -8,13 +8,13 @@ import os
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 from contextlib import suppress
 
 from ensemble.session.engine import tmux_cli
 from tests.session.case import Case
+from tests.utils.sandbox import scratch
 
 WAIT = """import os, sys, time
 for _ in range(3000):
@@ -24,9 +24,7 @@ for _ in range(3000):
 
 class ExecTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
         self.path, self.fifo = (os.path.join(self.root, n) for n in ("handover.json", "errpipe"))
         os.mkfifo(self.fifo, 0o600)
         self.reader = os.open(self.fifo, os.O_RDONLY | os.O_NONBLOCK)

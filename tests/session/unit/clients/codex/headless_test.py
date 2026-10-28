@@ -35,10 +35,11 @@ from tests.session.unit.clients.codex.support import (
     PLUGIN_OFF,
     TOOLS_OFF,
     Base,
+    LaunchPolicyCases,
     committed_headless,
-    holds,
     packaged,
 )
+from tests.session.unit.clients.support import holds
 
 CODEX = ("-s", "danger-full-access", "-c", 'approval_policy="on-request"')
 
@@ -349,62 +350,13 @@ class ContainerLaunch(Base):
             run.launch(spec)
 
 
-class LaunchPolicy(Base):
+class LaunchPolicy(LaunchPolicyCases, Base):
+    mode = "headless"
+
     def argv(self, client, spec, *, resume=False):
         return list(
             committed_headless(client, dataclasses.replace(spec, prompt="hi", resume=resume)).argv
         )
-
-    def test_supplied_policy_and_saved_replay_in_both_modes(self):
-        mode = "headless"
-        for saved, current in (
-            ("workspace-write", "danger-full-access"),
-            ("danger-full-access", "workspace-write"),
-        ):
-            with self.subTest(mode=mode, saved=saved):
-                flags = (
-                    "-s",
-                    saved,
-                    "-c",
-                    'approval_policy="on-request"',
-                    "-c",
-                    'approvals_reviewer="auto_review"',
-                    "-c",
-                    "sandbox_workspace_write.network_access=false",
-                )
-                spec = dataclasses.replace(
-                    self.spec, sid=f"{mode}-{saved}", flags=flags, env={"K": "saved"}
-                )
-                first = self.argv(self.client, spec)
-                self.assertEqual(first[first.index("-s") :][: len(flags)], list(flags))
-                self.common.bind(str(self.work), spec.sid, NATIVE)
-                self.rollout()
-                changed = dataclasses.replace(spec, flags=("-s", current), env={"K": "changed"})
-                second = self.argv(self.client, changed, resume=True)
-                self.assertEqual(second[second.index("-s") :][: len(flags)], list(flags))
-                self.assertEqual(
-                    self.common.load(str(self.work), spec.sid).snapshot.flags, tuple(flags)
-                )
-
-    def test_separator_tail_follows_generated_options_on_fresh_and_resume(self):
-        mode = "headless"
-        with self.subTest(mode=mode):
-            supplied = ("--enable", "web", "--", "literal", "--last")
-            spec = dataclasses.replace(self.spec, sid=f"separator-{mode}", flags=supplied)
-            first = self.argv(self.client, spec)
-            self.common.bind(str(self.work), spec.sid, NATIVE)
-            self.rollout()
-            changed = dataclasses.replace(spec, flags=("--", "changed"))
-            second = self.argv(self.client, changed, resume=True)
-            for argv in (first, second):
-                boundary = argv.index("--")
-                self.assertEqual(argv[boundary:], ["--", "literal", "--last", "hi"])
-                self.assertIn("gpt-test", argv[:boundary])
-                self.assertIn(str(self.extra), argv[:boundary])
-                self.assertIn("project_doc_max_bytes=0", argv[:boundary])
-            self.assertEqual(
-                self.common.load(str(self.work), spec.sid).snapshot.flags, tuple(supplied)
-            )
 
 
 class PolicyReplay(Base):
@@ -471,16 +423,6 @@ class PolicyReplay(Base):
         self.assertNotIn("danger-full-access", resumed.argv)
 
 
-class SuppliedPolicy(Base):
-    def test_a_policy_reaches_both_client_launches(self):
-        flags = CODEX
-        client = self.client
-        spec = dataclasses.replace(self.spec, flags=flags)
-        launch = committed_headless(client, dataclasses.replace(spec, prompt="hi"))
-        start = launch.argv.index(flags[0])
-        self.assertEqual(launch.argv[start : start + len(flags)], flags)
-
-
 class ConfiguredFlags(Base):
     OWN = ("-c", "plugins.x@m.enabled=false")
     NEW = ("-c", "plugins.y@m.enabled=false")
@@ -512,23 +454,13 @@ class ConfiguredFlags(Base):
             with self.subTest(pair=pair):
                 self.assertTrue(holds(argv, pair), argv)
 
-    def test_the_configs_flags_grant_no_directory(self):
-        with self.assertRaisesRegex(
-            ConfigError, r"^--add-dir: \[clients\.codex\] flags grant no directory"
-        ):
-            CodexClient({**self.client.config, "flags": ["--add-dir", str(self.extra)]})
-
-    def test_the_configs_flags_pass_no_literal_argument(self):
-        with self.assertRaisesRegex(
-            ConfigError, r"^--: \[clients\.codex\] flags pass no literal argument"
-        ):
-            CodexClient({**self.client.config, "flags": ["-c", "x=1", "--", "extra"]})
-
     def test_the_packaged_config_turns_the_ensemble_plugin_off(self):
         spec = dataclasses.replace(self.spec, flags=CODEX, prompt="hi")
         argv = committed_headless(packaged(), spec).argv
         start = argv.index(PLUGIN_OFF[1]) - 1
         self.assertEqual(argv[start : start + 2], PLUGIN_OFF)
+        self.assertEqual(argv[1:start], ("exec", "--json", "--skip-git-repo-check", *AUTO))
+        self.assertEqual(argv.count(PLUGIN_OFF[1]), 1)
 
     def test_the_packaged_config_turns_the_browser_computer_use_apps_and_suggestions_off(self):
         spec = dataclasses.replace(self.spec, flags=CODEX, prompt="hi")
@@ -612,6 +544,8 @@ class ConfiguredFlags(Base):
             ([1], "[clients.codex].flags must be a list of strings"),
             (["-C", "/x"], "-C /x: the Codex client sets hooks, session and cwd"),
             (["-c", "hooks.x=1"], "-c hooks.x=1: the Codex client sets hooks, session and cwd"),
+            (["--add-dir", "/x"], "--add-dir: [clients.codex] flags grant no directory"),
+            (["-c", "x=1", "--", "extra"], "--: [clients.codex] flags pass no literal argument"),
         ):
             with self.subTest(flags=flags), self.assertRaises(ConfigError) as caught:
                 CodexClient({**self.client.config, "flags": flags})

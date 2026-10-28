@@ -3,9 +3,9 @@
 import json
 import os
 import shlex
-import tempfile
 from dataclasses import replace
 from datetime import datetime
+from functools import partial
 from unittest import mock
 from zoneinfo import ZoneInfo
 
@@ -22,7 +22,8 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.engine.types import Spec as BaseSpec
 from ensemble.utils import LOCAL_ENV_VARS
-from tests.session.case import Case
+from tests.session.case import SID, Case
+from tests.utils.sandbox import scratch
 
 
 class ClaudeCommon(UnconfiguredCommon):
@@ -36,8 +37,6 @@ class ClaudeCommon(UnconfiguredCommon):
 
 
 Spec = BaseSpec
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 CEILING = {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "3600000"}
 TUI_DEFAULTS = {"CLAUDE_CODE_DISABLE_AGENT_VIEW": "1"}
@@ -115,9 +114,7 @@ class Base(Case):
         os.mkdir(self.work)
 
     def dir(self) -> str:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        return os.path.realpath(tmp.name)
+        return scratch(self)
 
     def env(self, values):
         patch = mock.patch.dict(os.environ, values)
@@ -129,26 +126,27 @@ class Base(Case):
             call()
         self.assertEqual(str(caught.exception), message)
 
-    def launch(
-        self, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
-    ) -> Launch:
-        spec = Spec(
-            **{
-                "workdir": self.work,
-                "access": Access(cwd=self.work),
-                "sid": SID,
-                "prompt": prompt,
-                "resume": resume,
-                **spec,
-            }
-        )
-        run = ClaudeClient(config).headless()
-        run._context = replace(LOCAL_CONTEXT, permission=permission)
-        return run.launch(spec)
+    def launch(self, prompt="hi", config=CONFIG, **spec) -> Launch:
+        return _launch("headless", self.work, prompt, config, **spec)
 
 
-def stream_line(record) -> str:
-    return json.dumps(record)
+def _launch(
+    mode, work, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
+) -> Launch:
+    spec = Spec(
+        **{
+            "workdir": work,
+            "access": Access(cwd=work),
+            "sid": SID,
+            "prompt": prompt,
+            "resume": resume,
+            **spec,
+        }
+    )
+    client = ClaudeClient(config)
+    run = client.tui() if mode == "tui" else client.headless()
+    run._context = replace(LOCAL_CONTEXT, permission=permission)
+    return run.launch(spec, HOOK) if mode == "tui" else run.launch(spec)
 
 
 def assistant(*blocks, **fields) -> dict:
@@ -236,22 +234,7 @@ def reference(cwd: str, sid: str = SID) -> str:
     return f"cd {q(cwd)} && ensemble-session client-resume claude {q(store())} {q(cwd)} {sid}"
 
 
-def tui_launch(
-    work, prompt="hi", config=CONFIG, *, resume=False, permission=Permission.AUTO, **spec
-) -> Launch:
-    spec = Spec(
-        **{
-            "workdir": work,
-            "access": Access(cwd=work),
-            "sid": SID,
-            "prompt": prompt,
-            "resume": resume,
-            **spec,
-        }
-    )
-    run = ClaudeClient(config).tui()
-    run._context = replace(LOCAL_CONTEXT, permission=permission)
-    return run.launch(spec, HOOK)
+tui_launch = partial(_launch, "tui")
 
 
 def said(mid, *blocks) -> dict:

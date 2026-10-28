@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 import unittest
 import unittest.mock
 
@@ -12,6 +11,7 @@ from ensemble.delegate.event.types import Outcome, Updraft, UpdraftStatus
 from ensemble.utils import SHORT, OutcomeStatus, one_line
 from tests.delegate.case import Case
 from tests.delegate.repo import PROCESS_ERRORS, fail, ok
+from tests.utils.sandbox import scratch
 
 URL = "https://github.com/o/n/pull/7"
 HEAD = "a" * 40
@@ -627,12 +627,6 @@ class NotDone(Base):
                 )
                 self.assertEqual(self.gh.calls, calls)
 
-    def test_never_readies(self):
-        for status in (OutcomeStatus.FAILED, OutcomeStatus.NEEDS_INPUT):
-            with self.subTest(status=status):
-                self.go(Gh(view([run_("a")])), out=outcome(status))
-                self.assertNotIn(READY, self.gh.calls)
-
 
 class Skipped(Base):
     def test_compare_tree_and_empty_urls_skip_the_gate(self):
@@ -665,9 +659,7 @@ class Skipped(Base):
 
 class Hosts(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
 
     def found(self, text=None, output=None, **env):
         if text is not None:

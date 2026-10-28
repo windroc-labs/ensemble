@@ -27,6 +27,7 @@ from ensemble.utils import parse_time
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import Case
+from tests.orchestrator.config_fixtures import write
 from tests.orchestrator.unit import promote_fixtures as tp
 from tests.orchestrator.unit.board_ids import (
     DUPLICATE,
@@ -108,14 +109,11 @@ def gql_for(
     changed=None,
     elsewhere=(),
 ):
-    """owners: delegate app user ids by issue, independent of assignee.
-    children: sub-issue state types by parent, any depth, as Linear lists them (archived ones
-    left out), archived with their parent; stamps: canceledAt and completedAt, hours before NOW, by issue (none: null);
-    reread: the state an issue's archive read finds, by issue (none: its own); changed: the idents
-    the change feed lists (gql.changed, settable later; None: every issue), each updated just now,
-    or "since": those updated after the feed's updatedAt.gt, at their time; an issue's updatedAt:
-    its latest move or stamp, else OLD; elsewhere: issues the batched read leaves out (another
-    team's). gql.read: the idents read, in order."""
+    """owners: delegate app user ids by issue. children: sub-issue state types by parent, any
+    depth, archived with it; stamps: canceledAt/completedAt hours before NOW (none: null); reread:
+    the state an issue's archive read finds; changed: the idents the feed lists (gql.changed; None:
+    all), updated now, or "since": those updated after updatedAt.gt; updatedAt: latest move or
+    stamp, else OLD; elsewhere: issues the batched read leaves out. gql.read: idents read."""
     owners, children, stamps, reread = owners or {}, children or {}, stamps or {}, reread or {}
 
     def at(ident):
@@ -203,6 +201,7 @@ def gql_for(
                             "id": f"id-{i}",
                             "identifier": i,
                             "updatedAt": updated(i),
+                            "state": {"id": STATE_IDS[issues[i][0]]},
                             "history": history(i),
                             **at(i),
                         }
@@ -269,11 +268,6 @@ def tree(path):
             with open(os.path.join(top, name), "rb") as f:
                 found[os.path.relpath(os.path.join(top, name), path)] = f.read()
     return found
-
-
-def write(path, text):
-    with open(path, "w") as f:
-        f.write(text)
 
 
 class Git:
@@ -442,13 +436,17 @@ class PruneScenario(Case):
         shutil.rmtree(self.work)
         os.makedirs(self.work)
 
-    def tick(self, prune_gql):
+    def configured(self, text=tp.CONFIG):
         write(
             os.path.join(self.ensemble, "config.local.toml"),
             f'[orchestrator]\nwork_dir = "{self.root}"\n' + CORE_LOCAL,
         )
         path = os.path.join(self.root, "config.toml")
-        write(path, tp.CONFIG)
+        write(path, text)
+        return path
+
+    def tick(self, prune_gql):
+        path = self.configured()
         fake = tp.FakeLinear()
         fake.add("DR-1")
         fake.moved("DR-1", 60, "In Review")

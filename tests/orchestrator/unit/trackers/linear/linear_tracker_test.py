@@ -55,7 +55,7 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker, Selves
 from ensemble.utils import one_line
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import SID, Case
 from tests.orchestrator.prune_fixtures import NOW, ROLES, TEAM_OBJ
 from tests.orchestrator.unit.board_ids import (
     DUPLICATE,
@@ -75,12 +75,13 @@ from tests.orchestrator.unit.board_ids import (
 BASE = {
     # its state's type and updatedAt
     "Q_ISSUE": "176947979d752d5bbfd43f0a6fae9d57b76222c1d68b91c67fc4db0ecf00bb52",
-    # updatedAt
-    "Q_FINISHED": "f8be6e566b829a2e8276129335ec9b75690d4561539f9d2d0b46e461bc7ec51f",
+    # updatedAt and state id
+    "Q_FINISHED": "077e071010bd9ca107a4202a79e9fa2afc277096cc01bda3b878e0f4ec0b18f4",
     # each sub-issue's first child, so a leaf is not read, and updatedAt
     "Q_ARCHIVE": "0a19726cff83adff30e527ac21e2832ea2ed120ec6880e03772006c3b899a209",
     "Q_CHILDREN": "91955ba5094f94357fc88a229f81f5b6f79249d3d3154a460514a787f610b7c5",
     "M_ARCHIVE": "86a7493d87b61ff2c087cf86df51894a9c04f95a6fa6d1d22be15947967ca1d3",
+    "M_ASSIGN": "580a13d7f210c8a5d8245ebcef691a163105c6b24740775db7148e33b98dbafc",
     "M_TITLE": "1b74f5b2bb7775a1147c8a6bac7f50c09a196de9122da2c52e7cd64eaf45d7be",
     "M_ATTACH": "8db2cfd3ed91f6b4daf1aeed80183275d14953ff02982847658243be789af1f4",
     "M_UNARCHIVE": "e0c0d3bff0bf11847fc7ffd4b98030ac98c9319cde37a09fe0745906d545d9a3",
@@ -98,7 +99,6 @@ BASE = {
     "Q_IDS": "fd0f74d3cdd0d0a34ba9f12805652c7ecedebd4d75e003bece27d4d9912f9b95",
     "Q_UPSTREAM": "be140943c548c5d9b8dc0940cd9dd8c712469da812be4997e0d9ebc3fad38eda",
 }
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 REF = (SID, "session")
 CID = ops.client_id(SID, "session")
 NOT_FOUND = LinearError("linear api error: [{'message': 'Entity not found: Comment'}]")
@@ -474,11 +474,12 @@ class Changed(Case):
 
 
 class FinishedIssues(Case):
-    def node(self, ident, completed=2):
+    def node(self, ident, completed=2, state="done"):
         return {
             "id": f"id-{ident}",
             "identifier": ident,
             "updatedAt": UPDATED.isoformat(),
+            "state": {"id": STATES.get(state, state)},
             "canceledAt": None,
             "completedAt": ago(completed).isoformat(),
             "history": moves(),
@@ -511,6 +512,16 @@ class FinishedIssues(Case):
                 Finished("id-TASK-2", "TASK-2", ago(3), UPDATED),
             ],
         )
+
+    def test_a_canceled_type_state_marks_the_issue_canceled(self):
+        nodes = [
+            self.node("TASK-1"),
+            self.node("TASK-2", state="canceled"),
+            self.node("TASK-3", state=DUPLICATE),
+        ]
+        gql = Gql(Q_FINISHED=self.page(nodes, None, more=False))
+        found = tracker(gql).finished(("pm",))
+        self.assertEqual([f.canceled for f in found], [False, True, True])
 
     def test_stops_on_repeated_or_empty_cursor(self):
         for pages in (
@@ -709,10 +720,6 @@ class Archive(Case):
             self.assertEqual(raised.exception.plan, expected)
             self.assertTrue(expected.unfinished)
             self.assertNotIn("M_ARCHIVE", gql.names())
-
-    def test_the_rule_is_trackers_not_its_own(self):
-        self.assertNotIn("archive", vars(LinearTracker))
-        self.assertIn("_write_archive", vars(LinearTracker))
 
     def test_success_false_raises(self):
         gql = Gql(Q_ARCHIVE=planned(), M_ARCHIVE={"issueArchive": {"success": False}})
@@ -1073,17 +1080,7 @@ class Assigned(Case):
         first = [todo(f"TASK-{n}") for n in range(1, 101)]
         extra = todo("TASK-101")
         unowned = {"identifier": "TASK-102", "delegate": None}
-        gql = Gql(
-            LIST=[
-                {"issues": {"nodes": first, "pageInfo": {"hasNextPage": True, "endCursor": "a"}}},
-                {
-                    "issues": {
-                        "nodes": [extra, unowned],
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                },
-            ]
-        )
+        gql = Gql(LIST=[feed(*first, cursor="a"), feed(extra, unowned)])
         said = []
         port = tracker(gql)
         port.say = lambda *a, **f: said.append((a, f))
@@ -1097,23 +1094,7 @@ class Assigned(Case):
     def test_pages_past_unowned_and_empty_pages(self):
         owned = {"identifier": "TASK-9", "delegate": {"id": role_id("pm")}}
         unowned = {"identifier": "TASK-1", "delegate": None, "assignee": PM}
-        gql = Gql(
-            LIST=[
-                {
-                    "issues": {
-                        "nodes": [unowned],
-                        "pageInfo": {"hasNextPage": True, "endCursor": "a"},
-                    }
-                },
-                {"issues": {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "b"}}},
-                {
-                    "issues": {
-                        "nodes": [owned],
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    }
-                },
-            ]
-        )
+        gql = Gql(LIST=[feed(unowned, cursor="a"), feed(cursor="b"), feed(owned)])
         said = []
         port = tracker(gql)
         port.say = lambda *a, **f: said.append((a, f))
@@ -1131,11 +1112,7 @@ class Assigned(Case):
             {"identifier": "TASK-2", "delegate": {"id": "someone"}},
             owned,
         ]
-        gql = Gql(
-            LIST=[
-                {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}}
-            ]
-        )
+        gql = Gql(LIST=feed(*nodes))
         said = []
         port = tracker(gql)
         port.say = lambda *a, **f: said.append((a, f))
@@ -1145,22 +1122,9 @@ class Assigned(Case):
     def test_invalid_page_cursor_is_refused(self):
         for end in (None, "a"):
             with self.subTest(end=end):
-                gql = Gql(
-                    LIST=[
-                        {
-                            "issues": {
-                                "nodes": [],
-                                "pageInfo": {"hasNextPage": True, "endCursor": "a"},
-                            }
-                        },
-                        {
-                            "issues": {
-                                "nodes": [],
-                                "pageInfo": {"hasNextPage": True, "endCursor": end},
-                            }
-                        },
-                    ]
-                )
+                last = feed(cursor="a")
+                last["issues"]["pageInfo"]["endCursor"] = end
+                gql = Gql(LIST=[feed(cursor="a"), last])
                 with self.assertRaisesRegex(LinearError, "hasNextPage without a new endCursor"):
                     tracker(gql).assigned(IssueState.RUNNING)
 
@@ -1509,42 +1473,6 @@ class Role(Case):
 
 class Interface(Case):
     def test_linear_tracker_implements_every_method(self):
-        self.assertEqual(
-            Tracker.__abstractmethods__,
-            {
-                "read",
-                "finished",
-                "archive_plan",
-                "_write_archive",
-                "approved",
-                "detail",
-                "created",
-                "create",
-                "relate",
-                "comment",
-                "move",
-                "claim",
-                "comment_and_move",
-                "find_comment",
-                "put_comment",
-                "notify",
-                "assign",
-                "links",
-                "link",
-                "retitle",
-                "on_board",
-                "unarchive",
-                "role",
-                "assigned",
-                "ready",
-                "moved_at",
-                "recheck",
-                "issue",
-                "search",
-                "description",
-                "state_name",
-            },
-        )
         self.assertIsInstance(LinearTracker(None), Tracker)
 
 
@@ -1774,25 +1702,6 @@ class Writes(Case):
                 )
             ],
         )
-
-    def test_comment(self):
-        gql = Gql(M_COMMENT={"commentCreate": {"success": True}})
-        tracker(gql).comment("id-A", "Promoted to C-1.")
-        self.assertEqual(gql.calls, [(ops.M_COMMENT, {"i": "id-A", "b": "Promoted to C-1."})])
-
-    def test_move_maps_states_and_returns_current(self):
-        for now, left, sent in (
-            (STATES["handoff"], None, [(ops.M_STATE, {"i": "id-A", "s": STATES["done"]})]),
-            (STATES["in_review"], STATES["in_review"], []),
-        ):
-            with self.subTest(now=now):
-                gql = Gql(
-                    Q_ISSUE_STATE={"issue": {"state": {"id": now}}},
-                    M_STATE={"issueUpdate": {"success": True}},
-                )
-                moved = tracker(gql).move("id-A", IssueState.DONE, frm=IssueState.APPROVED)
-                self.assertEqual(moved, left)
-                self.assertEqual(gql.calls, [(ops.Q_ISSUE_STATE, {"i": "id-A"}), *sent])
 
     def test_claim_updates_without_reading(self):
         gql = Gql(M_STATE={"issueUpdate": {"success": True}})

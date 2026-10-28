@@ -27,7 +27,6 @@ from ensemble.manager.engine.types import (
     StatusError,
 )
 from ensemble.utils import (
-    ACCOUNT_ENV,
     EVENTS_ENV,
     EXIT_BUSY,
     LEASE_ENV,
@@ -106,9 +105,8 @@ def _reconciled(entry: Entry, status: Status) -> State:
     return State.GONE
 
 
-def _closed_run(work_dir: str, issue: str) -> tuple[str, str, str, str, str, str, str]:
-    """An issue run's role, client, session id, cwd, agent name, Host and account ("": none, the
-    session's ACCOUNT_ENV) from its run record,
+def _closed_run(work_dir: str, issue: str) -> tuple[str, str, str, str, str, str]:
+    """An issue run's role, client, session id, cwd, agent name and Host from its run record,
     `<work_dir>/work/<issue>/run/delegate.json`; never run.jsonl, which its
     agent can append to.
     """
@@ -123,19 +121,15 @@ def _closed_run(work_dir: str, issue: str) -> tuple[str, str, str, str, str, str
         client, sid, workdir = session["client"], session["sid"], session["workdir"]
         cwd = session["access"]["cwd"]
         name, host = state["agent_name"], state["host"]
-        env = session.get("env") or {}
-        account = env.get(ACCOUNT_ENV, "") if isinstance(env, dict) else None
         if not all(isinstance(value, str) and value for value in (name, host)):
             raise TypeError("no agent name or host")
-        if not isinstance(account, str):
-            raise TypeError("account not text")
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise RuntimeError(f"{issue}: no run record at {path}: {error!r}") from None
     if not all(isinstance(value, str) and value for value in (role, client, sid, workdir, cwd)):
         raise RuntimeError(f"{issue}: {path}: no role, client, session id or cwd")
     if os.path.realpath(workdir) != os.path.realpath(run):
         raise RuntimeError(f"{issue}: {path} records another run, {workdir}")
-    return role, client, sid, cwd, name, host, account
+    return role, client, sid, cwd, name, host
 
 
 class Crew:
@@ -268,12 +262,12 @@ class Crew:
             words = {w for w in (o.split("=")[0] for o in options) if w.startswith("--") and w[2:]}
             if fixed := {
                 f
-                for f in ("--account", "--client", "--cwd", "--host", "--resume")
+                for f in ("--client", "--cwd", "--host", "--resume")
                 for w in words
                 if f.startswith(w)
             }:
                 raise ValueError(f"reopen sets {', '.join(sorted(fixed))} from the run record")
-            _, client, sid, cwd, name, host, account = _closed_run(work_dir, key)
+            _, client, sid, cwd, name, host = _closed_run(work_dir, key)
             found = self._live({key, name}, sid)
             if found.live:
                 raise ValueError(
@@ -296,7 +290,6 @@ class Crew:
                 cwd,
                 "--resume",
                 sid,
-                *(("--account", account) if account else ()),
                 *argv,
             )
         elif kind == "issue":

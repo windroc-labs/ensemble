@@ -1,7 +1,6 @@
 """Reply and run-record helpers shared by delegate tests and the layers above."""
 
 import json
-import os
 
 
 def completed_steps(steps) -> list[dict]:
@@ -35,11 +34,3 @@ def option(call: dict, name: str) -> str | None:
 
 def bare(record: dict) -> dict:
     return {k: v for k, v in record.items() if k != "ts"}
-
-
-def running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True

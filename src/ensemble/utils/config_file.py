@@ -1,13 +1,12 @@
 """Ordered config resources with per-layer local sections.
 
 Tables merge key by key; higher values and whole lists replace lower values. Each layer's local
-section overlays its file before the next layer. Sections use the package's final name, with
-hyphens replaced by underscores. Only supplied layers are read and validated against their own
-and lower files; read_resources also always validates the local [utils] section, which accepts no
-keys without a utils resource. Unknown top-level keys are rejected, a renamed one naming its new
-name (RENAMED_KEYS), inside tolerate_unknown_keys reported and dropped; nested tables are validated
-by their owners. Flat local keys are rejected.
-Explicit paths replace files while retaining the defaults as their validation schema.
+section overlays its file before the next layer. A section is its package's final name, - as _.
+Only supplied layers are read and validated, against their own and lower files, plus the local
+[utils] section. Unknown top-level keys are rejected, a renamed or moved one naming its new place
+(RENAMED_KEYS, MOVED_KEYS), inside tolerate_unknown_keys reported and dropped; nested tables are
+validated by their owners. Flat local keys are rejected.
+Explicit paths replace files; the defaults stay their validation schema.
 """
 
 import contextlib
@@ -23,6 +22,7 @@ from ensemble.utils.paths import STATE
 
 LOCAL = f"{STATE}/config.local.toml"
 RENAMED_KEYS = MappingProxyType({"runtime": "client"})
+MOVED_KEYS = MappingProxyType({"accounts": "[session.clients.<client>] account"})
 _TOLERATED: list[Callable[[str], None]] = []
 
 
@@ -31,8 +31,10 @@ class ConfigFileError(ValueError):
 
 
 def renamed_key(key: str) -> str:
-    """An unknown-key error's hint for a renamed key, else ""."""
-    return f"; renamed to {RENAMED_KEYS[key]!r}" if key in RENAMED_KEYS else ""
+    """An unknown-key error's hint, else ""."""
+    if key in RENAMED_KEYS:
+        return f"; renamed to {RENAMED_KEYS[key]!r}"
+    return f"; moved to {MOVED_KEYS[key]}" if key in MOVED_KEYS else ""
 
 
 @contextlib.contextmanager
@@ -61,7 +63,7 @@ class _Array(tuple):
 
 
 def freeze(value: Any) -> Any:
-    """A read-only deep copy: mappings as MappingProxyType, lists as tuples."""
+    """A read-only deep copy: lists as tuples."""
     if isinstance(value, Mapping):
         return MappingProxyType({k: freeze(v) for k, v in value.items()})
     if isinstance(value, (list, _Array)):
@@ -72,7 +74,7 @@ def freeze(value: Any) -> Any:
 
 
 def thaw(value: Any) -> Any:
-    """A fresh mutable deep copy: mappings as dicts, freeze's lists lists again."""
+    """freeze's inverse, a fresh copy."""
     if isinstance(value, Mapping):
         return {k: thaw(v) for k, v in value.items()}
     if isinstance(value, _Array):
@@ -89,7 +91,6 @@ def read_resources(
     paths: Mapping[str, str] | None = None,
     validate: Callable[[str, str, Mapping], None] | None = None,
 ) -> dict:
-    """Read ordered resources; validate each raw layer before its local section overlays it."""
     resources = tuple(resources)
     configs, known = {}, {}
     for package, filename in resources:
@@ -168,9 +169,7 @@ def _flat_sections(keys: tuple, schemas: Mapping[str, dict]) -> list[str]:
 
 
 def unset(cfg: Mapping, keys: tuple[str, ...]) -> list[str]:
-    """The dotted `keys` (a `*` segment: each subtable) missing from `cfg` or still "" there:
-    required, unset.
-    """
+    """Dotted `keys` (`*`: each subtable) missing or "" in `cfg`."""
     return [k for key in keys for k, v in _values(cfg, key.split("."), []) if v in (None, "")]
 
 

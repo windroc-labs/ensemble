@@ -10,7 +10,7 @@ from tests.session import live_tmux
 from tests.session.case import PY, Case
 
 UNCONFIGURED = "session not configured: call Session.configure first"
-CALLED = ("start", "attach", "usage", "layout", "writable_dirs", "display", "host")
+CALLED = ("start", "attach", "list", "usage", "layout", "writable_dirs", "display", "host")
 # A child: each class method on Session unconfigured, then after Session.configure; it prints
 # {"unconfigured": {name: message}, "configured": {name: result or [error type, message]}}.
 DISPATCH = """import json, os
@@ -33,7 +33,7 @@ def outcome(call):
         return call()
     except (ConfigError, SessionError) as e:
         return [type(e).__name__, str(e)]
-unconfigured = {n: outcome(c)[1] for n, c in calls.items() if n != "list"}
+unconfigured = {n: outcome(c)[1] for n, c in calls.items()}
 tmux = {"implementation": "ensemble.session.hosts.tmux:TmuxHost"}
 Session.configure(clients={}, hosts=Hosts("tmux", {"tmux": tmux}))
 configured = {n: outcome(c) for n, c in calls.items()}

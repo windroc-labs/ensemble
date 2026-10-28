@@ -3,7 +3,6 @@
 import fcntl
 import os
 import shutil
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
@@ -30,11 +29,12 @@ from ensemble.orchestrator.engine.flow.types import (
     SubIssue,
 )
 from ensemble.orchestrator.engine.types import IssueError, TrackerFileError
-from ensemble.orchestrator.trackers.local.local_tracker import ISSUE_STATES, LocalTracker
+from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
 from ensemble.orchestrator.trackers.local.types import LocalState
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import Case, zone
+from tests.orchestrator.unit.trackers.local import board_fixtures
+from tests.orchestrator.unit.trackers.local.board_fixtures import MTIME, text
 
-MTIME = datetime(2026, 10, 20, tzinfo=UTC)
 RUN = "Run 0123abcd-0000-4000-8000-0123456789ab · started"
 
 
@@ -42,35 +42,14 @@ def at(hour, minute=0):
     return datetime(2026, 10, 19, hour, minute, tzinfo=UTC)
 
 
-def text(ident, *, front="", description="", comments="", history=""):
-    body = f"### Description\n{description}\n" if description else ""
-    body += f"### Comments\n{comments}" if comments else ""
-    body += f"### History\n{history}" if history else ""
-    return f"---\nid: {ident}\ntitle: {ident} title\ncreated: 2026-10-19T14:02:00-04:00\n{front}---\n{body}"
-
-
 def checked(role, assignee, task, client, *, ready):
     return Recheck(ready, role, None, assignee, None, task, client)
 
 
-class Board(Case):
+class Board(board_fixtures.Board):
     def setUp(self):
-        zone = mock.patch.dict(os.environ, {"TZ": "UTC0"})
-        zone.start()
-        self.addCleanup(time.tzset)
-        self.addCleanup(zone.stop)
-        time.tzset()
-        self.board = os.path.join(os.path.realpath(self.home), "board")
-        os.mkdir(self.board)
+        super().setUp()
         self.tracker = LocalTracker(self.board, ("pm", "engineer"), prefix="LOC")
-
-    def write(self, rel, ident, **parts):
-        path = os.path.join(self.board, rel, f"{ident} x.md")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as file:
-            file.write(text(ident, **parts))
-        os.utime(path, (MTIME.timestamp(), MTIME.timestamp()))
-        return path
 
 
 class States(Case):
@@ -79,20 +58,6 @@ class States(Case):
         self.assertEqual(tracker.state_name(IssueState.READY), "ready/")
         self.assertEqual(tracker.state_name(IssueState.REVIEW), "review/")
         self.assertEqual(tracker.state_name(IssueState.APPROVED), "approved/")
-
-    def test_issue_states(self):
-        self.assertEqual(
-            ISSUE_STATES,
-            {
-                LocalState.BACKLOG: IssueState.BACKLOG,
-                LocalState.READY: IssueState.READY,
-                LocalState.RUNNING: IssueState.RUNNING,
-                LocalState.REVIEW: IssueState.REVIEW,
-                LocalState.APPROVED: IssueState.APPROVED,
-                LocalState.DONE: IssueState.DONE,
-                LocalState.CANCELED: IssueState.CANCELED,
-            },
-        )
 
 
 class Listing(Board):
@@ -517,7 +482,7 @@ class Reads(Board):
         self.assertEqual(
             self.tracker.finished({"pm"}),
             [
-                Finished("LOC-4", "LOC-4", MTIME),
+                Finished("LOC-4", "LOC-4", MTIME, canceled=True),
                 Finished("LOC-1", "LOC-1", at(16, 10)),
             ],
         )
@@ -1082,11 +1047,7 @@ class Stamped(Written):
 
     def test_derived_times_survive_a_stamp_in_a_dst_fold(self):
         """01:30 New York time twice on 2026-11-01: a derived time is the one its History line reads."""
-        zone = mock.patch.dict(os.environ, {"TZ": "America/New_York"})
-        zone.start()
-        self.addCleanup(time.tzset)
-        self.addCleanup(zone.stop)
-        time.tzset()
+        zone(self, "America/New_York")
         for at in ("2026-11-01T06:30:20+00:00", "2026-11-01T05:30:20+00:00"):  # EST, then EDT
             with self.subTest(at=at):
                 shutil.rmtree(self.board)

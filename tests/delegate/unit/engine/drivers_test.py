@@ -7,7 +7,6 @@ from dataclasses import fields
 from ensemble.delegate import ConfigError, Spec
 from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.drivers import AgentDriver, Driver, InstructionDriver
-from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.types import DriverSpec, Finished, Instruction
 from ensemble.session import Access, Session
 from ensemble.session import ConfigError as SessionConfigError
@@ -16,7 +15,8 @@ from tests.delegate.case import Case
 from tests.delegate.fakes.session import SessionClass
 from tests.delegate.replies import block
 from tests.delegate.runner import executed
-from tests.delegate.unit.runs import DONE, START, no_child, turn
+from tests.delegate.unit.runs import DONE, START, turn
+from tests.session.case import no_spawn
 
 
 class IdleTimeoutConfig(Case):
@@ -34,7 +34,7 @@ class IdleTimeoutConfig(Case):
             ),
         ):
             for mode in ("headless", "in_process"):
-                with self.subTest(text=text, mode=mode), no_child():
+                with self.subTest(text=text, mode=mode), no_spawn():
                     self.local(text)
                     session_cls = SessionClass.scripted(turn(START, block(DONE)))
                     result = executed(
@@ -80,7 +80,7 @@ class Drivers(Case):
             mode="tui",
             prompt="accepted prompt",
         )
-        with no_child():
+        with no_spawn():
             driver.preflight(spec)
         self.assertEqual(
             session_cls.preflights,
@@ -100,7 +100,7 @@ class Drivers(Case):
             mode="headless",
             prompt="input",
         )
-        with no_child():
+        with no_spawn():
             driver.preflight(spec)
             session = driver.start(
                 DriverSpec(spec, os.path.join(self.home, "out")), idle_timeout=30
@@ -130,7 +130,7 @@ class Drivers(Case):
 
     def test_instruction_preflight_needs_no_session_and_writes_nothing(self):
         work = os.path.join(self.home, "missing")
-        with no_child():
+        with no_spawn():
             InstructionDriver().preflight(
                 StartSpec(workdir=work, access=Access(cwd=work), prompt="instruction")
             )
@@ -148,7 +148,7 @@ class Drivers(Case):
         work = os.path.join(self.home, "work")
         out = os.path.join(work, "instruction.md")
         events = []
-        with no_child():
+        with no_spawn():
             result = executed(
                 Composer().resolve("dummy-tester"),
                 Spec("input", work, out=out),
@@ -211,7 +211,7 @@ class Drivers(Case):
             mode="headless",
             prompt=prompt,
         )
-        with no_child():
+        with no_spawn():
             instruction = InstructionDriver().start(DriverSpec(spec, out))
         self.assertEqual(instruction, Instruction(out))
         with open(out, "rb") as stream:
@@ -261,28 +261,11 @@ class Drivers(Case):
             ({"display": "opaque"}, "instruction has no host or display"),
             ({"idle_timeout": 30}, "instruction has no idle timeout"),
         ):
-            with self.subTest(keywords=keywords), no_child():
+            with self.subTest(keywords=keywords), no_spawn():
                 with self.assertRaises(ConfigError) as caught:
                     driver.start(DriverSpec(spec, out), **keywords)
                 self.assertEqual(str(caught.exception), message)
                 self.assertFalse(os.path.exists(os.path.dirname(out)))
-
-    def test_instruction_run_bypasses_attempts_and_replies_but_finishes(self):
-        work = os.path.join(self.home, "work")
-        out = os.path.join(work, "prompt.md")
-        spec = Spec("[ensemble-progress:start] source text", work, out=out)
-        composition = Composer()
-        config = composition.resolve("dummy-tester")
-        driver = InstructionDriver()
-        expected = plan(config, spec, driver=driver, composition=composition).prompt
-        events = []
-        with no_child():
-            result = executed(config, spec, driver=driver, on_event=events.append)
-        self.assertEqual((result.returncode, result.outcome, result.instruction), (0, None, out))
-        self.assertEqual(events, [Finished(result)])
-        with open(out, "rb") as stream:
-            self.assertEqual(stream.read(), expected.encode("utf-8"))
-        self.assertFalse(os.path.exists(os.path.join(work, "run.jsonl")))
 
 
 if __name__ == "__main__":

@@ -11,8 +11,7 @@
 #                    client name a Spec's client names, independent of the module and class
 #   implementation   required: "module.path:Class", the Client subclass that runs it
 #   max_runs         session-wide concurrent starts for this client, across every caller and mode; 0 or absent:
-#                    unlimited. The session owns this key, not the Client adapter (docs/architecture.md
-#                    › Run limits)
+#                    unlimited. The session owns this key, not the Client adapter
 #   any other key    the client's own (its class's `keys`); a key it does not list is a config error
 # [clients.<name>.modes]  its permission modes, auto and yolo (skips every permission and approval), each a list of
 #                    flags added to every launch, a resume's included, after flags; an isolated Host's sessions get
@@ -28,24 +27,26 @@
 #   allow            tool rules pre-approved for every session (--allowedTools), after the run's commands and read
 #                    rules; empty → none
 #   env              variables added to every command's environment, over the client's defaults; empty → none
-# [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog
-#                            skipped (docs/architecture.md › Client policy)
+#   account          the account (default or a [clients.claude.accounts.<name>]) every start that selects none runs
+#                    on; empty → each start picks the one with the most usage left. Only --account overrides it
+# [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog skipped
 # [clients.claude.tiers]    tier "1".."4" → its --model
 # [clients.claude.efforts]  effort (low, medium, high, xhigh, max) → its --effort
 #                            starting a run whose tier or effort has no entry here is a config error
-# [clients.claude.accounts.<name>]  a Claude account a worker or role may select (ENSEMBLE_ACCOUNT); only the Docker
-#                    Host uses it, injecting that account's setup-token alone (ensemble-broker login claude <name>;
-#                    docs/architecture.md › Claude accounts); <name> 1–64 lowercase letters, digits, ., _ or -, never
+# [clients.claude.accounts.<name>]  a Claude account, selected by account above or a worker's --account
+#                    (ENSEMBLE_ACCOUNT); only the Docker Host uses it, injecting that account's setup-token alone
+#                    (ensemble-broker login claude <name>); <name> 1–64 lowercase letters, digits, ., _ or -, never
 #                    setup-token. default, the account of no selection, is always registered; selecting an
 #                    unregistered name is a config error. None packaged; no secret:
 #   dir              its CLAUDE_CONFIG_DIR on the host, ~ expanded, absolute; absent → ~/.claude; never on default.
-#                    Nothing reads it yet (a planned per-account usage probe)
+#                    The usage probe reads it, so log it in to the account whose setup-token the broker holds
 #   account          a display string, e.g. its login email
 [clients.claude]
 implementation = "ensemble.session.clients.claude:ClaudeClient"
 max_runs = 0
 flags = ["--settings", '{"enabledPlugins": {"ensemble@windroc": false}}']
 allow = []
+account = ""
 # local: [session.clients.claude]
 # local: allow = ["<rule>"]
 
@@ -73,10 +74,9 @@ max = "max"
 # [clients.codex]   Codex (src/ensemble/session/clients/codex/)
 #   flags            codex flags added before a Spec's to every launch, a resume's too; no --add-dir or --; empty → none.
 #                    Default: as [clients.claude] flags', plus Codex 0.163.0's bundled browser and computer-use
-#                    plugins, Apps and tool_suggest off (docs/architecture.md › Session settings); a plugin id stays
-#                    unquoted, or the key never matches
+#                    plugins, Apps and tool_suggest off; a plugin id stays unquoted, or the key never matches
 # [clients.codex.modes]  auto: no Codex sandbox, auto-reviewed approvals; yolo: no sandbox, no approvals. Neither
-#                    grants a directory, hooks, session or cwd (docs/architecture.md › Client policy)
+#                    grants a directory, hooks, session or cwd
 [clients.codex]
 implementation = "ensemble.session.clients.codex:CodexClient"
 max_runs = 0
@@ -121,7 +121,6 @@ max = "max"
 #                    TUI asks and the session is blocked. OpenCode runs any cwd's .opencode plugins and opencode.json
 #                    (it has no project trust), so outside an isolated Host a launch, a resume's included, whose cwd is
 #                    not trusted (Access.project) is refused before it starts
-#                    (docs/customizing-roles-and-tasks.md › OpenCode sessions)
 #   flags            opencode flags added to every launch; never a session selector, --model, --format, --attach,
 #                    --dir or a permission flag (modes'), nor for the TUI --prompt or --pure, nor for headless
 #                    --title; empty → none
@@ -129,7 +128,6 @@ max = "max"
 #                    client's own name on PATH; a launch whose `<executable> --version` is not 1.x is refused
 #   ollama_port      the host's Ollama port
 #   ollama_context   its context window in tokens (OLLAMA_CONTEXT_LENGTH): ollama/ models compact before it fills
-#                    (docs/customizing-roles-and-tasks.md › OpenCode sessions)
 #   model            the --model of a run without a tier (ollama/<model> or <name>/<model>, as tiers'); never empty,
 #                    and without it such a run is refused
 #   env              variables added to every launch; never one that overrides the launch's OpenCode config
@@ -138,13 +136,13 @@ max = "max"
 #                            doom_loop, avoiding transient permission.asked events; edit denies stay, questions still ask
 # [clients.opencode.tiers]    tier "1".."4" → its --model: ollama/<model> or <name>/<model> of a providers table, which
 #                             lists the model; any other provider is refused
-# [clients.opencode.providers.<name>]  an OpenAI-compatible provider (e.g. a LAN server;
-#                    docs/customizing-roles-and-tasks.md › OpenCode sessions), <name> up to 64 letters, digits, ., _ or -; none packaged:
+# [clients.opencode.providers.<name>]  an OpenAI-compatible provider (e.g. a LAN server), <name> up to 64
+#                    letters, digits, ., _ or -; none packaged:
 #   base_url         its http(s) URL, ending /v1 (http://<host>:8080/v1)
 #   models           model names it lists beside those tiers map to it; [] → only those
 #   context          optional: its context window in tokens, as ollama_context; absent → 65536
 #                    Its API key: on tmux, `opencode auth login` (provider <name>), which ensemble never reads;
-#                    on Docker, `ensemble-broker login opencode <name>`, every listed one (docs/architecture.md › OpenCode on Docker)
+#                    on Docker, `ensemble-broker login opencode <name>`, every listed one
 # [clients.opencode.efforts]  effort → its --variant (a model without that variant ignores it)
 [clients.opencode]
 implementation = "ensemble.session.clients.opencode:OpenCodeClient"
@@ -189,10 +187,10 @@ max = "max"
 #                     ([clients.<name>.modes]); false → auto mode
 # [hosts.tmux]
 #   status_line       true → tui sessions show tmux's status line
-# [hosts.docker]      each tui session in its own container, made by ensemble-broker (docs/architecture.md#docker-host):
+# [hosts.docker]      each tui session in its own container, made by ensemble-broker:
 #   docker            the docker CLI, an absolute path
 #   plugins           pinned sources: name@owner/repo#commit[::marketplace-owner/repo#commit]; []: none
-#                     Both commits are full 40-hex hashes (docs/architecture.md › Plugins).
+#                     Both commits are full 40-hex hashes.
 #   github.app        the slug of the GitHub App whose installation tokens every Docker session gets, the one
 #                     `ensemble-broker login github ensemble-broker-bot` saved (scripts/install.sh writes it); "": none
 [hosts]

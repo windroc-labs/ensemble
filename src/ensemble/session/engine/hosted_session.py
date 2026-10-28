@@ -32,6 +32,7 @@ from ensemble.session.engine.base import Session
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
+    DEFAULT_ACCOUNT,
     Access,
     ClientBound,
     ConfigError,
@@ -43,6 +44,7 @@ from ensemble.session.engine.types import (
     IdleTimeout,
     KeyPress,
     Launch,
+    LimitHit,
     Liveness,
     Mode,
     NoRecordedSession,
@@ -221,8 +223,20 @@ def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, U
     return accounts.readings(name, probes, lambda launch: _read_usage(setup, client, launch))
 
 
+def _pool_account(spec: Spec, client: Client, host: Host) -> str | None:
+    """The account a start runs on, when its client has two or more on a container Host."""
+    registered = client._accounts()
+    if registered is None or len(registered) < 2 or host._client_context().container is None:
+        return None
+    return spec.env.get(ACCOUNT_ENV) or DEFAULT_ACCOUNT
+
+
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
-    if spec.env.get(ACCOUNT_ENV) or (pool := _pooled(setup, name, client, host)) is None:
+    if spec.env.get(ACCOUNT_ENV):
+        return spec
+    if account := client._account():
+        return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
+    if (pool := _pooled(setup, name, client, host)) is None:
         return spec
     if (account := accounts.best(pool)) is None:
         return spec
@@ -237,6 +251,16 @@ def _host_class(setup: _Setup, name: str) -> tuple[type[Host], dict]:
         return setup.class_loader(path, Host), settings
     except ValueError as e:
         raise ConfigError(f"[hosts.{name}].implementation: {e}") from None
+
+
+def _asked_to_close(channel: Channel) -> bool:
+    """Its owner's confirmed close; False once it is gone unasked; a refusal is OwnerRefused."""
+    try:
+        return channel.request(Op.CLOSE)
+    except Unanswered:
+        raise
+    except SessionError as error:
+        raise OwnerRefused(str(error)) from error
 
 
 def _host_key(setup: _Setup, name: str) -> str:
@@ -423,6 +447,7 @@ class HostedSession(Session):
         self._capacity: Admission | None = None
         self._capacity_hosts: Mapping[str, Host] = {}
         self._read_only = False  # a view's attach: no run records
+        self._account: str | None = None  # its pool account, held over at a usage limit
 
     @classmethod
     def configure(
@@ -813,6 +838,7 @@ class HostedSession(Session):
                 raise
             session._capacity = capacity
             session._capacity_hosts = {_host_key(setup, selected_host): on}
+            session._account = _pool_account(spec, client, on)
             return session
 
     @classmethod
@@ -1007,13 +1033,15 @@ class HostedSession(Session):
             )
         if state is not None and (channel := channel_bound(name, state)) is not None:
             store.check()
-            try:
-                if channel.request(Op.CLOSE):
-                    return
-            except Unanswered:
-                raise
-            except SessionError as error:
-                raise OwnerRefused(str(error)) from error
+            if _asked_to_close(channel):
+                return
+        if state is None and generation is None and (found := on._headless_owner(name)):
+            if sid not in (None, found["sid"]):
+                raise SessionError(f"session {name}: expected sid {sid!r}, found {found['sid']!r}")
+            channel = channel_bound(name, found)
+            if channel is None or not _asked_to_close(channel):
+                confirmed_end(on, name, found["generation"])()
+            return
         try:
             clients = [store.read()["client"]]
         except SessionError:
@@ -1085,6 +1113,8 @@ class HostedSession(Session):
                 found.usage_probe(),
                 container=host._client_context().container is not None,
             )
+        if account := found._account():
+            return pool[account]
         return None if (name := accounts.best(pool)) is None else pool[name]
 
     @classmethod
@@ -1216,6 +1246,8 @@ class HostedSession(Session):
             )
         elif isinstance(event, Stderr):
             self._log.note("stderr", best_effort=True, text=event.text)
+        elif isinstance(event, LimitHit) and self._account is not None:
+            accounts.hold(self.client, self._account, event.resets_at)
         self._fold(event)
         if isinstance(event, ClientBound):
             self._refresh_metadata()

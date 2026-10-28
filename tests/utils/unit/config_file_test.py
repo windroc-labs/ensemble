@@ -7,7 +7,6 @@ import copy
 import importlib.util
 import operator
 import os
-import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -25,13 +24,12 @@ from ensemble.utils.config_file import (
     unset,
 )
 from tests.utils.case import REPO, Case
+from tests.utils.sandbox import scratch
 
 
 class ConfigFileTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.path = self.root / "config.toml"
 
     def test_merge_overlays_one_config_on_another(self):
@@ -106,9 +104,7 @@ class FrozenTables(Case):
 
 class Resources(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = tmp.name
+        self.root = scratch(self, real=False)
         self.package = "config_fixture_" + Path(self.root).name.replace("-", "_")
         for section, text in (
             ("session", SESSION),
@@ -183,11 +179,6 @@ class Resources(Case):
             read_resources(self.resources[:1]),
             {"hosts": {"default": "tmux", "tmux": {"status_line": True}}},
         )
-        self.local("unknown_key = 1\n")
-        with self.assertRaisesRegex(
-            ConfigFileError, "unknown key 'unknown_key': flat local configuration"
-        ):
-            read_resources(self.resources[:1])
 
     def test_path_replaces_one_resource_with_defaults_as_schema(self):
         override = Path(self.root, "override.toml")
@@ -278,8 +269,6 @@ class Resources(Case):
 
     def test_misplaced_or_unknown_keys_are_errors(self):
         for text, error in (
-            ('client = "x"\n', r"move it under \[delegate\]"),
-            ("[hosts.tmux]\nstatus_line = true\n", r"move it under \[session\]"),
             ("[delegate]\nunknown_field = 1\n", r"unknown key 'unknown_field' in \[delegate\]"),
             (
                 "session = 1\n",
@@ -337,6 +326,11 @@ class Resources(Case):
                 '[delegate]\nruntime = "codex"\n',
                 2,
                 "~/.ensemble/config.local.toml: unknown key 'runtime' in [delegate]; renamed to 'client'",
+            ),
+            (
+                '[delegate.accounts]\nclaude = "work"\n',
+                2,
+                "~/.ensemble/config.local.toml: unknown key 'accounts' in [delegate]; moved to [session.clients.<client>] account",
             ),
         ):
             self.local(text)

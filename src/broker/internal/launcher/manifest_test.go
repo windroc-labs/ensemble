@@ -46,11 +46,7 @@ func TestManifestFixtures(t *testing.T) {
 }
 
 func TestManifestDuplicatesTrailingUTF8(t *testing.T) {
-	valid, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, err := ParseManifest(valid)
+	m, err := ParseManifest(fixtureBytes(t, "manifest-valid.json"))
 	if err != nil || !m.HasHook || m.HookPath != "/usr/local/bin/ensemble-session" || m.Labels["team"] != "crew" {
 		t.Fatalf("%+v %v", m, err)
 	}
@@ -76,34 +72,27 @@ func TestManifestDuplicatesTrailingUTF8(t *testing.T) {
 }
 
 func TestManifestCleansCWD(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, err := ParseManifest([]byte(strings.Replace(string(data), `src/project"`, `src//project/."`, 1)))
+	data := string(fixtureBytes(t, "manifest-valid.json"))
+	m, err := ParseManifest([]byte(strings.Replace(data, `src/project"`, `src//project/."`, 1)))
 	if err != nil || m.CWD != "/Users/example/src/project" {
 		t.Fatalf("%q %v", m.CWD, err)
 	}
 }
 
 func TestManifestLock(t *testing.T) {
+	lockDoc := func(lock any) []byte { return withFields(t, map[string]any{"lock": lock, "lock_owner": "session 1"}) }
 	for _, lock := range []string{"a", "0", "a.b-c_d", strings.Repeat("a", 63)} {
-		path := editedManifest(t, func(f map[string]any) { f["lock"], f["lock_owner"] = lock, "session 1" })
-		data, _ := os.ReadFile(path)
-		if _, err := ParseManifest(data); err != nil {
+		if _, err := ParseManifest(lockDoc(lock)); err != nil {
 			t.Errorf("%q: %v", lock, err)
 		}
 	}
 	for _, lock := range []any{"", "A B", "A", "-a", "a/b", "a\n", strings.Repeat("a", 64), nil, 1} {
-		path := editedManifest(t, func(f map[string]any) { f["lock"], f["lock_owner"] = lock, "session 1" })
-		data, _ := os.ReadFile(path)
-		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
+		if _, err := ParseManifest(lockDoc(lock)); code(t, err) != protocol.ManifestRejected {
 			t.Errorf("accepted lock %v", lock)
 		}
 	}
 	for _, label := range []string{"windroc.lock", "windroc.other", "windroc.egress.contract", "ensemble.lock"} {
-		path := editedManifest(t, func(f map[string]any) { f["labels"] = map[string]string{label: "x"} })
-		data, _ := os.ReadFile(path)
+		data := withFields(t, map[string]any{"labels": map[string]string{label: "x"}})
 		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
 			t.Errorf("accepted reserved label %q", label)
 		}
@@ -114,7 +103,7 @@ func TestManifestLock(t *testing.T) {
 		"empty owner":   func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "" },
 		"control owner": func(f map[string]any) { f["lock"], f["lock_owner"] = "x", "a\n" },
 	} {
-		data, _ := os.ReadFile(editedManifest(t, edit))
+		data := fixtureBytes(t, "manifest-valid.json", edit)
 		if _, err := ParseManifest(data); code(t, err) != protocol.ManifestRejected {
 			t.Errorf("accepted %s", name)
 		}
@@ -122,10 +111,7 @@ func TestManifestLock(t *testing.T) {
 }
 
 func TestManifestWorkspace(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fixtureBytes(t, "manifest-valid.json")
 	with := func(workspace string) (Manifest, error) {
 		return ParseManifest([]byte(strings.Replace(string(data), `"ensemble-ws-worker_1"`, workspace, 1)))
 	}
@@ -141,16 +127,9 @@ func TestManifestWorkspace(t *testing.T) {
 }
 
 func TestManifestGitHub(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-github-app.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data, valid := fixtureBytes(t, "manifest-github-app.json"), fixtureBytes(t, "manifest-valid.json")
 	if m, err := ParseManifest(data); err != nil || m.GitHubApp != "ensemble-broker-bot" || !maps.Equal(m.GitHubPermissions, fixtureSet) {
 		t.Fatalf("%+v %v", m, err)
-	}
-	valid, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
-	if err != nil {
-		t.Fatal(err)
 	}
 	if m, err := ParseManifest(valid); err != nil || m.GitHubApp != "" || m.GitHubPermissions != nil {
 		t.Fatalf("%+v %v", m, err)
@@ -171,24 +150,14 @@ func TestManifestGitHub(t *testing.T) {
 	if m, err := ParseManifest(data); err != nil || m.GitHubRepo != "" {
 		t.Fatalf("no repo: %+v %v", m, err)
 	}
-	for _, repo := range []string{"acme", "acme/x/y", "acme/..", "./x", "acme/x y", ""} {
-		doc := strings.Replace(string(valid), `"github": null`, `"github": {"app":"a",`+set+`,"repo":"`+repo+`"}`, 1)
-		_, err := ParseManifest([]byte(doc))
-		if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != `Manifest rejected: invalid github repo "`+repo+`"` {
-			t.Errorf("repo %q: %v", repo, err)
-		}
-	}
-	// The broker names the entry it rejects, so the start fails with a clear error.
-	for permissions, want := range map[string]string{
-		`{}`:                                "Manifest rejected: no GitHub permissions",
-		`{"contents":"write","foo":"read"}`: `Manifest rejected: unknown GitHub permission "foo"`,
-		`{"contents":"admin"}`:              `Manifest rejected: GitHub permission contents: level "admin", want read or write`,
-		`{"workflows":"read"}`:              `Manifest rejected: GitHub permission workflows: level "read", want write`,
+	// The broker names the repo or permission it rejects; ValidRepo and CheckPermissions have the other cases.
+	for github, want := range map[string]string{
+		`{"app":"a",` + set + `,"repo":"acme/x/y"}`:                   `Manifest rejected: invalid github repo "acme/x/y"`,
+		`{"app":"a","permissions":{"contents":"write","foo":"read"}}`: `Manifest rejected: unknown GitHub permission "foo"`,
 	} {
-		doc := strings.Replace(string(valid), `"github": null`, `"github": {"app":"a","permissions":`+permissions+`}`, 1)
-		_, err := ParseManifest([]byte(doc))
+		_, err := ParseManifest([]byte(strings.Replace(string(valid), `"github": null`, `"github": `+github, 1)))
 		if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != want {
-			t.Errorf("%s: %v, want %q", permissions, err, want)
+			t.Errorf("%s: %v, want %q", github, err, want)
 		}
 	}
 }
@@ -208,11 +177,7 @@ func TestValidClaudeAccount(t *testing.T) {
 
 func TestManifestClaudeAccount(t *testing.T) {
 	parse := func(edit func(map[string]any)) (Manifest, error) {
-		data, err := os.ReadFile(editedManifest(t, edit))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ParseManifest(data)
+		return ParseManifest(fixtureBytes(t, "manifest-valid.json", edit))
 	}
 	for want, edit := range map[string]func(map[string]any){"default": nil, "work": withClaudeAccount("work"), "a.b-c_d": withClaudeAccount("a.b-c_d")} {
 		if m, err := parse(edit); err != nil || m.ClaudeAccount != want {
@@ -228,10 +193,9 @@ func TestManifestClaudeAccount(t *testing.T) {
 		delete(f, "claude_dir")
 	}
 	for name, edit := range map[string]func(map[string]any){
-		"uppercase": withClaudeAccount("Work"), "setup-token": withClaudeAccount("setup-token"), "empty": withClaudeAccount(""),
-		"path": withClaudeAccount("../a"), "too long": withClaudeAccount(strings.Repeat("a", 65)), "control": withClaudeAccount("a\n"),
-		"number": withClaudeAccount(1), "null": withClaudeAccount(nil), "array": withClaudeAccount([]string{"work"}),
-		"codex": codex, "opencode": opencode,
+		// uppercase stands for the name rule; TestValidClaudeAccount has its other cases.
+		"uppercase": withClaudeAccount("Work"), "number": withClaudeAccount(1), "null": withClaudeAccount(nil),
+		"array": withClaudeAccount([]string{"work"}), "codex": codex, "opencode": opencode,
 	} {
 		m, err := parse(edit)
 		if code(t, err) != protocol.ManifestRejected {
@@ -269,11 +233,7 @@ func TestValidEnvName(t *testing.T) {
 
 func TestParseManifestSecrets(t *testing.T) {
 	parse := func(edit func(map[string]any)) (Manifest, error) {
-		data, err := os.ReadFile(editedManifest(t, edit))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ParseManifest(data)
+		return ParseManifest(fixtureBytes(t, "manifest-valid.json", edit))
 	}
 	if m, err := parse(nil); err != nil || m.Secrets != nil {
 		t.Fatalf("absent: %+v %v", m.Secrets, err)
@@ -304,6 +264,7 @@ func TestParseManifestSecrets(t *testing.T) {
 			t.Fatalf("%s: %v", client, err)
 		}
 	}
+	// One invalid item stands for the item rule, whose other cases TestValidEnvName has.
 	for name, secrets := range map[string]any{
 		"too many":         many(maxSecrets + 1),
 		"null":             nil,
@@ -313,13 +274,7 @@ func TestParseManifestSecrets(t *testing.T) {
 		"no file":          []any{map[string]any{"item": "ensemble-broker-env/dummy"}},
 		"no item":          []any{map[string]any{"file": "dummy.txt"}},
 		"item number":      []any{map[string]any{"item": 1, "file": "dummy.txt"}},
-		"broker item":      []any{secret("ensemble-broker-bot", "key")},
-		"claude item":      []any{secret("ensemble-broker-claude", "token")},
 		"old env prefix":   []any{secret("ensemble-env/dummy", "dummy.txt")}, // protocol 30 renamed it
-		"linear item":      []any{secret("linear.harness_key", "key")},
-		"bare prefix":      []any{secret("ensemble-broker-env/", "x")},
-		"uppercase item":   []any{secret("ensemble-broker-env/Dummy", "x")},
-		"nested item":      []any{secret("ensemble-broker-env/a/b", "x")},
 		"traversal":        []any{secret("ensemble-broker-env/dummy", "../github/token")},
 		"slash":            []any{secret("ensemble-broker-env/dummy", "a/b")},
 		"empty file":       []any{secret("ensemble-broker-env/dummy", "")},
@@ -343,38 +298,16 @@ func TestParseManifestSecrets(t *testing.T) {
 		t.Fatalf("255-byte file: %v", err)
 	}
 	doc := `"secrets":[{"item":"ensemble-broker-env/dummy","file":"a","file":"b"}]`
-	valid, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ParseManifest([]byte(strings.Replace(string(valid), `"github": null`, `"github": null, `+doc, 1))); code(t, err) != protocol.ManifestRejected {
+	valid := string(fixtureBytes(t, "manifest-valid.json"))
+	if _, err := ParseManifest([]byte(strings.Replace(valid, `"github": null`, `"github": null, `+doc, 1))); code(t, err) != protocol.ManifestRejected {
 		t.Fatal("duplicate key accepted")
 	}
 }
 
-// withFields is manifest-valid.json with fields set (nil deletes one).
+// withFields is manifest-valid.json with fields set.
 func withFields(t *testing.T, fields map[string]any) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "manifest-valid.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
-	}
-	for k, v := range fields {
-		if v == nil {
-			delete(doc, k)
-			continue
-		}
-		doc[k] = v
-	}
-	out, err := json.Marshal(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return fixtureBytes(t, "manifest-valid.json", func(doc map[string]any) { maps.Copy(doc, fields) })
 }
 
 func TestManifestGateway(t *testing.T) {
@@ -422,6 +355,8 @@ func TestManifestPrefetch(t *testing.T) {
 	if err != nil || m.Prefetch == nil || *m.Prefetch != (Prefetch{Repo: "o/r.x"}) {
 		t.Fatalf("no ref: %+v %v", m.Prefetch, err)
 	}
+	// One bad repo and one bad ref stand for their rules, whose other cases TestValidRepo (internal/github) and
+	// TestValidRef have.
 	for name, prefetch := range map[string]any{
 		"null":        json.RawMessage("null"),
 		"string":      "o/r",
@@ -429,21 +364,8 @@ func TestManifestPrefetch(t *testing.T) {
 		"extra":       map[string]any{"repo": "o/r", "depth": 1},
 		"repo number": map[string]any{"repo": 1},
 		"no owner":    map[string]any{"repo": "r"},
-		"three parts": map[string]any{"repo": "o/r/x"},
-		"dot":         map[string]any{"repo": "o/."},
-		"dotdot":      map[string]any{"repo": "o/.."},
-		"owner dot":   map[string]any{"repo": "./r"},
-		"space":       map[string]any{"repo": "o/r x"},
-		"empty ref":   map[string]any{"repo": "o/r", "ref": ""},
 		"null ref":    map[string]any{"repo": "o/r", "ref": json.RawMessage("null")},
 		"flag ref":    map[string]any{"repo": "o/r", "ref": "--upload-pack=x"},
-		"pull ref":    map[string]any{"repo": "o/r", "ref": "refs/pull/1/head"},
-		"sha ref":     map[string]any{"repo": "o/r", "ref": "0123456789abcdef0123456789abcdef01234567"},
-		"short sha":   map[string]any{"repo": "o/r", "ref": "deadbeef"},
-		"space ref":   map[string]any{"repo": "o/r", "ref": "a b"},
-		"newline ref": map[string]any{"repo": "o/r", "ref": "a\nb"},
-		"dotdot ref":  map[string]any{"repo": "o/r", "ref": "a..b"},
-		"lock ref":    map[string]any{"repo": "o/r", "ref": "x.lock"},
 		"ref number":  map[string]any{"repo": "o/r", "ref": 1},
 	} {
 		if _, err := ParseManifest(withFields(t, map[string]any{"prefetch": prefetch})); code(t, err) != protocol.ManifestRejected {

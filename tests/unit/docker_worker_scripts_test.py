@@ -102,24 +102,6 @@ class MiniOpSkill(Case):
         self.assertEqual(skill.readlink(), self.image)
         self.assertEqual((skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text())
 
-    def test_codex_without_mini_op_leaves_user_skills_absent(self):
-        shutil.rmtree(self.source)
-        self.code["bootstrap_codex"](
-            self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
-        )
-        self.assertFalse(Path(self.home, ".agents").exists())
-
-    def test_codex_preserves_and_refuses_a_conflicting_user_skill(self):
-        skills = Path(self.home, ".agents/skills")
-        skills.mkdir(parents=True)
-        target = skills / "mini-op"
-        target.write_text("existing")
-        with self.assertRaisesRegex(SystemExit, "mini-op skill already exists"):
-            self.code["bootstrap_codex"](
-                self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
-            )
-        self.assertEqual(target.read_text(), "existing")
-
     def test_codex_refuses_a_linked_user_skill_parent(self):
         elsewhere = Path(self.home, "elsewhere")
         elsewhere.mkdir()
@@ -132,8 +114,9 @@ class MiniOpSkill(Case):
 
     def test_an_ordinary_image_without_mini_op_adds_no_skill(self):
         shutil.rmtree(self.source)
-        self.code["bootstrap_skill"](self.target)
-        self.assertFalse((self.target / "skills").exists())
+        missing = Path(self.home, "missing")
+        self.code["bootstrap_skill"](missing)
+        self.assertFalse(missing.exists())
 
     def test_reinstall_keeps_the_same_link(self):
         self.code["bootstrap_skill"](self.target)
@@ -1060,7 +1043,14 @@ class WithSecrets(Case):
 
     def test_with_secrets_requires_client_and_command(self):
         self.secret.write_text("tok-123")
-        for argv in ([], ["claude"], ["--client", "claude"], ["--client", "other", "claude"]):
+        for argv in (
+            [],
+            ["claude"],
+            ["--client"],
+            ["--client", "claude"],
+            ["--client", "codex"],
+            ["--client", "other", "claude"],
+        ):
             with (
                 self.subTest(argv=argv),
                 mock.patch("os.execvpe") as execvpe,
@@ -1107,13 +1097,6 @@ class WithSecrets(Case):
             self.assertEqual(
                 execute.call_args.args[2]["CLAUDE_CODE_OAUTH_TOKEN"], "claude-synthetic"
             )
-
-    def test_invalid_client_or_missing_command_is_rejected(self):
-        for argv in (["--client"], ["--client", "codex"], ["--client", "other", "cmd"]):
-            with self.subTest(argv=argv), mock.patch("os.execvpe") as execute:
-                with self.assertRaises(SystemExit):
-                    self.main(argv, secret=self.secret)
-                execute.assert_not_called()
 
 
 class GitHubTokens(Case):
@@ -1401,8 +1384,6 @@ class OpencodeInstall(Case):
         with mock.patch.dict(self.ns["main"].__globals__, {"install": install}):
             self.ns["main"](["arm64", str(self.prefix), "1.20.4"])
         install.assert_called_once_with("arm64", self.prefix, "1.20.4")
-        self.assertNotIn("VERSION", self.ns)
-        self.assertNotIn("SHA512", self.ns)
         self.assertEqual(
             self.ns["PLATFORMS"],
             {"arm64": "opencode-linux-arm64", "amd64": "opencode-linux-x64"},

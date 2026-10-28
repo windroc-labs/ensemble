@@ -1,15 +1,10 @@
-"""The runner's unit fakes: fake client steps (said, limit), session events (turn, STOP),
-FakeHandle and no_child.
-"""
+"""The runner's unit fakes: client steps (said, limit), session events (turn, STOP), FakeHandle."""
 
-import contextlib
 import os
-from unittest import mock
 
 from ensemble.delegate.engine.types import Result
 from ensemble.session import Exited, TurnEnd
 from ensemble.utils import Status, StatusState
-from tests.session.case import SPAWNS
 
 NAME = "fake-11111111"
 DONE = {"status": "done", "title": "T", "summary": "S", "deliverable": "# Doc\n"}
@@ -18,25 +13,12 @@ GAVE_UP = Result(0, None, "the agent run returned no outcome")
 
 
 def said(*lines) -> dict:
-    """A step printing a message record (Reply) of `lines`."""
+    """A step printing a Reply of `lines`."""
     return {"out": {"type": "message", "text": "\n".join(lines)}}
 
 
 def limit(resets_at) -> dict:
     return {"out": {"type": "limit", "resets_at": resets_at}}
-
-
-@contextlib.contextmanager
-def no_child():
-    """Each of SPAWNS fails inside, and none was called."""
-    with contextlib.ExitStack() as stack:
-        spawns = [
-            stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-            for target in SPAWNS
-        ]
-        yield
-    for spawn in spawns:
-        spawn.assert_not_called()
 
 
 def turn(*lines, pending=0) -> TurnEnd:
@@ -47,10 +29,10 @@ STOP = turn("Working.")
 
 
 class FakeHandle:
-    """ensemble.session.Session as the Delegate uses it: events() goes on through `events` across
-    calls, up to an Exited (none left: AssertionError); send (raising `fail`), stop (raising
-    `stop_fail`) and close (raising `close_fail`) recorded in `calls`; show's commands (raising `show_fail`) in `shown`; status: live,
-    `hidden` as set. start: the Delegate Driver's stand-in.
+    """ensemble.session.Session as the Delegate uses it: events() walks `events` across calls, up
+    to an Exited (none left: AssertionError); send, stop, close (raising fail, stop_fail,
+    close_fail) in calls; show's command (raising show_fail) in shown; status live, hidden as set;
+    start: a Driver stand-in.
     """
 
     showable = True

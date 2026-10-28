@@ -5,9 +5,9 @@ session loads by name, a class installed through a .pth file included.
 import json
 import os
 import subprocess
-import tempfile
 
 from tests.session.case import PY, REPO, SRC, Case, child_env
+from tests.utils.sandbox import scratch
 
 MODULES = {
     "pth_client": "from tests.session.fake_client import FakeClient\n\n\n"
@@ -33,9 +33,7 @@ print(json.dumps(Session.class_roots("pth")))
 
 class ClassRootsIntegration(Case):
     def test_a_pth_installed_class_gives_the_directory_its_pth_file_names(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        root = os.path.realpath(tmp.name)
+        root = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         site, installed = os.path.join(root, "site"), os.path.join(root, "installed")
         os.mkdir(site)
         os.mkdir(installed)

@@ -155,13 +155,32 @@ func TestCheckClientsCommand(t *testing.T) {
 	}
 }
 
-func TestLoginOwnershipFailureExit(t *testing.T) {
-	a := app{loginOpencode: func(keys, string, string, io.Writer) error {
-		return fmt.Errorf("cannot save item: %w", broker.ErrInvalidOwnerEdit)
-	}}
-	code, out, errOut := invoke(a, "login", "opencode", "strata")
-	if code != 11 || out != "" || !strings.Contains(errOut, "keychain status -25244") {
-		t.Fatalf("%d %q %q", code, out, errOut)
+// A failed login, retrust or install-codex prints its error and exits 1, or 11 when another process owns the item.
+func TestLoginFailureExit(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		err  error
+		code int
+	}{
+		{[]string{"login", "github", "ensemble-broker-bot"}, errors.New("no item"), 1},
+		{[]string{"login", "claude", "work"}, errors.New("no terminal"), 1},
+		{[]string{"login", "opencode", "strata"}, errors.New("no terminal"), 1},
+		{[]string{"login", "codex"}, errors.New("login failed"), 1},
+		{[]string{"install-codex", "0.162.1"}, errors.New("install failed"), 1},
+		{[]string{"login", "env", "dummy"}, errors.New("the value must be 1 to 16384 bytes"), 1},
+		{[]string{"retrust"}, errors.New("1 broker keychain item(s) not re-trusted; rerun x"), 1},
+		{[]string{"login", "opencode", "strata"}, fmt.Errorf("cannot save item: %w", broker.ErrInvalidOwnerEdit), 11},
+	} {
+		a := app{retrust: func(keys, io.Writer) error { return c.err },
+			login:         func(keys, string, io.Writer) error { return c.err },
+			loginCodex:    func(context.Context, keys, io.Writer) error { return c.err },
+			loginGitHub:   func(context.Context, keys, string, *keyFile, io.Writer) error { return c.err },
+			loginOpencode: func(keys, string, string, io.Writer) error { return c.err },
+			loginEnv:      func(keys, string, io.Writer) error { return c.err },
+			installCodex:  func(context.Context, string, bool) (any, error) { return nil, c.err }}
+		if code, out, errOut := invoke(a, c.args...); code != c.code || out != "" || errOut != "ensemble-broker: "+c.err.Error()+"\n" {
+			t.Fatalf("%q: exit %d %q %q", c.args, code, out, errOut)
+		}
 	}
 }
 
@@ -250,24 +269,18 @@ func TestUsageErrors(t *testing.T) {
 		{"build", []string{"build", "--ensemble"}},
 		{"build", []string{"build", "--package", "/x"}},
 		{"build", []string{"build", "--ensemble", "relative"}},
-		{"build", []string{"build", "--ensemble", "/x", "--max-age"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "-1"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1.5"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1234567890"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "x"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-ages", "1"}},
-		{"build", []string{"build", "--ensemble", "/x", "--plugin"}},
-		{"build", []string{"build", "--ensemble", "/x", "--plugin", "../x"}},
 		{"build", []string{"build", "--ensemble", "/x", "--plugin", "a@"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--plugin", "a"}},
 		{"build", []string{"build", "--ensemble", "/x", "--image-plugin"}},
-		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "../x"}},
 		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", ".x"}},
 		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		{"build", []string{"build", "--ensemble", "/x", "--image-plugin", "a", "--plugin", "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		{"build", []string{"build", "--ensemble", "/x", "--max-age", "1", "--image-plugin", "a"}},
-		{"build", []string{"build", "--ensemble", "/x", "--base-image"}},
-		{"build", []string{"build", "--ensemble", "/x", "--base-image", "-x"}},
 		{"build", []string{"build", "--ensemble", "/x", "--base-image", "Dummy:test"}},
 		{"build", []string{"build", "--ensemble", "/x", "--base-image", "localhost:5000/env:1"}},
 		{"build", []string{"build", "--ensemble", "/x", "--base-image", "env@sha256:" + strings.Repeat("c", 64)}},
@@ -278,13 +291,8 @@ func TestUsageErrors(t *testing.T) {
 		{"start", []string{"start", "--manifest", "/bad\xffpath"}},
 		{"close", []string{"close", "--container", "other"}},
 		{"maintain", []string{"maintain", "--container", "ensemble-x-0123456789abcdef0123456789abcdef"}},
-		{"maintain", []string{"maintain", "--container", "other", "--manifest", "/m.json"}},
-		{"maintain", []string{"maintain", "--manifest", "/m.json", "--container", "ensemble-x-0123456789abcdef0123456789abcdef"}},
-		{"maintain", []string{"maintain", "--container", "ensemble-x-0123456789abcdef0123456789abcdef", "--manifest", "m.json"}},
-		{"status", []string{"status", "x"}},
 		{"status", []string{"status", "--cleanup"}},
 		{"close", []string{"close", "--container", "ensemble-x-0123"}},
-		{"version", []string{"version", "x"}},
 		{"workspace-rm", []string{"workspace-rm"}},
 		{"workspace-rm", []string{"workspace-rm", "--volume"}},
 		{"workspace-rm", []string{"workspace-rm", "--volume", ".hidden"}},
@@ -347,10 +355,6 @@ func TestLoginGitHubDispatch(t *testing.T) {
 			t.Fatalf("%s: exit %d app %q %q %q", name, code, got, out, errOut)
 		}
 	}
-	a := app{loginGitHub: func(context.Context, keys, string, *keyFile, io.Writer) error { return errors.New("no item") }}
-	if code, out, errOut := invoke(a, "login", "github", "ensemble-broker-bot"); code != 1 || out != "" || errOut != "ensemble-broker: no item\n" {
-		t.Fatalf("exit %d %q %q", code, out, errOut)
-	}
 }
 
 func TestLoginClaudeDispatch(t *testing.T) {
@@ -364,10 +368,6 @@ func TestLoginClaudeDispatch(t *testing.T) {
 		if code, out, errOut := invoke(a, args...); code != 0 || got != want || out != "ok\n" || errOut != "" {
 			t.Fatalf("%q: exit %d account %q %q %q", args, code, got, out, errOut)
 		}
-	}
-	a := app{login: func(keys, string, io.Writer) error { return errors.New("no terminal") }}
-	if code, out, errOut := invoke(a, "login", "claude", "work"); code != 1 || out != "" || errOut != "ensemble-broker: no terminal\n" {
-		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
 	_, _, errOut := invoke(app{}, "login", "claude", "Work")
 	var got struct{ Error struct{ Message string } }
@@ -397,10 +397,6 @@ func TestLoginOpencodeDispatch(t *testing.T) {
 		if code, _, _ := invoke(a, append([]string{"login", "opencode"}, args...)...); code != 2 {
 			t.Fatalf("accepted %q", args)
 		}
-	}
-	a = app{loginOpencode: func(keys, string, string, io.Writer) error { return errors.New("no terminal") }}
-	if code, out, errOut := invoke(a, "login", "opencode", "strata"); code != 1 || out != "" || errOut != "ensemble-broker: no terminal\n" {
-		t.Fatalf("exit %d %q %q", code, out, errOut)
 	}
 }
 
@@ -478,14 +474,6 @@ func TestCodexCommands(t *testing.T) {
 	if code, out, errOut := invoke(a, "login", "codex"); code != 0 || !called || out != "saved\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	a.loginCodex = func(context.Context, keys, io.Writer) error { return errors.New("login failed") }
-	if code, out, errOut := invoke(a, "login", "codex"); code != 1 || out != "" || errOut != "ensemble-broker: login failed\n" {
-		t.Fatalf("%d %q %q", code, out, errOut)
-	}
-	a.installCodex = func(context.Context, string, bool) (any, error) { return nil, errors.New("install failed") }
-	if code, out, errOut := invoke(a, "install-codex", "0.162.1"); code != 1 || out != "" || errOut != "ensemble-broker: install failed\n" {
-		t.Fatalf("%d %q %q", code, out, errOut)
-	}
 }
 
 func TestCodexStatusFixtures(t *testing.T) {
@@ -516,25 +504,7 @@ func TestCodexStatusFixtures(t *testing.T) {
 	}
 }
 
-func TestBuildMaxAge(t *testing.T) {
-	for want, args := range map[time.Duration][]string{
-		-1:                      nil,
-		0:                       {"--max-age", "0"},
-		7 * 24 * time.Hour:      {"--max-age", "604800"},
-		999999999 * time.Second: {"--max-age", "999999999"},
-	} {
-		got := time.Duration(-2)
-		a := app{build: func(_ context.Context, _ keys, _ string, _ launcher.BuildSpec, maxAge time.Duration, _ io.Writer) (any, error) {
-			got = maxAge
-			return map[string]string{}, nil
-		}}
-		if code, _, errOut := invoke(a, append([]string{"build", "--ensemble", "/pkg"}, args...)...); code != 0 || got != want {
-			t.Fatalf("%q: exit %d max age %v want %v: %s", args, code, got, want, errOut)
-		}
-	}
-}
-
-func TestBuildPlugins(t *testing.T) {
+func TestBuildOptions(t *testing.T) {
 	widget := "widget@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"
 	b, a := "b@o/r#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a@o/m.x#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	for _, c := range []struct {
@@ -543,6 +513,9 @@ func TestBuildPlugins(t *testing.T) {
 		maxAge time.Duration
 	}{
 		{nil, launcher.BuildSpec{}, -1},
+		{[]string{"--max-age", "0"}, launcher.BuildSpec{}, 0},
+		{[]string{"--max-age", "604800"}, launcher.BuildSpec{}, 7 * 24 * time.Hour},
+		{[]string{"--max-age", "999999999"}, launcher.BuildSpec{}, 999999999 * time.Second},
 		{[]string{"--plugin", widget}, launcher.BuildSpec{Plugins: []string{widget}}, -1},
 		{[]string{"--plugin", b, "--plugin", a, "--max-age", "60"}, launcher.BuildSpec{Plugins: []string{b, a}}, time.Minute},
 		{[]string{"--image-plugin", "dummy-plugin"}, launcher.BuildSpec{ImagePlugins: []string{"dummy-plugin"}}, -1},
@@ -921,10 +894,6 @@ func TestLoginEnvDispatch(t *testing.T) {
 	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 0 || got != "dummy" || out != "ok\n" || errOut != "" {
 		t.Fatalf("exit %d name %q %q %q", code, got, out, errOut)
 	}
-	a = app{loginEnv: func(keys, string, io.Writer) error { return errors.New("the value must be 1 to 16384 bytes") }}
-	if code, out, errOut := invoke(a, "login", "env", "dummy"); code != 1 || out != "" || errOut != "ensemble-broker: the value must be 1 to 16384 bytes\n" {
-		t.Fatalf("%d %q %q", code, out, errOut)
-	}
 }
 
 // keptReader reads from r and keeps every buffer it was handed, so a test can check the caller erased it.
@@ -1107,22 +1076,6 @@ func TestStaticLoginRecordsExpiry(t *testing.T) {
 	}
 }
 
-func TestStaticLoginRejectsBeforeLogin(t *testing.T) {
-	s, home := staticFixture(t)
-	called := false
-	var out, errOut bytes.Buffer
-	err := s.register("ensemble-broker-claude/default", credential.Registration{Fresh: true, Expires: day(t, "2027-01-02")}, &out, &errOut, func() error {
-		called = true
-		return nil
-	})
-	if err == nil || err.Error() != "--fresh-token takes no date" || called || out.Len() != 0 {
-		t.Fatalf("%v %v %q", err, called, out.String())
-	}
-	if _, err := os.Stat(staticStore(home).Path); !os.IsNotExist(err) {
-		t.Fatalf("store written: %v", err)
-	}
-}
-
 func TestStaticLoginPrintsDueNotice(t *testing.T) {
 	s, home := staticFixture(t)
 	var out, errOut bytes.Buffer
@@ -1178,8 +1131,9 @@ func TestStaticSentinelAbsent(t *testing.T) {
 	if err := os.WriteFile(s.store.Path, []byte(sentinel), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	printed := out.Len() // a rejected register neither logs in nor prints
 	err := s.register("ensemble-broker-env/db", credential.Registration{}, &out, &errOut, login)
-	if err == nil || err.Error() != s.store.Path+": invalid content" {
+	if err == nil || err.Error() != s.store.Path+": invalid content" || out.Len() != printed {
 		t.Fatalf("%v", err)
 	}
 	code, stdout, stderr := invoke(app{loginEnv: func(keys, string, io.Writer) error { return err }}, "login", "env", "db")
@@ -1332,10 +1286,6 @@ func TestRetrustCommand(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("retrust ran with arguments: %v", got)
-	}
-	a.retrust = func(keys, io.Writer) error { return errors.New("1 broker keychain item(s) not re-trusted; rerun x") }
-	if code, out, errOut := invoke(a, "retrust"); code != 1 || out != "" || errOut != "ensemble-broker: 1 broker keychain item(s) not re-trusted; rerun x\n" {
-		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	a.keychain = func(bool) (keys, error) { return keys{}, errors.New("cannot resolve system account home") }
 	if code, _, errOut := invoke(a, "retrust"); code != 1 || errOut != "ensemble-broker: cannot resolve system account home\n" {

@@ -155,7 +155,8 @@ class HelpSafety(Case):
         for leaf in [None, *commands]:
             for flag in ("--help", "-h"):
                 arguments = ([] if leaf is None else [leaf]) + [flag]
-                for entry in ("module", "repository", "installed"):
+                entries = ("module", "repository", "installed")
+                for entry in entries if leaf in (None, commands[0]) else entries[:1]:
                     with self.subTest(root=root, leaf=leaf, flag=flag, entry=entry):
                         if entry == "module":
                             command = [

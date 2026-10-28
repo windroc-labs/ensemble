@@ -1,6 +1,8 @@
-"""Published examples through real parsers, stopped before operational dispatch."""
+"""Help text, and published examples through real parsers stopped before dispatch."""
 
 import argparse
+import contextlib
+import io
 import shlex
 from unittest import mock
 
@@ -42,3 +44,24 @@ def parse_only(main, argv):
             if result.code != 0:
                 raise
     return None
+
+
+def help_text(case, main, argv):
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), case.assertRaises(SystemExit) as raised:
+        main(argv)
+    case.assertEqual(raised.exception.code, 0)
+    return out.getvalue()
+
+
+def check_examples(case, text_of, names, *, check, optional=()):
+    for name in names:
+        published = list(examples(text_of(name)))
+        if name not in optional:
+            case.assertTrue(published, name)
+        for command in published:
+            with (
+                case.subTest(name=name, command=command),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                check(command)

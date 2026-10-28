@@ -222,7 +222,7 @@ def tui_lock(name: str) -> str:
 
 
 class InteractiveProcess(ABC):
-    """A managed worker's handle (docs/architecture.md › Session harness interfaces)."""
+    """A managed worker's handle."""
 
     name: str
     generation: str
@@ -281,6 +281,10 @@ class Host(ABC):
     _named_headless: ClassVar[bool] = False
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
+        return None
+
+    def _headless_owner(self, name: str) -> Mapping[str, str] | None:
+        """The harness dir, sid and generation owning named headless run `name` (Docker)."""
         return None
 
     def __init__(self, name: str, settings: Mapping | None = None) -> None:
@@ -343,6 +347,10 @@ class Host(ABC):
 
     def worker_liveness(self, name: str, generation: str) -> Liveness:
         raise SessionError(f"host {self.name} runs no managed worker")
+
+    def remove_workspaces(self, cwd: str) -> list[str]:
+        """cwd's workspaces, force-removed."""
+        return []
 
     def _release(self, name: str, generation: str) -> None:
         """Removes `generation`'s leftovers once worker_liveness is ABSENT; override with worker."""

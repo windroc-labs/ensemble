@@ -2,32 +2,18 @@
 directory (no ensemble/__init__.py), imports from there and passes its unit tests against it.
 """
 
-import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 
-from tests.session.case import REPO, SRC, Case
-from tests.utils.sandbox import clean_env
-
-IMPORT = """import json, ensemble, ensemble.session, ensemble.utils
-print(json.dumps([list(ensemble.__path__), ensemble.session.__file__, ensemble.utils.__file__]))
-"""
+from tests.session.case import REPO, Case
+from tests.session.integration.support import site_copy
+from tests.utils.sandbox import clean_env, scratch
 
 
 class SessionBundleTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.bundle = os.path.realpath(tmp.name)
-        for package in ("session", "utils"):
-            shutil.copytree(
-                os.path.join(SRC[package], "ensemble", package),
-                os.path.join(self.bundle, "ensemble", package),
-                ignore=shutil.ignore_patterns("__pycache__"),
-            )
+        self.bundle = site_copy(scratch(self))
 
     def run_python(self, *args, **env):
         return subprocess.run(
@@ -39,18 +25,6 @@ class SessionBundleTest(Case):
             stdin=subprocess.DEVNULL,
             timeout=600,
         )
-
-    def test_the_copy_imports_on_its_own(self):
-        self.assertEqual(
-            sorted(os.listdir(os.path.join(self.bundle, "ensemble"))), ["session", "utils"]
-        )
-        result = self.run_python("-c", IMPORT, PYTHONPATH=self.bundle)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        path, session, utils = json.loads(result.stdout)
-        own = os.path.join(self.bundle, "ensemble")
-        self.assertEqual(path, [own])
-        self.assertTrue(session.startswith(own + os.sep), session)
-        self.assertTrue(utils.startswith(own + os.sep), utils)
 
     def test_the_session_unit_tests_pass_against_the_copy(self):
         result = self.run_python(

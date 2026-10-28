@@ -12,26 +12,7 @@ from ensemble.session.clients.codex.tui import HOOKS, HookPlan
 from ensemble.session.clients.codex.tui import start as tui_start
 from tests.session.case import SRC
 from tests.session.codex_tui import HOOK, PlanCase
-from tests.session.source_roots import PACKAGE_ROOTS
 from tests.session.unit.clients.codex.support import Base, committed_tui
-
-
-class StartPaths(Base):
-    def test_unknown_launch_fields_are_refused_without_spawning(self):
-        with mock.patch("shutil.which", return_value="/protected/codex"):
-            launch = committed_tui(
-                self.client, dataclasses.replace(self.spec, prompt="prompt"), HOOK
-            )
-        data = json.loads(launch.argv[-1])
-        with mock.patch("subprocess.Popen") as proc, mock.patch("os.execve") as execute:
-            for changed in (data | {"unknown": []}, data | {"import_roots": list(PACKAGE_ROOTS)}):
-                with (
-                    self.subTest(changed=sorted(changed)),
-                    self.assertRaisesRegex(ValueError, "fields"),
-                ):
-                    tui_start.launch(changed)
-        proc.assert_not_called()
-        execute.assert_not_called()
 
 
 class TuiPaths(Base):

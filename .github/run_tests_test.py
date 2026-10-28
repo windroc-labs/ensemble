@@ -88,33 +88,6 @@ class Run(unittest.TestCase):
 
 
 class Discovery(unittest.TestCase):
-    def test_parallel_repository_jobs_keep_every_selector_and_duration_hint(self):
-        commands = []
-        with mock.patch.object(
-            runner, "parallel", side_effect=lambda _t, c, _d: commands.extend(c.values()) or 0
-        ):
-            for number in (1, 2):
-                self.assertEqual(
-                    runner.main(
-                        [
-                            "Repository",
-                            "tests/integration",
-                            "--durations",
-                            "timings.json",
-                            "--parallel",
-                            "4",
-                            "--shard",
-                            f"{number}/2",
-                        ]
-                    ),
-                    0,
-                )
-        self.assertEqual([command[-1] for command in commands], [f"{i}/8" for i in range(1, 9)])
-        for command in commands:
-            self.assertEqual(
-                command[-5:-1], ["tests/integration", "--durations", "timings.json", "--shard"]
-            )
-
     def test_duration_shards_are_balanced_deterministic_complete_and_disjoint(self):
         cases = [unittest.FunctionTestCase(lambda: None) for _ in range(5)]
         for number, case in enumerate(cases):
@@ -150,35 +123,6 @@ class Discovery(unittest.TestCase):
             with self.subTest(durations=durations), self.assertRaises(ValueError):
                 runner.shard(unittest.TestSuite(cases), "1/2", durations)
 
-    def test_directory_shards_keep_selection_complete_and_disjoint(self):
-        cases = [unittest.FunctionTestCase(lambda: None, description=str(i)) for i in range(7)]
-        for i, case in enumerate(cases):
-            case.id = lambda i=i: f"example.Case.test_{i}"
-        selected, executed = [], []
-
-        def select(_root, selectors):
-            selected.append(selectors)
-            return unittest.TestSuite(cases), []
-
-        def run(suite, _title):
-            executed.extend(test.id() for test in runner.tests(suite))
-            return 0
-
-        with (
-            mock.patch.object(runner, "supervise", return_value=None),
-            mock.patch.object(runner.isolation, "install"),
-            mock.patch.object(runner, "GATE"),
-            mock.patch.object(runner, "select", side_effect=select),
-            mock.patch.object(runner, "run", side_effect=run),
-        ):
-            for number in range(1, 4):
-                self.assertEqual(
-                    runner.main(["Repository", "tests/integration", "--shard", f"{number}/3"]),
-                    0,
-                )
-        self.assertEqual(selected, [["tests/integration"]] * 3)
-        self.assertCountEqual(executed, [case.id() for case in cases])
-
     def test_sharding_preserves_the_selected_suite_isolation_mode(self):
         for normalized in (False, True):
             root, path, _module = self.selection_fixture(normalized=normalized)
@@ -194,20 +138,22 @@ class Discovery(unittest.TestCase):
                 self.assertEqual(run.call_args.args[0].countTestCases(), 1)
                 self.assertEqual((gate.unit_only, gate.unit), (not normalized, not normalized))
 
-    def test_parallel_unit_jobs_cover_the_same_shards_without_supervising_the_coordinator(self):
-        commands = []
-
-        def parallel(_title, selected, _directory):
-            commands.extend(selected.values())
-            return 0
-
-        with mock.patch.object(runner, "parallel", side_effect=parallel):
-            for number in (1, 2):
-                self.assertEqual(
-                    runner.main(["Unit", "--unit", "--parallel", "4", "--shard", f"{number}/2"]),
-                    0,
-                )
-        self.assertEqual([argv[-1] for argv in commands], [f"{i}/8" for i in range(1, 9)])
+    def test_parallel_jobs_cover_the_same_shards_without_supervising_the_coordinator(self):
+        for title, selectors in (
+            ("Repository", ["tests/integration", "--durations", "timings.json"]),
+            ("Unit", ["--unit"]),
+        ):
+            with (
+                self.subTest(title=title),
+                mock.patch.object(runner, "parallel", return_value=0) as parallel,
+            ):
+                for number in (1, 2):
+                    argv = [title, *selectors, "--parallel", "4", "--shard", f"{number}/2"]
+                    self.assertEqual(runner.main(argv), 0)
+                commands = [c for call in parallel.call_args_list for c in call.args[1].values()]
+                self.assertEqual([argv[-1] for argv in commands], [f"{i}/8" for i in range(1, 9)])
+                for argv in commands:
+                    self.assertEqual(argv[-len(selectors) - 2 : -1], [*selectors, "--shard"])
         for value, workers in (("0/1", 4), ("2/1", 4), ("1/0", 4), ("1/1", 0)):
             with self.subTest(value=value, workers=workers), self.assertRaises(ValueError):
                 runner.selection_parallel("Unit", value, workers, ["--unit"])

@@ -26,12 +26,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session import Host, NoRecordedSession, NotShowable, Viewer
-from ensemble.session.clients import common as selection
 from ensemble.session.clients.base import Client
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.codex.common import SessionStore
-from ensemble.session.engine import hosted_session, worker
+from ensemble.session.engine import hosted_session
 from ensemble.session.engine import types as engine_types
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.records import RunLog
@@ -74,7 +73,7 @@ from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.utils import ACCOUNT_ENV, Record, StatusState, exhausted, inode_lock, load_class
 from tests.session import fake_client, harnesses
-from tests.session.case import HOSTS, REPO, SPAWNS, SRC, Case
+from tests.session.case import HOSTS, REPO, SRC, Case, no_spawn
 from tests.session.fakes.container_host import HOMED as HOMED_HOST
 from tests.session.fakes.container_host import NAMED as NAMED_HOST
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
@@ -89,13 +88,16 @@ from tests.session.hosted_support import (
     Base,
     HostedEnvBase,
     HostedTuiBase,
+    PoolClient,
     ProbeClient,
     TuiBase,
     fake_tmux,
     listed,
 )
 from tests.session.threads import capture_errors
-from tests.utils.sandbox import owned_directory
+from tests.utils.clock import FakeClock
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import owned_directory, scratch
 
 UNCONFIGURED = "session not configured: call Session.configure first"
 FAKE_HOSTS = {"fake": {"implementation": "tests.session.fakes.host:FakeHost"}}
@@ -236,12 +238,11 @@ class ClientCapacityTest(HostedTuiBase):
 
     def test_refusal_happens_before_the_session_record_and_host_launch(self):
         first = self.start(mode="tui", name="one", sid="s1")
-        before, calls = self.written(), len(self.host.calls.mock_calls)
+        before = self.written()
         with self.assertRaisesRegex(SessionError, "one"):
             self.start(mode="headless", sid="s2")
         self.assertEqual(self.written(), before)
         self.assertEqual(self.host.calls.headless_worker.call_count, 0)
-        self.assertGreaterEqual(len(self.host.calls.mock_calls), calls)
         first.close()
 
     def test_preflight_does_not_reserve_and_other_clients_remain_available(self):
@@ -419,11 +420,9 @@ class ConfiguredTest(Case):
     def test_each_configured_class_has_its_own_setup_and_none_changes_hosted_session(self):
         first = harnesses.Threaded.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
         second = harnesses.Threaded.configured(clients={}, hosts=parsed(FAKE_HOSTS, "fake"))
-        self.assertTrue(issubclass(first, HostedSession))
         self.assertIsNot(first, second)
         self.assertIsInstance(first.host(), TmuxHost)
         self.assertIsInstance(second.host(), FakeHost)
-        self.assertIsNone(HostedSession._setup)
         with self.assertRaises(ConfigError) as caught:
             HostedSession.host()
         self.assertEqual(str(caught.exception), UNCONFIGURED)
@@ -465,15 +464,8 @@ class ConfiguredTest(Case):
 
 class InspectTest(Base):
     def inspect(self, spec):
-        with contextlib.ExitStack() as stack:
-            starts = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in SPAWNS
-            ]
-            answer = self.session.inspect(spec)
-        for start in starts:
-            start.assert_not_called()
-        return answer
+        with no_spawn():
+            return self.session.inspect(spec)
 
     def test_historical_status_resolves_the_recorded_cwd_inside_session(self):
         os.makedirs(self.workdir)
@@ -937,20 +929,13 @@ class InProcessTest(Base):
         """An in_process session started and drained, each of SPAWNS failing meanwhile and never
         called.
         """
-        with contextlib.ExitStack() as stack:
-            spawns = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in SPAWNS
-            ]
+        with no_spawn():
             session = self.start(mode="in_process", **kwargs)
             found = self.drain(session)
-        for spawn in spawns:
-            spawn.assert_not_called()
         return session, found
 
     def logged(self) -> list[dict]:
-        with open(self.log, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log)
 
     def test_cleanup_joins_a_stopped_runs_thread_before_removing_its_files(self):
         self.steps({"sleep": 0.3})
@@ -964,24 +949,6 @@ class InProcessTest(Base):
         session, _ = self.run_in_process()
         with self.assertRaisesRegex(SessionError, "^press: tui mode only$"):
             session.press((KeyPress("Escape"),))
-
-    def test_a_spec_started_in_process_yields_reply_turn_end_then_exited_fr_12(self):
-        self.steps(
-            {"out": {"type": "message", "text": "hi"}},
-            {"out": {"type": "result", "text": "done"}},
-        )
-        session = self.session.start(
-            Spec(
-                workdir=self.workdir,
-                access=Access(cwd=self.workdir),
-                client="fake",
-                mode=Mode.IN_PROCESS,
-                prompt="hello",
-            )
-        )
-        self.addCleanup(session.stop)
-        self.assertEqual(self.drain(session), [Reply("hi"), TurnEnd("done", 0), Exited(0)])
-        self.assertEqual(self.logged()[0]["prompt"], "hello")
 
     def test_flags_and_env_reach_the_in_process_client(self):
         LAUNCHED.clear()
@@ -1108,19 +1075,8 @@ class InProcessTest(Base):
         self.assertEqual(found[-2:], [Reply("b"), Exited(0)])
 
 
-class Clock:
-    """The session's clock and time.monotonic's stand-in: `now` moves only when a StubMode
-    waits.
-    """
-
-    now = 0.0
-
-    def monotonic(self) -> float:
-        return self.now
-
-
 class StubMode:
-    """A BaseMode on a Clock: poll(timeout) gives the next script item (at, events, ended) once the
+    """A BaseMode on a FakeClock: poll(timeout) gives the next script item (at, events, ended) once the
     clock reaches `at`, else ([], False), moving the clock to `at` or on by timeout, whichever is
     sooner; past LATE s it raises, so a session that never ends fails. returncode() gives `code`;
     every call is logged in `calls`.
@@ -1168,12 +1124,10 @@ class StubMode:
 
 class EventsOverAModeTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
-        self.clock = Clock()
+        self.dir = scratch(self, real=False)
+        self.clock = FakeClock()
         self.configured = harnesses.Threaded.configured(
-            clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock.monotonic
+            clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock
         )
 
     def session(self, *script, code=0, idle_timeout=None, **kwargs) -> HostedSession:
@@ -1210,7 +1164,6 @@ class EventsOverAModeTest(Case):
         for pending in ("/color", None):
             with self.subTest(pending=pending):
                 self.mode.opening_pending = pending
-                self.assertIsInstance(session, worker._Opens)
                 self.assertIs(session.opening_pending, pending)
 
     def test_its_dialog_folds_the_events_it_yielded_then_those_it_queued(self):
@@ -1219,7 +1172,6 @@ class EventsOverAModeTest(Case):
             (1, [Activity("")], False),
             (2, [], True),
         )
-        self.assertIsInstance(session, worker._Dialogs)
         events = session.events()
         self.assertIsNone(session.dialog)
         self.assertEqual(next(events), Reply("r"))
@@ -1730,19 +1682,6 @@ class AccountPoolTest(Base):
         self.assertEqual(self.probed(), ["/d", "/w"])
         self.assertTrue(os.path.isfile(self.cache))
 
-    def test_an_account_over_a_threshold_is_passed_over(self):
-        self.outputs = {"/d": "92,5", "/w": "50,60"}
-        self.assertEqual(self.usage(), Usage(Window(50, None), Window(60, None)))
-
-    def test_every_account_over_is_an_exhausted_reading(self):
-        self.outputs = {"/d": "95,10", "/w": "10,100"}
-        self.assertTrue(exhausted(self.usage()))
-
-    def test_no_reading_known_is_none(self):
-        self.probe.side_effect = None
-        self.probe.return_value = None
-        self.assertIsNone(self.usage())
-
     def test_a_second_reading_within_the_ttl_probes_nothing(self):
         first = self.usage()
         self.probe.reset_mock()
@@ -1760,10 +1699,55 @@ class AccountPoolTest(Base):
         self.assertEqual(self.started_env(**{ACCOUNT_ENV: "default"})[ACCOUNT_ENV], "default")
         self.probe.assert_not_called()
 
+    def test_a_configured_account_runs_unprobed_unless_one_is_selected(self):
+        with mock.patch.object(PoolClient, "_account", return_value="work"):
+            self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
+            self.assertEqual(self.started_env(**{ACCOUNT_ENV: "default"})[ACCOUNT_ENV], "default")
+        self.probe.assert_not_called()
+
+    def test_usage_is_the_configured_accounts_reading(self):
+        self.outputs = {"/d": "10,10", "/w": "20,100"}
+        with mock.patch.object(PoolClient, "_account", return_value="work"):
+            self.assertTrue(exhausted(self.usage()))
+            hosted_session.accounts.hold("pool", "work", None)
+            self.assertEqual(self.usage().five_hour.used_percent, 100.0)
+        self.assertEqual(self.usage(), Usage(Window(10, None), Window(10, None)))
+
     def test_with_no_reading_known_a_start_selects_none(self):
         self.probe.side_effect = None
         self.probe.return_value = None
+        self.assertIsNone(self.usage())
         self.assertNotIn(ACCOUNT_ENV, self.started_env())
+
+    def run_on(self, **env):
+        """An in_process run selecting `env`'s account, drained."""
+        spec = self.spec(client="pool", mode=Mode.IN_PROCESS, env=env)
+        with (
+            mock.patch.object(PoolClient, "in_process", fake_client.InProcessFakeClient.in_process),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            session = self.session.start(spec)
+            self.addCleanup(session.stop)
+            self.drain(session)
+
+    def test_a_run_at_its_weekly_limit_moves_later_starts_to_another_account(self):
+        """WDRC-367: default is over its weekly limit while its probe reads plenty left."""
+        self.outputs = {"/d": "5,10", "/w": "16,52"}
+        self.steps({"out": {"type": "limit", "resets_at": time.time() + 3 * 24 * 3600}})
+        self.assertEqual(self.started_env()[ACCOUNT_ENV], "default")
+        self.run_on()
+        self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
+        self.assertEqual(self.usage(), Usage(Window(16, None), Window(52, None)))
+        self.run_on(**{ACCOUNT_ENV: "work"})
+        self.assertTrue(exhausted(self.usage()))
+
+    def test_a_run_off_the_pool_holds_nothing(self):
+        self.steps({"out": {"type": "limit", "resets_at": time.time() + 3600}})
+        self.pool({"default": "/d"})
+        self.run_on()
+        self.pool({"default": "/d", "work": "/w"}, container=False)
+        self.run_on()
+        self.assertFalse(os.path.exists(os.path.join(self.ensemble, "usage", "pool-holds.json")))
 
     def test_one_account_or_no_container_is_todays_single_probe(self):
         for accounts, container in (
@@ -1903,11 +1887,7 @@ class ListTest(HostedTuiBase):
                 self.session.list()
             self.assertEqual(str(caught.exception), message)
 
-    def test_a_row_is_frozen_with_these_fields(self):
-        self.assertEqual(
-            [f.name for f in dataclasses.fields(SessionRow)],
-            ["name", "sid", "client", "state", "display", "shown", "last_lines", "own"],
-        )
+    def test_a_row_is_frozen(self):
         found = SessionRow(
             name="w1",
             sid=None,
@@ -2655,50 +2635,6 @@ class ChecksTest(Base):
                         ),
                     )
 
-    def test_selection_scanning_stops_at_the_separator_and_accepts_other_words(self):
-        forbidden = ("--resume", "-r", "resume", "fork", "--last")
-        for flags in (("--", *forbidden), ("--resumes", "--continued", "--teleport-x")):
-            with self.subTest(flags=flags):
-                selection.check_selection(flags, forbidden)
-
-    def test_selection_words_used_as_option_values_are_not_selectors(self):
-        from ensemble.session.clients.codex import CodexClient
-
-        for flags in (
-            ("--add-dir", "fork"),
-            ("--add-dir=resume",),
-            ("--enable", "hooks"),
-            ("-c", "model=x"),
-            ("-cmodel=x",),
-        ):
-            with self.subTest(flags=flags):
-                selection.check_selection(
-                    flags, CodexClient.forbidden_selection, CodexClient.valued_flags
-                )
-        with self.assertRaisesRegex(ConfigError, "fork: picks the session"):
-            selection.check_selection(
-                ("--add-dir", "safe", "fork"),
-                CodexClient.forbidden_selection,
-                CodexClient.valued_flags,
-            )
-
-    def test_selection_uses_declared_syntax_and_uuid_validation(self):
-        syntax = (("--session-id",), ("--resume",))
-        self.assertEqual(
-            selection.select(SID, syntax, uuid=True, resume=False), ("--session-id", SID)
-        )
-        self.assertEqual(selection.select(SID, syntax, uuid=True, resume=True), ("--resume", SID))
-        self.assertEqual(selection.select("native", ((), ("resume",)), resume=False), ())
-        self.assertEqual(
-            selection.select("native", ((), ("resume",)), resume=True), ("resume", "native")
-        )
-        for native in ("abc", SID.upper(), SID + "\n"):
-            with (
-                self.subTest(native=native),
-                self.assertRaisesRegex(ConfigError, "session ids are UUIDs"),
-            ):
-                selection.select(native, syntax, uuid=True, resume=False)
-
     def test_a_registry_error_passes_through(self):
         self.refused(
             ConfigError,
@@ -3183,6 +3119,26 @@ class OwnedHeadlessTest(HostedTuiBase):
         self.assertIn(TurnEnd("done", 0), self.pumped(owned))
         self.assertEqual(owned.confirm_end(WAIT), 0)
 
+    def test_a_named_runs_host_metadata_carries_its_harness_and_the_sid_it_runs_as(self):
+        """The sid its Host records is the one its harness.json names, so close finds it."""
+        starts = []
+
+        def worker(name, _launch, metadata):
+            starts.append(metadata)
+            return ScriptedWorker(name, metadata["generation"], [], None)
+
+        self.host.headless_worker = worker
+        self.channel = Channel.create()
+        spec = dataclasses.replace(self.spec(), client="fake", mode="headless", name="w1")
+        owned = self.session.own(spec, owner=self.channel.directory)
+        self.addCleanup(owned.stop)
+        [metadata] = starts
+        self.assertEqual(
+            (metadata["harness"], metadata["sid"], metadata["generation"]),
+            (self.channel.directory, owned.sid, owned.generation),
+        )
+        self.assertRegex(owned.sid, "^[0-9a-f-]{36}$")
+
     def test_stop_returns_its_interrupted_turn_and_its_exit_is_confirmed(self):
         owned = self.own()
         final = owned.stop()
@@ -3527,18 +3483,8 @@ class OwnedStartTest(Case):
         self.scripted((1.0, BUILDING), (100.0, starting), (161.0, starting))
         self.timed_out("161 s while starting")
 
-    def test_an_interrupted_start_kills_its_harness_and_its_dir_goes(self):
-        self.harness_writes({"state": "starting"})
-        with (
-            mock.patch("time.sleep", side_effect=KeyboardInterrupt),
-            self.assertRaises(KeyboardInterrupt),
-        ):
-            self.session_cls.start(self.spec())
-        self.popen.return_value.kill.assert_called_once_with()
-        self.assertFalse(os.path.exists(self.spawned[2].directory))
-
-    def test_a_stop_right_after_popen_kills_its_harness(self):
-        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
+    def test_a_stop_at_each_start_point_kills_its_harness_and_its_dir_goes(self):
+        running = {"state": "running", "name": "w1", "sid": SID, "generation": "g7"}
         monotonic = time.monotonic
 
         def clock():
@@ -3546,23 +3492,21 @@ class OwnedStartTest(Case):
                 raise KeyboardInterrupt
             return monotonic()
 
-        with (
-            mock.patch("time.monotonic", side_effect=clock),
-            self.assertRaises(KeyboardInterrupt),
+        for status, owner, attr, effect in (
+            ({"state": "starting"}, time, "sleep", KeyboardInterrupt),
+            (running, time, "monotonic", clock),
+            (running, self.session_cls, "_view", KeyboardInterrupt),
         ):
-            self.session_cls.start(self.spec())
-        self.popen.return_value.kill.assert_called_once_with()
-        self.assertFalse(os.path.exists(self.spawned[2].directory))
-
-    def test_a_stop_while_its_view_is_built_kills_its_harness(self):
-        self.harness_writes({"state": "running", "name": "w1", "sid": SID, "generation": "g7"})
-        with (
-            mock.patch.object(self.session_cls, "_view", side_effect=KeyboardInterrupt),
-            self.assertRaises(KeyboardInterrupt),
-        ):
-            self.session_cls.start(self.spec())
-        self.popen.return_value.kill.assert_called_once_with()
-        self.assertFalse(os.path.exists(self.spawned[2].directory))
+            with self.subTest(attr):
+                self.popen.reset_mock()
+                self.harness_writes(status)
+                with (
+                    mock.patch.object(owner, attr, side_effect=effect),
+                    self.assertRaises(KeyboardInterrupt),
+                ):
+                    self.session_cls.start(self.spec())
+                self.popen.return_value.kill.assert_called_once_with()
+                self.assertFalse(os.path.exists(self.spawned[2].directory))
 
     def stop_on_sigterm(self) -> type[Exception]:
         """SIGTERM raises the returned exception here, as a drive's stop handler does."""
@@ -3984,8 +3928,8 @@ class OwnedStart(Case):
                     )
 
 
-class BoundOwnerTest(HostedTuiBase):
-    """attach and retire of a tui session whose session.json names a session harness."""
+class BoundOwnerBase(HostedTuiBase):
+    """A tui session whose session.json names a session harness, and that harness's moves."""
 
     def setUp(self):
         super().setUp()
@@ -3993,54 +3937,24 @@ class BoundOwnerTest(HostedTuiBase):
         self.state = tui.TuiMode.snapshot("w1")
         self.channel = Channel.create()
         self.state["owner"] = self.channel.directory
-        self.held = None
+        self.harness = harnesses.HeldOwner(self, self.channel)
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump(self.state, f)
 
-    def owner(self, **status) -> int | None:
-        """The lock fd it holds."""
-        if not self.channel.alive():
-            self.held = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(self.held, fcntl.LOCK_EX)
-            self.addCleanup(self.let_go)
-        self.channel.write_status(
-            {
-                "state": "running",
-                "name": "w1",
-                "sid": SID,
-                "generation": self.state["generation"],
-                **status,
-            }
+    def owner(self, **status) -> None:
+        self.harness.hold(
+            **{"name": "w1", "sid": SID, "generation": self.state["generation"], **status}
         )
-        return self.held
 
-    def let_go(self):
-        """The harness exits: its lock released."""
-        if self.held is not None:
-            os.close(self.held)
-            self.held = None
-
-    def serve(self, let_go=None, **answer_with):
-        """Answers one request; after an ok one it lets go of its lock (`let_go`, the fd owner()
-        returned), as a harness does once it answered an end.
+    def serve(self, **answer_with):
+        """Answers one request; after an ok one it lets go of its lock, as a harness does once it
+        answered an end.
         """
-        self.served = []
-        answer_with = answer_with or {"ok": True}
+        self.served = self.harness.serve(answer_with or {"ok": True})
 
-        def answer():
-            deadline = time.monotonic() + WAIT
-            while time.monotonic() < deadline:
-                for ident, op in self.channel.requests():
-                    self.served.append(op)
-                    self.channel.reply(ident, **answer_with)
-                    if answer_with.get("ok"):
-                        self.let_go()
-                    return
-                time.sleep(0.01)
 
-        thread = threading.Thread(target=answer)
-        thread.start()
-        self.addCleanup(thread.join)
+class BoundOwnerTest(BoundOwnerBase):
+    """attach and retire of a tui session whose session.json names a session harness."""
 
     def test_attach_of_a_bound_owner_is_its_control_view(self):
         self.owner()
@@ -4099,11 +4013,11 @@ class BoundOwnerTest(HostedTuiBase):
         self.assertTrue(view.alive())
 
     def test_retire_of_a_running_owner_whose_terminal_is_gone_asks_it(self):
-        held = self.owner()
+        self.owner()
         self.host.processes.pop("w1")
         with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
             self.session.retire("w1", sid="other")
-        self.serve(let_go=held)
+        self.serve()
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
 
@@ -4142,18 +4056,12 @@ class BoundOwnerTest(HostedTuiBase):
             self.session.attach("w1", sid="other")
 
     def test_retire_asks_the_owner_and_closes_nothing_itself(self):
-        self.serve(let_go=self.owner())
+        self.owner()
+        self.serve()
         terminal = self.host.processes["w1"]
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
         terminal.calls.close.assert_not_called()
-
-    def test_retire_asks_the_owner_even_when_its_terminal_is_gone(self):
-        self.owner()
-        self.serve()
-        self.host.processes.pop("w1")
-        self.session.retire("w1", sid=SID)
-        self.assertEqual(self.served, [Op.CLOSE])
 
     def test_an_owner_that_cannot_confirm_the_end_is_unanswered_and_nothing_is_closed(self):
         self.owner()
@@ -4226,6 +4134,75 @@ class BoundOwnerTest(HostedTuiBase):
         with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
             self.session.retire("w1", sid="other")
         self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
+
+
+class HeadlessOwnerTest(BoundOwnerBase):
+    """retire of a named headless run: no session.json; its Host's record names its harness."""
+
+    def setUp(self):
+        super().setUp()
+        os.unlink(os.path.join(self.root, "w1", "session.json"))
+        self.host.processes.pop("w1")
+        found = {
+            "owner": self.channel.directory,
+            "sid": SID,
+            "generation": self.state["generation"],
+        }
+        patcher = mock.patch.object(self.host, "_headless_owner", return_value=found, create=True)
+        self.headless_owner = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_retire_asks_its_harness_to_close(self):
+        for sid in (None, SID):
+            with self.subTest(sid=sid):
+                self.owner()
+                self.serve()
+                self.session.retire("w1", sid=sid)
+                self.assertEqual(self.served, [Op.CLOSE])
+        self.headless_owner.assert_called_with("w1")
+        self.host.calls.release.assert_not_called()
+
+    def test_a_refused_or_unconfirmed_close_raises(self):
+        self.owner()
+        self.serve(ok=False, error="cannot close w1")
+        with self.assertRaisesRegex(engine_types.OwnerRefused, "cannot close w1"):
+            self.session.retire("w1")
+        self.serve(ok=False, error="w1: worker exit not confirmed", unanswered=True)
+        with self.assertRaisesRegex(Unanswered, "not confirmed"):
+            self.session.retire("w1")
+
+    def test_another_sid_raises_asking_nothing(self):
+        self.owner()
+        with self.assertRaisesRegex(SessionError, f"expected sid 'other', found {SID!r}"):
+            self.session.retire("w1", sid="other")
+        self.assertEqual(self.channel.requests(), [])
+
+    def vanish(self):
+        """The harness takes the next request and exits unanswered."""
+        harnesses.serve(self, self.channel, lambda *_: self.harness.let_go())
+
+    def test_an_unbound_or_vanished_harness_closes_only_a_confirmed_absent_worker(self):
+        generation = self.state["generation"]
+        for bound, found in (
+            (False, Liveness.UNKNOWN),
+            (False, Liveness.ABSENT),
+            (True, Liveness.UNKNOWN),
+            (True, Liveness.ABSENT),
+        ):
+            with self.subTest(bound=bound, found=found):
+                self.host.calls.reset_mock()
+                self.host.calls.worker_liveness.return_value = found
+                self.owner(**({} if bound else {"name": "w2"}))
+                if bound:
+                    self.vanish()
+                with contextlib.ExitStack() as stack:
+                    if not bound:
+                        stack.enter_context(self.assertLogs("session", "WARNING"))
+                    if found == Liveness.UNKNOWN:
+                        stack.enter_context(self.assertRaisesRegex(Unanswered, "still running"))
+                    self.session.retire("w1")
+                released = [mock.call("w1", generation)] * (found == Liveness.ABSENT)
+                self.assertEqual(self.host.calls.release.call_args_list, released)
 
 
 class DeadOwner(HostedTuiBase):

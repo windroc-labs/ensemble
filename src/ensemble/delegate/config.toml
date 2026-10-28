@@ -5,7 +5,7 @@
 # keys in that table.
 #
 # Each layer reads only its own keys (paths from the repo root): the Composer (src/ensemble/delegate/composer/)
-# the run keys, [output], [accounts], [roles.<role>], trusted_dirs and team_dirs; src/ensemble/delegate/team/tools/repo.py
+# the run keys, [output], [roles.<role>], trusted_dirs and team_dirs; src/ensemble/delegate/team/tools/repo.py
 # users and trusted_dirs; src/ensemble/delegate/config.py [delegates]; the Delegate
 # (src/ensemble/delegate/engine/plan.py) [policy.<client>]. [clients] and [hosts]: src/ensemble/session/config.toml.
 #
@@ -87,13 +87,8 @@ branch = ""
 dir = ""
 host = ""
 
-# Accounts: client name → the account (a [clients.<client>.accounts] name: src/ensemble/session/config.toml)
-# a run on that client starts on; merged entry by entry, global → role ([roles.<role>.accounts]) → each overlay (the
-# orchestrator's among them). Only the run's client's entry counts, so a role run on another client gets none; no
-# entry or "" → none. An unregistered one refuses the run
-[accounts]
-# local: [delegate.accounts]
-# local: claude = "work"
+# A run's Claude account is the session's choice ([clients.claude] account: src/ensemble/session/config.toml); an
+# accounts table here, global, a role's or an overlay's, is a config error naming that key
 
 # Roles: [roles.<role>], a role's run keys; its tasks are its charter's index (core's team/roles/<role>.md › Tasks). A
 # role table holding task-level keys (default_task, a tasks table) is an error.
@@ -106,19 +101,18 @@ host = ""
 #                 tui mode, but in the shipped auto mode goes to Claude's classifier; a broad dir such
 #                 as ~ pre-approves reads of its whole tree; a path with any of *?[]{}()\, refuses the run. Codex adds
 #                 nothing (no read-only grant usable with -s): its workspace-write sandbox reads the whole disk; the
-#                 session's default auto mode's danger-full-access, or yolo's, can write there too (docs/architecture.md › Client policy). A dir also in write,
+#                 session's default auto mode's danger-full-access, or yolo's, can write there too. A dir also in write,
 #                 or inside the cwd, <workdir>/agent or a write dir, stays writable; shell commands can write there
 #                 regardless
 #   write         extra dirs the agent run needs to write; <workdir>/agent is always reachable; [] → none.
 #                 On the Docker Host a run reads only the image's team and writes only <workdir>/agent: any other
-#                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it (docs/architecture.md#docker-host)
+#                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it
 #   commands      requested shell commands (a trailing ` *` matches any arguments); the Client decides how
 #                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}}
 #                 as in read; a word holding one is shell-quoted once filled, and a prompt text writing the command
 #                 with <Workdir>, <team> or <role team> gets it as approved when that quoting changed it; [] → none
 # A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role
-#   accounts      [roles.<role>.accounts]: [accounts] above, for that role, entry by entry
 
 # ── Researcher ──────────────────────────────────────────
 [roles.researcher]
@@ -173,7 +167,7 @@ prefetch = true
 tier = 3
 effort = "low"
 
-# Environments (docs/architecture.md › Environments): the container a role run's agent starts in, on a Docker-kind
+# Environments: the container a role run's agent starts in, on a Docker-kind
 # Host. Only this file and config.local.toml set them: a caller's overlay (the orchestrator's among them) holding
 # environment, environments or roles.<role>.environment is refused, and nothing in a run's input selects one.
 # A run on Host <host> resolves, each step replacing the keys it sets (a list whole):
@@ -185,7 +179,7 @@ effort = "low"
 # environments. An in_process run has no container: it drops the environment, refusing one with lock, secrets or
 # prefetch. Keys (a table refuses any other):
 #   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
-#   gateway   the egress proxy's caller network the container joins (its label name, docs/architecture.md › Egress proxy)
+#   gateway   the egress proxy's caller network the container joins (its label name)
 #   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
 #   secrets   [[…secrets]] tables of item (an ensemble-broker-env/<name> keychain item) and file (its name under
 #             /run/ensemble/secrets/env/); references only, never a value; [] → none
@@ -203,7 +197,7 @@ prefetch = false
 [environments]
 
 # mini-op: the test Mac mini through mini-op's image and plain skill, by the names mini-op publishes; its secrets are
-# `ensemble-broker login env` items (docs/architecture.md › Environments)
+# `ensemble-broker login env` items
 [environments.mini-op]
 image = "mini-op:env"
 gateway = "mini-op"
@@ -223,7 +217,7 @@ file = "mini-ssh-key"
 
 # [policy.<client>]   a role run's flags and env, the Delegate's, after the session's [clients.<client>] flags and
 #                     permission mode (src/ensemble/session/config.toml), which keep ensemble's own plugin off
-#                     and hold every permission flag (docs/architecture.md › Client policy); [] → none. The system-prompt
+#                     and hold every permission flag; [] → none. The system-prompt
 #                     flag keeps a final reply to its outcome block, and --strict-mcp-config (Claude) or
 #                     -c mcp_servers={} (Codex: the client turns off each server your Codex config names) loads no
 #                     MCP server: a local list replacing this one keeps them too
