@@ -114,6 +114,8 @@ class WorkerState:
     events: str | None = None
     display: Display = None
     environment: EnvironmentSpec | None = None
+    credentials: str | None = None
+    environment_credentials: str | None = None
 
     def __post_init__(self):
         checks = {
@@ -148,12 +150,14 @@ class WorkerState:
         names = {"version", *(name for name in cls.__dataclass_fields__)}
         if (
             not isinstance(data, dict)
-            or not names - {"environment"} <= set(data) <= names
+            or not names - {"environment", "credentials", "environment_credentials"}
+            <= set(data)
+            <= names
             or data["version"] != VERSION
         ):
             raise ConfigError(
                 f"want version {VERSION} with exactly {', '.join(sorted(names))}"
-                " (environment optional)"
+                " (environment, credentials and environment_credentials optional)"
             )
         if not isinstance(data["flags"], list) or not isinstance(data["env"], dict):
             raise ConfigError("flags: want a list; env: want an object")
@@ -204,6 +208,8 @@ class WorkerState:
             flags=self.flags,
             env=self.env,
             environment=self.environment,
+            credentials=self.credentials,
+            environment_credentials=self.environment_credentials,
         )
 
 

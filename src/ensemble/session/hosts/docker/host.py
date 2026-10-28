@@ -805,6 +805,8 @@ class DockerHost(Host):
             repo=repo,
             providers=tuple(json.loads(metadata.get("home_providers") or "[]")),
             account=metadata.get("home_account", ""),
+            credentials=metadata.get("credentials"),
+            environment_credentials=metadata.get("environment_credentials"),
             **(
                 {
                     "gateway": environment.gateway,

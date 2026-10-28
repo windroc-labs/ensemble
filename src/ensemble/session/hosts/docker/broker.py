@@ -545,6 +545,8 @@ def write_manifest(
     lock_owner: str | None = None,
     prefetch: Mapping[str, str] | None = None,
     repo: str = "",
+    credentials: str | None = None,
+    environment_credentials: str | None = None,
 ) -> None:
     field, home_path = home
     client = field.removesuffix("_dir")
@@ -565,6 +567,12 @@ def write_manifest(
         if github
         else None,
         "labels": {},
+        **({"credentials": credentials} if credentials is not None else {}),
+        **(
+            {"environment_credentials": environment_credentials}
+            if environment_credentials is not None
+            else {}
+        ),
         **({f"{client}_providers": list(providers)} if providers else {}),
         **({f"{client}_account": account} if account else {}),
         **({"gateway": gateway} if gateway else {}),

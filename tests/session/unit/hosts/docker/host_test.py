@@ -1441,6 +1441,17 @@ class EnvironmentTest(StartBase):
         with open(os.path.join(self.state, f"{GEN}.json")) as f:
             return json.load(f)
 
+    def test_manifest_preserves_both_credential_declarations(self):
+        for value in (' {"future-kind": [1]}\n', "{", "{}", ""):
+            with self.subTest(value=value):
+                self.start(credentials=value, environment_credentials=' {"other": 2} ')
+                manifest = self.manifest()
+                self.assertEqual(manifest["credentials"], value)
+                self.assertEqual(manifest["environment_credentials"], ' {"other": 2} ')
+        self.start()
+        self.assertNotIn("credentials", self.manifest())
+        self.assertNotIn("environment_credentials", self.manifest())
+
     def resumable(self, environment):
         """w's host.json from a start in `environment` (absent: a pre-upgrade one), its history."""
         self.record(**({} if environment == "absent" else {"environment": environment}))

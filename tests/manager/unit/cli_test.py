@@ -251,7 +251,17 @@ class Launch(CliCase):
                 "worker",
                 "w1",
                 ("ensemble-session", "start", "w1"),
-                ("--client", "claude", "--prompt", "hi", "--", "--permission-mode", "auto"),
+                (
+                    "--client",
+                    "claude",
+                    "--credentials",
+                    ' {"future-kind": [1]}\n',
+                    "--prompt",
+                    "hi",
+                    "--",
+                    "--permission-mode",
+                    "auto",
+                ),
             ),
             (
                 "issue",
@@ -323,6 +333,8 @@ class Launch(CliCase):
                     "product-design",
                     "--input",
                     "x",
+                    "--credentials",
+                    ' {"future-kind": [1]}\n',
                 )
                 self.assertEqual(result, 0)
                 sid = Record.parse(stdout).sid
@@ -342,6 +354,8 @@ class Launch(CliCase):
                         "product-design",
                         "--input",
                         "x",
+                        "--credentials",
+                        ' {"future-kind": [1]}\n',
                     ),
                 )
 

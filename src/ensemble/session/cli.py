@@ -198,6 +198,16 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
     p.add_argument("--cwd", help="its directory (default: this one)")
     p.add_argument("--host", metavar="NAME", help="its Host (default: [session.hosts].default)")
     p.add_argument(
+        "--credentials",
+        metavar="JSON",
+        help="opaque Docker credential references; resume reuses saved text and refuses changes",
+    )
+    p.add_argument(
+        "--environment-credentials",
+        metavar="JSON",
+        help="opaque environment credential declaration from delegate; kept separate",
+    )
+    p.add_argument(
         "--environment-spec",
         type=_environment,
         metavar="JSON",
@@ -764,6 +774,8 @@ def _start(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_c
         events=None if events is None else os.path.abspath(events),
         display=Session.display(args.display, host=host),
         environment=args.environment_spec,
+        credentials=args.credentials,
+        environment_credentials=args.environment_credentials,
     )
     worker.check(prompt=args.prompt, resume=args.resume is not None)
     with worker.locked():

@@ -216,6 +216,11 @@ class BaseMode(ABC):
         """spec with `host`'s client env for `name`, and the metadata its Host keeps."""
         home = host._client_env(name, spec.client or "", client_home, resume=spec.resume)
         metadata = {
+            **{
+                key: value
+                for key in ("credentials", "environment_credentials")
+                if (value := getattr(spec, key)) is not None
+            },
             **(
                 {"environment": json.dumps(spec.environment.persisted())}
                 if spec.environment is not None

@@ -109,6 +109,17 @@ class WorkerEnvironment(Case):
         self.worker.check.assert_called_once_with(prompt="", resume=False)
         self.worker.start.assert_called_once_with(prompt="", resume=False, hidden=True)
 
+    def test_credential_declarations_are_forwarded_without_decoding(self):
+        for value in (' {"future-kind": [1]}\n', "{", "{}", ""):
+            with self.subTest(value=value):
+                code, _, err = self.start(
+                    "--credentials", value, "--environment-credentials", ' {"other": 2} '
+                )
+                self.assertEqual(code, 0, err)
+                fields = self.workers.new.call_args.kwargs
+                self.assertEqual(fields["credentials"], value)
+                self.assertEqual(fields["environment_credentials"], ' {"other": 2} ')
+
     def test_bad_environment_json_is_rejected_before_a_worker_exists(self):
         valid = self.environment.persisted()
         for data in (
