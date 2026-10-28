@@ -2182,7 +2182,7 @@ class InstallTest(Case):
             },
         )
         self.assertNotIn(
-            "github", tomllib.loads(self.config().read_text())["session"]["hosts"]["docker"]
+            "github", tomllib.loads(self.config().read_text())["session"]["hosts"].get("docker", {})
         )
         result = self.again()
         self.assert_ok(result)
