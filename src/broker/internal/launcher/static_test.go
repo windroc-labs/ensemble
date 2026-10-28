@@ -111,7 +111,7 @@ func staticStartHost(t *testing.T, static *fakeStatic) (Host, string, string, *f
 	}
 	path := editedManifest(t, func(f map[string]any) {
 		f["claude_dir"] = filepath.Join(parent, "claude")
-		f["secrets"] = []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/ssh", "id_ed25519")}
+		withSecrets(dummySecrets)(f)
 	})
 	return h, path, filepath.Join(parent, "0123456789abcdef0123456789abcdef.static.json"), d
 }

@@ -314,7 +314,7 @@ class Refusals(Base):
 
 
 class Planned(Base):
-    KEYS = {"read": ["{{team}}"], "commands": ["x --dir {{workdir}}/src *"]}
+    KEYS = {"read": [], "commands": ["x --dir {{workdir}}/src *"]}
 
     def setUp(self):
         super().setUp()
@@ -729,7 +729,7 @@ class Docker(DockerCase):
     def test_host_dir_grants_are_refused_naming_their_key(self):
         for keys, word in (
             ({"read": ["~/x"]}, "read"),
-            ({"read": ["{{team}}", "repo"]}, "read"),
+            ({"read": ["repo"]}, "read"),
             ({"write": ["~/y"]}, "write"),
             ({"cwd": self.tmp}, "cwd"),
         ):
@@ -747,9 +747,6 @@ class Docker(DockerCase):
         write_team(top)
         team = teams.team(dirs=(top,))
         self.assertIn("team_dirs", self.refused("poet", "verse", team=team, out=None))
-
-
-SECRET = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
 
 
 class PrefetchTest(DockerCase):
@@ -820,7 +817,6 @@ class PrefetchTest(DockerCase):
         for environment, key in (
             (self.env(prefetch=False), "lock"),
             (self.env(), "prefetch"),
-            (Resolved(replace(self.SPEC, lock=None, secrets=(SECRET,)), prefetch=False), "secrets"),
         ):
             with self.subTest(key=key):
                 message = self.refused(mode="in_process", environment=environment)
@@ -828,3 +824,18 @@ class PrefetchTest(DockerCase):
         gateway = Resolved(EnvironmentSpec(image="@worker", gateway="x"), prefetch=False)
         got, _ = self.planned(mode="in_process", environment=gateway)
         self.assertIsNone(got.session.environment)
+
+    def test_environment_credentials_are_opaque_and_separate_from_the_caller(self):
+        value = ' {"future-kind": [1]}\n'
+        environment = Resolved(replace(self.SPEC, lock=None), prefetch=False, credentials=value)
+        got, _ = self.planned(environment=environment, credentials=' {"other-kind": [2]} ')
+        self.assertEqual(got.session.environment_credentials, value)
+        self.assertEqual(got.session.credentials, ' {"other-kind": [2]} ')
+        self.assertEqual(got.spec.environment_credentials, value)
+        for value in ("{}", "", "{"):
+            with self.subTest(value=value):
+                environment = replace(environment, credentials=value)
+                self.assertIn(
+                    "environment_credentials: in_process",
+                    self.refused(mode="in_process", environment=environment),
+                )

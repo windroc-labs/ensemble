@@ -93,10 +93,11 @@ host = ""
 # Roles: [roles.<role>], a role's run keys; its tasks are its charter's index (core's team/roles/<role>.md › Tasks). A
 # role table holding task-level keys (default_task, a tasks table) is an error.
 #   templates     names of team/templates/*.md inlined into the prompt; [] → none
-#   read          extra dirs the agent run needs to read; `repo` is the caller's repo dir, {{team}} core's team/,
-#                 {{role_team}} the role's team root (its team dir: team_dirs; core's team/ for a core role);
-#                 the role's tasks dir (core's team/tasks/, or a team dir's: team_dirs) is always
-#                 included; [] → none. Read-only: never --add-dir. Claude gets a Read(//<dir>/**) allow rule each
+#   read          extra dirs the agent run needs to read; `repo` is the caller's repo dir.
+#                 Delegate always grants reads of core's team/, the role's team root and its tasks dir,
+#                 independently of config and overlays; [] → no extra dirs. {{role_team}} is the role's team
+#                 root (its team dir: team_dirs; core's team/ for a core role).
+#                 Read-only: never --add-dir. Claude gets a Read(//<dir>/**) allow rule each
 #                 (Read; Grep and Glob best-effort), so a file-tool write there is denied headless (-p) and prompts in
 #                 tui mode, but in the shipped auto mode goes to Claude's classifier; a broad dir such
 #                 as ~ pre-approves reads of its whole tree; a path with any of *?[]{}()\, refuses the run. Codex adds
@@ -108,8 +109,8 @@ host = ""
 #                 On the Docker Host a run reads only the image's team and writes only <workdir>/agent: any other
 #                 read, a write, a role cwd, a trusted_dirs project cwd or a team_dirs role refuses it
 #   commands      requested shell commands (a trailing ` *` matches any arguments); the Client decides how
-#                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}}
-#                 as in read; a word holding one is shell-quoted once filled, and a prompt text writing the command
+#                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}} the
+#                 role's team root; a word holding one is shell-quoted once filled, and a prompt text writing the command
 #                 with <Workdir>, <team> or <role team> gets it as approved when that quoting changed it; [] → none
 # A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role
@@ -117,7 +118,6 @@ host = ""
 # ── Researcher ──────────────────────────────────────────
 [roles.researcher]
 templates = ["research-report"]
-read = ["{{team}}"]
 commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *", "python3 -P {{team}}/tools/svg_check.py *", "python3 -P {{team}}/tools/report_check.py *"]
 # local: [delegate.roles.researcher]
 # local: cwd = "~/src/<name>"
@@ -140,7 +140,6 @@ commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *"
 # ── Engineer ────────────────────────────────────────────
 [roles.engineer]
 effort = "xhigh"
-read = ["{{team}}"]
 commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *", "python3 -P {{team}}/tools/repo.py status --dir {{workdir}}/src *"]
 
 [roles.engineer.output]
@@ -176,13 +175,13 @@ effort = "low"
 #   [environments.<name>] a named environment: only the keys that differ from the default; <name> as lock below
 #   [roles.<role>.environment]  local: name (a named environment) and keys overriding it, or the default without name
 # A result equal to this file's default (config.local.toml aside) passes no environment: the run starts as before
-# environments. An in_process run has no container: it drops the environment, refusing one with lock, secrets or
+# environments. An in_process run has no container: it drops the environment, refusing one with lock, credentials or
 # prefetch. Keys (a table refuses any other):
 #   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
 #   gateway   the egress proxy's caller network the container joins (its label name)
 #   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
-#   secrets   [[…secrets]] tables of item (an ensemble-broker-env/<name> keychain item) and file (its name under
-#             /run/ensemble/secrets/env/); references only, never a value; [] → none
+#   credentials  an opaque credential declaration, sent separately from the caller's; only the broker validates
+#                and merges kinds (caller wins); unset → none
 #   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run keeps its
 #             container and lock until its user closes it or its client exits; unset → none
 #   prefetch  true: clone the input's one Reference `Repo:` at its optional `Ref:` line into the new workspace; the
@@ -191,7 +190,6 @@ effort = "low"
 image = "@worker"
 gateway = "workers"
 plugins = []
-secrets = []
 prefetch = false
 
 [environments]
@@ -204,11 +202,11 @@ gateway = "mini-op"
 plugins = []
 lock = "mini-op"
 
-[[environments.mini-op.secrets]]
+[[environments.mini-op.credentials.env]]
 item = "ensemble-broker-env/mini-op-password"
 file = "mini-password"
 
-[[environments.mini-op.secrets]]
+[[environments.mini-op.credentials.env]]
 item = "ensemble-broker-env/mini-op-ssh-key"
 file = "mini-ssh-key"
 

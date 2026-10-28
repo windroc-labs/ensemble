@@ -48,13 +48,41 @@ Workers, `ensemble-delegate run` and `ensemble-session start` have no default Gi
 roles and `ensemble-crew role` use their role/task declarations. To start a verifier directly, pass the repo-scoped
 declaration with `--credentials`. Saved declarations are reused on resume; changed declarations affect new runs.
 
-Environment `secrets` → environment `credentials.env` migration belongs to WDRC-351; this GitHub change retains the
-existing secrets path. Follow that change's upgrade instructions when it is installed.
+Also migrate environment secrets using [environment credential declarations](#environment-credential-declarations)
+below. GitHub and environment files now use the same merged credential request; neither has a legacy grant path.
 
 ## Broker protocol 34: credential requests
 
 Before upgrading, close workers started before this release; they cannot be resumed after it.
 Install the current broker with `scripts/install.sh --docker`. For GitHub configuration, follow protocol 35 above.
+
+### Environment credential declarations
+
+In `~/.ensemble/config.local.toml`, replace each `[[delegate.environments.<name>.secrets]]`
+with `[[delegate.environments.<name>.credentials.env]]`, keeping its `item` and `file` values.
+For example:
+
+```toml
+[[delegate.environments.mini-op.credentials.env]]
+item = "ensemble-broker-env/mini-op-password"
+file = "mini-password"
+
+[[delegate.environments.mini-op.credentials.env]]
+item = "ensemble-broker-env/mini-op-ssh-key"
+file = "mini-ssh-key"
+```
+
+Remove old `secrets` keys from environment defaults and role environment overrides too;
+put any retained entries under that table's `credentials.env`. Removed keys are configuration errors,
+with no automatic migration. The packaged mini-op declaration already uses the new shape.
+Custom session callers must remove `EnvironmentSpec.secrets` and send a separate
+`environment_credentials` JSON-text value; custom broker callers must replace manifest `secrets`
+with `env` inside `credentials` or `environment_credentials`.
+
+Keep Keychain items under `ensemble-broker-env/*`; container paths stay
+`/run/ensemble/secrets/env/<file>`. A caller's `env` replaces the environment's entire `env` list,
+so an explicit override must include every entry that run needs. Existing workers cannot resume after
+this upgrade; close them before installing, as above.
 
 ### Linear container credentials
 
@@ -172,7 +200,7 @@ the Docker Host refuses a protocol 30 broker. Install the GitHub App on that out
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →
 `ensemble-broker-claude`, `ensemble-bot` → `ensemble-broker-bot`, `ensemble-env/<name>` → `ensemble-broker-env/<name>`
 and so on: [broker Keychain services](../src/broker/internal/broker/keychain.go)), and the static secret references with
-them: a manifest or `[[delegate.environments.<name>.secrets]]` item names `ensemble-broker-env/<name>`, and one naming
+them: an `env` credential item names `ensemble-broker-env/<name>`, and one naming
 `ensemble-env/<name>` is rejected (`manifest_rejected`). Upgrading from v0.4.1 or earlier, the maintainer gives you a
 one-time rename step; in this order:
 

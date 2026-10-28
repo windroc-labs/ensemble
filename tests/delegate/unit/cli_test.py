@@ -394,7 +394,7 @@ image = "dummy-env:test"
 plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
-[[delegate.environments.dummy.secrets]]
+[[delegate.environments.dummy.credentials.env]]
 item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
@@ -425,7 +425,6 @@ class Environments(Harnessed):
             {
                 "image": "dummy-env:test",
                 "gateway": "workers",
-                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "plugins": ["dummy-plugin"],
                 "lock": "dummy-lock",
                 "prefetch": {"repo": "acme/app", "ref": "release/1"},
@@ -463,10 +462,6 @@ class Verifier(Harnessed):
             {
                 "image": "mini-op:env",
                 "gateway": "mini-op",
-                "secrets": [
-                    {"item": "ensemble-broker-env/mini-op-password", "file": "mini-password"},
-                    {"item": "ensemble-broker-env/mini-op-ssh-key", "file": "mini-ssh-key"},
-                ],
                 "plugins": [],
                 "lock": "mini-op",
                 "prefetch": {"repo": "windroc-labs/ensemble", "ref": "main"},
@@ -642,7 +637,7 @@ class DryRun(Base):
         )
         self.assertEqual(
             (shown["dirs"], shown["reads"], shown["commands"]),
-            ([], [os.path.join(TEAM, "tasks")], []),
+            ([], [os.path.join(TEAM, "tasks"), TEAM], []),
         )
         self.assertIn("**Your task**: `echo` (`<tasks>/echo.md`).", shown["prompt"])
         self.assertTrue(shown["prompt"].endswith("\n# Input\n\nHello.\n"))

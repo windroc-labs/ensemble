@@ -1,3 +1,9 @@
+---
+name: principle-subtract-before-you-add
+description: "Apply when sequencing an addition, refactor, or rewrite. Remove dead code, redundant validators, and stub references first, then build on the simpler base."
+disable-model-invocation: true
+---
+
 # Subtract Before You Add
 
 When evolving a system, remove complexity first, then build. Default to subtraction.

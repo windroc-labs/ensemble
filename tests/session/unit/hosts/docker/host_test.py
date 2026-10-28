@@ -1382,7 +1382,6 @@ ENV_SOURCE = "gamma@owner/market#" + "e" * 40
 ENVIRONMENT = EnvironmentSpec(
     image="dummy-env:test",
     gateway="mini-op",
-    secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
     plugins=("dummy-plugin", BETA, ENV_SOURCE),
     lock="dummy-lock",
 )
@@ -1512,16 +1511,16 @@ class EnvironmentTest(StartBase):
         self.start(environment=carried(ENVIRONMENT))
         manifest = self.manifest()
         self.assertEqual(
-            {key: manifest.get(key) for key in ("gateway", "secrets", "lock", "lock_owner")},
+            {key: manifest.get(key) for key in ("gateway", "lock", "lock_owner")},
             {
                 "gateway": "mini-op",
-                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "lock": "dummy-lock",
                 "lock_owner": "w",
             },
         )
         self.assertNotIn("prefetch", manifest)
         self.assertNotIn("github", manifest)
+        self.assertNotIn("secrets", manifest)
         self.assertEqual(self.guard_env()["ENSEMBLE_PR_AUTHOR"], BOT)
 
     def test_prefetch_has_no_implicit_github_credential(self):

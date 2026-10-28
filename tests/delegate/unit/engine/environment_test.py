@@ -3,6 +3,7 @@
 """
 
 import copy
+import json
 
 from ensemble.delegate.engine.environment import prefetch_target, resolve, resolve_fields
 from ensemble.delegate.engine.types import ConfigError, Resolved
@@ -14,7 +15,6 @@ PACKAGED = {
         "image": "@worker",
         "gateway": "workers",
         "plugins": [],
-        "secrets": [],
         "prefetch": False,
     }
 }
@@ -33,6 +33,14 @@ def resolved(cfg: dict, role: str = "dummy-tester", host: str = "docker") -> Res
 
 
 class ResolveTest(Case):
+    def test_credentials_remain_a_separate_opaque_value_for_default_equivalent_environment(self):
+        value = {"future-kind": [1, {"anything": "unchanged"}]}
+        cfg = config(environments={"dummy": {"credentials": value}})
+        found = resolve_fields(cfg, host="docker", name="dummy", overrides={}, packaged=PACKAGED)
+        assert found is not None
+        self.assertEqual(json.loads(found.credentials), value)
+        self.assertNotIn("credentials", found.spec.persisted())
+
     def test_a_role_without_an_environment_table_passes_none(self):
         self.assertIsNone(resolved(config(), "engineer"))
         self.assertIsNone(resolved(config(), "engineer", "tmux"))
@@ -60,15 +68,19 @@ class ResolveTest(Case):
         assert engineer is not None
         self.assertEqual(engineer.spec, EnvironmentSpec(image="@worker", gateway="x"))
 
-    def test_role_secrets_replace_whole_list(self):
+    def test_role_credentials_replace_whole_declaration(self):
         other = {"item": "ensemble-broker-env/other", "file": "other.txt"}
         cfg = config(
-            environments={"dummy": {"image": "dummy-env:test", "secrets": [SECRET]}},
-            roles={"dummy-tester": {"environment": {"name": "dummy", "secrets": [other]}}},
+            environments={"dummy": {"image": "dummy-env:test", "credentials": {"env": [SECRET]}}},
+            roles={
+                "dummy-tester": {
+                    "environment": {"name": "dummy", "credentials": {"other-kind": [other]}}
+                }
+            },
         )
         found = resolved(cfg)
         assert found is not None
-        self.assertEqual([dict(s) for s in found.spec.secrets], [other])
+        self.assertEqual(json.loads(found.credentials), {"other-kind": [other]})
 
     def test_role_overrides_without_a_name_go_over_the_default(self):
         cfg = config(roles={"dummy-tester": {"environment": {"lock": "dummy-lock"}}})
@@ -88,7 +100,6 @@ class ResolveTest(Case):
         for table in (
             {"plugins": ["dummy-plugin"]},
             {"lock": "dummy-lock"},
-            {"secrets": [SECRET]},
             {"image": "dummy-env:test"},
             {"gateway": "x"},
         ):

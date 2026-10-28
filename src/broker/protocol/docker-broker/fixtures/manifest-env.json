@@ -10,11 +10,5 @@
   "labels": {
     "team": "crew"
   },
-  "secrets": [
-    {
-      "item": "ensemble-broker-env/dummy",
-      "file": "dummy.txt",
-      "mode": "0644"
-    }
-  ]
+  "environment_credentials": "{\"env\":[{\"item\":\"ensemble-broker-env/dummy\",\"file\":\"dummy.txt\"},{\"item\":\"ensemble-broker-env/mini-ssh\",\"file\":\"id_ed25519\"}]}"
 }

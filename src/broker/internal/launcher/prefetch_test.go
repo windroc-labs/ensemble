@@ -364,7 +364,7 @@ func TestEnvironmentWithoutPrefetchKeepsGitHub(t *testing.T) {
 	path := prefetchManifest(t, h, func(f map[string]any) {
 		delete(f, "prefetch")
 		f["gateway"] = "mini-op"
-		f["secrets"] = []any{map[string]any{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}}
+		withSecrets([]any{secret("ensemble-broker-env/dummy", "dummy.txt")})(f)
 		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet})
 	})
 	if _, err := h.Start(context.Background(), path); err != nil {

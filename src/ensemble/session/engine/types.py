@@ -244,7 +244,6 @@ DEFAULT_ACCOUNT = "default"
 RESUME = (COMMAND, "resume")
 
 
-# The broker's rules (its protocol.schema.json)
 PLUGIN_SOURCE = re.compile(
     r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40}"
     r"(?:::[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}#[a-f0-9]{40})?"
@@ -256,9 +255,6 @@ BASE_IMAGE = re.compile(
 )
 GATEWAY = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}")
 LOCK_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
-SECRET_ITEM = re.compile(r"ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}")
-SECRET_FILE = re.compile(r"[^/\x00-\x1f\x7f-\x9f]{1,255}")
-SECRETS_MAX = 16
 REPO = re.compile(r"[A-Za-z0-9-]+/(?!\.\.?\Z)[A-Za-z0-9._-]+")
 
 
@@ -293,19 +289,6 @@ class Access:
         object.__setattr__(self, "env", MappingProxyType(dict(self.env)))
 
 
-def _secret(value) -> bool:
-    return (
-        isinstance(value, Mapping)
-        and set(value) == {"item", "file"}
-        and isinstance(value["item"], str)
-        and SECRET_ITEM.fullmatch(value["item"]) is not None
-        and isinstance(value["file"], str)
-        and SECRET_FILE.fullmatch(value["file"]) is not None
-        and value["file"] not in (".", "..")
-        and len(value["file"].encode("utf-8")) <= 255
-    )
-
-
 def _prefetch(value) -> bool:
     if not (
         isinstance(value, Mapping)
@@ -328,24 +311,17 @@ class EnvironmentSpec:
     WORKER: ClassVar[str] = "@worker"
     image: str
     gateway: str
-    secrets: tuple[Mapping[str, str], ...] = ()
     plugins: tuple[str, ...] = ()
     lock: str | None = None
     prefetch: Mapping[str, str] | None = None
 
     def __post_init__(self):
-        secrets, files = self.secrets, ()
-        if isinstance(secrets, tuple) and all(map(_secret, secrets)):
-            files = [secret["file"] for secret in secrets]
         plugins = self.plugins
         checks = {
             "image": isinstance(self.image, str)
             and (self.image == self.WORKER or bool(BASE_IMAGE.fullmatch(self.image)))
             and len(self.image) <= 255,
             "gateway": isinstance(self.gateway, str) and bool(GATEWAY.fullmatch(self.gateway)),
-            "secrets": isinstance(secrets, tuple)
-            and len(files) == len(secrets) <= SECRETS_MAX
-            and len(set(files)) == len(files),
             "plugins": isinstance(plugins, tuple)
             and all(
                 isinstance(p, str) and (PLUGIN_SOURCE.fullmatch(p) or PLUGIN_NAME.fullmatch(p))
@@ -359,9 +335,6 @@ class EnvironmentSpec:
         }
         if bad := next((name for name, ok in checks.items() if not ok), None):
             raise ConfigError(f"environment {bad}: {getattr(self, bad)!r:.120} is not valid")
-        object.__setattr__(
-            self, "secrets", tuple(MappingProxyType(dict(secret)) for secret in secrets)
-        )
         if self.prefetch is not None:
             object.__setattr__(self, "prefetch", MappingProxyType(dict(self.prefetch)))
 
@@ -369,7 +342,6 @@ class EnvironmentSpec:
         return {
             "image": self.image,
             "gateway": self.gateway,
-            "secrets": [dict(secret) for secret in self.secrets],
             "plugins": list(self.plugins),
             "lock": self.lock,
             "prefetch": None if self.prefetch is None else dict(self.prefetch),
@@ -385,9 +357,8 @@ class EnvironmentSpec:
         if missing := [name for name in ("image", "gateway") if name not in fields]:
             raise ConfigError(f"environment: missing field {missing[0]!r}")
         found = dict(fields)
-        for name in ("secrets", "plugins"):
-            if isinstance(found.get(name), list):
-                found[name] = tuple(found[name])
+        if isinstance(found.get("plugins"), list):
+            found["plugins"] = tuple(found["plugins"])
         return cls(**found)
 
 

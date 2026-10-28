@@ -55,9 +55,16 @@ OpenCode provider keys, GitHub installation tokens, environment secrets and requ
 App private keys, Codex refresh tokens and enrolled Linear client secrets stay broker-side. Docker access
 and processes running as you remain trusted; a container separates the worker from the host, not its tools from its client.
 
-GitHub container tokens require a `github` credential declaration (`app`, `permissions`, optional `repo`). The
-broker merges the caller's and environment's declarations, with the caller's whole same-kind value winning, and
-alone interprets kinds. Session and Delegate pass both values unchanged. An undeclared run receives no GitHub token.
+Environment credentials are declared in delegate environment `credentials` tables. Delegate serializes the
+selected declaration once; it and Session carry that JSON text separately from the caller's credential text.
+The broker alone validates both declarations and merges their kinds, with the caller's whole value winning.
+The merged `env` list supplies only `ensemble-broker-env/*` items, at `/run/ensemble/secrets/env/<file>`;
+without `env`, no environment secret is delivered. These static copies use the broker's existing expiry
+checks, notices and audit. Session saves both declarations on the host for resume/reopen; later configuration
+changes affect new runs. The removed environment and manifest `secrets` fields have no compatibility path.
+
+GitHub container tokens use the same merged request, with a `github` declaration (`app`, `permissions`, optional
+`repo`). Without `github`, no GitHub token is delivered.
 The broker signs, renews and revokes the declared tokens and returns the App bot's commit/PR identity in its start
 response's generic `env` map; Session applies that map without interpreting credential kinds.
 

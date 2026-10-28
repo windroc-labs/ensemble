@@ -431,6 +431,11 @@ class CommandViewTest(Base):
                         *("new-session", "-d", "-s", "d1", "-x", x, "-y", y, "--", *self.ARGV),
                         *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
                         *(";", "set-option", "-t", "=d1:", "status", status),
+                        *(
+                            [";", "set-option", "-t", "=d1:", "status-left-length", "5"]
+                            if status == "on"
+                            else []
+                        ),
                     ]
                 )
 

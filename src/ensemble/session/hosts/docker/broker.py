@@ -535,7 +535,6 @@ def write_manifest(
     providers: tuple[str, ...] = (),
     account: str = "",
     gateway: str | None = None,
-    secrets: Sequence[Mapping[str, str]] = (),
     lock: str | None = None,
     lock_owner: str | None = None,
     prefetch: Mapping[str, str] | None = None,
@@ -563,7 +562,6 @@ def write_manifest(
         **({f"{client}_providers": list(providers)} if providers else {}),
         **({f"{client}_account": account} if account else {}),
         **({"gateway": gateway} if gateway else {}),
-        **({"secrets": [dict(secret) for secret in secrets]} if secrets else {}),
         **({"lock": lock, "lock_owner": lock_owner} if lock else {}),
         **({"prefetch": dict(prefetch)} if prefetch else {}),
     }

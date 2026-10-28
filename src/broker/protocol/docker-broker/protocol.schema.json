@@ -272,37 +272,6 @@
             "const": "setup-token"
           }
         },
-        "secrets": {
-          "$comment": "Environment secrets by keychain reference; the broker also refuses a file repeated in the list and a file over 255 bytes.",
-          "type": "array",
-          "maxItems": 16,
-          "items": {
-            "type": "object",
-            "properties": {
-              "item": {
-                "type": "string",
-                "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
-              },
-              "file": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "not": {
-                  "enum": [
-                    ".",
-                    ".."
-                  ]
-                }
-              }
-            },
-            "required": [
-              "item",
-              "file"
-            ],
-            "additionalProperties": false
-          }
-        },
         "lock": {
           "$ref": "#/$defs/lock_name"
         },
@@ -2086,7 +2055,7 @@
           "minItems": 1,
           "maxItems": 16,
           "items": {
-            "$ref": "#/$defs/manifest/properties/secrets/items"
+            "$ref": "#/$defs/env_secret"
           }
         }
       },
@@ -2107,6 +2076,26 @@
           "type": "string"
         }
       }
+    },
+    "env_secret": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string",
+          "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
+          "not": {
+            "enum": [".", ".."]
+          }
+        }
+      },
+      "required": ["item", "file"],
+      "additionalProperties": false
     }
   }
 }

@@ -119,9 +119,11 @@ def plan(
         sid=run_sid(spec.sid),
         team=composition.team,
     )
+    if environment is not None and environment.credentials is not None:
+        spec = replace(spec, environment_credentials=environment.credentials)
     docker = driver.docker and spec.mode in (Mode.TUI, Mode.HEADLESS)
     if environment is not None and not docker:
-        lost = next((k for k in ("lock", "secrets") if getattr(environment.spec, k)), None)
+        lost = "lock" if environment.spec.lock else None
         if lost := "prefetch" if environment.prefetch else lost:
             raise ConfigError(
                 f"mode {spec.mode}: environment {lost} needs a container: tui or headless"
