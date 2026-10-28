@@ -1,9 +1,11 @@
 """Case, every session test's base; HOSTS, configured, packaged_hosts; PY, child_env; REPO, SRC,
-ROOTS; PLUGIN_BIN; SPAWNS, the process starts.
+ROOTS; PLUGIN_BIN; SPAWNS, the process starts; no_spawn.
 """
 
+import contextlib
 import os
 import sys
+from unittest import mock
 
 import ensemble
 from ensemble.session import Host
@@ -87,3 +89,15 @@ def _foreign(modules=None) -> str | None:
 
 def child_env(base=None, *extra: str) -> dict[str, str]:
     return clean_env(base, *ROOTS, *extra)
+
+
+@contextlib.contextmanager
+def no_spawn(*more: str):
+    with contextlib.ExitStack() as stack:
+        calls = [
+            stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
+            for target in (*SPAWNS, *more)
+        ]
+        yield
+    for call in calls:
+        call.assert_not_called()

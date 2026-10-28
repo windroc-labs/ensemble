@@ -22,7 +22,7 @@ from ensemble.session.engine.types import (
     Usage,
     Window,
 )
-from tests.session.case import SPAWNS
+from tests.session.case import no_spawn
 from tests.session.hosted_support import (
     LAUNCHED,
     PYTHONPATH,
@@ -98,11 +98,7 @@ class SessionTest(Base):
         )
         self.assertEqual(self.drain(session), [TurnFailed("incomplete_turn"), Exited(0)])
         session.close()
-        with contextlib.ExitStack() as stack:
-            starts = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in SPAWNS
-            ]
+        with no_spawn():
             status = self.session.inspect(
                 Spec(
                     workdir=self.workdir,
@@ -112,8 +108,6 @@ class SessionTest(Base):
                 )
             )
         self.assertEqual(status, SessionStatus("yes", 1.5, f"probe history {self.dir}"))
-        for start in starts:
-            start.assert_not_called()
 
     def test_a_headless_session_cannot_show_and_has_no_record(self):
         session = self.start()

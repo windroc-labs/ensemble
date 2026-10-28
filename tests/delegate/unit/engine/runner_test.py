@@ -65,10 +65,10 @@ from tests.delegate.unit.runs import (
     START,
     STOP,
     FakeHandle,
-    no_child,
     said,
     turn,
 )
+from tests.session.case import no_spawn
 
 
 class DeadStream(io.StringIO):
@@ -94,7 +94,7 @@ class InProcess(Base):
         )
 
     def go(self, *steps, **kw) -> Result:
-        with no_child():
+        with no_spawn():
             return super().go(*steps, mode="in_process", **kw)
 
     def test_a_done_run(self):
@@ -738,7 +738,7 @@ class InstructionRuns(InstructionCase):
             with self.subTest(role=role):
                 args = self.given(role)
                 want, events = plan(*args, driver=self.driver, composition=Composer()).prompt, []
-                with no_child(), redirect_stderr(io.StringIO()):
+                with no_spawn(), redirect_stderr(io.StringIO()):
                     r = executed(*args, on_event=events.append, driver=self.driver)
                 self.assertEqual((r.returncode, r.outcome, r.instruction), (0, None, args[1].out))
                 with open(args[1].out) as f:
@@ -749,7 +749,7 @@ class InstructionRuns(InstructionCase):
 
     def test_an_unconfigured_client_does_not_start_a_session(self):
         args = self.given("dummy-tester", client="unconfigured")
-        with no_child():
+        with no_spawn():
             result = executed(*args, driver=self.driver)
         self.assertEqual(
             (result.returncode, result.outcome, result.instruction), (0, None, args[1].out)
@@ -758,7 +758,7 @@ class InstructionRuns(InstructionCase):
     def test_a_resume_is_refused(self):
         args = self.given("dummy-tester", resume=True)
         with (
-            no_child(),
+            no_spawn(),
             self.assertRaisesRegex(ConfigError, "instruction has no session to resume"),
         ):
             executed(*args, driver=self.driver)

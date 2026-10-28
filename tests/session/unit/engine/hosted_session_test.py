@@ -74,7 +74,7 @@ from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.utils import ACCOUNT_ENV, Record, StatusState, exhausted, inode_lock, load_class
 from tests.session import fake_client, harnesses
-from tests.session.case import HOSTS, REPO, SPAWNS, SRC, Case
+from tests.session.case import HOSTS, REPO, SRC, Case, no_spawn
 from tests.session.fakes.container_host import HOMED as HOMED_HOST
 from tests.session.fakes.container_host import NAMED as NAMED_HOST
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
@@ -466,15 +466,8 @@ class ConfiguredTest(Case):
 
 class InspectTest(Base):
     def inspect(self, spec):
-        with contextlib.ExitStack() as stack:
-            starts = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in SPAWNS
-            ]
-            answer = self.session.inspect(spec)
-        for start in starts:
-            start.assert_not_called()
-        return answer
+        with no_spawn():
+            return self.session.inspect(spec)
 
     def test_historical_status_resolves_the_recorded_cwd_inside_session(self):
         os.makedirs(self.workdir)
@@ -938,15 +931,9 @@ class InProcessTest(Base):
         """An in_process session started and drained, each of SPAWNS failing meanwhile and never
         called.
         """
-        with contextlib.ExitStack() as stack:
-            spawns = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in SPAWNS
-            ]
+        with no_spawn():
             session = self.start(mode="in_process", **kwargs)
             found = self.drain(session)
-        for spawn in spawns:
-            spawn.assert_not_called()
         return session, found
 
     def logged(self) -> list[dict]:

@@ -40,8 +40,9 @@ from tests.delegate.fakes.harness_session import (
 )
 from tests.delegate.harness import SID as HARNESS_SID
 from tests.delegate.harness import HarnessCase
-from tests.delegate.unit.runs import DONE, no_child
+from tests.delegate.unit.runs import DONE
 from tests.session import fake_client
+from tests.session.case import no_spawn
 from tests.session.modules import client_loader
 from tests.utils.case import local_section
 from tests.utils.cli_help import check_examples, help_text, parse_only
@@ -692,7 +693,7 @@ class InProcess(Base):
         with (
             mock.patch("time.strftime", return_value="2026-10-16"),
             mock.patch("uuid.uuid4", return_value=uuid.UUID(SID)),
-            no_child(),
+            no_spawn(),
         ):
             code, out, err = self.cli(
                 "run",
@@ -735,7 +736,7 @@ class InProcess(Base):
         )
 
     def runs(self, *extra, **kw):
-        with no_child():
+        with no_spawn():
             return super().runs(*extra, **kw)
 
     def test_a_run_without_sid_takes_the_launchers(self):
@@ -768,7 +769,7 @@ class InProcess(Base):
         self.assertEqual([(e["sid"], e["pid"]) for e in self.launches()], [(SID, os.getpid())])
 
     def test_a_run_without_out_names_its_default_deliverable_file(self):
-        with no_child():
+        with no_spawn():
             code, out, err = self.cli(
                 "run",
                 "--role",
