@@ -452,8 +452,16 @@ class DecomposeCompletion(Base):
                 "Created AGE-52; reused none\nAGE-49: the old edge stays.",
                 "Created AGE-52; reused none",
             ),
+            (
+                "Created AGE-52 AGE-53; reused AGE-40 AGE-41",
+                "Created AGE-52, AGE-53; reused AGE-40, AGE-41",
+            ),
+            ("Created NONE; reused None", "Created none; reused none"),
             ("ENG-8", unreadable),
             ("Created AGE-52 and AGE-53; reused none", unreadable),
+            ("Created AGE-52; reused AGE-40 and AGE-41", unreadable),
+            ("Created AGE-52; reused AGE-40/AGE-41", unreadable),
+            ("Created AGE-52; reused none, AGE-40", unreadable),
             ("", unreadable),
         ):
             with self.subTest(summary=summary):

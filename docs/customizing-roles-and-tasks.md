@@ -106,7 +106,7 @@ input = "research"
 next = "pm"           # promote hands its Handoff issues to pm
 ```
 
-- The role's charter (`roles/<role>.md`, here in a team dir) says where its output goes. A done run or a question goes to In Review; a failure follows `first_failure`, and a failure after resume goes to In Review. Engineer `decompose` returns no deliverable; write-back posts `Decompose done: Created <ids>; reused <ids>`, built from its summary's identifiers alone, and completes itself and its source PRD on done; questions and failures leave the PRD unchanged.
+- The role's charter (`roles/<role>.md`, here in a team dir) says where its output goes. A done run or a question goes to In Review; a failure follows `first_failure`, and a failure after resume goes to In Review. Engineer `decompose` returns no deliverable; write-back posts `Decompose done: Created <ids>; reused <ids>`, built from its summary's identifiers alone (a summary not of that form posts `Decompose done: no Created/reused identifiers in the run's summary`), and completes itself and its source PRD on done; questions and failures leave the PRD unchanged.
 - `[orchestrator.roles.<role>] max_runs` is optional: no table → 1.
 - Every `ensemble-orchestrator` command checks the file when it loads it and exits 2 naming the file and stage: an unknown or ill-typed key, a role the Delegate does not know, a `next` that names no other stage, a `next` chain with a cycle.
 - At least one stage's role must still publish documents to GitHub (its `[output]`), as the packaged researcher and pm do.

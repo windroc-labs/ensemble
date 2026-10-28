@@ -84,9 +84,11 @@ LOCK = "writeback.lock"
 MAX_FILE = 1_000_000
 PLAN_MARK = "RESUME: phase="
 FOOTER = "Answer in a comment, then move this issue back to {state}."
-_IDS = rf"none|{ISSUE_ID}(?:\s*,\s*{ISSUE_ID})*"
+_IDS = rf"(?i:none)|{ISSUE_ID}(?:(?:\s*,\s*|\s+){ISSUE_ID})*"
 # a decompose summary's leading `Created <ids>; reused <ids>`; text after it is never posted
-DECOMPOSED = re.compile(rf"\s*(?i:created)\s+({_IDS})\s*;\s*(?i:reused)\s+({_IDS})\b")
+DECOMPOSED = re.compile(
+    rf"\s*(?i:created)\s+({_IDS})\s*;\s*(?i:reused)\s+({_IDS})[ \t]*(?:$|[.;\n])"
+)
 LIMIT = "Usage limit,"
 # a failed attempt's own steps; a later valid outcome keeps the normal ones
 NO_OUTCOME = "no-outcome:"
