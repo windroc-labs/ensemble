@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def _publish(path, text: str) -> None:
-    """path holding text, whole: a test polls for its existence, then reads it."""
+    """path holding text whole once it exists."""
     temporary = f"{path}.{os.getpid()}.tmp"
     with open(temporary, "w", encoding="utf-8") as stream:
         stream.write(text)

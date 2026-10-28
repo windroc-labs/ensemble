@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from ensemble.utils import ProcessControl, Record
-from tests.delegate.integration.cli import ASKING, Integration, retire_drive
+from tests.delegate.integration.cli import ASKING, Integration
 from tests.delegate.replies import block, mark
 from tests.session import live_tmux
 from tests.utils.contracts.ctl import AnswerCtlContract
@@ -90,11 +90,13 @@ class DelegateCtlContract(AnswerCtlContract, Integration):
             return json.load(file).get("drive")
 
     def stop_drive(self, workdir):
-        """The drive the test left, retired before the temp dirs go."""
+        """A drive the test left running, killed before the temp dirs go."""
         with contextlib.suppress(OSError):
             path = self.drive_of(os.path.join(workdir, "run", "delegate.json"))
-            if path is not None:
-                retire_drive(ProcessControl.attach(path))
+            control = None if path is None else ProcessControl.attach(path)
+            if control is not None and control.running():
+                control.kill()
+                live_tmux.wait(lambda: not control.live(), what="the left drive gone")
 
     def refuse(self):
         return self.call(

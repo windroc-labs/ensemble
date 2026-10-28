@@ -34,7 +34,7 @@ from ensemble.session import SIGNALS
 from ensemble.utils import ProcessControl, Record, Status
 from tests.delegate.case import PY, PYTHONPATH, Case
 from tests.delegate.fakes import callback_recorder
-from tests.delegate.integration.cli import ASKING, DONE, RUN, SID, retire_drive
+from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
 from tests.delegate.replies import block, mark, running
 from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN
@@ -212,10 +212,11 @@ class Detach(Case):
         self.until(lambda: not self.drive_running(), f"{DRIVE} ended")
 
     def stop_drive(self) -> None:
-        """The drive a test left, retired before the temp dirs go."""
+        """A drive a test left running, killed before the temp dirs go."""
         control = self.control()
-        if control is not None:
-            retire_drive(control)
+        if control is not None and control.running():
+            control.kill()
+            live_tmux.wait(lambda: not control.live(), WAIT, what="the left drive gone")
 
     def poke(self) -> None:
         # tmux on Linux (CI: 3.4) can leave an exited pane's process unreaped until another child of

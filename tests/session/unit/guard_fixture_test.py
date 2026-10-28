@@ -2,10 +2,10 @@
 
 import os
 import tempfile
-import unittest
 from unittest import mock
 
 from tests.session import docker_attach_fixture, guard_fixture
+from tests.session.case import Case
 
 FIXTURES = (guard_fixture, docker_attach_fixture)
 
@@ -24,7 +24,7 @@ def published(fixture, path: str, text: str) -> list[tuple[bool, str]]:
     return seen
 
 
-class PublishTest(unittest.TestCase):
+class PublishTest(Case):
     def test_a_published_file_appears_complete_and_leaves_no_temp_file(self):
         for fixture in FIXTURES:
             with self.subTest(fixture.__name__), tempfile.TemporaryDirectory() as directory:

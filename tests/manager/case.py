@@ -16,6 +16,7 @@ from unittest import mock
 import ensemble
 from ensemble.utils import Record
 from tests.session import harnesses
+from tests.utils import controls
 from tests.utils.fakes import ctl
 from tests.utils.sandbox import clean_env, project_roots
 
@@ -58,6 +59,7 @@ class Case(unittest.TestCase):
         ):
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)
+            self.addCleanup(controls.retired, self.home)
             self.addCleanup(harnesses.end, self.home)
             return super().run(result)
 

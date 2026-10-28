@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 
-from ensemble.utils import SID_ENV, ProcessControl, Record, Status
+from ensemble.utils import SID_ENV, Record, Status
 from tests.delegate.case import PY, REPO, Case, child_env
 from tests.delegate.workdir import input_first
 from tests.session import harnesses, live_tmux
@@ -38,19 +38,6 @@ ASKING = {
 }
 UNSAVED = {k: v for k, v in DONE.items() if k != "deliverable"}
 UNSAVED_ERROR = "done with a local destination must carry the deliverable"
-
-
-def retire_drive(control: ProcessControl) -> None:
-    """A drive a test leaves, killed if running, then awaited until its controller, which records
-    done before removing its own directory, has removed it; one no controller serves is left.
-    """
-    if control.ended:
-        return
-    if control.running():
-        control.kill()
-    live_tmux.wait(
-        lambda: not os.path.isdir(control.path), WAIT, what="the drive's controller gone"
-    )
 
 
 class Runs(Case):
