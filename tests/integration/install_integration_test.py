@@ -4856,7 +4856,7 @@ exec /bin/rm "$@"
         self.assertEqual(linear["human_members"], ["me@example.com"])
         self.assertEqual(
             linear["roles"],
-            {r: app_config(r) for r in SLOTS[3:]},
+            {r: app_config(r) for r in SLOTS if r not in ("harness", "manager")},
         )
         self.assertEqual(linear["project_repos"], {uuid(30): "acme/widget"})
         # the config gates of router --dry-run, promote --dry-run and issue list

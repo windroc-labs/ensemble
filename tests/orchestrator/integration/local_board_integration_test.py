@@ -262,13 +262,18 @@ class LocalBoard(BinFlow):
             json.loads(re.sub(r"\bLOC-(\d+)", r"TASK-\1", json.dumps(e))) for e in on_board
         ]
         next(e for e in normalized if e["kind"] == "would comment")["body"] = linear_comment["body"]
-        remote_credentials = credentials(load(), "engineer", None)
+        cfg = load()
+        remote_credentials = {
+            f"TASK-{seed.n}": credentials(cfg, seed.owner, seed.task)
+            for seed in ISSUES
+            if seed.owner in cfg.roles
+        }
         for event in normalized:
             if "credentials" in event:
                 self.assertEqual(event["credentials"], {})
         for event in on_linear:
             if "credentials" in event:
-                self.assertEqual(event["credentials"], remote_credentials)
+                self.assertEqual(event["credentials"], remote_credentials[event["issue"]])
                 event["credentials"] = {}
         self.assertEqual(normalized, on_linear)
 
