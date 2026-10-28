@@ -1019,7 +1019,7 @@ class TuiMode(BaseMode):
             if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):
                 self._absorbed = max(self._absorbed, _sends(marker, self._generation)[1])
             found += events
-        for event in found:
+        for event in [*found[len(observed) :], *observed]:  # the client's own, newest, last
             if word := next((w for kind, w in MARKED if isinstance(event, kind)), None):
                 self._mark(word)
         self._track(found)

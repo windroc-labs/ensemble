@@ -3120,6 +3120,14 @@ class ActivityTest(OwnedBase):
         mode.poll(0)
         self.assertEqual(self.activity(), f"{mode.generation} done\n")
 
+    def test_the_clients_own_record_read_with_older_hooks_marks_last(self):
+        mode = self.owned_start()
+        observed = [[TurnEnd("")]]
+        mode.run.observe = lambda: observed.pop() if observed else []
+        self.append(record("tool", tool="x"))
+        mode.poll(0)
+        self.assertEqual(self.activity(), f"{mode.generation} done\n")
+
     def test_each_record_marks_once(self):
         mode = self.owned_start()
         self.append(record("ask", why="y"))
