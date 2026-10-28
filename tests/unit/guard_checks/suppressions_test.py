@@ -82,7 +82,7 @@ class SourceSuppressions(Sample):
             ),
             (
                 {
-                    "docs/unused.py": "# noqa\n",
+                    "other/unused.py": "# noqa\n",
                     "src/ensemble/utils/strings.py": (
                         '"""Example: # noqa and # type: ignore."""\nvalue = \'# noqa: F401\'\n# Suppressions are checked elsewhere.\n'
                     ),

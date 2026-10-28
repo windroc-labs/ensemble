@@ -66,7 +66,7 @@ def _owner(path: str) -> str | None:
 
 
 def _docs(path: str) -> bool:
-    # Root *.md and docs/**; skills and team text are not docs.
+    # Root Markdown files and the docs tree; skills and team text are not docs.
     return _owner(path) == "docs" or (_owner(path) == path and path.endswith(".md"))
 
 

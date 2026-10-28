@@ -1,6 +1,6 @@
-"""The interfaces the session harness replaced (docs/architecture.md › End-state removals) stay
-gone from shipped code: no definition or import of the removed classes and function, no Host or
-InteractiveProcess subclass defining a removed member, no removed call on a Host.
+"""The interfaces the session harness replaced stay gone from shipped code: no definition or
+import of the removed classes and function, no Host or InteractiveProcess subclass defining a
+removed member, no removed call on a Host.
 """
 
 import ast

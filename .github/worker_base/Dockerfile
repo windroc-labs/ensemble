@@ -1,4 +1,4 @@
-# Worker image CI's base image (docs/architecture.md#base-images): the default worker definition
+# Worker image CI's base image: the default worker definition
 # (src/broker/worker/Dockerfile) with agent at 1000:1000, no python3, and one in-image plugin.
 ARG BASE=ci-worker:definition
 FROM ${BASE}
