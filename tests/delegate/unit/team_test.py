@@ -276,13 +276,18 @@ class Shipped(Packaged):
     def test_the_verify_report_template_is_one_table_with_a_column_per_round(self):
         template = team_texts()["templates/verify-report.md"]
         for text in (
-            "**Verdict:** <✅ | ❌ | ⚠️>",
+            "**Verdict:** <✅ | ❌ | ⚠️>: <one line why>\n\n✅ pass · ❌ fail · ⚠️ partial or problem · ⏭️ not run\n\n",
             "| Requirement | Check | R1 | Notes (latest non-✅ only) |",
-            "✅ pass, ❌ fail, ⚠️ partial, ⏭️ skipped",
-            "add the next round's column",
+            "the Verdict line, the legend line, the table",
+            "Marks: only the legend's four",
+            "keep every earlier round's column and add the next one (R<n+1>)",
+            "never restart at R1",
+            "carry its per-requirement results into R1..Rn columns",
             "Blocked / next:",
         ):
             self.assertIn(text, template)
+        self.assertNotIn("start a new table at R1", template)
+        self.assertNotIn("⏭️ skipped", template)
         checklist = item(composed("verifier", "verify")[0], "Checklist first")
         self.assertIn("the Template's table", checklist)
         self.assertIn("extending an earlier report", checklist)
