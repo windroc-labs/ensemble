@@ -54,12 +54,24 @@ implementation = "ensemble.delegate:HarnessDelegate"
 #   max_runs  agent runs of this role at once; 3 for these roles unless config.local.toml sets it; no table → 1
 [roles.researcher]
 max_runs = 3
+credentials = {}
+tasks = {}
 
 [roles.pm]
 max_runs = 3
+credentials = {}
+tasks = {}
 
 [roles.engineer]
 max_runs = 3
+credentials = {}
+tasks = {}
+
+# credentials: kind → reference, with no secret values; {} → none. Broker validates kinds and values.
+# [roles.<role>.tasks.<task>.credentials] replaces whole same-kind role values, keeping other kinds.
+# Only the shorthand linear = "role" is expanded here: this role's app references and non-secret board settings.
+# Tasks must appear in the role's Tasks index. A run without a task uses only role credentials.
+# Local declarations use the orchestrator. prefix; credentials in [core] overlays are refused.
 
 # local: [orchestrator.roles.engineer]
 # local: max_runs = 1

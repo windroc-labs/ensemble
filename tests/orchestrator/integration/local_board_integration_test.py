@@ -201,7 +201,13 @@ class LocalBoard(BinFlow):
         def picked(n, source="default"):
             return [
                 {"kind": "pick", "issue": local(n), "queue": 8},
-                {"kind": "preview", "issue": local(n), "client": "claude", "client_source": source},
+                {
+                    "kind": "preview",
+                    "issue": local(n),
+                    "client": "claude",
+                    "client_source": source,
+                    "credentials": {},
+                },
             ]
 
         self.assertEqual(
@@ -323,6 +329,7 @@ class LocalBoard(BinFlow):
                     "issue": "LOC-1",
                     "client": "claude",
                     "client_source": "default",
+                    "credentials": {},
                 },
                 {"kind": "usage", "client": "claude", "usage": USAGE, "allowed": True},
             ),

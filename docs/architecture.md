@@ -396,6 +396,26 @@ decoding the outer manifest recovers the original UTF-8 JSON text, including whi
 This envelope keeps malformed opaque text from changing the surrounding manifest. There is no Python credential
 type or kind registry. tmux does not inject from these fields.
 
+Board runs (`router`, including `ensemble-crew issue`) resolve `[orchestrator.roles.<role>.credentials]`
+and `[orchestrator.roles.<role>.tasks.<task>.credentials]`: each task value replaces the whole role value of
+the same kind, retaining other kinds. A run without a task uses only role values; no declarations yields `{}`. New runs pass
+the result as JSON text; resumes omit it and keep the saved spec. Issue bodies and comments never supply it.
+`router --dry-run` prints the resolved object in each new-run preview; a resume supplies no replacement.
+Credentials in the orchestrator's `[core]` or `[core.roles.<role>]` overlays are configuration errors.
+
+Declarations check JSON-compatible table shape, the role's task index and the orchestrator-only `linear = "role"` shorthand;
+broker owns kind names and values. The shorthand expands to that role's app references and only the board keys
+listed below, without reading any secret. It requires `tracker = "linear"`; explicit reference objects stay opaque.
+For example, to declare the engineer app for `light-build` on a configured Linear board:
+
+```toml
+[orchestrator.roles.engineer.tasks.light-build.credentials]
+linear = "role"
+```
+
+The packaged declarations are empty. Installer-written GitHub grants and the decompose task declaration are
+follow-up work.
+
 The broker alone interprets kinds: both declarations require independent
 validation; the caller's whole value replaces an environment value of the same kind, retaining other kinds.
 Duplicate JSON keys, trailing content, non-objects and unknown or invalid kinds must fail with `manifest_rejected`
@@ -429,10 +449,8 @@ container lost without close leaves its token to expire (up to 30 days). No Line
 tokens with identical scopes and individual revocation. Enable client credentials for the role app; changing its
 scopes invalidates its other tokens. Host renewal keeps using its existing shared token path.
 
-Protocol 34 accepts absent declarations or JSON-text empty objects and refuses every nonempty declaration before
-side effects, without interpreting kinds. Malformed envelopes and non-object contents also fail with
-`manifest_rejected`; errors name the source without echoing values. Host lifecycle, CLI and manifest-writer wiring
-remain follow-up work. Existing global GitHub, verifier output-repo and environment-secret paths still operate;
+Protocol 34 errors name the source and kind without echoing values. Host lifecycle, CLI and manifest-writer wiring
+remain separate work. Existing global GitHub, verifier output-repo and environment-secret paths still operate;
 an empty new spec does not yet remove their implicit grants.
 
 | Credential | Host | Purpose | Stored at | Readers | Lifetime | Revoke |

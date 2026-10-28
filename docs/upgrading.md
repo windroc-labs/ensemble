@@ -6,11 +6,13 @@ Broker protocol 34 adds optional `credentials` and `environment_credentials` JSO
 Delegate and session carry both unchanged. The broker validates each, merges whole kinds with the caller winning,
 and serves GitHub, env and Linear through the existing delivery batch.
 The decoded contract is `{github: {app, permissions, repo?}, linear: {app, board}, env: [{item, file}]}`; every kind is
-optional. Unknown kinds and invalid values are refused before Docker operations. Empty objects add nothing.
+optional. New board runs send the orchestrator's resolved declarations (an empty object when none are configured);
+resumes keep the stored spec. Unknown kinds and invalid values are refused before Docker operations. Empty objects add nothing.
 Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
 refuses an older protocol's broker. The broker change alone requires no migration of existing GitHub/env configuration. The existing
 `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal,
-explicit role/task declarations, `--credentials`, and the no-implicit-credentials rule are not enabled here.
+`--credentials`, and the no-implicit-credentials rule are not enabled here. Orchestrator role/task declarations
+are available as described in [Credential spec](architecture.md#credentials).
 GitHub grants (including verifier output) will move to orchestrator/CLI declarations; environment secrets will move
 to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
 errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for the contract.

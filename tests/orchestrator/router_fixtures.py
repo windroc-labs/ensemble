@@ -754,6 +754,7 @@ class OuterBase(TickBase):
             sid=sid,
             resume=resume,
             name=f"{role}-{ID}-{sid[:8]}",
+            credentials=None if resume else "{}",
         )
 
     def input(self, **kw):

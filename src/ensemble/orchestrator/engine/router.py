@@ -506,7 +506,15 @@ class Board:
             self.say("plan", spec.issue, mode="resume", sid=sid, tier=tier, live=live)
             return
         tier = self.cfg.task_tier(spec.task)
-        self.say("plan", spec.issue, mode="new", client=spec.client, tier=tier, live=live)
+        self.say(
+            "plan",
+            spec.issue,
+            mode="new",
+            client=spec.client,
+            tier=tier,
+            live=live,
+            credentials=config.credentials(self.cfg, spec.role, spec.task) if self.dry else None,
+        )
         self.say(
             "restart",
             spec.issue,
@@ -658,6 +666,7 @@ class Board:
                 client=client or "invalid",
                 client_source=source,
                 tier=self.cfg.task_tier(task),
+                credentials=config.credentials(self.cfg, role, task),
             )
         if comments := [error for error in (task_error, client_error) if error]:
             if client_error is None:
