@@ -44,7 +44,7 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 
 ## Principle index
 
-Read each principle's file in full before applying it; each entry gives its trigger. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. Task files select additional principles here; roles select none. These rules adapt pstack; its MIT notice is `<team>/principles/LICENSE`.
+Read each principle's file in full before applying it; each entry gives its trigger. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. Task steps cite a principle only where it changes the step; roles select none. Apply any other principle when its trigger fits, even when the task does not cite it. These rules adapt pstack; its MIT notice is `<team>/principles/LICENSE`.
 
 Resolve upstream principle links through this index, not their original relative paths. Never invoke an unshipped skill or tool mentioned by a leaf; those references are context only. Follow the selected task's steps for the corresponding workflow.
 

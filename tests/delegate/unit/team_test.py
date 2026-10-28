@@ -908,25 +908,6 @@ UNIVERSAL = {
     "prove-it-works",
     "explain-the-number",
 }
-BUILD = {
-    "laziness-protocol",
-    "foundational-thinking",
-    "redesign-from-first-principles",
-    "subtract-before-you-add",
-    "minimize-reader-load",
-    "outcome-oriented-execution",
-    "model-the-domain",
-    "boundary-discipline",
-    "type-system-discipline",
-    "make-operations-idempotent",
-    "migrate-callers-then-delete-legacy-apis",
-    "separate-before-serializing-shared-state",
-    "fix-root-causes",
-    "sequence-verifiable-units",
-    "test-behavior-not-implementation",
-    "encode-lessons-in-structure",
-    "exhaust-the-design-space",
-}
 
 
 class Principles(Packaged):
@@ -946,34 +927,36 @@ class Principles(Packaged):
             self.assertIn(os.path.join(TEAM, "principles", "fix-root-causes.md"), expanded(prompt))
             self.assertEqual(run.read, [])
 
-    def test_tasks_select_principles_and_roles_select_none(self):
-        expected = {
-            "build": BUILD,
-            "light-build": BUILD,
-            "product-design": {
-                "experience-first",
-                "exhaust-the-design-space",
-                "redesign-from-first-principles",
-                "subtract-before-you-add",
-            },
-            "verify": {"test-behavior-not-implementation"},
-        }
-        names = BUILD | UNIVERSAL | {"experience-first"}
+    def test_task_principle_citations_resolve_and_shape_steps(self):
+        index = section(team_texts()["principles.md"], "Principle index")
+        names = set(re.findall(r"<team>/principles/([\w-]+)\.md", index))
         for task in os.listdir(os.path.join(TEAM, "tasks")):
             text = task_text(task.removesuffix(".md"))
-            selected = {name for name in names if f"`{name}`" in text}
-            self.assertEqual(selected, expected.get(task.removesuffix(".md"), set()), task)
-            if selected:
-                self.assertIn("[Principles › Principle index](#principle-index)", text)
+            with self.subTest(task=task):
+                self.assertNotRegex(text, r"(?im)^#+ .*principles")
+                citations = re.findall(r"\[`([\w-]+)`\]\(#principle-index\)", text)
+                self.assertLessEqual(set(citations), names)
+                mentioned = {name for name in names if f"`{name}`" in text}
+                self.assertEqual(mentioned, set(citations))
+                for line in text.splitlines():
+                    if "(#principle-index)" not in line:
+                        continue
+                    self.assertIn(line, section(text, "Steps"))
+                    self.assertRegex(line, r"^\s*(?:\d+\.|-) \*\*[^*]+\*\*")
+                    self.assertEqual(line.count("(#principle-index)"), 1)
+                    self.assertRegex(line, r"\]\(#principle-index\) [A-Za-z]")
+
+    def test_roles_select_none_and_index_triggers_apply_to_every_task(self):
+        index = section(team_texts()["principles.md"], "Principle index")
+        names = set(re.findall(r"<team>/principles/([\w-]+)\.md", index))
         for role in roles():
             with open(os.path.join(TEAM, "roles", f"{role}.md")) as f:
                 text = f.read()
             self.assertFalse(any(name in text for name in names), role)
-        universal = section(team_texts()["principles.md"], "Principle index").split(
-            "| Principle", 1
-        )[0]
+        universal = index.split("| Principle", 1)[0]
         for name in UNIVERSAL:
             self.assertIn(f"`{name}`", universal)
+        self.assertIn("Apply any other principle when its trigger fits", universal)
 
     def test_shared_contract_keeps_outcomes_and_independent_review(self):
         text = team_texts()["principles.md"]

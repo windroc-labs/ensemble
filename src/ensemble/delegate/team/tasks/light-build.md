@@ -2,15 +2,6 @@
 
 Build the requirement with `/updraft:light-build`, then open a pull request.
 
-## Applicable principles
-
-Use [Principles › Principle index](#principle-index) for these triggers and files.
-- For every change: `redesign-from-first-principles` (`<team>/principles/redesign-from-first-principles.md`) and `subtract-before-you-add` (`<team>/principles/subtract-before-you-add.md`). When debugging: `fix-root-causes` (`<team>/principles/fix-root-causes.md`).
-- `laziness-protocol`, `foundational-thinking`, `minimize-reader-load`, `outcome-oriented-execution`.
-- `model-the-domain`, `boundary-discipline`, `type-system-discipline`, `make-operations-idempotent`.
-- `migrate-callers-then-delete-legacy-apis`, `separate-before-serializing-shared-state`.
-- `sequence-verifiable-units`, `test-behavior-not-implementation`, `encode-lessons-in-structure`, `exhaust-the-design-space`.
-
 ## Input processing
 
 [Engineer › Input processing](#input-processing), the requirement being the input's text; a PRD, if given, is context for it.
@@ -27,6 +18,9 @@ Use [Principles › Principle index](#principle-index) for these triggers and fi
 4. **Report progress:**
    [ensemble-progress:start] the build (continue, new or first)
 5. **Build**: continuing → [Engineer › Repo › Continue](#repo); else `/updraft:light-build` ([Engineer › Updraft](#updraft)), the requirements being the requirement, a PRD if given and the user's requirements; docs line "The plan doc stays where updraft puts it; S7 copies it to where the repo keeps design docs; never `git add -f` it."; push points: S5 and each fix.
+   - **Data shape**: at planning, use [`model-the-domain`](#principle-index) to choose the structure for stateful or branching logic before splitting implementation tasks.
+   - **Shared state**: before fan-out, use [`separate-before-serializing-shared-state`](#principle-index) to remove shared write targets; serialize only when one shared target is a real invariant.
+   - **Delivery**: use [`sequence-verifiable-units`](#principle-index) to implement, verify and commit each small unit before starting the next.
    - **Report progress** at the end of each build step (`S<i>`) you run and of each S5 task:
      [ensemble-progress:step] the step and its result; an S5 task as `S5 task <k>/<n> done: <commit>; <checks run>`, `<k>` its number, `<n>` the plan doc's task count (its `### Task` headings)
 6. **Finish** ([Engineer › Finish](#finish)).
