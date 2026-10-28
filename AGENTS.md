@@ -36,6 +36,7 @@ workflow with fake credentials. The independent `Broker macOS` workflow
 `src/broker/` or the workflow, and on manual dispatch, preserving macOS checks (gofmt runs on
 ubuntu only) and the darwin/arm64 build artifact without blocking required CI.
 Require `CI` and `mini-op PR text` (`.github/workflows/mini-op-pr-text.yml`, the PR title, body and commits scan, which a title or body edit reruns alone), never `Broker macos-15` separately.
+A base change alone reruns no CI: push to the branch, or close and reopen the PR.
 
 ## Releasing
 

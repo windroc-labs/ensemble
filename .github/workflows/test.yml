@@ -6,12 +6,10 @@ on:
   merge_group:
     types: [checks_requested]
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
-# A PR title or body edit (`edited` without changes.base) runs no job here, in its own group, so it
-# cancels nothing; mini-op-pr-text.yml rescans the PR text. A base change reruns everything.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}${{ (github.event.action == 'edited' && !github.event.changes.base) && format('-text-edit-{0}', github.run_id) || '' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -26,7 +24,6 @@ env:
 jobs:
   changes:
     name: Test scope
-    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -396,7 +393,6 @@ jobs:
 
   mini-op:
     name: mini-op guard
-    if: ${{ !(github.event.action == 'edited' && !github.event.changes.base) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -420,10 +416,9 @@ jobs:
           fi
 
   ci:
-    # Not `CI` on a text edit: its skipped check would replace the code run's required `CI`.
-    name: ${{ (github.event.action == 'edited' && !github.event.changes.base) && 'CI skipped on a PR text edit' || 'CI' }}
+    name: CI
     needs: [changes, lint, repository, unit, coverage, integration, broker, mini-op]
-    if: ${{ always() && !(github.event.action == 'edited' && !github.event.changes.base) }}
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
