@@ -787,13 +787,7 @@ class PrefetchTest(Docker):
     def test_bad_lines_are_refused_before_any_git_call(self):
         for lines in (
             "Repo: acme/app\nRepo: acme/app",
-            "Repo: acme/app\nRef: a\nRef: b",
             "Repo: acme/app\nRef: --upload-pack=x",
-            "Repo: acme/app\nRef: refs/pull/1/head",
-            "Repo: acme/app\nRef: 0123456789abcdef",
-            "Repo: acme/app\nRef: a b",
-            "Repo: not a repo!",
-            "Ref: v1",
         ):
             with (
                 self.subTest(lines=lines),

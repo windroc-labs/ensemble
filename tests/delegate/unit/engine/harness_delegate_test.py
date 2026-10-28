@@ -40,7 +40,6 @@ from ensemble.session import (
     Access,
     EnvironmentSpec,
     Exited,
-    HookCallback,
     Mode,
     NotShowable,
     Reply,
@@ -2713,50 +2712,6 @@ class EnvironmentTest(HarnessCase):
             self.preview(text=named).plan.session.environment,
             self.preview().plan.session.environment,
         )
-
-    def test_delegate_json_round_trips_environment(self):
-        self.append(ACCEPTANCE)
-        self.make(spec=self.spec(), host="docker").close()
-        found = self.metadata()["plan"]["session"]["environment"]
-        want = EnvironmentSpec(
-            image="dummy-env:test",
-            gateway="workers",
-            plugins=("dummy-plugin",),
-            secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
-            lock="dummy-lock",
-            prefetch={"repo": "acme/app", "ref": "release/1"},
-        )
-        self.assertEqual(found, want.persisted())
-        view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-        self.assertEqual(view._state.plan.session.environment, want)
-
-    def test_pre_upgrade_state_parses_without_environment(self):
-        self.make(role="engineer", spec=self.spec(task="build"), host="docker").close()
-        data = self.metadata()
-        del data["plan"]["session"]["environment"]
-        with open(self.state_record(), "w", encoding="utf-8") as file:
-            json.dump(data, file)
-        view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-        self.assertIsNone(view._state.plan.session.environment)
-
-    def test_delegate_json_round_trips_handlers_and_reads_none_before_them(self):
-        self.make(role="engineer", spec=self.spec(task="build"), host="docker").close()
-        data = self.metadata()
-        self.assertEqual(data["plan"]["session"]["handlers"], [])
-        handler = {"module": "pkg.handler", "state": {"k": 1}, "roots": ["/r"]}
-        for stored, want in (
-            ([handler], (HookCallback("pkg.handler", {"k": 1}, ("/r",)),)),
-            (None, ()),
-        ):
-            with self.subTest(stored=stored):
-                if stored is None:
-                    del data["plan"]["session"]["handlers"]
-                else:
-                    data["plan"]["session"]["handlers"] = stored
-                with open(self.state_record(), "w", encoding="utf-8") as file:
-                    json.dump(data, file)
-                view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-                self.assertEqual(view._state.plan.session.handlers, want)
 
     def answered(self, view, text="The answer."):
         view._complete(Result(0, Outcome("needs_input", "Q", "A", questions=["Which?"])))

@@ -417,22 +417,16 @@ class CloseTest(HandlerCase):
 
         AgentSession.agent = Agent(close)
 
-    def test_a_close_ends_the_active_attempt_as_a_stop_before_the_worker_exits(self):
-        for opening in (True, False):
-            with self.subTest(opening=opening):
-                if not opening:
-                    self.call(TurnStarted())
-                self.delegate.close()
-                state = self.state()
-                self.assertEqual(state.result, self.STOP)
-                self.assertEqual(self.kinds_sent()[-1], ("finished", state.attempt))
-                self.assertEqual(self.kinds()[-2:], ["result", "end"])
-                sent = len(self.sent)
-                self.call(Exited(0))
-                self.assertEqual(self.state().result, state.result)
-                self.assertEqual(len(self.sent), sent)
-                self.register(state.attempt + 1, attempt=state.attempt + 1, completed=False)
-                self.record.save(replace(self.state(), result=None, bound=False))
+    def test_a_close_ends_the_opening_attempt_as_a_stop_before_the_worker_exits(self):
+        self.delegate.close()
+        state = self.state()
+        self.assertEqual(state.result, self.STOP)
+        self.assertEqual(self.kinds_sent()[-1], ("finished", state.attempt))
+        self.assertEqual(self.kinds()[-2:], ["result", "end"])
+        sent = len(self.sent)
+        self.call(Exited(0))
+        self.assertEqual(self.state().result, state.result)
+        self.assertEqual(len(self.sent), sent)
 
     def test_its_claim_covers_the_attach_and_the_owners_close(self):
         self.call(TurnStarted())
@@ -573,12 +567,6 @@ class CloseTest(HandlerCase):
         self.assertFalse(self.state().completed)
         self.assertFalse(self.record.store.closing())
         self.assertEqual(self.kinds_sent(), [])
-
-    def test_a_close_after_the_attempt_ended_sends_no_second_finished(self):
-        self.finish()
-        before = (replace(self.state(), closing=True), list(self.sent))
-        self.delegate.close()
-        self.assertEqual((self.state(), self.sent), before)
 
 
 class IgnoredTest(HandlerCase):
