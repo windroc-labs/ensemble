@@ -169,12 +169,45 @@ def label(name, id, group=TASK_GROUP):
 
 
 @contextlib.contextmanager
-def other_router(path):
+def held(runs, name, op=fcntl.LOCK_EX):
     # flock conflicts across open files in one process too
+    path = os.path.join(os.path.dirname(runs), name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(os.path.join(os.path.dirname(path), "router.lock"), "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with open(path, "a") as f:
+        fcntl.flock(f, op | fcntl.LOCK_NB)
         yield
+
+
+def other_router(runs):
+    return held(runs, "router.lock")
+
+
+def free(runs, name, op=fcntl.LOCK_EX):
+    try:
+        with held(runs, name, op):
+            return True
+    except BlockingIOError:
+        return False
+
+
+LOCKS = {
+    "router": ("router.lock", fcntl.LOCK_EX),
+    "issue": (os.path.join("router", "TASK-1.lock"), fcntl.LOCK_EX),
+    "starts": ("router-starts.lock", fcntl.LOCK_EX),
+    "starts shared": ("router-starts.lock", fcntl.LOCK_SH),
+}
+
+
+class Probe(Start):
+    """Start that records which LOCKS another router could take during the start."""
+
+    def __init__(self, runs, **kwargs):
+        super().__init__(**kwargs)
+        self.runs, self.free = runs, None
+
+    def __call__(self, a):
+        self.free = {key: free(self.runs, *lock) for key, lock in LOCKS.items()}
+        return super().__call__(a)
 
 
 SAY = functools.partial(router.log, "router")
@@ -778,7 +811,14 @@ class RouterEntry(OuterBase):
                 self.assertEqual((entry.kind, entry.ts), (kind, written))
                 self.assertEqual(
                     sorted(os.listdir(os.path.dirname(self.runs))),
-                    ["orchestrator.jsonl", "router.lock", "runs.jsonl", "runs.jsonl.lock"],
+                    [
+                        "orchestrator.jsonl",
+                        "router",
+                        "router-starts.lock",
+                        "router.lock",
+                        "runs.jsonl",
+                        "runs.jsonl.lock",
+                    ],
                 )
 
     def test_a_new_run_closes_only_its_issues_recorded_run_first(self):
@@ -1653,7 +1693,7 @@ class RouterArguments(Base):
             "[--tui [--display D] [--events FILE]] | --brake ROLE",
         )
         for flag in ("--gate", "--split", "--manager", "--now"):
-            self.assertNotIn(flag, router.USAGE + router.__doc__)
+            self.assertNotIn(flag, router.USAGE + router.HELP)
 
     def test_now_is_refused(self):
         for argv in (["--now"], ["--now", "--dry-run"]):
@@ -1690,15 +1730,87 @@ class RouterLocking(TickBase):
 
     def test_another_router_leaves_the_issue_alone(self):
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
-        with other_router(self.runs):
+        with (
+            other_router(self.runs),
+            mock.patch("time.monotonic", side_effect=[0, router.WAIT]),
+            mock.patch("time.sleep") as slept,
+        ):
             self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 2)
-        self.assertEqual(self.err, "router.py: another router is running; try again\n")
+        slept.assert_called_once_with(router.POLL)
+        self.assertEqual(
+            self.err,
+            "router.py: another router is running; waiting up to 600 s\n"
+            "router.py: another router is running; try again\n",
+        )
         self.assertEqual(self.said(), ["skip TASK-1 reason=another router is running"])
         self.assertEqual((fake.queries, self.api.order, self.state), ([], [], ""))
 
+    def test_an_issue_run_waits_for_the_router_lock(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        with contextlib.ExitStack() as other:
+            other.enter_context(other_router(self.runs))
+            with mock.patch("time.sleep", side_effect=lambda _: other.close()):
+                self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+        self.assertEqual(
+            self.err.count("router.py: another router is running; waiting up to 600 s\n"), 1
+        )
+        self.assertNotIn("try again", self.err)
+        self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
+
+    def test_an_issue_being_started_is_refused(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        with held(self.runs, LOCKS["issue"][0]):
+            self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 2)
+        self.assertEqual(
+            self.err, "router.py: TASK-1 is being started by another router; try again\n"
+        )
+        self.assertEqual(self.said(), ["skip TASK-1 reason=being started by another router"])
+        self.assertEqual((fake.queries, self.api.order, self.state), ([], [], ""))
+        self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+
+    def test_an_issue_run_starts_outside_the_router_lock(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        probe = Probe(self.runs)
+        self.assertEqual(self.tick(fake, "--issue", "TASK-1", start=probe), 0)
+        self.assertEqual(
+            probe.free, {"router": True, "issue": False, "starts": False, "starts shared": True}
+        )
+        self.assertTrue(all(free(self.runs, *lock) for lock in LOCKS.values()))
+
+    def test_a_tick_holds_its_locks_through_its_start(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        probe = Probe(self.runs)
+        self.assertEqual(self.tick(fake, start=probe), 0)
+        self.assertEqual(
+            probe.free, {"router": False, "issue": True, "starts": False, "starts shared": False}
+        )
+
+    def test_a_tick_skips_while_an_issue_run_starts(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        with held(self.runs, "router-starts.lock", fcntl.LOCK_SH):
+            self.assertEqual(self.tick(fake), 0)
+            self.assertEqual(self.said(), ["skip reason=an issue run is starting"])
+            self.assertEqual((fake.queries, self.api.order), ([], []))
+        self.assertEqual(self.tick(fake), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+
+    def test_a_failed_issue_start_releases_its_locks(self):
+        for start in (Start(exits={"TASK-1": 1}), Start(raises={"TASK-1": RuntimeError("boom")})):
+            fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+            with self.subTest(start=start.exits or start.raises):
+                with contextlib.suppress(RuntimeError):
+                    self.tick(fake, "--issue", "TASK-1", start=start)
+                self.assertEqual(start.launches[0].issue, "TASK-1")
+                self.assertTrue(all(free(self.runs, *lock) for lock in LOCKS.values()))
+
     def test_a_dry_run_and_the_brake_take_no_lock(self):
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
-        with other_router(self.runs):
+        with contextlib.ExitStack() as others:
+            for name, op in LOCKS.values():
+                if op == fcntl.LOCK_EX:
+                    others.enter_context(held(self.runs, name))
             self.assertEqual(self.tick(fake, "--dry-run"), 0)
             self.assertEqual(
                 self.said()[:-1],

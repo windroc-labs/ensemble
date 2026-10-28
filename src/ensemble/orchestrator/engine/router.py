@@ -1,78 +1,4 @@
-"""Claim or resume issue work with one scheduler tick or an explicit issue.
-
-Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
-                             [--tui [--display D] [--events FILE]]
-       ensemble-orchestrator router --brake ROLE
-
-Arguments and options:
-  (no mode)     One scheduled tick: role max_runs and usage
-                gates; starts at most one role's run. Linear uses the app
-                delegate (Agent field); local boards use the role directory.
-  --issue ID    Only this issue identifier, e.g. TASK-1; bypass role max_runs
-                and usage gates; session client limits still apply.
-  --dry-run     Print the plan without claiming issues or launching work;
-                a tick still performs usage checks. Not an offline preview:
-                read configuration, run inventory, credentials and board data.
---tui         With either: each run it starts or resumes is attended (TUI (text user interface) mode), shown at D (opaque,
-              its format: ensemble-session --help; no D: the caller's place; none: started hidden,
-              passed on as given), its events written to FILE, else $ENSEMBLE_EVENTS. Exits 2 before
-              any Linear call without either, or when the Delegate refuses D or FILE (no place to
-              show the TUI, a D its Host cannot use, FILE not writable). A run it starts or resumes
-              prints its Record line on stdout, its attach commands on stderr. launchd never passes
-              it: a tick resumes a run headless.
---brake ROLE  Print the run's client usage (else ROLE's); exit 0 if a deep-research round may start, 1 if not or
-              unknown, 2 no such role.
---help        Print this; exit 0. Bad arguments exit 2.
-  -h           Equivalent to --help. --brake must stand alone.
-  Valued options occur at most once; boolean flags may repeat with no change.
-
-Prerequisites and effects:
-  Requires configured roles and board (Linear: [linear], the [linear.harness]
-  OAuth app, whose token a run renews when under 5 days are left (--dry-run
-  never; it logs the days left), role apps' Keychain items and access) and the
-  selected Delegate/client executable. See
-  ensemble-orchestrator --help for configuration, executable lookup and Record schema.
-  Execution can claim/move issues, post comments or write back ended outcomes.
-  A launch prepares input, records a runs.jsonl row and detaches a LinearRun;
-  the router exits while the Delegate harness writes events back to the board.
-  Other events go to orchestrator.jsonl (src router). A tick without diagnostics
-  writes none; Linear issues without a configured role delegate log claim-skip,
-  and usage-blocked candidates log usage-skip. Preview plans print JSON lines
-  to stderr. Output files follow Delegate configuration.
-
-Exit conditions:
-  Tick: 2 on configuration or host usage probe failure, 1 when Linear is unavailable (each logged
-  once a day), otherwise 0.
-  --issue: 2 on configuration failure, 1 when Linear is unavailable or on
-  unknown run inventory; 2 when busy,
-  already live or unclaimable; 0 if an ended outcome was written back. Otherwise
-  launch result: 0 detached/bounced, 1 launch failure, 2 issue config error,
-  3 transient error. --dry-run: 0 for the plan; setup failures still apply.
-  A nonzero --issue (not --dry-run) also prints its orchestrator.jsonl lines about
-  the issue that stderr did not show, e.g. router.py: pick-none TASK-1 reason=...
-  ENSEMBLE_SID is read once and removed: new run identity, or must match a
-  resumed run (mismatch: 2; dry-run: 0). ENSEMBLE_AGENT_SESSION blocks tick and
-  --issue execution with 2; --dry-run and --brake remain available.
-  --tui exits 2 before Linear calls if events are absent or its Delegate refuses
-  display/events (no usable placement, invalid Host value or unwritable file).
-
-Examples (configured Linear access, client and a claimable TASK-1):
-  ensemble-orchestrator router --issue TASK-1 --dry-run
-  Prints the issue plan; no claim or launch.
-  ensemble-orchestrator router --issue TASK-1 --tui --display none --events /tmp/demo-events.jsonl
-  Starts attended but hidden; writes events and prints the Record.
-  ensemble-orchestrator router --brake engineer
-  Requires a configured engineer role; prints usage without starting work.
-
-Recovery and next help:
-  Busy: retry later. Live run: ensemble-orchestrator status TASK-1
-  View recovery: ensemble-orchestrator attach-command TASK-1
-  Interrupted run: ensemble-orchestrator resume --help
-  Termination: ensemble-orchestrator close --help
-  Fix reported configuration/Keychain errors before retrying.
-  Command discovery: ensemble-orchestrator --help
-  Role discovery: ensemble-delegate run --list
-"""
+"""The board router: one scheduler tick, or an explicit issue (HELP)."""
 
 import contextlib
 import fcntl
@@ -84,6 +10,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -146,6 +73,83 @@ from ensemble.utils import (
     summary,
 )
 
+HELP = """Claim or resume issue work with one scheduler tick or an explicit issue.
+
+Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
+                             [--tui [--display D] [--events FILE]]
+       ensemble-orchestrator router --brake ROLE
+
+Arguments and options:
+  (no mode)     One scheduled tick: role max_runs and usage
+                gates; starts at most one role's run. Linear uses the app
+                delegate (Agent field); local boards use the role directory.
+  --issue ID    Only this issue identifier, e.g. TASK-1; bypass role max_runs
+                and usage gates; session client limits still apply.
+  --dry-run     Print the plan without claiming issues or launching work;
+                a tick still performs usage checks. Not an offline preview:
+                read configuration, run inventory, credentials and board data.
+--tui         With either: each run it starts or resumes is attended (TUI (text user interface) mode), shown at D (opaque,
+              its format: ensemble-session --help; no D: the caller's place; none: started hidden,
+              passed on as given), its events written to FILE, else $ENSEMBLE_EVENTS. Exits 2 before
+              any Linear call without either, or when the Delegate refuses D or FILE (no place to
+              show the TUI, a D its Host cannot use, FILE not writable). A run it starts or resumes
+              prints its Record line on stdout, its attach commands on stderr. launchd never passes
+              it: a tick resumes a run headless.
+--brake ROLE  Print the run's client usage (else ROLE's); exit 0 if a deep-research round may start, 1 if not or
+              unknown, 2 no such role.
+--help        Print this; exit 0. Bad arguments exit 2.
+  -h           Equivalent to --help. --brake must stand alone.
+  Valued options occur at most once; boolean flags may repeat with no change.
+
+Prerequisites and effects:
+  Requires configured roles and board (Linear: [linear], the [linear.harness]
+  OAuth app, whose token a run renews when under 5 days are left (--dry-run
+  never; it logs the days left), role apps' Keychain items and access) and the
+  selected Delegate/client executable. See
+  ensemble-orchestrator --help for configuration, executable lookup and Record schema.
+  Execution can claim/move issues, post comments or write back ended outcomes.
+  A launch prepares input, records a runs.jsonl row and detaches a LinearRun;
+  the router exits while the Delegate harness writes events back to the board.
+  Other events go to orchestrator.jsonl (src router). A tick without diagnostics
+  writes none; Linear issues without a configured role delegate log claim-skip,
+  and usage-blocked candidates log usage-skip. Preview plans print JSON lines
+  to stderr. Output files follow Delegate configuration.
+
+Exit conditions:
+  Tick: 2 on configuration or host usage probe failure, 1 when Linear is unavailable (each logged
+  once a day), otherwise 0.
+  --issue: 2 on configuration failure, 1 when Linear is unavailable or on
+  unknown run inventory; 2 when busy (another router held the lock for 600 s;
+  it waits meanwhile), being started by another router, already live or
+  unclaimable; 0 if an ended outcome was written back. Otherwise
+  launch result: 0 detached/bounced, 1 launch failure, 2 issue config error,
+  3 transient error. --dry-run: 0 for the plan; setup failures still apply.
+  A nonzero --issue (not --dry-run) also prints its orchestrator.jsonl lines about
+  the issue that stderr did not show, e.g. router.py: pick-none TASK-1 reason=...
+  ENSEMBLE_SID is read once and removed: new run identity, or must match a
+  resumed run (mismatch: 2; dry-run: 0). ENSEMBLE_AGENT_SESSION blocks tick and
+  --issue execution with 2; --dry-run and --brake remain available.
+  --tui exits 2 before Linear calls if events are absent or its Delegate refuses
+  display/events (no usable placement, invalid Host value or unwritable file).
+
+Examples (configured Linear access, client and a claimable TASK-1):
+  ensemble-orchestrator router --issue TASK-1 --dry-run
+  Prints the issue plan; no claim or launch.
+  ensemble-orchestrator router --issue TASK-1 --tui --display none --events /tmp/demo-events.jsonl
+  Starts attended but hidden; writes events and prints the Record.
+  ensemble-orchestrator router --brake engineer
+  Requires a configured engineer role; prints usage without starting work.
+
+Recovery and next help:
+  Busy or being started: retry later. Live run: ensemble-orchestrator status TASK-1
+  View recovery: ensemble-orchestrator attach-command TASK-1
+  Interrupted run: ensemble-orchestrator resume --help
+  Termination: ensemble-orchestrator close --help
+  Fix reported configuration/Keychain errors before retrying.
+  Command discovery: ensemble-orchestrator --help
+  Role discovery: ensemble-delegate run --list
+"""
+
 STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
@@ -155,6 +159,10 @@ SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
 BUSY = "another router is running"
+STARTING = "being started by another router"
+STARTS = "an issue run is starting"
+WAIT = 600  # s an --issue run waits for the router lock: its claim takes seconds, a tick's start minutes
+POLL = 0.2
 USAGE = (
     "usage: ensemble-orchestrator router [--dry-run] [--issue ID] "
     "[--tui [--display D] [--events FILE]] | --brake ROLE"
@@ -932,21 +940,56 @@ def announce(ident, linear_run, detached):
         )
 
 
+def _take(f, op, wait: float | None, waiting):
+    """Whether f's flock op was taken, retried every POLL s for up to wait s (None: blocks);
+    waiting() runs once, before the first retry.
+    """
+    if wait is None:
+        fcntl.flock(f, op)
+        return True
+    deadline = None
+    while True:
+        try:
+            fcntl.flock(f, op | fcntl.LOCK_NB)
+        except BlockingIOError:
+            now = time.monotonic()
+            deadline = now + wait if deadline is None else deadline
+            if now >= deadline:
+                return False
+        else:
+            return True
+        if waiting is not None:
+            waiting()
+            waiting = None
+        time.sleep(POLL)
+
+
 @contextlib.contextmanager
-def lock(runs, dry):
+def _flock(runs, dry, name, op, *, wait: float | None = 0, waiting=None):
     if dry:
         yield True
         return
-    os.makedirs(os.path.dirname(runs), exist_ok=True)
-    with open(
-        os.path.join(os.path.dirname(runs), "router.lock"), "a"
-    ) as f:  # not inherited by children (PEP 446)
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            free = True
-        except BlockingIOError:
-            free = False
-        yield free
+    path = os.path.join(os.path.dirname(runs), name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:  # not inherited by children (PEP 446)
+        yield _take(f, op, wait, waiting)
+
+
+def lock(runs, dry, *, wait=0, waiting=None):
+    return _flock(runs, dry, "router.lock", fcntl.LOCK_EX, wait=wait, waiting=waiting)
+
+
+def issue_lock(runs, ident, dry):
+    """The one router starting ident holds it from before its claim until its start returns."""
+    return _flock(runs, dry, os.path.join("router", f"{ident}.lock"), fcntl.LOCK_EX)
+
+
+def starts(runs, dry, *, shared):
+    """Shared: each --issue run's from its claim until its start returns; exclusive: a tick's. Taken
+    only under the router lock, so a shared take never waits.
+    """
+    op = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+    return _flock(runs, dry, "router-starts.lock", op, wait=None if shared else 0)
 
 
 class Held:
@@ -1044,9 +1087,12 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
     now = clock().astimezone(UTC)
     dry, runs = opts["dry"], cfg.runs_log
     say = functools.partial(log, "router", dry=dry)
-    with lock(runs, dry) as free:
+    with lock(runs, dry) as free, contextlib.ExitStack() as held:
         if not free:
             say("skip", reason=BUSY)
+            return 0
+        if not held.enter_context(starts(runs, dry, shared=False)):
+            say("skip", reason=STARTS)
             return 0
         entries = parse_log(runs)
         live = live_sessions(cfg, entries, say=say)
@@ -1094,58 +1140,67 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
     now = clock().astimezone(UTC)
     ident, dry, runs = opts["issue"], opts["dry"], cfg.runs_log
     stop = 0 if dry else 2
-    with lock(runs, dry) as free:
-        if not free:
-            log("router", "skip", ident, reason=BUSY, told=True)
-            print(f"router.py: {BUSY}; try again", file=sys.stderr)
+    waiting = functools.partial(
+        print, f"router.py: {BUSY}; waiting up to {WAIT} s", file=sys.stderr, flush=True
+    )
+    with contextlib.ExitStack() as held:
+        if not held.enter_context(issue_lock(runs, ident, dry)):
+            log("router", "skip", ident, reason=STARTING, told=True)
+            print(f"router.py: {ident} is {STARTING}; try again", file=sys.stderr)
             return stop
-        entries = parse_log(runs)
-        live = live_sessions(cfg, entries, say=functools.partial(log, "router", dry=dry))
-        if live is None:
-            print("router.py: agent runs unknown; try again", file=sys.stderr)
-            return 0 if dry else 1
-        if any(ident in ids for ids in live.values()):
-            sid = latest(entries)[ident].sid
-            view = LinearRun.attach(ident, cfg=cfg, sid=sid)
-            try:
-                attach = view.delegate.attach_command()
-            except delegate.SessionError as e:
-                attach = f"unknown ({one_line(e)})"
-            shown = f": {attach}" if attach else ""
-            print(f"router.py: {ident} has a live agent run{shown}", file=sys.stderr)
-            return stop
-        entries = parse_log(runs)
-        board = Board(gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring)
-        if issue := next(
-            (i for i in board.tracker.assigned(IssueState.RUNNING) if i["identifier"] == ident),
-            None,
-        ):
-            sid = board.current_sid(issue)
-            if cfg.tracker is TrackerKind.LINEAR and board.credential_error(
-                role_of(entries, sid) if sid else board.role(issue)
-            ):
+        with lock(runs, dry, wait=WAIT, waiting=waiting) as free:
+            if not free:
+                log("router", "skip", ident, reason=BUSY, told=True)
+                print(f"router.py: {BUSY}; try again", file=sys.stderr)
                 return stop
-            if not board.settle(issue, sid, wait=False):
-                return 0 if board.replays.get(ident) else stop
-            spec = board.resumption(issue, sid, launch_sid or str(uuid.uuid4()))
-            board.plan(("resume", spec, sid))
-            if not dry and other_sid(spec, launch_sid):
-                return 2
-        elif board.is_blocked(ident) or not (taken := board.take(ident)):
-            return stop
-        else:
-            issue, task, role, client, source = taken
-            spec = Spec.from_issue(
-                issue,
-                role=role,
-                mode="new",
-                sid=launch_sid or str(uuid.uuid4()),
-                task=task,
-                client=client,
-                client_source=source,
-            )
-        if dry:
-            return 0
+            entries = parse_log(runs)
+            live = live_sessions(cfg, entries, say=functools.partial(log, "router", dry=dry))
+            if live is None:
+                print("router.py: agent runs unknown; try again", file=sys.stderr)
+                return 0 if dry else 1
+            if any(ident in ids for ids in live.values()):
+                sid = latest(entries)[ident].sid
+                view = LinearRun.attach(ident, cfg=cfg, sid=sid)
+                try:
+                    attach = view.delegate.attach_command()
+                except delegate.SessionError as e:
+                    attach = f"unknown ({one_line(e)})"
+                shown = f": {attach}" if attach else ""
+                print(f"router.py: {ident} has a live agent run{shown}", file=sys.stderr)
+                return stop
+            entries = parse_log(runs)
+            board = Board(gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring)
+            if issue := next(
+                (i for i in board.tracker.assigned(IssueState.RUNNING) if i["identifier"] == ident),
+                None,
+            ):
+                sid = board.current_sid(issue)
+                if cfg.tracker is TrackerKind.LINEAR and board.credential_error(
+                    role_of(entries, sid) if sid else board.role(issue)
+                ):
+                    return stop
+                if not board.settle(issue, sid, wait=False):
+                    return 0 if board.replays.get(ident) else stop
+                spec = board.resumption(issue, sid, launch_sid or str(uuid.uuid4()))
+                board.plan(("resume", spec, sid))
+                if not dry and other_sid(spec, launch_sid):
+                    return 2
+            elif board.is_blocked(ident) or not (taken := board.take(ident)):
+                return stop
+            else:
+                issue, task, role, client, source = taken
+                spec = Spec.from_issue(
+                    issue,
+                    role=role,
+                    mode="new",
+                    sid=launch_sid or str(uuid.uuid4()),
+                    task=task,
+                    client=client,
+                    client_source=source,
+                )
+            if dry:
+                return 0
+            held.enter_context(starts(runs, dry, shared=True))
         return start(begin(cfg, spec))
 
 
@@ -1207,7 +1262,7 @@ def _help_text():
             break_long_words=False,
             break_on_hyphens=False,
         ),
-        __doc__ or "",
+        HELP,
     )
 
 
