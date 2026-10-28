@@ -11,8 +11,7 @@ from ensemble.delegate import config
 DOCKER_HOST = "ensemble.session.hosts.docker.host:DockerHost"
 # an environment name follows the lock-name rule (WDRC-109 FR-64)
 ENVIRONMENT_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
-ENVIRONMENT_KEYS = frozenset({"image", "gateway", "plugins", "lock", "prefetch", "secrets"})
-SECRET_KEYS = frozenset({"item", "file"})
+ENVIRONMENT_KEYS = frozenset({"image", "gateway", "plugins", "lock", "prefetch", "credentials"})
 # what a named or role table, checked alone, may leave to its default
 PLACEHOLDERS = {"image": session.EnvironmentSpec.WORKER, "gateway": "workers"}
 
@@ -109,16 +108,10 @@ def _check_table(table: Mapping, where: str) -> None:
         raise ValueError(f"unknown key {extra[0]!r} in {where}")
     if not isinstance(table.get("prefetch", False), bool):
         raise ValueError(f"{where} prefetch must be true or false")
-    secrets = table.get("secrets", [])
-    if isinstance(secrets, list):
-        for n, secret in enumerate(secrets, 1):
-            if not isinstance(secret, Mapping):
-                raise ValueError(f"{where} secrets {n} must be a table")
-            if extra := sorted(set(secret) - SECRET_KEYS, key=str):
-                raise ValueError(f"unknown key {extra[0]!r} in {where} secrets {n}")
     try:
         session.EnvironmentSpec.from_fields(
-            PLACEHOLDERS | {key: value for key, value in table.items() if key != "prefetch"}
+            PLACEHOLDERS
+            | {key: value for key, value in table.items() if key not in ("prefetch", "credentials")}
         )
     except session.ConfigError as error:
         raise ValueError(f"{where}: {error}") from None

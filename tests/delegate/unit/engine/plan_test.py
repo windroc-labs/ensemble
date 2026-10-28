@@ -749,9 +749,6 @@ class Docker(DockerCase):
         self.assertIn("team_dirs", self.refused("poet", "verse", team=team, out=None))
 
 
-SECRET = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
-
-
 class PrefetchTest(DockerCase):
     """A resolved environment's prefetch target: the Reference block's one Repo: and optional Ref:,
     syntax-checked before any git call (WDRC-109 FR-52).
@@ -854,7 +851,6 @@ class PrefetchTest(DockerCase):
         for environment, key in (
             (self.env(prefetch=False), "lock"),
             (self.env(), "prefetch"),
-            (Resolved(replace(self.SPEC, lock=None, secrets=(SECRET,)), prefetch=False), "secrets"),
         ):
             with self.subTest(key=key):
                 message = self.refused(mode="in_process", environment=environment)
@@ -862,3 +858,18 @@ class PrefetchTest(DockerCase):
         gateway = Resolved(EnvironmentSpec(image="@worker", gateway="x"), prefetch=False)
         got, _ = self.planned(mode="in_process", environment=gateway)
         self.assertIsNone(got.session.environment)
+
+    def test_environment_credentials_are_opaque_and_separate_from_the_caller(self):
+        value = ' {"future-kind": [1]}\n'
+        environment = Resolved(replace(self.SPEC, lock=None), prefetch=False, credentials=value)
+        got, _ = self.planned(environment=environment, credentials=' {"other-kind": [2]} ')
+        self.assertEqual(got.session.environment_credentials, value)
+        self.assertEqual(got.session.credentials, ' {"other-kind": [2]} ')
+        self.assertEqual(got.spec.environment_credentials, value)
+        for value in ("{}", "", "{"):
+            with self.subTest(value=value):
+                environment = replace(environment, credentials=value)
+                self.assertIn(
+                    "environment_credentials: in_process",
+                    self.refused(mode="in_process", environment=environment),
+                )

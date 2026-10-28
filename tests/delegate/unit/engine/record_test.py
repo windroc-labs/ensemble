@@ -29,7 +29,6 @@ class RunRecordTest(HarnessCase):
             image="dummy-env:test",
             gateway="workers",
             plugins=("dummy-plugin",),
-            secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
             lock="dummy-lock",
             prefetch={"repo": "acme/app", "ref": "release/1"},
         )

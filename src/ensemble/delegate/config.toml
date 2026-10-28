@@ -176,13 +176,13 @@ effort = "low"
 #   [environments.<name>] a named environment: only the keys that differ from the default; <name> as lock below
 #   [roles.<role>.environment]  local: name (a named environment) and keys overriding it, or the default without name
 # A result equal to this file's default (config.local.toml aside) passes no environment: the run starts as before
-# environments. An in_process run has no container: it drops the environment, refusing one with lock, secrets or
+# environments. An in_process run has no container: it drops the environment, refusing one with lock, credentials or
 # prefetch. Keys (a table refuses any other):
 #   image     a local base image's tag or ID, or "@worker": ensemble's worker base (~/.ensemble/docker/worker)
 #   gateway   the egress proxy's caller network the container joins (its label name)
 #   plugins   in-image plugin names or pinned sources, added to [hosts.docker] plugins; [] → none
-#   secrets   [[…secrets]] tables of item (an ensemble-broker-env/<name> keychain item) and file (its name under
-#             /run/ensemble/secrets/env/); references only, never a value; [] → none
+#   credentials  an opaque credential declaration, sent separately from the caller's; only the broker validates
+#                and merges kinds (caller wins); unset → none
 #   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run keeps its
 #             container and lock until its user closes it or its client exits; unset → none
 #   prefetch  true: clone the input's one Reference `Repo:` at its optional `Ref:` line into the new workspace; the
@@ -191,7 +191,6 @@ effort = "low"
 image = "@worker"
 gateway = "workers"
 plugins = []
-secrets = []
 prefetch = false
 
 [environments]
@@ -204,11 +203,11 @@ gateway = "mini-op"
 plugins = []
 lock = "mini-op"
 
-[[environments.mini-op.secrets]]
+[[environments.mini-op.credentials.env]]
 item = "ensemble-broker-env/mini-op-password"
 file = "mini-password"
 
-[[environments.mini-op.secrets]]
+[[environments.mini-op.credentials.env]]
 item = "ensemble-broker-env/mini-op-ssh-key"
 file = "mini-ssh-key"
 

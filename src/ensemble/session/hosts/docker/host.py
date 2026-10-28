@@ -831,7 +831,6 @@ class DockerHost(Host):
             **(
                 {
                     "gateway": environment.gateway,
-                    "secrets": environment.secrets,
                     "lock": environment.lock,
                     "lock_owner": name,
                     "prefetch": environment.prefetch,
