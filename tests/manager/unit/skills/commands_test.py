@@ -29,8 +29,11 @@ RETIRED = (
     "router.py",
     "--runner",
     "attach --resume",
+    "ctmux's",
     "${CLAUDE_SKILL_DIR}/../../src/ensemble/manager",
     "src/ensemble/manager",
+    "tmux ls",
+    "ensemble-<role>-<ID>",
 )
 REPAIRS = ("rename-session", "/rename", "@grid-busy", "@opener", "@pane", "send-keys", "set-option")
 
@@ -99,6 +102,7 @@ class Commands(Case):
         for word in (*RETIRED, *REPAIRS):
             self.assertNotIn(word, body("manage"))
         self.assertNotIn("--split", body("manage"))
+        self.assertNotIn("## Crew commands", body("manage"))
 
 
 class Names(Case):

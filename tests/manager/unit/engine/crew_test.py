@@ -12,7 +12,8 @@ from unittest import mock
 
 from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _run_start
 from ensemble.manager.engine.types import RosterError, Spec, State
-from ensemble.utils import Record, Status, save_reply
+from ensemble.utils import Record, save_reply
+from tests.manager.case import status
 from tests.manager.roster_case import RosterCase, mark
 from tests.manager.starters import answered, finished
 from tests.utils.jsonl import read_jsonl
@@ -184,17 +185,10 @@ class ResumeInput(RosterCase):
                 else:
                     self.assertEqual(tuple(argv), (*self.record.ctl, "status"))
                     self.assertEqual(options["input"], self.record.to_line() + "\n")
-                    stdout = (
-                        Status(
-                            name=self.record.name,
-                            alive=False,
-                            state="gone",
-                            outcome="needs_input",
-                            attach=None,
-                            hidden=False,
-                        ).to_line()
-                        + "\n"
+                    gone = status(
+                        self.record.name, alive=False, state="gone", outcome="needs_input"
                     )
+                    stdout = gone.to_line() + "\n"
                 return mock.Mock(returncode=0, stdout=stdout, stderr="")
 
             with mock.patch("subprocess.run", side_effect=query):
@@ -244,15 +238,10 @@ class ResumeLive(RosterCase):
 
         def query(argv, **_options):
             self.assertEqual(tuple(argv), (*self.record.ctl, "status"))
-            status = Status(
-                name=self.record.name,
-                alive=alive,
-                state="working" if alive else "done",
-                outcome=outcome,
-                attach=None,
-                hidden=False,
+            answer = status(
+                self.record.name, alive=alive, state="working" if alive else "done", outcome=outcome
             )
-            return mock.Mock(returncode=0, stdout=status.to_line() + "\n", stderr="")
+            return mock.Mock(returncode=0, stdout=answer.to_line() + "\n", stderr="")
 
         def run(argv, **options):
             started.append(tuple(argv))
@@ -330,14 +319,7 @@ class RecordlessStatus(RosterCase):
         self.assertIsNone(starting.record)
         self.assertEqual(
             Crew(self.roster).status(),
-            [
-                Status(
-                    name="l", alive=False, state="gone", outcome=None, attach=None, hidden=False
-                ),
-                Status(
-                    name="s", alive=False, state="starting", outcome=None, attach=None, hidden=False
-                ),
-            ],
+            [status("l", alive=False, state="gone"), status("s", alive=False, state="starting")],
         )
 
 
@@ -356,14 +338,7 @@ class Attach(RosterCase):
             if argv[1:] == ("show",):
                 shows.append(records)
             statuses = (
-                Status(
-                    name=record.name,
-                    alive=True,
-                    state="working",
-                    outcome=None,
-                    attach=f"attach {record.name}",
-                    hidden=record.name == "h",
-                )
+                status(record.name, attach=f"attach {record.name}", hidden=record.name == "h")
                 for record in records
             )
             stdout = "".join(s.to_line() + "\n" for s in statuses) if argv[1] == "status" else ""
@@ -401,14 +376,7 @@ class Entries(RosterCase):
         records = [Record.parse(line) for line in options["input"].splitlines()]
         if argv[-1] == "status":
             stdout = "".join(
-                Status(
-                    name=r.name,
-                    alive=self.alive[r.name],
-                    state="working",
-                    outcome=None,
-                    attach=self.attach[r.name],
-                    hidden=False,
-                ).to_line()
+                status(r.name, alive=self.alive[r.name], attach=self.attach[r.name]).to_line()
                 + "\n"
                 for r in records
             )

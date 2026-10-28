@@ -26,8 +26,7 @@ from ensemble.manager.engine.crew import (
 )
 from ensemble.manager.engine.roster import LOCK_TIMEOUT, Roster
 from ensemble.manager.engine.types import Held, RosterError, Spec, Stale, State, StatusError
-from ensemble.utils import Status
-from tests.manager.case import Case, with_ctl
+from tests.manager.case import Case, own, status, with_ctl
 from tests.manager.starters import answered
 from tests.utils.fakes import ctl
 
@@ -48,11 +47,6 @@ class CrewTest(Case):
         if display is not None:
             argv += ("--display", display)
         return self.crew.run(Spec(name, argv, note))
-
-    def own(self, record):
-        """record committed under its name, as if this roster launched it."""
-        self.roster.begin(Spec(record.name, (record.ctl[0], "start")), sid=record.sid)
-        self.roster.commit(record.name, record)
 
     def gone(self, name):
         record = self.start(name)
@@ -596,15 +590,7 @@ class CrewTest(Case):
         def run(argv, **options):
             if tuple(argv) == (self.command, "status"):
                 lines = (
-                    Status(
-                        name=name,
-                        alive=True,
-                        state="working",
-                        outcome=None,
-                        attach=None,
-                        cwd=cwd,
-                        hidden=False,
-                    ).to_line()
+                    status(name, cwd=cwd).to_line()
                     for name, cwd in (("one", "/w/repo one"), ("two", None))
                 )
                 return subprocess.CompletedProcess(argv, 0, "\n".join(lines) + "\n", "")
@@ -621,9 +607,7 @@ class CrewTest(Case):
         self.start("one")
         self.start("two")
         ctl.set_session(self.ctl_dir, "one", alive=True)
-        one = Status(
-            name="one", alive=True, state="working", outcome=None, attach=None, hidden=False
-        )
+        one = status("one")
         real_run = subprocess.run
 
         def run(argv, **options):
@@ -650,22 +634,8 @@ class CrewTest(Case):
         self.start("worker")
         responses = (
             "",
-            (
-                Status(
-                    name="worker",
-                    alive=True,
-                    state="working",
-                    outcome=None,
-                    attach=None,
-                    hidden=False,
-                ).to_line()
-                + "\n"
-            )
-            * 2,
-            Status(
-                name="extra", alive=True, state="working", outcome=None, attach=None, hidden=False
-            ).to_line()
-            + "\n",
+            (status("worker").to_line() + "\n") * 2,
+            status("extra").to_line() + "\n",
         )
         for raw in responses:
             with (
@@ -699,7 +669,7 @@ class CrewTest(Case):
         healthy = self.start("healthy", display="view")
         ctl.set_session(self.ctl_dir, "healthy", showable=True)
         bad = with_ctl(self.fake_record("broken"), MISSING)
-        self.own(bad)
+        own(self.roster, bad)
         stderr = io.StringIO()
         with self.listed((healthy, bad)), contextlib.redirect_stderr(stderr):
             table = self.crew.attach()
@@ -716,7 +686,7 @@ class CrewTest(Case):
         with open(command, "w", encoding="utf-8") as stream:
             stream.write("#!/bin/sh\necho broken-controller >&2\nexit 7\n")
         os.chmod(command, 0o700)
-        self.own(bad)
+        own(self.roster, bad)
         real_run = subprocess.run
 
         def run(argv, **options):
@@ -791,8 +761,7 @@ class CrewTest(Case):
         )
         os.chmod(os.path.join(self.bin_dir, second), 0o700)
         record = self.fake_record("two")
-        self.roster.begin(Spec("two", (second, "start", "two")), sid=record.sid)
-        self.roster.commit("two", with_ctl(record, second))
+        own(self.roster, with_ctl(record, second))
         ctl.set_session(self.ctl_dir, "two", alive=True)
         statuses = self.crew.status()
         self.assertEqual([status.name for status in statuses], ["one", "two"])

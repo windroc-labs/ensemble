@@ -803,36 +803,27 @@ class RosterTest(RosterCase):
         append_line(path, " complete\n")
         self.assertEqual(self.roster.backlog(), (2, 0, ["partial complete"]))
 
-    def test_read_positions_do_not_acknowledge_and_rotation_retains_pending(self):
+    def test_bad_cursors_are_stale_and_rotation_retains_only_unacknowledged_events(self):
+        self.assertTrue(os.path.isfile(self.roster.events))
+        for after, gen in ((1, 0), (-1, 0), (0, 1)):
+            with self.subTest(after=after, gen=gen), self.assertRaises(Stale):
+                self.roster.advance(after, gen)
         handled = "h" * (1 << 20)
         Path(self.roster.events).write_text(handled + "\npending\n")
         self.roster.watch_events(2, 0, acknowledge=False)
         self.assertEqual(self.roster.backlog(), (0, 0, [handled, "pending"]))
         self.assertEqual(self.roster.next_event(0, 0), (1, handled))
-        self.roster.advance(1, 0)
-        self.roster.advance(1, 0)
-        self.assertTrue(self.roster.rotate_events())
-        self.assertEqual(self.roster.backlog(), (0, 1, ["pending"]))
-        with self.assertRaises(Stale):
-            self.roster.advance(1, 0)
-        self.assertEqual(self.roster.backlog(), (0, 1, ["pending"]))
-
-    def test_bad_cursor_and_generation_are_stale(self):
-        self.assertTrue(os.path.isfile(self.roster.events))
-        for after, gen in ((1, 0), (-1, 0), (0, 1)):
-            with self.subTest(after=after, gen=gen), self.assertRaises(Stale):
-                self.roster.advance(after, gen)
-
-    def test_rotation_retains_unread_and_rejects_old_generation(self):
-        path = self.roster.events
-        append_line(path, "h" * (1 << 20) + "\nunread\n")
         self.assertFalse(self.roster.rotate_events())
         self.roster.advance(1, 0)
+        self.roster.advance(1, 0)
         self.assertTrue(self.roster.rotate_events())
-        self.assertEqual(self.roster.backlog(), (0, 1, ["unread"]))
-        self.assertTrue(os.path.exists(path + ".1"))
+        self.assertEqual(self.roster.backlog(), (0, 1, ["pending"]))
+        self.assertTrue(os.path.exists(self.roster.events + ".1"))
+        with self.assertRaises(Stale):
+            self.roster.advance(1, 0)
         with self.assertRaises(Stale):
             self.roster.next_event(1, 0)
+        self.assertEqual(self.roster.backlog(), (0, 1, ["pending"]))
 
     def test_rotation_preserves_bytes_and_completes_partial_tail(self):
         path = self.roster.events

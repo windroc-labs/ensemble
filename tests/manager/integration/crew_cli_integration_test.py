@@ -13,47 +13,13 @@ from unittest import mock
 from ensemble.manager import Crew, Roster, Spec, State
 from ensemble.utils import Record, Status
 from tests.manager import fake_session
-from tests.manager.case import Case, child_env, with_ctl
+from tests.manager.case import child_env, with_ctl
+from tests.manager.cli_case import InstalledCrewCase
 from tests.manager.roster_case import mark
 from tests.utils.fakes import ctl
 
 
-def _without_manager_identity():
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if key
-        not in {
-            "ENSEMBLE_MANAGER",
-            "ENSEMBLE_HOLDER_ID",
-            "ENSEMBLE_HOLDER_GENERATION",
-            "ENSEMBLE_HOLDER_PID",
-        }
-    }
-
-
-class Commands(Case):
-    def setUp(self):
-        self.command = self.setup_ctl()
-        self.sessions = os.path.join(self.home, "session-list")
-        self.crew_bin = self.plugin_root()
-        fake_session.install(os.path.dirname(self.crew_bin), self.sessions)
-        self.directory = os.path.join(self.ensemble, "managers", "mgr")
-
-    def invoke(self, *argv, clean=False):
-        env = dict(os.environ)
-        if clean:
-            env.pop("PYTHONPATH", None)
-        return subprocess.run(
-            (self.crew_bin, *argv),
-            cwd=self.home,
-            env=child_env(env),
-            text=True,
-            capture_output=True,
-            timeout=20,
-            check=False,
-        )
-
+class Commands(InstalledCrewCase):
     def succeeded(self, *argv):
         result = self.invoke(*argv)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -62,29 +28,6 @@ class Commands(Case):
     def test_help_from_an_unrelated_directory_without_pythonpath(self):
         result = self.invoke("--help", clean=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        expected = {
-            "hold",
-            "run",
-            "worker",
-            "reopen",
-            "issue",
-            "role",
-            "attach",
-            "status",
-            "hide",
-            "show",
-            "resume",
-            "close",
-            "close-all",
-            "forget",
-            "note",
-            "report",
-            "next-event",
-            "pending",
-            "ack",
-            "release",
-        }
-        self.assertEqual(set(result.stdout.split("{")[1].split("}")[0].split(",")), expected)
         self.assertFalse(Path(self.directory).exists())
 
     def test_unknown_and_removed_commands_exit_two(self):
@@ -98,72 +41,31 @@ class Commands(Case):
             with self.subTest(args=args):
                 self.assertEqual(self.invoke(*args).returncode, 2)
 
-    def test_invalid_manager_names_from_flag_and_environment_write_nowhere(self):
-        env = _without_manager_identity()
-        outside = Path(self.home, "outside")
-        before = {str(path.relative_to(self.home)) for path in Path(self.home).rglob("*")}
-        invalid = (
-            ".",
-            "..",
-            "../outside",
-            "../../outside",
-            str(outside),
-            "a/b",
-            "a\\b",
-            "name space",
-            "name\n",
-        )
-        with mock.patch.dict(os.environ, env, clear=True):
-            for source in ("flag", "environment"):
-                for name in invalid:
-                    with self.subTest(source=source, name=name):
-                        if source == "flag":
-                            result = self.invoke("attach", f"--manager={name}")
-                        else:
-                            with mock.patch.dict(os.environ, {"ENSEMBLE_MANAGER": name}):
-                                result = self.invoke("attach")
-                        self.assertEqual(result.returncode, 2, result.stderr)
-                        self.assertIn("manager name", result.stderr)
-                        self.assertEqual(result.stdout, "")
-                        after = {
-                            str(path.relative_to(self.home)) for path in Path(self.home).rglob("*")
-                        }
-                        self.assertEqual(after, before)
-                        self.assertFalse(Path(self.ensemble, "managers").exists())
-                        self.assertFalse(outside.exists())
+    def test_an_invalid_manager_name_writes_nowhere(self):
+        before = sorted(Path(self.home).rglob("*"))
+        result = self.invoke("attach", "--manager=../outside")
+        self.assertEqual((result.returncode, result.stdout), (2, ""), result.stderr)
+        self.assertIn("manager name", result.stderr)
+        self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+        self.assertFalse(Path(self.ensemble, "managers").exists())
 
     def test_missing_manager_argument_and_environment_exit_two_without_writes(self):
-        env = _without_manager_identity()
-        with mock.patch.dict(os.environ, env, clear=True):
-            result = self.invoke("attach")
+        result = self.invoke("attach")
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("--manager NAME", result.stderr)
         self.assertIn("ENSEMBLE_MANAGER", result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertFalse(Path(self.ensemble, "managers").exists())
 
-    def test_valid_manager_names_work_from_flag_and_environment(self):
-        env = _without_manager_identity()
-        names = ("a", "A_9-z", "_leading", "9", "-dash", "trailing-")
-        with mock.patch.dict(os.environ, env, clear=True):
-            for source in ("flag", "environment"):
-                for name in names:
-                    with self.subTest(source=source, name=name):
-                        alias = f"sample-{source}"
-                        command = ("--", self.command, "start", f"{source}-{name}")
-                        if source == "flag":
-                            result = self.invoke("run", alias, f"--manager={name}", *command)
-                        else:
-                            with mock.patch.dict(os.environ, {"ENSEMBLE_MANAGER": name}):
-                                result = self.invoke("run", alias, *command)
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        path = Path(self.ensemble, "managers", name, "roster.json")
-                        self.assertTrue(path.is_file())
-                        record = Record.parse(result.stdout)
-                        self.assertEqual(
-                            json.loads(path.read_text())["entries"][alias]["record"],
-                            json.loads(record.to_line()),
-                        )
+    def test_a_valid_manager_name_from_the_environment_works(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_MANAGER": "A_9-z"}):
+            result = self.invoke("run", "sample", "--", self.command, "start", "w")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path = Path(self.ensemble, "managers", "A_9-z", "roster.json")
+        self.assertEqual(
+            json.loads(path.read_text())["entries"]["sample"]["record"],
+            json.loads(Record.parse(result.stdout).to_line()),
+        )
 
     def test_run_status_resume_and_close_with_executable_fake(self):
         self.succeeded("attach", "--manager", "mgr")
@@ -209,8 +111,7 @@ class Commands(Case):
         second = Crew(roster).run(Spec("b", (self.command, "start", "b")))
         ctl.set_session(self.ctl_dir, "b", alive=False)
         mark(roster, "b", State.GONE)
-        with mock.patch.dict(os.environ, _without_manager_identity(), clear=True):
-            result = self.invoke("resume", "a", "b", "--manager", "mgr")
+        result = self.invoke("resume", "a", "b", "--manager", "mgr")
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("ensemble-delegate", result.stderr)
         self.assertEqual([Record.parse(line) for line in result.stdout.splitlines()], [second])

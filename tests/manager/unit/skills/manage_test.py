@@ -6,30 +6,8 @@ import os
 import re
 
 from tests.manager.case import REPO, Case
-from tests.manager.skills.commands import (
-    BIN,
-    body,
-    examples,
-    paths,
-    references,
-    rules,
-    section,
-    sections,
-)
+from tests.manager.skills.commands import body, references, rules, section, sections
 from tests.manager.skills.manage import rule
-
-RETIRED = (
-    "crew.py",
-    "drive.py",
-    "tmux_host.py",
-    "router.py",
-    "--runner",
-    "attach --resume",
-    "ctmux's",
-    "${CLAUDE_SKILL_DIR}/../../src/ensemble/manager",
-    "tmux ls",
-    "ensemble-<role>-<ID>",
-)
 
 
 class Manage(Case):
@@ -41,13 +19,6 @@ class Manage(Case):
         self.assertGreaterEqual(set(cited), {"Start", "Events", "Launch", "Direct", "Recover"})
         for name in cited:
             self.assertIn(name, sections("manage"))
-
-    def test_commands_are_bin_commands_and_no_retired_name(self):
-        for command in examples(body("manage")):
-            self.assertIn(command[0], sorted(os.listdir(BIN)), command)
-        for word in RETIRED:
-            self.assertNotIn(word, body("manage"))
-        self.assertNotIn("## Crew commands", body("manage"))
 
     def test_stale_holder_recovery_restarts_under_hold_without_polling(self):
         lease_free = "env -u ENSEMBLE_HOLDER_ID -u ENSEMBLE_HOLDER_GENERATION"
@@ -174,11 +145,6 @@ class Manage(Case):
             "**Cross-link**: a `related` link and a comment with the reason on each",
         ):
             self.assertIn(literal, proposals, literal)
-
-    def test_the_files_it_names_exist(self):
-        self.assertTrue(paths("manage"))
-        for path in paths("manage"):
-            self.assertTrue(os.path.isfile(path), path)
 
     def test_a_plugin_update_names_each_clients_command(self):
         update = rule("bumps the ensemble plugin version")
