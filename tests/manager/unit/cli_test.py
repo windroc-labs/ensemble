@@ -335,6 +335,37 @@ class Launch(CliCase):
                 self.assertEqual(self.calls[0][0][-len(options) :], options)
                 self.roster.remove("r")
 
+    def test_role_defaults_ignore_option_values(self):
+        for index, (options, task) in enumerate(
+            (
+                (("--input", "--task wrong"), ()),
+                (("--input", "--task=wrong"), ()),
+                (("--input", "--credentials={}"), ()),
+                (("--input=x", "--on-event", "--task=wrong"), ()),
+                (("--input", "--task", "wrong"), ()),
+                (("--input", "--credentials", "{}"), ()),
+                (("--dry-run", "--task=build", "--input", "x"), ("--task=build",)),
+                (("--detach", "--task", "build", "--input=x"), ("--task=build",)),
+                (("--input=x", "--", "--task=wrong", "--credentials={}"), ()),
+            )
+        ):
+            reply = SimpleNamespace(returncode=0, stdout="{}\n", stderr="")
+            with (
+                self.subTest(options=options),
+                mock.patch("subprocess.run", return_value=reply) as query,
+            ):
+                code, _, err = self.start(
+                    "role", "--manager", "mgr", "--name", f"r{index}", "engineer", *options
+                )
+                self.assertEqual(code, 0, err)
+                query.assert_called_once()
+                self.assertEqual(
+                    query.call_args.args[0],
+                    ("ensemble-orchestrator", "credentials", "--role", "engineer", *task),
+                )
+                self.assertEqual(self.calls[0][0][-2:], ("--credentials", "{}"))
+                self.roster.remove(f"r{index}")
+
     def test_role_default_config_failure_starts_nothing(self):
         reply = SimpleNamespace(returncode=2, stdout="", stderr="invalid credentials overlay")
         with mock.patch("subprocess.run", return_value=reply):

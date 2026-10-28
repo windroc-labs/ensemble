@@ -305,14 +305,20 @@ class Crew:
         return self._run(Spec(name, command, note), sid, shorthand=True, busy=kind == "role")
 
     def _role_arguments(self, role: str, argv: tuple[str, ...]) -> tuple[str, ...]:
-        if any(word.partition("=")[0] == "--credentials" for word in argv):
-            return argv
         task = ()
-        for index, word in enumerate(argv):
-            if word == "--task" and index + 1 < len(argv):
-                task = (f"--task={argv[index + 1]}",)
-            elif word.startswith("--task="):
-                task = (word,)
+        options = iter(argv)
+        for word in options:
+            if word == "--":
+                break
+            option, inline, value = word.partition("=")
+            if option == "--credentials":
+                return argv
+            if option in {"--list", "--detach", "--dry-run", "--help", "-h"}:
+                continue
+            if not inline:
+                value = next(options, "")
+            if option == "--task":
+                task = (f"--task={value}",)
         query = (LayerCommand.ORCHESTRATOR, "credentials", "--role", role, *task)
         result = self._call(query, "")
         if result.returncode:
