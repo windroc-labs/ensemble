@@ -142,6 +142,25 @@ class ManagedTest(Case):
         self.assertEqual(
             argv[start : start + 3], ["--terminal", "--display-grace", "--display-socket"]
         )
+        self.assertEqual(argv[start + 4 : start + 6], ["--size", "80x24"])
+
+    def test_terminal_worker_guard_and_display_take_the_hidden_size(self):
+        proc = mock.Mock()
+        proc.stdout.read.side_effect = [
+            guard.json_frame(b"s", {"pid": 123}),
+            guard.json_frame(b"x", {"returncode": 0}),
+            b"",
+        ]
+        host = TmuxHost("tmux", {"hidden_size": "100x30"}, tmux=mock.Mock())
+        with (
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
+            mock.patch.object(os, "set_blocking"),
+        ):
+            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel.close()
+        argv = spawn.call_args.args[0]
+        self.assertEqual(argv[argv.index("--size") + 1], "100x30")
+        self.assertEqual(host.tmux.start.call_args.kwargs["size"], (100, 30))
 
     def test_never_started_name_is_absent(self):
         self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.ABSENT)
