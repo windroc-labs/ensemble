@@ -10,6 +10,7 @@ Pick the task below that fits the input; unsure → `verify` (`<tasks>/verify.md
 
 ## Rules
 
+- Apply [`test-behavior-not-implementation`](#principle-index) to every check; judge the requested observable behaviour rather than internal steps.
 - **No mutation testing**: never change the target repo's code, a runbook or the mini's software to see what happens; check the behaviour as it is.
 - Reach the mini only through the `mini-op` skill. Change no file of the target repo; commit and push nothing to it.
 - **Checklist first**: before running anything, write the report to `<Workdir>/tmp/report.md` ([Output › Destination](#destination) then copies that file), opening with the verification checklist: every row you will run and the requirement it covers. As each row runs, record its result there, `PASS`, `FAIL` or `SKIP` with its evidence, so a partial run still leaves a complete record.

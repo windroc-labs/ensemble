@@ -910,6 +910,17 @@ UNIVERSAL = {
 }
 
 
+def _principle_citations(text):
+    return {
+        name
+        for pair in re.findall(
+            r"\[`?([\w-]+)`?\]\(#principle-index\)|<team>/principles/([\w-]+)\.md", text
+        )
+        for name in pair
+        if name
+    }
+
+
 class Principles(Packaged):
     def test_index_covers_each_leaf_once_and_resolves_in_every_role(self):
         index = section(team_texts()["principles.md"], "Principle index")
@@ -934,10 +945,10 @@ class Principles(Packaged):
             text = task_text(task.removesuffix(".md"))
             with self.subTest(task=task):
                 self.assertNotRegex(text, r"(?im)^#+ .*principles")
-                citations = re.findall(r"\[`([\w-]+)`\]\(#principle-index\)", text)
-                self.assertLessEqual(set(citations), names)
+                citations = _principle_citations(text)
+                self.assertLessEqual(citations, names)
                 mentioned = {name for name in names if f"`{name}`" in text}
-                self.assertEqual(mentioned, set(citations))
+                self.assertEqual(mentioned, citations)
                 for line in text.splitlines():
                     if "(#principle-index)" not in line:
                         continue
@@ -946,19 +957,38 @@ class Principles(Packaged):
                     self.assertEqual(line.count("(#principle-index)"), 1)
                     self.assertRegex(line, r"\]\(#principle-index\) [A-Za-z]")
 
-    def test_roles_select_none_and_index_triggers_apply_to_every_task(self):
+    def test_role_and_task_citations_resolve_without_overlap(self):
         index = section(team_texts()["principles.md"], "Principle index")
         names = set(re.findall(r"<team>/principles/([\w-]+)\.md", index))
-        for role in roles():
+        for role, tasks in catalog().items():
             with open(os.path.join(TEAM, "roles", f"{role}.md")) as f:
-                text = f.read()
-            self.assertFalse(any(name in text for name in names), role)
+                selected = _principle_citations(f.read())
+            self.assertLessEqual(selected, names, role)
+            for task in tasks:
+                task_principles = _principle_citations(task_text(task))
+                self.assertLessEqual(task_principles, names, (role, task))
+                self.assertFalse(selected & task_principles, (role, task))
         universal = index.split("| Principle", 1)[0]
         for name in UNIVERSAL:
             self.assertIn(f"`{name}`", universal)
         self.assertIn("Apply any other principle when its trigger fits", universal)
+        self.assertIn("all of a role's work", universal)
+        self.assertIn("conflicts with a task it runs", universal)
+        self.assertNotRegex(universal, r"roles (?:name|select) none")
 
-    def test_shared_contract_keeps_outcomes_and_independent_review(self):
+    def test_engineer_keeps_standing_principles_and_reviewer_briefs(self):
+        rules = section(team_texts()["roles/engineer.md"], "Rules")
+        for label, name in (
+            ("Fix root causes", "fix-root-causes"),
+            ("Subtract before you add", "subtract-before-you-add"),
+            ("Redesign from first principles", "redesign-from-first-principles"),
+        ):
+            standing_rule = item(rules, label)
+            self.assertIn(f"<team>/principles/{name}.md", standing_rule)
+            self.assertIn("Every brief to a reviewer sub-agent", standing_rule)
+            self.assertIn("for the reviewer to read", standing_rule)
+
+    def test_shared_contract_keeps_outcomes_without_subagent_guidance(self):
         text = team_texts()["principles.md"]
         index = section(text, "Principle index")
         self.assertIn("Resolve upstream principle links through this index", index)
@@ -966,8 +996,12 @@ class Principles(Packaged):
         self.assertIn("existing role and task rules", section(text, "Non-negotiables"))
         self.assertIn("`needs_input`", section(text, "Autonomy"))
         self.assertIn("never a direct question", section(text, "Autonomy"))
-        self.assertIn("independent reviewer", section(text, "Subagents"))
-        self.assertIn("Stop abandoned subagents", section(text, "Subagents"))
+        self.assertNotIn("## Subagents", text)
+        for name in ("Non-negotiables", "Writing", "Principle index", "Autonomy"):
+            self.assertNotRegex(
+                section(text, name),
+                r"(?i)\b(subagents?|delegat(?:e|es|ing|ion)|fan-out|parallel|workers?)\b",
+            )
         self.assertIn("Read each principle's file in full", section(text, "Principle index"))
         for name in (
             "fix-root-causes",

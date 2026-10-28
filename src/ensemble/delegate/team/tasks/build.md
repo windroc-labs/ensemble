@@ -19,7 +19,7 @@ Build the PRD with `/updraft:build`, then open a pull request.
    [ensemble-progress:start] the build (continue `<plan doc>`, new or first)
 5. **Build**: continuing → [Engineer › Repo › Continue](#repo); else `/updraft:build` ([Engineer › Updraft](#updraft)), the requirements being the PRD and the user's requirements; docs line "Spec and plan doc stay where updraft puts them; S7 copies them to where the repo keeps design docs; never `git add -f` them."; push points: each task and review round.
    - **Data shape**: at planning, use [`model-the-domain`](#principle-index) to choose the structure for stateful or branching logic before splitting implementation tasks.
-   - **Shared state**: before fan-out, use [`separate-before-serializing-shared-state`](#principle-index) to remove shared write targets; serialize only when one shared target is a real invariant.
+   - **Shared state**: when designing concurrent writes, use [`separate-before-serializing-shared-state`](#principle-index) to remove shared write targets; serialize only when one shared target is a real invariant.
    - **Delivery**: use [`sequence-verifiable-units`](#principle-index) to implement, verify and commit each small unit before starting the next.
    - **Report progress** at the end of each build step (`S<i>`) you run and of each S5 task:
      [ensemble-progress:step] the step and its result; an S5 task as `S5 task <k>/<n> done: <commit>; <checks run>`, `<k>` its number, `<n>` the plan doc's task count (its `### Task` headings)

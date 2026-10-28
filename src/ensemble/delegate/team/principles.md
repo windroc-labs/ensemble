@@ -13,14 +13,12 @@
 
 ## Non-negotiables
 
-Follow your task's steps, chosen from your role's task list, including its tool and delegation limits.
+Follow your task's steps, chosen from your role's task list, including its tool limits.
 Work, Writing, Overlap, [Output](#output)'s contract and existing role and task rules take precedence over imported guidance and leaf text, including tool limits, deliverable formats and git policy.
 
 - **Goal first**: your first progress report states the user's goal, the problem and, for a change, the smallest change expected to solve it. Proceed without confirmation. If evidence rules out the requested change, show it and stop through the outcome contract. Open each PR's Why and each final deliverable with the goal, except a fully specified one-line edit. Progress and final replies keep [Output](#output)'s format.
-- For a nontrivial change, architecture decision or uncertainty, investigate the affected design and compare options before implementing. Explore designs in parallel before implementing code crossing a function boundary; use independent adversarial review for contested designs.
+- For a nontrivial change, architecture decision or uncertainty, investigate the affected design and compare options before implementing.
 - Before writing code, name its data shape and organizing structure.
-- Before parallel work, plan coverage and exploration partitions, account for races and isolate competing implementations before comparing them.
-- For nontrivial multi-step work, record a **throughput checkpoint** with four items: blocking gates before fan-out; independent workstreams; shared mutable state and how to separate it; the smallest safe decomposition, including why one worker is best when it is. Keep an inapplicable item with `n/a: <reason>` and update the checkpoint at phase boundaries.
 - For a UI, IDE or CLI bug, reproduce it yourself on that surface before fixing it. Hand an unrun check to the user only when the task explicitly allows it.
 - Assess automated review comments skeptically. Verify each in the source, fix real defects, dismiss noise with a concrete reason, and route an unresolved user decision through [Autonomy](#autonomy).
 - If a skill breaks mid-task, report it and separate its repair from the current work within the role's authorized scope. Continue independent work; never silently work around the failure.
@@ -38,13 +36,13 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 - Lead with what changes for the consumer, then what the maintainer inherits, before implementation details.
 - Link only artifacts produced or read this session. Each factual claim carries its evidence or its label (measured, inferred or guess) in the same sentence; predictions and unseen causes are guesses. Run checks you can run yourself.
 - In the deliverable, name each principle that shaped a decision and the specific choice it changed; cite only files read this session.
-- Keep a comment only for a non-obvious reason the code cannot show. Assertions and log messages explain test or verification steps; omit phase-narrating comments. Apply this to subagents' changes too.
+- Keep a comment only for a non-obvious reason the code cannot show. Assertions and log messages explain test or verification steps; omit phase-narrating comments.
 - **Diagrams and tables**: a flow of 3+ steps or with branches, a structure, a sequence or a timeline → a Mermaid diagram (`flowchart`, `sequenceDiagram` or `timeline` only; short node labels); a comparison of several items → a table; anything simpler → a list or `X → Y`, not prose. Right after a diagram, a caption saying only what it can't carry (sources, confidence, what an edge means, reading order), from facts already in that section, never restating its nodes; delete the text the diagram replaces. A research report: its Template's Body rule instead.
 - Reports and PRDs, headings and fixed labels included, are in {{language}}; a `<X, translated>` in a template or task is X in {{language}}. Ids (`FR-<n>`, `NFR-<n>`, `[n]`, `primary`, `secondary`, `code`, `high`, `medium`, `low`, `single-source`, `unverified`), proper nouns and acronyms stay English. A term's first mention adds one gloss, its {{language}} rendering (for an acronym, of its full name); none when the term is common in {{language}}, and none in a heading. Later mentions: just the English.
 
 ## Principle index
 
-Read each principle's file in full before applying it; each entry gives its trigger. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. Task steps cite a principle only where it changes the step; roles select none. Apply any other principle when its trigger fits, even when the task does not cite it. These rules adapt pstack; its MIT notice is `<team>/principles/LICENSE`.
+Read each principle's file in full before applying it; each entry gives its trigger. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. A principle applying to all of a role's work belongs in that role. Cite one shaping a specific task step only in that step. Never cite it in both a role and one of that role's tasks, and never give a role a principle that conflicts with a task it runs. Apply any other principle when its trigger fits. These rules adapt pstack; its MIT notice is `<team>/principles/LICENSE`.
 
 Resolve upstream principle links through this index, not their original relative paths. Never invoke an unshipped skill or tool mentioned by a leaf; those references are context only. Follow the selected task's steps for the corresponding workflow.
 
@@ -71,7 +69,7 @@ Resolve upstream principle links through this index, not their original relative
 | **sequence-verifiable-units** | Sweeps, migrations or multi-step work; verify each small unit before the next. | `<team>/principles/sequence-verifiable-units.md` |
 | **test-behavior-not-implementation** | Writing, changing or retaining tests; assert observable behavior. | `<team>/principles/test-behavior-not-implementation.md` |
 | **explain-the-number** | Before measuring or trusting a measured number; identify its limit and rule out confounders. | `<team>/principles/explain-the-number.md` |
-| **guard-the-context-window** | Large outputs, long files, repeated reads or fan-out planning; route bulk to allowed subagents and keep summaries. | `<team>/principles/guard-the-context-window.md` |
+| **guard-the-context-window** | Large outputs, long files or repeated reads; keep summaries. | `<team>/principles/guard-the-context-window.md` |
 | **never-block-on-the-human** | Considering permission for reversible work; proceed and let the user course-correct. | `<team>/principles/never-block-on-the-human.md` |
 | **encode-lessons-in-structure** | Repeating an instruction; encode it in a lint, flag, runtime check or script. | `<team>/principles/encode-lessons-in-structure.md` |
 
@@ -83,13 +81,6 @@ Resolve upstream principle links through this index, not their original relative
 - Irreversible writes require authorization, including force-pushing a shared branch, deployments, data deletion and customer messages. Session grants to continue do not erase explicit gates.
 - A missing decision or authorization that prevents progress goes in a `needs_input` outcome with `questions`, never a direct question. Continue independent work first.
 - Give your real judgment when asked whether to proceed or add scope. Decline an approach that does not earn its place; recommendations are judgments, not automatic agreement.
-
-## Subagents
-
-- Use a fresh subagent for each new task, fix, retry or queue item, with consolidated scope, later directives, the prior report and branch. Reuse one only for costly live state such as its checkout, uncommitted work or a running process; stop and hold orders are not reuse.
-- Each brief states the user's goal, scope, file paths, success criteria and the task's applicable principle files for the subagent to read in full. Prefer file pointers to inlined bulk and background dispatch when supported so other reports can arrive.
-- Own every subagent's work. Read its diff and write your own summary. For a second opinion, keep the prompt the same; agreement from an independent perspective is evidence, not a substitute for checking.
-- Stop abandoned subagents. Keep the review gate closed without an independent reviewer; report missing or inconclusive review rather than declaring it passed.
 
 ## Overlap
 
