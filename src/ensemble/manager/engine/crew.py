@@ -251,6 +251,8 @@ class Crew:
         name: str | None = None,
         resume: str | None = None,
         work_dir: str = STATE,
+        task: str | None = None,
+        credentials: str | None = None,
     ) -> Record:
         sid = resume or str(uuid.uuid4())
         if kind == "worker":
@@ -298,35 +300,36 @@ class Crew:
             command = ("ensemble-orchestrator", "router", "--issue", key, "--tui", *argv)
         elif kind == "role":
             name = name if name is not None else f"{key}-{sid[:8]}"
-            argv = self._role_arguments(key, argv)
-            command = ("ensemble-delegate", "run", "--role", key, "--detach", "--name", name, *argv)
+            selected = ("--task", task) if task is not None else ()
+            if credentials is None:
+                credentials = self._role_credentials(key, task)
+            command = (
+                "ensemble-delegate",
+                "run",
+                "--role",
+                key,
+                "--detach",
+                "--name",
+                name,
+                *selected,
+                "--credentials",
+                credentials,
+                *argv,
+            )
         else:
             raise ValueError(f"unknown launch kind: {kind}")
         return self._run(Spec(name, command, note), sid, shorthand=True, busy=kind == "role")
 
-    def _role_arguments(self, role: str, argv: tuple[str, ...]) -> tuple[str, ...]:
-        task = ()
-        options = iter(argv)
-        for word in options:
-            if word == "--":
-                break
-            option, inline, value = word.partition("=")
-            if option == "--credentials":
-                return argv
-            if option in {"--list", "--detach", "--dry-run", "--help", "-h"}:
-                continue
-            if not inline:
-                value = next(options, "")
-            if option == "--task":
-                task = (f"--task={value}",)
-        query = (LayerCommand.ORCHESTRATOR, "credentials", "--role", role, *task)
+    def _role_credentials(self, role: str, task: str | None) -> str:
+        selected = (f"--task={task}",) if task is not None else ()
+        query = (LayerCommand.ORCHESTRATOR, "credentials", "--role", role, *selected)
         result = self._call(query, "")
         if result.returncode:
             error = ValueError if result.returncode == 2 else RuntimeError
             raise error(
                 f"{shlex.join(query)}: {result.stderr.strip() or f'exit {result.returncode}'}"
             )
-        return (*argv, "--credentials", result.stdout.removesuffix("\n"))
+        return result.stdout.removesuffix("\n")
 
     def _live(self, names: set[str], sid: str) -> Liveness:
         """Roster entries named in names or holding sid, and sessions listed here or below holding

@@ -9,7 +9,8 @@ For this release:
 3. Keep the existing `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets`
    configuration until their migrations ship. Leave new credential declarations empty until broker kind issuance ships.
 4. To supply references for a new run, use `--credentials JSON` on `ensemble-delegate run`, `ensemble-session start`,
-   `ensemble-crew worker NAME` or `ensemble-crew role ROLE` (after NAME/ROLE for crew).
+   or `ensemble-crew worker NAME --credentials JSON`. For role runs, put `--task` and `--credentials` before ROLE:
+   `ensemble-crew role [--task TASK] [--credentials JSON] ROLE --input TEXT`.
    See [Credential spec](architecture.md#credentials) for defaults, host-side state, resume and refusal rules.
 
 ## Claude account selection is the session's

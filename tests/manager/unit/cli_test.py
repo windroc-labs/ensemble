@@ -299,8 +299,8 @@ class Launch(CliCase):
                     "mgr",
                     "--name",
                     "r",
-                    "engineer",
                     *task_options,
+                    "engineer",
                     "--input",
                     "x",
                 )
@@ -317,7 +317,24 @@ class Launch(CliCase):
                     ),
                 )
                 self.assertEqual(query.call_args.kwargs["input"], "")
-                self.assertEqual(self.calls[0][0][-2:], ("--credentials", declared))
+                selected = ("--task", "build") if task_options else ()
+                self.assertEqual(
+                    self.calls[0][0],
+                    (
+                        "ensemble-delegate",
+                        "run",
+                        "--role",
+                        "engineer",
+                        "--detach",
+                        "--name",
+                        "r",
+                        *selected,
+                        "--credentials",
+                        declared,
+                        "--input",
+                        "x",
+                    ),
+                )
                 self.roster.remove("r")
 
     def test_explicit_role_credentials_skip_default_lookup(self):
@@ -328,25 +345,27 @@ class Launch(CliCase):
         ):
             with self.subTest(options=options), mock.patch("subprocess.run") as query:
                 code, _, err = self.start(
-                    "role", "--manager", "mgr", "--name", "r", "engineer", "--input", "x", *options
+                    "role", "--manager", "mgr", "--name", "r", *options, "engineer", "--input", "x"
                 )
                 self.assertEqual(code, 0, err)
                 query.assert_not_called()
-                self.assertEqual(self.calls[0][0][-len(options) :], options)
+                value = options[1] if len(options) == 2 else "{}"
+                self.assertEqual(self.calls[0][0][-4:], ("--credentials", value, "--input", "x"))
                 self.roster.remove("r")
 
-    def test_role_defaults_ignore_option_values(self):
-        for index, (options, task) in enumerate(
+    def test_role_defaults_use_crew_task_without_scanning_delegate_words(self):
+        for index, options in enumerate(
             (
-                (("--input", "--task wrong"), ()),
-                (("--input", "--task=wrong"), ()),
-                (("--input", "--credentials={}"), ()),
-                (("--input=x", "--on-event", "--task=wrong"), ()),
-                (("--input", "--task", "wrong"), ()),
-                (("--input", "--credentials", "{}"), ()),
-                (("--dry-run", "--task=build", "--input", "x"), ("--task=build",)),
-                (("--detach", "--task", "build", "--input=x"), ("--task=build",)),
-                (("--input=x", "--", "--task=wrong", "--credentials={}"), ()),
+                ("--input", "--task wrong"),
+                ("--input", "--task=wrong"),
+                ("--input", "--credentials={}"),
+                ("--input=x", "--on-event", "--task=wrong"),
+                ("--input", "--task", "wrong"),
+                ("--input", "--credentials", "{}"),
+                ("--future-switch", "--input", "x"),
+                ("--dry-run", "--input", "x"),
+                ("--detach", "--input=x"),
+                ("--input=x", "--", "--task=wrong", "--credentials={}"),
             )
         ):
             reply = SimpleNamespace(returncode=0, stdout="{}\n", stderr="")
@@ -355,15 +374,25 @@ class Launch(CliCase):
                 mock.patch("subprocess.run", return_value=reply) as query,
             ):
                 code, _, err = self.start(
-                    "role", "--manager", "mgr", "--name", f"r{index}", "engineer", *options
+                    "role",
+                    "--manager",
+                    "mgr",
+                    "--name",
+                    f"r{index}",
+                    "--task",
+                    "build",
+                    "engineer",
+                    *options,
                 )
                 self.assertEqual(code, 0, err)
                 query.assert_called_once()
                 self.assertEqual(
                     query.call_args.args[0],
-                    ("ensemble-orchestrator", "credentials", "--role", "engineer", *task),
+                    ("ensemble-orchestrator", "credentials", "--role", "engineer", "--task=build"),
                 )
-                self.assertEqual(self.calls[0][0][-2:], ("--credentials", "{}"))
+                self.assertEqual(
+                    self.calls[0][0][7:], ("--task", "build", "--credentials", "{}", *options)
+                )
                 self.roster.remove(f"r{index}")
 
     def test_role_default_config_failure_starts_nothing(self):
@@ -422,13 +451,13 @@ class Launch(CliCase):
                     "--manager",
                     "mgr",
                     *explicit,
-                    "pm",
                     "--task",
                     "product-design",
-                    "--input",
-                    "x",
                     "--credentials",
                     ' {"future-kind": [1]}\n',
+                    "pm",
+                    "--input",
+                    "x",
                 )
                 self.assertEqual(result, 0)
                 sid = Record.parse(stdout).sid
@@ -446,10 +475,10 @@ class Launch(CliCase):
                         name,
                         "--task",
                         "product-design",
-                        "--input",
-                        "x",
                         "--credentials",
                         ' {"future-kind": [1]}\n',
+                        "--input",
+                        "x",
                     ),
                 )
 
@@ -478,8 +507,8 @@ class Launch(CliCase):
                     verb,
                     "--manager",
                     "mgr",
-                    key,
                     *(("--credentials", "{}") if verb == "role" else ()),
+                    key,
                     code=2,
                     output="",
                     stderr=f"{reason}\n",
@@ -495,9 +524,9 @@ class Launch(CliCase):
             "role",
             "--manager",
             "mgr",
-            "pm",
             "--credentials",
             "{}",
+            "pm",
             code=75,
             output="",
             stderr=f"{busy}\n",
@@ -553,7 +582,7 @@ class Launch(CliCase):
 
     def test_failed_starts_exit_one_and_leave_their_entry_lost(self):
         run = ("run", "--manager", "mgr", "r1", "--", "starter")
-        role = ("role", "--manager", "mgr", "--name", "r1", "pm", "--credentials", "{}")
+        role = ("role", "--manager", "mgr", "--name", "r1", "--credentials", "{}", "pm")
         receipts = (None, "invalid Record\n", " \n")
         for arguments, name, code, output in (
             (("worker", "--manager", "mgr", "w1"), "w1", 75, ""),
@@ -1463,6 +1492,26 @@ HELP_COMMANDS = [
 
 
 class HelpContracts(Case):
+    def test_role_options_are_owned_before_role_and_remainder_is_opaque(self):
+        parsed = cli._parser().parse_args(
+            [
+                "role",
+                "--task=build",
+                "--credentials",
+                "",
+                "engineer",
+                "--future-switch",
+                "--input",
+                "--task wrong",
+            ]
+        )
+        self.assertEqual((parsed.key, parsed.task, parsed.credentials), ("engineer", "build", ""))
+        self.assertEqual(parsed.arguments, ["--future-switch", "--input", "--task wrong"])
+        text = self.help("role")
+        self.assertIn("--task TASK", text)
+        self.assertIn("--credentials JSON", text)
+        self.assertIn("before ROLE", text)
+
     def test_visibility_help_does_not_require_roster_ownership(self):
         for command in ("show", "hide"):
             text = self.help(command)
