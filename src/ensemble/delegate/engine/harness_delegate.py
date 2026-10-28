@@ -1050,15 +1050,11 @@ class HarnessDelegate(Delegate):
         p, n = self._state.plan, self._state.attempt
         idle, start = p.run.idle_timeout, time.monotonic()
         checked = gone = None
-        colored = False
         while True:
             state = self._read()
             if state.attempt != n or state.completed or state.plan.sid != p.sid:
                 return self._stored(state, on_event)
             now = time.monotonic()
-            if not colored and now - start >= COLOR_WAIT:
-                colored = True
-                self._uncolored(handle)
             if checked is None or now - checked >= GONE_EVERY:
                 checked = now
                 with contextlib.suppress(Unanswered):
@@ -1078,16 +1074,6 @@ class HarnessDelegate(Delegate):
                 ):
                     return ending
             time.sleep(TUI_POLL)
-
-    def _uncolored(self, handle: Session) -> None:
-        name = handle.name
-        try:
-            text = handle.opening_pending if isinstance(handle, _Opens) else None
-        except SessionError:
-            return
-        if text is not None and name is not None:
-            send = shlex.join(("ensemble-session", "send", name, text))
-            say(f"delegate: session {name}: color not set: not sent within {COLOR_WAIT} s; {send}")
 
     def _start_failure_end(self, error: BaseException) -> Result:
         """A signal's stop ends as the saved start_failure, if any."""
@@ -1234,7 +1220,8 @@ class HarnessDelegate(Delegate):
         if state.plan.spec.mode != Mode.TUI:
             return
         limit = DOCKER_START_TIMEOUT if self.driver.docker else TUI_START_TIMEOUT
-        deadline = time.monotonic() + limit
+        began = time.monotonic()
+        deadline = began + limit
         agent = unanswered = None
         ended = False
         try:
@@ -1243,6 +1230,7 @@ class HarnessDelegate(Delegate):
                 try:
                     if agent is not None and agent.alive() and agent.status().alive:
                         self._publish_record(state)
+                        self._colored(agent, state.agent_name, began)
                         return
                 except Unanswered as error:
                     unanswered = error
@@ -1274,6 +1262,19 @@ class HarnessDelegate(Delegate):
         if busy := self._busy(state):
             raise SessionError(str(busy))
         raise SessionError(message)
+
+    @staticmethod
+    def _colored(agent: Session, name: str, began: float) -> None:
+        try:
+            while isinstance(agent, _Opens) and (text := agent.opening_pending) is not None:
+                if time.monotonic() - began >= COLOR_WAIT:
+                    send = shlex.join(("ensemble-session", "send", name, text))
+                    why = f"not ready within {COLOR_WAIT} s"
+                    say(f"delegate: session {name}: color not set: {why}; {send}")
+                    return
+                time.sleep(TUI_POLL)
+        except SessionError:
+            return
 
     def _publish_record(self, state: DelegateState) -> None:
         """Its Record in its agent session's worker dir, through that view."""
