@@ -1,12 +1,6 @@
-"""The harness: `python3 -P -s -m ensemble.delegate.engine.harness <workdir>`, a detached run's drive
-(started through ProcessControl). It attaches to the run by its workdir, drives it to its Result
-and appends its events outcome line, then its exited line.
-
-Exits 0 on a valid outcome, 1 without one, 75 busy, 2 when the run is refused (usage, its state,
-config), 128 + n on signal n. It starts with SIGNALS blocked; they are unblocked only while the run
-executes, so a late signal cannot drop either line. The first stop signal ignores
-later ones instead of blocking them, since a callback started afterwards would inherit a blocked
-mask.
+"""Detached drive; owned handlers write outcome independently of its exited line.
+Other runs write outcome first. Exit: 0 valid, 1 invalid, 75 busy, 2 refused, 128+n signal.
+SIGNALS stay blocked outside the run; late signals cannot drop its notifications.
 """
 
 import signal
@@ -67,7 +61,7 @@ def _said(event: Event) -> None:
 
 def _stop(signum, _frame):
     for each in SIGNALS:
-        # not SIG_IGN: exec keeps an ignored disposition, it resets a handled one
+        # exec resets a handled disposition, but keeps SIG_IGN
         signal.signal(each, _ignore)
     raise Stopped(128 + signum)
 
