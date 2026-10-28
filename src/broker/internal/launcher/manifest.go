@@ -29,8 +29,9 @@ type Manifest struct {
 	Secrets                                                                                     []Secret          // the environment secrets the container gets; nil without the field
 	Lock, LockOwner                                                                             string            // optional lock name and readable owner
 	Gateway                                                                                     string            // the egress proxy's caller network key; workers without the field
-	Linear                                                                                      *credential.LinearRequest
-	Prefetch                                                                                    *Prefetch // the repo cloned into a new workspace; nil without the field
+	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
+
+	Linear *credential.LinearRequest // the requested role app token and board config; nil without linear
 }
 
 // Prefetch is the repo a start clones into the workspace volume it creates: Repo owner/name, Ref a branch or tag

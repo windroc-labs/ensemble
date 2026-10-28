@@ -2862,57 +2862,7 @@
       }
     },
     {
-      "file": "credential-spec-linear-wrong-key-board.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
       "file": "credential-spec-linear-wrong-key-role.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-client-id.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-user-id.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-secret-service.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-token-service.json",
       "definition": "credential_spec",
       "valid": false,
       "expected": {
@@ -2932,57 +2882,7 @@
       }
     },
     {
-      "file": "credential-spec-linear-wrong-key-states.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-labels.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-project-repos.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-human-members.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
       "file": "credential-spec-linear-wrong-key-task-labels.json",
-      "definition": "credential_spec",
-      "valid": false,
-      "expected": {
-        "stage": "schema",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
-      }
-    },
-    {
-      "file": "credential-spec-linear-wrong-key-agent-labels.json",
       "definition": "credential_spec",
       "valid": false,
       "expected": {

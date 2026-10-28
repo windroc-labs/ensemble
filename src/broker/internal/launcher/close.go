@@ -53,9 +53,8 @@ func (h Host) held(ctx context.Context, c string) (kind string, secrets []string
 	return "", secrets
 }
 
-// Close revokes the GitHub tokens it reads back from the container's token files (no copy is kept elsewhere), then
-// deletes the container and its tmpfs whatever the read or the revocations did; an absent container is success, its
-// tokens expire.
+// Close revokes GitHub tokens read from the container, removes the container and its tmpfs, then revokes Linear
+// tokens from its retained record. Container removal proceeds even if reading or revoking GitHub tokens fails.
 func (h Host) Close(ctx context.Context, container string) (CloseResult, error) {
 	h.Audit.Begin(container, nil)
 	kind, secrets := h.held(ctx, container)
