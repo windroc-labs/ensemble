@@ -13,11 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import (
     Access,
     Exited,
-    HookCallback,
     Launch,
     Mode,
     NotShowable,
@@ -30,20 +28,19 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
-from ensemble.session.hosts.base import HARNESS_ROOT, Host
+from ensemble.session.hosts.base import HARNESS_ROOT
 from ensemble.session.hosts.tmux import TmuxHost, managed
 from tests.session import harnesses, live_tmux
-from tests.session.case import HOSTS, REPO, Case
+from tests.session.case import HOSTS, REPO, Case, harnessed
 from tests.session.cli_support import logged
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.session.integration.harness import headless_caller
+from tests.session.integration.harness.support import TURNS, Recording
 from tests.utils.sandbox import pid_exists as running
 from tests.utils.sandbox import scratch
 
-HANDLER = "tests.session.integration.harness.recording_handler"
-TURNS = ("TurnStarted", "TurnFailed", "TurnEnd", "Exited")
 WAIT = 30
 CLAUDE = {
     "implementation": "ensemble.session.clients.claude:ClaudeClient",
@@ -52,20 +49,13 @@ CLAUDE = {
 }
 
 
-def harnessed(clients: dict) -> type[HostedSession]:
-    """A default-configured session class on tmux, so a session harness owns its headless starts."""
-    return harnesses.Threaded.configured(
-        clients=clients, hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"})
-    )
-
-
 def shim(bin_dir: Path, name: str, script: str) -> None:
     path = bin_dir / name
     path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(script)} "$@"\n')
     path.chmod(0o755)
 
 
-class Headless(Case):
+class Headless(Recording, Case):
     """self.root, a temp dir; the handler's records in self.out."""
 
     def setUp(self):
@@ -76,12 +66,6 @@ class Headless(Case):
         for path in (self.bin, self.cwd):
             path.mkdir(parents=True)
         self.out = str(self.root / "handled.jsonl")
-
-    def handlers(self) -> tuple[HookCallback, ...]:
-        return (HookCallback(HANDLER, {"path": self.out}, (REPO,)),)
-
-    def handled(self) -> list[dict]:
-        return [r for r in logged(self.out) if r["type"] in TURNS]
 
     def wait_for(self, kind: str) -> list[dict]:
         def found():
@@ -247,24 +231,14 @@ class ClaudeCallerTest(ClaudeHeadless):
 class ClaudeKillTest(ClaudeHeadless):
     """kill -9 of a headless run's harness: its guard ends the client; the next start sweeps."""
 
-    def killed(self) -> int:
-        """A hung run's harness killed with SIGKILL, its view held (a dropped view closes the
-        run); the fake's pid.
-        """
+    def test_after_kill_9_the_next_start_removes_the_one_shot_dir(self):
         self.scene(steps=["working"], hang=True)
-        self.view = self.session_cls.start(self.spec())
+        self.view = self.session_cls.start(self.spec())  # held: a dropped view closes the run
         harness = self.harness_pid()
         pid = self.pid()
         self.wait_for("Reply")
         os.kill(harness, signal.SIGKILL)
-        return pid
-
-    def test_a_harness_killed_with_kill_9_ends_its_headless_client(self):
-        pid = self.killed()
         live_tmux.wait(lambda: not running(pid), 10, what=f"the fake {pid} gone")
-
-    def test_after_kill_9_the_next_start_removes_the_one_shot_dir(self):
-        self.killed()
         (directory,) = Path(managed.control_root()).glob("o*")
         leases = [str(lease) for lease in directory.glob("*/lease")]
         live_tmux.wait(

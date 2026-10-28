@@ -6,7 +6,6 @@ files only under the test's HOME).
 import contextlib
 import dataclasses
 import errno
-import fcntl
 import io
 import itertools
 import json
@@ -43,6 +42,7 @@ from ensemble.session.harness.types import Op
 from ensemble.session.hosts.base import stored_record
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
+from tests.session import harnesses
 from tests.session.case import SID, Case
 
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
@@ -146,17 +146,13 @@ class Base(Case):
         harness holds it); a running one answers each request with `answer` (default: nothing
         reopened), its ops in self.asked.
         """
-        channel = Channel.create()
+        owner = harnesses.HeldOwner(self, Channel.create())
         if status is not None:
-            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            self.addCleanup(os.close, fd)
-            channel.write_status(
-                {"state": status, "name": "w1", "sid": sid, "generation": generation}
-            )
+            owner.hold(state=status, name="w1", sid=sid, generation=generation)
         if status == "running":
-            self.serve(channel, answer or {"ok": True, "data": {"reopened": False}})
-        self.write_state(sid, generation=generation, owner=channel.directory)
+            reply = answer or {"ok": True, "data": {"reopened": False}}
+            self.asked = owner.serve(reply, until_cleanup=True)
+        self.write_state(sid, generation=generation, owner=owner.channel.directory)
 
     def write_state(self, sid: str, *, generation: str = "g1", owner: str | None = None) -> None:
         record = {
@@ -175,22 +171,6 @@ class Base(Case):
         }
         with open(os.path.join(self.tui, "session.json"), "w", encoding="utf-8") as f:
             json.dump(record, f)
-
-    def serve(self, channel: Channel, answer: dict) -> None:
-        self.asked: list[Op] = []
-        done = threading.Event()
-
-        def run():
-            while not done.is_set():
-                for ident, op, _ in channel.pending():
-                    self.asked.append(op)
-                    channel.reply(ident, **answer)
-                time.sleep(0.01)
-
-        thread = threading.Thread(target=run, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join, 5)
-        self.addCleanup(done.set)
 
 
 class StateTest(Case):

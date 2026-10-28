@@ -21,6 +21,7 @@ from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryViewer, ScreenHost
 from tests.session.modules import client_loader
 from tests.session.threads import capture_errors
+from tests.session.tmux_fixtures import expected_row as listed
 from tests.session.tmux_fixtures import which
 
 WAIT = 10
@@ -32,22 +33,6 @@ PYTHONPATH = "/child"
 TMUX = "/opt/tmux/bin/tmux"
 
 BAD_NAMES = ("../x", "a b", "", "a/b", "w1\n", 5)
-
-PLACEMENTS = (
-    ({"split": "left"}, "split must be right or below, got 'left'"),
-    ({"split_from": "a b"}, "split_from must match [A-Za-z0-9_-]+, got 'a b'"),
-    ({"split_from": 5}, "split_from must match [A-Za-z0-9_-]+, got 5"),
-)
-
-OPENERS = (
-    ("x y", "opener must be a tmux session name or $ITERM_SESSION_ID's value, got 'x y'"),
-    (
-        "w0t0p0:a/b",
-        "opener must be a tmux session name or $ITERM_SESSION_ID's value, got 'w0t0p0:a/b'",
-    ),
-)
-
-NO_PANE = "no anchor pane: not in tmux, no iTerm2 pane ($ITERM_SESSION_ID)"
 
 LAUNCHED: list[Spec] = []
 
@@ -136,25 +121,6 @@ class PoolHeadless(fake_client.FakeHeadless):
         return engine_types.ClientHome("pool_dir", "pool", "FAKE_HOME", "pool-token")
 
 
-class InnerClient(fake_client.FakeClient):
-    """Records requests and injects INNER_SESSION into tui children."""
-
-    session_env = "INNER_SESSION"
-    identity_env = ("INNER_SESSION", "INNER_ID")
-    child_defaults = {"PAGER": "cat", "NO_COLOR": "1"}
-
-    def tui(self):
-        return InnerTui(self)
-
-
-class InnerTui(fake_client.FakeTui):
-    def launch(self, spec: Spec, hook):
-        LAUNCHED.append(spec)
-        launch = super().launch(spec, hook)
-        env = {**spec.env, "LAUNCH_SET": "1"}
-        return dataclasses.replace(launch, env=env, unset=("LAUNCH_DROP",))
-
-
 class EnvClient(ProbeClient):
     def headless(self):
         return EnvRun(self)
@@ -177,7 +143,6 @@ class EnvTui(fake_client.FakeTui):
 
 
 def package(name, cls) -> types.ModuleType:
-    """An in-memory module ensemble.session.clients.<name> holding `cls`."""
     module = types.ModuleType(f"ensemble.session.clients.{name}")
     setattr(module, cls.__name__, cls)
     return module
@@ -192,7 +157,6 @@ PACKAGES = {
             ("probe", ProbeClient),
             ("pool", PoolClient),
             ("checked", CheckedClient),
-            ("inner", InnerClient),
             ("env", EnvClient),
         )
     },
@@ -266,7 +230,6 @@ class Base(Case):
         host=None,
         **fields,
     ) -> Session:
-        """self.session.start of `spec` (else self.spec()) with client, mode, prompt and `fields`."""
         spec = dataclasses.replace(
             spec or self.spec(), client=client, mode=mode, prompt=prompt, **fields
         )
@@ -304,7 +267,6 @@ class Base(Case):
         return RunLog(self.workdir).read()
 
     def refused(self, error, message, call):
-        """call() raises `error` with `message`, nothing started and no run record written."""
         with (
             mock.patch("subprocess.Popen", side_effect=AssertionError("started")) as popen,
             self.assertRaises(error) as caught,
@@ -317,7 +279,6 @@ class Base(Case):
 
 
 def fake_tmux(case=None) -> mock.Mock:
-    """Recorded tmux responses; defaults: status None, listing [], PAUSE 0."""
     host = mock.create_autospec(TmuxCli, instance=True)
     host.PAUSE = 0
     host.runner = mock.Mock(side_effect=AssertionError("a direct runner call"))
@@ -429,20 +390,3 @@ class HostedTuiBase(TuiBase):
 
 class HostedEnvBase(EnvBase, HostedTuiBase):
     pass
-
-
-def listed(name, **fields) -> dict:
-    """A tmux listing row of a live session with no tags, but `fields`."""
-    return {
-        "name": name,
-        "sid": None,
-        "client": None,
-        "state": None,
-        "pane": None,
-        "opener": None,
-        "display": None,
-        "dead": False,
-        "shown": None,
-        "last_lines": None,
-        **fields,
-    }

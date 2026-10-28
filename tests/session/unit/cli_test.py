@@ -1,13 +1,10 @@
 import argparse
 import contextlib
-import fcntl
 import io
 import json
 import os
 import shutil
 import sys
-import threading
-import time
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -22,6 +19,7 @@ from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes.tui import TuiStore
 from ensemble.session.viewer import display as displays
 from ensemble.utils import ACCOUNT_ENV, Record
+from tests.session import harnesses
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
 from tests.session.hosted_support import SID, HostedTuiBase
@@ -164,7 +162,6 @@ class ElsewhereHost(ScreenHost):
 class ControlBase(HostedTuiBase):
     def setUp(self):
         super().setUp()
-        self.locks = {}
         CliHost.current = self.host
         self.addCleanup(setattr, HostedSession, "_setup", None)
         Path(self.ensemble).mkdir(exist_ok=True)
@@ -198,53 +195,21 @@ class ControlBase(HostedTuiBase):
             code = cli.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
-    def owned(self, name="w1", *, sid=SID, gone=True, held=True) -> Channel:
+    def owned(self, name="w1", *, sid=SID, gone=True, held=True) -> harnesses.HeldOwner:
         """Tui session `name` of `sid` whose session.json names a running session harness."""
         self.tui(name=name, sid=sid)
         path = Path(self.root, name, "session.json")
         state = json.loads(path.read_text())
-        channel = Channel.create()
-        path.write_text(json.dumps({**state, "owner": channel.directory}))
+        owner = harnesses.HeldOwner(self, Channel.create())
+        path.write_text(json.dumps({**state, "owner": owner.channel.directory}))
+        status = {"state": "running", "name": name, "sid": sid, "generation": state["generation"]}
         if held:
-            fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            self.locks[channel.directory] = fd
-            self.addCleanup(lambda: self.locks.get(channel.directory) and self.let_go(channel))
-        channel.write_status(
-            {"state": "running", "name": name, "sid": sid, "generation": state["generation"]}
-        )
+            owner.hold(**status)
+        else:
+            owner.channel.write_status(status)
         if gone:
             self.host.processes.pop(name)
-        return channel
-
-    def let_go(self, channel):
-        """Its harness exits: its lock released."""
-        os.close(self.locks.pop(channel.directory))
-
-    def serve(self, channel, *replies, before=None) -> list:
-        """Answers one request per reply, in order, calling `before` first, and exits after an ok
-        one, like a harness; the ops it served.
-        """
-        served = []
-
-        def answer():
-            pending = list(replies)
-            deadline = time.monotonic() + 10
-            while pending and time.monotonic() < deadline:
-                for ident, op in channel.requests():
-                    served.append(op)
-                    if before is not None:
-                        before()
-                    reply = pending.pop(0)
-                    channel.reply(ident, **reply)
-                    if reply.get("ok"):
-                        self.let_go(channel)
-                time.sleep(0.01)
-
-        thread = threading.Thread(target=answer)
-        thread.start()
-        self.addCleanup(thread.join)
-        return served
+        return owner
 
 
 class RecordControl(ControlBase):
@@ -327,10 +292,9 @@ class RecordControl(ControlBase):
         self.assertFalse(os.path.exists(os.path.join(self.root, "w1")))
 
     def test_a_stale_record_still_asks_the_owner_its_session_json_names(self):
-        channel = self.owned()
         unconfirmed = {"ok": False, "error": "w1: worker exit not confirmed", "unanswered": True}
         refused = {"ok": False, "error": "cannot close w1"}
-        served = self.serve(channel, unconfirmed, refused, {"ok": True})
+        served = self.owned().serve(unconfirmed, refused, {"ok": True})
         for reply in (unconfirmed, refused):
             code, out, err = self.invoke("close", record=self.record)
             self.assertEqual((code, out), (1, ""))
@@ -340,8 +304,7 @@ class RecordControl(ControlBase):
 
     def test_a_stale_record_asks_each_owner_after_one_whose_harness_is_gone(self):
         self.owned("w1", held=False)
-        channel = self.owned("w2")
-        served = self.serve(channel, {"ok": False, "error": "cannot close w2"})
+        served = self.owned("w2").serve({"ok": False, "error": "cannot close w2"})
         record = replace(self.record, sessions=("w1", "w2"))
         code, out, err = self.invoke("close", record=record)
         self.assertEqual((code, out), (1, ""))
@@ -404,14 +367,13 @@ class RecordControl(ControlBase):
         self.assertEqual((code, out), (1, ""), err)
 
     def test_a_stale_record_skips_an_owner_of_another_sid(self):
-        channel = self.owned(sid="replacement")
+        channel = self.owned(sid="replacement").channel
         self.assertEqual(self.invoke("close", record=self.record)[:2], (0, ""))
         self.assertFalse(os.path.exists(os.path.join(channel.directory, "requests")))
 
     def test_an_owner_refusal_is_a_failed_close_even_when_the_record_then_looks_stale(self):
-        channel = self.owned(gone=False)
         refused = {"ok": False, "error": "cannot close w1"}
-        self.serve(channel, refused, before=lambda: self.host.processes.pop("w1"))
+        self.owned(gone=False).serve(refused, before=lambda: self.host.processes.pop("w1"))
         code, out, err = self.invoke("close", record=self.record)
         self.assertEqual((code, out), (1, ""))
         self.assertIn("cannot close w1", err)
@@ -573,19 +535,15 @@ class HeadlessElsewhere(ControlBase):
                 '[session.hosts]\ndefault = "other"\n[session.hosts.other]\n'
                 'implementation = "tests.session.unit.cli_test:ElsewhereHost"\n'
             )
-        self.channel = channel = Channel.create()
-        fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        self.locks[channel.directory] = fd
-        self.addCleanup(lambda: self.locks.get(channel.directory) and self.let_go(channel))
-        found = {"owner": channel.directory, "sid": SID, "generation": "g" * 32}
-        channel.write_status({"state": "running", "name": "h1", **found})
+        self.owner = harnesses.HeldOwner(self, Channel.create())
+        found = {"owner": self.owner.channel.directory, "sid": SID, "generation": "g" * 32}
+        self.owner.hold(name="h1", **found)
         patcher = mock.patch.object(CliHost, "_headless_owner", return_value=found, create=True)
         patcher.start()
         self.addCleanup(patcher.stop)
 
     def test_close_asks_its_harness_on_its_own_host(self):
-        served = self.serve(self.channel, {"ok": True})
+        served = self.owner.serve({"ok": True})
         with mock.patch("subprocess.Popen", side_effect=FileNotFoundError(2, "no tmux", "tmux")):
             code, out, err = self.invoke("close", "h1")
         self.assertEqual((code, out, served), (0, "", [Op.CLOSE]), err)

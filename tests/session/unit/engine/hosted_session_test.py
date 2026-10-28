@@ -4017,54 +4017,20 @@ class BoundOwnerBase(HostedTuiBase):
         self.state = tui.TuiMode.snapshot("w1")
         self.channel = Channel.create()
         self.state["owner"] = self.channel.directory
-        self.held = None
+        self.harness = harnesses.HeldOwner(self, self.channel)
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump(self.state, f)
 
-    def owner(self, **status) -> int | None:
-        """The lock fd it holds."""
-        if not self.channel.alive():
-            self.held = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
-            fcntl.flock(self.held, fcntl.LOCK_EX)
-            self.addCleanup(self.let_go)
-        self.channel.write_status(
-            {
-                "state": "running",
-                "name": "w1",
-                "sid": SID,
-                "generation": self.state["generation"],
-                **status,
-            }
+    def owner(self, **status) -> None:
+        self.harness.hold(
+            **{"name": "w1", "sid": SID, "generation": self.state["generation"], **status}
         )
-        return self.held
 
-    def let_go(self):
-        """The harness exits: its lock released."""
-        if self.held is not None:
-            os.close(self.held)
-            self.held = None
-
-    def serve(self, let_go=None, **answer_with):
-        """Answers one request; after an ok one it lets go of its lock (`let_go`, the fd owner()
-        returned), as a harness does once it answered an end.
+    def serve(self, **answer_with):
+        """Answers one request; after an ok one it lets go of its lock, as a harness does once it
+        answered an end.
         """
-        self.served = []
-        answer_with = answer_with or {"ok": True}
-
-        def answer():
-            deadline = time.monotonic() + WAIT
-            while time.monotonic() < deadline:
-                for ident, op in self.channel.requests():
-                    self.served.append(op)
-                    self.channel.reply(ident, **answer_with)
-                    if answer_with.get("ok"):
-                        self.let_go()
-                    return
-                time.sleep(0.01)
-
-        thread = threading.Thread(target=answer)
-        thread.start()
-        self.addCleanup(thread.join)
+        self.served = self.harness.serve(answer_with or {"ok": True})
 
 
 class BoundOwnerTest(BoundOwnerBase):
@@ -4127,11 +4093,11 @@ class BoundOwnerTest(BoundOwnerBase):
         self.assertTrue(view.alive())
 
     def test_retire_of_a_running_owner_whose_terminal_is_gone_asks_it(self):
-        held = self.owner()
+        self.owner()
         self.host.processes.pop("w1")
         with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
             self.session.retire("w1", sid="other")
-        self.serve(let_go=held)
+        self.serve()
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
 
@@ -4170,7 +4136,8 @@ class BoundOwnerTest(BoundOwnerBase):
             self.session.attach("w1", sid="other")
 
     def test_retire_asks_the_owner_and_closes_nothing_itself(self):
-        self.serve(let_go=self.owner())
+        self.owner()
+        self.serve()
         terminal = self.host.processes["w1"]
         self.session.retire("w1", sid=SID)
         self.assertEqual(self.served, [Op.CLOSE])
@@ -4275,7 +4242,8 @@ class HeadlessOwnerTest(BoundOwnerBase):
     def test_retire_asks_its_harness_to_close(self):
         for sid in (None, SID):
             with self.subTest(sid=sid):
-                self.serve(let_go=self.owner())
+                self.owner()
+                self.serve()
                 self.session.retire("w1", sid=sid)
                 self.assertEqual(self.served, [Op.CLOSE])
         self.headless_owner.assert_called_with("w1")
@@ -4298,16 +4266,7 @@ class HeadlessOwnerTest(BoundOwnerBase):
 
     def vanish(self):
         """The harness takes the next request and exits unanswered."""
-
-        def gone():
-            deadline = time.monotonic() + WAIT
-            while not self.channel.requests() and time.monotonic() < deadline:
-                time.sleep(0.01)
-            self.let_go()
-
-        thread = threading.Thread(target=gone)
-        thread.start()
-        self.addCleanup(thread.join)
+        harnesses.serve(self, self.channel, lambda *_: self.harness.let_go())
 
     def test_an_unbound_or_vanished_harness_closes_only_a_confirmed_absent_worker(self):
         generation = self.state["generation"]

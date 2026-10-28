@@ -18,6 +18,7 @@ from ensemble.session.harness.types import Op
 
 WAIT = 60  # s, past process.DRAIN
 KILL_WAIT = 10  # s, FR-13's reap bound
+ANSWER_WAIT = 10
 _clock, _pause = time.monotonic, time.sleep  # the real ones, past a test's fake clock
 
 
@@ -186,3 +187,65 @@ def joined():
                 with contextlib.suppress(SessionError):
                     channel.request(Op.CLOSE, timeout=WAIT)
             thread.join(WAIT)
+
+
+def until(check, wait: float = 5) -> None:
+    deadline = _clock() + wait
+    while not check():
+        if _clock() > deadline:
+            raise AssertionError(f"timed out after {wait} s")
+        _pause(0.01)
+
+
+def serve(case, channel: Channel, answer, *, count: int | None = 1) -> list[tuple[Op, dict]]:
+    served: list[tuple[Op, dict]] = []
+    done = threading.Event()
+
+    def run():
+        deadline = time.monotonic() + ANSWER_WAIT
+        while not done.is_set() and (count is None or time.monotonic() < deadline):
+            for ident, op, data in channel.pending():
+                served.append((op, data))
+                answer(ident, op, data)
+                if len(served) == count:
+                    return
+            time.sleep(0.01)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    case.addCleanup(thread.join, ANSWER_WAIT)
+    case.addCleanup(done.set)
+    return served
+
+
+class HeldOwner:
+    def __init__(self, case, channel: Channel) -> None:
+        self.case, self.channel, self.held = case, channel, None
+
+    def hold(self, **status) -> None:
+        if self.held is None:
+            self.held = os.open(self.channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(self.held, fcntl.LOCK_EX)
+            self.case.addCleanup(self.let_go)
+        self.channel.write_status({"state": "running", **status})
+
+    def let_go(self) -> None:
+        if self.held is not None:
+            os.close(self.held)
+            self.held = None
+
+    def serve(self, *replies: dict, before=None, until_cleanup=False) -> list[Op]:
+        """A reply per request, letting go after an ok one; until_cleanup: replies[0] for each."""
+        ops: list[Op] = []
+
+        def answer(ident, op, _data):
+            ops.append(op)
+            if before is not None:
+                before()
+            reply = replies[0] if until_cleanup else replies[len(ops) - 1]
+            self.channel.reply(ident, **reply)
+            if reply.get("ok") and not until_cleanup:
+                self.let_go()
+
+        serve(self.case, self.channel, answer, count=None if until_cleanup else len(replies))
+        return ops

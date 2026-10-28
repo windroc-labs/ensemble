@@ -1,5 +1,5 @@
-"""Case, every session test's base; HOSTS, configured, packaged_hosts; PY, child_env; REPO, SRC,
-ROOTS; PLUGIN_BIN; SID; SPAWNS, the process starts; no_spawn.
+"""Case, every session test's base; HOSTS, configured, harnessed, packaged_hosts; PY, child_env;
+REPO, SRC, ROOTS; PLUGIN_BIN; SID; SPAWNS, the process starts; no_spawn.
 """
 
 import contextlib
@@ -55,6 +55,11 @@ def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedS
     return harnesses.Threaded.configured(
         clients=clients, hosts=hosts, host_factory=build, **dependencies
     )
+
+
+def harnessed(clients) -> type[HostedSession]:
+    hosts = Host.parse_hosts({**HOSTS, "default": "tmux"})
+    return harnesses.Threaded.configured(clients=clients, hosts=hosts)
 
 
 class Case(TreeCase):
