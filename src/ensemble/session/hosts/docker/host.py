@@ -624,6 +624,7 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; start does lock and credential checks."""
+        self._credentials(name, metadata or {})
         environment = self._environment(name, metadata)
         if environment is None:
             self.validate(name, launch, missing_ok=True)
@@ -638,11 +639,27 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; the start builds and locks."""
+        self._credentials(name, metadata or {})
         if self._environment(name, metadata) is None:
             self.validate(name, launch)
             return
         self._check_cwd(name, launch)
         self.broker.version()
+
+    def _credentials(self, name: str, metadata: Mapping[str, str]) -> dict[str, str]:
+        record = _record(name)
+        resumed = metadata.get("resume") == "1" and record.get("sid") == metadata.get("sid")
+        values = {}
+        for key in ("credentials", "environment_credentials"):
+            given = metadata.get(key)
+            value = record.get(key) if resumed else given
+            if resumed and given is not None and given != value:
+                raise ConfigError(
+                    f"docker session {name}: resume: {key} differs from the one it was started with"
+                )
+            if value is not None:
+                values[key] = value
+        return values
 
     def _environment(self, name: str, metadata: Mapping[str, str] | None) -> EnvironmentSpec | None:
         """A resume's is its stored one (FR-62): taken if none is given, refused if the given one
@@ -916,6 +933,7 @@ class DockerHost(Host):
         self._check_cwd(name, launch)
         events = created_events(events)
         metadata = metadata or {}
+        metadata = {**metadata, **self._credentials(name, metadata)}
         environment = self._environment(name, metadata)
         owner = _take_owner(name)
         if owner is None:
@@ -982,6 +1000,11 @@ class DockerHost(Host):
                     "events": events,
                     "kind": Kind.TUI if terminal else Kind.HEADLESS,
                     "environment": None if environment is None else environment.persisted(),
+                    **{
+                        key: metadata[key]
+                        for key in ("credentials", "environment_credentials")
+                        if key in metadata
+                    },
                     **({} if terminal else {"owner": metadata.get("harness"), "host": self.name}),
                 },
             )
