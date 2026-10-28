@@ -4276,6 +4276,19 @@ class HeadlessOwnerTest(BoundOwnerBase):
             self.session.retire("w1", sid="other")
         self.assertEqual(self.channel.requests(), [])
 
+    def vanish(self):
+        """The harness takes the next request and exits unanswered."""
+
+        def gone():
+            deadline = time.monotonic() + WAIT
+            while not self.channel.requests() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.let_go()
+
+        thread = threading.Thread(target=gone)
+        thread.start()
+        self.addCleanup(thread.join)
+
     def test_an_unbound_or_vanished_harness_closes_only_a_confirmed_absent_worker(self):
         generation = self.state["generation"]
         for bound, found in (
@@ -4288,8 +4301,9 @@ class HeadlessOwnerTest(BoundOwnerBase):
                 self.host.calls.reset_mock()
                 self.host.calls.worker_liveness.return_value = found
                 self.owner(**({} if bound else {"name": "w2"}))
-                vanished = mock.patch.object(Channel, "request", return_value=False)
-                with vanished, contextlib.ExitStack() as stack:
+                if bound:
+                    self.vanish()
+                with contextlib.ExitStack() as stack:
                     if not bound:
                         stack.enter_context(self.assertLogs("session", "WARNING"))
                     if found == Liveness.UNKNOWN:
