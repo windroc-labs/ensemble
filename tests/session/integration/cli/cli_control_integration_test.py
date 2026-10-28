@@ -18,6 +18,7 @@ from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.cli_support import COMMAND, MANAGER, CliCase
 from tests.session.fakes.host import FakeHost
+from tests.utils.fakes.ctl import lines
 from tests.utils.sandbox import pid_exists as pid_alive
 
 PROG = "ensemble-session"
@@ -42,10 +43,6 @@ def absent(name: str) -> Record:
         display=None,
         detail=None,
     )
-
-
-def lines(*records: Record) -> str:
-    return "".join(record.to_line() + "\n" for record in records)
 
 
 def gone(name: str) -> Status:

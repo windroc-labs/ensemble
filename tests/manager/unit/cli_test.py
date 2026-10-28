@@ -461,7 +461,7 @@ class Reopen(CliCase):
             if argv[1] == "ls":
                 if unlisted:
                     return SimpleNamespace(returncode=1, stdout="", stderr="ls: down")
-                return SimpleNamespace(returncode=0, stdout=lines(listed), stderr="")
+                return SimpleNamespace(returncode=0, stdout=ctl.lines(*listed), stderr="")
             if failing:
                 return SimpleNamespace(returncode=2, stdout="", stderr="status: down")
             names = (Record.parse(line).name for line in kwargs["input"].splitlines())
@@ -476,10 +476,7 @@ class Reopen(CliCase):
                 )
                 for name in names
             )
-            return SimpleNamespace(returncode=0, stdout=lines(statuses), stderr="")
-
-        def lines(items):
-            return "".join(item.to_line() + "\n" for item in items)
+            return SimpleNamespace(returncode=0, stdout=ctl.lines(*statuses), stderr="")
 
         with mock.patch("subprocess.run", side_effect=run):
             return self.start("reopen", "--manager", "mgr", *crew, "TASK-9", *extra)

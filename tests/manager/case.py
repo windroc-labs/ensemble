@@ -66,18 +66,7 @@ class Case(TreeCase):
     def fake_record(
         self, name: str, *, display: str | None = None, sid: str | None = None
     ) -> Record:
-        return Record(
-            1,
-            "fake",
-            name,
-            (name,),
-            sid or str(uuid.uuid4()),
-            None,
-            (ctl.COMMAND,),
-            (ctl.COMMAND, "resume", name),
-            display,
-            None,
-        )
+        return ctl.record(name, display, sid=sid or str(uuid.uuid4()))
 
     @contextlib.contextmanager
     def listed(self, records=()):
@@ -85,9 +74,7 @@ class Case(TreeCase):
 
         def run(argv, **options):
             if tuple(argv) in (HERE, (*HERE, "--descendants")):
-                return subprocess.CompletedProcess(
-                    argv, 0, "".join(record.to_line() + "\n" for record in records), ""
-                )
+                return subprocess.CompletedProcess(argv, 0, ctl.lines(*records), "")
             return real_run(argv, **options)
 
         with mock.patch("subprocess.run", side_effect=run):

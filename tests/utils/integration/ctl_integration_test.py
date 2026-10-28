@@ -11,16 +11,8 @@ from ensemble.utils.record import Record, Status
 from tests.utils.case import Case
 from tests.utils.contracts.ctl import NamedCtlContract
 from tests.utils.fakes import ctl
+from tests.utils.fakes.ctl import lines, record
 from tests.utils.sandbox import clean_env
-
-
-def record(name, display=None, *, sid=None):
-    resume = (ctl.COMMAND, "resume", name)
-    return Record(1, "fake", name, (name,), sid, None, (ctl.COMMAND,), resume, display, None)
-
-
-def lines(*records):
-    return "".join(r.to_line() + "\n" for r in records)
 
 
 class Installed(Case):
