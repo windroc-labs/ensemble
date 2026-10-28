@@ -103,8 +103,17 @@ func (o fakeRefreshOutput) Close() error {
 	return nil
 }
 
+// fastRefreshWait sets a stopRefresh wait to 1 ms for the test.
+func fastRefreshWait(t *testing.T, wait *time.Duration) {
+	t.Helper()
+	saved := *wait
+	*wait = time.Millisecond
+	t.Cleanup(func() { *wait = saved })
+}
+
 func newRefreshFixture(t *testing.T) *refreshFixture {
 	t.Helper()
+	fastRefreshWait(t, &refreshTermGrace)
 	root := t.TempDir()
 	home := t.TempDir()
 	if err := os.Chmod(home, 0700); err != nil {
@@ -383,6 +392,7 @@ func TestRefreshEnforcesTotalOutput(t *testing.T) {
 
 func TestRefreshCleansProcessGroup(t *testing.T) {
 	f := newRefreshFixture(t)
+	fastRefreshWait(t, &refreshExitGrace)
 	f.process.hang = true
 	if err := f.refresh(); err != nil {
 		t.Fatal(err)

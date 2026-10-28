@@ -127,7 +127,7 @@ func (zeroReader) Read(p []byte) (int, error) {
 
 func TestPublishedPlatformArchiveSize(t *testing.T) {
 	var compressed bytes.Buffer
-	z := gzip.NewWriter(&compressed)
+	z, _ := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
 	tw := tar.NewWriter(z)
 	const publishedSize = 338137646
 	if err := tw.WriteHeader(&tar.Header{Name: "package/support-data", Typeflag: tar.TypeReg, Mode: 0644, Size: publishedSize}); err != nil {
