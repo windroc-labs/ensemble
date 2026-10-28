@@ -17,7 +17,7 @@ from tests.session.cli_support import MANAGER, WorkerCase, logged
 from tests.session.integration.clients.codex import fake_tui
 
 PERMISSION = {"kind": "hook", "event": "PermissionRequest", "tool_name": "Edit"}
-TRUST = "Quick safety check: Is this a project you created or one you trust? 1. Yes, I trust this folder 2. No, exit"
+TRUST = "Quick safety check: Is this a project you created or one you trust?\n1. Yes, I trust this folder\n2. No, exit"
 ATTACH = "session w1: tmux attach -t '=w1'"
 
 

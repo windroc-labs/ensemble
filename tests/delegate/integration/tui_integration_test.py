@@ -35,7 +35,7 @@ NAME = f"claude-{SID[:8]}"
 LEFT_OPEN = f"session {NAME} left open: tmux attach -t '={NAME}'\n"
 WAIT = 60  # seconds: a run
 START = mark("start", "echoing")
-TRUST = "Quick safety check: Is this a project you created or one you trust? 1. Yes, I trust this folder 2. No, exit"
+TRUST = "Quick safety check: Is this a project you created or one you trust?\n1. Yes, I trust this folder\n2. No, exit"
 HELD = 2  # seconds the trust dialog stays: past /color's due, 1 s after SessionStart
 
 

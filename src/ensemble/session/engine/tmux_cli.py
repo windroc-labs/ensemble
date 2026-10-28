@@ -113,9 +113,9 @@ DEAD_EVENT = (
 BORDER = " #{session_name} #{@state} "
 
 
-def sized(size: tuple[int, int]) -> tuple[str, ...]:
-    """tmux's -x/-y for size (columns, rows)."""
-    return ("-x", str(size[0]), "-y", str(size[1]))
+def sized(size: tuple[int, int], *, border: bool = False) -> tuple[str, ...]:
+    """tmux's -x/-y for a pane of size (columns, rows), border: under a border row."""
+    return ("-x", str(size[0]), "-y", str(size[1] + border))
 
 
 TERMINAL_KEYS = (
@@ -431,10 +431,12 @@ class TmuxCli:
         else:
             self.checked(["kill-session", "-t", address(target, "")])
 
-    def unview(self, session: str, size: tuple[int, int] = HIDDEN_SIZE) -> None:
+    def unview(
+        self, session: str, size: tuple[int, int] = HIDDEN_SIZE, *, border: bool = False
+    ) -> None:
         target = address(session)
         self.checked(
-            ["resize-window", "-t", target, *sized(size), ";"]
+            ["resize-window", "-t", target, *sized(size, border=border), ";"]
             + ["set-option", "-w", "-u", "-t", target, "window-size"]
         )
 
@@ -592,7 +594,7 @@ class TmuxCli:
                     PROCESS,
                     "-s",
                     session,
-                    *sized(size),
+                    *sized(size, border=True),
                     *wrapper,
                     ";",
                     "set-option",

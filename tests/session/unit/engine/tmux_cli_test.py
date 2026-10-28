@@ -198,10 +198,14 @@ class KillTest(Case):
             tmux_cli.TmuxCli(FakeTmux(fail={"kill-session"})).kill("s")
 
     def test_unview_sizes_the_window_hidden_then_lets_the_next_client_size_it(self):
-        for size, x, y in ((None, "80", "24"), ((100, 30), "100", "30")):
-            with self.subTest(size=size):
+        for given, x, y in (
+            ((), "80", "24"),
+            (((100, 30),), "100", "30"),
+            (((100, 30), True), "100", "31"),  # its pane under a border row
+        ):
+            with self.subTest(given=given):
                 fake = FakeTmux()
-                tmux_cli.TmuxCli(fake).unview("s", *(() if size is None else (size,)))
+                tmux_cli.TmuxCli(fake).unview("s", *given[:1], border=given[1:] == (True,))
                 self.assertEqual(
                     fake.calls,
                     [
@@ -676,12 +680,12 @@ class StartTest(StartFixture):
                 )
                 self.assertEqual(os.listdir(self.temp), [])
 
-    def test_start_sizes_the_new_session_as_given(self):
+    def test_start_sizes_the_new_sessions_pane_under_its_border_as_given(self):
         fake = FakeTmux()
         with which():
             self.start(fake, size=(100, 30))
         new = fake.calls[1]
-        self.assertEqual(new[new.index("-x") : new.index("-x") + 4], ["-x", "100", "-y", "30"])
+        self.assertEqual(new[new.index("-x") : new.index("-x") + 4], ["-x", "100", "-y", "31"])
 
     def test_start_runs_wrapper_decorates_dead_pane_without_opening_a_pane(
         self,
@@ -704,7 +708,7 @@ class StartTest(StartFixture):
                         "-x",
                         "80",
                         "-y",
-                        "24",
+                        "25",
                         sys.executable,
                         "-I",
                         "-c",

@@ -176,6 +176,7 @@ class Viewer:
     def hide(self, name: str, host: Host, *, if_closed: bool = False) -> None:
         """Undoes show: hidden until a show (if_closed: only once its pane was closed by hand)."""
         target = self._target(name, host)
+        size = host.tui_settings().hidden_size
         if self._tmux.status(name) is None:
             if isinstance(target, SessionView):
                 raise SessionError(f"no tmux session {name}")
@@ -195,7 +196,8 @@ class Viewer:
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
         try:
-            self._tmux.unview(name, host.tui_settings().hidden_size)
+            # a SessionView is a Host's tmux session, TmuxCli.start's, under a pane border
+            self._tmux.unview(name, size, border=isinstance(target, SessionView))
         except TuiError as e:
             LOG.warning("hide %s: hidden size: %s", name, e)
         self._mark(name, host, hidden=True)

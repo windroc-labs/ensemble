@@ -202,14 +202,14 @@ class HideTest(Base):
         self.options(pane="%9", sid=SID)
         self.assertIsNone(self.viewer.hide("w1", self.host))
         self.tmux.kill.assert_called_once_with("%9")
-        self.tmux.unview.assert_called_once_with("w1", (80, 24))
+        self.tmux.unview.assert_called_once_with("w1", (80, 24), border=True)
         self.assertTrue(hidden.read("w1", SID))
 
     def test_hide_returns_the_window_to_its_hosts_configured_size(self):
         self.options(pane="%9", sid=SID)
         host = TmuxHost("tmux", {"hidden_size": "100x30"}, tmux=self.tmux)
         self.assertIsNone(self.viewer.hide("w1", host))
-        self.tmux.unview.assert_called_once_with("w1", (100, 30))
+        self.tmux.unview.assert_called_once_with("w1", (100, 30), border=True)
 
     def test_a_failed_hidden_size_still_hides(self):
         self.options(pane="%9", sid=SID)
@@ -304,7 +304,7 @@ class HideTest(Base):
                 self.assertIsNone(self.viewer.hide("w1", self.host, if_closed=True))
                 self.assertEqual(hidden.read("w1", SID), want)
                 self.assertEqual(
-                    self.tmux.unview.call_args_list, [mock.call("w1", (80, 24))] * want
+                    self.tmux.unview.call_args_list, [mock.call("w1", (80, 24), border=True)] * want
                 )
                 self.assertEqual(found["pane"], None if want else pane)
         self.tmux.kill.assert_not_called()
@@ -504,6 +504,22 @@ class CommandViewTest(Base):
         with self.assertRaisesRegex(SessionError, "^show d1: a host tmux session d1 exists$"):
             self.viewer.show("d1", self.docker)
         self.assertNotIn("new-session", [c[1] for c in self.runner.calls])
+
+    def test_hide_returns_a_view_session_without_a_border_to_the_hidden_size(self):
+        self.tmux.status.return_value = PaneStatus.RUNNING
+        self.docker.tui_settings.return_value = TuiSettings(hidden_size=(100, 30))
+        self.viewer.hide("d1", self.docker)
+        self.tmux.unview.assert_called_once_with("d1", (100, 30), border=False)
+        self.assertTrue(hidden.read("d1", SID))
+
+    def test_a_bad_host_setting_fails_a_hide_before_it_changes_anything(self):
+        self.tmux.status.return_value = PaneStatus.RUNNING
+        self.docker.tui_settings.side_effect = ConfigError("status_line: want true or false")
+        with self.assertRaises(ConfigError):
+            self.viewer.hide("d1", self.docker)
+        self.tmux.kill.assert_not_called()
+        self.tmux.unview.assert_not_called()
+        self.assertFalse(hidden.read("d1", SID))
 
     def test_hide_without_a_view_session_only_marks_it_hidden(self):
         self.tmux.status.return_value = None
