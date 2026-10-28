@@ -961,6 +961,11 @@ class RemovedSelectionKeys(Case):
             self.load(""), self.load('[selector.jev]\nurl = "http://127.0.0.1:8000"\n')
         )
 
+    def test_leftover_delegate_role_without_a_charter_is_refused(self):
+        with self.assertRaises(config.ConfigError) as cm:
+            self.load("[delegate.roles.choice-translator]\ntier = 4\n")
+        self.assertIn("no charter roles/choice-translator.md", str(cm.exception))
+
 
 class CommittedConfiguration(Case):
     def test_harness_uses_the_public_delegate_export(self):

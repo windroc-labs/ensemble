@@ -690,6 +690,7 @@ class WritebackUsage(RunCase):
             ("no event", "", workdir, "want one DelegateEvent line"),
             ("two events", begun + "\n" + begun + "\n", workdir, "want one DelegateEvent line"),
             ("not JSON", "{\n", workdir, "not JSON"),
+            ("an unknown kind", begun.replace("begun", "ended"), workdir, "kind: want one of"),
             ("no start row", begun.replace(SID, other) + "\n", workdir, "no start row"),
             ("another workdir", begun + "\n", self.cfg.issue_workdir("TASK-2"), "--workdir"),
         ):
