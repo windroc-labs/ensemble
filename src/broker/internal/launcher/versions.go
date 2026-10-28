@@ -1,8 +1,6 @@
 package launcher
 
 import (
-	"strings"
-
 	"ensemble/broker/internal/codex"
 	"ensemble/broker/internal/protocol"
 )
@@ -15,12 +13,12 @@ type CodexVersions interface {
 }
 
 // startClients reads the versions verified when the image was built.
-func startClients(labels map[string]string) (Clients, error) {
+func startClients(labels map[string]string) (ClientVersions, error) {
 	v, ok := imageClients(labels)
 	if !ok {
-		return Clients{}, protocol.New(protocol.StartFailed, "Image client version labels are missing or invalid; rebuild the worker image with ensemble-broker build.")
+		return ClientVersions{}, protocol.New(protocol.StartFailed, "Image client version labels are missing or invalid; rebuild the worker image with ensemble-broker build.")
 	}
-	return Clients{Claude: v.Claude + " (Claude Code)", Codex: "codex-cli " + v.Codex, Opencode: v.Opencode}, nil
+	return v, nil
 }
 
 func (h Host) versionPolicy() error {
@@ -37,15 +35,15 @@ func (h Host) versionPolicy() error {
 	return nil
 }
 
-// checkCodex requires the image's codex --version output to be codex-cli and a version of at least codex.MinVersion.
+// checkCodex requires the image label to be a version of at least codex.MinVersion.
 func checkCodex(version string) error {
-	if v, ok := strings.CutPrefix(version, "codex-cli "); !ok || !codex.SupportedVersion(v) {
+	if !codex.SupportedVersion(version) {
 		return protocol.New(protocol.StartFailed, "Image Codex version is invalid or below the minimum; rebuild the worker image with Codex "+codex.MinVersion+" or newer.")
 	}
 	return nil
 }
 
-// checkOpencode requires the image's opencode --version output to be a stable version of at least opencodeMinVersion.
+// checkOpencode requires the image label to be a stable version of at least opencodeMinVersion.
 func checkOpencode(version string) error {
 	if !codex.ValidVersion(version) || codex.Newer(opencodeMinVersion, version) {
 		return protocol.New(protocol.StartFailed, "Image OpenCode version is invalid or below the minimum; rebuild the worker image with OpenCode "+opencodeMinVersion+" or newer.")

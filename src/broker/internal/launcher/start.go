@@ -435,7 +435,9 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if codexExpiry != nil {
 		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, Deadline: deadlineOf(delivered, heldKinds(m))},
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID,
+			Clients:  Clients{Claude: clients.Claude + " (Claude Code)", Codex: "codex-cli " + clients.Codex, Opencode: clients.Opencode},
+			Deadline: deadlineOf(delivered, heldKinds(m))},
 		held, nil
 }
 

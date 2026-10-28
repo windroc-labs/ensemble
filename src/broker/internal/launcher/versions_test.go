@@ -119,9 +119,9 @@ func TestCheckCodex(t *testing.T) {
 		version string
 		ok      bool
 	}{
-		{"codex-cli 0.163.0", true}, {"codex-cli 0.164.0", true}, {"codex-cli 1.0.0", true},
-		{"codex-cli 0.162.999", false},
-		{"0.163.0", false}, {"codex-cli 0.163.0-beta", false}, {"codex-cli  0.163.0", false}, {"codex 0.163.0", false}, {"", false},
+		{"0.163.0", true}, {"0.164.0", true}, {"1.0.0", true},
+		{"0.162.999", false},
+		{"codex-cli 0.163.0", false}, {"0.163.0-beta", false}, {" 0.163.0", false}, {"codex 0.163.0", false}, {"", false},
 	} {
 		t.Run(c.version, func(t *testing.T) {
 			err := checkCodex(c.version)

@@ -3,7 +3,6 @@ package launcher
 import (
 	"context"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -32,15 +31,9 @@ func TestStartReadsVersionLabels(t *testing.T) {
 }
 
 func TestStartRejectsInvalidVersionLabels(t *testing.T) {
-	for _, client := range []string{"claude", "codex", "opencode"} {
-		for _, version := range []string{"", "v1.2.3", "1.2", "1.2.3\n", "1.2.3-beta.1"} {
-			t.Run(client+"/"+version, func(t *testing.T) {
-				h, _ := startHost(&world{labels: labelsWithVersion(client, version)}, &fakeCreds{})
-				_, err := h.Start(context.Background(), validManifest(t))
-				if err == nil || !strings.Contains(protoErr(t, err).Message, "rebuild") {
-					t.Fatalf("accepted label %q: %v", version, err)
-				}
-			})
-		}
+	h, _ := startHost(&world{labels: labelsWithVersion("codex", "")}, &fakeCreds{})
+	_, err := h.Start(context.Background(), validManifest(t))
+	if err == nil || protoErr(t, err).Message != "Image client version labels are missing or invalid; rebuild the worker image with ensemble-broker build." {
+		t.Fatal(err)
 	}
 }

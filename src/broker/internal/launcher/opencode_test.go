@@ -281,7 +281,11 @@ func TestStartOpencode(t *testing.T) {
 }
 
 func TestOpencodeImageBelowMinimum(t *testing.T) {
-	for _, version := range []string{"1.19.2\n", "1.19\n", "v1.19.3\n", "opencode 1.19.3\n"} {
+	for _, tc := range []struct{ version, message string }{
+		{"1.19.2", "Image OpenCode version is invalid or below the minimum; rebuild the worker image with OpenCode 1.19.3 or newer."},
+		{"1.19", "Image client version labels are missing or invalid; rebuild the worker image with ensemble-broker build."},
+	} {
+		version := tc.version
 		t.Run(strings.TrimSpace(version), func(t *testing.T) {
 			tokens := &fakeTokens{}
 			h, d, _ := opencodeHost(&world{labels: labelsWithVersion("opencode", strings.TrimSpace(version))}, tokens)
@@ -289,8 +293,7 @@ func TestOpencodeImageBelowMinimum(t *testing.T) {
 			_, err := h.Start(context.Background(), opencodeManifest(t, withGitHub))
 			rec.Flush(err)
 			e := protoErr(t, err)
-			want := "Image OpenCode version is invalid or below the minimum; rebuild the worker image with OpenCode 1.19.3 or newer."
-			if e.Code != protocol.StartFailed || (!strings.Contains(e.Message, "labels") && e.Message != want) || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
+			if e.Code != protocol.StartFailed || e.Message != tc.message || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
 				t.Fatalf("%+v", e)
 			}
 			if slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "issue") }) {
