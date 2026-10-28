@@ -529,6 +529,8 @@ class ConfiguredFlags(Base):
         argv = committed_headless(packaged(), spec).argv
         start = argv.index(PLUGIN_OFF[1]) - 1
         self.assertEqual(argv[start : start + 2], PLUGIN_OFF)
+        self.assertEqual(argv[1:start], ("exec", "--json", "--skip-git-repo-check", *AUTO))
+        self.assertEqual(argv.count(PLUGIN_OFF[1]), 1)
 
     def test_the_packaged_config_turns_the_browser_computer_use_apps_and_suggestions_off(self):
         spec = dataclasses.replace(self.spec, flags=CODEX, prompt="hi")
