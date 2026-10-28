@@ -10,7 +10,7 @@ resumes keep the stored spec. Launch commands also accept explicit declarations.
 and refuses any nonempty declaration until kind issuance ships.
 Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
 refuses an older protocol's broker. This interface-only change requires no configuration migration. The existing
-`[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal,
+`[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal
 and the no-implicit-credentials rule are not enabled here. Orchestrator role/task declarations
 are available as described in [Credential spec](architecture.md#credentials); nonempty declarations require
 the broker follow-up before they can start a Docker container.
@@ -20,7 +20,8 @@ errors must ship with those migrations. See [Credential spec](architecture.md#cr
 
 `ensemble-delegate run`, `ensemble-session start`, `ensemble-crew worker NAME` and `ensemble-crew role ROLE` now
 accept `--credentials JSON` (put it after NAME/ROLE for crew). Pass references only; the text is preserved unchanged.
-Omitting it declares none for a new run. tmux ignores it; in_process refuses a present declaration, including `{}`.
+Omitting it declares none for a new run, except crew role uses the orchestrator's role/task declarations; giving it
+replaces that entire default. tmux ignores it; in_process refuses a present declaration, including `{}`.
 Caller overlays containing `credentials` are configuration errors.
 
 Resume, restart and `ensemble-crew reopen` reuse both declarations from host-owned state, regardless of current

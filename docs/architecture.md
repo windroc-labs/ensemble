@@ -401,6 +401,9 @@ declaration as raw text, defaulting to absent. Crew forwards this option after t
 `ensemble-crew role ROLE --credentials JSON --input TEXT` or
 `ensemble-crew worker NAME --client CLIENT --credentials JSON`. Caller overlays cannot carry `credentials`.
 `ensemble-session start --environment-credentials JSON` is the separate handoff for an environment's declaration.
+Without an explicit `--credentials`, crew role queries `ensemble-orchestrator credentials --role ROLE [--task TASK]`
+for its declarations; an undeclared role yields `{}`. An explicit option replaces that whole default without a query.
+The query reads configuration only, without tracker or credential calls. Crew resumes replay saved values.
 
 Worker state, delegate records and Docker `host.json` live on the host, outside the container's writable workspace.
 Resume, restart and crew reopen reuse the saved declarations in each new start manifest. A caller may omit them or
