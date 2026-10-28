@@ -178,6 +178,7 @@ class Claim:
     target: tuple[str, str] | None
     client: str
     delegate_kind: str
+    task: str | None = None
 
 
 @dataclass(frozen=True)

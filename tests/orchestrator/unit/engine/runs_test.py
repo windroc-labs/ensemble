@@ -411,6 +411,14 @@ def start(sid, **fields):
 
 
 class ClaimOf(Case):
+    def test_claim_keeps_the_original_task_and_accepts_older_rows_without_it(self):
+        for task in (None, "decompose"):
+            row = json.loads(start(SID_A))
+            if task:
+                row["task"] = task
+            self.write([json.dumps(row), json.dumps({**row, "kind": "resume", "task": "build"})])
+            self.assertEqual(runs.claim(self.log, "TASK-1", SID_A).task, task)
+
     def test_claim_ignores_old_credentials_and_needs_none(self):
         for fields in ({}, {"key": "pre-app-key"}, {"key": None}, {"key": 7}):
             row = json.loads(start(SID_A))

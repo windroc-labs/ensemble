@@ -26,6 +26,7 @@ from ensemble.orchestrator.engine import (
     writeback,
 )
 from ensemble.orchestrator.engine import log as event_log
+from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import (
     ISSUE_ID,
     IssueState,
@@ -795,7 +796,9 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
             why = one_line(e)
         if why:
             return fail(a.issue, "transient", f"session {a.sid} not resumable ({why})", 3)
-    build = config.TASKS[role].input == "build"
+    task = started_task(cfg.runs_log, a.issue, a.sid) if a.mode == "resume" else a.task
+    stage = workflow.for_task(config.TASKS, role, task)
+    build = stage.input == "build"
     reader = wiring.reader(gql, cfg)
     try:
         issue = reader.issue(a.issue)
@@ -807,7 +810,6 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
     workdir = cfg.issue_workdir(a.issue)
     delegate_cls = LinearRun.kind_cls(cfg, kind)
     if build:
-        stage = config.TASKS[role]
         try:
             repo = target.check(
                 issue,
@@ -831,6 +833,8 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                 return fail(a.issue, "transient", f"bounce: {one_line(e)}", 3)
             log("router", "bounce", a.issue, reason=repo.reason)
             return 0
+    elif stage.input == "decompose":
+        repo = None
     else:
         host = next(
             (cfg.repo_host(name) for name in cfg.roles if config.TASKS[name].input == "build"),
@@ -848,7 +852,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
             run=run,
         )
     try:
-        sources = inputs.gather(issue, role, cfg.docs, run=run)
+        sources = inputs.gather(issue, role, cfg.docs, run=run, task=task)
     except (InputError, OSError, subprocess.TimeoutExpired) as e:
         return fail(a.issue, "transient", f"docs: {one_line(e)}", 3)
     found = None
@@ -864,6 +868,8 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
         target=repo,
         docs=cfg.docs,
         related=found,
+        task=task,
+        project_repos=writers.repos,
     ).replace("\x00", "")
     # a lone surrogate cannot be encoded
     text = text.encode("utf-8", "replace").decode()

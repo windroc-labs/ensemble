@@ -184,7 +184,7 @@ class WorkflowFile(Case):
             (GOOD + "bogus = 1\nzap = 2\n", "stage 1: unknown keys: bogus, zap"),
             (
                 '[[stage]]\nrole = "pm"\ninput = "x"\n',
-                "stage pm: input: want one of research, design, build: 'x'",
+                "stage pm: input: want one of research, design, build, decompose: 'x'",
             ),
             (
                 GOOD + 'first_failure = "todo"\n',

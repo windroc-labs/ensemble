@@ -102,6 +102,7 @@ def claim(path, issue, sid) -> Claim:
                 d["target"] and repo_slug(d["target"]),
                 d["client"],
                 d["delegate_kind"],
+                d["task"] if _text(d.get("task")) else None,
             )
     raise ValueError(f"{issue}: no start row for session {sid}")
 

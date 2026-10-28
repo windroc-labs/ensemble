@@ -3242,6 +3242,35 @@ class ScheduledTaskSelection(TickBase):
 
 
 class RunLaunching(OuterBase):
+    def test_decompose_skips_repo_checks_on_start_and_resume(self):
+        for mode in ("new", "resume"):
+            with self.subTest(mode=mode):
+                self.run_.calls.clear()
+                self.assertEqual(
+                    self.outer(
+                        task="decompose" if mode == "new" else None,
+                        mode=mode,
+                        started_task="decompose",
+                    ),
+                    0,
+                    self.err,
+                )
+                self.assertFalse(
+                    any(
+                        args[0] == "git"
+                        or args[:2] == ("gh", "api")
+                        and "repos/acme/ensemble" in args
+                        for args, _ in self.run_.calls
+                    )
+                )
+                spec = self.api.detached[-1][1]
+                self.assertNotIn("Branch:", spec.input)
+                self.assertEqual(spec.task, "decompose" if mode == "new" else None)
+                self.assertEqual(
+                    self.api.detached[-1][2]["overlays"][-1],
+                    {"roles": {"engineer": {"output": {"type": "local"}}}},
+                )
+
     def test_resume_keeps_recorded_role_and_current_app(self):
         runs.note(
             self.runs,

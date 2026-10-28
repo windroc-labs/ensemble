@@ -250,6 +250,41 @@ class LocalDocuments(Case):
         self.assertEqual({d.text for d in src.docs}, {"Local PRD", "GitHub report"})
 
 
+class DecomposeInputs(Case):
+    def test_handoff_prd_replies_and_mapping_without_a_repo_branch(self):
+        url = BASE + "Product%20Design/prd.md"
+        desc = handoff.handoff(
+            "PRD-3",
+            "https://linear.app/t/issue/PRD-3",
+            sources=[("PRD", url)],
+            instructions=[("Ann", "2026-09-02", "Split queues.")],
+            comments=[("Ann", "2026-09-02", "Use the smaller scope.")],
+        )
+        work = issue(desc, ident="ENG-7", notes=(note("Use option B.", "2026-09-03", ANN),))
+        run = Gh({endpoint("Product%20Design/prd.md"): ok("# Queue PRD")})
+        sources = inputs.gather(work, "engineer", DOCS, run=run, task="decompose")
+        text = inputs.render(
+            work,
+            "engineer",
+            sources,
+            target=None,
+            docs=DOCS,
+            task="decompose",
+            project_repos={"p-1": "acme/queue"},
+        )
+        for expected in (
+            "Source PRD: PRD-3",
+            "Split queues.",
+            "Use the smaller scope.",
+            "Use option B.",
+            "# Queue PRD",
+            '"p-1": "acme/queue"',
+        ):
+            self.assertIn(expected, text)
+        self.assertNotIn("Branch:", text)
+        self.assertNotIn("Checkout:", text)
+
+
 class BuildInputs(Case):
     def test_document_host_and_scheme_case_do_not_change_discovery(self):
         docs = replace(DOCS, host="ghe.example.com")
