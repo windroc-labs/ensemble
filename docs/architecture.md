@@ -660,7 +660,7 @@ ensemble keeps its state in `~/.ensemble/` (`work/` and `logs/` in `<work_dir>`,
 | `work/<ID>/agent/` | no: prune also drops its worktrees and pushed branches |
 | `work/<ID>/run/`, `work/<ID>/writeback.json` | once you won't resume or recover the run |
 | `logs/orchestrator.jsonl`, `logs/prune.json`, `probe/`, `bin/`, `hidden/<name>.json` | any time (keep `logs/`) |
-| `logs/router.lock`, `board/.lock` | while no router runs, no program writes the board |
+| `logs/router.lock`, `logs/router-starts.lock`, `logs/router/`, `board/.lock` | while no router runs, no program writes the board |
 | `sessions/`, `workers/<sid>/`, `docker-state/<name>/` | once you won't restart or resume that session |
 | `tui/<name>/` | no: closing the session removes it |
 | `tui/<name>.lock` | while no session of that name starts or closes |

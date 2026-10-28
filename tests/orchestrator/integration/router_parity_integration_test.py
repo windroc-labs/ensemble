@@ -7,7 +7,7 @@ import time
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from ensemble.orchestrator.engine.router import BUSY, LIVE, WAIT
+from ensemble.orchestrator.engine.router import BUSY, LIVE, STARTING, WAIT
 from tests.delegate.replies import block, mark, option
 from tests.delegate.workdir import session_cwd
 from tests.orchestrator.integration.flow_fixtures import (
@@ -120,6 +120,59 @@ class Lock(Parity):
         )
         for ident, row in rows.items():
             self.wait_end(row["sid"], ident)
+
+    def inside_start(self):
+        """ID's router, past its claim: its issue read answered 2 * HOLD s late."""
+        self.fake.fail("issues.Q_ISSUE", "hang", seconds=2 * HOLD)
+        self.scene([START, DONE], usage=usage(0.5))
+        first = self.start("router", "--issue", ID)
+        live_tmux.wait(
+            lambda: "issues.Q_ISSUE" in [r.op for r in self.requests()],
+            TIMEOUT,
+            "the first router's issue read",
+        )
+        return first
+
+    def all_started(self, procs, idents):
+        for proc in procs:
+            out, err = proc.communicate(timeout=TIMEOUT)
+            self.assertEqual(proc.returncode, 0, err)
+        rows = {row["issue"]: row for row in self.runs()}
+        self.assertEqual(sorted(rows), sorted(idents))
+        self.assertEqual({row["kind"] for row in rows.values()}, {"start"})
+        for ident, row in rows.items():
+            self.wait_end(row["sid"], ident)
+        self.assertEqual({self.state(i) for i in idents}, {"in_review"})
+
+    def test_parallel_issue_runs_of_different_issues_all_start(self):
+        idents = [ID, OTHER, SOURCE]
+        for ident in idents[1:]:
+            self.seed(ident, f"ENG: Session part {ident}")
+        self.fake.fail("linear.Q_TEAM", "hang", seconds=HOLD)
+        self.scene([START, DONE], usage=usage(0.5))
+        procs = [self.start("router", "--issue", ident) for ident in idents]
+        self.all_started(procs, idents)
+        self.assertEqual(len(agent_calls(self.calls())), 3)
+        self.assertNotIn(f"reason={BUSY}", "\n".join(self.said()))
+
+    def test_an_issue_run_starts_while_another_is_inside_its_start(self):
+        self.seed(OTHER, "ENG: Session index")
+        first = self.inside_start()
+        res = self.router("--issue", OTHER)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIsNone(first.poll(), "the first router ended before the second")
+        self.all_started([first], [ID, OTHER])
+
+    def test_a_second_run_of_the_same_issue_is_refused_while_the_first_starts(self):
+        first = self.inside_start()
+        res = self.router("--issue", ID)
+        self.assertEqual(
+            (res.returncode, res.stdout, res.stderr),
+            (2, "", f"router.py: {ID} is {STARTING}; try again\n"),
+        )
+        self.assertIsNone(first.poll(), "the first router ended before the second")
+        self.all_started([first], [ID])
+        self.assertIn(f"router skip {ID} reason={STARTING}", self.said())
 
 
 class MaxRuns(Parity):

@@ -120,7 +120,8 @@ Exit conditions:
   once a day), otherwise 0.
   --issue: 2 on configuration failure, 1 when Linear is unavailable or on
   unknown run inventory; 2 when busy (another router held the lock for 600 s;
-  it waits meanwhile), already live or unclaimable; 0 if an ended outcome was written back. Otherwise
+  it waits meanwhile), being started by another router, already live or
+  unclaimable; 0 if an ended outcome was written back. Otherwise
   launch result: 0 detached/bounced, 1 launch failure, 2 issue config error,
   3 transient error. --dry-run: 0 for the plan; setup failures still apply.
   A nonzero --issue (not --dry-run) also prints its orchestrator.jsonl lines about
@@ -140,7 +141,7 @@ Examples (configured Linear access, client and a claimable TASK-1):
   Requires a configured engineer role; prints usage without starting work.
 
 Recovery and next help:
-  Busy: retry later. Live run: ensemble-orchestrator status TASK-1
+  Busy or being started: retry later. Live run: ensemble-orchestrator status TASK-1
   View recovery: ensemble-orchestrator attach-command TASK-1
   Interrupted run: ensemble-orchestrator resume --help
   Termination: ensemble-orchestrator close --help
@@ -158,6 +159,8 @@ SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
 BUSY = "another router is running"
+STARTING = "being started by another router"
+STARTS = "an issue run is starting"
 WAIT = 600  # s an --issue run waits for the router lock: its claim takes seconds, a tick's start minutes
 POLL = 0.2
 USAGE = (
@@ -938,15 +941,20 @@ def announce(ident, linear_run, detached):
 
 
 def _take(f, op, wait, waiting):
-    """Whether f's flock op was taken, retried every POLL s for up to wait s; waiting() runs once,
-    before the first retry.
+    """Whether f's flock op was taken, retried every POLL s for up to wait s (None: blocks);
+    waiting() runs once, before the first retry.
     """
-    deadline = time.monotonic() + wait
+    if wait is None:
+        fcntl.flock(f, op)
+        return True
+    deadline = None
     while True:
         try:
             fcntl.flock(f, op | fcntl.LOCK_NB)
         except BlockingIOError:
-            if time.monotonic() >= deadline:
+            now = time.monotonic()
+            deadline = now + wait if deadline is None else deadline
+            if now >= deadline:
                 return False
         else:
             return True
@@ -957,20 +965,31 @@ def _take(f, op, wait, waiting):
 
 
 @contextlib.contextmanager
-def _flock(path, op, *, wait=0, waiting=None):
+def _flock(runs, dry, name, op, *, wait=0, waiting=None):
+    if dry:
+        yield True
+        return
+    path = os.path.join(os.path.dirname(runs), name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "a") as f:  # not inherited by children (PEP 446)
         yield _take(f, op, wait, waiting)
 
 
-@contextlib.contextmanager
 def lock(runs, dry, *, wait=0, waiting=None):
-    if dry:
-        yield True
-        return
-    path = os.path.join(os.path.dirname(runs), "router.lock")
-    with _flock(path, fcntl.LOCK_EX, wait=wait, waiting=waiting) as free:
-        yield free
+    return _flock(runs, dry, "router.lock", fcntl.LOCK_EX, wait=wait, waiting=waiting)
+
+
+def issue_lock(runs, ident, dry):
+    """The one router starting ident holds it from before its claim until its start returns."""
+    return _flock(runs, dry, os.path.join("router", f"{ident}.lock"), fcntl.LOCK_EX)
+
+
+def starts(runs, dry, *, shared):
+    """Shared: each --issue run's from its claim until its start returns; exclusive: a tick's. Taken
+    only under the router lock, so a shared take never waits.
+    """
+    op = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+    return _flock(runs, dry, "router-starts.lock", op, wait=None if shared else 0)
 
 
 class Held:
@@ -1068,9 +1087,12 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
     now = clock().astimezone(UTC)
     dry, runs = opts["dry"], cfg.runs_log
     say = functools.partial(log, "router", dry=dry)
-    with lock(runs, dry) as free:
+    with lock(runs, dry) as free, contextlib.ExitStack() as held:
         if not free:
             say("skip", reason=BUSY)
+            return 0
+        if not held.enter_context(starts(runs, dry, shared=False)):
+            say("skip", reason=STARTS)
             return 0
         entries = parse_log(runs)
         live = live_sessions(cfg, entries, say=say)
@@ -1121,58 +1143,64 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
     waiting = functools.partial(
         print, f"router.py: {BUSY}; waiting up to {WAIT} s", file=sys.stderr, flush=True
     )
-    with lock(runs, dry, wait=WAIT, waiting=waiting) as free:
-        if not free:
-            log("router", "skip", ident, reason=BUSY, told=True)
-            print(f"router.py: {BUSY}; try again", file=sys.stderr)
+    with contextlib.ExitStack() as held:
+        if not held.enter_context(issue_lock(runs, ident, dry)):
+            log("router", "skip", ident, reason=STARTING, told=True)
+            print(f"router.py: {ident} is {STARTING}; try again", file=sys.stderr)
             return stop
-        entries = parse_log(runs)
-        live = live_sessions(cfg, entries, say=functools.partial(log, "router", dry=dry))
-        if live is None:
-            print("router.py: agent runs unknown; try again", file=sys.stderr)
-            return 0 if dry else 1
-        if any(ident in ids for ids in live.values()):
-            sid = latest(entries)[ident].sid
-            view = LinearRun.attach(ident, cfg=cfg, sid=sid)
-            try:
-                attach = view.delegate.attach_command()
-            except delegate.SessionError as e:
-                attach = f"unknown ({one_line(e)})"
-            shown = f": {attach}" if attach else ""
-            print(f"router.py: {ident} has a live agent run{shown}", file=sys.stderr)
-            return stop
-        entries = parse_log(runs)
-        board = Board(gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring)
-        if issue := next(
-            (i for i in board.tracker.assigned(IssueState.RUNNING) if i["identifier"] == ident),
-            None,
-        ):
-            sid = board.current_sid(issue)
-            if cfg.tracker is TrackerKind.LINEAR and board.credential_error(
-                role_of(entries, sid) if sid else board.role(issue)
-            ):
+        with lock(runs, dry, wait=WAIT, waiting=waiting) as free:
+            if not free:
+                log("router", "skip", ident, reason=BUSY, told=True)
+                print(f"router.py: {BUSY}; try again", file=sys.stderr)
                 return stop
-            if not board.settle(issue, sid, wait=False):
-                return 0 if board.replays.get(ident) else stop
-            spec = board.resumption(issue, sid, launch_sid or str(uuid.uuid4()))
-            board.plan(("resume", spec, sid))
-            if not dry and other_sid(spec, launch_sid):
-                return 2
-        elif board.is_blocked(ident) or not (taken := board.take(ident)):
-            return stop
-        else:
-            issue, task, role, client, source = taken
-            spec = Spec.from_issue(
-                issue,
-                role=role,
-                mode="new",
-                sid=launch_sid or str(uuid.uuid4()),
-                task=task,
-                client=client,
-                client_source=source,
-            )
-        if dry:
-            return 0
+            entries = parse_log(runs)
+            live = live_sessions(cfg, entries, say=functools.partial(log, "router", dry=dry))
+            if live is None:
+                print("router.py: agent runs unknown; try again", file=sys.stderr)
+                return 0 if dry else 1
+            if any(ident in ids for ids in live.values()):
+                sid = latest(entries)[ident].sid
+                view = LinearRun.attach(ident, cfg=cfg, sid=sid)
+                try:
+                    attach = view.delegate.attach_command()
+                except delegate.SessionError as e:
+                    attach = f"unknown ({one_line(e)})"
+                shown = f": {attach}" if attach else ""
+                print(f"router.py: {ident} has a live agent run{shown}", file=sys.stderr)
+                return stop
+            entries = parse_log(runs)
+            board = Board(gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring)
+            if issue := next(
+                (i for i in board.tracker.assigned(IssueState.RUNNING) if i["identifier"] == ident),
+                None,
+            ):
+                sid = board.current_sid(issue)
+                if cfg.tracker is TrackerKind.LINEAR and board.credential_error(
+                    role_of(entries, sid) if sid else board.role(issue)
+                ):
+                    return stop
+                if not board.settle(issue, sid, wait=False):
+                    return 0 if board.replays.get(ident) else stop
+                spec = board.resumption(issue, sid, launch_sid or str(uuid.uuid4()))
+                board.plan(("resume", spec, sid))
+                if not dry and other_sid(spec, launch_sid):
+                    return 2
+            elif board.is_blocked(ident) or not (taken := board.take(ident)):
+                return stop
+            else:
+                issue, task, role, client, source = taken
+                spec = Spec.from_issue(
+                    issue,
+                    role=role,
+                    mode="new",
+                    sid=launch_sid or str(uuid.uuid4()),
+                    task=task,
+                    client=client,
+                    client_source=source,
+                )
+            if dry:
+                return 0
+            held.enter_context(starts(runs, dry, shared=True))
         return start(begin(cfg, spec))
 
 
