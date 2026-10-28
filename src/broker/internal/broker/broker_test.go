@@ -134,14 +134,18 @@ func (k *fakeKeychain) erased() error {
 }
 
 type fakeExec struct {
-	argv  [][]string
-	stdin [][]byte
-	err   error
+	argv   [][]string
+	stdin  [][]byte
+	err    error
+	failAt int // the nth run (1-based) fails; 0: none but err's
 }
 
 func (e *fakeExec) run(argv []string, stdin []byte) error {
 	e.argv = append(e.argv, argv)
 	e.stdin = append(e.stdin, append([]byte(nil), stdin...))
+	if len(e.argv) == e.failAt {
+		return errors.New("exec failed")
+	}
 	return e.err
 }
 

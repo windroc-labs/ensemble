@@ -17,252 +17,164 @@ import (
 
 var bg = context.Background()
 
-func acquire(t *testing.T, l Lifecycle, id string, c *container) []protocol.Expiry {
+func acquire(t *testing.T, l Lifecycle, host string, p *publisher) []protocol.Expiry {
 	t.Helper()
-	got, err := l.Acquire(bg, to(id, c), "app", map[string]string{"contents": "read"})
+	got, err := l.Acquire(bg, to(host, p), "app", map[string]string{"scope": "read"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return got
 }
 
-// TestStaticProviderRefused: every operation checks its provider's kind, so no static credential runs through renewal
-// or revocation.
+// TestStaticProviderRefused: every operation checks its provider's kind, so no static credential runs through renewal.
 func TestStaticProviderRefused(t *testing.T) {
 	p := newProvider(t, "acme")
 	p.kind = Claude
 	l := lifecycle(newStore(), p, nil)
-	c := newContainer()
-	if _, err := l.Acquire(bg, to(ctrA, c), "app", nil); !errors.Is(err, ErrStatic) {
+	pub := &publisher{}
+	if _, err := l.Acquire(bg, to(hostA, pub), "app", nil); !errors.Is(err, ErrStatic) {
 		t.Fatalf("Acquire: %v", err)
 	}
-	if _, err := l.Refresh(bg, to(ctrA, c), nil); !errors.Is(err, ErrStatic) {
+	if _, err := l.Refresh(bg, to(hostA, pub), nil); !errors.Is(err, ErrStatic) {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if err := l.Release(bg, Consumer{Container: ctrA}); !errors.Is(err, ErrStatic) {
-		t.Fatalf("Release: %v", err)
+	if len(p.calls) != 0 || pub.calls != 0 {
+		t.Fatalf("static kind reached the provider %q or a consumer", p.calls)
 	}
-	if _, err := l.Retry(bg); !errors.Is(err, ErrStatic) {
-		t.Fatalf("Retry: %v", err)
-	}
-	if len(p.calls) != 0 || len(c.argv) != 0 {
-		t.Fatalf("static kind reached the provider %q or a container %q", p.calls, c.argv)
-	}
-	p.kind = GitHub
-	acquire(t, l, ctrA, c)
-}
-
-func TestRevocationOutcomes(t *testing.T) {
-	for _, tc := range []struct {
-		outcome Outcome
-		gone    bool
-		audit   string
-	}{
-		{Revoked, true, `"result":"revoked"`},
-		{AlreadyInvalid, true, `"result":"revoked"`},
-		{Retryable, false, `"result":"pending","reason":"GitHub 503"`},
-		{Unsupported, false, `"result":"pending","reason":"revocation unsupported"`},
-	} {
-		t.Run(string(tc.outcome), func(t *testing.T) {
-			store, p := newStore(), newProvider(t, "acme")
-			rec, log := recorder(ctrA)
-			l := lifecycle(store, p, rec)
-			acquire(t, l, ctrA, newContainer())
-			p.revoke = func(string) Revocation {
-				r := Revocation{Outcome: tc.outcome}
-				if tc.outcome == Retryable {
-					r.Err = errors.New("GitHub 503")
-				}
-				return r
-			}
-			if err := l.Release(bg, Consumer{Container: ctrA}); err != nil {
-				t.Fatal(err)
-			}
-			_ = rec.Flush(nil)
-			if _, ok := store.record(t, ctrA); ok {
-				t.Fatal("record kept after a transfer to the backlog")
-			}
-			if queued := pendingTokens(store.backlog(t)); slices.Equal(queued, []string{"tok_1"}) == tc.gone {
-				t.Fatalf("backlog %q", queued)
-			}
-			if !strings.Contains(log.text(), tc.audit) {
-				t.Fatalf("audit %s", log.text())
-			}
-		})
-	}
-}
-
-func TestReleaseTouchesOnlyItsConsumer(t *testing.T) {
-	store, p := newStore(), newProvider(t, "acme")
-	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
-	acquire(t, l, ctrB, newContainer())
-	before := slices.Clone(store.items[records+"/"+ctrB])
-	p.revoke = failRevoke
-	store.fail = func(op, service string) bool { return service == backlogS }
-	var unrevoked *UnrevokedError
-	if err := l.Release(bg, Consumer{Container: ctrA}); !errors.As(err, &unrevoked) || unrevoked.Consumer != ctrA {
-		t.Fatalf("release with revoke and backlog down: %v", err)
-	}
-	if rec, ok := store.record(t, ctrA); !ok || len(rec.Tokens) != 1 {
-		t.Fatalf("recovery material of A lost: %v", rec)
-	}
-	if !bytes.Equal(store.items[records+"/"+ctrB], before) {
-		t.Fatal("B's record changed")
-	}
-	store.fail, p.revoke = nil, nil
-	if err := l.Release(bg, Consumer{Container: ctrA}); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(store.items[records+"/"+ctrB], before) || slices.Contains(p.revoked, "tok_2") {
-		t.Fatal("B's grant released with A's")
-	}
+	p.kind = Linear
+	acquire(t, l, hostA, pub)
 }
 
 func TestRefreshTouchesOnlyItsConsumer(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme")
 	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
-	acquire(t, l, ctrB, newContainer())
-	before := slices.Clone(store.items[records+"/"+ctrB])
-	if _, err := l.Refresh(bg, to(ctrA, newContainer()), nil); err != nil {
+	acquire(t, l, hostA, nil)
+	acquire(t, l, hostB, nil)
+	before := slices.Clone(store.items[records+"/"+idB])
+	if _, err := l.Refresh(bg, to(hostA, nil), nil); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(store.items[records+"/"+ctrB], before) || !slices.Equal(p.revoked, []string{"tok_1"}) {
-		t.Fatalf("B touched; revoked %q", p.revoked)
+	rec, _ := store.record(t, idA)
+	wantTokens(t, "A", tokens(rec), map[string]State{"tok_3": Delivered})
+	if !bytes.Equal(store.items[records+"/"+idB], before) {
+		t.Fatal("B touched")
 	}
 }
 
-func TestLegacyRecordRefreshesAndReleases(t *testing.T) {
+// TestRefreshAudit: a refresh notes the renewal, then the replaced material's withdrawal, each keyed by its account
+// and expiry, never its value.
+func TestRefreshAudit(t *testing.T) {
+	store, p := newStore(), newProvider(t, "acme")
+	rec, log := recorder(idA)
+	l := lifecycle(store, p, rec)
+	acquire(t, l, hostA, nil)
+	if _, err := l.Refresh(bg, to(hostA, nil), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Flush(nil); err != nil {
+		t.Fatal(err)
+	}
+	want := `"credentials":[` +
+		`{"kind":"test-token","result":"issued","expires_at":"2026-10-26T13:00:00Z","account":"acme","installation":1},` +
+		`{"kind":"test-token","result":"renewed","expires_at":"2026-10-26T13:00:00Z","account":"acme","installation":1},` +
+		`{"kind":"test-token","result":"withdrawn","expires_at":"2026-10-26T13:00:00Z","account":"acme","installation":1}]`
+	if len(log.data) != 1 || !strings.Contains(log.text(), want) || strings.Contains(log.text(), "tok_") {
+		t.Fatalf("audit %s", log.text())
+	}
+}
+
+func TestLegacyRecordRefreshes(t *testing.T) {
 	store, p := newStore(), newProvider(t)
-	legacy := `{"app":"app","tokens":[{"account":"acme","installation":1,"token":"ghs_old","expires_at":"2026-10-26T13:00:00Z"}]}`
-	store.items[records+"/"+ctrA] = []byte(legacy)
-	l := lifecycle(store, p, nil)
-	c := newContainer()
-	got, err := l.Refresh(bg, to(ctrA, c), map[string]string{"contents": "read"})
+	legacy := `{"app":"app","tokens":[{"account":"acme","installation":1,"token":"old","expires_at":"2026-10-26T13:00:00Z"}]}`
+	store.items[records+"/"+idA] = []byte(legacy)
+	pub := &publisher{}
+	got, err := lifecycle(store, p, nil).Refresh(bg, to(hostA, pub), map[string]string{"scope": "read"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-26T13:00:00Z"}}; !slices.Equal(got, want) || c.files["acme"] != "tok_1" {
-		t.Fatalf("expiries %v, files %v", got, c.files)
+	if want := []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-26T13:00:00Z"}}; !slices.Equal(got, want) || !slices.Equal(pub.published, []string{"tok_1"}) {
+		t.Fatalf("expiries %v, published %q", got, pub.published)
 	}
-	rec, _ := store.record(t, ctrA)
-	if len(rec.Tokens) != 1 || rec.Tokens[0].Token != "tok_1" || rec.Tokens[0].State != Delivered || rec.Tokens[0].Revision != 1 ||
-		!slices.Equal(p.revoked, []string{"ghs_old"}) {
-		t.Fatalf("record %+v revoked %q", rec, p.revoked)
-	}
-	store.items[records+"/"+ctrB] = []byte(legacy)
-	if err := l.Release(bg, Consumer{Container: ctrB}); err != nil || !slices.Contains(p.revoked, "ghs_old") {
-		t.Fatalf("release: %v", err)
-	}
-	if _, ok := store.record(t, ctrB); ok {
-		t.Fatal("legacy record kept")
+	rec, _ := store.record(t, idA)
+	if len(rec.Tokens) != 1 || rec.Tokens[0].Token != "tok_1" || rec.Tokens[0].State != Delivered || rec.Tokens[0].Revision != 1 {
+		t.Fatalf("record %+v", rec)
 	}
 }
 
 func TestRecordKeepsLegacyFields(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme")
-	acquire(t, lifecycle(store, p, nil), ctrA, newContainer())
+	acquire(t, lifecycle(store, p, nil), hostA, nil)
 	var raw struct {
 		App    string           `json:"app"`
 		Tokens []map[string]any `json:"tokens"`
 	}
-	if err := json.Unmarshal(store.items[records+"/"+ctrA], &raw); err != nil {
+	if err := json.Unmarshal(store.items[records+"/"+idA], &raw); err != nil {
 		t.Fatal(err)
 	}
 	m := raw.Tokens[0]
-	if raw.App != "app" || m["account"] != "acme" || m["installation"] != float64(1) || m["token"] != "tok_1" || m["expires_at"] != "2026-10-26T13:00:00Z" {
-		t.Fatalf("%s", store.items[records+"/"+ctrA])
+	if raw.App != "app" || m["account"] != "acme" || m["installation"] != float64(1) || m["token"] != "tok_1" || m["expires_at"] != "2026-10-26T13:00:00Z" ||
+		m["revision"] != float64(1) || m["state"] != "delivered" || len(m) != 6 {
+		t.Fatalf("%s", store.items[records+"/"+idA])
 	}
 }
 
 func TestExpiriesListOnlyDelivered(t *testing.T) {
 	store, p := newStore(), newProvider(t)
 	at := clock.Add(30 * time.Minute).Format(time.RFC3339)
-	store.seed(t, ctrA, Record{Subject: "app", Tokens: []Material{
-		{Account: "acme", Target: 1, Token: "ghs_live", ExpiresAt: at, Revision: 1, State: Delivered},
-		{Account: "acme", Target: 1, Token: "ghs_prepared", ExpiresAt: at, Revision: 2, State: Prepared},
-		{Account: "acme", Target: 1, Token: "ghs_retiring", ExpiresAt: at, Revision: 0, State: Retiring},
+	store.seed(t, idA, Record{Subject: "app", Tokens: []Material{
+		{Account: "acme", Target: 1, Token: "live", ExpiresAt: at, Revision: 1, State: Delivered},
+		{Account: "acme", Target: 1, Token: "prepared", ExpiresAt: at, Revision: 2, State: Prepared},
+		{Account: "acme", Target: 1, Token: "retiring", ExpiresAt: at, Revision: 0, State: Retiring},
 	}})
-	got, err := lifecycle(store, p, nil).Refresh(bg, to(ctrA, newContainer()), nil)
+	got, err := lifecycle(store, p, nil).Refresh(bg, to(hostA, nil), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if want := []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-26T13:00:00Z"}}; !slices.Equal(got, want) {
 		t.Fatalf("expiries %v", got)
 	}
-	rec, _ := store.record(t, ctrA)
+	rec, _ := store.record(t, idA)
 	wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
 	if rec.Tokens[0].Revision != 3 {
 		t.Fatalf("revision %d, want 3", rec.Tokens[0].Revision)
 	}
 }
 
-func TestAcquireFailureMatrix(t *testing.T) {
-	for _, point := range []string{"record", "delivery", "mark"} {
-		for _, revokeOK := range []bool{true, false} {
-			for _, backlogOK := range []bool{true, false} {
-				t.Run(fmt.Sprintf("%s/revoke=%v/backlog=%v", point, revokeOK, backlogOK), func(t *testing.T) {
-					store, p := newStore(), newProvider(t, "acme", "other")
-					c := newContainer()
-					writes := 0
-					store.fail = func(op, service string) bool {
-						if service == backlogS {
-							return !backlogOK
-						}
-						if service != records || op != "write" {
-							return false
-						}
-						writes++
-						return point == "record" && writes == 2 || point == "mark" && writes == 3
-					}
-					if point == "delivery" {
-						c.fail = func(n int) bool { return n == 2 }
-					}
-					if !revokeOK {
-						p.revoke = failRevoke
-					}
-					_, err := lifecycle(store, p, nil).Acquire(bg, to(ctrA, c), "app", nil)
-					if err == nil {
-						t.Fatal("acquire succeeded")
-					}
-					// No issued token is lost: each is revoked, queued, or kept in the record, but for a never-recorded
-					// one with every route down, which is reported unrevoked and bounded by its expiry.
-					rec, _ := store.record(t, ctrA)
-					var unrevoked *UnrevokedError
-					for _, token := range []string{"tok_1", "tok_2"} {
-						_, recorded := tokens(rec)[token]
-						if !slices.Contains(p.revoked, token) && !slices.Contains(pendingTokens(store.backlog(t)), token) && !recorded &&
-							!(token == "tok_2" && point == "record" && !revokeOK && !backlogOK && errors.As(err, &unrevoked)) {
-							t.Fatalf("%s lost: err %v record %v", token, err, rec)
-						}
-					}
-					for _, m := range rec.Tokens {
-						if m.State == Delivered {
-							t.Fatalf("a failed acquire left %s delivered", m.Token)
-						}
-					}
-					store.fail, p.revoke = nil, nil
-					rebuilt := lifecycle(store, p, nil)
-					if err := rebuilt.Release(bg, Consumer{Container: ctrA}); err != nil {
-						t.Fatal(err)
-					}
-					if _, err := rebuilt.Retry(bg); err != nil {
-						t.Fatal(err)
-					}
-					if _, ok := store.record(t, ctrA); ok || len(store.backlog(t)) != 0 || !slices.Contains(p.revoked, "tok_1") {
-						t.Fatalf("not finished: record %v backlog %v revoked %q", rec, store.backlog(t), p.revoked)
-					}
-				})
+// TestAcquireFailure: a failed acquire withdraws what it appended, but for a failed publication, which leaves its
+// materials prepared; none counts as delivered.
+func TestAcquireFailure(t *testing.T) {
+	for point, want := range map[string]map[string]State{
+		"record":  {},
+		"publish": {"tok_1": Prepared, "tok_2": Prepared},
+		"mark":    {},
+	} {
+		t.Run(point, func(t *testing.T) {
+			store, p := newStore(), newProvider(t, "acme", "other")
+			pub := &publisher{}
+			writes := 0
+			store.fail = func(op, service string) bool {
+				if service != records || op != "write" {
+					return false
+				}
+				writes++
+				return point == "record" && writes == 2 || point == "mark" && writes == 3
 			}
-		}
+			if point == "publish" {
+				pub.fail = func(n int) bool { return n == 2 }
+			}
+			if _, err := lifecycle(store, p, nil).Acquire(bg, to(hostA, pub), "app", nil); err == nil {
+				t.Fatal("acquire succeeded")
+			}
+			rec, _ := store.record(t, idA)
+			wantTokens(t, "record", tokens(rec), want)
+		})
 	}
 }
 
 func TestAcquireRecordsBeforeNextIssue(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme", "other", "third")
 	p.onIssue = func(n int) {
-		rec, _ := store.record(t, ctrA)
+		rec, _ := store.record(t, idA)
 		if len(rec.Tokens) != n-1 {
 			t.Errorf("issue %d with %d recorded", n, len(rec.Tokens))
 		}
@@ -278,37 +190,36 @@ func TestAcquireRecordsBeforeNextIssue(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := lifecycle(store, p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil); err == nil {
+	if _, err := lifecycle(store, p, nil).Acquire(bg, to(hostA, nil), "app", nil); err == nil {
 		t.Fatal("acquire succeeded")
 	}
-	if !slices.Equal(p.revoked, []string{"tok_1", "tok_2"}) {
-		t.Fatalf("revoked %q", p.revoked)
+	if _, ok := store.record(t, idA); ok {
+		t.Fatal("a failed acquire kept what it appended")
 	}
 }
 
 func TestRefreshOrder(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme")
 	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
+	acquire(t, l, hostA, nil)
 	var log []string
 	store.log, p.log = &log, &log
-	c := newContainer()
-	c.log = &log
+	pub := &publisher{log: &log}
 	states := []map[string]State{}
 	store.fail = func(op, service string) bool {
 		if op == "write" && service == records {
-			rec, _ := store.record(t, ctrA)
+			rec, _ := store.record(t, idA)
 			states = append(states, tokens(rec))
 		}
 		return false
 	}
-	if _, err := l.Refresh(bg, to(ctrA, c), nil); err != nil {
+	if _, err := l.Refresh(bg, to(hostA, pub), nil); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"issue tok_2", "write " + records, "deliver tok_2", "write " + records, "revoke tok_1", "write " + records}; !slices.Equal(log, want) {
+	if want := []string{"issue tok_2", "write " + records, "publish tok_2", "write " + records, "write " + records}; !slices.Equal(log, want) {
 		t.Fatalf("order %q", log)
 	}
-	rec, _ := store.record(t, ctrA)
+	rec, _ := store.record(t, idA)
 	states = append(states, tokens(rec))
 	want := []map[string]State{
 		{"tok_1": Delivered},
@@ -321,20 +232,25 @@ func TestRefreshOrder(t *testing.T) {
 	}
 }
 
-func TestRefreshDeliveryFailureKeepsOld(t *testing.T) {
-	store, p := newStore(), newProvider(t, "acme")
+// TestPublishFailureKeepsRecord: a failed publication keeps the new material prepared beside the usable one, in Acquire
+// and in Refresh.
+func TestPublishFailureKeepsRecord(t *testing.T) {
+	store, p := newStore(), newProvider(t, "account")
 	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
-	c := newContainer()
-	c.fail = func(int) bool { return true }
-	if _, err := l.Refresh(bg, to(ctrA, c), nil); !errors.Is(err, ErrDelivery) {
+	published := errors.New("deadline write failed")
+	d := to(hostA, nil)
+	d.Publish = func(Material) error { return published }
+	if _, err := l.Acquire(bg, d, "app", nil); !errors.Is(err, published) {
 		t.Fatalf("%v", err)
 	}
-	rec, _ := store.record(t, ctrA)
-	wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
-	if !slices.Equal(p.revoked, []string{"tok_2"}) {
-		t.Fatalf("revoked %q", p.revoked)
+	rec, _ := store.record(t, idA)
+	wantTokens(t, "after failed acquire", tokens(rec), map[string]State{"tok_1": Prepared})
+	acquire(t, l, hostB, nil)
+	if _, err := l.Refresh(bg, to(hostB, failing()), nil); err == nil {
+		t.Fatal("refresh succeeded")
 	}
+	rec, _ = store.record(t, idB)
+	wantTokens(t, "after failed refresh", tokens(rec), map[string]State{"tok_2": Delivered, "tok_3": Prepared})
 }
 
 func TestRefreshResumesAfterEachStep(t *testing.T) {
@@ -343,98 +259,71 @@ func TestRefreshResumesAfterEachStep(t *testing.T) {
 		return Material{Account: "acme", Target: 1, Token: token, ExpiresAt: at, State: state}
 	}
 	for name, left := range map[string][]Material{
-		"after the prepared write": {m("ghs_old", Delivered), m("ghs_new", Prepared)},
-		"after the delivered mark": {m("ghs_old", Retiring), m("ghs_new", Delivered)},
-		"after a stopped acquire":  {m("ghs_new", Prepared)},
+		"after the prepared write": {m("old", Delivered), m("new", Prepared)},
+		"after the delivered mark": {m("old", Retiring), m("new", Delivered)},
+		"after a stopped acquire":  {m("new", Prepared)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			store, p := newStore(), newProvider(t)
-			store.seed(t, ctrA, Record{Subject: "app", Tokens: left})
-			c := newContainer()
-			if _, err := lifecycle(store, p, nil).Refresh(bg, to(ctrA, c), nil); err != nil {
+			store.seed(t, idA, Record{Subject: "app", Tokens: left})
+			pub := &publisher{}
+			if _, err := lifecycle(store, p, nil).Refresh(bg, to(hostA, pub), nil); err != nil {
 				t.Fatal(err)
 			}
-			rec, _ := store.record(t, ctrA)
+			rec, _ := store.record(t, idA)
 			wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
-			for _, x := range left {
-				if !slices.Contains(p.revoked, x.Token) {
-					t.Fatalf("%s left unretired: %q", x.Token, p.revoked)
-				}
-			}
-			if c.files["acme"] != "tok_1" {
-				t.Fatalf("files %v", c.files)
+			if !slices.Equal(pub.published, []string{"tok_1"}) {
+				t.Fatalf("published %q", pub.published)
 			}
 		})
 	}
-	store, p := newStore(), newProvider(t)
-	store.seed(t, ctrA, Record{Subject: "app", Tokens: []Material{m("ghs_old", Retiring), m("ghs_new", Prepared)}})
-	if err := lifecycle(store, p, nil).Release(bg, Consumer{Container: ctrA}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := store.record(t, ctrA); ok || !slices.Equal(p.revoked, []string{"ghs_old", "ghs_new"}) {
-		t.Fatalf("release left %q", p.revoked)
-	}
 }
 
-func TestRefreshRetiresOnlyItsSlot(t *testing.T) {
+func TestRefreshReplacesOnlyItsSlot(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme", "other")
 	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
+	acquire(t, l, hostA, nil)
 	p.issueErr = func(n int) error {
 		if n == 4 {
-			return errors.New("GitHub 500")
+			return errors.New("Linear 500")
 		}
 		return nil
 	}
-	if _, err := l.Refresh(bg, to(ctrA, newContainer()), nil); err == nil {
+	if _, err := l.Refresh(bg, to(hostA, nil), nil); err == nil {
 		t.Fatal("refresh succeeded")
 	}
-	rec, _ := store.record(t, ctrA)
+	rec, _ := store.record(t, idA)
 	wantTokens(t, "record", tokens(rec), map[string]State{"tok_3": Delivered, "tok_2": Delivered})
-	if !slices.Equal(p.revoked, []string{"tok_1"}) {
-		t.Fatalf("revoked %q", p.revoked)
-	}
 }
 
 func TestInvalidConsumerFailsClosed(t *testing.T) {
-	exec := newContainer().exec
-	for name, d := range map[string]Delivery{
-		"neither":                {Consumer: Consumer{}, Exec: exec},
-		"both":                   {Consumer: Consumer{Container: ctrA, Host: "linear"}, Exec: exec},
-		"container without exec": {Consumer: Consumer{Container: ctrA}, Exec: nil},
-		"host with exec":         {Consumer: Consumer{Host: "linear"}, Exec: exec},
-		"container naming host":  {Consumer: Consumer{Container: "host/linear"}, Exec: exec},
-	} {
+	for _, host := range []string{"", "a/b"} {
 		store, p := newStore(), newProvider(t, "acme")
-		store.fail = func(op, service string) bool { t.Errorf("%s: store %s %s", name, op, service); return false }
+		store.fail = func(op, service string) bool { t.Errorf("%q: store %s %s", host, op, service); return false }
 		l := lifecycle(store, p, nil)
-		if _, err := l.Acquire(bg, d, "app", nil); !errors.Is(err, ErrConsumer) {
-			t.Errorf("%s acquire: %v", name, err)
+		if _, err := l.Acquire(bg, to(host, nil), "app", nil); !errors.Is(err, ErrConsumer) {
+			t.Errorf("%q acquire: %v", host, err)
 		}
-		if _, err := l.Refresh(bg, d, nil); !errors.Is(err, ErrConsumer) {
-			t.Errorf("%s refresh: %v", name, err)
+		if _, err := l.Refresh(bg, to(host, nil), nil); !errors.Is(err, ErrConsumer) {
+			t.Errorf("%q refresh: %v", host, err)
 		}
 		if len(p.calls) != 0 {
-			t.Errorf("%s: provider %q", name, p.calls)
+			t.Errorf("%q: provider %q", host, p.calls)
 		}
-	}
-	if err := lifecycle(newStore(), newProvider(t), nil).Release(bg, Consumer{}); !errors.Is(err, ErrConsumer) {
-		t.Fatalf("release: %v", err)
 	}
 }
 
-func TestStaleGenerationIssuesNothing(t *testing.T) {
+func TestRefreshWithoutRecordIssuesNothing(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme")
 	l := lifecycle(store, p, nil)
-	current := "ensemble-s-00000000000000000000000000000002"
-	acquire(t, l, current, newContainer())
-	before, calls := slices.Clone(store.items[records+"/"+current]), len(p.calls)
-	stale := newContainer()
-	if _, err := l.Refresh(bg, to("ensemble-s-00000000000000000000000000000001", stale), nil); !errors.Is(err, ErrNoRecord) {
+	acquire(t, l, hostA, nil)
+	before, calls := slices.Clone(store.items[records+"/"+idA]), len(p.calls)
+	pub := &publisher{}
+	if _, err := l.Refresh(bg, to(hostB, pub), nil); !errors.Is(err, ErrNoRecord) {
 		t.Fatalf("%v", err)
 	}
-	if len(p.calls) != calls || len(stale.argv) != 0 || !bytes.Equal(store.items[records+"/"+current], before) {
-		t.Fatal("stale generation reached the provider, a container or the current record")
+	if len(p.calls) != calls || pub.calls != 0 || !bytes.Equal(store.items[records+"/"+idA], before) {
+		t.Fatal("a consumer without a record reached the provider, a publication or another record")
 	}
 }
 
@@ -449,38 +338,29 @@ func TestSentinelNeverLeaks(t *testing.T) {
 		}
 	}
 	store, p := newStore(), newProvider(t, "acme")
-	rec, log := recorder(ctrA)
+	rec, log := recorder(idA)
 	l := lifecycle(store, p, rec)
-	p.issueErr = func(int) error { return errors.New("GitHub rejected " + issuer) }
-	_, err := l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
+	p.issueErr = func(int) error { return errors.New("Linear rejected " + issuer) }
+	_, err := l.Acquire(bg, to(hostA, nil), "app", nil)
 	check(t, "issue error", fmt.Sprint(err))
-	p.issueErr = func(int) error { return protocol.New(protocol.GitHubFailed, "GitHub rejected "+issuer) }
-	_, err = l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
+	p.issueErr = func(int) error { return protocol.New(protocol.InternalError, "Linear rejected "+issuer) }
+	_, err = l.Acquire(bg, to(hostA, nil), "app", nil)
 	var pe *protocol.Error
-	if !errors.As(err, &pe) || pe.Code != protocol.GitHubFailed {
+	if !errors.As(err, &pe) || pe.Code != protocol.InternalError {
 		t.Fatalf("protocol error lost: %v", err)
 	}
 	check(t, "protocol issue error", pe.Message)
 	p.issueErr = nil
-	acquire(t, l, ctrA, newContainer())
-	p.revoke = func(token string) Revocation {
-		return Revocation{Outcome: Retryable, Err: errors.New("revoke of " + token + " failed")}
-	}
-	if err := l.Release(bg, Consumer{Container: ctrA}); err != nil {
-		t.Fatal(err)
-	}
-	_, _ = l.Retry(bg)
+	acquire(t, l, hostA, nil)
+	d := to(hostA, nil)
+	d.Publish = func(Material) error { return errors.New("publishing with " + issuer + " failed") }
+	_, err = l.Refresh(bg, d, nil)
+	check(t, "publish error", fmt.Sprint(err))
 	store.fail = func(string, string) bool { return true }
-	_, err = l.Pending()
-	check(t, "store error", fmt.Sprint(err))
-	check(t, "release error", fmt.Sprint(l.Release(bg, Consumer{Container: ctrA})))
-	_, err = l.Refresh(bg, to(ctrA, newContainer()), nil)
+	_, err = l.Refresh(bg, to(hostA, nil), nil)
 	check(t, "refresh error", fmt.Sprint(err))
 	_ = rec.Flush(nil)
 	check(t, "audit", log.text())
-	if !strings.Contains(log.text(), "[redacted]") {
-		t.Fatalf("revoke reason not kept, redacted: %s", log.text())
-	}
 	if !errors.Is(err, ErrStore) {
 		t.Fatalf("store error class lost: %v", err)
 	}
@@ -490,8 +370,7 @@ func TestIndependentLocks(t *testing.T) {
 	var heldA, heldB bool
 	release := make(chan struct{})
 	taken := make(chan struct{})
-	storeA := newStore()
-	a := lifecycle(storeA, newProvider(t, "acme"), nil)
+	a := lifecycle(newStore(), newProvider(t, "acme"), nil)
 	a.Lock = func() (func(), error) {
 		heldA = true
 		return func() { heldA = false }, nil
@@ -509,12 +388,9 @@ func TestIndependentLocks(t *testing.T) {
 	b.Lock = heldLock(&heldB)
 	done := make(chan error, 1)
 	go func() {
-		_, err := b.Acquire(bg, to(ctrB, newContainer()), "app", nil)
+		_, err := b.Acquire(bg, to(hostB, nil), "app", nil)
 		if err == nil {
-			_, err = b.Refresh(bg, to(ctrB, newContainer()), nil)
-		}
-		if err == nil {
-			err = b.Release(bg, Consumer{Container: ctrB})
+			_, err = b.Refresh(bg, to(hostB, nil), nil)
 		}
 		done <- err
 	}()
@@ -532,107 +408,25 @@ func TestIndependentLocks(t *testing.T) {
 	close(release)
 }
 
-func TestReleaseAndRetryConverge(t *testing.T) {
+func TestRefreshRecordFailure(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme")
 	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
-	p.revoke = failRevoke
-	if err := l.Release(bg, Consumer{Container: ctrA}); err != nil {
-		t.Fatal(err)
+	acquire(t, l, hostA, nil)
+	store.fail = func(op, service string) bool { return service == records && op == "write" }
+	pub := &publisher{}
+	if _, err := l.Refresh(bg, to(hostA, pub), nil); !errors.Is(err, ErrStore) {
+		t.Fatalf("%v", err)
 	}
-	p.revoke = nil
-	if left, err := l.Retry(bg); err != nil || len(left) != 0 {
-		t.Fatalf("%v %v", left, err)
+	if pub.calls != 0 {
+		t.Fatal("an unrecorded replacement was published")
 	}
-	calls := len(p.calls)
-	if err := l.Release(bg, Consumer{Container: ctrA}); err != nil {
-		t.Fatal(err)
-	}
-	if left, err := l.Retry(bg); err != nil || len(left) != 0 || len(p.calls) != calls {
-		t.Fatalf("second release and retry not a no-op: %v %v %q", left, err, p.calls[calls:])
-	}
-}
-
-func TestSharedProviderReleaseNeverRevokes(t *testing.T) {
-	store, fp := newStore(), newProvider(t, "account")
-	p := sharedProvider{fp}
-	rec, log := recorder(ctrA)
-	l := lifecycle(store, p, rec)
-	acquire(t, l, ctrA, newContainer())
-	acquire(t, l, ctrB, newContainer())
-	before := slices.Clone(store.items[records+"/"+ctrB])
-	if err := l.Release(bg, Consumer{Container: ctrA}); err != nil {
-		t.Fatal(err)
-	}
-	_ = rec.Flush(nil)
-	if _, ok := store.record(t, ctrA); ok || !bytes.Equal(store.items[records+"/"+ctrB], before) || len(store.backlog(t)) != 0 {
-		t.Fatal("release of a shared grant touched more than its record")
-	}
-	if !strings.Contains(log.text(), `"result":"withdrawn"`) {
-		t.Fatalf("audit %s", log.text())
-	}
-	if _, err := l.Refresh(bg, to(ctrB, newContainer()), nil); err != nil {
-		t.Fatal(err)
-	}
-	recB, _ := store.record(t, ctrB)
-	wantTokens(t, "B after refresh", tokens(recB), map[string]State{"tok_3": Delivered})
-	failing := newContainer()
-	failing.fail = func(int) bool { return true }
-	if _, err := l.Refresh(bg, to(ctrB, failing), nil); err == nil {
-		t.Fatal("refresh succeeded")
-	}
-	recB, _ = store.record(t, ctrB)
-	wantTokens(t, "B after a failed refresh", tokens(recB), map[string]State{"tok_3": Delivered, "tok_4": Prepared})
-	if _, err := l.Acquire(bg, to(ctrA, failing), "app", nil); err == nil {
-		t.Fatal("acquire succeeded")
-	}
-	if err := l.Release(bg, Consumer{Container: ctrA}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := store.record(t, ctrA); ok {
-		t.Fatal("release kept a failed shared acquire's record")
-	}
-	if fp.revokes() != 0 || len(store.backlog(t)) != 0 {
-		t.Fatalf("shared material revoked: %q", fp.calls)
-	}
-}
-
-func TestRefreshRecordFailure(t *testing.T) {
-	for _, revokeOK := range []bool{true, false} {
-		for _, backlogOK := range []bool{true, false} {
-			t.Run(fmt.Sprintf("revoke=%v/backlog=%v", revokeOK, backlogOK), func(t *testing.T) {
-				store, p := newStore(), newProvider(t, "acme")
-				l := lifecycle(store, p, nil)
-				acquire(t, l, ctrA, newContainer())
-				store.fail = func(op, service string) bool {
-					return service == backlogS && !backlogOK || service == records && op == "write"
-				}
-				if !revokeOK {
-					p.revoke = failRevoke
-				}
-				c := newContainer()
-				_, err := l.Refresh(bg, to(ctrA, c), nil)
-				var unrevoked *UnrevokedError
-				live := !revokeOK && !backlogOK
-				if errors.As(err, &unrevoked) != live || !errors.Is(err, ErrStore) {
-					t.Fatalf("%v", err)
-				}
-				if len(c.argv) != 0 {
-					t.Fatal("an unrecorded replacement was delivered")
-				}
-				rec, _ := store.record(t, ctrA)
-				wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
-				if !live && !slices.Contains(p.revoked, "tok_2") && !slices.Contains(pendingTokens(store.backlog(t)), "tok_2") {
-					t.Fatal("replacement lost")
-				}
-			})
-		}
-	}
+	rec, _ := store.record(t, idA)
+	wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
 }
 
 func TestTargetsErrorRedacted(t *testing.T) {
 	p := &secretProvider{newProvider(t, "acme")}
-	_, err := lifecycle(newStore(), p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil)
+	_, err := lifecycle(newStore(), p, nil).Acquire(bg, to(hostA, nil), "app", nil)
 	if err == nil || strings.Contains(err.Error(), "jwt_ISSUER_SECRET") {
 		t.Fatalf("targets error: %v", err)
 	}
@@ -649,127 +443,38 @@ func (p *secretProvider) Begin(context.Context, string) (Issuer, error) { return
 
 func TestAcquireWithoutTargets(t *testing.T) {
 	store := newStore()
-	got, err := lifecycle(store, newProvider(t), nil).Acquire(bg, to(ctrA, newContainer()), "app", nil)
+	got, err := lifecycle(store, newProvider(t), nil).Acquire(bg, to(hostA, nil), "app", nil)
 	if err != nil || got == nil || len(got) != 0 || len(store.items) != 0 {
 		t.Fatalf("%v %v %v", got, err, store.items)
-	}
-}
-
-// TestHoldAndRetire is a token the broker itself uses once (GitHub's prefetch): held in its consumer's record while in
-// use, revoked after, and never lost when a write or the revocation fails.
-func TestHoldAndRetire(t *testing.T) {
-	m := Material{Account: "acme", Target: 1, Token: "ghs_prefetch", ExpiresAt: clock.Add(time.Hour).Format(time.RFC3339)}
-	store, p := newStore(), newProvider(t)
-	l := lifecycle(store, p, nil)
-	if err := l.Hold(bg, Consumer{Container: ctrA}, m); err != nil {
-		t.Fatal(err)
-	}
-	rec, _ := store.record(t, ctrA)
-	wantTokens(t, "held", tokens(rec), map[string]State{"ghs_prefetch": Prepared})
-	l.Retire(bg, Consumer{Container: ctrA}, m)
-	if _, ok := store.record(t, ctrA); ok || !slices.Equal(p.revoked, []string{"ghs_prefetch"}) {
-		t.Fatalf("retire left the record or skipped the revocation: %q", p.revoked)
-	}
-
-	store, p = newStore(), newProvider(t)
-	l = lifecycle(store, p, nil)
-	store.fail = func(op, service string) bool { return service == records && op == "write" }
-	if err := l.Hold(bg, Consumer{Container: ctrA}, m); !errors.Is(err, ErrStore) {
-		t.Fatalf("hold with the record down: %v", err)
-	}
-	if !slices.Contains(p.revoked, "ghs_prefetch") && !slices.Contains(pendingTokens(store.backlog(t)), "ghs_prefetch") {
-		t.Fatal("an unrecorded held token was lost")
-	}
-
-	store, p = newStore(), newProvider(t)
-	l = lifecycle(store, p, nil)
-	if err := l.Hold(bg, Consumer{Container: ctrA}, m); err != nil {
-		t.Fatal(err)
-	}
-	p.revoke = failRevoke
-	l.Retire(bg, Consumer{Container: ctrA}, m)
-	if !slices.Equal(pendingTokens(store.backlog(t)), []string{"ghs_prefetch"}) {
-		t.Fatalf("an unrevoked held token not queued: %v", store.backlog(t))
-	}
-}
-
-func TestRollbackReportsUnrevokedWhenRemovalFails(t *testing.T) {
-	store, p := newStore(), newProvider(t, "acme", "other", "third")
-	writes := 0
-	store.fail = func(op, service string) bool {
-		if service == backlogS {
-			return true
-		}
-		if service == records && op == "write" {
-			writes++
-			return writes >= 3
-		}
-		return false
-	}
-	p.revoke = func(token string) Revocation {
-		if token != "tok_1" { // tok_2 keeps the record, so removing tok_1 is a failing write
-			return Revocation{Outcome: Retryable, Err: errors.New("GitHub 503")}
-		}
-		return Revocation{Outcome: Revoked}
-	}
-	_, err := lifecycle(store, p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil)
-	var unrevoked *UnrevokedError
-	if !errors.As(err, &unrevoked) || !errors.Is(err, ErrStore) {
-		t.Fatalf("a live, unqueued tok_3 reported as %v", err)
 	}
 }
 
 func TestRefreshMarkWithoutReplacement(t *testing.T) {
 	store, p := newStore(), newProvider(t, "acme")
 	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
-	before := slices.Clone(store.items[records+"/"+ctrA])
-	c := newContainer()
-	c.fail = func(int) bool {
-		store.items[records+"/"+ctrA] = slices.Clone(before) // another command took the replacement out meanwhile
+	acquire(t, l, hostA, nil)
+	before := slices.Clone(store.items[records+"/"+idA])
+	pub := &publisher{fail: func(int) bool {
+		store.items[records+"/"+idA] = slices.Clone(before) // another command took the replacement out meanwhile
 		return false
-	}
-	if _, err := l.Refresh(bg, to(ctrA, c), nil); !errors.Is(err, ErrReleased) {
+	}}
+	if _, err := l.Refresh(bg, to(hostA, pub), nil); !errors.Is(err, ErrReleased) {
 		t.Fatalf("%v", err)
 	}
-	rec, _ := store.record(t, ctrA)
+	rec, _ := store.record(t, idA)
 	wantTokens(t, "record", tokens(rec), map[string]State{"tok_1": Delivered})
-	if slices.Contains(p.revoked, "tok_1") {
-		t.Fatal("the live token was retired")
-	}
-}
-
-func TestReleaseUnreadableRecordWithBacklogDown(t *testing.T) {
-	store, p := newStore(), newProvider(t, "acme")
-	l := lifecycle(store, p, nil)
-	acquire(t, l, ctrA, newContainer())
-	reads := 0
-	store.fail = func(op, service string) bool {
-		if service == records && op == "read" {
-			reads++
-			return reads >= 2 // Release's first read works; discard's fails
-		}
-		return service == backlogS
-	}
-	var unrevoked *UnrevokedError
-	if err := l.Release(bg, Consumer{Container: ctrA}); !errors.As(err, &unrevoked) {
-		t.Fatalf("release reported %v with its record unread and kept", err)
-	}
-	if _, ok := store.record(t, ctrA); !ok {
-		t.Fatal("record lost")
-	}
 }
 
 // TestRefreshUsesRecordedScope: a renewal never widens a grant; a record an older broker wrote, with no scope, renews
 // with the caller's.
 func TestRefreshUsesRecordedScope(t *testing.T) {
-	recorded, caller := map[string]string{"contents": "read"}, map[string]string{"contents": "write"}
+	recorded, caller := map[string]string{"scope": "read"}, map[string]string{"scope": "write"}
 	store, p := newStore(), newProvider(t)
-	store.seed(t, ctrA, Record{Subject: "app", Scope: recorded, Tokens: []Material{{Account: "acme", Target: 1, Token: "ghs_old", State: Delivered}}})
-	store.seed(t, ctrB, Record{Subject: "app", Tokens: []Material{{Account: "acme", Target: 1, Token: "ghs_legacy"}}})
+	store.seed(t, idA, Record{Subject: "app", Scope: recorded, Tokens: []Material{{Account: "acme", Target: 1, Token: "old", State: Delivered}}})
+	store.seed(t, idB, Record{Subject: "app", Tokens: []Material{{Account: "acme", Target: 1, Token: "legacy"}}})
 	l := lifecycle(store, p, nil)
-	for _, id := range []string{ctrA, ctrB} {
-		if _, err := l.Refresh(bg, to(id, newContainer()), caller); err != nil {
+	for _, host := range []string{hostA, hostB} {
+		if _, err := l.Refresh(bg, to(host, nil), caller); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -778,139 +483,18 @@ func TestRefreshUsesRecordedScope(t *testing.T) {
 	}
 }
 
-// TestHoldRefusedStillRevokes: Hold gets a token already issued, so refusing it (no valid consumer, a shared provider)
-// still revokes it, touching no store; a revocation that fails leaves an *UnrevokedError.
-func TestHoldRefusedStillRevokes(t *testing.T) {
-	m := Material{Account: "acme", Target: 1, Token: "ghs_prefetch", ExpiresAt: clock.Add(time.Hour).Format(time.RFC3339)}
-	for name, tc := range map[string]struct {
-		c      Consumer
-		shared bool
-	}{
-		"no consumer":     {Consumer{}, false},
-		"bad consumer":    {Consumer{Container: "a/b"}, false},
-		"shared provider": {Consumer{Container: ctrA}, true},
-	} {
-		for _, revokeOK := range []bool{true, false} {
-			store, fp := newStore(), newProvider(t)
-			store.fail = func(op, service string) bool { t.Errorf("%s: store %s %s", name, op, service); return false }
-			var p Provider = fp
-			if tc.shared {
-				p = sharedProvider{fp}
-			}
-			if !revokeOK {
-				fp.revoke = failRevoke
-			}
-			err := lifecycle(store, p, nil).Hold(bg, tc.c, m)
-			var unrevoked *UnrevokedError
-			if err == nil || errors.As(err, &unrevoked) == revokeOK || fp.revokes() != 1 {
-				t.Errorf("%s revoke=%v: %v, revokes %d", name, revokeOK, err, fp.revokes())
-			}
-			if revokeOK && !slices.Equal(fp.revoked, []string{"ghs_prefetch"}) {
-				t.Errorf("%s: revoked %q", name, fp.revoked)
-			}
-		}
-	}
-}
-
-// TestHoldAppendsToRecord: a held token joins whatever the record already has, after its highest revision.
-func TestHoldAppendsToRecord(t *testing.T) {
-	store, p := newStore(), newProvider(t)
-	store.seed(t, ctrA, Record{Subject: "app", Tokens: []Material{
-		{Account: "acme", Target: 1, Token: "ghs_live", Revision: 2, State: Delivered},
-		{Account: "acme", Target: 1, Token: "ghs_held", Revision: 3, State: Prepared},
-	}})
-	l := lifecycle(store, p, nil)
-	if err := l.Hold(bg, Consumer{Container: ctrA}, Material{Account: "acme", Target: 1, Token: "ghs_more"}); err != nil {
-		t.Fatal(err)
-	}
-	rec, _ := store.record(t, ctrA)
-	wantTokens(t, "record", tokens(rec), map[string]State{"ghs_live": Delivered, "ghs_held": Prepared, "ghs_more": Prepared})
-	if last := rec.Tokens[len(rec.Tokens)-1]; last.Token != "ghs_more" || last.Revision != 4 {
-		t.Fatalf("%+v", last)
-	}
-}
-
-// TestEnderEndsOnce: an Ender issuer's run ends exactly once, whatever its outcome, and End's error joins the result.
-func TestEnderEndsOnce(t *testing.T) {
-	failing := newContainer()
-	failing.fail = func(int) bool { return true }
-	issueFails := errors.New("issue failed")
-	for name, c := range map[string]struct {
-		run    func(l Lifecycle, p *endingProvider) error
-		failed bool
-	}{
-		"acquire": {run: func(l Lifecycle, _ *endingProvider) error {
-			_, err := l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
-			return err
-		}},
-		"acquire issue failure": {failed: true, run: func(l Lifecycle, p *endingProvider) error {
-			p.issueErr = func(int) error { return issueFails }
-			_, err := l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
-			return err
-		}},
-		"acquire delivery failure": {failed: true, run: func(l Lifecycle, _ *endingProvider) error {
-			_, err := l.Acquire(bg, to(ctrA, failing), "app", nil)
-			return err
-		}},
-		"refresh": {run: func(l Lifecycle, p *endingProvider) error {
-			acquire(t, l, ctrA, newContainer())
-			p.ends = 0
-			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
-			return err
-		}},
-		"refresh delivery failure": {failed: true, run: func(l Lifecycle, p *endingProvider) error {
-			acquire(t, l, ctrA, newContainer())
-			p.ends = 0
-			_, err := l.Refresh(bg, to(ctrA, failing), nil)
-			return err
-		}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			p := &endingProvider{fakeProvider: newProvider(t, "acme")}
-			err := c.run(lifecycle(newStore(), p, nil), p)
-			if p.ends != 1 || (err != nil) != c.failed {
-				t.Fatalf("ends %d, run error %v", p.ends, err)
-			}
-		})
-	}
-	p := &endingProvider{fakeProvider: newProvider(t, "acme"), endErr: errors.New("end failed")}
-	if _, err := lifecycle(newStore(), p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil); !errors.Is(err, p.endErr) {
-		t.Fatalf("End's error not returned: %v", err)
-	}
-	p.issueErr = func(int) error { return issueFails }
-	if _, err := lifecycle(newStore(), p, nil).Acquire(bg, to(ctrA, newContainer()), "app", nil); !errors.Is(err, issueFails) || !errors.Is(err, p.endErr) {
-		t.Fatalf("run and End errors not joined: %v", err)
-	}
-}
-
-// TestWriterReplacesDeliver: a Writer issuer writes its material itself; the provider's File is never consulted.
-func TestWriterReplacesDeliver(t *testing.T) {
-	fp := newProvider(t, "bad/account") // File refuses it: only the Writer path can succeed
-	l := lifecycle(newStore(), writingProvider{fp}, nil)
-	c := newContainer()
-	acquire(t, l, ctrA, c)
-	if c.files["bad/account"] != "carrier-tok_1" || len(c.argv) != 1 || c.argv[0][0] != "write" {
-		t.Fatalf("container %v %q", c.files, c.argv)
-	}
-	if _, err := l.Acquire(bg, Delivery{Consumer: Consumer{Host: "linear"}}, "app", nil); err != nil {
-		t.Fatalf("host consumer: %v", err)
-	}
-}
-
-// TestPublishBeforeDelivered: Publish runs once the material is in the container, before it counts as delivered; a
-// failed publication leaves a shared provider's material prepared and retires a non-shared one's.
+// TestPublishBeforeDelivered: Publish runs once the material is recorded, before it counts as delivered.
 func TestPublishBeforeDelivered(t *testing.T) {
-	store, fp := newStore(), newProvider(t, "acme")
-	l := lifecycle(store, fp, nil)
-	acquire(t, l, ctrA, newContainer())
-	c := newContainer()
+	store, p := newStore(), newProvider(t, "acme")
+	l := lifecycle(store, p, nil)
+	acquire(t, l, hostA, nil)
 	var seen map[string]State
-	d := to(ctrA, c)
+	d := to(hostA, nil)
 	d.Publish = func(m Material) error {
-		rec, _ := store.record(t, ctrA)
+		rec, _ := store.record(t, idA)
 		seen = tokens(rec)
-		if m.Token != "tok_2" || c.files["acme"] != "tok_2" {
-			t.Errorf("published %+v before delivery %v", m, c.files)
+		if m.Token != "tok_2" {
+			t.Errorf("published %+v", m)
 		}
 		return nil
 	}
@@ -918,107 +502,31 @@ func TestPublishBeforeDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTokens(t, "record at publication", seen, map[string]State{"tok_1": Delivered, "tok_2": Prepared})
-
-	published := errors.New("deadline write failed")
-	d.Publish = func(Material) error { return published }
-	if _, err := l.Refresh(bg, d, nil); !errors.Is(err, published) {
-		t.Fatalf("%v", err)
-	}
-	rec, _ := store.record(t, ctrA)
-	wantTokens(t, "non-shared after failed publication", tokens(rec), map[string]State{"tok_2": Delivered})
-	if !slices.Contains(fp.revoked, "tok_3") {
-		t.Fatalf("unpublished token not retired: %q", fp.revoked)
-	}
-
-	store, fp = newStore(), newProvider(t, "account")
-	l = lifecycle(store, sharedProvider{fp}, nil)
-	d = to(ctrA, newContainer())
-	d.Publish = func(Material) error { return published }
-	if _, err := l.Acquire(bg, d, "app", nil); !errors.Is(err, published) {
-		t.Fatalf("%v", err)
-	}
-	rec, _ = store.record(t, ctrA)
-	wantTokens(t, "shared after failed acquire publication", tokens(rec), map[string]State{"tok_1": Prepared})
-	d.Publish = nil
-	if _, err := l.Refresh(bg, d, nil); err != nil {
-		t.Fatal(err)
-	}
-	d.Publish = func(Material) error { return published }
-	if _, err := l.Refresh(bg, d, nil); !errors.Is(err, published) {
-		t.Fatalf("%v", err)
-	}
-	rec, _ = store.record(t, ctrA)
-	wantTokens(t, "shared after failed refresh publication", tokens(rec), map[string]State{"tok_2": Delivered, "tok_3": Prepared})
-	if fp.revokes() != 0 {
-		t.Fatalf("shared material revoked: %q", fp.calls)
-	}
 }
 
-// TestSharedDeliveryFailureKeepsRecord: a shared provider's failed delivery keeps the new material prepared beside the
-// usable one, in Acquire and in Refresh.
-func TestSharedDeliveryFailureKeepsRecord(t *testing.T) {
-	store, fp := newStore(), newProvider(t, "account")
-	l := lifecycle(store, sharedProvider{fp}, nil)
-	failing := newContainer()
-	failing.fail = func(int) bool { return true }
-	if _, err := l.Acquire(bg, to(ctrA, failing), "app", nil); !errors.Is(err, ErrDelivery) {
-		t.Fatalf("%v", err)
-	}
-	rec, _ := store.record(t, ctrA)
-	wantTokens(t, "after failed acquire", tokens(rec), map[string]State{"tok_1": Prepared})
-	acquire(t, l, ctrB, newContainer())
-	if _, err := l.Refresh(bg, to(ctrB, failing), nil); !errors.Is(err, ErrDelivery) {
-		t.Fatalf("%v", err)
-	}
-	rec, _ = store.record(t, ctrB)
-	wantTokens(t, "after failed refresh", tokens(rec), map[string]State{"tok_2": Delivered, "tok_3": Prepared})
-	if fp.revokes() != 0 || len(store.backlog(t)) != 0 {
-		t.Fatalf("shared material revoked: %q", fp.calls)
-	}
-}
-
-// TestRefreshTargetIsNewestMaterial: Refresh gives the provider each slot's newest recorded material as its target.
-func TestRefreshTargetIsNewestMaterial(t *testing.T) {
-	store, fp := newStore(), newProvider(t, "acme")
-	exp := clock.Add(time.Hour).Format(time.RFC3339)
-	store.seed(t, ctrA, Record{Subject: "app", Tokens: []Material{
-		{Account: "acme", Target: 1, Token: "tok_b", ExpiresAt: exp, Revision: 2, State: Prepared},
-		{Account: "acme", Target: 1, Token: "tok_a", ExpiresAt: exp, Revision: 1, State: Delivered},
-	}})
-	if _, err := lifecycle(store, fp, nil).Refresh(bg, to(ctrA, newContainer()), nil); err != nil {
-		t.Fatal(err)
-	}
-	want := Material{Account: "acme", Target: 1, Token: "tok_b", ExpiresAt: exp, Revision: 2, State: Prepared}
-	if len(fp.targetsIssued) != 1 || fp.targetsIssued[0] != want {
-		t.Fatalf("targets %+v", fp.targetsIssued)
-	}
-}
-
-// TestRefreshReissuedTokenNotDuplicated: a provider that issues material the slot already holds (a shared account not
-// yet renewed) gets that entry delivered anew, never a duplicate.
+// TestRefreshReissuedTokenNotDuplicated: a provider that issues material the slot already holds (an account not yet
+// renewed) gets that entry delivered anew, never a duplicate.
 func TestRefreshReissuedTokenNotDuplicated(t *testing.T) {
-	store, fp := newStore(), newProvider(t, "account")
-	fp.fixed = "acct_1"
-	l := lifecycle(store, sharedProvider{fp}, nil)
-	acquire(t, l, ctrA, newContainer())
-	if _, err := l.Refresh(bg, to(ctrA, newContainer()), nil); err != nil {
+	store, p := newStore(), newProvider(t, "account")
+	p.fixed = "acct_1"
+	l := lifecycle(store, p, nil)
+	acquire(t, l, hostA, nil)
+	if _, err := l.Refresh(bg, to(hostA, nil), nil); err != nil {
 		t.Fatal(err)
 	}
-	rec, _ := store.record(t, ctrA)
+	rec, _ := store.record(t, idA)
 	if len(rec.Tokens) != 1 || rec.Tokens[0].State != Delivered || rec.Tokens[0].Revision != 1 {
 		t.Fatalf("record %+v", rec.Tokens)
 	}
-	failing := newContainer()
-	failing.fail = func(int) bool { return true }
-	if _, err := l.Refresh(bg, to(ctrA, failing), nil); err == nil {
+	if _, err := l.Refresh(bg, to(hostA, failing()), nil); err == nil {
 		t.Fatal("refresh succeeded")
 	}
-	rec, _ = store.record(t, ctrA)
+	rec, _ = store.record(t, idA)
 	if len(rec.Tokens) != 1 || rec.Tokens[0].State != Prepared {
-		t.Fatalf("record after failed redelivery %+v", rec.Tokens)
+		t.Fatalf("record after failed republication %+v", rec.Tokens)
 	}
-	acquire(t, l, ctrA, newContainer())
-	rec, _ = store.record(t, ctrA)
+	acquire(t, l, hostA, nil)
+	rec, _ = store.record(t, idA)
 	if len(rec.Tokens) != 1 || rec.Tokens[0].State != Delivered || rec.Tokens[0].Revision != 1 {
 		t.Fatalf("record after a second acquire %+v", rec.Tokens)
 	}
@@ -1036,9 +544,9 @@ func once() func(op, service string) bool {
 	}
 }
 
-// TestSharedRollbackKeepsHeldMaterial: a failed run of a shared provider rolls back only what it appended; a material
-// the record already held (the account not renewed meanwhile) stays as it was, never withdrawn.
-func TestSharedRollbackKeepsHeldMaterial(t *testing.T) {
+// TestRollbackKeepsHeldMaterial: a failed run rolls back only what it appended; a material the record already held
+// (the account not renewed meanwhile) stays as it was, never withdrawn.
+func TestRollbackKeepsHeldMaterial(t *testing.T) {
 	for name, c := range map[string]struct {
 		fixed     string // the provider's one token, re-issued every time; "": a new token per issue
 		lands     bool   // the failing write lands before it reports failure
@@ -1046,32 +554,32 @@ func TestSharedRollbackKeepsHeldMaterial(t *testing.T) {
 		wantState State
 	}{
 		"refresh held, write fails": {fixed: "acct_1", wantState: Delivered, run: func(l Lifecycle) error {
-			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
+			_, err := l.Refresh(bg, to(hostA, nil), nil)
 			return err
 		}},
 		"refresh held, write lands then fails": {fixed: "acct_1", lands: true, wantState: Prepared, run: func(l Lifecycle) error {
-			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
+			_, err := l.Refresh(bg, to(hostA, nil), nil)
 			return err
 		}},
 		"refresh appended, write lands then fails": {lands: true, wantState: Delivered, run: func(l Lifecycle) error {
-			_, err := l.Refresh(bg, to(ctrA, newContainer()), nil)
+			_, err := l.Refresh(bg, to(hostA, nil), nil)
 			return err
 		}},
 		"acquire held, write fails": {fixed: "acct_1", wantState: Delivered, run: func(l Lifecycle) error {
-			_, err := l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
+			_, err := l.Acquire(bg, to(hostA, nil), "app", nil)
 			return err
 		}},
 		"acquire appended, write lands then fails": {lands: true, wantState: Delivered, run: func(l Lifecycle) error {
-			_, err := l.Acquire(bg, to(ctrA, newContainer()), "app", nil)
+			_, err := l.Acquire(bg, to(hostA, nil), "app", nil)
 			return err
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			store, fp := newStore(), newProvider(t, "account")
-			fp.fixed = c.fixed
-			l := lifecycle(store, sharedProvider{fp}, nil)
-			acquire(t, l, ctrA, newContainer())
-			before, _ := store.record(t, ctrA)
+			store, p := newStore(), newProvider(t, "account")
+			p.fixed = c.fixed
+			l := lifecycle(store, p, nil)
+			acquire(t, l, hostA, nil)
+			before, _ := store.record(t, idA)
 			if c.lands {
 				store.failAfter = once()
 			} else {
@@ -1080,14 +588,11 @@ func TestSharedRollbackKeepsHeldMaterial(t *testing.T) {
 			if err := c.run(l); !errors.Is(err, ErrStore) {
 				t.Fatalf("%v", err)
 			}
-			rec, ok := store.record(t, ctrA)
+			rec, ok := store.record(t, idA)
 			want := before.Tokens[0]
 			want.State = c.wantState
 			if !ok || len(rec.Tokens) != 1 || rec.Tokens[0] != want {
 				t.Fatalf("record %+v (found %v), want [%+v]", rec.Tokens, ok, want)
-			}
-			if fp.revokes() != 0 || len(store.backlog(t)) != 0 {
-				t.Fatalf("shared material revoked: %q", fp.calls)
 			}
 		})
 	}

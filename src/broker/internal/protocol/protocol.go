@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-const Version = "32"
+const Version = "33"
 
 const AuditWriteFailed = "audit_write_failed"
 
@@ -57,13 +57,6 @@ const (
 
 // Expiry is one installation token's account and expiry, as start and refresh report it: never the token.
 type Expiry struct {
-	Account   string `json:"account"`
-	ExpiresAt string `json:"expires_at"`
-}
-
-// Pending is a token the broker still has to revoke, as status reports it.
-type Pending struct {
-	Container string `json:"container"`
 	Account   string `json:"account"`
 	ExpiresAt string `json:"expires_at"`
 }

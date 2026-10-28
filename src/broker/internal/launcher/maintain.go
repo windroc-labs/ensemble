@@ -71,19 +71,21 @@ var tokenProviders = []tokenProvider{
 	{kind: credential.GitHub, renew: renewGitHub, failed: "Writing a GitHub token into %s failed."},
 }
 
-// renewCodex renews only when no consumer has and records the expiry as Codex's publication, so a retry after a
-// failed record delivers the login already renewed.
+// renewCodex renews the login only when due and no concurrent run has, and records the expiry as Codex's
+// publication, so a retry after a failed record delivers the login already renewed.
 func renewCodex(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
 	exec := h.agentExec(ctx, container)
 	inject := func(argv []string, data []byte) error { return exec(append(argv, m.CodexDir), data) }
-	expiry, err := h.Codex.Refresh(ctx, container, inject, func(expiry string) error { return record([]string{expiry}) })
+	expiry, err := h.Codex.Refresh(ctx, inject, func(expiry string) error { return record([]string{expiry}) })
 	if err != nil {
 		return nil, err
 	}
-	h.Audit.Add(container, audit.Credential{Kind: clientKind(m.Client), Result: audit.Renewed, ExpiresAt: &expiry}, "")
+	h.Audit.Add(container, audit.Credential{Kind: clientKind(m.Client), Result: audit.Renewed, ExpiresAt: &expiry})
 	return []string{expiry}, nil
 }
 
+// renewGitHub writes a new token per current installation of the manifest's App (or its repo grant's) over the
+// container's and records their expiries; the tokens replaced expire.
 func renewGitHub(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
 	if err := h.GitHub.Ready(m.GitHubApp); err != nil {
 		return nil, injected(err, protocol.RefreshFailed, "GitHub renewal for "+container+" failed.")

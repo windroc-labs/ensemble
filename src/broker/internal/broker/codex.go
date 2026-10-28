@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"ensemble/broker/internal/codex"
-	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -52,13 +51,10 @@ type codexKeychain interface {
 	WriteCodex([]byte) error
 }
 
-// Codex holds the one Codex login and each container's grant of it (codex_grants.go); grantsLock guards the grant
-// records only, taken while the account lock (native.Lock) is held, never around it.
+// Codex holds the one Codex login, which codex_session.go delivers to containers.
 type Codex struct {
 	native      codexNative
 	keychain    codexKeychain
-	grants      credential.Store
-	grantsLock  func() (unlock func(), err error)
 	password    func() ([]byte, error)
 	revisionDir string
 	tempRoot    string
@@ -68,8 +64,7 @@ type Codex struct {
 
 // NewCodex is the Codex login of the account at home, its items in k.
 func NewCodex(home string, k SystemKeychain, password func() ([]byte, error)) Codex {
-	return Codex{native: codex.New(), keychain: k, grants: k,
-		grantsLock: FileLock(filepath.Join(home, ".ensemble/docker/codex-grants.lock")), password: password,
+	return Codex{native: codex.New(), keychain: k, password: password,
 		revisionDir: filepath.Join(home, ".ensemble/docker/codex-refresh"), tempRoot: "/private/tmp", now: time.Now, uid: os.Geteuid}
 }
 
