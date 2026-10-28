@@ -2240,6 +2240,18 @@ class AttachTargetTest(Base):
 
 
 class GuardedStartTest(StartBase):
+    def test_the_guard_takes_the_hosts_hidden_size(self):
+        self.host = DockerHost(
+            "docker",
+            {"docker": DOCKER, "hidden_size": "100x30"},
+            run=self.docker,
+            broker=self.broker,
+        )
+        handle = self.start()
+        [(argv, _, _)] = self.execs
+        self.assertEqual(argv[argv.index("--size") + 1], "100x30")
+        handle.close()
+
     def test_owned_terminal_execs_the_guard_without_tmux(self):
         handle = self.start()
         self.assertIsInstance(handle, worker_module.DockerWorker)
@@ -2252,7 +2264,7 @@ class GuardedStartTest(StartBase):
                 *(DOCKER, "--host", self.ep, "exec", "-i", "--workdir", self.cwd),
                 *("--env", "AGENT_HOME", "--env", "K", "--env", "ENSEMBLE_GUARD_HOOK_SOCKET"),
                 *(CONTAINER, PYTHON, "-I", worker_module.GUARD),
-                *("--terminal", "--display-socket", f"{run}/display"),
+                *("--terminal", "--display-socket", f"{run}/display", "--size", "80x24"),
                 *("--hook-socket", f"{run}/hook", "--lease", f"{run}/lease", "--"),
                 *("with-secrets", "--client", "agent", "agent", "--flag"),
             ],
@@ -2559,6 +2571,7 @@ class HeadlessWorkerTest(StartBase):
         handle = self.headless()
         [(argv, _, _)] = self.execs
         self.assertNotIn("--terminal", argv)
+        self.assertNotIn("--size", argv)
         self.assertEqual(self.host_record()["kind"], "headless")
         self.assertNotIn("mode", self.host_record())
         self.listed("w")

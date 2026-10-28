@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import signal
 import stat
 from abc import ABC, abstractmethod
@@ -14,6 +15,7 @@ from dataclasses import dataclass, replace
 from typing import ClassVar
 
 from ensemble.session.engine.types import (
+    HIDDEN_SIZE,
     LOCAL_CONTEXT,
     MARKS,
     SESSION_NAME,
@@ -51,6 +53,7 @@ from ensemble.utils import (
 )
 
 SIGNALS = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
+HIDDEN = re.compile(r"([1-9][0-9]{0,3})x([1-9][0-9]{0,3})")
 TUI_DIR = f"{STATE}/tui"
 HARNESS_ROOT = f"{STATE}/harness"
 GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"
@@ -253,13 +256,23 @@ class InteractiveProcess(ABC):
         return None
 
 
+def _hidden_size(value) -> tuple[int, int]:
+    """[hosts] hidden_size "<columns>x<rows>" as (columns, rows)."""
+    found = HIDDEN.fullmatch(value) if isinstance(value, str) else None
+    if found is None:
+        raise ConfigError(
+            '[hosts] hidden_size: want "<columns>x<rows>", each 1 to 9999, e.g. "80x24"'
+        )
+    return int(found[1]), int(found[2])
+
+
 def host_resume(host: Host, name: str | None, cwd: str) -> str | None:
     argv = None if name is None else host._resume_argv(name)
     return resume_command(cwd, {}, argv) if argv else None
 
 
 class Host(ABC):
-    """settings excludes implementation/isolated; Launch.env passes verbatim. Exit events:
+    """settings excludes implementation/isolated/hidden_size; Launch.env passes verbatim. Exit events:
     `exited <rc>` / `dead`; unknown attach: SessionError; list: sorted names. Viewer reads display.
     """
 
@@ -277,6 +290,11 @@ class Host(ABC):
         self._isolated = self.settings.pop("isolated", False)
         if not isinstance(self._isolated, bool):
             raise ConfigError(f"[hosts.{name}] isolated: want true or false")
+        self._hidden_size = (
+            _hidden_size(self.settings.pop("hidden_size"))
+            if "hidden_size" in self.settings
+            else HIDDEN_SIZE
+        )
 
     @classmethod
     def parse_hosts(cls, table) -> Hosts:
@@ -284,7 +302,7 @@ class Host(ABC):
             raise ConfigError("[hosts]: missing")
         tables = {}
         for key, value in table.items():
-            if key == "default":
+            if key in ("default", "hidden_size"):
                 continue
             if not isinstance(key, str):
                 raise ConfigError(f"[hosts] {key!r}: want a string key")
@@ -295,7 +313,12 @@ class Host(ABC):
             implementation = value.get("implementation")
             if not isinstance(implementation, str) or not CLASS_PATH.fullmatch(implementation):
                 raise ConfigError(f"[hosts.{key}].implementation: want module.path:Class")
+            if "hidden_size" in value:
+                raise ConfigError(f"[hosts.{key}] hidden_size: set it in [hosts], for every Host")
             tables[key] = value
+        if "hidden_size" in table:  # one size for every Host: each Host's own settings carry it
+            _hidden_size(table["hidden_size"])
+            tables = {k: {**v, "hidden_size": table["hidden_size"]} for k, v in tables.items()}
         default = table.get("default")
         names = ", ".join(sorted(tables))
         if isinstance(default, str) and default and default not in tables:
@@ -374,7 +397,7 @@ class Host(ABC):
         return None
 
     def tui_settings(self) -> TuiSettings:
-        return TuiSettings()
+        return TuiSettings(hidden_size=self._hidden_size)
 
     def _preflight(
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None

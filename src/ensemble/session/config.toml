@@ -180,6 +180,9 @@ max = "max"
 
 # ── Hosts ───────────────────────────────────────────────
 # [hosts]             default: the [hosts.<name>] sessions run on
+#   hidden_size       "<columns>x<rows>", each 1 to 9999: every Host's tui worker's terminal size while no viewer
+#                     shows it (hidden, or before any pane attaches); a shown pane follows its viewer. Only here,
+#                     never in a [hosts.<name>] table
 # [hosts.<name>]      one table per Host, parsed only by Host.parse_hosts (src/ensemble/session/hosts/base.py)
 #   implementation    required: "module.path:Class", the Host class; checked for that form only, never loaded there
 #   isolated          true → an isolation boundary (a container): its sessions' clients run in yolo mode
@@ -194,6 +197,9 @@ max = "max"
 #                     `ensemble-broker login github ensemble-broker-bot` saved (scripts/install.sh writes it); "": none
 [hosts]
 default = "tmux"
+hidden_size = "80x24"
+# local: [session.hosts]
+# local: hidden_size = "120x40"
 
 [hosts.tmux]
 # TmuxHost (src/ensemble/session/hosts/tmux/host.py)

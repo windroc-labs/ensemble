@@ -53,7 +53,7 @@ MANAGER, SID, IDLE, WAIT, Stream = (
 TABLE = {
     "implementation": "ensemble.session.clients.claude:ClaudeClient",
 }
-TRUST = "Quick safety check: Is this a project you created or one you trust? 1. Yes, I trust this folder 2. No, exit"
+TRUST = "Quick safety check: Is this a project you created or one you trust?\n1. Yes, I trust this folder\n2. No, exit"
 LIMIT = "You've hit your weekly limit · resets Oct 15, 2027, 9am (UTC)"
 RESETS = datetime(2027, 10, 15, 9, tzinfo=UTC).timestamp()
 # Another process: attaches by name, sends text, prints [sid, state, reply, its first TurnEnd,
