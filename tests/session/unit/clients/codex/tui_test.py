@@ -660,6 +660,117 @@ class TuiTest(Base):
                 self.assertEqual(run.observe(), [])
                 self.assertEqual(run.hook_events("Stop", self.payload(turn_id=turn)), [])
 
+    def test_two_interrupted_turns_then_an_idle_outcome_allow_an_immediate_send(self):
+        host = MemoryHost()
+        spec = dataclasses.replace(self.spec, name="w1", client="codex", prompt="opening")
+        with mock.patch("shutil.which", return_value=sys.executable):
+            mode = TuiMode.start(
+                spec,
+                self.client,
+                registry=self.session_cls._config().registry,
+                record=lambda _: None,
+                host=host,
+            )
+        terminal = host.processes["w1"]
+        path = self.rollout()
+        hooks = os.path.join(mode._store.dir, "hooks.jsonl")
+        with open(hooks, "w") as stream:
+            stream.write(json.dumps({"label": "SessionStart", "payload": self.payload()}) + "\n")
+        now = [0.0]
+        with mock.patch("time.monotonic", side_effect=lambda: now[0]):
+            mode.poll(0)
+            now[0] = 1.1
+            for turn, text in (("one", "second"), ("two", "finish")):
+                _append(
+                    path,
+                    {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}},
+                )
+                self.assertEqual(mode.poll(0), ([TurnStarted()], False))
+                self.assertFalse(mode.send(text))
+                self.assertEqual(terminal.calls.send.call_args.args, (Key("Escape"),))
+                _append(
+                    path,
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "turn_aborted",
+                            "turn_id": turn,
+                            "reason": "interrupted",
+                        },
+                    },
+                )
+                self.assertEqual(mode.poll(0), ([TurnEnd()], False))
+                self.assertTrue(mode.send(text))
+            _append(
+                path,
+                {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "three"}},
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_complete",
+                        "turn_id": "three",
+                        "last_agent_message": "[ensemble-outcome] done",
+                    },
+                },
+            )
+            self.assertEqual(
+                mode.poll(0), ([TurnStarted(), TurnEnd("[ensemble-outcome] done")], False)
+            )
+            terminal.calls.send.reset_mock()
+            self.assertTrue(mode.send("after outcome"))
+            self.assertEqual(
+                terminal.calls.send.call_args_list,
+                [mock.call(Paste("after outcome")), mock.call(Key("Enter"))],
+            )
+            self.assertTrue(mode.client_alive())
+
+    def test_native_aborts_settle_once_and_old_aborts_cannot_end_a_new_turn(self):
+        run, path = self.bound()
+        for turn in ("one", "two"):
+            _append(
+                path, {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}}
+            )
+            self.assertEqual(run.observe(), [TurnStarted()])
+            if turn == "two":
+                _append(
+                    path,
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "turn_aborted",
+                            "turn_id": "one",
+                            "reason": "interrupted",
+                        },
+                    },
+                )
+                self.assertEqual(run.observe(), [])
+            aborted = {
+                "type": "event_msg",
+                "payload": {"type": "turn_aborted", "turn_id": turn, "reason": "interrupted"},
+            }
+            _append(path, aborted, aborted)
+            self.assertEqual(run.observe(), [TurnEnd()])
+            self.assertEqual(run.hook_events("Interrupt", self.payload(turn_id=turn)), [])
+
+    def test_native_abort_without_id_and_after_a_hook_never_repeats_reply(self):
+        run, path = self.bound()
+        for turn in ("one", "two"):
+            _append(
+                path,
+                {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn}},
+                said("assistant", "partial"),
+            )
+            self.assertEqual(run.observe(), [TurnStarted(), Reply("partial")])
+            if turn == "two":
+                self.assertEqual(
+                    run.hook_events("Interrupt", self.payload(turn_id=turn)), [TurnEnd()]
+                )
+            _append(
+                path,
+                {"type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted"}},
+            )
+            self.assertEqual(run.observe(), [TurnEnd()] if turn == "one" else [])
+
     def test_native_failure_can_arrive_before_its_accepted_input_hook(self):
         run, path = self.bound()
         for turn in ("first", "pane-followup"):

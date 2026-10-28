@@ -445,6 +445,12 @@ class RecordControl(ControlBase):
         self.assertEqual(self.invoke("reply", "w1", "--sid", SID)[:2], (0, ""))
         self.assertEqual(self.invoke("read", "w1", "--sid", SID)[:2], (0, "screen\n"))
 
+    def test_a_send_gate_error_is_printed_and_exits_one(self):
+        self.owned().serve({"ok": False, "error": "send blocked by turn interruption"})
+        code, out, err = self.invoke("send", "w1", "next")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("turn interruption", err)
+
     def test_malformed_record_is_usage_error(self):
         self.assertEqual(self.invoke("status", stdin="{}\n")[:2], (2, ""))
 
