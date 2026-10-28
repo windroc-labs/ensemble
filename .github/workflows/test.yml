@@ -225,6 +225,9 @@ jobs:
         env:
           RUN_TESTS_COVERAGE: ${{ github.event_name != 'push' && 'collect' || '' }}
           RUN_TESTS_REPORT_DIR: ${{ runner.temp }}/unit
+          # As in an ensemble worker: the runner must keep them from the tests.
+          ENSEMBLE_CLIENT: claude
+          ENSEMBLE_GUARD_HOOK_SOCKET: /run/ensemble/guard/ci/hook
         run: |
           echo "shards=$(( ${{ strategy.job-total }} * 4 ))" >> "$GITHUB_OUTPUT"
           python3 -X faulthandler .github/run_tests.py 'Unit ${{ matrix.job }}' --unit --durations .github/test_durations.json --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'

@@ -258,9 +258,9 @@ def supervise(title, *, grace=CONTROL_GRACE):
             sysconfig.get_path("purelib"),
             sysconfig.get_path("platlib"),
         ]
-        env = clean_env(
-            {**os.environ, "HOME": workspace, "ENSEMBLE_TEST_WORKSPACE": workspace}, *roots
-        )
+        # A worker or board-run container's ENSEMBLE_* would steer tests: they set what they need.
+        caller = {k: v for k, v in os.environ.items() if not k.startswith("ENSEMBLE_")}
+        env = clean_env({**caller, "HOME": workspace, "ENSEMBLE_TEST_WORKSPACE": workspace}, *roots)
         env.update(
             HOME=workspace,
             TMPDIR=tmp,

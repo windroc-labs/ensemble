@@ -146,3 +146,17 @@ class Supervise(Case):
         tmp, proc = self.main(source)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(sorted(os.listdir(tmp)), ["durations.jsonl", "pkg"])
+
+    def test_the_child_sees_only_the_runners_own_ensemble_variables(self):
+        source = (
+            "import os, unittest\n\n\nclass X(unittest.TestCase):\n    def test_x(self):\n"
+            "        self.assertEqual(\n"
+            "            sorted(k for k in os.environ if k.startswith('ENSEMBLE_')),\n"
+            "            ['ENSEMBLE_CONTROL_ROOT', 'ENSEMBLE_TEST_SANDBOX', 'ENSEMBLE_TEST_TMP',"
+            " 'ENSEMBLE_TEST_WORKSPACE'],\n"
+            "        )\n"
+        )
+        _, proc = self.main(
+            source, ENSEMBLE_CLIENT="claude", ENSEMBLE_GUARD_HOOK_SOCKET="/run/ensemble/hook"
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
