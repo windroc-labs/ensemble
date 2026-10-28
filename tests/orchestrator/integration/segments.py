@@ -291,23 +291,18 @@ class Segment(TmuxFlow):
             "title": f"Session registry run {n}",
             "summary": f"Summary #{n}.",
         }
-        if outcome == "done":
-            if role == "engineer" and DECOMPOSE in self.issue(ident)["labels"]:
-                report["deliverable"] = f"| Issue | Repo |\n| TASK-99 | {REPO} |"
-            else:
-                report["url"] = url or (
-                    f"https://github.com/{REPO}/pull/{n}"
-                    if config.TASKS[role].input == "build"
-                    else self.doc_url(
-                        f"{DIRS[role]}{datetime.now(UTC):%Y-%m-%d}-{ident}-run-{n}.md"
-                    )
-                )
+        if outcome == "done" and not (
+            role == "engineer" and DECOMPOSE in self.issue(ident)["labels"]
+        ):
+            report["url"] = url or (
+                f"https://github.com/{REPO}/pull/{n}"
+                if config.TASKS[role].input == "build"
+                else self.doc_url(f"{DIRS[role]}{datetime.now(UTC):%Y-%m-%d}-{ident}-run-{n}.md")
+            )
         if outcome == "needs_input":
             report["questions"] = [f"Question #{n}?"]
         text = report["questions"][0] if outcome == "needs_input" else report["summary"]
         texts = {text: TEXT_KINDS[outcome]}
-        if "deliverable" in report:
-            texts[report["deliverable"]] = "tickets"
         return Script(outcome, [*steps, block(report)], report, texts)
 
     def launch(self, ident, role, script, *, resumed, tui=False, tick=False, after_stop=False):
@@ -457,7 +452,7 @@ class Segment(TmuxFlow):
                 steps.append(f"{scope}comment")
                 comments += [(app, k) for k in p.script.texts.values()]
                 if outcome == "done" and task.input == "decompose":
-                    steps += [f"{scope}deliverable", f"{scope}source:done"]
+                    steps.append(f"{scope}source:done")
                     source = handoff.parse_handoff(self.issue(p.ident)["description"]).source
                     self.expect(source, state="done", history=[("handoff", "done", app)])
                 if outcome == "done" and url:
@@ -481,9 +476,7 @@ class Segment(TmuxFlow):
                     changes["subscribers"] = [HUMAN]
             # write-back looks each comment step up before posting it: its event may come again
             posts = [
-                s
-                for s in steps
-                if s not in ledgered and (s == "start" or s.endswith(("comment", "deliverable")))
+                s for s in steps if s not in ledgered and (s == "start" or s.endswith("comment"))
             ]
             self.expect_problem(*[lookup(app)] * len(posts))
             self.expect(p.ident, comments=comments, ledger={p.sid: steps}, **changes)

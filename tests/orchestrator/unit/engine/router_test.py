@@ -3272,9 +3272,11 @@ class RunLaunching(OuterBase):
                 spec = self.api.detached[-1][1]
                 self.assertNotIn("Branch:", spec.input)
                 self.assertEqual(spec.task, "decompose" if mode == "new" else None)
-                self.assertEqual(
-                    self.api.detached[-1][2]["overlays"][-1],
-                    {"roles": {"engineer": {"output": {"type": "local"}}}},
+                self.assertFalse(
+                    any(
+                        "output" in overlay.get("roles", {}).get("engineer", {})
+                        for overlay in self.api.detached[-1][2]["overlays"]
+                    )
                 )
 
     def test_resume_keeps_recorded_role_and_current_app(self):

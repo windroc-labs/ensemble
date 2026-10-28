@@ -52,9 +52,7 @@ class LinearRun:
             workflow.for_task(config.TASKS, role, effective_task) if role in config.TASKS else None
         )
         output = cfg.roles[role].run.output if stage else {}
-        if stage and stage.input == "decompose":
-            overlays += ({"roles": {role: {"output": {"type": "local"}}}},)
-        elif stage and (stage.input == "build" or output["type"] == "github"):
+        if stage and (stage.input == "build" or output["type"] == "github"):
             host = cfg.repo_host(role)
             if host != "github.com" or output.get("host"):
                 overlays += ({"roles": {role: {"output": dict(output) | {"host": host}}}},)

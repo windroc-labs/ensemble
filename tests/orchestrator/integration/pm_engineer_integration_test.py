@@ -25,7 +25,7 @@ PRD = "# PRD: Session registry\n\nThe registry maps each tmux session to its run
 
 
 class PmToEngineer(Segment):
-    def test_decompose_done_completes_both_issues_with_ticket_table(self):
+    def test_decompose_done_completes_both_issues_from_its_summary(self):
         child = self.pm_to_engineer()
         source = handoff.parse_handoff(self.issue(child)["description"]).source
         before = list(self.sent("promote.M_CREATE"))

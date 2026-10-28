@@ -474,8 +474,6 @@ def _finish(ctx, o, steps="", *, move=True):
     report = None
     if task.deliverable and o.status == OutcomeStatus.DONE:
         report, body = _report(ctx, body)
-        if task.input == "decompose" and report is None:
-            raise IssueError(body)
 
     if (
         task.retitle

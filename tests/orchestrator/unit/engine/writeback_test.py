@@ -424,8 +424,6 @@ class ProgressReporting(Base):
 
 
 class DecomposeCompletion(Base):
-    TABLE = "| Issue | Repo | Requirements |\n| ENG-8 | acme/queue | FR-1 |\n"
-
     def prepared(self):
         port = mock.Mock()
         port.links.return_value = set()
@@ -434,10 +432,9 @@ class DecomposeCompletion(Base):
         port.move.return_value = None
         port.find_comment.return_value = None
         ctx = replace(self.ctx(), task="decompose", tracker=port)
-        self.write(ctx, "run/out.md", self.TABLE)
         return ctx, port
 
-    def test_done_posts_table_and_completes_source_before_decompose_once(self):
+    def test_done_posts_the_summary_alone_and_completes_source_before_decompose_once(self):
         ctx, port = self.prepared()
         done = Outcome(status="done", title="Queues", summary="Created ENG-8", url=PR)
         self.assertTrue(writeback.finish(ctx, done))
@@ -448,21 +445,21 @@ class DecomposeCompletion(Base):
                 mock.call(UUID, writeback.IssueState.DONE, frm=writeback.IssueState.RUNNING),
             ],
         )
-        self.assertIn(
-            mock.call(UUID, self.TABLE, (SID, "deliverable")), port.comment.call_args_list
+        self.assertFalse(os.path.exists(os.path.join(ctx.workdir, "run", "out.md")))
+        self.assertEqual(
+            port.comment.call_args_list,
+            [mock.call(UUID, "Decompose done: Created ENG-8", (SID, "comment"))],
         )
         port.link.assert_not_called()
         self.assertTrue(writeback.finish(ctx, done))
         self.assertEqual(port.move.call_count, 2)
-        self.assertEqual(port.comment.call_count, 2)
+        self.assertEqual(port.comment.call_count, 1)
 
-    def test_missing_table_or_source_does_not_complete(self):
-        for missing in ("table", "handoff", "source"):
+    def test_missing_handoff_or_source_does_not_complete(self):
+        for missing in ("handoff", "source"):
             with self.subTest(missing=missing):
                 ctx, port = self.prepared()
-                if missing == "table":
-                    os.remove(os.path.join(ctx.workdir, "run/out.md"))
-                elif missing == "handoff":
+                if missing == "handoff":
                     port.description.return_value = "No handoff"
                 else:
                     port.on_board.return_value = None
@@ -484,7 +481,7 @@ class DecomposeCompletion(Base):
                 self.assertEqual(port.move.call_count, 2 if okay else 1)
                 self.assertEqual("outcome" in self.steps(ctx)[SID], okay)
 
-    def test_retry_after_second_move_failure_preserves_table_and_source_step(self):
+    def test_retry_after_second_move_failure_preserves_comment_and_source_step(self):
         ctx, port = self.prepared()
         port.move.side_effect = [None, LinearError("offline"), None]
         done = Outcome(status="done", title="Queues", summary="ENG-8")
@@ -496,7 +493,7 @@ class DecomposeCompletion(Base):
             ),
             1,
         )
-        self.assertEqual(port.comment.call_count, 2)
+        self.assertEqual(port.comment.call_count, 1)
 
     def test_stale_outcome_does_not_move_either_issue(self):
         ctx, port = self.prepared()
@@ -814,7 +811,6 @@ class WritebackContext(run_fixtures.Base):
             issue=ID, uuid=UUID, sid=SID, mode="new", project=PROJECT, task="decompose"
         )
         ctx = writeback.for_run(cfg, "engineer", spec, writers)
-        self.write(os.path.join(ctx.workdir, "run", "out.md"), DecomposeCompletion.TABLE)
         done = Outcome(status="done", title="Queues", summary="ENG-8")
         self.assertFalse(writeback.finish(ctx, done))
         self.assertTrue(writeback.finish(ctx, done))
@@ -823,8 +819,7 @@ class WritebackContext(run_fixtures.Base):
             moves, [(SRC_UUID, STATES["done"]), (UUID, STATES["done"]), (UUID, STATES["done"])]
         )
         self.assertEqual(
-            sum(name == "comment" and v["b"] == DecomposeCompletion.TABLE for name, v in gql.calls),
-            1,
+            [v["b"] for name, v in gql.calls if name == "comment"], ["Decompose done: ENG-8"]
         )
 
     def test_context_resolves_the_output_host_and_github_blob_prefix(self):

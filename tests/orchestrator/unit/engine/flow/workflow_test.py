@@ -174,7 +174,8 @@ class WorkflowFile(Case):
         )
         base = workflow.stage({"role": "engineer", "input": "build"})
         stages = {"engineer": base}
-        self.assertEqual(workflow.for_task(stages, "engineer", "decompose").input, "decompose")
+        decompose = workflow.for_task(stages, "engineer", "decompose")
+        self.assertEqual((decompose.input, decompose.deliverable), ("decompose", False))
         self.assertIs(workflow.for_task(stages, "engineer", "build"), base)
 
     def test_format_errors(self):
