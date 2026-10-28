@@ -143,6 +143,7 @@ class Detach(Base):
         ):
             with self.subTest(argv=argv, out=out):
                 self.assertEqual(self.runs(*argv, out=out), (2, "", f"delegate: {want}\n"))
+                self.assertFalse(os.path.exists(self.work))
         self.assertEqual(Detaching.made, [])
 
     def test_without_out_the_spec_out_is_none(self):
@@ -1161,7 +1162,7 @@ class Prompt(Case):
             with self.subTest(argv=argv):
                 code, out, err = self.prompt(*argv)
                 self.assertEqual((code, out), (2, ""))
-                self.assertIn("unrecognized arguments:", err)
+                self.assertIn(f"unrecognized arguments: {' '.join(argv)}", err)
                 self.assertFalse(os.path.exists(self.work))
 
     def test_list_is_rejected_and_absent_from_prompt_options(self):
@@ -1174,13 +1175,16 @@ class Prompt(Case):
         self.assertFalse(os.path.exists(self.work))
 
     def test_out_dash_is_refused(self):
-        err = io.StringIO()
-        with redirect_stderr(err):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
             code = cli.main(
                 ["prompt", "--role", "dummy-tester", "--input", "x"]
                 + ["--workdir", self.work, "--out", "-"]
             )
-        self.assertEqual((code, err.getvalue()), (2, "delegate: --out takes a PATH, not -\n"))
+        self.assertEqual(
+            (code, out.getvalue(), err.getvalue()),
+            (2, "", "delegate: --out takes a PATH, not -\n"),
+        )
         self.assertFalse(os.path.exists(self.work))
 
     def test_unknown_role_is_a_config_error_before_writes(self):
@@ -1276,6 +1280,9 @@ class Open(Base):
         ):
             with self.subTest(argv=argv):
                 self.assertEqual(self.cli(*argv)[:2], (2, ""))
+        self.assertIn(
+            "not starting with -", self.cli("open", "--environment", "dummy", "--", "-worker")[2]
+        )
         self.opened.assert_not_called()
 
     def test_nested_open_is_refused_and_help_starts_nothing(self):

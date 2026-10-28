@@ -267,9 +267,7 @@ class CodexIntegration(Runs):
         with open(self.scenario, "w", encoding="utf-8") as stream:
             json.dump({"steps": steps, **scenario}, stream)
 
-    def drive(self, steps, *extra, fixes=None, **scenario) -> subprocess.CompletedProcess:
-        if fixes is not None:
-            scenario["resume"] = fixes
+    def drive(self, steps, *extra, **scenario) -> subprocess.CompletedProcess:
         self.scene(steps, **scenario)
         argv = [
             *RUN,
@@ -306,7 +304,7 @@ class CodexIntegration(Runs):
 class OpenCodeIntegration(CodexIntegration):
     """ROLE's TASK, --client opencode over fake_opencode on PATH; HOME, its session bindings,
     outside the temp dirs. A run's cwd is `proj`, in trusted_dirs (the tmux Host starts OpenCode
-    only in a trusted cwd), unless `trusted=False` leaves it the workdir's agent dir.
+    only in a trusted cwd).
     """
 
     CLIENT = "opencode"
@@ -325,6 +323,5 @@ class OpenCodeIntegration(CodexIntegration):
         with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
             f.write(local_section(f"trusted_dirs = [{json.dumps(self.proj)}]\n", "delegate"))
 
-    def drive(self, steps, *extra, trusted=True, **scenario) -> subprocess.CompletedProcess:
-        cwd = ("--cwd", self.proj) if trusted else ()
-        return super().drive(steps, *cwd, *extra, **scenario)
+    def drive(self, steps, *extra, **scenario) -> subprocess.CompletedProcess:
+        return super().drive(steps, "--cwd", self.proj, *extra, **scenario)

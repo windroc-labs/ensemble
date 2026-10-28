@@ -2104,6 +2104,7 @@ class CrashTest(HarnessCase):
         view, name = self.crashed()
         view.resume()
         self.assertNotEqual(HarnessSession.preflights[-1]["spec"].name, name)
+        self.assertTrue(HarnessSession.preflights[-1]["spec"].resume)
         self.assertEqual(self.metadata()["plan"]["session"]["name"], name)
 
     def test_resume_refuses_a_run_replaced_since_its_attach(self):
