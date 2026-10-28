@@ -25,17 +25,26 @@ from tests.delegate.unit.runs import DONE
 CLASS_QUERIES = """import json, sys, unittest
 from ensemble.delegate import HarnessDelegate
 from tests.delegate.contracts.delegate import DelegateContract
+from tests.delegate.fakes.harness_session import HarnessSession
 from tests.delegate.harness import HarnessCase
 
 class ClassQueries(DelegateContract, HarnessCase):
     delegate_cls = HarnessDelegate
     ROLE = "dummy-tester"
+    SHOWABLE = sys.argv[1] == "True"
+
+    def setUp(self):
+        super().setUp()
+        if self.SHOWABLE:
+            script = HarnessSession.script
+            HarnessSession.reset(showable=True)
+            HarnessSession.script = script
 
     def runTest(self):
         DelegateContract.test_class_methods_answer_for_its_roles_and_refuse_an_unknown_one(self)
 
 result = unittest.TextTestRunner(verbosity=2).run(ClassQueries())
-print(json.dumps({"tests": result.testsRun}))
+print(json.dumps({"tests": result.testsRun, "showable": ClassQueries.SHOWABLE}))
 sys.exit(not result.wasSuccessful())
 """
 
@@ -47,7 +56,7 @@ class HarnessContract(DelegateContract, HarnessCase):
 
     def test_class_methods_answer_for_its_roles_and_refuse_an_unknown_one(self):
         result = subprocess.run(
-            [sys.executable, "-P", "-S", "-c", CLASS_QUERIES],
+            [sys.executable, "-P", "-S", "-c", CLASS_QUERIES, str(self.SHOWABLE)],
             cwd=self.home,
             env=child_env(None, REPO),
             stdin=subprocess.DEVNULL,
@@ -56,7 +65,7 @@ class HarnessContract(DelegateContract, HarnessCase):
             timeout=60,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(json.loads(result.stdout), {"tests": 1})
+        self.assertEqual(json.loads(result.stdout), {"tests": 1, "showable": self.SHOWABLE})
 
     def make(self, workdir, **kw):
         role = kw.pop("role", self.ROLE)
