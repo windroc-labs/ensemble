@@ -1,123 +1,117 @@
-<div align="center">
+# Ensemble
 
-# ensemble
+[English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [한국어](README.ko.md) · [Português](README.pt.md) · [简体中文](README.zh-CN.md)
 
-[English](../../README.md) · [中文](README.zh-CN.md) · **日本語** · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Português](README.pt.md)
+Ensemble を使うと、コーディングエージェントをチームとして扱えます。コマンダーと会話する、ロールにタスクを委任する、
+ボードにロール間の作業振り分けを任せる、といった使い方ができます。Claude Code、Codex、OpenCode は共通のセッション操作を使います。
 
-[![CI](https://github.com/windroc-labs/ensemble/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/windroc-labs/ensemble/actions/workflows/test.yml?query=branch%3Amain) [![Worker image](https://github.com/windroc-labs/ensemble/actions/workflows/worker-image.yml/badge.svg?branch=main)](https://github.com/windroc-labs/ensemble/actions/workflows/worker-image.yml?query=branch%3Amain) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../../LICENSE)
+<a id="what"></a>
+## 実行できるもの
 
-</div>
+![5 つの実践段階：Drive、Equip、Systematize、Orchestrate、Master](../images/levels.svg)
 
-*これは翻訳です。正式な内容は英語版 README を参照してください。*
+必要な範囲を選んでください。ワーカーはクライアントとの会話です。ロールはそこに役割の規定、タスク、結果を加えます。
+ボードはロールの実行をスケジュールし、その結果を issue に書き戻します。ボードには Linear またはローカルの Markdown を使えます。
 
-Linear ボード、または Markdown の issue ファイルからなるローカルボードから、コーディングエージェント（Claude Code、Codex、ホストの Ollama モデルで動く OpenCode）を無人で動かします。Orchestrator は差し替え可能な Tracker インターフェースで issue を読み書きし、`[orchestrator] tracker` で `local`（デフォルト）か `linear` を選びます。workflow ファイルがステージと対応する role を定義します。各 role は同時に最大 `max_runs` 件の issue を処理し、成果物をレビューのために戻します。承認すると次の role が引き継ぎます。
+<a id="why"></a>
+## チームを使う理由
 
-開発者向け：[`AGENTS.md`](../../AGENTS.md)。
+![単独のエージェント、手動で調整する複数のエージェント、コマンダーが調整する ensemble のチーム](../images/compare.svg)
 
-```mermaid
-flowchart LR
-    R["researcher<br>deep-research, research, light-research"] -->|"report → Approve → promote"| P["pm<br>product-design"]
-    P -->|"PRD → Approve → promote"| E["engineer<br>build, light-build"] -->|pull request| Y[you]
-    T[ensemble-orchestrator router] -.->|claims ready issues| R & P & E
-```
+エージェントを個別に実行すると、誰かが作業を振り分け、返答を追う必要があります。コマンダーは Crew を使い、
+1 つの会話からこれらの実行を開始、確認、再開します。どの作業を許可し、レビューするかは引き続きあなたが決めます。
 
-## レイヤー構成
+<a id="how-it-works"></a>
+## 仕組み
 
-ensemble はレイヤーで構成され、各レイヤーは 1 つの役割だけを担い、すぐ下のレイヤーだけを呼び出します。下の 2 つのレイヤー、Session と Delegate は単体で使える汎用の部品で、その上に独自のオーケストレーションも構築できます。Orchestrator では workflow ファイルでステージを変更し、Tracker インターフェースを実装して別のボードを接続できます。拡張するときは、新しいエージェント client を Session に、新しい role と task を Delegate に追加します。
+![レイヤーの境界：Manager のコマンド、Orchestrator、Delegate、Session、共通の Utils](../images/layers.svg)
 
-![ensemble のレイヤー（上から下へ）：Manager（ユーザーインターフェース）、Orchestrator（オーケストレーション、Linear とローカルボードの tracker）、Delegate（role レイヤー）、Session（client アダプター）](../images/layers.svg)
+![実行時の境界：セッションハーネス、ローカルと Docker のガード、broker の認証情報、外向き通信のプロキシ](../images/system.svg)
 
-| レイヤー | 役割 | 入口 |
-|---|---|---|
-| Manager | 下位レイヤーのドライバー。対話するエージェントで、worker、role run、ボード run を起動し、監視して報告します。 | [デモ](#デモ1-つの-manager複数の-worker) |
-| Orchestrator | workflow ファイルに従って role を動かし、差し替え可能な tracker で Linear またはローカルの Markdown ボードに接続します。 | [ボード](../architecture.md#board) |
-| Delegate（コア） | session を通じて role に 1 つの task を実行させ、チェック済みの結果を返します。単体でも使える Claude Code / Codex プラグインです。 | [インストール](#インストール) |
-| Session | tmux または Docker コンテナでコーディングエージェント（Claude Code、Codex、OpenCode）を起動・監視・再開します。どの client でも同じ方法です。 | [Sessions](../architecture.md#session-settings) |
+制御、認証情報の配布、ネットワーク経路はそれぞれ別のものです。[アーキテクチャ概要](../architecture.md)では責任の分担と信頼関係を説明しています。
+実装の詳細は、リンク先のソースコードを参照してください。
 
-同梱の workflow は、エージェントがどう働くべきかについての私の考え方です（調査、PRD、ビルドの順に進み、各ステージの間に人間のレビューを挟む）。`[orchestrator] workflow` で別の workflow ファイルを選び、空なら同梱のものを使います。role と task 自体も自由に編集できます（[role と task のカスタマイズ](../customizing-roles-and-tasks.md)）。
-
-## ensemble を使う理由
-
-![コーディングエージェントとの働き方：エージェント 1 つ、複数エージェントを手作業で、ensemble](../images/compare.svg)
-
-エージェント 1 つでは待たされます。複数のエージェントを手作業で回すと、すべてのプロンプト、チェック、承認があなたを経由します。ensemble では manager と話すだけで、manager が worker を起動・監視し、報告します。
-
-## AI agent を使いこなす 5 つの level
-
-コーディング agent との協働ははしごのようなものです。各 level は下の level の上に新しいエンジニアリングを積み重ね、肝心なのは問題に合った level を選ぶことです。
-
-![AI agent を使いこなす 5 つの level：Drive、Equip、Systematize、Orchestrate、Master。ensemble は 4 と 5 の間](../images/levels.svg)
-
-| Level | 分野 | 内容 |
-|---|---|---|
-| 1. Drive | prompt engineering と context engineering | 対話的な prompting、context の管理、どの仕事にどのモデルを使うかの判断。 |
-| 2. Equip | tools、skills、MCP | agent にツールを与え、外の世界（ファイル、API、ブラウザ、MCP server）に手を伸ばして操作させる。ただし権限と sandbox の範囲内で。 |
-| 3. Systematize | state engineering | 1 つの workflow を状態機械として回す：決まったステージ、リトライ、冪等なステップ、引き継ぎ。 |
-| 4. Orchestrate | loop engineering | 複数の agent：fan-out、planner と verifier、ルーティング、並行数と quota の上限。 |
-| 5. Master | environment engineering | ガードレールと agent-oriented な環境：人間ではなく agent のために作ったツール、チェック、検証で、いちばん楽な道が正しい道になるようにする（Lauren Tan の考え方）。 |
-
-まだ level 3 に届いていない？[updraft](https://github.com/windroc-labs/updraft) をどうぞ。少なくともそこまでは連れて行ってくれます。ensemble の各層（冒頭の表）はさらに上へ登ります。Session は agent の対話を回し、手を動かせる host を与えます（level 1–2）。Delegate は 1 つの role を 1 つの task でチェック付きの workflow として回します（3）。Orchestrator とその上の manager は複数の agent を調整します（4 と 5 の間）。そこにあなたが上に立ち、環境、境界、関門を決めれば Master です。ただし ensemble の検証はまだ少し手薄です。目標は level 5、そしてその先です。
-
-## デモ：1 つの manager、複数の worker
-
-ボードを使わずに、1 つのエージェント（manager）と話すだけで ensemble を動かせます。`ctmux <name>` でその session を開き、Claude Code か Codex を起動して `/ensemble:manage` を呼び出します。普通の言葉で仕事を伝えると、task ごとに worker を起動し、イベントを監視し、pull request をチェックして報告します。
-
-コマンド：[クイックスタート](#クイックスタート)。
-
+<a id="install"></a>
 ## インストール
 
-各 client がそれぞれプラグインをインストールします。アップグレード前に [Upgrading](../upgrading.md) を確認してください。
+Apple silicon Mac で、[windroc マーケットプレイス](https://github.com/windroc-labs/agent-plugins-marketplace/blob/main/.claude-plugin/marketplace.json)に
+固定されているリリースのインストーラーを実行します。
+`<tag>` を、そのファイルにある ensemble の `source.ref` に置き換えてください。
 
-| Client | インストール |
+```sh
+curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
+```
+
+Keychain から `sudo` のパスワードを渡すには、先にスクリプトをダウンロードします。stdin にスクリプト本体も流すことはできません。`<item>` を Keychain のサービス名に置き換えてください。
+
+```bash
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
+```
+
+| フラグ | 読み取る内容 |
 |---|---|
-| Claude Code | `/plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `/plugin install ensemble@windroc` |
-| Codex 0.156.0+ | `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`（追加済みのものを更新するには `codex plugin marketplace upgrade windroc`）、続けて `codex plugin add ensemble@windroc`。`codex plugin list -m windroc` でインストール済みかつ有効と表示される必要があります。 |
+| `--password-stdin` | stdin から `sudo` のパスワードを読み取ります。プロバイダーのキーより先に渡します |
 
-以下は何もチェックされません。1 つでも欠けているとエージェント run は失敗します。
+インストーラーでは、使用するクライアント、ワーカーをローカルと Docker のどちらで実行するか、ボードを設定するかを尋ねます。
+選択した依存関係とプラグインをインストールし、必要なログインを求め、`ctmux` を設定します。
+インストールが中断した場合は、再実行すれば完了できます。オプションを確認するには、リポジトリのチェックアウトで `bash scripts/install.sh --help` を使ってください。
+既存のインストールがある場合は、先に[アップグレード](../upgrading.md)を読んでください。
 
-| 必要なもの | 用途 |
-|---|---|
-| `claude` CLI、Python 3.11+ | すべてのエージェント run |
-| [`updraft`](https://github.com/windroc-labs/updraft) プラグイン（host worker の client に）：Claude Code は `/plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `/plugin install updraft@windroc`。Codex は `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`、続けて `codex plugin add updraft@windroc`. Docker worker はイメージ内で個別にインストールします（[プラグイン](../architecture.md#plugins)）。 | engineer の build task（`/updraft:build`、`/updraft:light-build`）と PM の PRD レビュー（`/updraft:review`）。それ以外では不要。 |
-| tmux 3.3–3.8 | `tmux` Host 上の tui run |
-| `127.0.0.1` だけで待ち受け、コンテキスト長 65536 以上、tier のモデルを pull 済みの [Ollama](https://ollama.com)。`tmux` ではさらに OpenCode 1.x（`npm install -g opencode-ai@1.19.3`） | OpenCode のみ（[Docker host › OpenCode on Docker](../architecture.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)） |
-| `git`、ログイン済みの `gh` | コーディング（checkout、pull request）と GitHub の出力先。それ以外では不要。 |
-| 起動中の iTerm2 | デフォルトの iTerm2 分割 |
-| 起動中の Docker Desktop。broker `B`（`/usr/local/libexec/ensemble/ensemble-broker`）、`sh <plugin dir>/src/broker/install.sh` でインストール（`sudo` とログイン済みの `gh` が必要）。ログインはそれぞれ 1 回：`B login claude`（`claude setup-token` を貼り付け）、`B login github ensemble-broker-bot`、Codex は `sudo B install-codex <version>` の後に `B login codex`。OpenCode は不要 | Docker Host のみ（[Docker host](../architecture.md#docker-host)）。ホストに Node は不要。各認証情報の権限、保存場所、取り消し方法：[Credentials](../architecture.md#credentials)。 |
+選択したクライアントに必要なモデルのアカウントまたはプロバイダーを使ってください。OpenCode のプロバイダーとネットワークの設定は、
+[ロールとタスクのカスタマイズ](../customizing-roles-and-tasks.md#opencode-sessions)にあります。
+ホストの `gh` には、対象リポジトリへの push と PR 操作の権限が必要です。classic token には `repo`、`read:org`、`gist` が必要です。
+fine-grained token には、チェックのために Actions の読み取り権限も必要です。
 
-ensemble が起動する session があなたの設定をどう読み込むか、そしてその中で一部のコマンドが拒否される理由：[Session settings](../architecture.md#session-settings)。
+### GitHub App
 
-| コマンド | 内容 |
-|---|---|
-| `ctmux <name>` | commander の tmux session を開きます。iTerm2 ではネイティブウィンドウ、他のターミナルでは通常の tmux attach、tmux の中からは切り替えになります。`ctmux --install` は ctmux と 4 つのコマンド `ensemble-crew`、`ensemble-session`、`ensemble-delegate`、`ensemble-orchestrator` を `~/.ensemble/bin/` に置きます。そのパスで実行するか、`PATH` に追加してください。各コマンドは今回のインストールで選択したプラグインを使い、他のクライアントの残存コピーには切り替わりません。更新で選択中のディレクトリが削除されると、次のコマンドは同じクライアントの最新のインストール済みコピーを選択・記録して実行し、そのパスを stderr に表示します。インストーラーの再実行は不要です。同じクライアントにコピーが残っていない場合は従来の選択エラーになります。古い ref にはインストーラーを使ってください。 |
-| `/ensemble:manage` | commander のガイドラインに沿って worker、role run、pipeline run を起動・指示します。 |
-| `/ensemble:act-as <role>[:<task>] <input>` | この会話の中でコア role を実行します。 |
-| `/ensemble:board` | 固定の `ensemble-orchestrator issue` コマンドでボードの issue を読み、探し、作成し、編集し、移動し、アーカイブします。 |
-| `ensemble-delegate run --list` | すべての role と task を一覧表示します。 |
+`github` 認証情報を宣言した Docker ワーカーは GitHub App を使います。インストーラーは App を作成しません。
+GitHub Settings › Developer settings › GitHub Apps で、自分のアカウントにだけインストールできる非公開 App を作成し、
+webhook を無効にしてください。リポジトリの権限は、インストーラーが書き込む engineer ロールの認証情報宣言
+`[orchestrator.roles.engineer.credentials.github]` を満たす必要があります。ドキュメントの出力先を含め、
+ワーカーに push を許可するリポジトリだけにインストールしてください。宣言のない Docker run には GitHub token が渡されません。
+直接起動するワーカーと verifier の出力権限は、[明示的な GitHub 認証情報](../upgrading.md#broker-protocol-35-explicit-github-credentials)を参照してください。
 
+秘密鍵を生成し、App ID を控えて、次のコマンドで取り込みます。
+
+```sh
+/usr/local/libexec/ensemble/ensemble-broker login github ensemble-broker-bot \
+  --key-file KEY.pem --app-id APP_ID
+```
+
+取り込み後は PEM を削除してください。交換と失効については、[認証情報のローテーション](../upgrading.md#credential-rotation)を参照してください。
+
+<a id="quick-start"></a>
 ## クイックスタート
 
-1. プラグインを[インストール](#インストール)します。
-2. 新しい Claude Code session で確認します：`/ensemble:act-as dummy-tester:echo hello` が `hello` を返します。
-3. role を実行します：`/ensemble:act-as researcher <question>`。ローカル設定がなければ、レポートは `~/.ensemble/adhoc/<date>-researcher-<name>/agent/prompt.md` に保存されます。公開したい場合は role の destination を設定してください（[role と task のカスタマイズ](../customizing-roles-and-tasks.md#change-a-roles-run-settings)）。
-4. Linear またはローカルの Markdown ボードから role を動かすには：[ボード](../architecture.md#board)。
+1 つのタスクを実行するには、インストールしたクライアントの会話で次を入力します。
 
-## role と task のカスタマイズ
+```text
+/ensemble:act-as dummy-tester:echo hello
+```
 
-- role ごとの実行設定（モデルの tier、effort、client、destination、コマンド）：`~/.ensemble/config.local.toml` の `[delegate.roles.<role>]`。
-- 独自の role、task、テンプレート：`[delegate] team_dirs` に列挙した team ディレクトリ。追加するだけで、組み込みの role を変えることはありません。
-- 確認：`ensemble-delegate run --list`、続けて `ensemble-delegate run --role <role> --input <text> --dry-run`。
+チームを使うには、コマンダーのシェルを開き、クライアントを起動します。
 
-形式、ルール、ボードの制限：[role と task のカスタマイズ](../customizing-roles-and-tasks.md)。
+```sh
+ctmux work
+claude
+```
 
+使用するクライアントが `codex` または `opencode` の場合は、`claude` を置き換えてください。その会話で次を呼び出します。
+
+```text
+/ensemble:manage
+```
+
+作業内容と希望する成果物を伝えてください。コマンダーは Crew を通じて、ワーカーとロールの実行を調整します。
+ボードで作業する場合、`/ensemble:board` で issue を操作します。ステージの選び方は、
+[ワークフローのカスタマイズ](../customizing-roles-and-tasks.md#on-the-board)で説明しています。
+
+<a id="docs"></a>
 ## ドキュメント
 
-以下のドキュメントは英語です。
-
-| ページ | 内容 |
+| 知りたいこと | 参照先 |
 |---|---|
-| [Customizing roles and tasks](../customizing-roles-and-tasks.md) | 実行設定、team ディレクトリ、role と task のファイル、チェック、OpenCode の session |
-| [Board](../architecture.md#board) | セットアップ、issue の状態と task ラベル、router の運用、Agent ラベル（issue ごとの client）、ローカルボード（`tracker`、`ENSEMBLE_BOARD_DIR`、構成、ファイル形式） |
-| [Upgrading](../upgrading.md) | アップグレード手順 |
-| [Core architecture](../architecture.md) | レイヤーとパッケージ（開発者向け）；session 設定、`ensemble-session`、role run の client フラグ |
-| [Tests](../architecture.md#tests) | lint、テストスイート、カバレッジ、ローカルモデルで判定できる実機テスト（開発者向け） |
+| システムのレイヤー、実行と信頼の境界 | [アーキテクチャ](../architecture.md) |
+| モデル、プロバイダー、ロールの設定、独自のタスクやワークフロー | [ロールとタスクのカスタマイズ](../customizing-roles-and-tasks.md) |
+| 既存のインストールに必要な変更 | [アップグレード](../upgrading.md) |
+| コントリビューター向けの規約とチェックの実行方法 | [AGENTS.md](../../AGENTS.md) |

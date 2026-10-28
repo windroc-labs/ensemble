@@ -38,6 +38,7 @@ from ensemble.orchestrator.engine.types import (
     MOVES,
     UNOWNED,
     UUID_RE,
+    ConfigError,
     IssueError,
     LinearApp,
     LinearError,
@@ -367,6 +368,8 @@ class LinearTracker(Tracker):
             roles=roles,
             humans=linear.human_members,
             selves=Selves.of(linear),
+            task_group=linear.task_label_group,
+            label_tasks={i: task for task, i in linear.task_labels.items()},
         )
 
     @classmethod
@@ -732,8 +735,16 @@ class LinearTracker(Tracker):
         nodes = self.gql(Q_CHILD, c=client_id(*once))["issues"]["nodes"]
         return Ref(nodes[0]["id"], nodes[0]["identifier"]) if nodes else None
 
-    def create(self, once, *, home, owner, priority, title, description):
+    def create(self, once, *, home, owner, priority, title, description, task=None):
         _need("states", self.state_ids)
+        labels = {}
+        if task is not None:
+            label = next((i for i, name in self.label_tasks.items() if name == task), None)
+            if label is None:
+                raise ConfigError(
+                    f"orchestrator/config.toml: linear.task_labels.{task} is required"
+                )
+            labels = {"labelIds": [label]}
         made = call(
             self.gql,
             M_CREATE,
@@ -749,6 +760,7 @@ class LinearTracker(Tracker):
                     "priority": priority,
                     "title": title,
                     "description": description,
+                    **labels,
                 }
             },
         )["issue"]

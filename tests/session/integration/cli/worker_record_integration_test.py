@@ -71,6 +71,8 @@ class RecordTest(RecordCase):
                 "events": self.events,
                 "display": MANAGER,
                 "environment": None,
+                "credentials": None,
+                "environment_credentials": None,
             },
         )
 

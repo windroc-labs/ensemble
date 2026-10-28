@@ -70,6 +70,16 @@ class PluginRootTest(Case):
 
 
 class ResponseTest(Case):
+    def test_start_environment_is_a_generic_string_map(self):
+        response = data("start-output.json")
+        response["env"] = {"FUTURE_KIND_IDENTITY": "opaque", "GIT_AUTHOR_NAME": "app[bot]"}
+        started = Broker(FakeBroker((0, json.dumps(response), ""))).start(MANIFEST, clients=KEYS)
+        self.assertEqual(started.env, response["env"])
+        for invalid in (None, [], {"IDENTITY": 1}):
+            response["env"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(SessionError):
+                Broker(FakeBroker((0, json.dumps(response), ""))).start(MANIFEST, clients=KEYS)
+
     def test_a_warning_sink_failure_keeps_the_success(self):
         def unavailable(_message):
             raise OSError("AUDIT_SINK_SECRET_SENTINEL")
@@ -410,7 +420,7 @@ class ResponseTest(Case):
                 endpoint="unix:///Users/example/.docker/run/docker.sock",
                 image_digest="sha256:" + "b" * 64,
                 clients={"claude": "2.1.0", "codex": "codex-cli 0.100.0", "opencode": "1.19.3"},
-                github_user_id=343764394,
+                env=data("start-output.json")["env"],
                 deadline=None,
             ),
         )
@@ -427,21 +437,6 @@ class ResponseTest(Case):
         other = (0, json.dumps({"volume": "ensemble-ws-other", "removed": True}), "")
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
             Broker(FakeBroker(other)).workspace_rm(VOLUME)
-
-    def test_start_takes_a_null_or_positive_integer_github_user_id(self):
-        good = data("start-output.json")
-        for value in (None, 1, 343764394):
-            with self.subTest(value=value):
-                found = (0, json.dumps(good | {"github_user_id": value}), "")
-                started = Broker(FakeBroker(found)).start(MANIFEST, clients=KEYS)
-                self.assertEqual(started.github_user_id, value)
-        missing = {k: v for k, v in good.items() if k != "github_user_id"}
-        for bad in (missing, *(good | {"github_user_id": v} for v in (0, -1, "1", True, 1.5))):
-            with (
-                self.subTest(bad=bad.get("github_user_id", "missing")),
-                self.assertRaisesRegex(SessionError, "bad response to start: fields"),
-            ):
-                Broker(FakeBroker((0, json.dumps(bad), ""))).start(MANIFEST, clients=KEYS)
 
     def test_build_passes_only_the_package(self):
         fake = FakeBroker(success("build-cached.json"))

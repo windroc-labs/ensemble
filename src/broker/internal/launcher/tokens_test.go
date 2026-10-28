@@ -158,7 +158,7 @@ func tokenStartHost(t *testing.T) (Host, string, string, *fakeTokens, *fakeCodex
 	}
 	path := codexManifest(t, func(f map[string]any) {
 		f["codex_dir"] = filepath.Join(parent, "codex")
-		f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
+		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet})
 	})
 	return h, path, parent, tokens, creds, d
 }

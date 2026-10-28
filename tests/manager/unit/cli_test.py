@@ -251,7 +251,17 @@ class Launch(CliCase):
                 "worker",
                 "w1",
                 ("ensemble-session", "start", "w1"),
-                ("--client", "claude", "--prompt", "hi", "--", "--permission-mode", "auto"),
+                (
+                    "--client",
+                    "claude",
+                    "--credentials",
+                    ' {"future-kind": [1]}\n',
+                    "--prompt",
+                    "hi",
+                    "--",
+                    "--permission-mode",
+                    "auto",
+                ),
             ),
             (
                 "issue",
@@ -269,6 +279,129 @@ class Launch(CliCase):
                 entry = self.roster.entries()[key]
                 self.assertEqual(entry.note, "Crew note")
                 self.assertEqual(entry.record, Record.parse(stdout))
+
+    def test_role_defaults_are_queried_for_the_last_task(self):
+        for task_options in (
+            (),
+            ("--task", "build"),
+            ("--task=build",),
+            ("--task", "old", "--task=build"),
+        ):
+            declared = ' {"future-kind": [1]} '
+            reply = SimpleNamespace(returncode=0, stdout=declared + "\n", stderr="")
+            with (
+                self.subTest(task_options=task_options),
+                mock.patch("subprocess.run", return_value=reply) as query,
+            ):
+                code, _, err = self.start(
+                    "role",
+                    "--manager",
+                    "mgr",
+                    "--name",
+                    "r",
+                    *task_options,
+                    "engineer",
+                    "--input",
+                    "x",
+                )
+                self.assertEqual(code, 0, err)
+                query.assert_called_once()
+                self.assertEqual(
+                    query.call_args.args[0],
+                    (
+                        "ensemble-orchestrator",
+                        "credentials",
+                        "--role",
+                        "engineer",
+                        *(("--task=build",) if task_options else ()),
+                    ),
+                )
+                self.assertEqual(query.call_args.kwargs["input"], "")
+                selected = ("--task", "build") if task_options else ()
+                self.assertEqual(
+                    self.calls[0][0],
+                    (
+                        "ensemble-delegate",
+                        "run",
+                        "--role",
+                        "engineer",
+                        "--detach",
+                        "--name",
+                        "r",
+                        *selected,
+                        "--credentials",
+                        declared,
+                        "--input",
+                        "x",
+                    ),
+                )
+                self.roster.remove("r")
+
+    def test_explicit_role_credentials_skip_default_lookup(self):
+        for options in (
+            ("--credentials", ""),
+            ("--credentials={}",),
+            ("--credentials", ' {"future-kind": [1]} '),
+        ):
+            with self.subTest(options=options), mock.patch("subprocess.run") as query:
+                code, _, err = self.start(
+                    "role", "--manager", "mgr", "--name", "r", *options, "engineer", "--input", "x"
+                )
+                self.assertEqual(code, 0, err)
+                query.assert_not_called()
+                value = options[1] if len(options) == 2 else "{}"
+                self.assertEqual(self.calls[0][0][-4:], ("--credentials", value, "--input", "x"))
+                self.roster.remove("r")
+
+    def test_role_defaults_use_crew_task_without_scanning_delegate_words(self):
+        for index, options in enumerate(
+            (
+                ("--input", "--task wrong"),
+                ("--input", "--task=wrong"),
+                ("--input", "--credentials={}"),
+                ("--input=x", "--on-event", "--task=wrong"),
+                ("--input", "--task", "wrong"),
+                ("--input", "--credentials", "{}"),
+                ("--future-switch", "--input", "x"),
+                ("--dry-run", "--input", "x"),
+                ("--detach", "--input=x"),
+                ("--input=x", "--", "--task=wrong", "--credentials={}"),
+            )
+        ):
+            reply = SimpleNamespace(returncode=0, stdout="{}\n", stderr="")
+            with (
+                self.subTest(options=options),
+                mock.patch("subprocess.run", return_value=reply) as query,
+            ):
+                code, _, err = self.start(
+                    "role",
+                    "--manager",
+                    "mgr",
+                    "--name",
+                    f"r{index}",
+                    "--task",
+                    "build",
+                    "engineer",
+                    *options,
+                )
+                self.assertEqual(code, 0, err)
+                query.assert_called_once()
+                self.assertEqual(
+                    query.call_args.args[0],
+                    ("ensemble-orchestrator", "credentials", "--role", "engineer", "--task=build"),
+                )
+                self.assertEqual(
+                    self.calls[0][0][7:], ("--task", "build", "--credentials", "{}", *options)
+                )
+                self.roster.remove(f"r{index}")
+
+    def test_role_default_config_failure_starts_nothing(self):
+        reply = SimpleNamespace(returncode=2, stdout="", stderr="invalid credentials overlay")
+        with mock.patch("subprocess.run", return_value=reply):
+            code, out, err = self.start("role", "--manager", "mgr", "engineer", "--input", "x")
+        self.assertEqual((code, out, self.calls), (2, "", []))
+        self.assertIn("invalid credentials overlay", err)
+        self.assertFalse(Path(self.directory).exists())
 
     def test_worker_and_run_resume_pass_the_given_sid(self):
         sid = str(uuid.uuid4())
@@ -318,9 +451,11 @@ class Launch(CliCase):
                     "--manager",
                     "mgr",
                     *explicit,
-                    "pm",
                     "--task",
                     "product-design",
+                    "--credentials",
+                    ' {"future-kind": [1]}\n',
+                    "pm",
                     "--input",
                     "x",
                 )
@@ -340,6 +475,8 @@ class Launch(CliCase):
                         name,
                         "--task",
                         "product-design",
+                        "--credentials",
+                        ' {"future-kind": [1]}\n',
                         "--input",
                         "x",
                     ),
@@ -367,7 +504,14 @@ class Launch(CliCase):
         for verb, key in (("issue", "TASK-12"), ("role", "pm"), ("worker", "w1")):
             with self.subTest(verb=verb):
                 result, stdout, stderr = self.start(
-                    verb, "--manager", "mgr", key, code=2, output="", stderr=f"{reason}\n"
+                    verb,
+                    "--manager",
+                    "mgr",
+                    *(("--credentials", "{}") if verb == "role" else ()),
+                    key,
+                    code=2,
+                    output="",
+                    stderr=f"{reason}\n",
                 )
                 self.assertEqual((result, stdout, self.roster.entries()), (2, "", {}))
                 [line] = stderr.splitlines()
@@ -377,7 +521,15 @@ class Launch(CliCase):
     def test_a_busy_role_start_exits_75_and_leaves_no_entry(self):
         busy = "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
         result, stdout, stderr = self.start(
-            "role", "--manager", "mgr", "pm", code=75, output="", stderr=f"{busy}\n"
+            "role",
+            "--manager",
+            "mgr",
+            "--credentials",
+            "{}",
+            "pm",
+            code=75,
+            output="",
+            stderr=f"{busy}\n",
         )
         self.assertEqual((result, stdout, self.roster.entries()), (75, "", {}))
         [line] = stderr.splitlines()
@@ -430,7 +582,7 @@ class Launch(CliCase):
 
     def test_failed_starts_exit_one_and_leave_their_entry_lost(self):
         run = ("run", "--manager", "mgr", "r1", "--", "starter")
-        role = ("role", "--manager", "mgr", "--name", "r1", "pm")
+        role = ("role", "--manager", "mgr", "--name", "r1", "--credentials", "{}", "pm")
         receipts = (None, "invalid Record\n", " \n")
         for arguments, name, code, output in (
             (("worker", "--manager", "mgr", "w1"), "w1", 75, ""),
@@ -1340,6 +1492,26 @@ HELP_COMMANDS = [
 
 
 class HelpContracts(Case):
+    def test_role_options_are_owned_before_role_and_remainder_is_opaque(self):
+        parsed = cli._parser().parse_args(
+            [
+                "role",
+                "--task=build",
+                "--credentials",
+                "",
+                "engineer",
+                "--future-switch",
+                "--input",
+                "--task wrong",
+            ]
+        )
+        self.assertEqual((parsed.key, parsed.task, parsed.credentials), ("engineer", "build", ""))
+        self.assertEqual(parsed.arguments, ["--future-switch", "--input", "--task wrong"])
+        text = self.help("role")
+        self.assertIn("--task TASK", text)
+        self.assertIn("--credentials JSON", text)
+        self.assertIn("before ROLE", text)
+
     def test_visibility_help_does_not_require_roster_ownership(self):
         for command in ("show", "hide"):
             text = self.help(command)

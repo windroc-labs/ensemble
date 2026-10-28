@@ -183,9 +183,10 @@ class ColorTest(WorkerCase):
         self.assertEqual(self.ok(self.session("reply", "w1")).stdout, "Colored.\n")
 
     def test_exit_in_the_launch_turn_still_fails_start(self):
-        # exits in its launch prompt's turn, inside the early watch
+        # The terminal may echo /color before exit; only the command log proves it was read.
         res = self.start("w1", steps=[{"kind": "exit"}])
         self.assert_early_exit(res, "w1", 0)
+        self.assertEqual(self.commands("w1"), [])
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
         self.assertIsNone(self.dir_record("w1"))
 

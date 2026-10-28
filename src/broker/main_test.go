@@ -80,7 +80,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"33"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"35"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -735,6 +735,17 @@ func TestStatus(t *testing.T) {
 // noSecrets is an empty broker-only keychain.
 type noSecrets struct{}
 
+type noLinear struct{}
+
+func (noLinear) Ready(credential.LinearApp) error { return nil }
+func (noLinear) Issue(context.Context, credential.LinearRequest, string) ([]credential.Command, func(), string, error) {
+	return nil, func() {}, "", nil
+}
+func (noLinear) Refresh(context.Context, credential.LinearRequest, string, func([]string, []byte) error) (string, error) {
+	return "", nil
+}
+func (noLinear) Revoke(context.Context, string) error { return nil }
+
 func (noSecrets) Secret(string, string) ([]byte, error)  { return nil, broker.ErrNotFound }
 func (noSecrets) PutSecret(string, string, []byte) error { return errors.New("read-only") }
 func (noSecrets) DeleteSecret(string, string) error      { return nil }
@@ -814,7 +825,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
 			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Audit: rec,
 				API: github.Client{Base: srv.URL, HTTP: srv.Client(), Now: time.Now}},
-			Audit: rec,
+			Audit: rec, Linear: noLinear{},
 		}
 		switch command {
 		case "start":

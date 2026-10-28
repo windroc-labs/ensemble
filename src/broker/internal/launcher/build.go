@@ -248,7 +248,7 @@ func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, err
 			return "", "", protocol.New(protocol.BuildFailed, "Cannot read the worker image definition.")
 		}
 	}
-	for _, rel := range []string{"src/ensemble/session", "src/ensemble/utils", "src/ensemble/delegate", ".claude-plugin/plugin.json"} {
+	for _, rel := range []string{"src/ensemble/session", "src/ensemble/utils", "src/ensemble/delegate", "src/ensemble/orchestrator", ".claude-plugin/plugin.json"} {
 		if err := snapshotTree(filepath.Join(pkg, rel), filepath.Join(packageDir, rel)); err != nil {
 			return "", "", protocol.New(protocol.BuildFailed, "Invalid ensemble package directory: "+rel+" unreadable.")
 		}

@@ -8,7 +8,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
 
-from ensemble.orchestrator.engine.config import BOARD_ENV
+from ensemble.orchestrator.engine.config import BOARD_ENV, credentials, load
 from ensemble.orchestrator.engine.router import CAP
 from tests.orchestrator.integration.flow_fixtures import (
     BIN,
@@ -28,7 +28,7 @@ LINEAR_STATES = {"ready": "todo", "review": "in_review", "done": "done"}
 T0 = datetime(2026, 10, 1, 9, tzinfo=UTC)
 USAGE = "five_hour=50% weekly=none"
 BAD_TASK = (
-    'Task "light-research" is not one of engineer\'s tasks (build, light-build). '
+    'Task "light-research" is not one of engineer\'s tasks (build, light-build, decompose). '
     "Fix the task or the assignee, then move the issue back to ready/."
 )
 
@@ -201,7 +201,13 @@ class LocalBoard(BinFlow):
         def picked(n, source="default"):
             return [
                 {"kind": "pick", "issue": local(n), "queue": 8},
-                {"kind": "preview", "issue": local(n), "client": "claude", "client_source": source},
+                {
+                    "kind": "preview",
+                    "issue": local(n),
+                    "client": "claude",
+                    "client_source": source,
+                    "credentials": {},
+                },
             ]
 
         self.assertEqual(
@@ -256,6 +262,19 @@ class LocalBoard(BinFlow):
             json.loads(re.sub(r"\bLOC-(\d+)", r"TASK-\1", json.dumps(e))) for e in on_board
         ]
         next(e for e in normalized if e["kind"] == "would comment")["body"] = linear_comment["body"]
+        cfg = load()
+        remote_credentials = {
+            f"TASK-{seed.n}": credentials(cfg, seed.owner, seed.task)
+            for seed in ISSUES
+            if seed.owner in cfg.roles
+        }
+        for event in normalized:
+            if "credentials" in event:
+                self.assertEqual(event["credentials"], {})
+        for event in on_linear:
+            if "credentials" in event:
+                self.assertEqual(event["credentials"], remote_credentials[event["issue"]])
+                event["credentials"] = {}
         self.assertEqual(normalized, on_linear)
 
     def test_parse_error_exit_2(self):
@@ -323,6 +342,7 @@ class LocalBoard(BinFlow):
                     "issue": "LOC-1",
                     "client": "claude",
                     "client_source": "default",
+                    "credentials": {},
                 },
                 {"kind": "usage", "client": "claude", "usage": USAGE, "allowed": True},
             ),

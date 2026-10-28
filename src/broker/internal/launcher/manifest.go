@@ -3,6 +3,7 @@ package launcher
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -10,20 +11,22 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"ensemble/broker/internal/credential"
 	githubapi "ensemble/broker/internal/github"
 	"ensemble/broker/internal/protocol"
 )
 
 type Manifest struct {
+	Linear                                                                                      *credential.LinearRequest // the requested role app token and board config; nil without linear
 	Name, Generation, Image, CWD, Workspace, Client, ClaudeDir, CodexDir, OpencodeDir, HookPath string
 	HasHook                                                                                     bool
 	Labels                                                                                      map[string]string
-	GitHubApp                                                                                   string            // the App whose tokens the session gets; "": github null
-	GitHubPermissions                                                                           map[string]string // the repository permissions each of its tokens is limited to; nil: github null
+	GitHubApp                                                                                   string            // the declared App; "": no github credential
+	GitHubPermissions                                                                           map[string]string // the declared repository permissions; nil without github
 	GitHubRepo                                                                                  string            // the one repository its tokens reach (owner/name); "": every repository of every installation
 	OpencodeProviders                                                                           []string          // the providers whose API keys an opencode container gets
 	ClaudeAccount                                                                               string            // the account whose setup-token a claude container gets; "" for other clients
-	Secrets                                                                                     []Secret          // the environment secrets the container gets; nil without the field
+	Secrets                                                                                     []Secret          // the merged env request; nil without env
 	Lock, LockOwner                                                                             string            // optional lock name and readable owner
 	Gateway                                                                                     string            // the egress proxy's caller network key; workers without the field
 	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
@@ -128,86 +131,27 @@ func ParseManifest(data []byte) (Manifest, error) {
 	reject := func(format string, args ...any) (Manifest, error) {
 		return Manifest{}, protocol.Newf(protocol.ManifestRejected, "Manifest rejected: "+format, args...)
 	}
-	if !utf8.Valid(data) {
-		return reject("not UTF-8")
-	}
-	// Reject duplicate keys and anything after the first value; Token rejects NaN and other non-JSON.
-	type frame struct {
-		object, wantKey bool
-		keys            map[string]bool
-	}
-	var stack []*frame
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	values := 0
-	for {
-		tok, err := dec.Token()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return reject("%v", err)
-		}
-		if len(stack) == 0 {
-			if values++; values > 1 {
-				return reject("trailing data after the manifest")
-			}
-		}
-		if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].wantKey {
-			if key, ok := tok.(string); ok {
-				if stack[n-1].keys[key] {
-					return reject("duplicate key %q", key)
-				}
-				stack[n-1].keys[key], stack[n-1].wantKey = true, false
-				continue
-			}
-		}
-		switch tok {
-		case json.Delim('{'):
-			stack = append(stack, &frame{object: true, wantKey: true, keys: map[string]bool{}})
-			continue
-		case json.Delim('['):
-			stack = append(stack, &frame{})
-			continue
-		case json.Delim('}'), json.Delim(']'):
-			stack = stack[:len(stack)-1]
-		}
-		if n := len(stack); n > 0 && stack[n-1].object {
-			stack[n-1].wantKey = true
-		}
-	}
-	if values == 0 {
-		return reject("empty manifest")
-	}
-
-	str := func(raw json.RawMessage) (string, bool) {
-		var s string
-		if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &s) != nil || hasControl(s) {
-			return "", false
-		}
-		return s, true
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
-		return reject("not a JSON object")
+	fields, err := manifestObject(data)
+	if err != nil {
+		return reject("%s", err)
 	}
 	var m Manifest
 	targets := map[string]*string{"name": &m.Name, "generation": &m.Generation, "image": &m.Image,
 		"cwd": &m.CWD, "workspace": &m.Workspace, "client": &m.Client, "claude_dir": &m.ClaudeDir, "codex_dir": &m.CodexDir,
 		"opencode_dir": &m.OpencodeDir, "hook_path": &m.HookPath, "lock": &m.Lock, "lock_owner": &m.LockOwner, "gateway": &m.Gateway}
 	for key, raw := range fields {
-		if key == "labels" || key == "github" || key == "opencode_providers" || key == "claude_account" || key == "secrets" || key == "prefetch" {
+		if key == "labels" || key == "opencode_providers" || key == "claude_account" || key == "prefetch" || key == "credentials" || key == "environment_credentials" {
 			continue
 		}
 		target, ok := targets[key]
 		if !ok {
 			return reject("unknown field %q", key)
 		}
-		if *target, ok = str(raw); !ok {
+		if *target, ok = manifestString(raw); !ok {
 			return reject("field %q must be a string without control characters", key)
 		}
 	}
-	for _, key := range []string{"name", "generation", "image", "cwd", "workspace", "client", "github", "labels"} {
+	for _, key := range []string{"name", "generation", "image", "cwd", "workspace", "client", "labels"} {
 		if _, ok := fields[key]; !ok {
 			return reject("missing field %q", key)
 		}
@@ -247,29 +191,6 @@ func ParseManifest(data []byte) (Manifest, error) {
 	} else if !validGateway(m.Gateway) {
 		return reject("invalid gateway")
 	}
-	if raw := fields["github"]; string(raw) != "null" {
-		const shape = "github must be null or {\"app\": <name>, \"permissions\": {<permission>: <level>}, \"repo\"?: <owner/name>}"
-		var github map[string]json.RawMessage
-		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil {
-			return reject(shape)
-		}
-		app, ok := str(github["app"])
-		rawRepo, hasRepo := github["repo"]
-		repo, okRepo := str(rawRepo)
-		var permissions map[string]string
-		if raw := github["permissions"]; !ok || len(github) != 2 && !(len(github) == 3 && hasRepo) || hasRepo && !okRepo ||
-			!appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &permissions) != nil {
-			return reject(shape)
-		}
-		if hasRepo && !githubapi.ValidRepo(repo) {
-			return reject("invalid github repo %q", repo)
-		}
-		if err := githubapi.CheckPermissions(permissions); err != nil {
-			return reject("%s", err)
-		}
-		m.GitHubApp, m.GitHubPermissions, m.GitHubRepo = app, permissions, repo
-	}
-
 	if raw, ok := fields["opencode_providers"]; ok {
 		if m.Client != "opencode" {
 			return reject("opencode_providers requires client opencode")
@@ -290,7 +211,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		if m.Client != "claude" {
 			return reject("claude_account requires client claude")
 		}
-		account, ok := str(raw)
+		account, ok := manifestString(raw)
 		if !ok || !ValidClaudeAccount(account) {
 			return reject("invalid claude_account")
 		}
@@ -299,28 +220,14 @@ func ParseManifest(data []byte) (Manifest, error) {
 		m.ClaudeAccount = DefaultClaudeAccount
 	}
 
-	if raw, ok := fields["secrets"]; ok {
-		const shape = "secrets must be an array of at most %d {\"item\", \"file\"} objects"
-		var entries []map[string]json.RawMessage
-		if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &entries) != nil || len(entries) > maxSecrets {
-			return reject(shape, maxSecrets)
-		}
-		m.Secrets = []Secret{}
-		for _, entry := range entries {
-			item, okItem := str(entry["item"])
-			file, okFile := str(entry["file"])
-			switch {
-			case len(entry) != 2 || !okItem || !okFile:
-				return reject(shape, maxSecrets)
-			case !ValidEnvItem(item):
-				return reject("invalid secret item %q", item)
-			case !validSecretFile(file):
-				return reject("invalid secret file %q", file)
-			case slices.ContainsFunc(m.Secrets, func(s Secret) bool { return s.File == file }):
-				return reject("repeated secret file %q", file)
-			}
-			m.Secrets = append(m.Secrets, Secret{Item: item, File: file})
-		}
+	request, err := parseCredentials(fields)
+	if err != nil {
+		return Manifest{}, err
+	}
+	m.Linear = request.Linear
+	m.Secrets = request.Env
+	if request.GitHub != nil {
+		m.GitHubApp, m.GitHubPermissions, m.GitHubRepo = request.GitHub.App, request.GitHub.Permissions, request.GitHub.Repo
 	}
 
 	if raw, ok := fields["prefetch"]; ok {
@@ -329,9 +236,9 @@ func ParseManifest(data []byte) (Manifest, error) {
 		if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &p) != nil {
 			return reject(shape)
 		}
-		repo, ok := str(p["repo"])
+		repo, ok := manifestString(p["repo"])
 		rawRef, hasRef := p["ref"]
-		ref, okRef := str(rawRef)
+		ref, okRef := manifestString(rawRef)
 		switch {
 		case !ok || len(p) != 1 && !(len(p) == 2 && hasRef) || hasRef && !okRef:
 			return reject(shape)
@@ -340,7 +247,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		case hasRef && !ValidRef(ref):
 			return reject("invalid prefetch ref %q", ref)
 		case m.GitHubApp != "" && m.GitHubRepo == "":
-			return reject("prefetch requires github null or a github repo")
+			return reject("prefetch requires a github credential with repo or no github credential")
 		}
 		m.Prefetch = &Prefetch{Repo: repo, Ref: ref}
 	}
@@ -351,7 +258,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	}
 	m.Labels = map[string]string{}
 	for key, raw := range labels {
-		value, ok := str(raw)
+		value, ok := manifestString(raw)
 		if !ok || !labelKeyPattern.MatchString(key) || strings.HasPrefix(key, "ensemble.") || strings.HasPrefix(key, "windroc.") {
 			return reject("invalid label %q", key)
 		}
@@ -368,4 +275,72 @@ func (m Manifest) StateDir() string {
 		return m.OpencodeDir
 	}
 	return m.ClaudeDir
+}
+
+func manifestObject(data []byte) (map[string]json.RawMessage, error) {
+	if !utf8.Valid(data) {
+		return nil, fmt.Errorf("not UTF-8")
+	}
+	// Reject duplicate keys and anything after the first value; Token rejects NaN and other non-JSON.
+	type frame struct {
+		object, wantKey bool
+		keys            map[string]bool
+	}
+	var stack []*frame
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	values := 0
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(stack) == 0 {
+			if values++; values > 1 {
+				return nil, fmt.Errorf("trailing data after the manifest")
+			}
+		}
+		if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].wantKey {
+			if key, ok := tok.(string); ok {
+				if stack[n-1].keys[key] {
+					return nil, fmt.Errorf("duplicate key %q", key)
+				}
+				stack[n-1].keys[key], stack[n-1].wantKey = true, false
+				continue
+			}
+		}
+		switch tok {
+		case json.Delim('{'):
+			stack = append(stack, &frame{object: true, wantKey: true, keys: map[string]bool{}})
+			continue
+		case json.Delim('['):
+			stack = append(stack, &frame{})
+			continue
+		case json.Delim('}'), json.Delim(']'):
+			stack = stack[:len(stack)-1]
+		}
+		if n := len(stack); n > 0 && stack[n-1].object {
+			stack[n-1].wantKey = true
+		}
+	}
+	if values == 0 {
+		return nil, fmt.Errorf("empty manifest")
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
+		return nil, fmt.Errorf("not a JSON object")
+	}
+	return fields, nil
+}
+
+func manifestString(raw json.RawMessage) (string, bool) {
+	var s string
+	if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &s) != nil || hasControl(s) {
+		return "", false
+	}
+	return s, true
 }

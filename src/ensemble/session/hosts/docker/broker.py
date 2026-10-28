@@ -1,4 +1,4 @@
-"""The root-owned broker at the PROTOCOL version (src/broker/protocol/docker-broker/protocol.schema.json): version, build, start, maintain,
+"""The root-owned broker at the PROTOCOL version (SCHEMA): version, build, start, maintain,
 close, workspace-rm and probe-provider with strict response parsing. A missing, malformed or inconsistent response is a transport failure;
 a valid error response is a BrokerError.
 """
@@ -20,7 +20,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "33"
+PROTOCOL = "35"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -183,10 +183,6 @@ def _holder_ok(value) -> bool:
         and value.keys() == {"container", "owner"}
         and all(map(_text, value.values()))
     )
-
-
-def _user_id(value) -> bool:
-    return value is None or (type(value) is int and value >= 1)
 
 
 def _error(command: str, returncode: int, data: dict) -> BrokerError:
@@ -386,7 +382,8 @@ class Broker:
             and isinstance(started.clients, dict)
             and started.clients.keys() == clients
             and all(map(_text, started.clients.values()))
-            and _user_id(started.github_user_id)
+            and isinstance(started.env, dict)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in started.env.items())
             and deadline_ok(started.deadline)
         ):
             raise SessionError("broker: bad response to start: fields")
@@ -535,16 +532,14 @@ def write_manifest(
     workspace: str,
     home: tuple[str, str],
     hook_path: str,
-    github: str,
-    permissions: Mapping[str, str] | None = None,
     providers: tuple[str, ...] = (),
     account: str = "",
     gateway: str | None = None,
-    secrets: Sequence[Mapping[str, str]] = (),
     lock: str | None = None,
     lock_owner: str | None = None,
     prefetch: Mapping[str, str] | None = None,
-    repo: str = "",
+    credentials: str | None = None,
+    environment_credentials: str | None = None,
 ) -> None:
     field, home_path = home
     client = field.removesuffix("_dir")
@@ -557,18 +552,16 @@ def write_manifest(
         "client": client,
         field: home_path,
         "hook_path": hook_path,
-        "github": {
-            "app": github,
-            "permissions": dict(permissions or {}),
-            **({"repo": repo} if repo else {}),
-        }
-        if github
-        else None,
         "labels": {},
+        **({"credentials": credentials} if credentials is not None else {}),
+        **(
+            {"environment_credentials": environment_credentials}
+            if environment_credentials is not None
+            else {}
+        ),
         **({f"{client}_providers": list(providers)} if providers else {}),
         **({f"{client}_account": account} if account else {}),
         **({"gateway": gateway} if gateway else {}),
-        **({"secrets": [dict(secret) for secret in secrets]} if secrets else {}),
         **({"lock": lock, "lock_owner": lock_owner} if lock else {}),
         **({"prefetch": dict(prefetch)} if prefetch else {}),
     }

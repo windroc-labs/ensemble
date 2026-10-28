@@ -19,5 +19,8 @@ func heldKinds(m Manifest) []credential.Kind {
 	if len(m.Secrets) > 0 {
 		kinds = append(kinds, credential.Env)
 	}
+	if m.Linear != nil {
+		kinds = append(kinds, credential.Linear)
+	}
 	return kinds
 }

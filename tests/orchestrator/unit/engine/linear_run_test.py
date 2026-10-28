@@ -1,5 +1,6 @@
 """LinearRun owns exact plans and forwards views to the saved Delegate."""
 
+import json
 from dataclasses import replace
 from unittest import mock
 
@@ -48,6 +49,51 @@ class CheckedDelegate(FakeDelegate):
 
 
 class Runs(RunCase):
+    def test_new_run_receives_resolved_credentials_and_resume_omits_them(self):
+        role = self.cfg.roles["researcher"]
+        self.cfg = replace(
+            self.cfg,
+            roles={
+                **self.cfg.roles,
+                "researcher": replace(
+                    role,
+                    credentials={"future": {"ref": "role"}, "another": ["kept"]},
+                    task_credentials={"light-research": {"future": {"ref": "task"}}},
+                ),
+            },
+        )
+        owner, _ = self.start(delegate_cls=CapturedDelegate)
+        self.assertEqual(
+            json.loads(owner.delegate.accepted[1].credentials),
+            {"future": {"ref": "task"}, "another": ["kept"]},
+        )
+        changed = replace(self.cfg, roles={**self.cfg.roles, "researcher": role})
+        owner = LinearRun(
+            "TASK-1",
+            "Answer with credentials: linear",
+            self.cfg.issue_workdir("TASK-1"),
+            cfg=changed,
+            role="researcher",
+            sid=SID,
+            resume=True,
+            delegate_cls=CapturedDelegate,
+        )
+        self.assertIsNone(owner.delegate.accepted[1].credentials)
+
+    def test_issue_input_cannot_supply_credentials_and_default_is_role_grant(self):
+        owner = LinearRun(
+            "TASK-1",
+            'credentials: {"linear": {"app": "untrusted"}}',
+            self.cfg.issue_workdir("TASK-1"),
+            cfg=self.cfg,
+            role="engineer",
+            sid=SID,
+            delegate_cls=CapturedDelegate,
+        )
+        grant = json.loads(owner.delegate.accepted[1].credentials)["linear"]
+        self.assertEqual(set(grant), {"app", "board"})
+        self.assertEqual(grant["app"]["client_id"], self.cfg.linear.roles["engineer"].client_id)
+
     def test_document_host_is_canonicalized_in_delegate_output_overlay(self):
         for host in ("GHE.EXAMPLE.COM", "GitHub.com"):
             with self.subTest(host=host):
@@ -192,6 +238,7 @@ class Runs(RunCase):
         self.assertEqual(record.resume, ("ensemble-orchestrator", "resume", "TASK-1"))
 
     def test_a_tier_overlays_its_role_after_core(self):
+        self.start()
         for resume in (False, True):
             with self.subTest(resume=resume):
                 owner = LinearRun(
@@ -273,6 +320,7 @@ class Runs(RunCase):
             LinearRun.check_tui(cfg=replace(cfg, delegate_kind="gone"), display=None, events="/e")
 
     def test_a_resumed_run_asks_its_delegate_to_resume_the_session(self):
+        self.start()
         owner = LinearRun(
             "TASK-1",
             "Answer.",

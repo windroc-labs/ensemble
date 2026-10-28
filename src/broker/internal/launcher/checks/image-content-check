@@ -4,3 +4,7 @@ set -eu
 root=${1:-/opt/ensemble}
 unreadable=$(find -L "$root" \( \( -type d \( ! -readable -o ! -executable \) \) -o \( -type f ! -readable \) \) -print -quit) || exit 1
 test -z "$unreadable"
+if test "$#" = 0; then
+    test "$(command -v ensemble-orchestrator)" = /opt/ensemble/bin/ensemble-orchestrator
+    ensemble-orchestrator issue read --help > /dev/null
+fi

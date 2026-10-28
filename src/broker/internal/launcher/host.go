@@ -63,6 +63,14 @@ type Tokens interface {
 	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error
 }
 
+// LinearTokens delivers a role app's separate container token, never its host token.
+type LinearTokens interface {
+	Ready(credential.LinearApp) error
+	Issue(context.Context, credential.LinearRequest, string) ([]credential.Command, func(), string, error)
+	Refresh(context.Context, credential.LinearRequest, string, func([]string, []byte) error) (string, error)
+	Revoke(context.Context, string) error
+}
+
 type Host struct {
 	Home     string
 	Endpoint string
@@ -76,6 +84,7 @@ type Host struct {
 	Static   StaticMeta // nil: no static secret records, as tests without them
 	Schedule Schedule   // nil: no token record, as tests without one; every token provider is then always due
 	GitHub   Tokens
+	Linear   LinearTokens
 	Versions CodexVersions
 	Releases Releases                          // nil: a build that must rebuild fails
 	Progress io.Writer                         // nil: none; build's notes on older images, after Docker's progress; start's phase times
@@ -157,12 +166,12 @@ type Clients struct {
 }
 
 type StartResult struct {
-	Container    string    `json:"container"`
-	Endpoint     string    `json:"endpoint"`
-	ImageDigest  string    `json:"image_digest"`
-	Clients      Clients   `json:"clients"`
-	GitHubUserID *int64    `json:"github_user_id"`
-	Deadline     *Deadline `json:"deadline"`
+	Container   string            `json:"container"`
+	Endpoint    string            `json:"endpoint"`
+	ImageDigest string            `json:"image_digest"`
+	Clients     Clients           `json:"clients"`
+	Env         map[string]string `json:"env"`
+	Deadline    *Deadline         `json:"deadline"`
 }
 
 type StatusResult struct {

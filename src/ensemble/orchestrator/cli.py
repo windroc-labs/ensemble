@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import json
 import os
 import sys
 from functools import partial
@@ -18,7 +19,7 @@ from ensemble.orchestrator.engine import (
     runs,
     writeback,
 )
-from ensemble.orchestrator.engine.config import load
+from ensemble.orchestrator.engine.config import credentials, load
 from ensemble.orchestrator.engine.gate import Gate
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import (
@@ -166,6 +167,15 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     for command, (_, text) in entries.items():
         commands.add_parser(command, help=text)
+    declaration = commands.add_parser(
+        "credentials",
+        help="print resolved role/task credential references as JSON without starting a run",
+        description="Read orchestrator role/task credential declarations; no tracker or credential calls.",
+        epilog="A role with no declaration returns {}. Example: ensemble-orchestrator credentials "
+        "--role engineer --task light-build. Configuration: ensemble-orchestrator --help",
+    )
+    declaration.add_argument("--role", required=True, help="role whose declarations to resolve")
+    declaration.add_argument("--task", help="optional task; omitted: role declarations only")
     for command in ("status", "show", "hide", "close", "attach-command", "resume", "content"):
         purpose, guidance = _query_help(command)
         query = commands.add_parser(
@@ -235,6 +245,11 @@ def main(argv=None):
                 _refused(args.issue, error)
                 _log_ignored(args.issue, ignored)
             return 2
+        if args.command == "credentials":
+            print(
+                json.dumps(credentials(cfg, args.role, args.task) if args.role in cfg.roles else {})
+            )
+            return 0
         event_log.use_logs(cfg.logs_dir)
         if args.command == "writeback":
             try:

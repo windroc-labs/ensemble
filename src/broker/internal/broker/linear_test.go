@@ -557,17 +557,17 @@ func TestLinearEnrollmentWaitDoesNotHoldRegistry(t *testing.T) {
 	enrollLinear(t, l, k, a)
 	k.PutSecret(b.SecretService, b.SecretService, []byte("ROOT-SENTINEL"))
 	base := l.lock
-	unlock, err := base("account/" + a.TokenService)()
+	unlock, err := base("account/"+a.TokenService, true)()
 	if err != nil {
 		t.Fatal(err)
 	}
 	waiting := make(chan struct{})
-	l.lock = func(id string) func() (func(), error) {
+	l.lock = func(id string, create bool) func() (func(), error) {
 		return func() (func(), error) {
 			if id == "account/"+a.TokenService {
 				close(waiting)
 			}
-			return base(id)()
+			return base(id, create)()
 		}
 	}
 	resultA, resultB := make(chan error, 1), make(chan error, 1)

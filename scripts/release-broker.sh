@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds ensemble-broker from release tag v<X.Y.Z>'s commit on this Mac and uploads ensemble-broker-darwin-arm64.tar.gz
-# and its sha256 file to that published Release, for src/broker/install.sh (AGENTS.md › Releasing).
+# and its sha256 file to that published Release, for src/broker/install.sh.
 set -eu
 repo=windroc-labs/ensemble
 asset_name=ensemble-broker-darwin-arm64.tar.gz

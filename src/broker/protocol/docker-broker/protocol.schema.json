@@ -95,74 +95,67 @@
       "type": "string",
       "pattern": "^ensemble-ws-[A-Za-z0-9_-]+$"
     },
-    "github": {
-      "oneOf": [
-        {
-          "type": "null"
+    "github_grant": {
+      "type": "object",
+      "properties": {
+        "app": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
         },
-        {
+        "permissions": {
           "type": "object",
-          "properties": {
-            "app": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
-            },
-            "permissions": {
-              "type": "object",
-              "minProperties": 1,
-              "propertyNames": {
-                "enum": [
-                  "actions",
-                  "administration",
-                  "checks",
-                  "codespaces",
-                  "contents",
-                  "dependabot_secrets",
-                  "deployments",
-                  "environments",
-                  "issues",
-                  "metadata",
-                  "packages",
-                  "pages",
-                  "pull_requests",
-                  "repository_custom_properties",
-                  "repository_hooks",
-                  "secret_scanning_alerts",
-                  "secrets",
-                  "security_events",
-                  "single_file",
-                  "statuses",
-                  "vulnerability_alerts",
-                  "workflows"
-                ]
-              },
-              "additionalProperties": {
-                "enum": [
-                  "read",
-                  "write"
-                ]
-              },
-              "properties": {
-                "metadata": {
-                  "const": "read"
-                },
-                "workflows": {
-                  "const": "write"
-                }
-              }
-            },
-            "repo": {
-              "$comment": "A repo grant: its token reaches this repository alone; absent: every repository of every installation.",
-              "$ref": "#/$defs/github_repo"
-            }
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "actions",
+              "administration",
+              "checks",
+              "codespaces",
+              "contents",
+              "dependabot_secrets",
+              "deployments",
+              "environments",
+              "issues",
+              "metadata",
+              "packages",
+              "pages",
+              "pull_requests",
+              "repository_custom_properties",
+              "repository_hooks",
+              "secret_scanning_alerts",
+              "secrets",
+              "security_events",
+              "single_file",
+              "statuses",
+              "vulnerability_alerts",
+              "workflows"
+            ]
           },
-          "required": [
-            "app",
-            "permissions"
-          ],
-          "additionalProperties": false
+          "additionalProperties": {
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "properties": {
+            "metadata": {
+              "const": "read"
+            },
+            "workflows": {
+              "const": "write"
+            }
+          }
+        },
+        "repo": {
+          "$comment": "A repo grant: its token reaches this repository alone; absent: every repository of every installation.",
+          "$ref": "#/$defs/github_repo"
         }
-      ]
+      },
+      "required": [
+        "app",
+        "permissions"
+      ],
+      "additionalProperties": false
     },
     "github_repo": {
       "$comment": "A github.com repository, owner/name; GitHub forbids the names . and ..",
@@ -170,6 +163,14 @@
       "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
       "not": {
         "pattern": "/\\.\\.?$"
+      }
+    },
+    "credentials": {
+      "$comment": "Opaque JSON text, preserved byte-for-byte after decoding the outer JSON string. Only the broker decodes and validates contentSchema; session and delegate do neither.",
+      "type": "string",
+      "contentMediaType": "application/json",
+      "contentSchema": {
+        "$ref": "#/$defs/credential_spec"
       }
     },
     "volume": {
@@ -233,9 +234,6 @@
         "claude_dir": {
           "$ref": "#/$defs/path"
         },
-        "github": {
-          "$ref": "#/$defs/github"
-        },
         "hook_path": {
           "$ref": "#/$defs/path"
         },
@@ -274,31 +272,6 @@
             "const": "setup-token"
           }
         },
-        "secrets": {
-          "$comment": "Environment secrets by keychain reference; the broker also refuses a file repeated in the list and a file over 255 bytes.",
-          "type": "array",
-          "maxItems": 16,
-          "items": {
-            "type": "object",
-            "properties": {
-              "item": {
-                "type": "string",
-                "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
-              },
-              "file": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255,
-                "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
-                "not": {
-                  "enum": [".", ".."]
-                }
-              }
-            },
-            "required": ["item", "file"],
-            "additionalProperties": false
-          }
-        },
         "lock": {
           "$ref": "#/$defs/lock_name"
         },
@@ -328,8 +301,16 @@
               "$ref": "#/$defs/git_ref"
             }
           },
-          "required": ["repo"],
+          "required": [
+            "repo"
+          ],
           "additionalProperties": false
+        },
+        "credentials": {
+          "$ref": "#/$defs/credentials"
+        },
+        "environment_credentials": {
+          "$ref": "#/$defs/credentials"
         }
       },
       "required": [
@@ -338,7 +319,6 @@
         "image",
         "cwd",
         "workspace",
-        "github",
         "labels",
         "client"
       ],
@@ -444,26 +424,6 @@
         "lock_owner": [
           "lock"
         ]
-      },
-      "dependentSchemas": {
-        "prefetch": {
-          "$comment": "A prefetching container gets no GitHub token (github null) or a repo grant's, which reaches one repository.",
-          "properties": {
-            "github": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "type": "object",
-                  "required": [
-                    "repo"
-                  ]
-                }
-              ]
-            }
-          }
-        }
       }
     },
     "version_input": {
@@ -489,7 +449,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "33"
+          "const": "35"
         }
       },
       "required": [
@@ -632,17 +592,6 @@
           ],
           "additionalProperties": false
         },
-        "github_user_id": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "integer",
-              "minimum": 1
-            }
-          ]
-        },
         "deadline": {
           "oneOf": [
             {
@@ -655,6 +604,12 @@
         },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -662,7 +617,7 @@
         "endpoint",
         "image_digest",
         "clients",
-        "github_user_id",
+        "env",
         "deadline"
       ],
       "additionalProperties": false
@@ -1917,6 +1872,269 @@
     },
     "audit_warning": {
       "const": "audit_write_failed"
+    },
+    "credential_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[!-~]+$"
+    },
+    "credential_spec": {
+      "$comment": "Broker-only contract: independently validate both declarations, then replace whole same-kind environment values with the caller value. No secret values. The broker validates all kinds and currently serves only linear through its credential delivery batch; request github/env serving follows separately.",
+      "type": "object",
+      "properties": {
+        "github": {
+          "$ref": "#/$defs/github_grant"
+        },
+        "linear": {
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                  "not": {
+                    "enum": [
+                      "harness",
+                      "manager"
+                    ]
+                  }
+                },
+                "client_id": {
+                  "$ref": "#/$defs/credential_reference"
+                },
+                "user_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                },
+                "secret_service": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
+                  "not": {
+                    "enum": [
+                      ".",
+                      ".."
+                    ]
+                  }
+                },
+                "token_service": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
+                  "not": {
+                    "enum": [
+                      ".",
+                      ".."
+                    ]
+                  }
+                },
+                "renewal": {
+                  "enum": [
+                    "transport",
+                    "broker"
+                  ]
+                }
+              },
+              "required": [
+                "role",
+                "client_id",
+                "user_id",
+                "secret_service",
+                "token_service",
+                "renewal"
+              ],
+              "additionalProperties": false
+            },
+            "board": {
+              "type": "object",
+              "properties": {
+                "team": {
+                  "$ref": "#/$defs/credential_reference"
+                },
+                "states": {
+                  "type": "object",
+                  "properties": {
+                    "backlog": {
+                      "$ref": "#/$defs/credential_reference"
+                    },
+                    "todo": {
+                      "$ref": "#/$defs/credential_reference"
+                    },
+                    "in_progress": {
+                      "$ref": "#/$defs/credential_reference"
+                    },
+                    "in_review": {
+                      "$ref": "#/$defs/credential_reference"
+                    },
+                    "handoff": {
+                      "$ref": "#/$defs/credential_reference"
+                    },
+                    "done": {
+                      "$ref": "#/$defs/credential_reference"
+                    },
+                    "canceled": {
+                      "$ref": "#/$defs/credential_reference"
+                    }
+                  },
+                  "required": [
+                    "backlog",
+                    "todo",
+                    "in_progress",
+                    "in_review",
+                    "handoff",
+                    "done",
+                    "canceled"
+                  ],
+                  "additionalProperties": false
+                },
+                "labels": {
+                  "type": "object",
+                  "properties": {
+                    "task_labels": {
+                      "type": "object",
+                      "propertyNames": {
+                        "minLength": 1,
+                        "not": {
+                          "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                        }
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/credential_reference"
+                      }
+                    },
+                    "agent_labels": {
+                      "type": "object",
+                      "propertyNames": {
+                        "minLength": 1,
+                        "not": {
+                          "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                        }
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/credential_reference"
+                      }
+                    }
+                  },
+                  "required": [
+                    "task_labels",
+                    "agent_labels"
+                  ],
+                  "additionalProperties": false
+                },
+                "project_repos": {
+                  "type": "object",
+                  "propertyNames": {
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "[\\u0000-\\u001f\\u007f-\\u009f]"
+                    }
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/github_repo"
+                  }
+                },
+                "human_members": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/credential_reference"
+                  }
+                },
+                "task_label_group": {
+                  "$ref": "#/$defs/credential_reference"
+                },
+                "agent_label_group": {
+                  "anyOf": [
+                    {
+                      "const": ""
+                    },
+                    {
+                      "$ref": "#/$defs/credential_reference"
+                    }
+                  ]
+                },
+                "role_users": {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  }
+                }
+              },
+              "required": [
+                "team",
+                "states",
+                "labels",
+                "project_repos",
+                "human_members",
+                "role_users",
+                "task_label_group",
+                "agent_label_group"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "app",
+            "board"
+          ],
+          "additionalProperties": false
+        },
+        "env": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/env_secret"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "test_kind_fixture": {
+      "type": "object",
+      "required": [
+        "credentials",
+        "environment_credentials"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "credentials": {
+          "type": "string"
+        },
+        "environment_credentials": {
+          "type": "string"
+        }
+      }
+    },
+    "env_secret": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string",
+          "pattern": "^ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
+          "not": {
+            "enum": [
+              ".",
+              ".."
+            ]
+          }
+        }
+      },
+      "required": [
+        "item",
+        "file"
+      ],
+      "additionalProperties": false
     }
   }
 }

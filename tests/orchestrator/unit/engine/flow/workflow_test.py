@@ -167,6 +167,16 @@ class WorkflowFile(Case):
         self.assertEqual(flow.load(), workflow.Workflow().load(None))
         self.assertEqual(sorted(flow), ["engineer", "pm", "researcher"])
 
+    def test_decompose_is_selected_by_task_not_stage_configuration(self):
+        self.assert_refused(
+            '[[stage]]\nrole = "engineer"\ninput = "decompose"\n',
+            "stage engineer: input: want one of research, design, build: 'decompose'",
+        )
+        base = workflow.stage({"role": "engineer", "input": "build"})
+        stages = {"engineer": base}
+        self.assertEqual(workflow.for_task(stages, "engineer", "decompose").input, "decompose")
+        self.assertIs(workflow.for_task(stages, "engineer", "build"), base)
+
     def test_format_errors(self):
         for text, message in (
             (None, "No such file or directory"),

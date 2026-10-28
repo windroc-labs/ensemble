@@ -182,6 +182,26 @@ func TestMaintainWithoutRecordCodexFailureHasNoDeadline(t *testing.T) {
 	}
 }
 
+func TestDeadlineUsesEarliestHeldProvider(t *testing.T) {
+	for _, first := range []credential.Kind{credential.Linear, credential.Codex} {
+		record := TokenRecord{Expires: map[credential.Kind][]string{
+			credential.Linear: {soon(time.Hour)}, credential.Codex: {soon(time.Hour)},
+		}}
+		record.Expires[first] = []string{soon(-time.Minute)}
+		deadline := deadlineOf(record, []credential.Kind{credential.Codex, credential.Linear})
+		if deadline == nil || deadline.At != soon(-time.Minute) {
+			t.Fatalf("%s expired first: %+v", first, deadline)
+		}
+		want := "Linear"
+		if first == credential.Codex {
+			want = "Client"
+		}
+		if !strings.HasPrefix(deadline.Reason, want) {
+			t.Fatal("deadline reason belongs to another provider")
+		}
+	}
+}
+
 func TestMaintainStaticFailureKeepsTokenResults(t *testing.T) {
 	for _, c := range []struct {
 		name  string

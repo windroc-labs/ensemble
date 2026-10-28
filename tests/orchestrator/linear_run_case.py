@@ -18,7 +18,7 @@ class ReadyDelegate(FakeDelegate):
         **FakeDelegate.ROLES,
         "researcher": {"deep-research": "research", "light-research": "research"},
         "pm": {"product-design": "design"},
-        "engineer": {"build": "build", "light-build": "build"},
+        "engineer": {"build": "build", "light-build": "build", "decompose": "decompose"},
     }
     usage_result = Usage(None, None)
     usage_calls = []
@@ -87,5 +87,9 @@ class RunCase(ConfigFile, Case):
             role="researcher",
             client="fake",
             delegate_kind="fake",
+            uuid=issue,
+            project=None,
+            target=None,
+            task="light-research",
         )
         return owner, owner.detach()

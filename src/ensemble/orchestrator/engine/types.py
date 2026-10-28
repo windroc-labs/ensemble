@@ -1,5 +1,3 @@
-"""The Linear orchestrator's data types used by two or more of its modules."""
-
 import os
 import re
 import subprocess
@@ -23,6 +21,8 @@ class Role:
     tasks: tuple[str, ...]
     max_runs: int
     run: delegate.RunConfig
+    credentials: Mapping = field(default_factory=dict)
+    task_credentials: Mapping[str, Mapping] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -42,8 +42,6 @@ class Docs:
 
 
 class TrackerKind(StrEnum):
-    """[orchestrator] tracker: where the board's issues live."""
-
     LINEAR = "linear"
     LOCAL = "local"
 
@@ -58,8 +56,6 @@ OWNERSHIP = MappingProxyType(
 
 
 class AppKind(StrEnum):
-    """Which of ensemble's Linear OAuth apps: its token request's scopes."""
-
     HARNESS = "harness"
     ROLE = "role"
     MANAGER = "manager"
@@ -76,9 +72,6 @@ SCOPES = MappingProxyType(
 
 @dataclass(frozen=True)
 class LinearApp:
-    """A Linear OAuth app: name in messages and logs, table its config table (fix messages),
-    secret_service and token_service the Keychain services of its client secret and token record."""
-
     name: str
     kind: AppKind
     table: str
@@ -100,8 +93,6 @@ class LinearApp:
 
 @dataclass(frozen=True)
 class LinearSettings:
-    """[orchestrator.linear]: a Linear board's entities and keys, by id."""
-
     team: str
     states: Mapping[str, str]
     human_members: tuple[str, ...]
@@ -169,10 +160,6 @@ class Config:
 
 @dataclass(frozen=True)
 class Writers:
-    """A run's write-back side of its tracker: tracker writes as the run's role, harness posts the
-    session comment; states: each State's value as Tracker.move returns it; humans: who In Review
-    notifies (lowercase); repos: project → owner/name; assignee: a question's, "" none."""
-
     tracker: Tracker
     harness: Tracker
     states: Mapping[str, str]
@@ -183,8 +170,6 @@ class Writers:
 
 @dataclass(frozen=True)
 class Claim:
-    """The run's start context; role selects its current configured write-back identity."""
-
     issue: str
     sid: str
     role: str
@@ -193,13 +178,11 @@ class Claim:
     target: tuple[str, str] | None
     client: str
     delegate_kind: str
+    task: str | None = None
 
 
 @dataclass(frozen=True)
 class Wiring:
-    """One tracker kind's engine wiring, built by cli.py; transport: the Linear gql callable (a
-    local board ignores it)."""
-
     connect: Connect  # the router's board
     reader: Callable[[Any, Config], Tracker]  # a run's issue read and Related-work search
     writers: Callable[[Any, Config, LinearApp | None], Writers]  # write-back writers
@@ -233,8 +216,6 @@ MOVES = {
 
 
 class Resource(StrEnum):
-    """What ensemble-orchestrator issue lookup lists."""
-
     TEAMS = "teams"
     STATES = "states"
     LABELS = "labels"
@@ -245,8 +226,6 @@ class Resource(StrEnum):
 
 @dataclass(frozen=True)
 class ListQuery:
-    """issue list's filters."""
-
     query: str | None
     state: IssueState | None
     role: str | None
@@ -261,8 +240,6 @@ class ListQuery:
 
 @dataclass(frozen=True)
 class LookupQuery:
-    """issue lookup's query."""
-
     resource: Resource
     query: str | None
     team: str | None
@@ -271,8 +248,6 @@ class LookupQuery:
 
 @dataclass(frozen=True)
 class NewIssue:
-    """issue create's fields."""
-
     title: str
     body: str
     state: IssueState | None
@@ -290,8 +265,6 @@ class NewIssue:
 
 @dataclass(frozen=True)
 class IssueEdit:
-    """issue edit's fields."""
-
     id: str
     title: str | None
     body: str | None
@@ -303,8 +276,6 @@ class IssueEdit:
 
 
 class FinishedType(StrEnum):
-    """Linear state types finished beside the configured done state: Duplicate is canceled-type."""
-
     CANCELED = "canceled"
     DUPLICATE = "duplicate"
 
@@ -320,24 +291,19 @@ class LinearError(Exception):
 
 
 class KeychainError(LinearError):
-    """A Keychain item, or an app's token renewal, left no usable credential; identity: the app's
-    name when it is an app's."""
-
     def __init__(self, msg: str, identity: str | None = None):
         super().__init__(msg)
         self.identity = identity
 
 
 class GraphQLErrors(LinearError):
-    """A response's GraphQL errors, kept as .errors (client.messages gives each one's text)."""
-
     def __init__(self, errors):
         super().__init__(f"linear api error: {errors}")
         self.errors = errors
 
 
 class WriteUnknown(LinearError):
-    """A write Linear never answered: it may or may not have landed."""
+    pass
 
 
 class Unavailable(Exception):
@@ -352,15 +318,13 @@ class IssueError(LookupError):
 
 
 class TrackerFileError(Exception):
-    """A tracker file that cannot be read."""
-
     def __init__(self, path: str, reason: str):
         super().__init__(f"{path}: {reason}")
         self.path, self.reason = path, reason
 
 
 class LabelRefused(Exception):
-    """A label swap the issue's current labels block; nothing was written."""
+    pass
 
 
 @dataclass(frozen=True)
@@ -382,8 +346,6 @@ class Blocking:
 
 
 class RelationsFailed(Exception):
-    """create made receipt's issue but not each failed relation (with its uncut error)."""
-
     def __init__(
         self, receipt: Receipt, done: tuple[Blocking, ...], failed: tuple[tuple[Blocking, str], ...]
     ):
@@ -400,8 +362,6 @@ class InputError(RuntimeError):
 
 @dataclass(frozen=True)
 class Ref:
-    """A first-claim search's doc or merged PR; owner: the Found it belongs to, if any."""
-
     label: str
     url: str
     owner: str | None
@@ -441,9 +401,6 @@ UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 @dataclass(frozen=True, kw_only=True)
 class Spec:
-    """A run the router claimed or resumes: its issue's identity, its role (the tracker's for its
-    owner: Linear's delegate, a local board's assignee), its session and client."""
-
     uuid: str
     issue: str
     project: str | None
@@ -500,8 +457,6 @@ class Refusal:
 
 @dataclass
 class PruneState:
-    """prune.json; an Entry's snapshot None: gone; unbatched: read one by one."""
-
     synced: datetime | None = None
     issues: dict[str, Entry] = field(default_factory=dict)
     refused: dict[str, Refusal] = field(default_factory=dict)

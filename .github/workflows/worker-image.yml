@@ -12,10 +12,14 @@ on:
       - src/ensemble/session/**
       - src/ensemble/utils/**
       - src/ensemble/delegate/**
+      - src/ensemble/orchestrator/**
       - .claude-plugin/plugin.json
       - .github/workflows/worker-image.yml
       - .github/worker_codex.py
       - .github/worker_codex/**
+      - tests/orchestrator/**
+      - tests/session/**
+      - tests/utils/**
       - .github/worker_base/**
   schedule:
     - cron: "17 6 * * 1"
@@ -48,7 +52,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           changed=$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA")
-          if grep -qE '^(src/broker/|src/ensemble/session/|src/ensemble/utils/|src/ensemble/delegate/|\.claude-plugin/plugin\.json$|\.github/workflows/worker-image\.yml$|\.github/worker_codex\.py$|\.github/worker_codex/|\.github/worker_base/)' <<<"$changed"; then
+          if grep -qE '^(src/broker/|src/ensemble/session/|src/ensemble/utils/|src/ensemble/delegate/|src/ensemble/orchestrator/|tests/orchestrator/|tests/session/|tests/utils/|\.claude-plugin/plugin\.json$|\.github/workflows/worker-image\.yml$|\.github/worker_codex\.py$|\.github/worker_codex/|\.github/worker_base/)' <<<"$changed"; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             echo "No image input changed; nothing to build."
@@ -235,6 +239,15 @@ jobs:
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: python3 .github/worker_codex.py "$IMAGE"
+      - name: Run existing worker issue tests in the image
+        if: ${{ steps.inputs.outputs.build != 'false' }}
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tests,target=/opt/ensemble/tests,readonly" \
+            --env PYTHONPATH=/opt/ensemble --env PYTHONDONTWRITEBYTECODE=1 \
+            "$IMAGE" python3 -m unittest -v tests.orchestrator.unit.trackers.linear.worker_test
       - name: Build a variant on a local base image
         id: base
         if: ${{ steps.inputs.outputs.build != 'false' }}

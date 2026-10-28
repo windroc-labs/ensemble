@@ -29,7 +29,6 @@ WORDS = (
     "In Review",
     "Todo",
     "Handoff",
-    "issue",
 )
 
 

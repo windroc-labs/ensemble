@@ -1,5 +1,3 @@
-"""The engine's board port."""
-
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Sequence
 from datetime import datetime
@@ -29,8 +27,7 @@ class Tracker(ABC):
     batch = 1  # snapshots' idents per call
 
     @abstractmethod
-    def state_name(self, state: IssueState) -> str:
-        """Display name."""
+    def state_name(self, state: IssueState) -> str: ...
 
     @abstractmethod
     def read(self, ident: str) -> Snapshot | None:
@@ -55,18 +52,18 @@ class Tracker(ABC):
 
     @abstractmethod
     def finished(self, owners: Collection[str]) -> list[Finished]:
-        """Owners' done, all canceled; every page read first: archiving shifts them."""
+        """Owners' done, all canceled; read every page before archiving."""
 
     @abstractmethod
     def archive_plan(self, key: str) -> ArchivePlan:
-        """A gone issue or an unreadable page raises the adapter's error."""
+        """Gone or unreadable raises the adapter's error."""
 
     @abstractmethod
     def _write_archive(self, key: str) -> bool:
         """With its sub-issues; False: archived meanwhile."""
 
     def archive(self, key: str, plan: ArchivePlan | None = None) -> bool:
-        """Given a plan: writes only. False: already archived."""
+        """With plan: writes only. False: archived."""
         plan = plan or self.archive_plan(key)
         if plan.outcome == "refused":
             raise ArchiveRefused(plan)
@@ -95,6 +92,7 @@ class Tracker(ABC):
         priority: int,
         title: str,
         description: str,
+        task: str | None = None,
     ) -> Ref:
         """READY."""
 
@@ -110,13 +108,12 @@ class Tracker(ABC):
 
     @abstractmethod
     def claim(self, key: str) -> None:
-        """To RUNNING, unread: the caller rechecked it."""
+        """Unread → RUNNING; caller rechecked."""
 
     @abstractmethod
     def comment_and_move(
         self, key: str, body: str, *, to: IssueState, frm: IssueState, notify: bool
-    ) -> str | None:
-        """notify: subscribe others first."""
+    ) -> str | None: ...
 
     @abstractmethod
     def notify(self, key: str, people: Collection[str]) -> str:
@@ -136,7 +133,7 @@ class Tracker(ABC):
 
     @abstractmethod
     def on_board(self, ident: str) -> str | None:
-        """Its key if on this board."""
+        """Its key on this board."""
 
     @abstractmethod
     def unarchive(self, key: str) -> None: ...
@@ -158,7 +155,7 @@ class Tracker(ABC):
     def ready(self) -> list[tuple[IssueRecord, tuple[str, ...]]]: ...
 
     def dependency_cycles(self) -> tuple[tuple[str, ...], ...]:
-        """Closed unfinished dependency paths, when inspectable."""
+        """Unfinished cycles, if inspectable."""
         return ()
 
     @abstractmethod
@@ -169,6 +166,4 @@ class Tracker(ABC):
 
 
 class Connect(Protocol):
-    """transport: its calls' client; say: a logger."""
-
     def __call__(self, transport, cfg, /, *, say: Callable[..., None]) -> Tracker: ...

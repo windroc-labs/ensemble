@@ -11,9 +11,9 @@ from tests.manager.skills.commands import BIN, body, examples, flags, subcommand
 
 
 class Examples(Case):
-    def help(self, command: str, sub: str | None) -> str | None:
+    def help(self, command: str, sub: tuple[str, ...]) -> str | None:
         result = subprocess.run(
-            (os.path.join(BIN, command), *([sub] if sub else []), "--help"),
+            (os.path.join(BIN, command), *sub, "--help"),
             cwd=self.home,
             env=child_env(),
             text=True,
@@ -27,9 +27,9 @@ class Examples(Case):
         """Each (command, subcommand[, flag]) of source's examples its --help does not take."""
         helps, found = {}, []
         for command in examples(source):
-            key = command[0], subcommand(command)
+            key = command[0], *subcommand(command)
             if key not in helps:
-                helps[key] = self.help(*key)
+                helps[key] = self.help(key[0], key[1:])
             if helps[key] is None:
                 found.append(key)
                 continue

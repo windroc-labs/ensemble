@@ -439,6 +439,23 @@ class ViewTest(Base):
 
 
 class EnvironmentTest(Base):
+    def test_credential_declarations_are_stored_and_replayed(self):
+        values = {"credentials": ' {"future-kind": [1]}\n', "environment_credentials": "{"}
+        self.worker(**values).start(prompt="", resume=False)
+        for again in ("resume", "restart"):
+            self.session_cls.start.reset_mock()
+            self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
+            if again == "restart":
+                self.owned()
+                self.session_cls.retire.side_effect = None
+            loaded = Worker.load("w1", session_cls=self.session_cls, say=self.said.append)
+            self.assertEqual(
+                WorkerState.from_json(json.loads(loaded.state.to_json())), loaded.state
+            )
+            getattr(loaded, again)()
+            spec = self.session_cls.start.call_args.args[0]
+            self.assertEqual({key: getattr(spec, key) for key in values}, values)
+
     def test_environment_is_stored_and_reused(self):
         found = state(environment=ENVIRONMENT)
         data = json.loads(found.to_json())
@@ -473,6 +490,13 @@ class EnvironmentTest(Base):
         found = WorkerState.from_json(data)
         self.assertIsNone(found.environment)
         self.assertIsNone(found.spec(prompt="", resume=True).environment)
+
+    def test_worker_json_requires_both_credential_fields(self):
+        for key in ("credentials", "environment_credentials"):
+            data = json.loads(state().to_json())
+            del data[key]
+            with self.subTest(key=key), self.assertRaises(ConfigError):
+                WorkerState.from_json(data)
 
     def test_restart_while_held_raises_session_busy(self):
         self.worker(environment=ENVIRONMENT).start(prompt="", resume=False)

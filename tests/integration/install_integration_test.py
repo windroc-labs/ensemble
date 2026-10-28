@@ -2163,11 +2163,26 @@ class InstallTest(Case):
         self.assertIn("ensemble-broker login github ensemble-broker-bot", self.calls())
         self.assertEqual(len(self.state()["login_github"]), 64)
         self.assertEqual(self.state()["github_app"], "ensemble-test-bot")
-        self.assertIn('[session.hosts.docker.github] app = "ensemble-test-bot"', result.tty)
-        self.assertTrue(
-            self.config()
-            .read_text()
-            .endswith('[session.hosts.docker.github]\napp = "ensemble-test-bot"\n')
+        self.assertIn(
+            '[orchestrator.roles.engineer.credentials.github] app = "ensemble-test-bot"', result.tty
+        )
+        declaration = tomllib.loads(self.config().read_text())["orchestrator"]["roles"]["engineer"][
+            "credentials"
+        ]["github"]
+        self.assertEqual(declaration["app"], "ensemble-test-bot")
+        self.assertEqual(
+            declaration["permissions"],
+            {
+                "contents": "write",
+                "pull_requests": "write",
+                "workflows": "write",
+                "checks": "read",
+                "actions": "read",
+                "statuses": "read",
+            },
+        )
+        self.assertNotIn(
+            "github", tomllib.loads(self.config().read_text())["session"]["hosts"].get("docker", {})
         )
         result = self.again()
         self.assert_ok(result)
@@ -4054,7 +4069,10 @@ exec /bin/rm "$@"
             "--board",
             "linear",
             "--launchd",
-            answers=[*self.secrets("harness", "researcher", "pm", "engineer"), (WRITE_Q, "y")],
+            answers=[
+                *self.secrets("harness", "researcher", "pm", "engineer"),
+                (WRITE_Q, "y"),
+            ],
         )
         self.assert_ok(result)
         self.assertEqual(
@@ -4838,7 +4856,7 @@ exec /bin/rm "$@"
         self.assertEqual(linear["human_members"], ["me@example.com"])
         self.assertEqual(
             linear["roles"],
-            {r: app_config(r) for r in SLOTS[2:]},
+            {r: app_config(r) for r in SLOTS if r not in ("harness", "manager")},
         )
         self.assertEqual(linear["project_repos"], {uuid(30): "acme/widget"})
         # the config gates of router --dry-run, promote --dry-run and issue list
