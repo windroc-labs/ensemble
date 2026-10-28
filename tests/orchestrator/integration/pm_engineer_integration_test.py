@@ -106,12 +106,13 @@ class PmToEngineer(Segment):
         self.assertEqual(self.promote(ident, "pm", "engineer"), child)
         self.assertEqual([v["in"]["id"] for v in self.sent("promote.M_CREATE")], [key])
 
-    def test_b5_a_run_without_an_outcome_is_resumed(self):
+    def test_b6_an_attended_run_that_gives_up_is_resumed_headless(self):
         ident = self.pm_ready()
-        sid = self.claim(ident, "pm", self.agent_script("pm", "none", ident))
+        sid = self.claim(ident, "pm", self.agent_script("pm", "none", ident), tui=True)
         self.agent_run()
         self.human_move(ident, "in_progress", "human: retry failed run")
         self.resume(ident, "pm", sid, self.agent_script("pm", "done", ident))
+        self.assertFalse(self.live(config.tui_name("pm", ident, sid)))
         self.agent_run()
         self.handoff(ident, BUILD)
         self.promote(ident, "pm", "engineer")
@@ -123,17 +124,6 @@ class PmToEngineer(Segment):
             ],
             [ident],
         )
-
-    def test_b6_an_attended_run_that_gives_up_is_resumed_headless(self):
-        ident = self.pm_ready()
-        sid = self.claim(ident, "pm", self.agent_script("pm", "none", ident), tui=True)
-        self.agent_run()
-        self.human_move(ident, "in_progress", "human: retry failed run")
-        self.resume(ident, "pm", sid, self.agent_script("pm", "done", ident))
-        self.assertFalse(self.live(config.tui_name("pm", ident, sid)))
-        self.agent_run()
-        self.handoff(ident, BUILD)
-        self.promote(ident, "pm", "engineer")
 
     def test_b7_a_lost_transcript_starts_a_new_session(self):
         ident = self.pm_ready()

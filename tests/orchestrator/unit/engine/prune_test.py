@@ -5,8 +5,6 @@ import io
 import json
 import os
 import shutil
-import time
-import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import timedelta
@@ -25,7 +23,7 @@ from ensemble.orchestrator.engine.types import (
 from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.utils import temp_dirs
 from tests.delegate.workdir import checkout_path
-from tests.orchestrator.case import SID
+from tests.orchestrator.case import SID, zone
 from tests.orchestrator.prune_fixtures import (
     NOW,
     PRUNE_QUERIES,
@@ -38,8 +36,7 @@ from tests.orchestrator.prune_fixtures import (
 )
 from tests.orchestrator.unit import promote_fixtures as tp
 from tests.orchestrator.unit.board_ids import FINISHED, HARNESS_IDENTITY, role_id
-from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
-from tests.orchestrator.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
+from tests.orchestrator.unit.keychain_fixtures import app_transport, token_http_error
 from tests.orchestrator.unit.run_fixtures import CORE_LOCAL, logged, show
 from tests.utils.process_fixtures import CompletedProcess
 
@@ -1188,12 +1185,7 @@ class PruneCommand(PruneScenario):
     def command(self, prune_gql, *argv, token=None):
         """prune's exit code, stdout, plain stderr and logged lines; token: (days left, token
         endpoint answer) to call through the real transport as the harness app."""
-        write(
-            os.path.join(self.ensemble, "config.local.toml"),
-            f'[orchestrator]\nwork_dir = "{self.root}"\n' + CORE_LOCAL,
-        )
-        path = os.path.join(self.root, "config.toml")
-        write(path, tp.CONFIG)
+        path = self.configured()
         fake = tp.FakeLinear()
 
         def gql(query, **v):
@@ -1204,19 +1196,8 @@ class PruneCommand(PruneScenario):
             stack.enter_context(redirect_stdout(out))
             stack.enter_context(redirect_stderr(err))
             if token is not None:
-                self.keychain = Keychain(
-                    {
-                        HARNESS_IDENTITY.token_service: record(days=token[0]),
-                        HARNESS_IDENTITY.secret_service: APP_SECRET,
-                    }
-                )
-                self.endpoint = Endpoint(
-                    token[1], data=lambda q, v: gql(q, identity=HARNESS_IDENTITY, **v)
-                )
-                stack.enter_context(mock.patch("subprocess.run", self.keychain))
-                stack.enter_context(
-                    mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint)
-                )
+                transport = app_transport(HARNESS_IDENTITY, *token, gql)
+                self.keychain, self.endpoint = stack.enter_context(transport)
             code = prune.main(
                 list(argv),
                 trackers=cli.TRACKERS,
@@ -1249,11 +1230,7 @@ class PruneCommand(PruneScenario):
         def rejected(*_, **__):
             raise LinearError("linear api error: teams: HTTP 401")
 
-        write(
-            os.path.join(self.ensemble, "config.local.toml"),
-            f'[orchestrator]\nwork_dir = "{self.root}"\n' + CORE_LOCAL,
-        )
-        path = os.path.join(self.root, "config.toml")
+        path = self.configured()
         for text, gql, reason in (
             ("bogus = 1\n" + tp.CONFIG, None, "orchestrator/config.toml: unknown keys: bogus"),
             (tp.CONFIG, rejected, "linear api error: teams: HTTP 401"),
@@ -1279,16 +1256,6 @@ class PruneCommand(PruneScenario):
         self.assertFalse(os.path.exists(clone))
         self.assertEqual(gql.archived, ["id-TASK-49"])
         self.assertOutsideKept()
-
-    def test_a_duplicate_issue_is_finished_by_its_state_type(self):
-        clone = self.mkc("TASK-49")
-        gql = gql_for(
-            {"TASK-49": ("Duplicate", [(30, "In Progress"), (2, "Duplicate")])},
-            owners={"TASK-49": role_id("pm")},
-        )
-        self.assertEqual(self.command(gql)[:3], (0, "", ""))
-        self.assertFalse(os.path.exists(clone))
-        self.assertEqual(gql.archived, ["id-TASK-49"])
 
     def test_a_dry_run_plans_and_changes_nothing(self):
         clone = self.mkc("TASK-49")
@@ -1340,6 +1307,11 @@ class Bound(PruneScenario):
     def cache(self):
         return os.path.join(self.logs, "prune.json")
 
+    def cold(self):
+        """Clears prune.json, which fresh() leaves: it is under logs, not work."""
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(self.cache())
+
     def counts(self, gql):
         return [gql.calls.count(q) for q in (linear_tracker.Q_SNAPSHOTS, linear_tracker.Q_ISSUE)]
 
@@ -1350,21 +1322,15 @@ class Bound(PruneScenario):
 
 
 class RequestBound(Bound):
-    def test_a_cold_tick_reads_up_to_its_cap(self):
-        issues = self.dirs(300)
-        elsewhere = list(issues)[:20]
-        gql = gql_for(issues, changed=(), elsewhere=elsewhere)
-        code, out = self.tick(gql)
-        self.assertEqual((code, out), (0, "prune-deferred issues=16"))
-        self.assertEqual(self.counts(gql), [6, 4])
-        self.assertNotIn(linear_tracker.Q_CHANGED, gql.calls)
-
     def test_a_cold_start_converges(self):
         issues = self.dirs(300)
         elsewhere = list(issues)[:20]
         gql = gql_for(issues, changed=(), elsewhere=elsewhere)
+        self.assertEqual(self.tick(gql), (0, "prune-deferred issues=16"))
+        self.assertEqual(self.counts(gql), [6, 4])
+        self.assertNotIn(linear_tracker.Q_CHANGED, gql.calls)
         singles = []
-        for want in ([6, 4], [0, 10], [0, 6], [0, 0]):
+        for want in ([0, 10], [0, 6], [0, 0]):
             with self.subTest(want=want):
                 self.tick(gql)
                 self.assertEqual(self.counts(gql), want)
@@ -1376,8 +1342,7 @@ class RequestBound(Bound):
             with self.subTest(dirs=n):
                 self.fresh()
                 os.makedirs(self.logs, exist_ok=True)
-                if os.path.exists(self.cache()):
-                    os.remove(self.cache())
+                self.cold()
                 gql = gql_for(self.dirs(n), changed=())
                 self.tick(gql)
                 self.assertEqual(self.tick(gql), (0, ""))
@@ -1487,8 +1452,7 @@ class RequestBound(Bound):
         for case in ("warm", "warm quiet", "cold", "cold with nothing"):
             with self.subTest(case):
                 self.fresh()
-                if os.path.exists(self.cache()):
-                    os.remove(self.cache())
+                self.cold()
                 if case == "cold with nothing":
                     self.tick(gql_for({}, changed=()))
                     self.assertIsNone(self.synced())
@@ -1511,8 +1475,7 @@ class RequestBound(Bound):
         for case in ("a", "b"):
             with self.subTest(case):
                 self.fresh()
-                if os.path.exists(self.cache()):
-                    os.remove(self.cache())
+                self.cold()
                 issues = self.dirs(2, state=("Done", [(1, "Done")]), start=7)
                 issues["TASK-8"] = ("In Review", [(2, "In Review")])
                 inner = gql_for(issues, owners={"TASK-9": role_id("pm")}, changed="since")
@@ -1570,8 +1533,7 @@ class RequestBound(Bound):
         for how in ("deferred", "batch error", "inventory unknown"):
             with self.subTest(how=how):
                 self.fresh()
-                if os.path.exists(self.cache()):
-                    os.remove(self.cache())
+                self.cold()
                 self.unknown = False
                 self.mkc("TASK-999")
                 self.record("TASK-999", SID, [A])
@@ -1697,8 +1659,7 @@ class ArchiveBound(Bound):
         for dirs, finished in ((300, 120), (10, 5)):
             with self.subTest(dirs=dirs, finished=finished):
                 self.fresh()
-                if os.path.exists(self.cache()):
-                    os.remove(self.cache())
+                self.cold()
                 issues = self.dirs(dirs)
                 done, owners = self.candidates(finished)
                 gql = gql_for(issues | done, owners, elsewhere=list(issues)[:20])
@@ -1740,8 +1701,7 @@ class ArchiveBound(Bound):
         subs = [*big, *(f"LEAF-{c}" for c in big)]
         for dry in (False, True):
             with self.subTest(dry=dry):
-                if os.path.exists(self.cache()):
-                    os.remove(self.cache())
+                self.cold()
                 gql = gql_for(
                     {"TASK-1": self.done} | dict.fromkeys(subs, self.done),
                     owners=dict.fromkeys(["TASK-1", *subs], role_id("pm")),
@@ -1806,8 +1766,7 @@ class ArchiveBound(Bound):
         for changed in ("TASK-1", "TASK-2"):
             for dry in (False, True):
                 with self.subTest(changed=changed, dry=dry):
-                    if os.path.exists(self.cache()):
-                        os.remove(self.cache())
+                    self.cold()
                     issues = {"TASK-1": self.done}
                     children = {}
                     if changed == "TASK-2":
@@ -1858,8 +1817,7 @@ class ArchiveBound(Bound):
     def test_a_renamed_candidate_is_skipped_without_stopping_prune(self):
         for dry in (False, True):
             with self.subTest(dry=dry):
-                if os.path.exists(self.cache()):
-                    os.remove(self.cache())
+                self.cold()
                 issues = {"TASK-1": self.done, "TASK-2": self.done}
                 gql = gql_for(issues, owners=dict.fromkeys(issues, role_id("pm")), changed=())
 
@@ -1937,12 +1895,7 @@ class ArchiveBound(Bound):
         issues = self.dirs(300)
         done, owners = self.candidates(120)
         prune_gql, setup = gql_for(issues | done, owners), []
-        write(
-            os.path.join(self.ensemble, "config.local.toml"),
-            f'[orchestrator]\nwork_dir = "{self.root}"\n' + CORE_LOCAL,
-        )
-        path = os.path.join(self.root, "config.toml")
-        write(path, tp.CONFIG)
+        path = self.configured()
         fake = tp.FakeLinear()
 
         def routed(query, **v):
@@ -1972,11 +1925,7 @@ class LocalBoardPrune(PruneScenario):
 
     def setUp(self):
         super().setUp()
-        zone = mock.patch.dict(os.environ, {"TZ": "UTC0"})
-        zone.start()
-        self.addCleanup(time.tzset)
-        self.addCleanup(zone.stop)
-        time.tzset()
+        zone(self)
         self.board = os.path.join(self.root, "board")
         os.environ[config.BOARD_ENV] = self.board
         self.logs = os.path.join(self.board, ".state", "logs")

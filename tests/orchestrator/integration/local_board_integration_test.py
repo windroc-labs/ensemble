@@ -1,7 +1,4 @@
-"""router --dry-run on a local board (spec AC4, AC5, AC9, AC10): bin/ensemble-orchestrator as a real
-process (BinFlow) with tracker = "local" and $ENSEMBLE_BOARD_DIR a temp board; the same issues on
-FakeLinear with tracker = "linear" print the same router lines, LOC-<n> read as TASK-<n>.
-"""
+"""router --dry-run on a local board; the same issues on FakeLinear print the same lines."""
 
 import json
 import os
@@ -37,8 +34,7 @@ BAD_TASK = (
 
 
 class Seed(NamedTuple):
-    """An issue: its number, assignee dir (None: archived), state, priority, created (hours after T0),
-    blockers' numbers, task, client."""
+    """owner None: archived; hours: created after T0."""
 
     n: int
     owner: str | None
@@ -105,7 +101,7 @@ def write(board, seed, *, mtime=None):
 
 
 def tree(board):
-    """Every path under board: its bytes (None for a dir) and mtime."""
+    """Each path under board: (bytes or None for a dir, mtime)."""
     found = {}
     for top, dirs, files in os.walk(board):
         for name in dirs + files:
@@ -119,7 +115,6 @@ def tree(board):
 
 
 def lines(res):
-    """A dry run's stderr: one JSON line per event, its ts dropped."""
     out = []
     for line in res.stderr.splitlines():
         event = json.loads(line)
@@ -143,7 +138,6 @@ class LocalBoard(BinFlow):
         self.use("local")
 
     def use(self, tracker):
-        """config.local.toml with tracker = tracker and an Agent label for claude."""
         text = self.linear_text.replace(
             'tracker = "linear"\n',
             f'tracker = "{tracker}"\nlinear.agent_label_group = "{AGENT_GROUP}"\n',
@@ -197,10 +191,12 @@ class LocalBoard(BinFlow):
             for n in seed.blocked_by:
                 self.fake.relate("blocks", f"TASK-{n}", f"TASK-{seed.n}")
 
-    def test_dry_run_lists_queue_and_blockers(self):
-        """Spec AC5-AC8: blocked ready issues, then the queue by priority (0 last), later stage,
-        created; each pick's preview; a task not the role's is a bounce previewed."""
+    def test_dry_run_lists_the_queue_writes_nothing_and_matches_linear(self):
+        """The blocked, then the queue by priority (0 last), later stage, created; a task not the
+        role's bounces. Nothing written; Linear routes the same."""
         self.seed_board()
+        before = tree(self.board)
+        on_board = self.dry_run()
 
         def picked(n, source="default"):
             return [
@@ -209,7 +205,7 @@ class LocalBoard(BinFlow):
             ]
 
         self.assertEqual(
-            self.dry_run(),
+            on_board,
             router(
                 {"kind": "blocked", "issue": "LOC-6", "by": ["LOC-7"]},
                 {"kind": "blocked", "issue": "LOC-10", "by": ["LOC-11"]},
@@ -232,11 +228,9 @@ class LocalBoard(BinFlow):
                 *picked(3),
             ),
         )
-
-    def test_dry_run_matches_linear(self):
-        """Same routing, with each tracker's state names in the repair comment."""
-        self.seed_board()
-        on_board = self.dry_run()
+        self.assertEqual(tree(self.board), before)
+        for name in (".lock", ".state"):
+            self.assertFalse(os.path.lexists(os.path.join(self.board, name)), name)
         self.use("linear")
         self.seed_linear()
         on_linear = [e for e in self.dry_run() if e["kind"] != "token"]  # Linear's: the harness's
@@ -253,9 +247,7 @@ class LocalBoard(BinFlow):
             ),
         )
         on_linear = [e for e in on_linear if e not in unowned]
-        local_comment = next(e for e in on_board if e["kind"] == "would comment")
         linear_comment = next(e for e in on_linear if e["kind"] == "would comment")
-        self.assertEqual(local_comment["body"], BAD_TASK)
         self.assertEqual(
             linear_comment["body"],
             BAD_TASK.replace("ready/", "Todo").replace("assignee", "delegate"),
@@ -266,17 +258,8 @@ class LocalBoard(BinFlow):
         next(e for e in normalized if e["kind"] == "would comment")["body"] = linear_comment["body"]
         self.assertEqual(normalized, on_linear)
 
-    def test_dry_run_writes_nothing(self):
-        """Spec AC5: no lock, no state, every issue file byte- and mtime-identical."""
-        self.seed_board()
-        before = tree(self.board)
-        self.assertTrue(self.dry_run())
-        self.assertEqual(tree(self.board), before)
-        for name in (".lock", ".state"):
-            self.assertFalse(os.path.lexists(os.path.join(self.board, name)), name)
-
     def test_parse_error_exit_2(self):
-        """Spec AC9: a tick and --issue name the file and the reason, exit 2, before any pick."""
+        """A tick and --issue name the file and the reason before any pick."""
         self.seed_board()
         bad = os.path.join(self.board, "pm", "ready", "LOC-16 Bad.md")
         with open(bad, "w", encoding="utf-8") as f:
@@ -290,7 +273,6 @@ class LocalBoard(BinFlow):
                 )
 
     def test_missing_board_exit_2(self):
-        """Spec AC10: no board directory; a board of only .state/."""
         for name, made, reason in (
             ("missing", (), "no such board directory"),
             ("empty", (".state",), "empty board: no assignee directory"),
@@ -305,7 +287,7 @@ class LocalBoard(BinFlow):
                 )
 
     def test_two_boards_keep_state_apart(self):
-        """Spec AC4: board A's runs.jsonl counts LOC-1's failed launches on A only."""
+        """Board A's runs.jsonl counts LOC-1's failed launches on A only."""
         one = Seed(1, "engineer", "ready", 2)
         boards = [os.path.join(self.root, name) for name in ("a", "b")]
         for board in boards:

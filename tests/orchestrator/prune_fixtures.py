@@ -27,6 +27,7 @@ from ensemble.utils import parse_time
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import Case
+from tests.orchestrator.config_fixtures import write
 from tests.orchestrator.unit import promote_fixtures as tp
 from tests.orchestrator.unit.board_ids import (
     DUPLICATE,
@@ -269,11 +270,6 @@ def tree(path):
     return found
 
 
-def write(path, text):
-    with open(path, "w") as f:
-        f.write(text)
-
-
 class Git:
     def __init__(self):
         self.calls = []
@@ -440,13 +436,17 @@ class PruneScenario(Case):
         shutil.rmtree(self.work)
         os.makedirs(self.work)
 
-    def tick(self, prune_gql):
+    def configured(self, text=tp.CONFIG):
         write(
             os.path.join(self.ensemble, "config.local.toml"),
             f'[orchestrator]\nwork_dir = "{self.root}"\n' + CORE_LOCAL,
         )
         path = os.path.join(self.root, "config.toml")
-        write(path, tp.CONFIG)
+        write(path, text)
+        return path
+
+    def tick(self, prune_gql):
+        path = self.configured()
         fake = tp.FakeLinear()
         fake.add("DR-1")
         fake.moved("DR-1", 60, "In Review")

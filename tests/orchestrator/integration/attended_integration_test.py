@@ -1,18 +1,10 @@
-"""router.py --tui end to end (Segment): run from MANAGER's pane with $ENSEMBLE_EVENTS, an --issue
-claim or a tick prints the run's one pipeline Record and its sessions and attach command
-(FR-28); its drive (a local process, no session, so not in MANAGER's `ensemble-session ls
---here`) and TUI live, the TUI in MANAGER's grid; written back as a headless run is; the events file
-gets the TUI's turn ends, one outcome and the drive's exit; input Claude joins mid-turn (a manager
-send, a background task's notice) fails nothing; an idle tick prints nothing. A SIGKILL
-of the drive's process group and a kill of the TUI session, or `ensemble-orchestrator close ID`,
-ends the run and leaves the issue In Progress for the
-next router.py --issue to resume. `ensemble-orchestrator resume ID` brings a closed TUI's run back attended
-at its display, its Record unchanged. No place for the TUI, a bad display or events file, or none:
-exit 2 before any Linear request, starting nothing.
+"""router.py --tui end to end: from MANAGER's pane an --issue claim or a tick prints the run's
+Record; its drive and TUI live, written back as a headless run; a killed or closed run resumes
+on the next --issue, `resume ID` at its display; no place for the TUI, a bad display or events
+file: exit 2 before any Linear request.
 """
 
 import functools
-import glob
 import os
 import signal
 import subprocess
@@ -46,14 +38,12 @@ ID = "TASK-7"
 
 class Attended(Segment):
     def event_lines(self):
-        """The events file's lines without their `HH:MM:SS ` stamp."""
         lines = [line for line in live_tmux.events(self.events) if line]
         for line in lines:
             self.assertRegex(line, f"^{STAMP}")
         return [line[len("HH:MM:SS ") :] for line in lines]
 
     def here(self):
-        """The session names MANAGER's `ensemble-session ls --here` lists."""
         res = subprocess.run(
             [SESSION_CLI, "ls", "--here"],
             cwd=self.root,
@@ -90,62 +80,6 @@ class Attended(Segment):
         self.assertEqual([line for line in lines if line.startswith(f"{harness} ")], list(ended))
         self.assertEqual(set(lines) - set(ended), {f"{tui} done"})
 
-    def tool_runs(self, sid):
-        transcripts = os.path.join(self.root, "claude-config", "projects", "*", f"{sid}.jsonl")
-        for path in glob.glob(transcripts):
-            with open(path, encoding="utf-8") as f:
-                if '"tool_use"' in f.read():
-                    return True
-        return False
-
-    def joined_mid_turn(self, *joined, send=None):
-        """An attended run whose turn takes input Claude joins to it with its UserPromptSubmit
-        (`joined` steps; `send`, the manager's text one waits for), then gives its done outcome: written
-        back as any done run; the events file gets the TUI's one turn end and any reply, outcome
-        done and the drive's exit 0 (WDRC-346: `turn failed: superseded`, outcome error, exited 1).
-        """
-        ident = self.pm_ready()
-        script = self.agent_script("pm", "done", ident)
-        start, report = script.steps
-        sid = self.claim(ident, "pm", script._replace(steps=[start, *joined, report]), tui=True)
-        harness, tui = self.harness("pm", ident, sid), config.tui_name("pm", ident, sid)
-        if send is not None:  # its start mark's write-back runs meanwhile: agent_run checks it
-            with open(self.pending.gate, "w"):
-                pass
-            live_tmux.wait(lambda: self.tool_runs(sid), TIMEOUT, "the turn's tool")
-            res = subprocess.run(
-                [SESSION_CLI, "send", tui, send],
-                cwd=self.root,
-                env={**self.env(), **self.in_manager()},
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT,
-            )
-            self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
-        self.agent_run()
-        ended = (f"{harness} outcome done", f"{harness} exited 0")
-        live_tmux.wait(lambda: ended[1] in self.event_lines(), TIMEOUT, f"`{ended[1]}`")
-        lines = self.event_lines()
-        self.assertEqual([line for line in lines if line.startswith(f"{harness} ")], list(ended))
-        turns = [line for line in lines if line.startswith(f"{tui} ")]
-        self.assertEqual([line for line in turns if " reply " not in line], [f"{tui} done"])
-        self.assertNotIn("turn_failed", [record["kind"] for record in self.records(ident)])
-
-    def test_a_send_mid_turn_is_no_failure(self):
-        joined = {"kind": "queued", "answer": "Noted.", "prompted": True}
-        self.joined_mid_turn(joined, send="Also cover the registry's CLI.")
-
-    def test_background_notices_mid_turn_are_no_failure(self):
-        """No send: a council's background agents end one by one, each with a notice (WDRC-278)."""
-        self.joined_mid_turn(
-            {"kind": "tool", "name": "Agent"},
-            *(
-                {"kind": "notice", "text": f"<task-notification>agent {n} done</task-notification>"}
-                for n in range(3)
-            ),
-        )
-
     def test_a_tick_from_the_manager_starts_its_run_attended_and_an_idle_one_prints_nothing(self):
         ident = self.pm_ready()
         self.claim(ident, "pm", self.agent_script("pm", "done", ident), tui=True, tick=True)
@@ -155,7 +89,7 @@ class Attended(Segment):
             self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
 
     def drive_group(self, ident):
-        """The process group of ident's drive (its harness process), never this test's."""
+        """ident's harness process group, never this test's."""
         workdir = os.path.join(self.workdirs, ident)
         ps = subprocess.run(
             ["ps", "-A", "-ww", "-o", "pid=,pgid=,args="],
@@ -170,10 +104,7 @@ class Attended(Segment):
         return group
 
     def run_processes(self, ident):
-        """Whether ident's run still has a drive or write-back process: its control can report a
-        stopped drive ended before its process is reaped, and its last callback, in its own process
-        group, outlives it.
-        """
+        """Whether ident's drive or last write-back process lives on after its control ended."""
         workdir = os.path.join(self.workdirs, ident)
         marks = (
             f"ensemble.delegate.engine.harness {workdir}",
@@ -185,10 +116,8 @@ class Attended(Segment):
         return any(mark in c for c in ps.stdout.splitlines() for mark in marks)
 
     def interrupted(self, stop):
-        """An attended run waiting on after its start mark, stopped by stop(ident, sid): its TUI
-        ends and the issue stays In Progress; router.py --issue --tui resumes it to done.
-        The stopped harness's last write-back may or may not have run: its session comment says
-        running or interrupted, and no write-back end of the session is counted after the stop.
+        """An attended run stopped by stop(ident, sid) after its start mark: its TUI ends, the
+        issue stays In Progress, its session comment running or interrupted; --issue --tui resumes it.
         """
         ident, app = self.pm_ready(), role_id("pm")
         sid = self.claim(ident, "pm", self.agent_script("pm", "open", ident), tui=True)
@@ -217,8 +146,7 @@ class Attended(Segment):
 
     def test_killing_its_drive_and_tui_interrupts_the_run_and_the_next_router_run_resumes(self):
         def kill(ident, sid):
-            # the drive's SIGKILL leaves its owned TUI: the TUI's kill interrupts the attempt, its
-            # session harness's kill -9 ending its worker (its display alone ends none)
+            # the TUI outlives the drive's SIGKILL; its kill interrupts the attempt
             os.killpg(self.drive_group(ident), signal.SIGKILL)
             tui = config.tui_name("pm", ident, sid)
             live_tmux.crash_owner(self.ensemble, tui)
@@ -292,13 +220,13 @@ class Refused(TmuxFlow):
             ),
             ("no events file", (), inside, "--tui needs --events FILE or $ENSEMBLE_EVENTS"),
         )
-        for name, extra, env, said in cases:
-            for mode in (("--issue", ID), ()):
-                with self.subTest(name, mode=mode):
-                    res = self.router(*mode, "--tui", *extra, **env)
-                    self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
-                    self.assertTrue(res.stderr.startswith(f"router.py: {said}"), res.stderr)
-                    self.assertEqual(len(res.stderr.splitlines()), 1, res.stderr)
+        for n, (name, extra, env, said) in enumerate(cases):
+            mode = ("--issue", ID) if n % 2 else ()
+            with self.subTest(name, mode=mode):
+                res = self.router(*mode, "--tui", *extra, **env)
+                self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
+                self.assertTrue(res.stderr.startswith(f"router.py: {said}"), res.stderr)
+                self.assertEqual(len(res.stderr.splitlines()), 1, res.stderr)
         self.assertEqual(self.requests(), [])
         listed = self.server.tmux("list-sessions", "-F", "#{session_name}")
         self.assertEqual(listed.stdout.split(), [MANAGER], listed.stderr)

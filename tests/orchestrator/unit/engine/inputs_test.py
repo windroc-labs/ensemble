@@ -4,6 +4,7 @@ import json
 import os
 import re
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -13,7 +14,6 @@ from ensemble.orchestrator.engine import config, inputs, target, writeback
 from ensemble.orchestrator.engine.flow import handoff
 from ensemble.orchestrator.engine.flow.types import (
     Found,
-    Issue,
     Link,
     Linked,
     Note,
@@ -26,6 +26,7 @@ from ensemble.utils import SHORT
 from tests.delegate.workdir import checkout_path
 from tests.orchestrator.case import Case
 from tests.orchestrator.config_fixtures import HARNESS_DELEGATE
+from tests.orchestrator.unit.run_fixtures import flow_issue
 from tests.session.case import configured
 
 DOCS = config.Docs(
@@ -65,29 +66,7 @@ def note(body, at, who=AGENT):
     return Note(body, at, *who, "self" if who is AGENT else "other")
 
 
-def issue(
-    description="",
-    *,
-    ident="RES-4",
-    title="Compare queues",
-    notes=(),
-    links=(),
-    linked=(),
-    project="p-1",
-):
-    return Issue(
-        "uuid-4",
-        ident,
-        f"https://linear.app/t/issue/{ident}",
-        title,
-        description,
-        "2026-09-01T00:00:00.000Z",
-        project,
-        tuple(notes),
-        tuple(links),
-        tuple(linked),
-        handoff=handoff.parse_handoff(description),
-    )
+issue = partial(flow_issue, ident="RES-4", title="Compare queues", project="p-1")
 
 
 def lines(*ls):
@@ -476,29 +455,6 @@ class BuildInputs(Case):
                     ),
                 )
 
-    def test_handoff_prd_and_link_line(self):
-        d = lines("Handoff from PM-9: u", "", "## Instructions", "Ann, t:", "Go.")
-        src = inputs.Sources((self.PRD,), None)
-        got = inputs.render(
-            issue(d, ident="ENG-7"),
-            "engineer",
-            src,
-            target=self.TARGET,
-            docs=DOCS,
-        )
-        self.assertIn(f"Links: https://linear.app/t/issue/ENG-7, {self.PRD.url}\n", got)
-        self.assertIn(
-            lines(
-                "## The user's instructions",
-                "",
-                "Ann, t:\nGo.",
-                "",
-                "## PRD: `Product Design/2026-09-05-PM-9-q.md`",
-            ),
-            got,
-        )
-        self.assertNotIn("## Linked documents", got)
-
     def test_only_a_design_dir_doc_is_the_prd_first_one_wins(self):
         other = inputs.Doc(
             BASE + "Product%20Design/2026-09-06-PM-10-z.md",
@@ -599,6 +555,7 @@ class HandoffComments(Case):
         self.assertIn(
             f"## The user's instructions\n\n{instructions}\n\n## PRD: `{BuildInputs.PRD.path}`", got
         )
+        self.assertNotIn("## Linked documents", got)
 
 
 class InputCheckout(Case):

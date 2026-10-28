@@ -1,4 +1,4 @@
-"""The engine Tracker on a local board (docs/architecture.md › Local board)."""
+"""The engine Tracker on a local board."""
 
 import os
 import re

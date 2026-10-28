@@ -31,31 +31,13 @@ class PruneScenario(UnitPruneScenario):
         )
         if not os.path.isdir(bare):
             git("init", "-q", "-b", "main", seed)
-            git(
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-C",
-                seed,
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "one",
-            )
+            git("-C", seed, "commit", "-q", "--allow-empty", "-m", "one")
             git("clone", "-q", "--bare", seed, bare)
         git("clone", "-q", bare, clone)
         return clone
 
     def git_env(self):
-        return mock.patch.dict(
-            os.environ,
-            {
-                **clean_env(),
-            },
-            clear=True,
-        )
+        return mock.patch.dict(os.environ, clean_env(), clear=True)
 
 
 class RepositoryCleanup(PruneScenario):
@@ -68,34 +50,10 @@ class RepositoryCleanup(PruneScenario):
                 checkout_path(workdir, "p", "m", "TASK-49"),
             )
             git("-C", clone, "worktree", "add", "-q", "-b", "TASK-49-x", x, "origin/main")
-            git(
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-C",
-                x,
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "x",
-            )
+            git("-C", x, "commit", "-q", "--allow-empty", "-m", "x")
             git("-C", x, "push", "-q", "origin", "TASK-49-x")
             git("-C", clone, "worktree", "add", "-q", "-b", "TASK-49-y", y, "origin/main")
-            git(
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "-C",
-                y,
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "y",
-            )
+            git("-C", y, "commit", "-q", "--allow-empty", "-m", "y")
             git("-C", clone, "branch", "TASK-49-z", "origin/main")
             git("-C", clone, "branch", "TASK-490-q", "origin/main")
             own = os.path.join(self.root, "own")

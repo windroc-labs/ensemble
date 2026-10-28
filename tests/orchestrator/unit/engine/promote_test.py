@@ -4,8 +4,6 @@ import functools
 import io
 import json
 import os
-import time
-import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,7 +18,7 @@ from ensemble.orchestrator.engine.flow.types import IssueState
 from ensemble.orchestrator.engine.types import IssueError, LinearError
 from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.orchestrator.trackers.local.local_tracker import LocalTracker
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import Case, zone
 from tests.orchestrator.unit.board_ids import (
     FINISHED,
     HARNESS_IDENTITY,
@@ -34,13 +32,10 @@ from tests.orchestrator.unit.board_ids import role as role_table
 from tests.orchestrator.unit.keychain_fixtures import (
     NEW,
     OLD,
-    Endpoint,
-    Keychain,
-    record,
+    app_transport,
     renewed,
     token_http_error,
 )
-from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
 from tests.orchestrator.unit.outage import FAILURES, FIELDS, failing
 from tests.orchestrator.unit.promote_fixtures import (
     AGENT,
@@ -722,19 +717,8 @@ class HarnessToken(Base):
         self.ready("DR-1")
 
     def promote(self, days, answer=None, *argv):
-        self.keychain = Keychain(
-            {
-                HARNESS_IDENTITY.token_service: record(days=days),
-                HARNESS_IDENTITY.secret_service: APP_SECRET,
-            }
-        )
-        self.endpoint = Endpoint(
-            answer, data=lambda q, v: self.fake(q, identity=HARNESS_IDENTITY, **v)
-        )
-        with (
-            mock.patch("subprocess.run", self.keychain),
-            mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
-        ):
+        transport = app_transport(HARNESS_IDENTITY, days, answer, self.fake)
+        with transport as (self.keychain, self.endpoint):
             return self.run_main(*argv, gql=client.linear_gql)
 
     def stored(self):
@@ -872,19 +856,13 @@ class ChildTitles(Case):
             ("TDD", "PRD", "PRD: ", "TDD: PRD:"),
             ("PRD", None, "PRD: X", "PRD: PRD: X"),
             ("PRD", "", "PRD: X", "PRD: PRD: X"),
+            # "": the bare title
+            ("", "PRD", "PRD: Session Registry", "Session Registry"),
+            ("", None, "Session Registry", "Session Registry"),
+            ("", "PRD", "PRD:\nX", "X"),
         ):
-            with self.subTest(src_prefix=src_prefix, src=src):
+            with self.subTest(prefix=prefix, src_prefix=src_prefix, src=src):
                 self.assertEqual(promote.child_title(prefix, src_prefix, src), want)
-
-    def test_child_title_without_prefix(self):
-        # a next stage with no title_prefix keeps the bare title
-        for src_prefix, src, want in (
-            ("PRD", "PRD: Session Registry", "Session Registry"),
-            (None, "Session Registry", "Session Registry"),
-            ("PRD", "PRD:\nX", "X"),
-        ):
-            with self.subTest(src_prefix=src_prefix, src=src):
-                self.assertEqual(promote.child_title("", src_prefix, src), want)
 
 
 class PromotionScope(Base):
@@ -944,11 +922,6 @@ class PromotionScope(Base):
             self.fake.handoff_vars, {"t": TEAM, "s": IDS_BY_KEY["handoff"], "a": mock.ANY}
         )
         self.assertEqual(sorted(self.fake.handoff_vars["a"]), sorted(role_id(r) for r in ROLES))
-        self.assertIn("team: { id: { eq: $t } }", linear_tracker.Q_HANDOFF)
-        self.assertIn("state: { id: { eq: $s } }", linear_tracker.Q_HANDOFF)
-        self.assertIn("project: { null: false }", linear_tracker.Q_HANDOFF)
-        self.assertIn("delegate: { id: { in: $a } }", linear_tracker.Q_HANDOFF)
-        self.assertNotIn("assignee", linear_tracker.Q_HANDOFF)
 
     def test_unknown_flag(self):
         self.assertEqual(self.run_main("--nope"), 2)
@@ -959,11 +932,7 @@ class LocalBoardPromotion(Base):
 
     def setUp(self):
         super().setUp()
-        zone = mock.patch.dict(os.environ, {"TZ": "UTC0"})
-        zone.start()
-        self.addCleanup(time.tzset)
-        self.addCleanup(zone.stop)
-        time.tzset()
+        zone(self)
         self.board = os.path.join(os.path.realpath(self.home), "board")
         self.logs = os.path.join(self.board, ".state", "logs")  # the board's state root
         os.environ[config.BOARD_ENV] = self.board

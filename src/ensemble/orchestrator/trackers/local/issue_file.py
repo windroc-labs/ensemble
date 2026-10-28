@@ -1,6 +1,5 @@
 """A local issue file's text read into an IssueFile: front matter, then the Description, Comments and
-History sections (docs/architecture.md › Local board); and the text edits a board write makes, each keeping
-every other line."""
+History sections; and the text edits a board write makes, each keeping every other line."""
 
 import json
 import re
@@ -106,7 +105,6 @@ def _parse(path, text, assignee, state, mtime):
 
 
 def _front(lines):
-    """Each key's value text; links as FileLinks."""
     front, i = {}, 0
     while i < len(lines):
         line, i = lines[i], i + 1
@@ -127,7 +125,6 @@ def _front(lines):
 
 
 def _links(value, lines, i):
-    """The `  - title:` / `    url:` pairs from lines[i], and the index after them."""
     if value:
         raise _Bad(f"bad links value {value!r}")
     links = []
@@ -146,7 +143,6 @@ def _links(value, lines, i):
 
 
 def _scalar(value):
-    """Empty → None; a JSON string; else the text."""
     if not value:
         return None
     if not value.startswith('"'):
@@ -209,7 +205,6 @@ def _created(value):
 
 
 def _sections(lines):
-    """Each section's lines; only blank lines may come before the first."""
     sections, current = {}, None
     for line in lines:
         match = _SECTION.fullmatch(line)
@@ -230,7 +225,6 @@ def _sections(lines):
 
 
 def _local(text):
-    """`YYYY-MM-DD HH:MM` in the reading process's zone."""
     return datetime.strptime(text, "%Y-%m-%d %H:%M").astimezone()
 
 
@@ -469,7 +463,6 @@ def _minute(at):
 
 
 def _split(text):
-    """Lines as the parser splits them, and the front matter's closing line's index."""
     lines = text.splitlines()
     return lines, lines.index("---", 1)
 
@@ -479,7 +472,6 @@ def _join(lines):
 
 
 def _spans(lines, end):
-    """Each present section's (first, after) body line indexes."""
     starts = [
         (i, _Section(m[1]))
         for i in range(end + 1, len(lines))
