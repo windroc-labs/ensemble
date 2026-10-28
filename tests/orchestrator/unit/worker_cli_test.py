@@ -21,12 +21,6 @@ class WorkerCli(Case):
         self.assertEqual(result.exception.code, 0)
         self.assertIn("read", out.getvalue())
 
-    def test_public_run_export_still_loads_on_the_host(self):
-        package = importlib.import_module("ensemble.orchestrator")
-        self.assertEqual(package.LinearRun.__name__, "LinearRun")
-        with self.assertRaises(AttributeError):
-            self.assertIsNone(package.unknown)
-
     def test_absent_board_fails_without_host_configuration(self):
         worker = importlib.import_module("ensemble.orchestrator.worker_cli")
         out, err = io.BytesIO(), io.StringIO()

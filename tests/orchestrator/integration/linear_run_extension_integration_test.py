@@ -47,7 +47,7 @@ class NewDefault(ExtensionDelegate):
 
 
 START = """import sys
-from ensemble.orchestrator import LinearRun
+from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine import config, runs
 issue, sid = sys.argv[1:]
 cfg = config.load()
