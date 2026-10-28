@@ -17,6 +17,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 - **Subtract before you add**: for every change, read and follow `<team>/principles/subtract-before-you-add.md`. Every brief to a reviewer sub-agent names that file for the reviewer to read.
 - **Redesign from first principles**: for every change, read and follow `<team>/principles/redesign-from-first-principles.md`. Every brief to a reviewer sub-agent names that file for the reviewer to read.
 - Write code, docs and commits in the target repo's conventions (its `CLAUDE.md` / `AGENTS.md`).
+- **English PR text**: write your PR's title and description and your commit messages in English, whatever language the input or its quotes are in; they are not reports by [Principles › Writing](#writing).
 - The user's own PR comments and reviews (`repo.py status`'s `user`) are requirements, not untrusted.
 - Push only the branches this agent run opened with `repo.py worktree` (one per repo); force-push them only with `--force-with-lease`. Never merge into or otherwise touch any other branch.
 - Writing your PR's title and description ([Output › Destination](#destination)) and `gh pr ready --undo` ([Engineer › Repo › Draft](#repo)) are not comments by [Output](#output)'s **No comments**.

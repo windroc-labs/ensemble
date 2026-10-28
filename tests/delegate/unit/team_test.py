@@ -1008,6 +1008,16 @@ class Principles(Packaged):
             self.assertIn("Every brief to a reviewer sub-agent", standing_rule)
             self.assertIn("for the reviewer to read", standing_rule)
 
+    def test_engineer_writes_pr_text_and_commits_in_english(self):
+        texts = team_texts()
+        rule = item(section(texts["roles/engineer.md"], "Rules"), "English PR text")
+        for part in ("title", "description", "commit messages", "in English", "whatever language"):
+            self.assertIn(part, rule)
+        self.assertEqual(
+            [path for path, text in texts.items() if "**English PR text**" in text],
+            ["roles/engineer.md"],
+        )
+
     def test_shared_contract_keeps_outcomes_without_subagent_guidance(self):
         text = team_texts()["principles.md"]
         index = section(text, "Principle index")
