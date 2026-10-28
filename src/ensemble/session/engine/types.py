@@ -306,8 +306,6 @@ def _prefetch(value) -> bool:
 
 @dataclass(frozen=True, kw_only=True)
 class EnvironmentSpec:
-    """WDRC-109 FR-56: a Docker environment's runtime settings."""
-
     WORKER: ClassVar[str] = "@worker"
     image: str
     gateway: str
