@@ -10,8 +10,9 @@ For settings to change on this machine, use the comments and `# local:` examples
 when changing client flags or role policy, preserve the entries you still need.
 Permission modes belong to session config; role flags belong to delegate config.
 
-Project instructions load only in a trusted cwd. Give a role a project cwd through the delegate configuration's
-`trusted_dirs`; a workdir's `agent/` is intentionally untrusted. Put task files it must edit in its writable dirs
+Project instructions load only in a trusted cwd. Select the role's `cwd` in delegate configuration, then include
+that directory in `trusted_dirs`; trusting it alone does not select it. A workdir's `agent/` is intentionally
+untrusted. Put task files it must edit in its writable dirs
 rather than waiting for an approval that cannot grant a new path. Codex's packaged `auto` mode has no filesystem
 sandbox: directory grants are not an isolation boundary. Use Docker for untrusted work.
 
@@ -24,6 +25,13 @@ To re-enable a packaged Codex tool, edit `[session.clients.codex] flags` in `~/.
 copying the current packaged list and removing only the entries you intend to change. Session flags are reread
 on resume; Codex's role policy and writable grants instead come from the original launch. Claude resumes take
 the current role policy. A native `client-resume` runs here, with this machine's permission mode, outside ensemble's hooks.
+
+OpenCode's permission rules are not filesystem isolation. A pre-approved command permits redirections too:
+an allowed `git status` also allows `git status > FILE`. External-directory reads cover aliases and resolved paths;
+write grants cover resolved paths only, so use those for writes. Except for `.git`, path matching is case-sensitive:
+on a case-insensitive disk, a differently cased read directory or `OPENCODE.JSON` can bypass edit denies.
+Its GPT `apply_patch` tool checks only a moved file's source, not its destination. Use Docker containment for
+untrusted work rather than relying on these rules to prevent writes.
 
 Commander monitoring and acknowledgement belong to
 [`/ensemble:manage`](../skills/manage/SKILL.md). After installing or updating the Codex plugin, open `/hooks`
@@ -66,6 +74,10 @@ whose id was not yet bound through its saved title; if it never saved a conversa
 On macOS, detached or signal-ignoring descendants can survive even a live guard: there is no process namespace
 or subreaper. Inspect and end escapees yourself before removing recovery state. Docker's containment ends only
 when its container stops; see [security limits](credentials.md#security-limits).
+
+Any process that can write your harness's 0700 directory can stop or close its worker: well-formed control
+requests have no caller authentication. Treat that directory like your tmux socket, not as isolation from
+other processes running as you.
 
 ## Recall a closed run
 

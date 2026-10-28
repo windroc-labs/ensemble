@@ -138,7 +138,9 @@ use ensemble to start again. After rotating environment secrets, close waiting r
 ## Workspace volumes
 
 The workspace is `ensemble-ws-NAME`, mounted at the worker cwd. GitHub is the route for returning its work to
-the host. Same-name starts keep the volume; changing a board issue's client creates a new name and empty volume,
+the host. Same-name starts keep the volume only with unchanged cwd. A new start at a different cwd removes the
+old volume, refusing if Git finds unpushed work; ignored plans/logs do not prevent deletion. Changing a board
+issue's client creates a new name and empty volume,
 so recover unpushed work from the old one by hand. Client history under `~/.ensemble/docker-state/NAME/` is
 separate from the workspace.
 
