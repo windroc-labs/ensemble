@@ -40,7 +40,9 @@ from tests.delegate.unit.composer.prompts import (
 from tests.delegate.unit.composer.shipped import (
     CLIENT,
     COMMANDS_RULE,
+    FIXTURE,
     LANGUAGE_RULE,
+    Packaged,
     RealConfig,
     expanded,
     guide,
@@ -59,6 +61,7 @@ from tests.delegate.unit.composer.teams import (
     VERSE,
     WRITER,
 )
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 TEXTS = {
@@ -911,7 +914,7 @@ class TeamDirs(Fake):
                     )
 
 
-class Acceptance(Case):
+class Acceptance(Packaged):
     def test_every_role_and_task_composes_with_no_reference_error(self):
         self.assertEqual(roles(), ["researcher", "pm", "engineer", "verifier", "dummy-tester"])
         for role, task in runs():
@@ -941,8 +944,11 @@ class Acceptance(Case):
             config = os.path.join(tmp, "config.toml")
             with open(config, "w") as f:
                 f.write(cfg.replace('\nlanguage = "English"\n', "\n"))
+            local = os.path.join(tmp, "config.local.toml")
+            with open(local, "w") as f:
+                f.write(local_section(VERIFIER, "delegate"))
             for role in roles():
-                run = resolve(role, config=config, local=os.devnull)
+                run = resolve(role, config=config, local=local)
                 prompt = render(run, RUN)
                 self.assertEqual(run.language, "", role)
                 self.assertNotIn(LANGUAGE_RULE, prompt, role)
@@ -950,6 +956,25 @@ class Acceptance(Case):
 
 
 class Real(RealConfig):
+    def test_the_verifier_publishes_to_verification_on_its_local_repo(self):
+        composition = Composer()
+        run = composition.resolve("verifier", "verify")
+        for docker in (False, True):
+            with self.subTest(docker=docker):
+                prompt = composition.render(run, replace(RUN, docker=docker))
+                names = parameters(prompt)
+                self.assertEqual(
+                    [names[n] for n in ("<out-repo>", "<out-branch>", "<out-dir>")],
+                    ["`windroc/team-docs`", "`main`", "`Verification/`"],
+                )
+                self.assertIn("Publish the deliverable to `<out-repo>`", prompt)
+                self.assertNotIn("- `deliverable", prompt)
+
+    def test_the_verifier_without_a_local_repo_is_a_configuration_error(self):
+        self.local(FIXTURE.replace(VERIFIER, ""))
+        with self.assertRaisesRegex(ConfigError, r"\(output\.repo is not set\)"):
+            composed("verifier", "verify")
+
     def test_the_config_renders_the_language_and_progress_rules_once(self):
         for role in roles():
             prompt, run = composed(role)

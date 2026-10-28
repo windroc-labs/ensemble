@@ -829,3 +829,36 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 		})
 	}
 }
+
+// A start reaches GitHub only to issue its own tokens: no revocation precedes it (no backlog).
+func TestStartMakesNoRevocationBeforeIssue(t *testing.T) {
+	tokens := &fakeTokens{}
+	h, _ := githubHost(&world{labels: goodLabels()}, tokens)
+	if _, err := h.Start(context.Background(), githubManifest(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(tokens.calls, []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "issue ensemble-broker-bot " + container}) {
+		t.Fatalf("%q", tokens.calls)
+	}
+}
+
+// AC5: a start failing after its GitHub tokens were written (here the token schedule record) revokes the set Issue
+// returned, once, and removes the container; the revocation adds nothing to the error.
+func TestStartRollbackRevokesIssuedGitHubTokens(t *testing.T) {
+	h, path, parent, tokens, _, d := tokenStartHost(t)
+	if err := os.Symlink(filepath.Join(t.TempDir(), "elsewhere"), filepath.Join(parent, tokensGeneration+".tokens.lock")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := h.Start(context.Background(), path)
+	e := protoErr(t, err)
+	if e.Code != protocol.StartFailed || e.Message != "Recording "+tokensGeneration+".tokens.json failed." || e.Cleanup != protocol.Removed {
+		t.Fatalf("%+v", e)
+	}
+	want := []string{"ready ensemble-broker-bot", "user ensemble-broker-bot", "issue ensemble-broker-bot " + container, "revoke " + container}
+	if !hasCall(d, "rm") || !slices.Equal(tokens.calls, want) {
+		t.Fatalf("no full rollback: %q %q", d.verbs(), tokens.calls)
+	}
+	if _, err := os.Stat(filepath.Join(parent, tokensGeneration+".tokens.json")); !os.IsNotExist(err) {
+		t.Fatalf("record left behind: %v", err)
+	}
+}

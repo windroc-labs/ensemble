@@ -1,18 +1,12 @@
 """Fake macOS tools for install_integration_test: run as `install_fakes.py <tool> <args>`.
 
-Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under
-$FAKES: brew/<name> (installed), processes (one running command line each; unkillable: those KILL misses), login/<client>, keychain/<service>, claude/ and codex/ (plugins),
-src/broker/ (the broker's Codex install, tokens and protocol: the one `version` reports, else the plugin's;
-legacy: old-name items left, so every command but `version` refuses), fail (a call prefix that fails once), tty_name
-(what `ps -o tty=` reports), kqueue_refuses (a terminal the Bun-built clients die on, as on /dev/tty),
-commit (the commit GitHub reports for every ensemble ref), marketplace/ (the windroc marketplace's
-manifests on main), refs/<ref>/ (ensemble files at a ref, over pkg-src/), linear.json (the Linear workspace: apps
-{client_id: {secret, access_token, user_id}}, teams [{id, key, name, states, members, projects}],
-labels), launchd/<label> (a loaded launchd job), hang/<client> (its login waits 30 s after creating hung, for the
-test's signal; `stored`: logged in first), hang/sudo-k (`sudo -k` marks sudo-k-hung, waits 5 s, then drops the ticket
-and marks sudo-k-done), hang/<client>-status (once hung exists, its login status marks status-hung and waits 30 s),
-codex/unauthorized (the `codex plugin` sub-commands it names, all when
-empty, fail with a 401).
+Every call is logged to $LOG (argv) and $ENVLOG (environment values). State lives under $FAKES, e.g.
+processes (one command line each; unkillable: those KILL misses), keychain/<service> (an item: its password),
+keychain/<service>.count (N more items without a password), security_delete_fails (a service whose
+delete-generic-password exits 45), src/broker/ (legacy: old-name items left, so every command but `version`
+refuses), fail (a call prefix that fails once), kqueue_refuses (a terminal the Bun-built clients die on, as on
+/dev/tty), linear.json (the Linear workspace: apps {client_id: {secret, access_token, user_id}}, teams [{id, key,
+name, states, members, projects}], labels), hang/ (logins and `sudo -k` that wait for the test's signal).
 """
 
 import hashlib
@@ -170,7 +164,6 @@ LINEAR_TOKEN = "https://api.linear.app/oauth/token"
 
 
 def linear_token(args):
-    """Client credentials arrive only on stdin; enforce the app's exact fixed scopes."""
     if args[:1] != ["-q"] or args[args.index("--data-binary") + 1] != "@-":
         return 2
     form = parse_qs(sys.stdin.read(), strict_parsing=True)
@@ -193,7 +186,6 @@ def linear_token(args):
 
 
 def linear(args):
-    """Linear's GraphQL API: the app token from the -K - config on stdin, the query from --data-binary."""
     if args[:1] != ["-q"]:
         out("curl: Linear call without -q first\n", sys.stderr)
         return 2
@@ -317,9 +309,7 @@ def brew(args):
             (PREFIX / "bin" / command).unlink(missing_ok=True)
         if app := CASK_APPS.get(name):
             shutil.rmtree(ROOT / "Applications" / app)
-        if (
-            name == "docker-desktop"
-        ):  # the cask's uninstall stanza: its CLI links, helper and app state
+        if name == "docker-desktop":  # the cask's uninstall stanza
             for gone in (
                 ROOT / "usr/local/bin/docker",
                 FAKES / "docker_license",
@@ -339,7 +329,6 @@ export PATH="$PATH:{home}/.docker/bin"
 
 
 def docker_app(app):
-    """Docker.app as the cask puts it in place: Info.plist, its binary, its install and uninstall."""
     macos = app / "Contents/MacOS"
     macos.mkdir(parents=True, exist_ok=True)
     minimum = (
@@ -406,7 +395,6 @@ def login(client, args, status, start, logout):
 
 def gh(args):
     if args and args[0] == "api" and args[1].startswith("repos/windroc-labs/egress-proxy/tarball/"):
-        # egress_tarball, when present, says how to spoil it: corrupt or noexec.
         spoil = path.read_text() if (path := FAKES / "egress_tarball").exists() else ""
         if spoil == "corrupt":
             sys.stdout.buffer.write(b"not a tarball")
@@ -593,10 +581,20 @@ def security(args):
         store_key(args[args.index("-s") + 1], hidden_line("password data for new item: "))
         return 0
     if args[:1] == ["delete-generic-password"]:
-        item = FAKES / "keychain" / args[args.index("-s") + 1]
-        if not item.exists():
+        service = args[args.index("-s") + 1]
+        if load_text(FAKES / "security_delete_fails") == service:
+            return 45
+        item, count = FAKES / "keychain" / service, FAKES / "keychain" / f"{service}.count"
+        if item.exists():
+            item.unlink()
+        elif count.exists():
+            left = int(count.read_text()) - 1
+            if left:
+                mark(count, str(left))
+            else:
+                count.unlink()
+        else:
             return 44
-        item.unlink()
         return 0
     return 2
 
@@ -606,9 +604,6 @@ def xcode_select(args):
 
 
 def docker(args):
-    # egress_container, egress_image: the proxy's container and image are there; worker_images,
-    # ws_volumes: what `docker image ls` and `docker volume ls` list; docker_stops_at: the call
-    # before which Docker Desktop quits.
     container, image = FAKES / "egress_container", FAKES / "egress_image"
     stops = FAKES / "docker_stops_at"
     if stops.exists() and " ".join(["docker", *args]).startswith(stops.read_text()):
@@ -619,7 +614,6 @@ def docker(args):
         mark(container)
         mark(image)
         config_dir = Path(os.environ["EGRESS_CONFIG_DIR"])
-        # what start.sh would serve: the config the installer pointed it at; it renders its override beside it
         mark(FAKES / "egress_served", (config_dir / "config.local.yaml").read_text())
         mark(config_dir / "compose.networks.yaml", "services: {}\n")
         return 0
@@ -667,13 +661,11 @@ def docker(args):
     return 0 if args == ["info"] and (FAKES / "docker_running").exists() else 1
 
 
-# Docker's context store directory for context desktop-linux: the sha256 of its name.
+# Docker's context store directory: the sha256 of the context name desktop-linux.
 DESKTOP_CONTEXT = "fe9c6bd7a66301f49ca9b6a70b217107cd1284598bfc254700c989b916da791e"
 
 
 def docker_home(home):
-    """What Docker Desktop's first start writes under ~/.docker: its credential helper and context set in
-    config.json (other keys kept), the desktop-linux context, features.json and CLI plugin links into Docker.app."""
     docker = home / ".docker"
     config = docker / "config.json"
     data = json.loads(config.read_text()) if config.exists() else {}
@@ -691,9 +683,7 @@ def docker_home(home):
 
 
 def open_(args):
-    """Docker Desktop's first start also adds its block to ~/.zprofile, ~/.zshrc and ~/.bashrc and writes its own
-    files under ~/Library and ~/.docker. Installed by the cask, it asks for its
-    license unless its install command accepted it."""
+    """Installed by the cask, Docker Desktop waits for its license unless its install accepted it."""
     cask = (FAKES / "brew/docker-desktop").exists()
     if cask and not (FAKES / "docker_license").exists():
         return 0
@@ -724,7 +714,6 @@ def processes():
 
 
 def pgrep(args):
-    """pgrep -f <regex>: the 1-based line numbers of the matching processes as their pids."""
     pattern = re.compile(args[args.index("-f") + 1])
     found = [str(n) for n, line in enumerate(processes(), 1) if pattern.search(line)]
     out("".join(f"{pid}\n" for pid in found))
@@ -732,7 +721,6 @@ def pgrep(args):
 
 
 def pkill(args):
-    """pkill -TERM|-KILL -f <regex>: ends the matching processes, but none listed in $FAKES/unkillable."""
     pattern = re.compile(args[args.index("-f") + 1])
     stays = (
         set((FAKES / "unkillable").read_text().splitlines())
@@ -802,14 +790,14 @@ def broker(args):
                 sys.stderr,
             )
             return 11
-    if args == ["status", "--cleanup"]:
+    if args == ["status"]:
         default = {"state": "installation_invalid", "version": ""}
         default["repair"] = (
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
         )
         claude = (FAKES / "keychain/ensemble-broker-claude").exists()
         claude = claude and not (FAKES / "src/broker/claude_unusable").exists()
-        response = {"revocations": [], "codex": state or default, "claude": {"default": claude}}
+        response = {"codex": state or default, "claude": {"default": claude}}
         warning = FAKES / "src/broker/audit_warning.json"
         if warning.exists():
             response["audit_warning"] = load(warning, None)
@@ -894,7 +882,6 @@ STUB = '#!/bin/sh\necho "Error: opencode-ai\'s postinstall script was not run." 
 
 
 def npm(args):
-    """Installs opencode-ai as npm's allowScripts leaves it: the stub, its postinstall not run."""
     prefix = Path(args[args.index("--prefix") + 1])
     version = args[-1].split("@", 1)[1]
     package = prefix / "lib/node_modules/opencode-ai"
@@ -907,7 +894,6 @@ def npm(args):
 
 
 def node(args):
-    """opencode-ai's postinstall: the platform binary in place of the stub."""
     package = Path(args[0]).parent
     if (
         args[0].endswith("/opencode-ai/postinstall.mjs")
@@ -923,9 +909,7 @@ def xdg(name, default):
 
 
 def opencode_plugin(spec):
-    """opencode plugin -g -f: the spec in the global config, the files npm adds there, and the package,
-    which OpenCode downloads only when the spec has none yet: then the ensemble commit GitHub reports.
-    """
+    """OpenCode downloads the package only when the spec has none yet."""
     conf = xdg("XDG_CONFIG_HOME", ".config") / "opencode"
     path = conf / "opencode.json" if (conf / "opencode.json").exists() else conf / "opencode.jsonc"
     data = (

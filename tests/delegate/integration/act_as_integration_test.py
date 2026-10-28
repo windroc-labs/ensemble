@@ -8,6 +8,8 @@ from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.types import Layout
 from tests.delegate.case import REPO, Case
 from tests.delegate.skills.act_as import argv, command
+from tests.delegate.verifier import VERIFIER
+from tests.utils.case import local_section
 from tests.utils.sandbox import clean_env, python_path
 
 ROLES = ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
@@ -16,6 +18,8 @@ BIN = os.path.join(REPO, "bin")  # the plugin's bin/, on a Claude Code session's
 
 class ActAs(Case):
     def test_step_1s_command_lists_the_team(self):
+        with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
+            f.write(local_section(VERIFIER, "delegate"))
         env = clean_env()
         env["PATH"] = os.pathsep.join((BIN, python_path(os.path.join(self.home, "bin"))))
         res = subprocess.run(

@@ -2211,7 +2211,7 @@ store_app_key() {
 
 # Claude's default credential or pinned Codex: install, update, login, ready or busy.
 broker_need() {
-  "$broker" status --cleanup </dev/null | python3 -I -c '
+  "$broker" status </dev/null | python3 -I -c '
 import json, sys
 data = json.load(sys.stdin)
 if "audit_warning" in data:
@@ -2262,9 +2262,30 @@ token_screen_leave() {
   fi
 }
 
+# Deletes every item of the services brokers before protocol 33 kept per container, on every run: delete calls only,
+# which decrypt nothing.
+retired_broker_items() {
+  local service count rc n=0
+  step "retired broker keychain items"
+  for service in ensemble-broker-tokens ensemble-broker-revocations ensemble-broker-codex-grants; do
+    count=0
+    while :; do
+      rc=0
+      security delete-generic-password -s "$service" </dev/null >/dev/null 2>&1 || rc=$?
+      [ "$rc" != 44 ] || break
+      [ "$rc" = 0 ] || die "deleting $service keychain items failed ($rc): delete the $service items in Keychain Access, then rerun scripts/install.sh --docker"
+      count=$((count + 1))
+      [ "$count" -lt 1000 ] || die "more than 1000 $service items; rerun scripts/install.sh --docker"
+    done
+    n=$((n + count))
+  done
+  if [ "$n" -gt 0 ]; then say "    deleted $n retired broker keychain items"; else skip "none"; fi
+}
+
 broker_logins() {
   local sha min need said slug refusal
   sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
+  retired_broker_items
   # Before any other broker call: a new broker's items from earlier builds trust it, with one keychain password.
   step "broker re-trust"
   if [ "$(state_get retrust)" = "$sha" ]; then
@@ -2440,8 +2461,8 @@ egress_install() {
 docker_steps() {
   local name
   if [ "$docker" != yes ]; then
-    for name in "Docker Desktop running" "egress proxy" broker "broker re-trust" "broker login: Claude" \
-      "broker login: GitHub" "broker Codex install" "broker login: Codex"; do
+    for name in "Docker Desktop running" "egress proxy" broker "retired broker keychain items" "broker re-trust" \
+      "broker login: Claude" "broker login: GitHub" "broker Codex install" "broker login: Codex"; do
       step "$name"
       skip "Docker not chosen"
     done

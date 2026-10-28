@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
@@ -17,10 +16,9 @@ import (
 
 // fakeStatic is the static store: each Load returns the next of loads (the last again once used up), or err.
 type fakeStatic struct {
-	loads     []map[string]credential.Static
-	err       error
-	calls     int
-	delivered []string
+	loads []map[string]credential.Static
+	err   error
+	calls int
 }
 
 func (f *fakeStatic) Load() (map[string]credential.Static, error) {
@@ -33,11 +31,6 @@ func (f *fakeStatic) Load() (map[string]credential.Static, error) {
 	}
 	i := min(f.calls, len(f.loads)) - 1
 	return f.loads[i], nil
-}
-
-func (f *fakeStatic) DeliverHost(ref string, _ time.Time, _ func(credential.Notice)) error {
-	f.delivered = append(f.delivered, ref)
-	return nil
 }
 
 func records(pairs ...any) map[string]credential.Static {

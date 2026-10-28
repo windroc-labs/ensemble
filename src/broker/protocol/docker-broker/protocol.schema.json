@@ -489,7 +489,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "32"
+          "const": "33"
         }
       },
       "required": [
@@ -973,9 +973,6 @@
           "prefixItems": [
             {
               "const": "status"
-            },
-            {
-              "const": "--cleanup"
             }
           ],
           "items": false,
@@ -990,29 +987,6 @@
     "status_output": {
       "type": "object",
       "properties": {
-        "revocations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "container": {
-                "$ref": "#/$defs/container"
-              },
-              "account": {
-                "$ref": "#/$defs/github_login"
-              },
-              "expires_at": {
-                "$ref": "#/$defs/time"
-              }
-            },
-            "required": [
-              "container",
-              "account",
-              "expires_at"
-            ],
-            "additionalProperties": false
-          }
-        },
         "codex": {
           "$ref": "#/$defs/codex_status"
         },
@@ -1084,9 +1058,6 @@
           "$ref": "#/$defs/audit_warning"
         }
       },
-      "required": [
-        "revocations"
-      ],
       "additionalProperties": false
     },
     "error": {

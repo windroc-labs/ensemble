@@ -16,6 +16,7 @@ from ensemble.delegate.engine.types import Layout
 from tests.delegate.case import REPO as CHECKOUT
 from tests.delegate.case import Case
 from tests.delegate.skills.act_as import argv, head, prefix
+from tests.delegate.verifier import VERIFIER
 from tests.session import harnesses
 from tests.utils.case import local_section
 
@@ -48,7 +49,9 @@ class Instruction(Case):
 
     def config(self, role=None, destination=None):
         text = f"trusted_dirs = [{json.dumps(self.proj)}]\n"
-        if role is not None:
+        if role is None:
+            text += VERIFIER
+        else:
             text += f"[roles.{role}.output]\n"
             text += "".join(f"{key} = {json.dumps(value)}\n" for key, value in destination.items())
         with open(self.local, "w", encoding="utf-8") as f:
@@ -94,7 +97,6 @@ class Instruction(Case):
                 {"type": "local"},
                 {"type": "github", "repo": "o/docs", "branch": "main", "dir": "reports"},
                 {"type": "pull-request"},
-                {"type": "orchestrator"},
             ):
                 with self.subTest(role=role, destination=destination):
                     self.config(None if destination is None else role, destination)

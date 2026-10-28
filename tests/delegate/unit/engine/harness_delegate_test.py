@@ -499,11 +499,14 @@ class VerifierDockerTest(HarnessCase):
     """verifier on the packaged Docker Host, its broker faked: a missing mini-op:env or keychain
     item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network. Its
     session harness's start runs in this process (harnesses.Inline), so the faked broker answers.
+    Its github [output] needs the Docker Host's App (WDRC-338).
     """
 
     def setUp(self):
         super().setUp()
         self.settings(default="docker")
+        with open(self.local, "a", encoding="utf-8") as file:
+            file.write('[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n')
         self.calls, self.programs, self.refusals = [], [], {}
         path = os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
         for patcher in (
@@ -1669,6 +1672,39 @@ class EndingHarnessTest(HarnessCase):
                     self.assertEqual(len(harness_launches()), launches)
                 self.assertEqual((view.alive(), view.status().alive), (False, False))
                 self.assertEqual(view.resume().sid, SID)
+                self.assertEqual(len(harness_launches()), launches + 1)
+
+    def rows(self, state):
+        row = SessionRow(
+            self.metadata()["agent_name"], SID, "fake", state, None, None, None, own=False
+        )
+        return mock.patch.object(RecordingHost, "rows", return_value=[row], create=True)
+
+    def test_resume_refuses_busy_while_its_host_lists_its_worker_ownerless(self):
+        """Its harness gone, its container still reaped (WDRC-365): never the dying Record."""
+        for mode in (Mode.TUI, Mode.HEADLESS):
+            with self.subTest(mode=mode):
+                record, view = self.killed(mode)
+                busy = str(
+                    SessionBusy(
+                        self.metadata()["agent_name"],
+                        "previous worker generation (live or unknown)",
+                    )
+                )
+                launches = len(harness_launches())
+                with RunState(Layout(self.work)).run_lock():
+                    for state in (StatusState.UNKNOWN, StatusState.DEAD):
+                        for kwargs in ({}, {"input": "the answer"}):
+                            with self.rows(state), self.assertRaises(SessionError) as refused:
+                                view.resume(**kwargs)
+                            self.assertEqual(str(refused.exception), busy)
+                    self.assertEqual(
+                        (len(harness_launches()), self.metadata()["attempt"]), (launches, 1)
+                    )
+                    with self.rows(StatusState.WORKING):
+                        self.assertEqual(view.resume(), record)
+                with self.rows(StatusState.DEAD):
+                    self.assertEqual(view.resume().sid, SID)
                 self.assertEqual(len(harness_launches()), launches + 1)
 
 

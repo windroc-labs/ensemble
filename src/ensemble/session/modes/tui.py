@@ -1,6 +1,4 @@
-"""The tui mode: a Client command on a Host terminal; events from its client's own record,
-then the hook records appended to its session directory, and from its terminal.
-"""
+"""The tui mode: a Client command on a Host terminal."""
 
 import contextlib
 import json
@@ -33,6 +31,7 @@ from ensemble.session.engine.types import (
     Key,
     KeyPress,
     Launch,
+    LimitHit,
     Liveness,
     Mode,
     NotShowable,
@@ -93,6 +92,11 @@ WORDS = {
     HookKind.ACTIVITY: StatusState.WORKING,
     HookKind.TURN_STARTED: StatusState.WORKING,
 }
+MARKED = (  # each accepted event's word: a hook record its client drops marks none
+    (TurnEnd | TurnFailed | LimitHit, StatusState.DONE),
+    (Blocked, StatusState.BLOCKED),
+    (TurnStarted | Activity, StatusState.WORKING),
+)
 SLICE = 0.1
 OPEN_AFTER = 1.0  # keys sent before a client's input box shows are lost
 POLL_SCREEN = 0.5
@@ -147,7 +151,6 @@ def _owner_ok(path) -> bool:
 
 
 def _bad(state: Mapping) -> str | None:
-    """The first session.json field its readers refuse."""
     for field, check in tui_hook.SESSION_STATE.items():
         if field not in state or not check(state[field]):
             return field
@@ -184,9 +187,7 @@ def _read_state(name: str, path: str) -> dict:
 
 
 def store_record(name: str, generation: str, record: ControlRecord) -> None:
-    """Worker `name`'s Record, for `generation` while session.json names it; else SessionError.
-    Only the process owning that Record (a crew Worker, a delegate) calls it.
-    """
+    """Worker `name`'s Record while session.json names `generation`; only its owner calls it."""
     found = worker_state(name)
     if found is None or found.generation != generation:
         raise SessionError(f"session {name} is gone")
@@ -211,11 +212,8 @@ def store_record(name: str, generation: str, record: ControlRecord) -> None:
 
 class TuiStore:
     """Tui session `name`'s dir and lock under TUI_DIR; what changes them takes the lock.
-    attach(name, host=...) takes by name whatever is there: a tui session, a half-gone one (its dir
-    alone) or nothing. close: under its lock, removes the dir; absent is fine. An owned record goes
-    only with its own worker generation: by its owner's handle, else once that generation's
-    worker_liveness is ABSENT, its leftovers released through Host._release. With no owned record
-    there is no worker: only its dir goes.
+    The record rule: an owned record goes only with its worker generation, by its owner's handle
+    or once that generation's worker_liveness is ABSENT.
     """
 
     def __init__(self, name: str, *, host: Host, sid: str | None = None) -> None:
@@ -230,9 +228,7 @@ class TuiStore:
         return cls(checked_name(name), host=host, sid=sid)
 
     def hook_argv(self) -> tuple[str, ...]:
-        """The client's hook command: the running plugin's ensemble-session (where PATH finds it)
-        and this dir; the client appends its label.
-        """
+        """The client appends its label."""
         command = command_path(COMMAND)
         if command is None:
             raise ConfigError(
@@ -241,13 +237,11 @@ class TuiStore:
         return (command, "hook", self.dir)
 
     def set_activity(self, generation: str, word: StatusState, events: str | None) -> None:
-        """Its owner's mark: the activity file, then for done and blocked one events line."""
         save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
         if word in (StatusState.DONE, StatusState.BLOCKED) and events:
             SessionStatusLog(events).write(self.name, word)
 
     def store_record(self, generation: str, record: ControlRecord) -> None:
-        """Its crew Record, for `generation` while session.json names it; else SessionError."""
         store_record(self.name, generation, record)
 
     def read(self) -> dict:
@@ -287,7 +281,7 @@ class TuiStore:
 
     @contextlib.contextmanager
     def sending(self, *, wait: bool = True) -> Iterator[bool]:
-        """Holds the send lock; wait False yields False while another holds it."""
+        """wait False yields False while another holds it."""
         path = os.path.join(self.dir, SEND_LOCK)
         with contextlib.ExitStack() as stack:
             try:
@@ -317,7 +311,6 @@ class TuiStore:
             LOG.warning("tui session %s: %s: %s", self.name, path, e.strerror or e)
 
     def check(self) -> None:
-        """Worker state of another sid raises; none does not."""
         found = worker_state(self.name)
         if self._sid is not None and found is not None and found.sid != self._sid:
             raise SessionError(
@@ -478,7 +471,7 @@ class TuiStore:
         return True
 
     def _shut(self, generation: str) -> None:
-        """Its ABSENT worker generation's leftovers released through its host; then its dir."""
+        """Only for an ABSENT worker generation."""
         try:
             self.host._release(self.name, generation)
         except SessionError as error:
@@ -535,7 +528,7 @@ def _parsed(data: bytes) -> tuple[list[Record], int]:
 
 
 def _sweep(store: TuiStore) -> None:
-    """Other names idle STALE_AGE: expired, errors logged; one host listing, once one is idle."""
+    """Expires other idle names; lists the host once, only when one is idle."""
     try:
         found = {entry.name.removesuffix(".lock") for entry in os.scandir(store.root)}
     except OSError as error:
@@ -574,7 +567,6 @@ def _owned_record(store: TuiStore) -> dict | None:
 
 
 def _generation(store: TuiStore, record: Mapping, *, wait: bool) -> Liveness:
-    """wait: LIVE re-checked for up to GUARD_WAIT s (a reaping guard)."""
     generation = record.get("generation")
     if not isinstance(generation, str):
         return Liveness.UNKNOWN
@@ -636,10 +628,6 @@ class _Start:
 
 
 class TuiMode(BaseMode):
-    """One tui session generation: its owner's (start: holds its worker's handle) or a read-only
-    view's (attach: a liveness source, no terminal).
-    """
-
     kind = Mode.TUI
 
     @staticmethod
@@ -661,10 +649,7 @@ class TuiMode(BaseMode):
         replayed: tuple[SessionEvent | Stderr | ClientBound, ...] = (),
         opening: tuple[str, str] | None = None,
     ) -> None:
-        """terminal: its owner's handle (its harness's start), which alone marks its worker's
-        activity; None: a view, whose `liveness` answers for its worker. cursor: its next hook
-        record (TuiStore.records).
-        """
+        """terminal: its owner's handle, which alone marks activity; None: a view."""
         super().__init__(prepared)
         self.name, self.run, self.host, self._terminal = store.name, run, store.host, terminal
         if terminal is not None:
@@ -757,9 +742,7 @@ class TuiMode(BaseMode):
         check_name: Callable[[str], None] | None = None,
         owner: str | None = None,
     ) -> Self:
-        """Start the Client's terminal with its hook journal committed before execution; owner: its
-        session harness's dir, kept in session.json.
-        """
+        """Its hook journal is committed before execution; owner: its harness's dir."""
         pending = cls._prepare(
             spec, client, registry=registry, host=host, display=display, owner=owner
         )
@@ -811,7 +794,6 @@ class TuiMode(BaseMode):
 
     @classmethod
     def snapshot(cls, name: str) -> dict:
-        """Tui session `name`'s session.json as start wrote it; else SessionError."""
         return _read_state(
             checked_name(name), os.path.join(os.path.expanduser(TUI_DIR), name, TUI_STATE)
         )
@@ -827,10 +809,7 @@ class TuiMode(BaseMode):
         liveness: Callable[[], Liveness],
         sid: str | None = None,
     ) -> Self:
-        """Tui session `name`'s generation from its snapshot(), read-only: `liveness` answers for
-        its worker, which it never drives. A fresh Tui restored replays its client's record, then
-        its hook log; events from the next record.
-        """
+        """Read-only: `liveness` answers for its worker, which it never drives."""
         store = TuiStore.attach(name, host=host, sid=sid)
         if sid is not None and state.get("sid") != sid:
             raise SessionError(
@@ -885,7 +864,6 @@ class TuiMode(BaseMode):
         return getattr(self._terminal, "up", False) is True
 
     def _owner(self) -> InteractiveProcess:
-        """Its owner's handle; a view has none: its input and screen are its harness's."""
         if self._terminal is None:
             raise SessionError(f"session {self.name}: its harness is gone")
         return self._terminal
@@ -992,9 +970,7 @@ class TuiMode(BaseMode):
         self._code = -signal.SIGHUP if self._code is None else self._code
 
     def _read(self) -> list[SessionEvent | Stderr | ClientBound]:
-        """New records' events, the client's own first (read last, so a text written before its
-        hook record precedes it), checked against the terminal and session.json only once found.
-        """
+        """Client events read last: a text written before its hook record precedes it."""
         if self._gone:
             return []
         records, end = self._store.stamped(self._cursor)
@@ -1009,20 +985,18 @@ class TuiMode(BaseMode):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
         for label, payload, marker in records:
-            kind = self.run.hooks.get(label)
-            if kind is not None and (word := WORDS.get(kind)) is not None:
-                self._mark(word)
             events = self.run.hook_events(label, payload)
             if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):
                 self._absorbed = max(self._absorbed, _sends(marker, self._generation)[1])
             found += events
+        for event in [*found[len(observed) :], *observed]:  # the client's own, newest, last
+            if word := next((w for kind, w in MARKED if isinstance(event, kind)), None):
+                self._mark(word)
         self._track(found)
         return found
 
     def _replaced(self) -> bool:
-        """A view ended once session.json is gone or another generation's (its liveness saying
-        ABSENT ends it in poll).
-        """
+        """A view ends once session.json is gone or another generation's."""
         if self._owned:
             return False
         try:
@@ -1058,7 +1032,7 @@ class TuiMode(BaseMode):
         return frozenset(d for d in self.run.dialogs if self.run.shows(d, screen))
 
     def _mark(self, word: StatusState, *, again: bool = True) -> None:
-        """Its owner's alone (a view never marks); not again: only when its word differs."""
+        """Owner only; not again: only when its word differs."""
         if self._owned and (again or activity(self.name, self._generation) != word):
             try:
                 self._store.set_activity(self._generation, word, self.prepared.spec.events)
@@ -1083,11 +1057,10 @@ class TuiMode(BaseMode):
         return self._liveness()
 
     def client_alive(self) -> bool:
-        """Its client runs, its worker's liveness asked afresh."""
         self._store.check()
         try:
             return self._liveness() == Liveness.LIVE
-        except SessionError:  # it cannot tell
+        except SessionError:
             return False
 
     def send(self, text: str) -> None:
@@ -1125,11 +1098,10 @@ class TuiMode(BaseMode):
             raise SessionError(f"host {self.host.name} cannot show") from None
 
     def redisplay(self) -> bool:
-        """Its owner handle's display opened again where gone; False: none to open."""
+        """False: no display to open."""
         return isinstance(self._terminal, ManagedProcess) and self._terminal.redisplay()
 
     def _running(self) -> None:
-        """A view has no input or screen of its own; an owner's worker must run."""
         self._store.check()
         if self._owner().state() != Liveness.LIVE:
             raise SessionError(f"tui session {self.name} is not running")
@@ -1138,7 +1110,7 @@ class TuiMode(BaseMode):
         return self._store.close(self._terminal, self._generation)
 
     def stop(self) -> None:
-        """Once, unless it raises; then ends (returncode: the code seen, else -SIGHUP)."""
+        """Once, unless it raises; then ends."""
         if self._live:
             self._store.stop(self._terminal, generation=self._generation)
             self._live = False

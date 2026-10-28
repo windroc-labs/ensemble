@@ -15,8 +15,8 @@ const RetrustCommand = InstalledPath + " retrust"
 
 // retrustServices are the services retrust covers, every KeychainServices entry in its order; envServicePrefix
 // stands for each ensemble-broker-env/<name> service. Orchestrator-configured Linear services are not among them.
-var retrustServices = []string{tokenService, AppKeyService, usersService, tokensService, revocationsService, codexService,
-	codexGrantsService, opencodeService, envServicePrefix, linearService, linearGrantsService}
+var retrustServices = []string{tokenService, AppKeyService, usersService, codexService, opencodeService, envServicePrefix,
+	linearService, linearGrantsService}
 
 // RetrustKeychain is retrust's side of the login keychain: each item's access, its change, and the items by
 // attributes only.

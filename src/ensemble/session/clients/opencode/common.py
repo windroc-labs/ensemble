@@ -1,6 +1,4 @@
-"""OpenCode's config checks and session bindings: each run's sid, under its cwd, bound to the
-session id (`ses_…`) OpenCode chose, which a resume selects.
-"""
+"""OpenCode's config checks and each run's (cwd, sid) binding to its OpenCode session."""
 
 import hashlib
 import itertools
@@ -50,20 +48,19 @@ from ensemble.utils import (
 )
 
 TABLE = "[clients.opencode]"
-# A container Host's session state dir: OpenCode keeps opencode.db under $XDG_DATA_HOME/opencode.
+# opencode.db is under $XDG_DATA_HOME/opencode.
 HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
-STORE = f"{STATE}/sessions/opencode"  # under HOME, resolved per call
+STORE = f"{STATE}/sessions/opencode"
 BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
 OLLAMA_PORT = 11434
 OLLAMA_CONTEXT = 65536
-# Headroom below a window: OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER
-# (docs/customizing-roles-and-tasks.md › OpenCode sessions).
+# OpenCode's OUTPUT_TOKEN_MAX and COMPACTION_BUFFER (docs/customizing-roles-and-tasks.md).
 REPLY, BUFFER = 32000, 20000
-# Set by OpenCode for its children (a nested start's are never its own).
+# OpenCode sets them for its children.
 IDENTITY = ("OPENCODE", "OPENCODE_PID", "OPENCODE_TERMINAL")
-# Config OpenCode merges over or beside the launch's own OPENCODE_CONFIG_CONTENT.
+# Config OpenCode merges with OPENCODE_CONFIG_CONTENT.
 OVERRIDES = (
     "OPENCODE_PERMISSION",
     "OPENCODE_CONFIG",
@@ -74,9 +71,9 @@ UNSET = (*sorted(LOCAL_ENV_VARS), *IDENTITY, *OVERRIDES)
 SELECTORS = ("-s", "--session", "-c", "--continue", "--fork")
 RESERVED = (*SELECTORS, "--format", "--attach", "--dir", "-m", "--model")
 PERMISSIONS = ("--auto", "--yolo", "--dangerously-skip-permissions")
-TUI_RESERVED = ("--prompt", "--pure")  # the client's prompt; --pure would skip its plugin
-HEADLESS_RESERVED = ("--title",)  # TITLE's
-TITLE = "ensemble-{sid}"  # a new headless run's session title, which finds a session never bound
+TUI_RESERVED = ("--prompt", "--pure")  # --pure skips the plugin
+HEADLESS_RESERVED = ("--title",)
+TITLE = "ensemble-{sid}"  # finds a headless session never bound
 VALUED = (
     "-m",
     "--model",
@@ -104,14 +101,14 @@ EXECUTABLE = (
 )
 VERSION = re.compile(r"(\d+)\.\d+\.\d+")
 VERSION_WAIT = 10  # seconds
-MAJOR = 1  # the OpenCode release the client supports
+MAJOR = 1
 PORT = (
     "ollama_port",
     lambda v: type(v) is int and 0 < v < 65536,
     "an integer port 1–65535",
 )
 OLLAMA = "ollama"
-SECRETS = "secrets/opencode"  # the broker's key files, under a container's state root
+SECRETS = "secrets/opencode"  # under a container's state root
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 WORD = re.compile(r"\S+")
 
@@ -151,12 +148,12 @@ PROVIDERS = (
 
 
 PROTECTED = (".git", ".opencode", "opencode.json", "opencode.jsonc")  # names no run edits
-CASED = (".git",)  # also denied in every case: OpenCode's patterns are case-sensitive, macOS's not
+CASED = (".git",)  # macOS is case-insensitive
 GIT_WAIT = 10  # seconds
 
 
 def _ancestors(path: str) -> list[str]:
-    """`path`'s proper ancestors, nearest first, "/" last."""
+    """Proper ancestors, nearest first."""
     found = []
     while (parent := os.path.dirname(path)) != path:
         found.append(parent)
@@ -180,7 +177,7 @@ def _check_paths(paths: Iterable[str]) -> None:
 
 
 def _grant_paths(paths: Iterable[str]) -> list[str]:
-    """OpenCode tools check lexical paths; retain those alongside their resolved targets."""
+    """Lexical and resolved: OpenCode checks lexical paths."""
     found = list(
         dict.fromkeys(p for path in paths for p in (os.path.abspath(path), os.path.realpath(path)))
     )
@@ -194,9 +191,7 @@ def _git(argv: list[str], timeout: int):
 
 
 def worktree(cwd: str) -> str:
-    """OpenCode's worktree for `cwd` (its core/src/git.ts): the toplevel of the nearest .git's dir;
-    "/" without one or when git cannot read it.
-    """
+    """OpenCode's worktree (core/src/git.ts): the nearest .git's toplevel, else "/"."""
     found = next(
         (p for p in (cwd, *_ancestors(cwd)) if os.path.lexists(os.path.join(p, ".git"))), None
     )
@@ -215,9 +210,8 @@ def worktree(cwd: str) -> str:
 
 
 def edit_rules(cwd: str, dirs: list[str], reads: list[str]) -> dict[str, str]:
-    """OpenCode's edit rules: the last match wins, a deny even under --auto, on a path relative to
-    `worktree`. Each path by its deepest grant (cwd and dirs allow, reads deny), else deny; never
-    PROTECTED. One rule per level above the worktree, as "*" also matches "../".
+    """Edit rules relative to `worktree`, last match wins: a path by its deepest grant, else deny,
+    PROTECTED never; "*" also matches "../", so one rule per level above.
     """
     _check_paths((cwd, *dirs, *reads))
     top = worktree(cwd)
@@ -247,14 +241,14 @@ def edit_rules(cwd: str, dirs: list[str], reads: list[str]) -> dict[str, str]:
 
 
 def image_path(found: Container, local: str) -> str:
-    """`local`, a file of this package, at its path in the container's image."""
+    """`local`'s path in the container's image."""
     package = __name__.split(".")[:-1]
     return os.path.join(found.source, *package, os.path.relpath(os.path.abspath(local), HERE))
 
 
 def refuse(flags: Iterable[str], banned: tuple[str, ...], where: str) -> None:
     for flag in scan(tuple(flags), {word: word for word in VALUED}):
-        # yargs also takes an option's camelCase spelling.
+        # yargs takes camelCase too.
         kebab = re.sub(r"[A-Z]", lambda m: f"-{m.group().lower()}", flag.word)
         if flag.word in banned or kebab in banned:
             raise ConfigError(f"{flag.arg}: set by the opencode client, not {where}")
@@ -290,7 +284,6 @@ class OpenCodeCommon:
         refuse_env(self.env, f"{TABLE}.env")
 
     def _listed(self, key: str, model: str) -> None:
-        """Refuses a model whose provider is neither ollama nor a [clients.opencode.providers] one."""
         provider, _, name = model.partition("/")
         if not name or (provider != OLLAMA and provider not in self.providers):
             raise ConfigError(
@@ -306,7 +299,7 @@ class OpenCodeCommon:
         return found
 
     def model(self, tier: int | None) -> str:
-        """The tier's model, else `model`: never OpenCode's pick."""
+        """Never OpenCode's pick."""
         if tier is None:
             if self.default is None:
                 raise ConfigError(f"no model for a run without a tier: set {TABLE} model")
@@ -321,9 +314,8 @@ class OpenCodeCommon:
     def selection(
         self, spec: Spec, context: ClientContext, extra: tuple[str, ...] = ()
     ) -> tuple[str, ...]:
-        """A launch's checks and its session selection: on resume, (cwd, sid)'s session.
-        OpenCode 1.x runs any cwd's .opencode plugins and opencode.json, so a cwd outside a
-        container starts only when trusted; an isolated Host's context alone is yolo.
+        """Checks, then the selection: on resume, (cwd, sid)'s session, else a fresh one. OpenCode
+        runs any cwd's plugins, so a non-yolo launch needs a trusted cwd.
         """
         if context.permission is not Permission.YOLO and not spec.access.project:
             raise ConfigError(
@@ -338,26 +330,24 @@ class OpenCodeCommon:
         env = {**self.env, **spec.access.env, **spec.env}
         db = database(env if context.container is not None else {**os.environ, **env})
         native = self.session(spec.access.cwd, sid, db)
-        if native is None:
-            raise ConfigError(f"no OpenCode session bound to run ID {sid!r}")
-        return self.selector(native, resume=True)
+        return () if native is None else self.selector(native, resume=True)
 
     def home(self) -> ClientHome:
         return replace(HOME, providers=tuple(sorted(self.providers)))
 
     def executable_for(self, env: Mapping[str, str], cwd: str, context: ClientContext) -> str:
-        """A container's image opencode (the broker checks its version), else program's."""
+        """The image's opencode in a container, else program's."""
         if (found := context.container) is not None:
             return os.path.join(found.bin_dir, "opencode")
         return self.program(env, cwd)
 
     @staticmethod
     def transcript(env: Mapping[str, str], context: ClientContext) -> str:
-        """A container launch's opencode.db, which its Host checks before a resume; else ""."""
+        """A container's opencode.db, which its Host checks before a resume."""
         return database(env) if context.container is not None else ""
 
     def program(self, env: Mapping[str, str], cwd: str) -> str:
-        """The executable, once its --version, run as the launch would run it, is OpenCode 1.x."""
+        """The executable, once its --version is 1.x."""
         exe, fix = self.executable, f"set {TABLE} executable to an OpenCode {MAJOR}.x"
         run = {k: v for k, v in {**os.environ, **env}.items() if k not in LOCAL_ENV_VARS}
         try:
@@ -369,9 +359,7 @@ class OpenCodeCommon:
                 timeout=VERSION_WAIT,
                 stdin=subprocess.DEVNULL,
                 env=run,
-                cwd=cwd
-                if os.path.isdir(cwd)
-                else None,  # a run's cwd may not exist before its start
+                cwd=cwd if os.path.isdir(cwd) else None,  # may not exist yet
             )
         except OSError as error:
             raise ConfigError(
@@ -387,9 +375,7 @@ class OpenCodeCommon:
         return exe
 
     def inline(self, spec: Spec, context: ClientContext, plugin: str | None = None) -> dict:
-        """The launch's providers, permissions and plugin. A provider's API key: the container's
-        broker-written file, else OpenCode's auth.json.
-        """
+        """Providers, permissions, plugin; API keys from broker files, else auth.json."""
         access = spec.access
         commands = dict.fromkeys(access.commands, "allow")
         permission: dict = {
@@ -405,8 +391,7 @@ class OpenCodeCommon:
             os.path.realpath(access.cwd), [os.path.realpath(d) for d in access.dirs], reads
         )
         if context.permission is Permission.YOLO:
-            # --auto replies in the TUI after permission.asked; approve at the backend so the
-            # plugin never reports those transient asks as blocked. Keep agent and edit denies.
+            # --auto answers in the TUI; approve at the backend so none reports blocked.
             permission.update(
                 dict.fromkeys(("bash", "read", "external_directory", "doom_loop"), "allow")
             )
@@ -437,17 +422,17 @@ class OpenCodeCommon:
                 else {}
             ),
             "autoupdate": False,
-            # A refused call ends OpenCode's turn otherwise (session/processor.ts).
+            # Else a refusal ends the turn (session/processor.ts).
             "experimental": {"continue_loop_on_deny": True},
             "compaction": {"reserved": 0},  # it compacts at limit.input - reserved
-            # Built-in providers (OpenCode Zen's included) off.
+            # No built-in providers.
             "enabled_providers": list(providers),
             "provider": providers,
             "permission": permission,
         }
 
     def _provider(self, title: str, url: str, name: str, listed, window: int) -> dict:
-        """An OpenAI-compatible provider: its listed models, then those tiers or model name."""
+        """Its listed models, then those of tiers and model."""
         prefix = f"{name}/"
         named = (*self.tiers.values(), *((self.default,) if self.default else ()))
         mapped = (m.removeprefix(prefix) for m in named if m.startswith(prefix))
@@ -470,7 +455,7 @@ class OpenCodeCommon:
     def environment(
         self, spec: Spec, context: ClientContext, plugin: str | None = None
     ) -> dict[str, str]:
-        """The config's env, then Access's and the Spec's, under the client's own."""
+        """Config, Access, then Spec env, under the client's."""
         access = spec.access
         supplied = {**access.env, **spec.env}
         refuse_env(supplied, "a run's env")
@@ -488,7 +473,7 @@ class OpenCodeCommon:
         )
 
     def probe(self) -> Launch:
-        """On this machine, so the loopback, never the Host's address."""
+        """Local: the loopback."""
         request = self.usage_provider()
         args = (
             (str(self.port),)
@@ -503,7 +488,7 @@ class OpenCodeCommon:
 
     @staticmethod
     def parse_usage(output: str) -> Usage | None:
-        """A model listing: Ollama is up, and a local model has no limits; anything else unknown."""
+        """Ollama up: no limits; else unknown."""
         try:
             found = json.loads(output)
         except (ValueError, RecursionError):
@@ -528,9 +513,7 @@ class OpenCodeCommon:
         Bindings(self.store).unbind(cwd, sid)
 
     def session(self, cwd: str, sid: str, db: str) -> str | None:
-        """(cwd, sid)'s bound session, else its headless run's by TITLE in `db`, bound then: opencode
-        prints its session id only once its model streams, so a harness killed before then bound none.
-        """
+        """(cwd, sid)'s bound session, else its headless run's TITLE one in `db`, bound then."""
         native = self.native(cwd, sid)
         if native is None and os.path.isfile(db):
             try:
@@ -544,8 +527,8 @@ class OpenCodeCommon:
     def session_status(
         self, cwd: str, sid: str, env: Mapping[str, str], *, transcript: str = ""
     ) -> SessionStatus:
-        """From the bound session's row in opencode.db: the run's `transcript`, else the db the
-        run's opencode would find.
+        """By the bound session's row in `transcript`, else the run's opencode.db; unbound: a fresh
+        session once that db exists.
         """
         db = transcript or database({**os.environ, **self.env, **env})
         try:
@@ -553,7 +536,7 @@ class OpenCodeCommon:
         except ConfigError:
             return SessionStatus(Resumable.UNKNOWN, None, "")
         if native is None:
-            return SessionStatus(Resumable.NO, None, "")
+            return SessionStatus(Resumable.YES if os.path.isfile(db) else Resumable.NO, None, "")
         try:
             updated = session_updated(db, native)
         except Refused:
@@ -564,7 +547,7 @@ class OpenCodeCommon:
 
 
 class Homed:
-    """The Docker home both OpenCode adapters name."""
+    """Both adapters' Docker home."""
 
     common: OpenCodeCommon
 
@@ -573,7 +556,7 @@ class Homed:
 
 
 class Bindings:
-    """Each run's (cwd, sid) bound to its OpenCode session, one file each under `store`."""
+    """Each run's (cwd, sid) binding, one file under `store`."""
 
     def __init__(self, store: str):
         self.store = store
@@ -603,7 +586,7 @@ class Bindings:
             raise ConfigError(f"opencode session binding: {error}") from None
 
     def native(self, cwd: str, sid: str) -> str | None:
-        """The session bound to (cwd, sid); None when none is (a symlink counts as none)."""
+        """(cwd, sid)'s session, else None (a symlink too)."""
         path = self._binding(cwd, sid)
         data = read_beneath(self.store, path, limit=BINDING_MAX + 1)
         if data is None:

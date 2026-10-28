@@ -1,4 +1,6 @@
-"""Case, every delegate test's base; committed [clients]; child helpers; this tree's import roots."""
+"""Case, every delegate test's base; the committed [clients] (committed); child helpers (PY,
+child_env); this tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
+"""
 
 import os
 import sys
@@ -12,7 +14,6 @@ from ensemble.session import Session
 from ensemble.session.engine.config import read_config
 from tests.session import harnesses
 from tests.session.case import configured
-from tests.utils import controls
 from tests.utils.sandbox import CALLER_SESSION, clean_env, project_roots
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,7 +30,9 @@ PY = (sys.executable, "-P", "-S")
 
 
 def committed(local: str = os.devnull) -> dict:
-    """The session config's [clients], `local` merged (default none)."""
+    """The session config's [clients], `local` merged (default none), even under
+    Case.configure_session.
+    """
     return read_config(local=local)["clients"]
 
 
@@ -40,9 +43,10 @@ def packaged(**dependencies) -> type[Session]:
 
 
 class Case(unittest.TestCase):
-    """Runs a test of this tree's ensemble in a fresh temp HOME (self.ensemble: its .ensemble)
-    with a fresh session class and FakeDriver, minus CALLER_SESSION; its threaded harnesses
-    joined, its harnesses and process controllers ended before HOME goes.
+    """Fails a test whose ensemble is not exactly this tree's, else runs it (whatever its setUp) in
+    a fresh temp HOME, self.home (self.ensemble: its .ensemble), a fresh session class
+    (self.session_cls) and its FakeDriver, minus CALLER_SESSION; a start of a class with injected
+    callables runs its session harness on a thread (harnesses.Threaded), joined at its end.
     """
 
     def run(self, result=None):
@@ -65,7 +69,6 @@ class Case(unittest.TestCase):
             self.ensemble = os.path.join(self.home, ".ensemble")
             os.mkdir(self.ensemble)
             self.configure_session({})
-            self.addCleanup(controls.retired, self.home)
             self.addCleanup(harnesses.end, self.home)
             return super().run(result)
 

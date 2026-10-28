@@ -1,9 +1,0 @@
-{
-  "exit_code": 11,
-  "error": {
-    "command": "close",
-    "code": "keychain_failed",
-    "message": "The GitHub tokens of ensemble-worker_1-0123456789abcdef0123456789abcdef could not be revoked; they expire within an hour.",
-    "cleanup": "not_needed"
-  }
-}

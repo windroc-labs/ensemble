@@ -25,6 +25,7 @@ from ensemble.session.engine.types import (
     Mode,
     Reply,
     Spec,
+    StatusState,
     TurnEnd,
     TurnFailed,
     TurnStarted,
@@ -32,6 +33,7 @@ from ensemble.session.engine.types import (
 from tests.session import live_tmux
 from tests.session.case import REPO, Case, configured
 from tests.session.integration.clients.opencode import fake_opencode
+from tests.session.unit.clients.opencode.support import make_db
 
 WAIT = 20
 NODE = shutil.which("node")
@@ -189,6 +191,60 @@ class TuiSessions(Case):
         )
         self.assertEqual(handle.reply, "two")
 
+    def test_sends_mid_turn_join_the_running_turn(self):
+        """OpenCode's running loop takes a prompt saved while its turn runs (WDRC-360: each failed
+        the turn as superseded); a send after the turn's idle starts the next one.
+        """
+        self.scene([[{"text": "one"}, {"join": 2}, {"text": "two"}], [{"text": "three"}]])
+        handle, stream = self.start()
+        self.assertEqual(stream.until(Reply), [TurnStarted(), Activity(""), Reply("one")])
+        handle.send("also this")
+        handle.send("and this")
+        sent = time.monotonic()
+        self.assertEqual(stream.until(TurnEnd), [Reply("two"), TurnEnd("two")])
+        self.assertLess(time.monotonic() - sent, 4)  # no REPLY_WAIT for a reply after a join
+        self.assertEqual(self.words(1), ["w1 done"])
+        handle.send("next")
+        self.assertEqual(
+            stream.until(TurnEnd), [TurnStarted(), Activity(""), Reply("three"), TurnEnd("three")]
+        )
+
+    def test_a_shell_ordered_turn_after_an_ended_turn_starts_a_turn(self):
+        """OpenCode's `!cmd` reports busy before it saves its user message."""
+        self.scene([[{"text": "one"}], [{"shell": True}, {"text": "two"}]])
+        handle, stream = self.start()
+        stream.until(TurnEnd)
+        handle.send("!ls")
+        found = stream.until(TurnEnd)
+        self.assertEqual(found.count(TurnStarted()), 1)
+        self.assertEqual(found[-2:], [Reply("two"), TurnEnd("two")])
+
+    def test_a_re_saved_user_message_starts_no_turn(self):
+        """Each idle re-saves its turn's user messages, joined ones too."""
+        self.scene([[{"join": 1}, {"text": "one"}], [{"text": "two"}]])
+        handle, stream = self.start()
+        handle.send("more")
+        self.assertEqual(
+            stream.until(TurnEnd), [TurnStarted(), Activity(""), Reply("one"), TurnEnd("one")]
+        )
+        stream.quiet()
+        handle.send("next")
+        self.assertEqual(
+            stream.until(TurnEnd), [TurnStarted(), Activity(""), Reply("two"), TurnEnd("two")]
+        )
+        stream.quiet()
+
+    def test_a_send_after_a_recovered_error_joins_the_turn(self):
+        """The recovered error leaves the turn open: a send joins it, which then ends done."""
+        error = {"name": "ContextOverflowError", "data": {"message": "compacting"}}
+        self.scene([[{"error": error, "recover": True}, {"join": 1}, {"text": "answer"}]])
+        handle, stream = self.start()
+        handle.send("continue")
+        found = stream.until(TurnEnd)
+        self.assertFalse(any(isinstance(event, TurnFailed) for event in found))
+        self.assertEqual(found.count(TurnStarted()), 1)
+        self.assertEqual(found[-2:], [Reply("answer"), TurnEnd("answer")])
+
     def test_a_reply_saved_after_idle_is_still_read(self):
         self.scene([[{"text": "saved late", "late": 800}]])
         handle, stream = self.start()
@@ -337,25 +393,44 @@ class TuiSessions(Case):
         )
         self.assertEqual(self.words(1)[-1], "w1 done")
 
-    def test_a_failed_turn_cannot_later_succeed_without_another_accepted_input(self):
+    def test_a_compact_after_the_turn_leaves_it_done(self):
+        self.scene([[{"text": "answered"}, {"compactAfter": "summary"}]])
+        handle, stream = self.start()
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("answered"))
+        stream.quiet()
+        self.assertEqual(handle.status().state, StatusState.DONE)
+        self.assertEqual(self.words(1), ["w1 done"])
+
+    def test_a_recovered_error_does_not_fail_the_turn(self):
         error = {"name": "ContextOverflowError", "data": {"message": "compacting"}}
+        self.scene([[{"error": error, "recover": True}, {"tool": "read"}, {"text": "done anyway"}]])
+        _, stream = self.start()
+        found = stream.until(TurnEnd)
+        self.assertFalse(any(isinstance(event, TurnFailed) for event in found))
+        self.assertEqual(found[-2:], [Reply("done anyway"), TurnEnd("done anyway")])
+
+    def test_compacted_turns_end_done_with_their_own_replies(self):
         self.scene(
             [
-                [{"error": error, "recover": True}, {"tool": "read"}, {"text": "done anyway"}],
-                [{"text": "next turn"}],
+                [{"compact": "summary"}, {"text": "recovered"}],
+                [{"compact": "summary again"}, {"text": "next turn"}],
             ]
         )
         handle, stream = self.start()
-        found = stream.until(TurnFailed)
-        self.assertEqual(found[-1], TurnFailed("ContextOverflowError", "compacting"))
-        found += stream.until(Reply)
-        self.assertFalse(any(isinstance(event, TurnEnd) for event in found))
-        stream.quiet()
-        handle.send("continue")
         self.assertEqual(
             stream.until(TurnEnd),
-            [TurnStarted(), Activity(), Reply("next turn"), TurnEnd("next turn")],
+            [TurnStarted(), Activity(""), Reply("recovered"), TurnEnd("recovered")],
         )
+        stream.quiet()
+        self.assertEqual(handle.status().state, StatusState.DONE)
+        self.assertEqual(self.words(1), ["w1 done"])
+        handle.send("again")
+        self.assertEqual(
+            stream.until(TurnEnd),
+            [TurnStarted(), Activity(""), Reply("next turn"), TurnEnd("next turn")],
+        )
+        stream.quiet()
+        self.assertEqual(handle.status().state, StatusState.DONE)
 
     def test_a_fresh_restart_rebinds_the_root_session_once(self):
         self.common.bind(str(self.cwd), "run-1", fake_opencode.NATIVE)
@@ -449,6 +524,21 @@ class TuiSessions(Case):
         last = self.calls()[-1]
         self.assertEqual(last["argv"], ["--session", NATIVE, "--model", "ollama/qwen3.6:35b-mlx"])
         self.assertEqual(last["env"]["session"], NATIVE)
+
+    def test_a_resume_of_a_run_that_bound_no_session_starts_a_fresh_one(self):
+        """WDRC-366: a run killed before OpenCode saved its session left no binding."""
+        handle, stream = self.start()
+        stream.until(TurnEnd)
+        handle.stop()
+        self.common.unbind(str(self.cwd), "run-1")
+        make_db(str(self.root / "data" / "opencode" / "opencode.db"))
+        self.scene([[{"text": "fresh"}]])
+        handle, stream = self.start(prompt="Fix it.", resume=True)
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("fresh"))
+        last = self.calls()[-1]
+        self.assertEqual(last["argv"], ["--model", "ollama/qwen3.6:35b-mlx", "--prompt=Fix it."])
+        self.assertEqual(last["env"]["session"], "")
+        self.assertEqual(self.common.native(str(self.cwd), "run-1"), NATIVE)
 
     def test_flags_with_c_fail_before_start(self):
         with self.assertRaises(ConfigError):
