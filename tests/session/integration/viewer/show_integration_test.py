@@ -118,6 +118,6 @@ class ShowTest(Case):
             host, "attach_target", return_value=CommandView("cat -", live_tmux.IDLE)
         ):
             self.assertIsNone(Viewer().show("docker-worker", host, command="true"))
-        status = self.server.tmux("show", "-t", "=docker-worker", "status")
+        status = self.server.tmux("show", "-t", "=docker-worker:", "status")
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertEqual(status.stdout.strip(), "status on")
