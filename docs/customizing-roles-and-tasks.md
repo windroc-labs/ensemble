@@ -28,7 +28,7 @@ dir = "Research/"
 - **Client:** `client` picks it; `ensemble-delegate run --client` overrides it for one run. This applies to every role, including `verifier`. The flags a role run passes its client: [Client policy](architecture.md#client-policy).
 - **Claude account:** none per role: the session picks it (`[session.clients.claude] account`, else the account with the most usage left): [Docker host › Claude accounts](architecture.md#claude-accounts).
 - **Destination:** `[output]` (`local`, `github` or `pull-request`); a lower level's `[output]` replaces the whole table.
-- **Access:** `read`, `write` and `commands` widen what the agent run may read, write and run; `templates` inlines templates into its prompt.
+- **Access:** Delegate always grants reads of the core team directory, the role's team directory and its tasks directory, even when a role or overlay replaces `read`. `read` adds only extra directories; `write` and `commands` widen writes and commands; `templates` inlines templates into the prompt.
 - **Board runs:** the same keys under `[orchestrator.core]` (e.g. `[orchestrator.core.roles.engineer]`) apply to board runs only, after the `[delegate]` ones.
 
 ## Add roles, tasks and templates
