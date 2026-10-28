@@ -55,6 +55,7 @@ class CustomTeam(Base):
             ({"cwd": top}, f"the cwd {top}"),
             ({"keys": {"write": [inside]}}, f"write dir {inside} {inside}"),
             ({"keys": {"write": [self.tasks]}}, f"write dir {self.tasks} {self.tasks}"),
+            ({"keys": {"write": [self.team]}}, f"write dir {self.team} {self.team}"),
         ):
             with self.subTest(what=what):
                 self.assertEqual(

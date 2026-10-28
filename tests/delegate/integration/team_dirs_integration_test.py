@@ -1,6 +1,6 @@
 """A local `team_dirs` of TEAM's files, read by the Composer in a child process and by
 delegate/cli.py over the fake `claude` and fake_codex: its tasks dir is read, never added; a read
-dir holding the team dir runs unadded, a write dir (or CODEX_HOME) overlapping it is refused.
+dir holding the team dir runs unadded, a write dir overlapping it is refused.
 """
 
 import json
@@ -75,12 +75,6 @@ class ComposerTeamDirs(child.Case):
         self.assertNotIn("error", got)
         return got
 
-    def test_a_team_dirs_role_composes_with_its_tasks_dir(self):
-        got = self.composed()
-        self.assertEqual(TASKS_PARAM.search(got["prompt"])[1], self.tasks)
-        self.assertEqual((got["intent"]["dirs"], got["intent"]["reads"]), ([], [self.tasks]))
-        self.assertEqual(os.listdir(self.work), [])
-
     def test_the_catalog_lists_its_role_after_cores_with_its_sources(self):
         rows = self.child("catalog", self.work)
         self.assertEqual(
@@ -108,13 +102,12 @@ class ComposerTeamDirs(child.Case):
         for resume in (False, True):
             with self.subTest(resume=resume):
                 got = self.composed(resume=resume)
-                dirs, reads = got["intent"]["dirs"], got["intent"]["reads"]
-                self.assertIn(self.tasks, map(os.path.realpath, reads))
-                self.assertNotIn(self.tasks, map(os.path.realpath, dirs))
-                self.assertNotIn(CORE_TASKS, dirs + reads)
-                self.assertIn(f"`{self.tasks}`", got["prompt"])
+                self.assertEqual(
+                    (got["intent"]["dirs"], got["intent"]["reads"]), ([], [self.tasks])
+                )
+                self.assertEqual(TASKS_PARAM.search(got["prompt"])[1], self.tasks)
                 self.assertEqual(got["prompt"].startswith(RESUME), resume)
-                self.assertFalse(os.path.exists(os.path.join(self.work, "tasks")))
+                self.assertEqual(os.listdir(self.work), [])
 
     def test_a_read_dir_holding_the_team_dir_composes_unadded(self):
         self.local(f"[delegate.roles.writer]\nread = [{json.dumps(self.team)}]\n", "a")
@@ -205,16 +198,11 @@ class CodexTeamDirs(CodexIntegration):
         self.team = make_team(self)
         self.tasks = os.path.join(self.team, "tasks")
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
-        self.toml = os.path.join(self.home, ".ensemble", "config.local.toml")
-        with open(self.toml, "w") as f:
+        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
             f.write(
                 f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
                 + local_section(VERIFIER, "delegate")
             )
-
-    def role(self, key: str) -> None:
-        with open(self.toml, "a") as f:
-            f.write(f"[delegate.roles.writer]\n{key} = {json.dumps([self.team])}\n")
 
     def test_a_codex_run_and_its_resume_read_its_tasks_dir_unadded(self):
         for resume, resume_id in ((False, None), (True, NATIVE)):
@@ -234,39 +222,6 @@ class CodexTeamDirs(CodexIntegration):
                 self.assertFalse(os.path.exists(os.path.join(self.work, "tasks")))
                 if resume:
                     self.assertEqual(self.read(self.out), DONE["deliverable"])
-
-    def test_a_read_dir_holding_the_team_dir_runs_unadded(self):
-        self.role("read")
-        res = self.drive(codex_said(block(DONE)))
-        self.assertEqual(res.returncode, 0, res.stderr)
-        (call,) = self.calls()
-        self.assertFalse({self.team, self.tasks} & set(map(os.path.realpath, added(call["argv"]))))
-
-    def test_a_write_dir_holding_the_team_dir_is_refused(self):
-        self.role("write")
-        res = self.drive([])
-        self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
-        self.assertIn(
-            f"delegate: team_dirs: {self.team} overlaps write dir {self.team} {self.team}: "
-            "the agent run can write there\n",
-            res.stderr,
-        )
-        self.assertEqual(self.calls(), [])
-        self.assertEqual(os.listdir(self.work), [])
-
-    def test_one_overlapping_codex_home_exits_2_before_codex_starts(self):
-        for home in (os.path.join(self.team, "codex"), os.path.dirname(self.team)):
-            with self.subTest(home=home):
-                self.env["CODEX_HOME"] = home
-                res = self.drive([])
-                self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
-                self.assertIn(
-                    f"delegate: team_dirs: {self.team} overlaps a dir codex can write {home}: "
-                    "the agent run can write there\n",
-                    res.stderr,
-                )
-                self.assertEqual(self.calls(), [])
-                self.assertEqual(os.listdir(self.work), [])
 
 
 if __name__ == "__main__":
