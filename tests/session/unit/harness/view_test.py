@@ -604,6 +604,7 @@ class RequestTest(Base):
         view.send("hi")
         view.press([KeyPress("Enter"), KeyPress("c", ctrl=True)])
         self.assertEqual(view.screen(3), "now")
+        self.assertIsInstance(self.served[0][1].pop("_send_deadline"), float)
         self.assertEqual(
             self.served,
             [

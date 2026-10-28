@@ -1778,6 +1778,24 @@ class StartupTui(ScanTui):
 
 
 class StartupSendTest(Base):
+    def test_each_wait_reports_its_gate_and_cancellation_stays_distinct(self):
+        mode = self.started_with()
+        self.assertEqual(mode._try_send("next", lambda: True), "client startup")
+        self.ready(turn=False)
+        self.assertEqual(mode._try_send("next", lambda: True), "turn acceptance")
+        self.append(record("start", turn_id="first"))
+        mode.poll(0)
+        self.assertEqual(mode._try_send("next", lambda: True), "turn interruption")
+        self.assertEqual(mode._try_send("next", lambda: True), "turn interruption")
+        self.assertFalse(mode._try_send("canceled", lambda: False))
+        self.assertEqual(self.sent(), [Key("Escape")])
+
+    def test_a_codex_send_does_not_block_polling_while_the_send_lock_is_held(self):
+        mode = self.started_with()
+        with mode._store.sending():
+            self.assertEqual(mode._try_send("next", lambda: True), "send lock")
+        self.assertEqual(self.sent(), [])
+
     def test_a_rejected_plan_command_cannot_hold_the_next_send(self):
         mode = self.started_with(prompt="")
         self.ready(turn=False)

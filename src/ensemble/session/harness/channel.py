@@ -298,10 +298,15 @@ class Channel:
 
     def _answered(self, body: Mapping, ident: str, timeout: float) -> dict | None:
         op = body["op"]
+        deadline = time.monotonic() + timeout
+        if op == Op.SEND:
+            body = {
+                **body,
+                "data": {**body["data"], "_send_deadline": deadline - min(1.0, timeout / 2)},
+            }
         reply = os.path.join(self._replies, ident + ".json")
         os.makedirs(self._requests, 0o700, exist_ok=True)
         save(os.path.join(self._requests, ident + ".json"), json.dumps(body))
-        deadline = time.monotonic() + timeout
         while True:
             answer = _json(reply)
             if isinstance(answer, dict):

@@ -916,16 +916,122 @@ class WaitingOwned(RemoteOwned):
     def __init__(self, **kw):
         super().__init__(**kw)
         self.ready, self.attempts = False, []
+        self.gate = "client startup"
 
     def try_send(self, text, pending):
         self.attempts.append(text)
-        if not self.ready or not pending():
+        if not pending():
             return False
+        if not self.ready:
+            return self.gate
         self.send(text)
         return True
 
 
 class WaitingSendTest(Base):
+    def test_blocked_sends_answer_with_the_gate_before_the_caller_times_out(self):
+        owned = WaitingOwned()
+        self.running(owned)
+        for gate in ("client startup", "turn acceptance", "turn interruption"):
+            with self.subTest(gate=gate):
+                owned.gate = gate
+                with self.assertRaisesRegex(SessionError, gate) as caught:
+                    self.channel.ask(Op.SEND, {"text": "blocked"}, timeout=0.2)
+                self.assertNotIsInstance(caught.exception, Unanswered)
+        owned.ready = True
+        self.assertEqual(self.ask(Op.SEND, {"text": "after errors"}), {})
+        self.assertEqual(owned.inputs, [("send", "after errors")])
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_a_send_queued_behind_another_input_also_gets_a_gate_error(self):
+        owned = WaitingOwned()
+        self.queue("a", Op.SEND, {"text": "first"})
+        self.queue("b", Op.SEND, {"text": "second", "_send_deadline": time.monotonic() + 0.05})
+        self.running(owned)
+        reply = os.path.join(self.channel.directory, "replies", "b" * 32 + ".json")
+        until(lambda: os.path.isfile(reply))
+        with open(reply) as stream:
+            answer = json.load(stream)
+        self.assertFalse(answer["ok"])
+        self.assertIn("earlier input", answer["error"])
+        self.assertNotIn("second", owned.attempts)
+        self.assertEqual(self.ask(Op.SCREEN, {"lines": 1}), {"text": "screen 1"})
+        self.assertTrue(self.request(Op.CLOSE))
+
+    def test_readiness_at_the_submission_deadline_cannot_deliver_expired_text(self):
+        owned = WaitingOwned()
+        harness = self.harness(owned)
+        ident = "a" * 32
+        data = {"text": "expired", "_send_deadline": 1.0}
+        self.queue("a", Op.SEND, data)
+        with mock.patch("time.monotonic", return_value=0.0):
+            self.assertFalse(harness._serve(owned, Op.SEND, data, ident))
+        owned.ready = True
+        with mock.patch("time.monotonic", return_value=1.0):
+            self.assertTrue(harness._serve(owned, Op.SEND, data, ident))
+        reply = os.path.join(self.channel.directory, "replies", ident + ".json")
+        with open(reply) as stream:
+            answer = json.load(stream)
+        self.assertFalse(answer["ok"])
+        self.assertIn("client startup", answer["error"])
+        self.assertEqual(owned.inputs, [])
+        self.assertEqual(owned.attempts, ["expired"])
+
+    def test_a_request_expiring_before_its_first_attempt_names_the_deadline(self):
+        owned = WaitingOwned()
+        owned.ready = True
+        harness = self.harness(owned)
+        data = {"text": "expired", "_send_deadline": time.monotonic() - 1}
+        self.queue("a", Op.SEND, data)
+        self.assertTrue(harness._serve(owned, Op.SEND, data, "a" * 32))
+        reply = os.path.join(self.channel.directory, "replies", "a" * 32 + ".json")
+        with open(reply) as stream:
+            answer = json.load(stream)
+        self.assertFalse(answer["ok"])
+        self.assertIn("request deadline", answer["error"])
+        self.assertEqual(owned.inputs, [])
+
+    def test_expiry_during_dispatch_is_checked_before_input(self):
+        owned = WaitingOwned()
+        harness = self.harness(owned)
+        data = {"text": "expired", "_send_deadline": 1.0}
+        self.queue("a", Op.SEND, data)
+        now = [0.0]
+
+        def send(text, pending):
+            now[0] = 1.0
+            if pending():
+                owned.send(text)
+            return True
+
+        owned.try_send = send
+        with mock.patch("time.monotonic", side_effect=lambda: now[0]):
+            self.assertTrue(harness._serve(owned, Op.SEND, data, "a" * 32))
+        reply = os.path.join(self.channel.directory, "replies", "a" * 32 + ".json")
+        with open(reply) as stream:
+            answer = json.load(stream)
+        self.assertFalse(answer["ok"])
+        self.assertIn("request deadline", answer["error"])
+        self.assertEqual(owned.inputs, [])
+
+    def test_missing_or_invalid_deadlines_use_a_fixed_bounded_wait(self):
+        for value in (None, "bad", True, float("nan"), float("inf")):
+            with self.subTest(deadline=value):
+                owned = WaitingOwned()
+                harness = self.harness(owned)
+                data = {"text": "blocked", "_send_deadline": value}
+                self.queue("a", Op.SEND, data)
+                with mock.patch("time.monotonic", return_value=0.0):
+                    self.assertFalse(harness._serve(owned, Op.SEND, data, "a" * 32))
+                with mock.patch("time.monotonic", return_value=process.REQUEST_WAIT):
+                    self.assertTrue(harness._serve(owned, Op.SEND, data, "a" * 32))
+                reply = os.path.join(self.channel.directory, "replies", "a" * 32 + ".json")
+                with open(reply) as stream:
+                    answer = json.load(stream)
+                self.assertFalse(answer["ok"])
+                self.assertIn("client startup", answer["error"])
+                self.assertEqual(owned.inputs, [])
+
     def test_cancellation_during_an_earlier_screen_prevents_stale_batch_delivery(self):
         owned = WaitingOwned()
         owned.ready = True
@@ -972,11 +1078,11 @@ class WaitingSendTest(Base):
         )
         self.assertTrue(self.request(Op.CLOSE))
 
-    def test_a_timed_out_send_cannot_be_delivered_when_readiness_arrives_later(self):
+    def test_an_expired_send_cannot_be_delivered_when_readiness_arrives_later(self):
         owned = WaitingOwned()
         self.running(owned)
-        with self.assertRaises(Unanswered):
-            self.channel.ask(Op.SEND, {"text": "expired"}, timeout=0.05)
+        with self.assertRaisesRegex(SessionError, "client startup"):
+            self.channel.ask(Op.SEND, {"text": "expired"}, timeout=0.2)
         self.assertTrue(owned.attempts)
         owned.ready = True
         self.ask(Op.SCREEN, {"lines": 1})

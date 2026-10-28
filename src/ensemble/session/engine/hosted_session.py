@@ -1501,7 +1501,7 @@ class Owned:
     def up(self) -> bool:
         return self._session._running.client_up
 
-    def try_send(self, text: str, pending: Callable[[], bool]) -> bool:
+    def try_send(self, text: str, pending: Callable[[], bool]) -> bool | str:
         return self._session._running._try_send(text, pending)
 
     def press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None:

@@ -1078,23 +1078,25 @@ class TuiMode(BaseMode):
         return self._ready_at is not None and time.monotonic() >= self._ready_at
 
     def send(self, text: str) -> bool:
-        return self._try_send(text, lambda: True)
+        return self._try_send(text, lambda: True) is True
 
-    def _try_send(self, text: str, pending: Callable[[], bool]) -> bool:
-        with self._store.sending():
+    def _try_send(self, text: str, pending: Callable[[], bool]) -> bool | str:
+        with self._store.sending(wait=self.run._interrupt is None) as held:
+            if not held:
+                return "send lock"
             self._running()
             if not pending():
                 return False
             if not self._input_ready():
-                return False
+                return "client startup"
             if self.run._interrupt is not None:
                 if self._launching:
-                    return False
+                    return "turn acceptance"
                 if self._active_turn:
                     if not self._interrupting:
                         self._owner().send(self.run._interrupt)
                         self._interrupting = True
-                    return False
+                    return "turn interruption"
             self._deliver(self.run.submit(text), prompted=True)
             if self.run._interrupt is not None:
                 self._launching = self.run._starts_turn(text)
