@@ -23,6 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends tini python3 py
 COPY src/ensemble/session /opt/ensemble/src/ensemble/session
 COPY src/ensemble/utils /opt/ensemble/src/ensemble/utils
 COPY src/ensemble/delegate /opt/ensemble/src/ensemble/delegate
+COPY src/ensemble/orchestrator /opt/ensemble/src/ensemble/orchestrator
+COPY ensemble-orchestrator /opt/ensemble/bin/ensemble-orchestrator
 COPY plugin-sources.json /opt/ensemble/plugin-sources.json
 COPY .claude-plugin/plugin.json /opt/ensemble/version.json
 COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/
@@ -44,6 +46,7 @@ RUN test -n "${CLAUDE_VERSION}" && test -n "${CODEX_VERSION}" && test -n "${OPEN
     && PATH=/opt/ensemble/clients/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin python3 -I /opt/ensemble/lib/plugin-install.py /opt/ensemble/plugin-sources.json /opt/ensemble
 # python3 on the agent's PATH is this venv's, importing ensemble; system site keeps pip --user working.
 RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/ensemble/bin \
+    && chmod 755 /opt/ensemble/bin/ensemble-orchestrator \
     && printf '%s\n' /opt/ensemble/src > "$(/opt/ensemble/venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/ensemble.pth" \
     && printf '%s\n' '#!/bin/sh' 'exec /opt/ensemble/venv/bin/python "$@"' > /opt/ensemble/bin/python3 \
     && ln -s /opt/ensemble/src/ensemble/delegate/team /opt/ensemble/team \

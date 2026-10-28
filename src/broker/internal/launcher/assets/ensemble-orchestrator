@@ -1,0 +1,3 @@
+#!/bin/sh
+export PYTHONPATH=/opt/ensemble/src
+exec /opt/ensemble/venv/bin/python -P -m ensemble.orchestrator.worker_cli "$@"

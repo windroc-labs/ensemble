@@ -32,6 +32,13 @@ var assets embed.FS
 //go:embed checks/*
 var checks embed.FS
 
+// issueRuntime is the issue command's dependency closure; host orchestration and configuration stay out.
+var issueRuntime = []string{
+	"__init__.py", "worker_cli.py", "issue", "engine/__init__.py", "engine/types.py",
+	"engine/flow/__init__.py", "engine/flow/types.py", "engine/flow/tracker.py", "engine/flow/handoff.py",
+	"trackers/__init__.py", "trackers/linear",
+}
+
 // checkPath is the ensemble layer's PATH less /opt/ensemble/bin: where the layer finds what it needs.
 const checkPath = "/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
 
@@ -251,6 +258,12 @@ func (h Host) stage(pkg string, spec BuildSpec, tmp string) (string, string, err
 	for _, rel := range []string{"src/ensemble/session", "src/ensemble/utils", "src/ensemble/delegate", ".claude-plugin/plugin.json"} {
 		if err := snapshotTree(filepath.Join(pkg, rel), filepath.Join(packageDir, rel)); err != nil {
 			return "", "", protocol.New(protocol.BuildFailed, "Invalid ensemble package directory: "+rel+" unreadable.")
+		}
+	}
+	for _, rel := range issueRuntime {
+		path := filepath.Join("src/ensemble/orchestrator", rel)
+		if err := snapshotTree(filepath.Join(pkg, path), filepath.Join(packageDir, path)); err != nil {
+			return "", "", protocol.New(protocol.BuildFailed, "Invalid ensemble package directory: "+path+" unreadable.")
 		}
 	}
 	var meta struct {

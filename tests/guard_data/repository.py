@@ -84,6 +84,8 @@ STANDALONE = frozenset(
     {
         ".github/mini_op_guard.py",
         ".github/worker_codex.py",
+        ".github/worker_issue.py",
+        ".github/worker_issue/sitecustomize.py",
         ".github/worker_codex/tools.py",
         ".github/worker_codex/skills.py",
         ".github/worker_codex/state.py",

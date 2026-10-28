@@ -20,6 +20,8 @@ ORCH_SRC = f"src/{PKG}/{ORCH}/"
 
 ORCH_PROJECT = "orchestrator"
 
+ENTRY_MODULES = {ORCH_PROJECT: {"worker_cli.py"}}
+
 
 ORCH_FILES = f"{ORCH_SRC}"
 

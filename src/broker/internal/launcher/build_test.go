@@ -303,6 +303,17 @@ func newReleases() *fakeReleases {
 // clientArgs maps the ensemble layer's client build args to the labels its Dockerfile sets.
 var clientArgs = map[string]string{"CLAUDE_VERSION": "ensemble.claude-version", "CODEX_VERSION": "ensemble.codex-version", "OPENCODE_VERSION": "ensemble.opencode-version"}
 
+func putIssueRuntime(t *testing.T, pkg string) {
+	t.Helper()
+	for _, rel := range issueRuntime {
+		path := filepath.Join(pkg, "src/ensemble/orchestrator", rel)
+		if !strings.HasSuffix(rel, ".py") {
+			path = filepath.Join(path, "__init__.py")
+		}
+		putFile(t, path, "")
+	}
+}
+
 func newBuildEnv(t *testing.T) *buildEnv {
 	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseAgent: "agent 1000 1000\n", releases: newReleases()}
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
@@ -310,6 +321,7 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "session")
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/utils/sample.py"), "utils")
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/delegate/sample.py"), "delegate")
+	putIssueRuntime(t, e.pkg)
 	e.fake = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		switch args[0] {
 		case "build":
@@ -781,6 +793,7 @@ func TestAFailedRefreshKeepsTheImage(t *testing.T) {
 // otherPackage is a package whose build key differs from e.pkg's.
 func otherPackage(t *testing.T) string {
 	pkg := t.TempDir()
+	putIssueRuntime(t, pkg)
 	putFile(t, filepath.Join(pkg, ".claude-plugin/plugin.json"), `{"version":"1.2.3"}`)
 	for _, rel := range []string{"src/ensemble/session/sample.py", "src/ensemble/utils/sample.py", "src/ensemble/delegate/sample.py"} {
 		putFile(t, filepath.Join(pkg, rel), "other")

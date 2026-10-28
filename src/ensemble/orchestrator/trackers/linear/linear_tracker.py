@@ -7,7 +7,6 @@ import re
 from dataclasses import dataclass
 from typing import TypeVar
 
-from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.flow.handoff import parse_handoff
 from ensemble.orchestrator.engine.flow.tracker import Tracker
 from ensemble.orchestrator.engine.flow.types import (
@@ -338,6 +337,8 @@ class LinearTracker(Tracker):
     def connect(cls, gql, cfg, *, say):
         """Checks the team and task label group, then uses configured role app ids; keeps the task and
         Agent label maps. Calls gql as linear.harness."""
+        from ensemble.orchestrator.engine import config
+
         linear = config.linear_settings(cfg, "router")
         gql = functools.partial(gql, identity=linear.harness)
         found = ops.team(gql, linear)
