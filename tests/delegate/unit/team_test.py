@@ -72,6 +72,21 @@ When something "fails after restart," suspect stale persistent state first: conf
 """
 
 
+PSTACK_SUBTRACT_BEFORE_YOU_ADD = """# Subtract Before You Add
+
+When evolving a system, remove complexity first, then build. Default to subtraction.
+
+Make simplification a continual investment. Leave the design slightly simpler and more capable behind the same or smaller surface than you found it.
+
+- Sequence removal before construction
+- Cut before you polish (get to the minimum before investing in quality)
+- Design for observed usage, not speculative edge cases
+- No speculative validators, parsers, or guards beyond what the spec demands
+- Simplify prompts (remove redundant instructions, excessive templates)
+- When a reference has no novel content, delete it rather than leaving a stub
+"""
+
+
 def destined(role, output, *, docker=False):
     """The real core's prompt for `role` with `output`, rendered for Docker when `docker`."""
     composition = Composer()
@@ -708,6 +723,26 @@ class Real(RealConfig):
         for role, task in runs():
             if role != "engineer":
                 self.assertNotIn("fix-root-causes", composed(role, task)[0], (role, task))
+
+    def test_engineers_subtract_before_they_add_by_the_method_file(self):
+        rules = section(composed("engineer")[0], "Rules")
+        self.assertEqual(
+            item(rules, "Subtract before you add"),
+            ": for every change, read and follow the **subtract-before-you-add method** "
+            "`<team>/methods/subtract-before-you-add.md`. Every brief to a sub-agent "
+            "(producer, reviewer) names that file for the sub-agent to read.\n",
+        )
+        labels = re.findall(r"^- \*\*(.*?)\*\*", rules, re.MULTILINE)
+        self.assertEqual(
+            labels.index("Subtract before you add"), labels.index("Fix root causes") + 1
+        )
+        with open(
+            os.path.join(TEAM, "methods", "subtract-before-you-add.md"), encoding="utf-8"
+        ) as f:
+            self.assertEqual(f.read(), PSTACK_SUBTRACT_BEFORE_YOU_ADD)
+        for role, task in runs():
+            if role != "engineer":
+                self.assertNotIn("subtract-before-you-add", composed(role, task)[0], (role, task))
 
     def test_the_summary_is_short_and_details_go_in_the_deliverable(self):
         for role, task in runs():
