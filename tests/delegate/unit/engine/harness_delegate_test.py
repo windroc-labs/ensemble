@@ -908,6 +908,94 @@ class CleanTest(HarnessCase):
         self.assertFalse(DrivenDelegate.clean(never))
         self.assertFalse(os.path.lexists(never))
 
+    def workspaces(self, *removed, error=None):
+        """The agent Host's remove_workspaces, a mock."""
+        found = mock.Mock(return_value=list(removed), side_effect=error)
+        HarnessSession.hosts["agent"].remove_workspaces = found
+        return found
+
+    def rewrite(self, **fields):
+        path = Layout(self.work).run + "/delegate.json"
+        with open(path) as file:
+            record = json.load(file)
+        with open(path, "w") as file:
+            json.dump(record | fields, file)
+
+    def test_clean_removes_the_runs_workspaces_before_the_agent_files(self):
+        self.make()
+        remove = self.workspaces()
+        remove.side_effect = lambda cwd: ["ensemble-ws-a"] if os.path.isdir(cwd) else []
+        self.assertTrue(DrivenDelegate.clean(self.work))
+        remove.assert_called_once_with(self.agent())
+        self.assertFalse(os.path.lexists(self.agent()))
+        remove.side_effect, remove.return_value = None, ["ensemble-ws-b"]
+        self.assertTrue(DrivenDelegate.clean(self.work))
+        remove.return_value = []
+        self.assertFalse(DrivenDelegate.clean(self.work))
+
+    def test_a_workspace_refusal_keeps_the_agent_files(self):
+        self.make()
+        self.workspaces(error=SessionError("docker workspace ensemble-ws-a kept: in use"))
+        with self.assertRaisesRegex(SessionError, "ensemble-ws-a kept: in use"):
+            DrivenDelegate.clean(self.work)
+        self.assertTrue(os.path.isdir(self.agent()))
+
+    def test_dry_or_scratch_clean_keeps_workspaces(self):
+        self.make()
+        os.makedirs(os.path.join(self.agent(), "tmp"))
+        remove = self.workspaces("ensemble-ws-a")
+        for dry, scratch in ((True, False), (False, True), (True, True)):
+            DrivenDelegate.clean(self.work, dry=dry, scratch=scratch)
+        remove.assert_not_called()
+
+    def test_clean_without_a_run_record_touches_no_workspace(self):
+        os.makedirs(self.agent())
+        remove = self.workspaces("ensemble-ws-a")
+        self.assertTrue(DrivenDelegate.clean(self.work))
+        remove.assert_not_called()
+        self.assertFalse(os.path.lexists(self.agent()))
+
+    def test_clean_of_an_unparseable_record_deletes_files_only(self):
+        self.make()
+        remove = self.workspaces("ensemble-ws-a")
+        for record in ({"version": 2}, None):
+            if record is None:
+                with open(Layout(self.work).run + "/delegate.json", "w") as file:
+                    file.write("not json")
+            else:
+                self.rewrite(**record)
+            os.makedirs(self.agent(), exist_ok=True)
+            self.assertTrue(DrivenDelegate.clean(self.work))
+            self.assertFalse(os.path.lexists(self.agent()))
+        remove.assert_not_called()
+
+    def test_clean_of_an_unattachable_run_uses_its_recorded_host(self):
+        self.make()
+        self.rewrite(session_cls="tests.nowhere:Gone")
+        remove = self.workspaces("ensemble-ws-a")
+        module = HarnessDelegate.__module__
+        with (
+            mock.patch(f"{module}.Session", HarnessSession),
+            mock.patch.object(HarnessSession, "configure_from") as configure,
+        ):
+            self.assertTrue(DrivenDelegate.clean(self.work))
+        configure.assert_called_once()
+        remove.assert_called_once_with(self.agent())
+        self.assertFalse(os.path.lexists(self.agent()))
+
+    def test_clean_with_an_unknown_recorded_host_refuses(self):
+        self.make()
+        self.rewrite(host="gone")
+        files = tree(self.work)
+        for dry in (False, True):
+            with self.subTest(dry=dry):
+                if dry:
+                    DrivenDelegate.clean(self.work, dry=True)
+                else:
+                    with self.assertRaisesRegex(ConfigError, "unknown host gone"):
+                        DrivenDelegate.clean(self.work)
+                self.assertEqual(tree(self.work), files)
+
     def test_scratch_deletes_only_checkouts_and_temp_files_never_following_a_link(self):
         self.make()
         agent = self.agent()

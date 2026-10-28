@@ -656,7 +656,7 @@ ensemble keeps its state in `~/.ensemble/` (`work/` and `logs/` in `<work_dir>`,
 | Entry | Safe to delete by hand |
 |---|---|
 | `config.local.toml`, `logs/runs.jsonl`, board issue files and `.next-id`, `docker/worker/` | never |
-| `work/<ID>/agent/` | no: prune also drops its worktrees and pushed branches |
+| `work/<ID>/agent/` | no: prune also drops its worktrees, pushed branches and Docker workspace volumes |
 | `work/<ID>/run/`, `work/<ID>/writeback.json` | once you won't resume or recover the run |
 | `logs/orchestrator.jsonl`, `logs/prune.json`, `probe/`, `bin/`, `hidden/<name>.json` | any time (keep `logs/`) |
 | `logs/router.lock`, `logs/router-starts.lock`, `logs/router/`, `board/.lock` | while no router runs, no program writes the board |
@@ -760,7 +760,7 @@ A role's environment comes only from the trusted delegate config, never a run's 
 
 ### Workspace volumes
 
-A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cwd; work reaches the host only through GitHub. A new start of the same name keeps it; `close` reclaims volumes whose cwd is gone, keeping any with unsaved work (warnings in `~/.ensemble/docker-state/reclaim.log`). Remove one with `"$B" workspace-rm --volume <volume>` (exit 12 `workspace_dirty` names unpushed repos; `--force` skips the check). The check sees only git: ignored files (updraft plan docs, progress logs) go with the volume. A board issue that switches client gets a new name and an empty volume; the old one goes when the issue is pruned, so fetch its unpushed work by hand. A kept dirty volume takes disk until you act; anyone with Docker access can read volumes.
+A worker's workspace is a Docker volume, `ensemble-ws-<name>`, mounted at its cwd; work reaches the host only through GitHub. A new start of the same name keeps it. Prune, cleaning a finished issue, first force-removes every volume at its `agent/` dir on its latest run's Host, unsaved work included, so a Canceled or Duplicate move cannot be undone for that work after prune's next tick; a refusal (`prune-error`) keeps the agent files for the next tick. `close` reclaims other volumes whose cwd is gone, keeping any with unsaved work (warnings in `~/.ensemble/docker-state/reclaim.log`). Remove one with `"$B" workspace-rm --volume <volume>` (exit 12 `workspace_dirty` names unpushed repos; `--force` skips the check). The check sees only git: ignored files (updraft plan docs, progress logs) go with the volume. A board issue that switches client gets a new name and an empty volume; the old one goes when the issue is pruned, so fetch its unpushed work by hand. A kept dirty volume takes disk until you act; anyone with Docker access can read volumes.
 
 ### Docker recovery
 

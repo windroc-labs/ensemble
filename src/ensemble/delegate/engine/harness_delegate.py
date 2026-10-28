@@ -510,10 +510,29 @@ class HarnessDelegate(Delegate):
             found = [
                 p for p in (layout.scratch if scratch else (layout.agent,)) if os.path.lexists(p)
             ]
+            removed = []
+            if not (dry or scratch) and (host := view._recorded_host(payload)) is not None:
+                removed = host.remove_workspaces(layout.agent)
             if not dry:
                 for path in found:
                     _remove(path)
-            return bool(found)
+            return bool(found or removed)
+
+    def _recorded_host(self, payload: bytes | None) -> Host | None:
+        """The run record's Host, on this view's session class or, unattached, on Session set up
+        from the delegate config; None without a readable record.
+        """
+        state = getattr(self, "_state", None)
+        if state is None:
+            try:
+                state = self._parse(payload)
+            except ConfigError:
+                return None
+            try:
+                self.session_cls.configure_from(thaw(Composer().config.values))
+            except (OSError, ValueError, SessionConfigError) as error:
+                raise ConfigError(str(error)) from None
+        return self._session_host(state.host)
 
     @classmethod
     def check_tui(
