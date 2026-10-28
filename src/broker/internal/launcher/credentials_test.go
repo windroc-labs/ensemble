@@ -17,8 +17,9 @@ func TestCredentialSpecFixtures(t *testing.T) {
 		t.Run(c.File, func(t *testing.T) {
 			encoded, _ := json.Marshal(string(c.Data))
 			_, problem := parseCredentialEnvelope(encoded, credentialKinds)
-			if (problem == "") != c.Valid {
-				t.Fatalf("valid=%v problem=%q", c.Valid, problem)
+			valid := c.Valid && (c.Expected.ErrorCode == nil || *c.Expected.ErrorCode == "")
+			if (problem == "") != valid {
+				t.Fatalf("valid=%v problem=%q", valid, problem)
 			}
 		})
 	}
@@ -28,8 +29,14 @@ func TestCredentialMerge(t *testing.T) {
 	caller := ` { "env": [{"item":"ensemble-broker-env/caller","file":"caller"}] } `
 	environment := `{"github":{"app":"bot","permissions":{"contents":"read"}},"env":[{"item":"ensemble-broker-env/env","file":"env"}]}`
 	m, err := ParseManifest(withFields(t, map[string]any{"credentials": caller, "environment_credentials": environment}))
-	if err != nil || len(m.Credentials) != 2 || !strings.Contains(string(m.Credentials["env"]), `"caller"`) || !strings.Contains(string(m.Credentials["github"]), `"bot"`) {
+	if err != nil || len(m.Credentials) != 2 {
 		t.Fatalf("%s %v", m.Credentials, err)
+	}
+	if !fixtures.SameJSON(t, m.Credentials["env"], []byte(`[{"item":"ensemble-broker-env/caller","file":"caller"}]`)) {
+		t.Fatalf("caller must replace the entire env kind: %s", m.Credentials["env"])
+	}
+	if !fixtures.SameJSON(t, m.Credentials["github"], []byte(`{"app":"bot","permissions":{"contents":"read"}}`)) {
+		t.Fatalf("unmatched environment kind must survive: %s", m.Credentials["github"])
 	}
 	// Validate the environment independently, even when its kind would be replaced.
 	_, err = ParseManifest(withFields(t, map[string]any{"credentials": caller, "environment_credentials": `{"env":false}`}))
