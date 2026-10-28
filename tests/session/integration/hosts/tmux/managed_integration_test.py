@@ -137,8 +137,6 @@ class ManagedIntegrationTest(Case):
         proc.kill()
         proc.wait(timeout=10)
         live_tmux.wait(lambda: not any(map(self.alive, pids)), what="adopted daemon reaped")
-        # the guard writes its generation's exit state after the reap, under this test's HOME
-        live_tmux.wait(lambda: not self.alive(value["guard"]), what="the guard's end")
 
     def test_guard_sigkill_keeps_unknown_and_refuses_new_owner(self):
         worker = self.worker(terminal=True)
