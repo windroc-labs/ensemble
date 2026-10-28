@@ -33,6 +33,7 @@ from ensemble.utils import (
     REPLY_ID,
     SID_ENV,
     STATE,
+    LayerCommand,
     OutcomeStatus,
     Record,
     Status,
@@ -297,10 +298,35 @@ class Crew:
             command = ("ensemble-orchestrator", "router", "--issue", key, "--tui", *argv)
         elif kind == "role":
             name = name if name is not None else f"{key}-{sid[:8]}"
+            argv = self._role_arguments(key, argv)
             command = ("ensemble-delegate", "run", "--role", key, "--detach", "--name", name, *argv)
         else:
             raise ValueError(f"unknown launch kind: {kind}")
         return self._run(Spec(name, command, note), sid, shorthand=True, busy=kind == "role")
+
+    def _role_arguments(self, role: str, argv: tuple[str, ...]) -> tuple[str, ...]:
+        task = ()
+        options = iter(argv)
+        for word in options:
+            if word == "--":
+                break
+            option, inline, value = word.partition("=")
+            if option == "--credentials":
+                return argv
+            if option in {"--list", "--detach", "--dry-run", "--help", "-h"}:
+                continue
+            if not inline:
+                value = next(options, "")
+            if option == "--task":
+                task = (f"--task={value}",)
+        query = (LayerCommand.ORCHESTRATOR, "credentials", "--role", role, *task)
+        result = self._call(query, "")
+        if result.returncode:
+            error = ValueError if result.returncode == 2 else RuntimeError
+            raise error(
+                f"{shlex.join(query)}: {result.stderr.strip() or f'exit {result.returncode}'}"
+            )
+        return (*argv, "--credentials", result.stdout.removesuffix("\n"))
 
     def _live(self, names: set[str], sid: str) -> Liveness:
         """Roster entries named in names or holding sid, and sessions listed here or below holding

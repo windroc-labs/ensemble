@@ -1447,6 +1447,66 @@ class EnvironmentTest(StartBase):
         with open(os.path.join(self.state, f"{GEN}.json")) as f:
             return json.load(f)
 
+    def test_manifest_preserves_both_credential_declarations(self):
+        for value in (' {"future-kind": [1]}\n', "{", "{}", ""):
+            with self.subTest(value=value):
+                self.start(credentials=value, environment_credentials=' {"other": 2} ')
+                manifest = self.manifest()
+                self.assertEqual(manifest["credentials"], value)
+                self.assertEqual(manifest["environment_credentials"], ' {"other": 2} ')
+        self.start()
+        self.assertNotIn("credentials", self.manifest())
+        self.assertNotIn("environment_credentials", self.manifest())
+
+    def test_resume_reissues_saved_declarations_after_close(self):
+        values = {"credentials": ' {"future-kind": [1]}\n', "environment_credentials": "{"}
+        self.start(**values)
+        self.assertEqual({key: self.host_record()[key] for key in values}, values)
+        self.close_quietly(self.handle)
+        self.handle = None
+        self.history()
+        with open(os.path.join(self.cwd, "credentials.json"), "w") as f:
+            f.write('{"replacement": true}')
+        self.host.github = "different-app"
+        self.broker.started = replace(self.broker.started, github_user_id=123)
+        self.start(resume="1")
+        self.assertEqual({key: self.manifest()[key] for key in values}, values)
+        self.start(resume="1", **values)
+        self.assertEqual({key: self.manifest()[key] for key in values}, values)
+
+    def test_resume_refuses_different_or_new_declarations_before_start(self):
+        self.history()
+        for key in ("credentials", "environment_credentials"):
+            for saved, given in ((None, "{}"), ("{}", " {} "), ("{}", ""), ("{}", "{")):
+                self.record(**{key: saved})
+                metadata = {**self.METADATA, "resume": "1", key: given}
+                for check in (
+                    lambda metadata=metadata: self.host._preflight("w", self.launch, metadata),
+                    lambda metadata=metadata: self.host._validate("w", self.launch, metadata),
+                    lambda key=key, given=given: self.start(resume="1", **{key: given}),
+                ):
+                    with self.subTest(key=key, saved=saved, given=given):
+                        self.order.clear()
+                        with self.assertRaisesRegex(
+                            ConfigError, f"resume: {key} differs"
+                        ) as caught:
+                            check()
+                        self.assertNotIn("future-kind", str(caught.exception))
+                        self.assertEqual(self.order, [])
+
+    def test_fresh_start_does_not_inherit_saved_credentials(self):
+        self.record(credentials="{}", environment_credentials="{}")
+        self.start()
+        self.assertNotIn("credentials", self.manifest())
+        self.assertNotIn("environment_credentials", self.manifest())
+
+    def test_another_identity_does_not_inherit_saved_credentials(self):
+        self.record(sid="another", credentials="{}", environment_credentials="{}")
+        self.history()
+        self.start(resume="1")
+        self.assertNotIn("credentials", self.manifest())
+        self.assertNotIn("environment_credentials", self.manifest())
+
     def resumable(self, environment):
         """w's host.json from a start in `environment` (absent: a pre-upgrade one), its history."""
         self.record(**({} if environment == "absent" else {"environment": environment}))

@@ -2891,6 +2891,27 @@ class EnvironmentHostTest(HostedTuiBase):
         self.addCleanup(session.stop)
         self.assertNotIn("environment", self.docker.calls.worker.call_args.kwargs["metadata"])
 
+    def test_credential_text_reaches_the_host_in_tui_and_headless(self):
+        for mode in (Mode.TUI, Mode.HEADLESS):
+            with self.subTest(mode=mode):
+                spec = self.env_spec(
+                    mode=mode,
+                    environment=None,
+                    credentials=' {"future-kind": [1]}\n',
+                    environment_credentials="{",
+                )
+                session = self.session.start(spec, host="d2")
+                self.addCleanup(session.stop)
+                metadata = self.docker.calls.worker.call_args.kwargs["metadata"]
+                self.assertEqual(metadata["credentials"], spec.credentials)
+                self.assertEqual(metadata["environment_credentials"], spec.environment_credentials)
+                session.stop()
+
+    def test_tmux_accepts_credentials_without_a_container(self):
+        session = self.session.start(self.env_spec(environment=None, credentials="{"))
+        self.addCleanup(session.stop)
+        self.docker.calls.worker.assert_not_called()
+
     def test_in_process_refuses_it(self):
         spec = self.env_spec(mode=Mode.IN_PROCESS, name=None)
         self.refused(
