@@ -15,6 +15,7 @@ import tomllib
 from urllib.parse import quote
 
 from ensemble.utils import ProcessControl
+from tests.delegate import drives
 from tests.delegate.workdir import input_first, run_log
 from tests.orchestrator.case import PY, Case, child_env
 from tests.orchestrator.case import REPO as WORKTREE
@@ -129,6 +130,7 @@ class Flow(Case):
     def setUp(self):
         self.root = os.path.realpath(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.addCleanup(drives.end, self.root)
         state = os.path.join(self.root, "state")
         self.workdirs, self.logs = os.path.join(state, "work"), os.path.join(state, "logs")
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
