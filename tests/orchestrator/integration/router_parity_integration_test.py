@@ -134,15 +134,18 @@ class Lock(Parity):
         return first
 
     def all_started(self, procs, idents):
+        errs = []
         for proc in procs:
-            out, err = proc.communicate(timeout=TIMEOUT)
+            _, err = proc.communicate(timeout=TIMEOUT)
             self.assertEqual(proc.returncode, 0, err)
+            errs.append(err)
         rows = {row["issue"]: row for row in self.runs()}
         self.assertEqual(sorted(rows), sorted(idents))
         self.assertEqual({row["kind"] for row in rows.values()}, {"start"})
         for ident, row in rows.items():
             self.wait_end(row["sid"], ident)
         self.assertEqual({self.state(i) for i in idents}, {"in_review"})
+        return errs
 
     def test_parallel_issue_runs_of_different_issues_all_start(self):
         idents = [ID, OTHER, SOURCE]
@@ -151,7 +154,9 @@ class Lock(Parity):
         self.fake.fail("linear.Q_TEAM", "hang", seconds=HOLD)
         self.scene([START, DONE], usage=usage(0.5))
         procs = [self.start("router", "--issue", ident) for ident in idents]
-        self.all_started(procs, idents)
+        errs = self.all_started(procs, idents)
+        waited = [e for e in errs if f"router.py: {BUSY}; waiting up to {WAIT} s\n" in e]
+        self.assertEqual(len(waited), 2, errs)
         self.assertEqual(len(agent_calls(self.calls())), 3)
         self.assertNotIn(f"reason={BUSY}", "\n".join(self.said()))
 

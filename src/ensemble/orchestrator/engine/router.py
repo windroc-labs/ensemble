@@ -940,7 +940,7 @@ def announce(ident, linear_run, detached):
         )
 
 
-def _take(f, op, wait, waiting):
+def _take(f, op, wait: float | None, waiting):
     """Whether f's flock op was taken, retried every POLL s for up to wait s (None: blocks);
     waiting() runs once, before the first retry.
     """
@@ -965,7 +965,7 @@ def _take(f, op, wait, waiting):
 
 
 @contextlib.contextmanager
-def _flock(runs, dry, name, op, *, wait=0, waiting=None):
+def _flock(runs, dry, name, op, *, wait: float | None = 0, waiting=None):
     if dry:
         yield True
         return
