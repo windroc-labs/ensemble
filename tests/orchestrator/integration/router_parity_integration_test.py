@@ -98,7 +98,7 @@ class Lock(Parity):
         self.assertEqual(self.said().count(said), 1)
 
     def test_a_tick_while_another_router_holds_the_lock_logs_one_skip_and_does_nothing(self):
-        """v1 CLAUDE.md › Architecture: one router at a time."""
+        """One router at a time."""
         first = self.hold()
         res = self.router()
         self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
@@ -194,7 +194,7 @@ class MaxRuns(Parity):
         self.seed(OTHER, "ENG: Session index", priority=3)
 
     def test_a_live_agent_run_on_tmux_holds_the_roles_only_slot(self):
-        """v1 CLAUDE.md › Architecture: a live run holds its max_runs slot."""
+        """A live run holds its max_runs slot."""
         gate = os.path.join(self.root, "gate")
         self.scene([START, DONE], gate=gate, usage=usage(0.5))
         self.tick()
@@ -254,7 +254,7 @@ class Recover(Parity):
         return sid
 
     def test_a_tick_resumes_an_interrupted_in_progress_run(self):
-        """v1 CLAUDE.md › Architecture: a tick Recovers before it claims."""
+        """A tick Recovers before it claims."""
         sid = self.interrupted()
         self.scene([START, DONE], usage=usage(0.5))
         self.tick()
@@ -274,7 +274,7 @@ class Recover(Parity):
         self.assertEqual(self.state(ID), "in_review")
 
     def test_a_logged_role_not_the_delegates_is_not_resumed_and_goes_to_in_review(self):
-        """v1 CLAUDE.md › Architecture: a changed delegate invalidates the saved role."""
+        """A changed delegate invalidates the saved role."""
         sid = self.interrupted()
         with self.fake.lock:
             self.fake.find(ID)["delegate"] = role_id("pm")
@@ -299,7 +299,7 @@ class Refusals(Parity):
         self.assertEqual(sessions.stdout.split(), [MANAGER], sessions.stderr)
 
     def test_a_new_run_whose_target_check_fails_is_bounced_and_starts_no_agent_run(self):
-        """v1 CLAUDE.md › Architecture: `target.check` Invalid → bounce, as the role's app."""
+        """`target.check` Invalid → bounce, as the role's app."""
         self.seed(ID, "ENG: Session registry")
         self.gh["repos"][REPO]["permissions"]["push"] = False
         self.write_gh()
