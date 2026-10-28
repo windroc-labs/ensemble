@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import unittest
 
 from tests.utils.case import Case
 from tests.utils.sandbox import gone, kill, pid_exists, reap, running
@@ -16,6 +17,7 @@ class Probes(Case):
         self.addCleanup(reap, child)
         self.assertEqual(self.probes(child.pid), (True, True, False))
 
+    @unittest.skipUnless(hasattr(os, "waitid"), "os.waitid: Linux, or macOS on Python 3.13+")
     def test_a_zombie_exists_but_is_gone_and_a_reaped_pid_does_not_exist(self):
         child = subprocess.Popen(["true"])
         self.addCleanup(reap, child)
