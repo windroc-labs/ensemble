@@ -16,7 +16,7 @@ import (
 // The old-name guard (round 8): protocol 30 renamed every broker keychain service and static secret reference to start
 // with ensemble-broker-, and the maintainer's one-time step renames existing items and keys. While any old name remains,
 // every command but version refuses to run rather than read or write under either name. It reads no old-name item and
-// maps no name; remove it at the next broker protocol bump after 30 (spec D13).
+// maps no name; remove it in a later change, once no protocol-30 install is left.
 var (
 	legacyServices = []string{"ensemble-claude", "ensemble-bot", "ensemble-github-users", "ensemble-tokens",
 		"ensemble-revocations", "ensemble-codex", "ensemble-codex-grants", "ensemble-opencode", "ensemble-linear",

@@ -148,6 +148,7 @@ Recovery and next help:
             "content": "Prints the run's current content; does not resume it.",
             "outcome": "Prints outcome JSON, or null when no outcome is recorded.",
             "resume": "Live/completed runs return their Record; interrupted runs restart.\n"
+            "A run whose worker is ending (its container still reaped) exits 75, busy.\n"
             "--input answers a needs_input role run; pipeline answers belong on the\n"
             "issue board. Requires the original workdir, client and session identity.",
             "show": "Shows the agent session using saved display; accepts no new --display.",
@@ -573,6 +574,15 @@ def _query(a: argparse.Namespace, delegate_cls: type[HarnessDelegate], sid: str 
         status = view.status()
         return status.name, (view, status)
 
+    refused: list[SessionError] = []
+
+    def resumed(view) -> str:
+        try:
+            return _resume(view, a.input)
+        except SessionError as error:
+            refused.append(error)
+            raise
+
     reply = {
         "status": lambda pair: pair[1].to_line(),
         "show": lambda pair: pair[0].show(),
@@ -580,10 +590,10 @@ def _query(a: argparse.Namespace, delegate_cls: type[HarnessDelegate], sid: str 
         "close": lambda pair: pair[0].close(),
         "outcome": _outcome,
         "content": lambda view: view.content(),
-        "resume": lambda view: _resume(view, a.input),
+        "resume": resumed,
         "attach-command": _attach_command,
     }[a.command]
-    return answer_keys(
+    code = answer_keys(
         keys,
         sys.stdin,
         viewed,
@@ -595,6 +605,8 @@ def _query(a: argparse.Namespace, delegate_cls: type[HarnessDelegate], sid: str 
         out=sys.stdout,
         err=sys.stderr,
     )
+    busy = code == 1 and any(SessionBusy.PATTERN.match(str(error)) for error in refused)
+    return EXIT_BUSY if busy else code
 
 
 def _resume(view, input: str | None) -> str:

@@ -52,7 +52,7 @@ func recording(calls *[]call) app {
 		maintain: func(ctx context.Context, k keys, container, _ string, _ []string, _ bool) (any, error) {
 			return result("maintain")(ctx, k, container, nil)
 		},
-		status: func(ctx context.Context, k keys, _ bool) (any, error) { return result("status")(ctx, k, "", nil) },
+		status: func(ctx context.Context, k keys) (any, error) { return result("status")(ctx, k, "", nil) },
 		probeOpencode: func(ctx context.Context, k keys, provider, base string) (any, error) {
 			return result("probe-provider")(ctx, k, provider+" "+base, nil)
 		},
@@ -79,7 +79,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"32"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"33"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -282,6 +282,7 @@ func TestUsageErrors(t *testing.T) {
 		{"maintain", []string{"maintain", "--manifest", "/m.json", "--container", "ensemble-x-0123456789abcdef0123456789abcdef"}},
 		{"maintain", []string{"maintain", "--container", "ensemble-x-0123456789abcdef0123456789abcdef", "--manifest", "m.json"}},
 		{"status", []string{"status", "x"}},
+		{"status", []string{"status", "--cleanup"}},
 		{"close", []string{"close", "--container", "ensemble-x-0123"}},
 		{"version", []string{"version", "x"}},
 		{"workspace-rm", []string{"workspace-rm"}},
@@ -625,9 +626,10 @@ func (k *memKeychain) AppAccess(string, string) (broker.AppAccess, error) {
 func (k *memKeychain) Get(string) ([]byte, error) { return append([]byte(nil), k.token...), nil }
 
 type scripted struct {
-	calls [][]string
-	stdin [][]byte
-	fail  string
+	calls  [][]string
+	stdin  [][]byte
+	fail   string
+	tokens string // what a read of the token files answers
 }
 
 func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, error) {
@@ -639,6 +641,8 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	}
 	proxyID := strings.Repeat("e", 64)
 	switch {
+	case args[0] == "exec" && args[len(args)-1] == docker.SecretsDir+"/github":
+		return []byte(s.tokens), nil
 	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
 		return []byte(proxyID + "\n"), nil
 	case joined == "container inspect "+proxyID:
@@ -683,7 +687,7 @@ func TestTokenNeverLeaves(t *testing.T) {
 			Safe:   func(string) error { return nil },
 			Docker: d,
 			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(token)}},
-			GitHub: broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}, Lock: broker.FileLock(filepath.Join(t.TempDir(), "tokens.lock"))},
+			GitHub: broker.GitHub{Keychain: noSecrets{}, API: github.Client{Now: time.Now}},
 		}
 		a := app{start: func(ctx context.Context, _ keys, m string, _ io.Writer) (any, error) { return h.Start(ctx, m) }}
 		_, out, errOut := invoke(a, "start", "--manifest", path)
@@ -730,41 +734,19 @@ func TestBuildProgressGoesToStderr(t *testing.T) {
 }
 
 func TestStatus(t *testing.T) {
-	a := app{status: func(context.Context, keys, bool) (any, error) {
-		return launcher.StatusResult{Revocations: []protocol.Pending{{Container: "c", Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}}, nil
+	a := app{status: func(context.Context, keys) (any, error) {
+		return launcher.StatusResult{Claude: map[string]bool{"default": true}}, nil
 	}}
 	code, out, errOut := invoke(a, "status")
-	if code != 0 || errOut != "" || out != `{"revocations":[{"container":"c","account":"acme","expires_at":"2026-10-17T13:00:00Z"}]}`+"\n" {
+	if code != 0 || errOut != "" || out != `{"claude":{"default":true}}`+"\n" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
-	a = app{status: func(context.Context, keys, bool) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
+	a = app{status: func(context.Context, keys) (any, error) { return nil, protocol.New(protocol.KeychainFailed, "x") }}
 	code, out, errOut = invoke(a, "status")
 	if code != 11 {
 		t.Fatalf("%d %q", code, errOut)
 	}
 	assertError(t, errOut, out, "status", protocol.KeychainFailed)
-}
-
-func TestStatusCleanupOption(t *testing.T) {
-	var calls []call
-	a := recording(&calls)
-	var choices []bool
-	a.status = func(ctx context.Context, k keys, cleanup bool) (any, error) {
-		choices = append(choices, cleanup)
-		return recording(&calls).status(ctx, k, cleanup)
-	}
-	code, out, errOut := invoke(a, "status", "--cleanup")
-	if code != 0 || len(calls) != 1 || out == "" || errOut != "" {
-		t.Fatalf("explicit cleanup not dispatched: %d %q %q %v", code, out, errOut, calls)
-	}
-	for _, args := range [][]string{{"status", "--other"}, {"status", "--cleanup", "--cleanup"}} {
-		if code, _, _ := invoke(recording(&calls), args...); code != 2 || len(calls) != 1 {
-			t.Fatal("invalid status options dispatched")
-		}
-	}
-	if code, _, _ := invoke(a, "status"); code != 0 || !slices.Equal(choices, []bool{true, false}) {
-		t.Fatalf("wrong status choices: %v", choices)
-	}
 }
 
 // noSecrets is an empty broker-only keychain.
@@ -812,7 +794,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		case r.Method == http.MethodPost:
 			issued++
 			w.WriteHeader(http.StatusCreated)
-			_, _ = fmt.Fprintf(w, `{"token":"ghs_AUDITTEST_%d","expires_at":"2099-01-01T00:00:00Z"}`, issued)
+			_, _ = fmt.Fprintf(w, `{"token":"ghs_AUDITTEST%d","expires_at":"2099-01-01T00:00:00Z"}`, issued)
 		case r.URL.Path == "/installation/repositories":
 			_, _ = io.WriteString(w, `{"total_count":1,"repository_selection":"selected","repositories":[{"full_name":"acme/ensemble"}]}`)
 		case r.Method == http.MethodDelete:
@@ -835,7 +817,6 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	log := filepath.Join(t.TempDir(), "Library/Logs/ensemble/broker.jsonl")
 	keys := memSecrets{"ensemble-broker-github-users/ensemble-broker-bot": []byte(`{"slug":"ensemble-broker-bot","id":343764394}`)}
-	lock := broker.FileLock(filepath.Join(t.TempDir(), "tokens.lock"))
 	for _, command := range []string{"start", "maintain", "close"} {
 		rec := &audit.Recorder{Command: command, Now: time.Now, Log: audit.Log{Path: log}}
 		if command != "start" {
@@ -846,9 +827,9 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
 			IsDir:  func(string) bool { return true },
 			Safe:   func(string) error { return nil },
-			Docker: &scripted{},
+			Docker: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n"},
 			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
-			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Lock: lock, Audit: rec,
+			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Audit: rec,
 				API: github.Client{Base: srv.URL, HTTP: srv.Client(), Now: time.Now}},
 			Audit: rec,
 		}
@@ -888,7 +869,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		}
 	}
 	want := []string{"start claude-setup-token issued", "start github-installation-token issued",
-		"refresh github-installation-token renewed", "refresh github-installation-token revoked", "close github-installation-token revoked"}
+		"refresh github-installation-token renewed", "close github-installation-token revoked"}
 	if !slices.Equal(results, want) || !bytes.Contains(data, []byte(`"repositories":["acme/ensemble"]`)) {
 		t.Fatalf("%v\n%s", results, data)
 	}
@@ -1395,7 +1376,7 @@ func TestOnlyLoginsAndRetrustAreInteractive(t *testing.T) {
 		{[]string{"start", "--manifest", "/m.json"}, []bool{false}},
 		{[]string{"maintain", "--container", container, "--manifest", "/m.json"}, []bool{false}},
 		{[]string{"close", "--container", container}, []bool{false}},
-		{[]string{"status", "--cleanup"}, []bool{false}},
+		{[]string{"status"}, []bool{false}},
 		{[]string{"build", "--ensemble", "/e"}, []bool{false}},
 		{[]string{"lock-query", "--lock", "dummy"}, []bool{false}},
 		{[]string{"probe-provider", "--provider", "strata", "--base-url", "https://strata.test/v1"}, []bool{false}},

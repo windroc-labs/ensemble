@@ -342,29 +342,13 @@ class ReclaimedTest(Case):
         self.assertEqual(gate.reclaimed(lines, G1, "codex"), [])
         self.assertEqual(len(gate.reclaimed(lines, G1, "claude")), 1)
 
-    def test_pending_names_its_reason(self):
-        lines = [line("close", G1, token("pending", reason="network down"), withdrawn())]
+    def test_unrevoked_names_its_reason(self):
+        lines = [line("close", G1, token("unrevoked", reason="network down"), withdrawn())]
         (problem,) = gate.reclaimed(lines, G1, "claude")
-        self.assertIn("pending", problem)
-        self.assertIn("network down", problem)
-
-    def test_expired_unrevoked(self):
-        lines = [
-            line("close", G1, token("pending", reason="offline"), withdrawn()),
-            line("revocation-retry", G1, token("expired-unrevoked")),
-        ]
-        (problem,) = gate.reclaimed(lines, G1, "claude")
-        self.assertIn("expired-unrevoked", problem)
-
-    def test_pending_then_revoked_by_retry(self):
-        lines = [
-            line("close", G1, token("pending", reason="offline"), withdrawn()),
-            line("revocation-retry", G1, token("revoked")),
-        ]
-        self.assertEqual(gate.reclaimed(lines, G1, "claude"), [])
+        self.assertIn("unrevoked (network down)", problem)
 
     def test_every_installation_counts(self):
-        lines = [line("close", G1, token("revoked"), token("pending", "other", 2), withdrawn())]
+        lines = [line("close", G1, token("revoked"), token("unrevoked", "other", 2), withdrawn())]
         (problem,) = gate.reclaimed(lines, G1, "claude")
         self.assertIn("other", problem)
 
@@ -382,7 +366,7 @@ class ReclaimedTest(Case):
 
     def test_other_generation_ignored(self):
         lines = [
-            line("close", G2, token("pending", reason="offline")),
+            line("close", G2, token("unrevoked", reason="offline")),
             line("close", G1, token("revoked"), withdrawn()),
         ]
         self.assertEqual(gate.reclaimed(lines, G1, "claude"), [])
@@ -599,7 +583,7 @@ class RefreshedAtTest(Case):
     def test_first_renewal_of_that_container(self):
         lines = [
             line("refresh", G2, token("renewed"), time="2026-10-18T12:01:00Z"),
-            line("refresh", G1, token("pending", reason="x"), time="2026-10-18T12:02:00Z"),
+            line("refresh", G1, token("unrevoked", reason="x"), time="2026-10-18T12:02:00Z"),
             line("refresh", G1, token("renewed"), time="2026-10-18T12:03:00Z"),
         ]
         self.assertEqual(gate.refreshed_at(lines, f"ensemble-live-{G1}"), "2026-10-18T12:03:00Z")
@@ -689,18 +673,6 @@ class BotPrTest(Case):
         self.assertEqual(gate.bot_pr(view(), ["ready_for_review"], None, need_refresh=False), [])
 
 
-class PendingExceptTest(Case):
-    def test_rules(self):
-        removed = f"ensemble-live-{G1}"
-        entry = {"container": removed, "account": "acme", "expires_at": "2026-10-18T13:00:00Z"}
-        self.assertEqual(gate.pending_except({"revocations": []}, removed), [])
-        self.assertEqual(gate.pending_except({"revocations": [entry]}, removed), [])
-        other = {**entry, "container": f"ensemble-live-{G2}"}
-        (problem,) = gate.pending_except({"revocations": [entry, other]}, removed)
-        self.assertIn(G2, problem)
-        self.assertEqual(len(gate.pending_except({"revocations": [entry]}, None)), 1)
-
-
 class UnreachableDocTest(Case):
     def test_gate_runs_the_documented_commands(self):
         with open(DOCS, encoding="utf-8") as f:
@@ -716,7 +688,7 @@ class UnreachableDocTest(Case):
 
 class NoSecretTest(Case):
     def test_outputs_never_echo_values(self):
-        secret = token("pending", reason="offline", note=FAKE, token=FAKE)
+        secret = token("unrevoked", reason="offline", note=FAKE, token=FAKE)
         lines = [line("close", G1, secret, withdrawn()), {**line("refresh", G1), "error": FAKE}]
         outputs = [
             *gate.reclaimed(lines, G1, "claude"),
