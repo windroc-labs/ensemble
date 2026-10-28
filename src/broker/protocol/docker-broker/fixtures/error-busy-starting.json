@@ -3,10 +3,10 @@
   "error": {
     "command": "start",
     "code": "busy",
-    "message": "Lock held by windroc-lock-dummy-lock (starting).",
+    "message": "Lock held by ~/.ensemble/docker/locks/dummy-lock.lock (starting).",
     "cleanup": "not_needed",
     "holder": {
-      "container": "windroc-lock-dummy-lock",
+      "container": "~/.ensemble/docker/locks/dummy-lock.lock",
       "owner": "starting"
     }
   }
