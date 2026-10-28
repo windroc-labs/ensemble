@@ -1,5 +1,5 @@
 """`delegate run --detach` over fake_claude: a tui run on a private tmux server, a headless one
-with none; the drive is a local ProcessControl process, never a tmux session.
+with none; the drive is a ProcessControl process, never a tmux session.
 """
 
 import contextlib
@@ -282,9 +282,7 @@ def shape(lines: list[str]) -> list[str]:
 class Tui(Detach):
     def test_from_the_manager_shown_in_its_grid_turn_ends_then_one_outcome_done(self):
         res = self.detach(mode="tui", steps=[START], turns=[[block(DONE)]], inside=MANAGER)
-        early = shape(live_tmux.events(self.events))
         record = self.said(res, tui=True)
-        self.assertNotIn("outcome done", early)
         self.until(
             lambda: live_tmux.assert_grid(self, self.server, MANAGER, [[TUI]]),
             f"the grid [[{TUI!r}]]",

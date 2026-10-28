@@ -28,7 +28,7 @@ type check struct {
 }
 
 func (c *check) docker() *fakeDocker {
-	return &fakeDocker{respond: func(args []string) ([]byte, error) {
+	return &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		switch strings.Join(args[:2], " ") {
 		case "volume inspect":
 			if c.inspect != nil {

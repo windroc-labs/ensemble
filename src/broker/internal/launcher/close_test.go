@@ -23,7 +23,7 @@ func TestClose(t *testing.T) {
 		"failed":        {"", &docker.CommandError{Exit: 1, Stderr: "removal of container in progress"}, false, protocol.CloseFailed},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := &fakeDocker{respond: func([]string) ([]byte, error) { return []byte(tc.out), tc.err }}
+			d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return []byte(tc.out), tc.err }}
 			got, err := Host{Docker: d, GitHub: &fakeTokens{}}.Close(context.Background(), container)
 			if len(d.calls) != 1 || !slices.Equal(d.calls[0], []string{"rm", "--force", container}) {
 				t.Fatalf("%q", d.calls)
@@ -45,7 +45,7 @@ func TestClose(t *testing.T) {
 func TestCloseMakesNoCodexCall(t *testing.T) {
 	for _, removal := range []error{nil, &docker.CommandError{Exit: 1, Stderr: "removal of container in progress"}} {
 		var log []string
-		d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+		d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 			log = append(log, args[0])
 			return []byte(container + "\n"), removal
 		}}
@@ -63,7 +63,7 @@ func TestCloseMakesNoCodexCall(t *testing.T) {
 // AC6: close reads the token files as agent through docker exec on the context Revoke gives it, then removes the
 // container.
 func TestCloseRevokesBeforeRemove(t *testing.T) {
-	d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "exec" {
 			return []byte("acme 1 ghs_x\n"), nil
 		}
@@ -89,7 +89,7 @@ func TestCloseRevokesBeforeRemove(t *testing.T) {
 // AC6: an absent container's read says so (nothing to revoke), and close succeeds as before.
 func TestCloseAbsentContainer(t *testing.T) {
 	absent := &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such container: " + container}
-	d := &fakeDocker{respond: func([]string) ([]byte, error) { return nil, absent }}
+	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, absent }}
 	tokens := &fakeTokens{readFiles: true}
 	got, err := Host{Docker: d, GitHub: tokens}.Close(context.Background(), container)
 	if err != nil || got != (CloseResult{Container: container, Removed: false}) || !docker.Absent(tokens.readErr) {
@@ -100,7 +100,7 @@ func TestCloseAbsentContainer(t *testing.T) {
 // AC6: a read that fails never keeps the container: close removes it and succeeds.
 func TestCloseRemovesWhenReadFails(t *testing.T) {
 	for _, readErr := range []error{&docker.CommandError{Exit: 1, Stderr: "container is not running"}, context.DeadlineExceeded} {
-		d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+		d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 			if args[0] == "exec" {
 				return nil, readErr
 			}

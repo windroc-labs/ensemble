@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -18,6 +19,8 @@ var expiry = []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00
 // fakeTokens records the launcher's Tokens calls; each err field fails its method. An issued set's revocation is the
 // call "revoke <container>"; close's Revoke is "read-revoke <container>", reading the token files when readFiles.
 type fakeTokens struct {
+	prepared                    [][]byte
+	owners                      []string
 	calls                       []string
 	ready, user, issue, refresh error
 	prefetch                    error
@@ -42,15 +45,22 @@ func (f *fakeTokens) BotUserID(app string) (int64, error) {
 	}
 	return botID, nil
 }
-func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) (func(), []protocol.Expiry, error) {
+func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
 	f.calls, f.permissions, f.repos = append(f.calls, "issue "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
 	if f.issue != nil {
-		return nil, nil, f.issue
+		return nil, nil, nil, f.issue
 	}
-	if err := exec([]string{"write"}, []byte("ghs_token")); err != nil {
-		return nil, nil, err
+	owners := f.owners
+	if len(owners) == 0 {
+		owners = []string{"acme"}
 	}
-	return func() {
+	var commands []credential.Command
+	for _, owner := range owners {
+		data := []byte("ghs_token")
+		f.prepared = append(f.prepared, data)
+		commands = append(commands, credential.Command{Argv: []string{"write", owner}, Stdin: data})
+	}
+	return commands, func() {
 		f.calls = append(f.calls, "revoke "+c)
 		if f.onRevoke != nil {
 			f.onRevoke()
@@ -108,13 +118,9 @@ func TestStartGitHub(t *testing.T) {
 	if out, _ := json.Marshal(got); !strings.Contains(string(out), `"github_user_id":343764394`) {
 		t.Fatalf("%s", out)
 	}
-	last := d.calls[len(d.calls)-1]
-	if !slices.Equal(last, []string{"exec", "--interactive", "--user", "agent", container, "write"}) || string(d.stdin[len(d.stdin)-1]) != "ghs_token" {
-		t.Fatalf("write %q", last)
-	}
-	inject := slices.IndexFunc(d.calls, func(c []string) bool { return slices.Contains(c, "inject") })
-	if inject < 0 || inject > len(d.calls)-2 {
-		t.Fatal("tokens written before the Claude token")
+	commands := startCommands(t, d)
+	if len(commands) != 2 || commands[0].Argv[0] != "inject" || !slices.Equal(commands[1].Argv, []string{"write", "acme"}) || string(commands[1].Stdin) != "ghs_token" {
+		t.Fatalf("credential order or bytes: %+v", commands)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/fixtures"
 	"ensemble/broker/internal/protocol"
@@ -28,6 +29,7 @@ const (
 )
 
 type fakeCreds struct {
+	prepared  [][]byte
 	ready     error
 	injectErr error
 	calls     []string // "ready <account>" and "inject <account>", in turn
@@ -37,20 +39,23 @@ func (c *fakeCreds) Ready(account string) error {
 	c.calls = append(c.calls, "ready "+account)
 	return c.ready
 }
-func (c *fakeCreds) Inject(account string, exec func(argv []string, stdin []byte) error) error {
+func (c *fakeCreds) Inject(account string) (credential.Command, error) {
 	c.calls = append(c.calls, "inject "+account)
-	if err := exec([]string{"inject"}, []byte(fakeToken)); err != nil {
-		return err
+	if c.injectErr != nil {
+		return credential.Command{}, c.injectErr
 	}
-	return c.injectErr
+	data := []byte(fakeToken)
+	c.prepared = append(c.prepared, data)
+	return credential.Command{Argv: []string{"inject"}, Stdin: data}, nil
 }
 
 func goodLabels() map[string]string {
-	return map[string]string{"ensemble.key": imageKey, "ensemble.version": "1.2.3", "ensemble.agent-uid": "1001", "ensemble.agent-gid": "1002"}
+	return map[string]string{"ensemble.key": imageKey, "ensemble.version": "1.2.3", "ensemble.agent-uid": "1001", "ensemble.agent-gid": "1002", "ensemble.claude-version": "2.1.0", "ensemble.codex-version": "0.163.0", "ensemble.opencode-version": "1.19.3"}
 }
 
 // world is a scripted Docker Desktop: each field steers one kind of call.
 type world struct {
+	batchReply      *string
 	labels          map[string]string
 	imageMissing    bool
 	volume          string // "" absent, "matching", "mismatched" or "unlabeled"
@@ -61,7 +66,6 @@ type world struct {
 	exists          bool // container already present
 	runErr          error
 	execErr         func(args []string) error
-	versions        []string
 	rmErr           error
 	rmSilent        bool // rm --force exits 0 without echoing: the container was absent
 	unreachable     bool
@@ -77,8 +81,8 @@ type world struct {
 }
 
 func (w *world) docker() *fakeDocker {
-	probes := 0
-	return &fakeDocker{respond: func(args []string) ([]byte, error) {
+	d := &fakeDocker{}
+	d.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if w.unreachable {
 			return nil, docker.ErrUnreachable
 		}
@@ -166,27 +170,22 @@ func (w *world) docker() *fakeDocker {
 					return nil, err
 				}
 			}
-			if slices.Contains(args, "--version") {
-				v := "2.1.0 (Claude Code)\n"
-				if slices.ContainsFunc(args, func(s string) bool { return strings.HasSuffix(s, "/codex") || strings.HasSuffix(s, "/codex.next") }) {
-					v = "codex-cli 0.163.0\n"
+
+			if slices.Contains(args, credentialBatch) {
+				if w.batchReply != nil {
+					return []byte(*w.batchReply), nil
 				}
-				if slices.ContainsFunc(args, func(s string) bool { return strings.HasSuffix(s, "/opencode") }) {
-					v = "1.19.3\n"
+				var commands []credential.Command
+				if err := json.Unmarshal(stdin, &commands); err != nil {
+					return nil, err
 				}
-				if probes < len(w.versions) {
-					v = w.versions[probes]
-				}
-				probes++
-				if v == "" {
-					return nil, &docker.CommandError{Exit: 127, Stderr: "not found"}
-				}
-				return []byte(v), nil
+				return json.Marshal(map[string]int{"completed": len(commands)})
 			}
 			return nil, nil
 		}
 		return nil, errors.New("unexpected " + strings.Join(args, " "))
-	}}
+	}
+	return d
 }
 
 const (
@@ -505,9 +504,11 @@ func TestStartOrder(t *testing.T) {
 	for i, c := range d.calls {
 		step := strings.Join(c[:2], " ")
 		if c[0] == "exec" {
-			step = c[1] + " " + c[2] + " " + c[len(c)-1]
-			if c[1] == "--user" {
-				step = c[2] + " " + strings.Join(c[4:min(len(c), 7)], " ")
+			step = "credentials"
+			if slices.Contains(c, "/usr/bin/python3") {
+				step = "bootstrap"
+			} else if slices.Contains(c, "hook") {
+				step = "hook"
 			}
 		}
 		if len(d.stdin[i]) > 0 && c[1] != "--interactive" {
@@ -516,21 +517,16 @@ func TestStartOrder(t *testing.T) {
 		steps = append(steps, step)
 	}
 	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm", "run --detach",
-		"--interactive --user -s",
-		"agent /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
-		"root /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
-		"agent claude --version", "agent /opt/ensemble/clients/bin/codex --version", "agent /opt/ensemble/clients/bin/opencode --version",
-		"--interactive --user inject"}
+		"bootstrap", "hook", "credentials"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
 	}
-	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, "inject"}) {
+	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, Python, "-I", credentialBatch}) {
 		t.Fatalf("inject %q", inject)
 	}
-	boot, hook := d.calls[12], d.calls[13]
-	if !slices.Equal(boot[len(boot)-3:], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) ||
-		!slices.Equal(hook[len(hook)-2:], []string{"hook", "/usr/local/bin/ensemble-session"}) {
-		t.Fatalf("%q %q", boot, hook)
+	boot := d.calls[11]
+	if !slices.Equal(boot[8:11], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) {
+		t.Fatalf("bootstrap %q", boot)
 	}
 	h, d = startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	if _, err := h.Start(context.Background(), fixtureManifest(t, "manifest-no-hook.json")); err != nil {
@@ -548,11 +544,11 @@ func TestStartUnreadableImage(t *testing.T) {
 		for _, unreachable := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/unreachable=%t", client, unreachable), func(t *testing.T) {
 				w := &world{labels: goodLabels(), execErr: func(args []string) error {
-					if slices.Contains(args, "/bin/sh") && slices.Contains(args, "-s") {
+					if slices.Contains(args, "/usr/bin/python3") {
 						if unreachable {
 							return docker.ErrUnreachable
 						}
-						return &docker.CommandError{Exit: 1, Stderr: "synthetic permission denied"}
+						return &docker.CommandError{Exit: contentFailed, Stderr: "synthetic permission denied"}
 					}
 					return nil
 				}}
@@ -588,10 +584,9 @@ func TestStartUnreadableImage(t *testing.T) {
 					if slices.Contains(call, Bootstrap) || slices.Contains(call, "--version") {
 						t.Fatalf("bootstrap or probe ran before content check: %v", call)
 					}
-					if slices.Contains(call, "/bin/sh") {
-						want := []string{"exec", "--interactive", "--user", "agent", container, "/bin/sh", "-s"}
-						if !slices.Equal(call, want) || !strings.Contains(string(d.stdin[i]), "/opt/ensemble") || !strings.Contains(string(d.stdin[i]), "find -L") {
-							t.Fatalf("content check must run as agent over stdin: %v %q", call, d.stdin[i])
+					if slices.Contains(call, "/usr/bin/python3") {
+						if !slices.Contains(call, "-I") || !strings.Contains(call[len(call)-1], "find -L") || !strings.Contains(string(d.stdin[i]), "subprocess.run") {
+							t.Fatalf("content check missing: %v", call)
 						}
 					}
 					if strings.Contains(strings.Join(call, " "), "inject") {
@@ -636,8 +631,6 @@ func TestRollback(t *testing.T) {
 	}{
 		"bootstrap":           {&world{execErr: failOn("claude", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"hook":                {&world{execErr: failOn("hook", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
-		"clients":             {&world{versions: []string{"2.1.0\n", ""}}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
-		"clients unreachable": {&world{execErr: failOn("--version", docker.ErrUnreachable)}, &fakeCreds{}, protocol.DockerUnreachable, protocol.Removed},
 		"inject":              {&world{}, &fakeCreds{injectErr: errors.New("opaque")}, protocol.StartFailed, protocol.Removed},
 		"inject unreachable":  {&world{}, &fakeCreds{injectErr: docker.ErrUnreachable}, protocol.DockerUnreachable, protocol.Removed},
 		"inject keychain":     {&world{}, &fakeCreds{injectErr: protocol.New(protocol.KeychainFailed, "denied")}, protocol.KeychainFailed, protocol.Removed},
@@ -653,6 +646,9 @@ func TestRollback(t *testing.T) {
 			e := protoErr(t, err)
 			if e.Code != tc.code || e.Cleanup != tc.cleanup || !hasCall(d, "rm") {
 				t.Fatalf("%+v %q", e, d.verbs())
+			}
+			if name == "hook" && e.Message != "Installing the hook stub failed." {
+				t.Fatal(e)
 			}
 			if tc.cleanup == protocol.Failed && (e.CleanupError == "" || e.Container != container) {
 				t.Fatalf("%+v", e)
@@ -717,7 +713,6 @@ func TestCauseOnlyWhereNamed(t *testing.T) {
 	cmdErr := &docker.CommandError{Exit: 1, Stderr: "boom detail"}
 	for name, w := range map[string]*world{
 		"bootstrap": {execErr: failOn("claude", cmdErr)},
-		"clients":   {execErr: failOn("--version", cmdErr)},
 	} {
 		w.labels = goodLabels()
 		h, _ := startHost(w, &fakeCreds{})
@@ -795,6 +790,11 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 						t.Fatalf("docker %q carries a secret", args)
 					}
 					delivered = delivered || strings.Contains(string(d.stdin[i]), s)
+				}
+			}
+			for _, command := range startCommands(t, d) {
+				for _, secret := range secrets {
+					delivered = delivered || strings.Contains(string(command.Stdin), secret)
 				}
 			}
 			if !delivered {

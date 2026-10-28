@@ -593,6 +593,56 @@ class LaunchTest(Base):
         self.assertLessEqual(worker.BEAT, 2)
         self.assertLess(2, guard.HEARTBEAT)
 
+    def test_cleanup_waits_for_a_heartbeat_still_starting(self):
+        channel = self.make()
+        paused, released, closing, closed = (threading.Event() for _ in range(4))
+        errors = []
+        start = threading.Thread.start
+
+        def delayed_start(thread):
+            if thread.name == "worker_1-beat":
+                paused.set()
+                if not released.wait(WAIT):
+                    raise AssertionError("heartbeat start not released")
+            start(thread)
+
+        def launch():
+            try:
+                channel.launch(self.HANDOFF)
+            except (AssertionError, SessionError) as error:
+                errors.append(error)
+
+        def cleanup():
+            closing.set()
+            try:
+                channel.end_releases()
+            except (RuntimeError, SessionError) as error:
+                errors.append(error)
+            finally:
+                closed.set()
+
+        with (
+            writable(lambda _fd, data: len(data)),
+            mock.patch.object(threading.Thread, "start", delayed_start),
+        ):
+            launcher = threading.Thread(target=launch, daemon=True)
+            cleaner = threading.Thread(target=cleanup, daemon=True)
+            launcher.start()
+            try:
+                self.assertTrue(paused.wait(WAIT))
+                cleaner.start()
+                self.assertTrue(closing.wait(WAIT))
+                self.assertFalse(closed.wait(0.05))
+            finally:
+                released.set()
+                launcher.join(WAIT)
+                if cleaner.ident is not None:
+                    cleaner.join(WAIT)
+                channel.accept(b"x", b'{"returncode":0}')
+                channel.close()
+        self.assertFalse(launcher.is_alive() or cleaner.is_alive())
+        self.assertEqual(errors, [])
+
     def test_a_failed_channel_ends_the_heartbeat_quietly(self):
         channel, frames = self.launched()
         self.assertTrue(self.beats(frames, 1))

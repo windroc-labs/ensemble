@@ -178,6 +178,8 @@ def git_run(*argv, cwd=None, env=None, **kwargs):
             "-c",
             "core.hooksPath=/dev/null",
             "-c",
+            "maintenance.auto=false",
+            "-c",
             "init.templateDir=",
             "-c",
             "user.name=test",

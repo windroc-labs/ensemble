@@ -35,22 +35,6 @@ func asAgent(container string, argv ...string) []string {
 	return append([]string{"exec", "--user", "agent", container}, argv...)
 }
 
-// probe reads every client's version; the image installed them.
-func (h Host) probe(ctx context.Context, container string) (Clients, error) {
-	var versions [3]string
-	var errs []error
-	for i, client := range []string{"claude", "/opt/ensemble/clients/bin/codex", "/opt/ensemble/clients/bin/opencode"} {
-		out, err := h.Docker.Run(ctx, asAgent(container, client, "--version"), nil)
-		line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-		versions[i] = strings.TrimSpace(line)
-		if err == nil && (versions[i] == "" || hasControl(versions[i])) {
-			err = errors.New(client + " --version gave no usable version")
-		}
-		errs = append(errs, err)
-	}
-	return Clients{Claude: versions[0], Codex: versions[1], Opencode: versions[2]}, errors.Join(errs...)
-}
-
 func taken(c string) *protocol.Error {
 	return protocol.New(protocol.StartFailed, "Container "+c+" already exists; close it first.")
 }
@@ -295,7 +279,7 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 // create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
 // container so far.
 func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
-	lap func(phase string)) (_ StartResult, held holding, _ error) {
+	lap func(phase string)) (_ StartResult, held holding, retErr error) {
 	labels := info.Config.Labels
 	// Stdin open for the harness's docker attach; no log driver, so no channel data lands in docker logs.
 	args := append([]string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
@@ -356,28 +340,13 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 			return StartResult{}, held, busy(holder)
 		}
 	}
-	contentCheck, err := checks.ReadFile("checks/image-content-check")
-	if err != nil {
-		return StartResult{}, held, protocol.New(protocol.StartFailed, "Embedded image checks unreadable.")
-	}
-	if _, err := h.Docker.Run(ctx, []string{"exec", "--interactive", "--user", "agent", c, "/bin/sh", "-s"}, contentCheck); err != nil {
-		return StartResult{}, held, failure(err, protocol.StartFailed, "Image content under /opt/ensemble is unreadable by agent; rebuild with ensemble-broker build.")
-	}
-	// OpenCode has no state to seed.
-	if m.Client != "opencode" {
-		if _, err := h.Docker.Run(ctx, asAgent(c, Python, "-I", Bootstrap, m.Client, m.StateDir(), m.CWD), nil); err != nil {
-			return StartResult{}, held, failure(err, protocol.StartFailed, "Writing client bootstrap state failed.")
-		}
-	}
-	if m.HasHook {
-		if _, err := h.Docker.Run(ctx, []string{"exec", "--user", "root", c, Python, "-I", Bootstrap, "hook", m.HookPath}, nil); err != nil {
-			return StartResult{}, held, failure(err, protocol.StartFailed, "Installing the hook stub failed.")
-		}
+	if err := h.bootstrap(ctx, c, m); err != nil {
+		return StartResult{}, held, err
 	}
 	lap("bootstrap")
-	clients, err := h.probe(ctx, c)
+	clients, err := startClients(labels)
 	if err != nil {
-		return StartResult{}, held, failure(err, protocol.StartFailed, "Cannot run the image's clients.")
+		return StartResult{}, held, err
 	}
 	lap("clients")
 	switch m.Client {
@@ -389,7 +358,8 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if err != nil {
 		return StartResult{}, held, err
 	}
-	exec := h.agentExec(ctx, c)
+	var batch startDelivery
+	defer batch.erase()
 	// Read again just before the Keychain reads, the closest to the versions injected.
 	var record *injectedRecord
 	if refs := staticRefs(m); h.Static != nil && len(refs) > 0 {
@@ -401,34 +371,66 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		record = &r
 	}
 	var codexExpiry *string
+	var commands []credential.Command
+	var message string
 	switch m.Client {
 	case "codex":
-		expiry, err := h.Codex.Inject(ctx, exec)
-		if err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting Codex credentials failed.")
+		message = "Injecting Codex credentials failed."
+		var login CodexInjection
+		login, err = h.Codex.Inject(ctx)
+		if err == nil {
+			commands, codexExpiry = []credential.Command{login.Command}, &login.Expiry
+			defer func() {
+				if endErr := login.Finish(); endErr != nil && retErr == nil {
+					retErr = injected(endErr, protocol.StartFailed, message)
+				}
+			}()
 		}
-		codexExpiry = &expiry
 	case "claude":
-		if err := h.Creds.Inject(m.ClaudeAccount, exec); err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the Claude token failed.")
-		}
+		message = "Injecting the Claude token failed."
+		var command credential.Command
+		command, err = h.Creds.Inject(m.ClaudeAccount)
+		commands = []credential.Command{command}
 	case "opencode":
+		message = "Injecting the OpenCode provider API keys failed."
 		if len(m.OpencodeProviders) > 0 {
-			if err := h.Opencode.Inject(m.OpencodeProviders, exec); err != nil {
-				return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the OpenCode provider API keys failed.")
-			}
+			commands, err = h.Opencode.Inject(m.OpencodeProviders)
 		}
 	}
-	if kind := clientKind(m.Client); kind != "" {
-		held.client = true
-		h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry})
+	if err != nil {
+		return StartResult{}, held, injected(err, protocol.StartFailed, message)
 	}
+	batch.commands = append(batch.commands, commands...)
+	batch.step(message, func() {
+		if kind := clientKind(m.Client); kind != "" {
+			held.client = true
+			h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry})
+		}
+	})
 	for _, s := range m.Secrets {
-		if err := h.Env.Inject(s, exec); err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Writing "+s.Item+" into the container failed.")
+		message := "Writing " + s.Item + " into the container failed."
+		command, err := h.Env.Inject(s)
+		if err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, message)
 		}
-		held.secrets = append(held.secrets, s.Item)
-		h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
+		batch.commands = append(batch.commands, command)
+		batch.step(message, func() {
+			held.secrets = append(held.secrets, s.Item)
+			h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
+		})
+	}
+	expiries := []protocol.Expiry{}
+	if m.GitHubApp != "" {
+		message := "Injecting the GitHub tokens failed."
+		if commands, held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c); err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, message)
+		}
+		batch.commands = append(batch.commands, commands...)
+		batch.step(message, nil)
+		lap("github")
+	}
+	if err := h.deliverStart(ctx, c, &batch); err != nil {
+		return StartResult{}, held, err
 	}
 	if record != nil {
 		if err := h.writeInjected(m, *record, protocol.StartFailed); err != nil {
@@ -436,13 +438,6 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 	}
 	lap("credentials")
-	expiries := []protocol.Expiry{}
-	if m.GitHubApp != "" {
-		if held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c, exec); err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the GitHub tokens failed.")
-		}
-		lap("github")
-	}
 	if err := h.startTokens(m, codexExpiry, expiries); err != nil {
 		return StartResult{}, held, err
 	}
@@ -450,7 +445,9 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if codexExpiry != nil {
 		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID, Clients: clients, Deadline: deadlineOf(delivered, heldKinds(m))},
+	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID,
+			Clients:  Clients{Claude: clients.Claude + " (Claude Code)", Codex: "codex-cli " + clients.Codex, Opencode: clients.Opencode},
+			Deadline: deadlineOf(delivered, heldKinds(m))},
 		held, nil
 }
 
