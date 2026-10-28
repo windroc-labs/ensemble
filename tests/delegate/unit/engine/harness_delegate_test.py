@@ -1671,6 +1671,39 @@ class EndingHarnessTest(HarnessCase):
                 self.assertEqual(view.resume().sid, SID)
                 self.assertEqual(len(harness_launches()), launches + 1)
 
+    def rows(self, state):
+        row = SessionRow(
+            self.metadata()["agent_name"], SID, "fake", state, None, None, None, own=False
+        )
+        return mock.patch.object(RecordingHost, "rows", return_value=[row], create=True)
+
+    def test_resume_refuses_busy_while_its_host_lists_its_worker_ownerless(self):
+        """Its harness gone, its container still reaped (WDRC-365): never the dying Record."""
+        for mode in (Mode.TUI, Mode.HEADLESS):
+            with self.subTest(mode=mode):
+                record, view = self.killed(mode)
+                busy = str(
+                    SessionBusy(
+                        self.metadata()["agent_name"],
+                        "previous worker generation (live or unknown)",
+                    )
+                )
+                launches = len(harness_launches())
+                with RunState(Layout(self.work)).run_lock():
+                    for state in (StatusState.UNKNOWN, StatusState.DEAD):
+                        for kwargs in ({}, {"input": "the answer"}):
+                            with self.rows(state), self.assertRaises(SessionError) as refused:
+                                view.resume(**kwargs)
+                            self.assertEqual(str(refused.exception), busy)
+                    self.assertEqual(
+                        (len(harness_launches()), self.metadata()["attempt"]), (launches, 1)
+                    )
+                    with self.rows(StatusState.WORKING):
+                        self.assertEqual(view.resume(), record)
+                with self.rows(StatusState.DEAD):
+                    self.assertEqual(view.resume().sid, SID)
+                self.assertEqual(len(harness_launches()), launches + 1)
+
 
 class UnansweredTest(HarnessCase):
     """An agent attach that did not answer is no proof its run ended."""
