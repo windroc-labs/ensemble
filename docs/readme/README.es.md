@@ -42,6 +42,16 @@ Sustituye `<tag>` por el `source.ref` de ensemble en ese archivo:
 curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
 ```
 
+Para proporcionar la contraseña de `sudo` desde Keychain, descarga primero el script; stdin no puede transportar también el texto del script. Sustituye `<item>` por su servicio de Keychain:
+
+```bash
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
+```
+
+| Opción | Lee |
+|---|---|
+| `--password-stdin` | La contraseña de `sudo` desde stdin, antes de la clave del proveedor |
+
 El instalador pregunta qué clientes usar, si los trabajadores se ejecutan localmente o en Docker y si quieres configurar un
 tablero. Instala las dependencias y los plugins seleccionados, solicita los inicios de sesión necesarios y configura `ctmux`.
 Vuelve a ejecutarlo para completar una instalación interrumpida. Para ver las opciones, usa `bash scripts/install.sh --help` en una copia del repositorio;

@@ -42,6 +42,16 @@ Apple silicon Mac에서 [windroc 마켓플레이스](https://github.com/windroc-
 curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
 ```
 
+Keychain에서 `sudo` 비밀번호를 전달하려면 스크립트를 먼저 다운로드하세요. stdin으로 스크립트 본문까지 전달할 수는 없습니다. `<item>`을 Keychain 서비스 이름으로 바꾸세요.
+
+```bash
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
+```
+
+| 플래그 | 읽는 값 |
+|---|---|
+| `--password-stdin` | stdin에서 `sudo` 비밀번호를 읽으며, 공급자 키보다 먼저 전달합니다 |
+
 설치 프로그램은 사용할 클라이언트, 워커를 로컬 또는 Docker 중 어디에서 실행할지, 보드를 설정할지를 묻습니다.
 선택한 의존성과 플러그인을 설치하고, 필요한 로그인을 요청하며, `ctmux`를 설정합니다.
 설치가 중단되었다면 다시 실행하여 마무리하세요. 옵션은 저장소 체크아웃에서 `bash scripts/install.sh --help`로 확인할 수 있습니다.

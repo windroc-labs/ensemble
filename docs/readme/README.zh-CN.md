@@ -42,6 +42,16 @@ Ensemble 让你与编程智能体以团队方式协作。你可以与指挥官�
 curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
 ```
 
+要从 Keychain 传入 `sudo` 密码，请先下载脚本；stdin 不能同时承载脚本正文。将 `<item>` 替换为 Keychain 服务名：
+
+```bash
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
+```
+
+| 选项 | 读取内容 |
+|---|---|
+| `--password-stdin` | 从 stdin 读取 `sudo` 密码，位于提供商密钥之前 |
+
 安装程序会询问使用哪些客户端、工作者在本地还是 Docker 中运行，以及是否设置看板。
 它会安装所选依赖和插件、请求所需的登录，并设置 `ctmux`。
 安装中断后，重新运行即可完成。要查看选项，请在仓库检出目录中运行 `bash scripts/install.sh --help`；

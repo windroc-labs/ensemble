@@ -42,6 +42,16 @@ Remplacez `<tag>` par le `source.ref` associé à ensemble dans ce fichier :
 curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
 ```
 
+Pour fournir le mot de passe `sudo` depuis Keychain, téléchargez d’abord le script ; stdin ne peut pas aussi contenir son texte. Remplacez `<item>` par le nom du service Keychain :
+
+```bash
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
+```
+
+| Option | Lit |
+|---|---|
+| `--password-stdin` | Le mot de passe `sudo` depuis stdin, avant la clé du fournisseur |
+
 L’installateur demande quels clients utiliser, si les agents exécutants doivent fonctionner en local ou dans Docker, et s’il faut configurer un
 tableau. Il installe les dépendances et plugins sélectionnés, demande les connexions nécessaires et configure `ctmux`.
 Relancez-le pour terminer une installation interrompue. Pour les options, utilisez `bash scripts/install.sh --help` dans une copie du dépôt ;
