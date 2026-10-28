@@ -1,7 +1,4 @@
-"""The session layer's data types, shared by its modules. Access.dirs are granted
-write, Access.reads only read; Spec.flags/env are caller-supplied for every Mode; times are epoch
-seconds.
-"""
+"""The session layer's shared data types; times are epoch seconds."""
 
 import re
 import signal
@@ -95,8 +92,6 @@ class Mode(StrEnum):
 
 
 class Permission(StrEnum):
-    """A client's permission mode ([clients.<name>.modes]): yolo skips every permission and approval."""
-
     AUTO = "auto"
     YOLO = "yolo"
 
@@ -127,10 +122,7 @@ class Resumable(StrEnum):
 
 
 class HookKind(StrEnum):
-    """A Tui hook label's kind, the event its adapter normalizes it to; TURN_STARTED: its client
-    accepted a turn (the first prompt, a send or text typed into its terminal), to yield one
-    TurnStarted per accepted turn, never for a replayed record (WDRC-199 FR-10).
-    """
+    """TURN_STARTED: one TurnStarted per accepted turn, never a replayed record (WDRC-199 FR-10)."""
 
     TURN_END = "turn_end"
     TURN_FAILED = "turn_failed"
@@ -140,8 +132,6 @@ class HookKind(StrEnum):
 
 
 class Tier(StrEnum):
-    """Spec.tier's values (an int there), as the keys of a client's tiers table."""
-
     ONE = "1"
     TWO = "2"
     THREE = "3"
@@ -157,10 +147,7 @@ class HookError(Exception):
 
 @dataclass(frozen=True)
 class HookCallback:
-    """Tui: on_hook(HookCall); Host: on_hook(word, HookCall).
-    Spec.handlers: on_event(EventCall) -> None. Resolve module's regular file over session
-    roots, all callbacks' roots, then sys.path; state is JSON data.
-    """
+    """Tui: on_hook(HookCall); Host: on_hook(word, HookCall); Spec.handlers: on_event(EventCall)."""
 
     module: str
     state: Mapping[str, object] = field(default_factory=dict)
@@ -186,11 +173,7 @@ class HookCallback:
 
 @dataclass(frozen=True)
 class ClientHome:
-    """What a container Host needs to run a client: its per-session state dir (`field`, its name in
-    the Host's records; `dir`, its last path part; `env`, the variable naming it), `credential`,
-    the kind the Host injects, `files`, (name, text) for a fresh dir, `providers`, whose keys the
-    broker adds.
-    """
+    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable."""
 
     field: str
     dir: str
@@ -220,8 +203,6 @@ class ProviderProbe:
 
 @dataclass(frozen=True)
 class ClientContext:
-    """What a Host hands its client."""
-
     host_address: str
     permission: Permission
     container: Container | None = None
@@ -232,9 +213,8 @@ LOCAL_CONTEXT = ClientContext("127.0.0.1", Permission.AUTO)
 
 @dataclass(frozen=True)
 class HookCall:
-    """A tui hook callback's input; state: its HookCallback.state. A client's on_hook(call)
-    returns the payload to journal (changed or not), or None to journal nothing and stop; a host's
-    on_hook(word, call) runs after the journal line and returns None.
+    """on_hook(call) returns the payload to journal, or None to journal nothing and stop; a host's
+    on_hook(word, call) runs after the journal line.
     """
 
     label: str
@@ -343,10 +323,7 @@ def _prefetch(value) -> bool:
 
 @dataclass(frozen=True, kw_only=True)
 class EnvironmentSpec:
-    """A resolved container environment (WDRC-109 FR-56): image, a local image or WORKER (the
-    worker base); secrets, {"item", "file"} each; prefetch, {"repo"[, "ref"]}; github_repo,
-    the repo its token writes.
-    """
+    """WDRC-109 FR-56; github_repo: the repo its token writes."""
 
     WORKER: ClassVar[str] = "@worker"
     image: str
@@ -405,7 +382,6 @@ class EnvironmentSpec:
 
     @classmethod
     def from_fields(cls, fields: Mapping) -> Self:
-        """Lists for its tuples; ConfigError naming an unknown or missing field."""
         if not isinstance(fields, Mapping):
             raise ConfigError(f"environment: want a table, got {type(fields).__name__}")
         names = [f.name for f in dataclass_fields(cls)]
@@ -550,9 +526,8 @@ _IDENTITY = {
 
 @dataclass(frozen=True)
 class SessionInfo:
-    """The one session identity; persisted() and from_fields are its one codec, for run.jsonl's
-    session line and session.json's identity keys. Read back from either (agent-writable), it is a
-    status hint, never an authorization, a path to open or argv to run without re-validation.
+    """persisted() and from_fields are its one codec. Read back (agent-writable), it is a status hint,
+    never an authorization, a path to open or argv to run without re-validation.
     """
 
     sid: str
@@ -572,9 +547,7 @@ class SessionInfo:
 
     @classmethod
     def from_fields(cls, fields: Mapping, *, strict: bool = False) -> "SessionInfo | None":
-        """persisted()'s fields (a missing transcript or resume is ""); invalid: None, or with
-        strict a ValueError naming the first bad key.
-        """
+        """persisted()'s inverse; invalid: None, or with strict a ValueError naming its key."""
         found = fields if isinstance(fields, Mapping) else {}
         get = found.get
         for key, ok in _IDENTITY.items():
@@ -589,10 +562,6 @@ class SessionInfo:
 
 @dataclass(frozen=True)
 class Prepared:
-    """A mode's start, fixed before it starts: the Spec as started, its SessionInfo, argv and
-    child env (in_process, or a tui session attached: none).
-    """
-
     spec: Spec
     info: SessionInfo
     argv: tuple[str, ...] = ()
@@ -604,18 +573,14 @@ class Prepared:
 
 @dataclass(frozen=True)
 class ClientBound:
-    """A client's notice that its client bound client_id: a run.jsonl client_session line,
-    never a SessionEvent.
-    """
+    """A run.jsonl client_session line, never a SessionEvent."""
 
     client_id: str
 
 
 @dataclass(frozen=True)
 class TurnStarted:
-    """A turn its client accepted: the first prompt, a send or text typed into its terminal; never
-    a replayed record.
-    """
+    """Never for a replayed record."""
 
 
 @dataclass(frozen=True)
@@ -636,8 +601,6 @@ class TurnEnd:
 
 @dataclass(frozen=True)
 class TurnFailed:
-    """A turn the client ended on an error: its error type and any detail it gave."""
-
     error: str
     detail: str = ""
 
@@ -665,10 +628,7 @@ SessionEvent = TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked |
 
 @dataclass(frozen=True)
 class WorkerHook:
-    """A hook call a managed worker's guard relayed over its channel (WDRC-199 FR-15): the label
-    and payload the client's hook gave; untrusted worker output (FR-36), so its reader checks its
-    size and shape before use.
-    """
+    """Relayed by a worker's guard (WDRC-199 FR-15); untrusted (FR-36): check size and shape."""
 
     label: str
     payload: Mapping[str, object]
@@ -677,9 +637,7 @@ class WorkerHook:
 
 @dataclass(frozen=True)
 class WorkerOutput:
-    """Bytes a managed headless worker wrote to `stream`, "stdout" or "stderr" (FR-12, FR-15); its
-    reader parses complete lines only.
-    """
+    """FR-12, FR-15: its reader parses complete lines only."""
 
     data: bytes
     stream: str = "stdout"
@@ -687,7 +645,7 @@ class WorkerOutput:
 
 @dataclass(frozen=True)
 class WorkerExit:
-    """The client's exit as its guard saw it: returncode, -N when signal N ended it (FR-16)."""
+    """returncode -N: signal N ended it (FR-16)."""
 
     returncode: int
 
@@ -733,8 +691,6 @@ class Key:
 
 
 class NamedKey(StrEnum):
-    """KeyPress's named keys; each Host translates them."""
-
     ENTER = "Enter"
     ESCAPE = "Escape"
     TAB = "Tab"
@@ -771,9 +727,7 @@ KEY_RULE = (
 
 @dataclass(frozen=True)
 class KeyPress:
-    """One key of `send --key`'s Host-independent notation: one printable character or a NamedKey,
-    with Ctrl, Alt (meta) and Shift; written `C-`, `M-`, `S-` before it (`C-c`, `S-Up`).
-    """
+    """`send --key`'s notation, e.g. `C-c`, `S-Up`; M- is Alt."""
 
     key: str
     ctrl: bool = False
@@ -838,9 +792,7 @@ class NoRecordedSession(SessionError):
 
 
 class NotShowable(SessionError):
-    """A session its Host names no attach target for (`host <name> cannot show`), or a caller with
-    nothing to show (the Delegate's `no showable session`).
-    """
+    """`host <name> cannot show`, or the Delegate's `no showable session`."""
 
 
 @dataclass(frozen=True)
@@ -850,9 +802,7 @@ class IdleTimeout:
 
 @dataclass(frozen=True)
 class SessionRow:
-    """client: a tui session's (HostedSession's), else None; display: its Host's, opaque; shown: the
-    session showing it, "" unnamed, None none; state: given its plain value too.
-    """
+    """display: its Host's, opaque; shown: the session showing it, "" unnamed, None none."""
 
     name: str
     sid: str | None
@@ -869,10 +819,6 @@ class SessionRow:
 
 @dataclass(frozen=True)
 class Hosts:
-    """A parsed [hosts] table (Host.parse_hosts): the default Host's name and each [hosts.<name>],
-    a read-only copy.
-    """
-
     default: str
     tables: Mapping[str, Mapping]
 
