@@ -1,16 +1,16 @@
-"""Host, where processes live, keeping each one's Record and Display; an attachable one names the
-attach target the Viewer shows a session through.
-"""
+"""Host: where processes live, each with its Record and Display."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import signal
 import stat
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import ClassVar
 
@@ -65,6 +65,30 @@ ACTIVITY = "activity"  # "<generation> <word>": its harness's last mark
 RECORD = "record"  # "<generation>\t<Record line>": its crew Record
 STATE_MAX = 1 << 16
 ACTIVITY_MAX = 256
+_PHASE: ContextVar[Callable[[str | None, float], None] | None] = ContextVar("phase", default=None)
+
+
+@contextlib.contextmanager
+def phase_reporter(report: Callable[[str | None, float], None]) -> Iterator[None]:
+    """Threads started in this context do not inherit `report`."""
+    token = _PHASE.set(report)
+    try:
+        yield
+    finally:
+        _PHASE.reset(token)
+
+
+@contextlib.contextmanager
+def start_phase(phase: str, wait: float) -> Iterator[None]:
+    report = _PHASE.get()
+    if report is None:
+        yield
+        return
+    report(phase, wait)
+    try:
+        yield
+    finally:
+        report(None, 0)
 
 
 def sent(folder: str) -> str | None:
@@ -77,7 +101,6 @@ def sent(folder: str) -> str | None:
 
 
 def checked_events(path: str | None) -> str | None:
-    """An events file's absolute path, checked (ConfigError); never creates it."""
     try:
         return None if path is None else validate_events(path)
     except ValueError as error:
@@ -85,7 +108,6 @@ def checked_events(path: str | None) -> str | None:
 
 
 def created_events(path: str | None) -> str | None:
-    """checked_events, then the file made 0600 when missing (SessionError when it cannot be)."""
     path = checked_events(path)
     try:
         return None if path is None else events_file(path)
@@ -95,8 +117,6 @@ def created_events(path: str | None) -> str | None:
 
 @dataclass(frozen=True)
 class WorkerState:
-    """A tui worker's current generation, as its session.json says."""
-
     sid: str | None
     generation: str | None
     client: str | None
@@ -110,7 +130,6 @@ def worker_dir(name: str) -> str:
 
 
 def worker_names() -> list[str]:
-    """The names of the worker dirs (no links), whatever their state."""
     try:
         with os.scandir(os.path.expanduser(TUI_DIR)) as entries:
             return sorted(
@@ -123,7 +142,6 @@ def worker_names() -> list[str]:
 
 
 def worker_row(name: str, found: WorkerState | None, state: StatusState) -> SessionRow:
-    """Its row from its worker state (none: None fields)."""
     return SessionRow(
         name,
         None if found is None else found.sid,
@@ -137,9 +155,6 @@ def worker_row(name: str, found: WorkerState | None, state: StatusState) -> Sess
 
 
 def worker_file(name: str, file: str, limit: int) -> bytes | None:
-    """Worker `name`'s `file`, at most `limit` bytes, only when a regular file of this user's and no
-    link; else None.
-    """
     if not isinstance(name, str) or not SESSION_NAME.fullmatch(name):
         return None
     try:
@@ -184,7 +199,6 @@ def worker_state(name: str) -> WorkerState | None:
 
 
 def activity(name: str, generation: str) -> StatusState | None:
-    """Worker `name`'s last mark while it is generation `generation`'s."""
     data = worker_file(name, ACTIVITY, ACTIVITY_MAX)
     fields = b"".join((data or b"").split(b"\n", 1)[:1]).decode(errors="replace").split(" ")
     if len(fields) != 2 or fields[0] != generation or fields[1] not in MARKS:
@@ -193,7 +207,6 @@ def activity(name: str, generation: str) -> StatusState | None:
 
 
 def stored_record(name: str, generation: str) -> Record | None:
-    """Worker `name`'s crew Record while it is generation `generation`'s."""
     data = worker_file(name, RECORD, STATE_MAX)
     held, tab, line = (data or b"").decode(errors="replace").partition("\t")
     if not tab or held != generation:
@@ -209,9 +222,7 @@ def tui_lock(name: str) -> str:
 
 
 class InteractiveProcess(ABC):
-    """A managed worker's handle (docs/architecture.md › Session harness interfaces): send and
-    press into its input (Key names: the Client's), its screen, liveness and confirmed close.
-    """
+    """A managed worker's handle (docs/architecture.md › Session harness interfaces)."""
 
     name: str
     generation: str
@@ -246,7 +257,6 @@ class InteractiveProcess(ABC):
 
 
 def _hidden_size(value) -> tuple[int, int]:
-    """[hosts] hidden_size "<columns>x<rows>" as (columns, rows)."""
     found = HIDDEN.fullmatch(value) if isinstance(value, str) else None
     if found is None:
         raise ConfigError(
@@ -271,7 +281,6 @@ class Host(ABC):
     _named_headless: ClassVar[bool] = False
 
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
-        """Probe with this Host's credentials, when supported."""
         return None
 
     def __init__(self, name: str, settings: Mapping | None = None) -> None:
@@ -336,18 +345,13 @@ class Host(ABC):
         raise SessionError(f"host {self.name} runs no managed worker")
 
     def _release(self, name: str, generation: str) -> None:
-        """Worker `name`'s generation `generation`'s leftovers removed, once its worker_liveness
-        is ABSENT; a Host that overrides worker overrides this too.
-        """
+        """Removes `generation`'s leftovers once worker_liveness is ABSENT; override with worker."""
         return None
 
     @abstractmethod
     def list(self) -> list[str]: ...
 
     def rows(self) -> list[SessionRow]:
-        """One row per listed name: sid, client and display from its worker state (none: None),
-        state from its activity (none: working).
-        """
         rows = []
         for name in self.list():
             found = worker_state(name)
@@ -371,7 +375,7 @@ class Host(ABC):
         return None
 
     def attach_target(self, name: str) -> SessionView | CommandView | None:
-        """What the Viewer shows session `name` through; None unless attachable."""
+        """None unless attachable."""
         return None
 
     _inherit_env = True
@@ -384,7 +388,7 @@ class Host(ABC):
     def _client_env(
         self, name: str, client: str, home: ClientHome | None, *, resume: bool
     ) -> Mapping[str, str]:
-        """Env for `client`'s launch as `name`; ConfigError: not on this Host."""
+        """ConfigError: `client` cannot run on this Host."""
         return {}
 
     def _resume_argv(self, name: str) -> tuple[str, ...] | None:
