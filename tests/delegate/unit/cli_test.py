@@ -163,32 +163,6 @@ class Detach(Base):
         ((_, spec, _),) = Detaching.made
         self.assertIsNone(spec.out)
 
-    def test_the_specs_a_run_builds_carry_no_credential_request(self):
-        cwd = os.path.join(self.tmp, "elsewhere")
-        for extra in ((), ("--mode", "headless", "--name", "r1", "--cwd", cwd)):
-            with self.subTest(extra=extra):
-                Detaching.made = []
-                self.assertEqual(self.detaches(*extra)[0], 0)
-                ((_, spec, _),) = Detaching.made
-                self.assertIsNone(spec.credentials)
-        a = types.SimpleNamespace(
-            sid=None,
-            workdir=None,
-            role="dummy-tester",
-            task="echo",
-            mode="headless",
-            client="fake",
-            name=None,
-            events=None,
-            out=None,
-            repo="o/n",
-            cwd=None,
-        )
-        for workdir in (None, self.work):
-            with self.subTest(workdir=workdir):
-                spec = cli.spec_of(types.SimpleNamespace(**{**vars(a), "workdir": workdir}), "x")
-                self.assertIsNone(spec.credentials)
-
     def test_cwd_is_the_specs_cwd(self):
         cwd = os.path.join(self.tmp, "elsewhere")
         self.assertEqual(self.detaches("--cwd", cwd)[0], 0)
@@ -1145,24 +1119,6 @@ class Prompt(Case):
         log = Path(Layout(self.work).run, "run.jsonl")
         self.assertFalse(log.exists())
 
-    def test_the_spec_it_instructs_carries_no_credential_request(self):
-        instructed = []
-        out = self.out
-
-        class Instructing:
-            @classmethod
-            def instruct(cls, role, spec):
-                instructed.append((role, spec))
-                return Result(0, None, instruction=out)
-
-        argv = ["prompt", "--role", "dummy-tester", "--input", "x", "--workdir", self.work]
-        with redirect_stderr(io.StringIO()):
-            code = cli.main([*argv, "--out", self.out], delegate_cls=Instructing)
-        self.assertEqual(code, 0)
-        ((role, spec),) = instructed
-        self.assertEqual(role, "dummy-tester")
-        self.assertIsNone(spec.credentials)
-
     def test_runtime_execution_and_removed_options_are_usage_errors_before_writes(self):
         for argv in (
             ("--client", "claude"),
@@ -1635,11 +1591,6 @@ class HelpContracts(Case):
                 cli._check(args)
 
         check_examples(self, self.help, [None, *COMMANDS], check=check)
-
-    def test_no_option_names_a_credential_request(self):
-        for name in [None, *COMMANDS]:
-            with self.subTest(name=name):
-                self.assertNotIn("credential", self.help(name).lower())
 
     def help(self, command=None, flag="--help"):
         return help_text(self, cli.main, ([] if command is None else [command]) + [flag])

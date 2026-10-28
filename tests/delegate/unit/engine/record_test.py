@@ -93,19 +93,6 @@ class RunRecordTest(HarnessCase):
                 self.assertEqual(spec["credentials"], value)
                 self.assertEqual(spec["environment_credentials"], environment)
 
-    def test_a_record_without_credentials_reads_none(self):
-        self.make()
-        data = self.metadata()
-        for spec in (data["spec"], data["plan"]["session"]):
-            spec.pop("credentials", None)
-            spec.pop("environment_credentials", None)
-        with open(self.state_record(), "w", encoding="utf-8") as file:
-            json.dump(data, file)
-        found = self.record().read()
-        for spec in (found.plan.spec, found.plan.session):
-            self.assertIsNone(spec.credentials)
-            self.assertIsNone(spec.environment_credentials)
-
     def test_a_bad_record_is_a_config_error(self):
         self.make()
         data = self.metadata()

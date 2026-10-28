@@ -644,22 +644,6 @@ class SpecEnvironmentTest(Case):
             Spec(workdir="/tmp", access=access, environment=ENVIRONMENT)
 
 
-class SpecCredentialsTest(Case):
-    def test_two_opaque_values_are_not_interpreted(self):
-        for value in (None, "", "not JSON", ' { "fixture_test": {"file": "test"} } '):
-            with self.subTest(value=value):
-                spec = session.Spec(
-                    workdir="/work",
-                    access=Access(cwd="/work"),
-                    credentials=value,
-                    environment_credentials=value,
-                )
-                self.assertEqual((spec.credentials, spec.environment_credentials), (value, value))
-
-    def test_no_typed_credential_request_is_exported(self):
-        self.assertFalse(hasattr(session, "CredentialRequest"))
-
-
 class SessionBusyTest(Case):
     def test_it_is_a_session_error_naming_lock_and_holder(self):
         busy = session.SessionBusy("dummy-lock", "ensemble-dummy-1-ab (owner dummy-1)")

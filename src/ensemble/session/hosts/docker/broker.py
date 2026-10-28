@@ -545,8 +545,6 @@ def write_manifest(
     lock_owner: str | None = None,
     prefetch: Mapping[str, str] | None = None,
     repo: str = "",
-    credentials: str | None = None,
-    environment_credentials: str | None = None,
 ) -> None:
     field, home_path = home
     client = field.removesuffix("_dir")
@@ -573,11 +571,5 @@ def write_manifest(
         **({"secrets": [dict(secret) for secret in secrets]} if secrets else {}),
         **({"lock": lock, "lock_owner": lock_owner} if lock else {}),
         **({"prefetch": dict(prefetch)} if prefetch else {}),
-        **({"credentials": credentials} if credentials is not None else {}),
-        **(
-            {"environment_credentials": environment_credentials}
-            if environment_credentials is not None
-            else {}
-        ),
     }
     save(path, json.dumps(manifest), durable=True)

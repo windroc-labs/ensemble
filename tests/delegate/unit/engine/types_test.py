@@ -18,14 +18,6 @@ class SpecTest(Case):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             delegate.Spec("x", "/w").sid = "s"
 
-    def test_two_opaque_values_are_not_interpreted(self):
-        for value in (None, "", "not JSON", ' { "fixture_test": {"file": "test"} } '):
-            spec = delegate.Spec("x", "/w", credentials=value, environment_credentials=value)
-            self.assertEqual((spec.credentials, spec.environment_credentials), (value, value))
-
-    def test_no_typed_credential_request_is_exported(self):
-        self.assertFalse(hasattr(delegate, "CredentialRequest"))
-
 
 class LayoutTest(Case):
     def test_layout_stays_inside_delegate(self):

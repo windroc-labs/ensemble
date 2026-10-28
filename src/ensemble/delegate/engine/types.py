@@ -1,5 +1,3 @@
-"""The Delegate's shared types."""
-
 import contextlib
 import os
 from collections.abc import Mapping, Sequence
@@ -41,7 +39,7 @@ class Outer(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class Layout:
-    """A run workdir: agent writes, run state."""
+    """Spec.workdir: agent is cwd/only write grant; run holds harness state."""
 
     workdir: str
 
@@ -62,7 +60,6 @@ class Layout:
 
     @property
     def scratch(self) -> tuple[str, ...]:
-        """`agent`'s checkouts (`src`, the report repo's clone `publish`) and temp files."""
         return (os.path.join(self.agent, "src"), os.path.join(self.agent, "publish"), self.tmp)
 
     @property
@@ -71,11 +68,10 @@ class Layout:
 
     @property
     def out(self) -> str:
-        """A session run's default `out`."""
         return os.path.join(self.run, "out.md")
 
     def in_place(self) -> bool:
-        """Whether `agent` is a real directory where it belongs, reached through no symlink."""
+        """agent is in place, without symlinks."""
         real = os.path.join(
             os.path.realpath(os.path.dirname(self.workdir)),
             os.path.relpath(self.agent, os.path.dirname(self.workdir)),
@@ -87,7 +83,7 @@ class Layout:
         )
 
     def checkouts(self) -> tuple[str, ...] | None:
-        """Delegate.checkouts: the dirs at `agent`/src/<owner>/<name> that are their own real path."""
+        """agent/src/<owner>/<name> dirs whose paths are real."""
         if not os.path.lexists(self.agent):
             return None
         if not self.in_place():
@@ -103,7 +99,10 @@ class Layout:
 
 @dataclass(frozen=True)
 class Spec:
-    """Opaque credential JSON is copied unchanged."""
+    """One run: workdir=Layout; resume uses sid. None: client=role, team=built-in,
+    out=<run>/out.md for sessions, else unsaved. name/events: tui in plan(), all modes in
+    HarnessDelegate (agent name, harness <name>-drive, detached outcome events).
+    """
 
     input: str
     workdir: str
@@ -130,7 +129,9 @@ class DriverSpec:
 
 @dataclass(frozen=True)
 class Plan:
-    """Resolved run and its session."""
+    """spec: client/sid/team set, paths absolute; session: SessionSpec; docker: container,
+    repo: then its Reference repo.
+    """
 
     spec: Spec
     session: SessionSpec
@@ -173,8 +174,6 @@ class Plan:
 
 @dataclass(frozen=True)
 class Preview:
-    """A construction's plan and placement; agent None: unnamed."""
-
     plan: Plan
     agent: str | None
     host: str
@@ -222,7 +221,7 @@ Event = Begun | Progress | Finished
 
 
 class GateStatus(StrEnum):
-    """The ready gate's act; drafted: a failed or needs_input run's PR put back in draft."""
+    """DRAFTED: failed/needs_input PR returned to draft."""
 
     SKIPPED = "skipped"
     PASSED = "passed"
@@ -240,15 +239,15 @@ class Gated:
 
 @dataclass(frozen=True)
 class Resolved:
-    """A run's environment from the config layers (engine/environment.py)."""
-
     spec: EnvironmentSpec
     prefetch: bool
 
 
 @dataclass(frozen=True)
 class DelegateState:
-    """delegate.json run state."""
+    """delegate.json: previous=attempt-1 Result after follow-up; bound=owned worker took attempt;
+    closing=close stopped worker, no follow-up; drive=ProcessControl path.
+    """
 
     role: str
     plan: Plan

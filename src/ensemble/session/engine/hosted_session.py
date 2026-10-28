@@ -693,8 +693,6 @@ class HostedSession(Session):
                 for h in spec.handlers
             ],
             environment=None if spec.environment is None else spec.environment.persisted(),
-            credentials=spec.credentials,
-            environment_credentials=spec.environment_credentials,
         )
         return {
             "spec": thaw(fields),
@@ -733,8 +731,6 @@ class HostedSession(Session):
                 environment=None
                 if fields["environment"] is None
                 else EnvironmentSpec.from_fields(fields["environment"]),
-                credentials=fields.get("credentials"),
-                environment_credentials=fields.get("environment_credentials"),
             )
             spec = Spec(**fields)
             display, host, roots = request["display"], request["host"], request["roots"]

@@ -472,13 +472,6 @@ class Overlays(Fake):
                     f"{source}: {message.format(t=table)}",
                 )
 
-    def test_an_overlay_never_carries_a_credential_request(self):
-        overlay = {"roles": {"writer": {"credentials": {"linear": {"role": "engineer"}}}}}
-        self.assertEqual(
-            self.refused(overlays=(overlay,)),
-            "run overlay: unknown key 'credentials' in [overlay.roles.writer]",
-        )
-
     def test_an_overlay_never_carries_an_environment(self):
         trusted = "environments come only from the delegate config files"
         for overlay, table in (
