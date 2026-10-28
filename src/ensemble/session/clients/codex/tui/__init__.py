@@ -327,6 +327,14 @@ class CodexTui(Tui):
         if (
             record.get("type") == "event_msg"
             and isinstance(payload, dict)
+            and payload.get("type") == "turn_aborted"
+            and self._settle_turn(payload.get("turn_id") or self._native_turn, native=True)
+        ):
+            self.last = self.unseen = ""
+            return [TurnEnd()]
+        if (
+            record.get("type") == "event_msg"
+            and isinstance(payload, dict)
             and payload.get("type") == "task_complete"
             and payload.get("error") is None
             and self._settle_turn(payload.get("turn_id") or self._native_turn, native=True)
