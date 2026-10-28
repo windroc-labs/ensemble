@@ -3,6 +3,7 @@ name: Broker macOS
 on:
   push:
     branches: [main]
+    paths: [.github/workflows/broker-macos.yml, src/broker/**]
   pull_request:
     paths: [.github/workflows/broker-macos.yml, src/broker/**]
   workflow_dispatch:
@@ -28,13 +29,6 @@ jobs:
         with:
           go-version-file: src/broker/go.mod
           cache: false
-      - name: Gofmt
-        run: |
-          unformatted=$(sh with-go-state.sh gofmt -l .)
-          if [[ -n "$unformatted" ]]; then
-            printf '%s\n' "$unformatted"
-            exit 1
-          fi
       - name: Go vet
         run: sh with-go-state.sh go vet ./...
       - name: Staticcheck

@@ -16,7 +16,6 @@ SKILL_DIR = "${CLAUDE_SKILL_DIR}"
 PATH = re.compile(
     r"`((?:\$\{CLAUDE_SKILL_DIR\}/)?[\w.-]+(?:/[\w.-]+)*\.(?:md|toml|py)|\$\{CLAUDE_SKILL_DIR\}/[\w./-]+)`"
 )
-DOC_SECTION = re.compile(r"`([\w./-]+\.md)`((?: › [A-Z][\w ]*[a-z])+)")
 
 
 def text(skill: str) -> str:
@@ -96,11 +95,6 @@ def paths(skill: str) -> list[str]:
         else os.path.join(REPO, p)
         for p in PATH.findall(body(skill))
     ]
-
-
-def doc_sections(skill: str) -> list[tuple[str, list[str]]]:
-    """Each `<path>.md` › A › B the skill cites, as (path, [A, B])."""
-    return [(path, chain.split(" › ")[1:]) for path, chain in DOC_SECTION.findall(body(skill))]
 
 
 def example(skill: str, prefix: str, *having: str) -> str:

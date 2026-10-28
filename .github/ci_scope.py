@@ -65,14 +65,8 @@ def _owner(path: str) -> str | None:
     return parts[0]
 
 
-# Docs a repository check reads (tests/guard_checks/credentials.py), so they are not docs-only.
-CHECKED_DOCS = ("docs/architecture.md",)
-
-
 def _docs(path: str) -> bool:
-    # Root *.md and docs/** but CHECKED_DOCS; skills and team text are not docs.
-    if path in CHECKED_DOCS:
-        return False
+    # Root Markdown files and the docs tree; skills and team text are not docs.
     return _owner(path) == "docs" or (_owner(path) == path and path.endswith(".md"))
 
 

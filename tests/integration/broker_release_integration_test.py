@@ -130,25 +130,17 @@ class Release(Case):
         self.assertIn(f"sha256 {digest}", result.stdout)
         self.assertFalse(Path(work).exists())
 
-    def test_tag_other_than_the_plugin_version_stops_before_building(self):
-        result = self.release("v9.8.6")
-        self.assert_nothing_built_or_uploaded(result)
-        self.assertIn("tag v9.8.6 is not v9.8.7", result.stderr)
-
-    def test_unpublished_release_stops_before_building(self):
-        result = self.release("v9.8.7", NO_RELEASE="1")
-        self.assert_nothing_built_or_uploaded(result)
-        self.assertIn("no published Release v9.8.7", result.stderr)
-
-    def test_draft_release_stops_before_building(self):
-        result = self.release("v9.8.7", DRAFT="1")
-        self.assert_nothing_built_or_uploaded(result)
-        self.assertIn("Release v9.8.7 is a draft: publish it first", result.stderr)
-
-    def test_missing_tag_stops_before_building(self):
-        result = self.release("v9.8.7", NO_TAG="1")
-        self.assert_nothing_built_or_uploaded(result)
-        self.assertIn("could not fetch tag v9.8.7", result.stderr)
+    def test_a_wrong_tag_or_an_unready_release_stops_before_building(self):
+        for tag, env, error in (
+            ("v9.8.6", {}, "tag v9.8.6 is not v9.8.7"),
+            ("v9.8.7", {"NO_RELEASE": "1"}, "no published Release v9.8.7"),
+            ("v9.8.7", {"DRAFT": "1"}, "Release v9.8.7 is a draft: publish it first"),
+            ("v9.8.7", {"NO_TAG": "1"}, "could not fetch tag v9.8.7"),
+        ):
+            with self.subTest(error=error):
+                result = self.release(tag, **env)
+                self.assert_nothing_built_or_uploaded(result)
+                self.assertIn(error, result.stderr)
 
     def test_other_platforms_stop_before_fetching(self):
         for platform in ("Darwin x86_64", "Linux x86_64"):

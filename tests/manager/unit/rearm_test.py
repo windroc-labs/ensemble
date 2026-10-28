@@ -20,6 +20,7 @@ MANAGER = {
 }
 TABLE = b" 100 50\n  50 4242\n4242     1\n 777   1\n"
 SKILL = os.path.join(REPO, "skills", "manage", "SKILL.md")
+MODES = ((), ("--mode", "manual"))
 
 
 def _ps(stdout: bytes = TABLE, returncode: int = 0) -> mock.Mock:
@@ -66,33 +67,10 @@ def _start(source: object) -> bytes:
 
 
 class MainTest(Case):
-    def test_manual_mode_context_and_invalid_arguments(self):
-        for source in ("startup", "resume", "compact", "clear"):
-            with self.subTest(source):
-                code, out, err = _run(MANAGER, _start(source), argv=("--mode", "manual"))
-                self.assertEqual((code, err), (0, ""))
-                self.assertEqual(
-                    json.loads(out)["hookSpecificOutput"]["additionalContext"],
-                    rearm.prompt("mgr", source, manual=True),
-                )
+    def test_invalid_arguments_print_nothing(self):
         for argv in (("--mode", "unknown"), ("--mode",), ("extra",)):
             with self.subTest(argv):
                 self.assertEqual(_run(MANAGER, _start("startup"), argv=argv), (0, "", ""))
-
-    def test_manual_mode_keeps_session_and_source_guards(self):
-        for environ, source in (
-            ({}, "startup"),
-            ({"ENSEMBLE_MANAGER": "mgr"}, "startup"),
-            ({**MANAGER, "ENSEMBLE_MANAGER": "bad`name"}, "startup"),
-            ({**MANAGER, "ENSEMBLE_AGENT_SESSION": ""}, "startup"),
-            ({**MANAGER, "ENSEMBLE_HOLDER_PID": "777"}, "startup"),
-            (MANAGER, "fork"),
-            (MANAGER, "unknown"),
-        ):
-            with self.subTest(environ=environ, source=source):
-                self.assertEqual(
-                    _run(environ, _start(source), argv=("--mode", "manual")), (0, "", "")
-                )
 
     def test_non_manager_sessions_print_nothing(self):
         cases = {
@@ -122,25 +100,27 @@ class MainTest(Case):
             },
             "nothing": {},
         }
-        for label, environ in cases.items():
-            with self.subTest(label):
-                self.assertEqual(_run(environ, _start("startup")), (0, "", ""))
+        for argv in MODES:
+            for label, environ in cases.items():
+                with self.subTest(label, argv=argv):
+                    self.assertEqual(_run(environ, _start("startup"), argv=argv), (0, "", ""))
 
     def test_prompted_sources_print_context(self):
-        for source in ("startup", "resume", "compact", "clear"):
-            with self.subTest(source):
-                code, out, err = _run(MANAGER, _start(source))
-                self.assertEqual((code, err), (0, ""))
-                self.assertTrue(out.endswith("\n"))
-                self.assertEqual(
-                    json.loads(out),
-                    {
-                        "hookSpecificOutput": {
-                            "hookEventName": "SessionStart",
-                            "additionalContext": rearm.prompt("mgr", source),
-                        }
-                    },
-                )
+        for argv in MODES:
+            for source in ("startup", "resume", "compact", "clear"):
+                with self.subTest(source, argv=argv):
+                    code, out, err = _run(MANAGER, _start(source), argv=argv)
+                    self.assertEqual((code, err), (0, ""))
+                    self.assertTrue(out.endswith("\n"))
+                    self.assertEqual(
+                        json.loads(out),
+                        {
+                            "hookSpecificOutput": {
+                                "hookEventName": "SessionStart",
+                                "additionalContext": rearm.prompt("mgr", source, manual=bool(argv)),
+                            }
+                        },
+                    )
 
     def test_other_input_prints_nothing(self):
         cases = {
@@ -154,9 +134,10 @@ class MainTest(Case):
             "invalid UTF-8": b'{"source": "startup\xff"}',
             "deep nesting": b"[" * 100_000 + b"]" * 100_000,
         }
-        for label, stdin in cases.items():
-            with self.subTest(label):
-                self.assertEqual(_run(MANAGER, stdin), (0, "", ""))
+        for argv in MODES:
+            for label, stdin in cases.items():
+                with self.subTest(label, argv=argv):
+                    self.assertEqual(_run(MANAGER, stdin, argv=argv), (0, "", ""))
 
     def test_closed_stdout_exits_zero(self):
         for error in (BrokenPipeError(), OSError(9, "Bad file descriptor")):

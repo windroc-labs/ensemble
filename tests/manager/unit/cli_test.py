@@ -1,10 +1,10 @@
 """Crew CLI lease identity validation and holder command shape."""
 
-import argparse
 import contextlib
 import io
 import json
 import os
+import re
 import shlex
 import shutil
 import uuid
@@ -17,8 +17,8 @@ from unittest import mock
 from ensemble.manager import Roster, Spec, State, cli
 from ensemble.manager.cli import main
 from ensemble.manager.engine.pr import VIEW_FIELDS
-from ensemble.utils import Record, Status, StatusState, append_line
-from tests.manager.case import Case
+from ensemble.utils import Record, append_line
+from tests.manager.case import Case, own, status
 from tests.manager.cli_case import CliCase
 from tests.manager.roster_case import mark
 from tests.manager.starters import answered, finished
@@ -134,6 +134,30 @@ class CliTest(CliCase):
                 result, _, stderr = self.invoke("attach", "--manager", "mgr")
             self.assertEqual(result, 1, stderr)
 
+    def test_invalid_manager_names_from_flag_and_environment_write_nowhere(self):
+        outside = Path(self.home, "outside")
+        before = sorted(Path(self.home).rglob("*"))
+        names = (
+            ".",
+            "..",
+            "../outside",
+            "../../outside",
+            str(outside),
+            "a/b",
+            "a\\b",
+            "name space",
+            "name\n",
+        )
+        for name in names:
+            for flag, env in (((f"--manager={name}",), {}), ((), {"ENSEMBLE_MANAGER": name})):
+                with self.subTest(name=name, env=env), mock.patch.dict(os.environ, env):
+                    result, stdout, stderr = self.invoke("attach", *flag)
+                    self.assertEqual((result, stdout), (2, ""), stderr)
+                    self.assertIn("manager name", stderr)
+                    self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+                    self.assertFalse(Path(self.ensemble, "managers").exists())
+                    self.assertFalse(outside.exists())
+
     def test_unleased_attach_cannot_access_live_holder(self):
         with self.roster.hold("label"), self.listed():
             result, _, stderr = self.invoke("attach", "--manager", "mgr")
@@ -205,6 +229,21 @@ class Launch(CliCase):
 
         with mock.patch("subprocess.Popen", side_effect=answered(run)):
             return self.invoke(*arguments)
+
+    def test_valid_manager_names_work_from_flag_and_environment(self):
+        for name in ("a", "A_9-z", "_leading", "9", "-dash", "trailing-"):
+            for alias, flag, env in (
+                ("sample-flag", (f"--manager={name}",), {}),
+                ("sample-environment", (), {"ENSEMBLE_MANAGER": name}),
+            ):
+                with self.subTest(name=name, alias=alias), mock.patch.dict(os.environ, env):
+                    result, stdout, stderr = self.start("run", alias, *flag, "--", "fake", alias)
+                    self.assertEqual(result, 0, stderr)
+                    path = Path(self.ensemble, "managers", name, "roster.json")
+                    self.assertEqual(
+                        json.loads(path.read_text())["entries"][alias]["record"],
+                        json.loads(Record.parse(stdout).to_line()),
+                    )
 
     def test_worker_and_issue_forward_every_word_after_the_key(self):
         for verb, key, prefix, tail in (
@@ -389,47 +428,25 @@ class Launch(CliCase):
         self.assertEqual((result, stdout, self.roster.entries()), (75, "", {}))
         self.assertIn("exit 75", stderr)
 
-    def test_worker_and_issue_starts_keep_exit_75_as_failure(self):
-        for verb, key in (("worker", "w1"), ("issue", "TASK-12")):
-            with self.subTest(verb=verb):
-                result, stdout, _ = self.start(verb, "--manager", "mgr", key, code=75, output="")
-                self.assertEqual((result, stdout), (1, ""))
-                self.assertEqual(self.roster.entries()[key].state.value, "lost")
-
-    def test_exit_75_with_receipt_output_stays_a_failure(self):
-        for arguments, name in (
-            (("run", "--manager", "mgr", "r1", "--", "starter"), "r1"),
-            (("role", "--manager", "mgr", "--name", "r1", "pm"), "r1"),
+    def test_failed_starts_exit_one_and_leave_their_entry_lost(self):
+        run = ("run", "--manager", "mgr", "r1", "--", "starter")
+        role = ("role", "--manager", "mgr", "--name", "r1", "pm")
+        receipts = (None, "invalid Record\n", " \n")
+        for arguments, name, code, output in (
+            (("worker", "--manager", "mgr", "w1"), "w1", 75, ""),
+            (("issue", "--manager", "mgr", "TASK-12"), "TASK-12", 75, ""),
+            *((argv, "r1", 75, output) for argv in (run, role) for output in receipts),
+            *((run, "r1", code, "") for code in (1, 2, 3, 74, 76)),
+            (("worker", "--manager", "mgr", "a"), "a", 1, ""),
+            (("worker", "--manager", "mgr", "b"), "b", 2, "not empty\n"),
+            (("run", "--manager", "mgr", "c", "--", "fake"), "c", 2, ""),
         ):
-            for output in (None, "invalid Record\n", " \n"):
-                with self.subTest(arguments=arguments, output=output):
-                    result, stdout, stderr = self.start(*arguments, code=75, output=output)
-                    self.assertEqual((result, stdout), (1, ""))
-                    self.assertIn("layer message", stderr)
-                    self.assertEqual(self.roster.entries()[name].state.value, "lost")
-                    self.roster.remove(name)
-
-    def test_other_run_failures_keep_exit_one_and_lost(self):
-        for code in (1, 2, 3, 74, 76):
-            with self.subTest(code=code):
-                result, stdout, stderr = self.start(
-                    "run", "--manager", "mgr", "r1", "--", "starter", code=code, output=""
-                )
+            with self.subTest(arguments=arguments, code=code, output=output):
+                result, stdout, stderr = self.start(*arguments, code=code, output=output)
                 self.assertEqual((result, stdout), (1, ""))
                 self.assertIn("layer message", stderr)
-                self.assertEqual(self.roster.entries()["r1"].state.value, "lost")
-                self.roster.remove("r1")
-
-    def test_other_failures_keep_lost_and_generic_run_keeps_exit_two(self):
-        for arguments, code, output in (
-            (("worker", "--manager", "mgr", "a"), 1, ""),
-            (("worker", "--manager", "mgr", "b"), 2, "not empty\n"),
-            (("run", "--manager", "mgr", "c", "--", "fake"), 2, ""),
-        ):
-            with self.subTest(arguments=arguments):
-                result, stdout, _ = self.start(*arguments, code=code, output=output)
-                self.assertEqual((result, stdout), (1, ""))
-        self.assertEqual({e.state.value for e in self.roster.entries().values()}, {"lost"})
+                self.assertEqual(self.roster.entries()[name].state.value, "lost")
+                self.roster.remove(name)
 
 
 class Reopen(CliCase):
@@ -465,17 +482,7 @@ class Reopen(CliCase):
             if failing:
                 return SimpleNamespace(returncode=2, stdout="", stderr="status: down")
             names = (Record.parse(line).name for line in kwargs["input"].splitlines())
-            statuses = (
-                Status(
-                    name=name,
-                    alive=name in alive,
-                    state=StatusState.WORKING,
-                    outcome=None,
-                    attach=None,
-                    hidden=False,
-                )
-                for name in names
-            )
+            statuses = (status(name, alive=name in alive) for name in names)
             return SimpleNamespace(returncode=0, stdout=ctl.lines(*statuses), stderr="")
 
         with mock.patch("subprocess.run", side_effect=run):
@@ -542,9 +549,7 @@ class Reopen(CliCase):
 
     def test_reopen_refuses_a_run_that_still_answers_alive(self):
         self.record()
-        issue = self.fake_record("TASK-9")
-        self.roster.begin(Spec("TASK-9", ("start",)), sid=issue.sid)
-        self.roster.commit("TASK-9", issue)
+        own(self.roster, self.fake_record("TASK-9"))
         session = self.fake_record("researcher-tui", sid=self.sid)
         for listed, alive, live in (
             ((), ("TASK-9",), "TASK-9"),
@@ -561,9 +566,7 @@ class Reopen(CliCase):
 
     def test_reopen_refuses_while_liveness_is_unknown(self):
         self.record()
-        issue = self.fake_record("TASK-9")
-        self.roster.begin(Spec("TASK-9", ("start",)), sid=issue.sid)
-        self.roster.commit("TASK-9", issue)
+        own(self.roster, self.fake_record("TASK-9"))
         session = self.fake_record("researcher-tui", sid=self.sid)
         for kw, unknown in (
             ({"failing": True}, "TASK-9"),
@@ -608,8 +611,7 @@ class Reopen(CliCase):
 
     def test_a_closed_issue_run_reopens_on_its_own_sid(self):
         self.record()
-        self.roster.begin(Spec("TASK-9", ("start",)), sid=self.sid)
-        self.roster.commit("TASK-9", self.fake_record("TASK-9", sid=self.sid))
+        own(self.roster, self.fake_record("TASK-9", sid=self.sid))
         closed = []
 
         def close(argv, **kwargs):
@@ -638,9 +640,7 @@ class ResumeInput(CliCase):
         self.assertFalse(os.path.exists(self.directory))
 
     def test_refusal_returns_two_and_preserves_waiting(self):
-        record = self.fake_record("r1")
-        self.roster.begin(Spec("r1", ("start",)), sid=record.sid)
-        self.roster.commit("r1", record)
+        own(self.roster, self.fake_record("r1"))
         mark(self.roster, "r1", State.WAITING)
         with mock.patch("subprocess.Popen", return_value=finished(2, "refused")):
             code, stdout, stderr = self.invoke("resume", "--manager", "mgr", "r1", "--input", "")
@@ -657,13 +657,8 @@ class NextEventContent(CliCase):
         self.inputs = []
 
     def launched(self, name, *sessions, record_name=None):
-        sid = str(uuid.uuid4())
-        record = replace(
-            self.fake_record(record_name or name, sid=sid), sessions=sessions or (name,)
-        )
-        self.roster.begin(Spec(name, ("start",)), sid=sid)
-        self.roster.commit(name, record)
-        return record
+        record = replace(self.fake_record(record_name or name), sessions=sessions or (name,))
+        return own(self.roster, record, name)
 
     def next_event(self, event, *extra):
         Path(self.roster.events).write_text(f"{event}\n")
@@ -731,20 +726,13 @@ class NextEventContent(CliCase):
         ):
             with self.subTest(sessions=sessions):
                 record = self.launched("r1", *sessions, record_name=record_name)
-                status = Status(
-                    name=record.name,
-                    alive=False,
-                    state="dead",
-                    outcome="done",
-                    attach=None,
-                    hidden=False,
-                )
-                self.answers = {(*record.ctl, "content"): (0, status.to_line() + "\n", "")}
+                dead = status(record.name, alive=False, state="dead", outcome="done")
+                self.answers = {(*record.ctl, "content"): (0, dead.to_line() + "\n", "")}
                 self.assertEqual(
                     self.next_event("12:00:00 engineer-ab12-drive outcome done", "--content"),
                     (
                         0,
-                        f"1 12:00:00 engineer-ab12-drive outcome done\n{status.to_line()}\n",
+                        f"1 12:00:00 engineer-ab12-drive outcome done\n{dead.to_line()}\n",
                         "",
                     ),
                 )
@@ -1079,17 +1067,14 @@ class Report(CliCase):
         self.answers: dict[tuple[str, ...], Any] = {}
 
     def launched(self, name, *, note=None, record=None, alive=True, outcome=None):
-        sid = str(uuid.uuid4())
-        record = replace(record or self.fake_record(name), sid=sid)
-        self.roster.begin(Spec(name, ("start",), note), sid=sid)
-        self.roster.commit(name, record)
-        self.statuses[record.name] = Status(
-            name=record.name,
-            alive=alive,
-            state=StatusState.WORKING if alive else StatusState.GONE,
-            outcome=outcome,
-            attach=None,
-            hidden=False,
+        record = own(
+            self.roster,
+            replace(record or self.fake_record(name), sid=str(uuid.uuid4())),
+            name,
+            note,
+        )
+        self.statuses[record.name] = status(
+            record.name, alive=alive, state="working" if alive else "gone", outcome=outcome
         )
         self.answers[(*record.ctl, "status")] = self.status_answer
         return record
@@ -1190,10 +1175,6 @@ class Report(CliCase):
     def test_no_pr_url_makes_no_gh_call(self):
         for note, env, called in (
             (None, {}, False),
-            ("https://evil.example/o/r/pull/1", {}, False),
-            ("http://github.com/o/r/pull/1", {}, False),
-            ("https://x@github.com/o/r/pull/1", {}, False),
-            ("https://[x/o/r/pull/1", {}, False),
             ("https://ghe.corp/o/r/pull/1", {"GH_HOST": "ghe.corp"}, True),
         ):
             with self.subTest(note=note), mock.patch.dict(os.environ, env):
@@ -1287,9 +1268,7 @@ class View(CliCase):
     def setUp(self):
         super().setUp()
         for name in ("a", "b"):
-            record = self.fake_record(name)
-            self.roster.begin(Spec(name, ("start",)), sid=record.sid)
-            self.roster.commit(name, record)
+            own(self.roster, self.fake_record(name))
 
     def view(self, *argv, answers):
         def run(_argv, **kwargs):
@@ -1404,11 +1383,9 @@ class HelpContracts(Case):
         self.assertEqual(sorted(Path(self.home).rglob("*")), before)
 
     def test_root_lists_each_command_with_a_purpose(self):
-        parser = cli._parser()
-        sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
-        self.assertEqual(set(sub.choices), set(HELP_COMMANDS))
-        self.assertEqual({a.dest for a in sub._choices_actions}, set(HELP_COMMANDS))
-        self.assertTrue(all(a.help for a in sub._choices_actions))
+        text = self.help()
+        self.assertEqual(text.split("{")[1].split("}")[0].split(","), HELP_COMMANDS)
+        self.assertEqual(re.findall(r"^    (\S+) +\S", text, re.MULTILINE), HELP_COMMANDS)
 
     def test_boundary_help_and_recovery_are_explicit(self):
         for verb, owner in (

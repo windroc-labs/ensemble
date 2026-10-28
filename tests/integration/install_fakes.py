@@ -375,7 +375,7 @@ def login(client, args, status, start, logout):
     if args == status:
         if (FAKES / "hang" / f"{client}-status").exists() and (FAKES / "hung").exists():
             mark(FAKES / "status-hung")
-            time.sleep(30)
+            time.sleep(120)
         return 0 if flag.exists() else 1
     if args == logout:
         flag.unlink(missing_ok=True)
@@ -761,8 +761,8 @@ def shasum(args):
 
 LEGACY_REFUSAL = (
     'old-name broker items found (8: "ensemble-bot 123456", "ensemble-claude default",'
-    ' "ensemble-codex auth"): run the maintainer\'s one-time rename step (docs/upgrading.md),'
-    " then rerun"
+    ' "ensemble-codex auth"): run the maintainer\'s one-time rename step,'
+    " which renames them to ensemble-broker-*, then rerun"
 )
 
 

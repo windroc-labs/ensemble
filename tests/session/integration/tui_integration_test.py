@@ -1,9 +1,6 @@
-"""HostedSession's tui mode end to end on a private tmux server (tests/session/live_tmux.py),
-os.environ that server's env: the fake client's Tui (tests/session/fake_client/) started with no
-pane, its hook steps as events and events-file lines, send, the idle timer and its Blocked pause,
-attach from another process, stop, a client's own exit, close by name, list while tmux's state is
-unknown, an old session once its name is another session's, two starts of one name at once, and a
-start while another process closes the name.
+"""HostedSession's tui mode on a private tmux server (tests/session/live_tmux.py) with the fake
+client (tests/session/fake_client/): hooks, events lines, send, idle, attach, stop, exit, close,
+list with tmux unknown, name reuse, racing starts and closes.
 """
 
 import contextlib
@@ -39,8 +36,7 @@ from tests.session import fake_client, live_tmux
 from tests.session.case import PY, SPAWNS
 from tests.session.tui_support import DIALOG, IDLE, MANAGER, SID, WAIT, Live, Stream
 
-# Another process: attaches by name, sends text, prints [sid, state, reply, its first event but
-# IdleTimeout, reply].
+# In a child: attach by name, send text, print [sid, alive, reply, first non-idle event, reply].
 ATTACH = """import importlib.util, json, sys
 fake, clients, name, text = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("ensemble.session.clients.fake", fake)
@@ -79,7 +75,7 @@ class TuiTest(Live):
         self.assertEqual((first["kind"], first["sid"]), ("session", SID))
         self.assertEqual(tui.TuiMode.snapshot("w1")["sid"], SID)
         stream = Stream(self, handle)
-        # Hook processes can exceed IDLE between tool and stop on a loaded runner.
+        # A loaded runner's hooks can exceed IDLE from tool to stop.
         self.assertEqual(
             [stream.next(idle=False) for _ in range(2)], [Activity(""), TurnEnd("r1", 0)]
         )
@@ -148,8 +144,15 @@ class TuiTest(Live):
         stream = Stream(self, handle)
         self.assertEqual(stream.next(), TurnEnd("bye", 0))
         self.assertEqual(stream.next(poke=self.poke), Exited(3))
-        self.lines("w2 done", "w2 dead")
-        self.assertEqual(  # not alive: its worker ended, its display kept till close
+
+        def ended():
+            self.poke()
+            got = [line.split(" ", 1)[1] for line in live_tmux.events(self.events)]
+            self.assertCountEqual(got, ["w2 done", "w2 dead"])
+            return True
+
+        live_tmux.wait(ended, what="w2 done (its harness) and w2 dead (tmux), either order")
+        self.assertEqual(  # its worker ended, its display kept till close
             (handle.alive(), [r.state for r in self.session_cls.list("w2")]), (False, ["dead"])
         )
         tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
@@ -329,7 +332,7 @@ class SameNameTest(Live):
         self.start("w7", {"read": True})
         retiring, remove = threading.Event(), tempfile.TemporaryDirectory.cleanup
 
-        def slow(retired):  # its owner's removal of the closed dir, on its harness thread here
+        def slow(retired):  # the owner removing the closed dir, on its harness thread
             retiring.set()
             time.sleep(1)
             remove(retired)

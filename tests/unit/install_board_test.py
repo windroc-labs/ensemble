@@ -9,12 +9,7 @@ from unittest import mock
 from ensemble.orchestrator.engine.config import LINEAR_KEYS, REQUIRED, AppKey
 from ensemble.orchestrator.engine.flow.workflow import Workflow
 from tests.case import REPO, Case
-
-
-def embedded(function):
-    text = Path(REPO, "scripts/install.sh").read_text()
-    body = text.split(f"{function}() {{\n", 1)[1].split("\n}\n", 1)[0]
-    return body.split("python3 -I -c '\n", 1)[1].split("' ", 1)[0]
+from tests.unit.install_script import program
 
 
 class BoardContract(Case):
@@ -26,7 +21,7 @@ class BoardContract(Case):
             mock.patch.object(sys, "argv", ["-c", str(path), "reviewer\tbuild"]),
             self.assertRaises(SystemExit),
         ):
-            exec(embedded("board_complete"), values)
+            exec(program("board_complete"), values)
         covered = {
             "linear." + ".".join("*" if key == "reviewer" else key for key in keys)
             for keys in values["required"]
@@ -41,7 +36,7 @@ class BoardContract(Case):
         out = io.StringIO()
         with mock.patch.object(sys, "argv", ["-c", str(path), stages]), redirect_stdout(out):
             try:
-                exec(embedded("linear_slots"), {})
+                exec(program("linear_slots"), {})
             except SystemExit as stop:
                 return out.getvalue().splitlines(), str(stop.code)
         return out.getvalue().splitlines(), None
@@ -64,7 +59,7 @@ class BoardContract(Case):
             (
                 [],
                 "install.sh: config.local.toml: unknown keys in [linear]: other, typo; "
-                "see docs/upgrading.md#linear-apps",
+                "remove them, then rerun install.sh --board linear",
             ),
         )
 
@@ -83,7 +78,7 @@ class BoardContract(Case):
                 self.assertEqual(
                     stop,
                     f"install.sh: config.local.toml: unknown keys in [{table}]: {names}"
-                    "; see docs/upgrading.md#linear-apps",
+                    "; remove them, then rerun install.sh --board linear",
                 )
 
     def test_slots_refuse_a_linear_setting_that_is_no_table(self):
@@ -123,7 +118,7 @@ class BoardContract(Case):
             mock.patch.object(sys, "argv", ["-c", str(path), "pm\tdesign"]),
             redirect_stdout(io.StringIO()),
         ):
-            exec(embedded("linear_slots"), values)
+            exec(program("linear_slots"), values)
         self.assertEqual(values["KNOWN"], LINEAR_KEYS)
 
     def test_stage_snapshot_is_passed_to_board_helpers(self):
@@ -148,7 +143,7 @@ class BoardContract(Case):
                     mock.patch.object(sys, "argv", ["-c", str(config), str(packaged)]),
                     redirect_stdout(output),
                 ):
-                    exec(embedded("stage_roles"), {})
+                    exec(program("stage_roles"), {})
                 stages = Workflow().load(str(path) if custom else None)
                 self.assertEqual(
                     output.getvalue().splitlines(),

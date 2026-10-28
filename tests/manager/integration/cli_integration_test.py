@@ -1,45 +1,12 @@
 """Crew's printed shell commands preserve HOME paths and invalid cursors perform no writes."""
 
-import os
 import shlex
-import subprocess
 from pathlib import Path
 
-from tests.manager import fake_session
-from tests.manager.case import Case, child_env
+from tests.manager.cli_case import InstalledCrewCase
 
 
-class PathsAndArguments(Case):
-    def setUp(self):
-        self.command = self.setup_ctl()
-        fake_session.install(self.bin_dir, os.path.join(self.home, "session-list"))
-        self.crew_bin = self.plugin_root()
-        self.env = {
-            key: value
-            for key, value in os.environ.items()
-            if key
-            not in {
-                "ENSEMBLE_MANAGER",
-                "ENSEMBLE_HOLDER_ID",
-                "ENSEMBLE_HOLDER_GENERATION",
-                "ENSEMBLE_HOLDER_PID",
-            }
-        }
-
-    def invoke(self, *argv, home=None):
-        env = dict(self.env)
-        if home is not None:
-            env["HOME"] = home
-        return subprocess.run(
-            (self.crew_bin, *argv),
-            cwd=self.home,
-            env=child_env(env),
-            text=True,
-            capture_output=True,
-            timeout=20,
-            check=False,
-        )
-
+class PathsAndArguments(InstalledCrewCase):
     def test_quoted_home_arm_commands_parse_to_exact_paths_and_arguments(self):
         home = Path(self.home, "it's a home")
         home.mkdir()

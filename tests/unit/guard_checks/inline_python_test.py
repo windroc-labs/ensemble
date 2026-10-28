@@ -1,9 +1,17 @@
 import hashlib
 
+from tests.case import REPO
+from tests.guard_checks.common import _source_modules
 from tests.guard_checks.inline_python import _violations, inline_python
 from tests.guard_samples import Sample
+from tests.guards import PROJECTS
 
 PATH = "tests/delegate/example.py"
+MODULES = _source_modules(REPO, PROJECTS)
+
+
+def violations(code):
+    return _violations(code, modules=MODULES)
 
 
 def key(text):
@@ -20,9 +28,9 @@ class InlinePython(Sample):
             ("utils", "record"),
         ):
             with self.subTest(module=module):
-                self.assertTrue(_violations(f"from ensemble.{module} import {member} as hidden"))
+                self.assertTrue(violations(f"from ensemble.{module} import {member} as hidden"))
         self.assertEqual(
-            _violations("from ensemble.session import Session\nfrom ensemble.utils import Record"),
+            violations("from ensemble.session import Session\nfrom ensemble.utils import Record"),
             [],
         )
 
@@ -139,7 +147,7 @@ class InlinePython(Sample):
 
     def test_standard_library_and_public_packages_are_allowed(self):
         self.assertEqual(
-            _violations(
+            violations(
                 "import os, sys\nfrom pathlib import Path\nfrom ensemble.delegate import Delegate\nview = Delegate.attach(sys.argv[1])\nprint(view.content())\nprint(sys._getframe(), view.__class__)\nos._exit(0)"
             ),
             [],
@@ -159,7 +167,7 @@ class InlinePython(Sample):
             "import importlib\nimportlib.import_module('ensemble.session.modes')",
         ):
             with self.subTest(code=code):
-                self.assertTrue(_violations(code))
+                self.assertTrue(violations(code))
 
     def test_unresolved_programs_are_violations_unless_excepted(self):
         for source in (
@@ -260,12 +268,12 @@ class InlinePython(Sample):
             "import runpy\nrunpy.run_module('ensemble.session.cli')._setup",
         ):
             with self.subTest(code=code):
-                self.assertIn("private attribute _setup", _violations(code))
+                self.assertIn("private attribute _setup", violations(code))
         self.assertEqual(
-            _violations("class Example: pass\nvalue = Example()\nvalue._private = 1"), []
+            violations("class Example: pass\nvalue = Example()\nvalue._private = 1"), []
         )
         self.assertEqual(
-            _violations(
+            violations(
                 "import os, sys\nfrom ensemble.session import Session\ngetattr(os, '_exit')\nhasattr(sys, '_x')"
             ),
             [],
@@ -287,8 +295,8 @@ class InlinePython(Sample):
             ),
         ):
             with self.subTest(code=code):
-                self.assertTrue(any(found.startswith(error) for found in _violations(code)))
-        self.assertEqual(_violations("import runpy\nrunpy.run_module('ensemble.session.cli')"), [])
+                self.assertTrue(any(found.startswith(error) for found in violations(code)))
+        self.assertEqual(violations("import runpy\nrunpy.run_module('ensemble.session.cli')"), [])
 
     def test_only_sys_executable_names_the_interpreter(self):
         program = "'from ensemble.session.engine import base'"

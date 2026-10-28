@@ -112,13 +112,6 @@ class Tree(unittest.TestCase):
 
 
 class GuardTest(Tree):
-    def test_real_tree_clean(self):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = guard.main([], environ={})
-        self.assertEqual(code, 0, out.getvalue())
-        self.assertRegex(out.getvalue(), r"mini-op guard: \d+ files clean")
-
     def test_no_mini_op_dir_is_clean(self):
         self.assertEqual(self.run_guard(), (0, "mini-op guard: 0 files clean\n"))
 

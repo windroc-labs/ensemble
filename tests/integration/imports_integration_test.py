@@ -1,6 +1,6 @@
-"""Every module of ensemble (the five import roots) and tests imported alone in a fresh child, an
-empty temp dir its HOME and cwd, with only the import roots of its layer and the lower ones (PATHS;
-tests: all of them): it exits 0, leaving the dir empty and sys.path unchanged.
+"""Every module of ensemble and tests imported alone in a fresh child, an empty temp dir its HOME
+and cwd, with only the import roots (ROOTS; tests: TESTS): it exits 0, leaving the dir empty and
+sys.path unchanged.
 """
 
 import os
@@ -10,21 +10,14 @@ import tempfile
 import unittest
 
 from tests.case import PY, REPO, ROOTS, SRC, Case, child_env
-from tests.guards import LAYERS, PROJECTS
 
-PATHS = {
-    **{
-        f"ensemble.{PROJECTS[p]}": tuple(SRC[PROJECTS[q]] for q in LAYERS[: i + 1])
-        for i, p in enumerate(LAYERS)
-    },
-    "tests": (
-        *ROOTS,
-        REPO,
-        os.path.join(REPO, ".github"),
-        sysconfig.get_path("purelib"),
-        sysconfig.get_path("platlib"),
-    ),
-}
+TESTS = (
+    *ROOTS,
+    REPO,
+    os.path.join(REPO, ".github"),
+    sysconfig.get_path("purelib"),
+    sysconfig.get_path("platlib"),
+)
 CHILD = """import importlib, sys
 path = list(sys.path)
 importlib.import_module(sys.argv[1])
@@ -43,7 +36,7 @@ def modules(root: str, package: str) -> list[str]:
 
 
 def paths(name: str) -> tuple[str, ...]:
-    return PATHS[max((p for p in PATHS if f"{name}.".startswith(f"{p}.")), key=len)]
+    return TESTS if name.split(".")[0] == "tests" else ROOTS
 
 
 class ImportsAlone(Case):

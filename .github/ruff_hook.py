@@ -1,7 +1,7 @@
 """Pre-commit: ruff check --fix, then ruff format, on each staged .py file at CI's ruff version.
 
 Works on the staged blob, so unstaged edits are neither committed nor lost; the working file is
-rewritten only when it had none. Enabled by .githooks/pre-commit (docs/architecture.md#tests).
+rewritten only when it had none. Enabled by .githooks/pre-commit.
 """
 
 import os

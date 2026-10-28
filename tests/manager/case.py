@@ -1,5 +1,5 @@
-"""Case, every manager test's base; child helpers (PY, child_env); with_ctl; this tree's import
-roots (REPO, SRC, ROOTS, PYTHONPATH).
+"""Case, every manager test's base; child helpers (PY, child_env); with_ctl; status; own; this
+tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
 """
 
 import contextlib
@@ -12,7 +12,8 @@ from dataclasses import replace
 from unittest import mock
 
 import ensemble
-from ensemble.utils import Record
+from ensemble.manager.engine.types import Spec
+from ensemble.utils import Record, Status
 from tests.session import harnesses
 from tests.utils.case import REPO, ROOTS, RUN_WITH, SRC, TreeCase, foreign
 from tests.utils.fakes import ctl
@@ -87,6 +88,22 @@ def _foreign(modules=None) -> str | None:
 
 def with_ctl(record: Record, command: str) -> Record:
     return replace(record, ctl=(command,), resume=(command, "resume", record.name))
+
+
+def status(
+    name, *, alive=True, state="working", outcome=None, attach=None, hidden=False, cwd=None
+) -> Status:
+    return Status(
+        name=name, alive=alive, state=state, outcome=outcome, attach=attach, hidden=hidden, cwd=cwd
+    )
+
+
+def own(roster, record: Record, name=None, note=None) -> Record:
+    """record committed under name (default its own), as if roster launched it."""
+    name = name or record.name
+    roster.begin(Spec(name, ("start",), note), sid=record.sid)
+    roster.commit(name, record)
+    return record
 
 
 def child_env(base=None, *extra: str) -> dict[str, str]:

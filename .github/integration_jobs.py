@@ -29,14 +29,6 @@ def directories(root):
     )
 
 
-def tests(suite):
-    for test in suite:
-        if isinstance(test, unittest.TestSuite):
-            yield from tests(test)
-        else:
-            yield test
-
-
 def workflow_jobs(text):
     job = re.search(r"(?ms)^  integration:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text)
     lines = re.findall(r"^        job: (\[.*\])$", job[1], re.M) if job else []
@@ -92,12 +84,8 @@ def weights(found, durations):
 
 def assign(found, labels, durations):
     estimates = weights(found, durations)
-    split, totals = {job: [] for job in labels}, dict.fromkeys(labels, 0.0)
-    for test in sorted(found, key=lambda test: (-estimates[test.id()], test.id())):
-        target = min(labels, key=lambda job: (totals[job], job))
-        split[target].append(test)
-        totals[target] += estimates[test.id()]
-    return split
+    groups = run_tests.balance(found, len(labels), lambda test: estimates[test.id()])
+    return dict(zip(labels, groups, strict=True))
 
 
 def validate(found, suites, labels):
@@ -116,7 +104,9 @@ def check(root, labels, durations, workflow):
     matrix = workflow_shards(workflow)
     if set(matrix) != set(labels):
         raise ValueError("workflow matrix.job differs from the duration shards")
-    found = list(tests(run_tests.discover(root, ci_scope.selected(root, directories(root)))))
+    found = list(
+        run_tests.tests(run_tests.discover(root, ci_scope.selected(root, directories(root))))
+    )
     split = assign(found, labels, durations)
     validate(found, split, matrix)
     return split

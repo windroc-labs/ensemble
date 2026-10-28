@@ -9,6 +9,7 @@ from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import Spec, State
 from ensemble.utils import Record
 from tests.manager.case import Case
+from tests.manager.events_case import settle_at_once
 
 
 def mark(roster: Roster, name: str, state: State) -> None:
@@ -20,6 +21,7 @@ def mark(roster: Roster, name: str, state: State) -> None:
 
 class RosterCase(Case):
     def setUp(self):
+        self.enterContext(settle_at_once())
         self.directory = os.path.join(self.ensemble, "managers", "manager")
         self.roster = Roster(self.directory)
         self.record = Record(

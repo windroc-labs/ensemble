@@ -29,8 +29,11 @@ RETIRED = (
     "router.py",
     "--runner",
     "attach --resume",
+    "ctmux's",
     "${CLAUDE_SKILL_DIR}/../../src/ensemble/manager",
     "src/ensemble/manager",
+    "tmux ls",
+    "ensemble-<role>-<ID>",
 )
 REPAIRS = ("rename-session", "/rename", "@grid-busy", "@opener", "@pane", "send-keys", "set-option")
 
@@ -99,6 +102,7 @@ class Commands(Case):
         for word in (*RETIRED, *REPAIRS):
             self.assertNotIn(word, body("manage"))
         self.assertNotIn("--split", body("manage"))
+        self.assertNotIn("## Crew commands", body("manage"))
 
 
 class Names(Case):
@@ -120,10 +124,9 @@ class Names(Case):
     def test_only_the_commander_has_it_as_the_session_config_turns_it_off(self):
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
         self.assertIn(
-            "refuse inside them (`docs/architecture.md` › Session settings)", body("manage")
+            "refuse inside them (exit 2: each session's client gets `ENSEMBLE_AGENT_SESSION=1`)",
+            body("manage"),
         )
-        with open(os.path.join(REPO, "docs", "architecture.md"), encoding="utf-8") as f:
-            self.assertIn("`ENSEMBLE_AGENT_SESSION=1`", f.read())
         [config] = {p for p in paths("manage") if p.endswith("config.toml")}
         with open(config, "rb") as f:
             clients = tomllib.load(f)["clients"]

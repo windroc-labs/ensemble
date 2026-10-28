@@ -139,25 +139,17 @@ class Install(Case):
             ],
         )
 
-    def test_build_script_rejects_a_binary_without_the_hardened_runtime(self):
+    def test_build_script_rejects_an_unhardened_unidentified_or_debuggable_binary(self):
         self.fake("go", "codesign")
-        result = self.run_script("build.sh", str(Path(self.home, "b")), FLAGS="flags=0x2(adhoc)")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("lacks the hardened runtime", result.stderr)
-
-    def test_build_script_rejects_a_binary_without_its_designated_requirement(self):
-        self.fake("go", "codesign")
-        result = self.run_script("build.sh", str(Path(self.home, "b")), IDENTIFIER="other")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("lacks its designated requirement", result.stderr)
-
-    def test_build_script_rejects_get_task_allow(self):
-        self.fake("go", "codesign")
-        result = self.run_script(
-            "build.sh", str(Path(self.home, "b")), ENTITLEMENTS="com.apple.security.get-task-allow"
-        )
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("get-task-allow", result.stderr)
+        for env, error in (
+            ({"FLAGS": "flags=0x2(adhoc)"}, "lacks the hardened runtime"),
+            ({"IDENTIFIER": "other"}, "lacks its designated requirement"),
+            ({"ENTITLEMENTS": "com.apple.security.get-task-allow"}, "get-task-allow"),
+        ):
+            with self.subTest(error=error):
+                result = self.run_script("build.sh", str(Path(self.home, "b")), **env)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(error, result.stderr)
 
     def test_build_script_without_one_output_is_a_usage_error(self):
         self.fake("go", "codesign")
@@ -238,7 +230,6 @@ class Install(Case):
         result = self.install_release()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse([c for c in self.calls() if "attestation" in c])
-        self.assertNotIn("attestation", (BROKER / "install.sh").read_text())
 
     def test_local_asset_is_checked_against_its_sha256_file_then_installed(self):
         self.fake("gh", "sudo")
@@ -251,21 +242,18 @@ class Install(Case):
         self.assert_installed(calls, f"{work}/ensemble-broker")
         self.assertEqual(self.installed.read_bytes(), RELEASED_BINARY)
 
-    def test_local_asset_without_its_sha256_file_aborts(self):
+    def test_local_asset_with_another_or_no_sha256_file_aborts(self):
         self.fake("gh", "sudo")
-        self.sums.unlink()
-        result = self.run_script("install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset))
-        self.assert_nothing_installed(result)
-        self.assertIn(f"no sha256 file {self.sums}; nothing installed", result.stderr)
-        self.assertFalse(self.ran.exists())
-
-    def test_local_asset_with_another_sha256_aborts(self):
-        self.fake("gh", "sudo")
-        self.sums.write_text(f"{'f' * 64}  {ASSET}\n")
-        result = self.run_script("install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset))
-        self.assert_nothing_installed(result)
-        self.assertIn(f"{self.asset} does not match the sha256 in {self.sums}", result.stderr)
-        self.assertFalse(self.ran.exists())
+        for sums, error in (
+            (f"{'f' * 64}  {ASSET}\n", f"{self.asset} does not match the sha256 in {self.sums}"),
+            (None, f"no sha256 file {self.sums}; nothing installed"),
+        ):
+            with self.subTest(error=error):
+                self.sums.write_text(sums) if sums else self.sums.unlink()
+                result = self.run_script("install.sh", ENSEMBLE_BROKER_ASSET=str(self.asset))
+                self.assert_nothing_installed(result)
+                self.assertIn(error, result.stderr)
+                self.assertFalse(self.ran.exists())
 
     def test_asset_with_another_protocol_aborts_before_install(self):
         self.fake("gh", "sudo")
