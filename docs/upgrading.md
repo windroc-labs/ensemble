@@ -2,33 +2,15 @@
 
 ## Broker protocol 34: opaque credential spec interface
 
-Broker protocol 34 adds optional `credentials` and `environment_credentials` JSON-text strings to the start manifest.
-Delegate and session carry both unchanged. Kind validation, merging and issuance remain follow-up work.
-The decoded contract is `{github: {app, permissions, repo?}, linear: {app, board}, env: [{item, file}]}`; every kind is
-optional. New board runs send the orchestrator's resolved declarations (an empty object when none are configured);
-resumes keep the stored spec. Launch commands also accept explicit declarations. The broker accepts empty objects
-and refuses any nonempty declaration until kind issuance ships.
-Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
-refuses an older protocol's broker. This interface-only change requires no configuration migration. The existing
-`[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal
-and the no-implicit-credentials rule are not enabled here. Orchestrator role/task declarations
-are available as described in [Credential spec](architecture.md#credentials); nonempty declarations require
-the broker follow-up before they can start a Docker container.
-GitHub grants (including verifier output) will move to orchestrator/CLI declarations; environment secrets will move
-to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
-errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for the contract.
+For this release:
 
-`ensemble-delegate run`, `ensemble-session start`, `ensemble-crew worker NAME` and `ensemble-crew role ROLE` now
-accept `--credentials JSON` (put it after NAME/ROLE for crew). Pass references only; the text is preserved unchanged.
-Omitting it declares none for a new run, except crew role uses the orchestrator's role/task declarations; giving it
-replaces that entire default. tmux ignores it; in_process refuses a present declaration, including `{}`.
-Caller overlays containing `credentials` are configuration errors.
-
-Resume, restart and `ensemble-crew reopen` reuse both declarations from host-owned state, regardless of current
-configuration or workspace files. Do not give a new declaration on resume: a restatement must match the saved text
-exactly, including whitespace. To change credentials, start a new run. Existing state without these fields resumes
-with absent declarations. The separate `--environment-credentials JSON` session option carries an environment's
-opaque declaration; environment configuration migration remains separate.
+1. Before upgrading, close workers started before this release; they cannot be resumed after it.
+2. Before upgrading the broker, close every running Docker session, then run `scripts/install.sh --docker`.
+3. Keep the existing `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets`
+   configuration until their migrations ship. Leave new credential declarations empty until broker kind issuance ships.
+4. To supply references for a new run, use `--credentials JSON` on `ensemble-delegate run`, `ensemble-session start`,
+   `ensemble-crew worker NAME` or `ensemble-crew role ROLE` (after NAME/ROLE for crew).
+   See [Credential spec](architecture.md#credentials) for defaults, host-side state, resume and refusal rules.
 
 ## Claude account selection is the session's
 
