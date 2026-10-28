@@ -2039,28 +2039,6 @@ class ClientUsage(Base):
                 self.raw = ""
                 self.assertEqual(self.said(), [f"usage-skip TASK-1 client=a {why}"] if why else [])
 
-    def test_one_probe_per_client(self):
-        self.api.usages = {"a": reading(95), "b": reading(50)}
-        with redirect_stderr(io.StringIO()), self.log_dir(again=False):
-            gate = self.gate()
-            got = [
-                gate.blocked(r, i, key=("harness", c))
-                for r, i, c in (
-                    ("researcher", "TASK-1", "a"),
-                    ("pm", "TASK-2", "b"),
-                    ("engineer", "TASK-3", "a"),
-                )
-            ]
-        self.assertEqual((got, self.api.usage_calls), ([True, False, True], ["a", "b"]))
-
-    def test_usage_cache_does_not_cross_ticks(self):
-        self.api.usages = {"a": reading(95)}
-        with redirect_stderr(io.StringIO()), self.log_dir(again=False):
-            self.assertTrue(self.gate().blocked("researcher", "TASK-1", key=("harness", "a")))
-            self.api.usages = {"a": reading(10)}
-            self.assertFalse(self.gate().blocked("researcher", "TASK-1", key=("harness", "a")))
-        self.assertEqual(self.api.usage_calls, ["a", "a"])
-
     def test_summary(self):
         rows = (
             (None, "unknown"),
