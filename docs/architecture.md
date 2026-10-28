@@ -1,57 +1,65 @@
 # Architecture
 
-Read this for the shape of a run; use the topic guides below for operations.
-[CONTEXT.md](../CONTEXT.md) defines the vocabulary.
+Ensemble separates deciding **what to run** from running a coding client. A person can direct a crew,
+run a role directly, or let a board advance work through roles. [CONTEXT.md](../CONTEXT.md) defines the terms.
 
 ## Layers
 
-| Layer | Question it owns | Source |
-|---|---|---|
-| Manager | What is my crew doing, and how do I control it? | [`manager/`](../src/ensemble/manager/) |
-| Orchestrator | Which board issue runs next, and what happens to its outcome? | [`orchestrator/`](../src/ensemble/orchestrator/) |
-| Delegate | Which prompt, policy and result protocol does this role need? | [`delegate/`](../src/ensemble/delegate/) |
-| Session | How does this client run, emit events and recover on this Host? | [`session/`](../src/ensemble/session/) |
-| Utils | Which data and OS primitives do the layers share? | [`utils/`](../src/ensemble/utils/) |
+| Layer | Owns |
+|---|---|
+| [Manager](../src/ensemble/manager/) | The commander's crew, launch records and event cursor; controls other layers through commands |
+| [Orchestrator](../src/ensemble/orchestrator/) | Board scheduling, handoffs and write-back through a Linear or local Markdown Tracker |
+| [Delegate](../src/ensemble/delegate/) | Role prompts, run policy and interpretation of progress and outcomes |
+| [Session](../src/ensemble/session/) | Client lifecycle and normalized events, independent of client and Host |
+| [Utils](../src/ensemble/utils/) | Shared configuration, records, paths and process primitives |
 
-Import boundaries are enforced in [`pyproject.toml`](../pyproject.toml);
-[AGENTS.md](../AGENTS.md#import-rules) explains repository constraints.
-Manager reaches the other layers through commands. Orchestrator uses Delegate's public API;
-Delegate uses Session's. Client adapters and Hosts are separate Session extension points.
+Orchestrator calls Delegate's public API; Delegate calls Session's. Import boundaries are enforced in
+[`pyproject.toml`](../pyproject.toml). Client adapters translate native client behavior; Hosts supply execution.
 
 ## A run
 
 ```mermaid
-sequenceDiagram
-    participant U as User / manager
-    participant O as Orchestrator
-    participant D as Delegate
-    participant S as Session harness
-    participant W as Client worker
-    U->>O: Issue ready
-    O->>D: Role, task, input
-    Note over U,D: Direct role runs enter Delegate here
-    D->>S: Prompt, policy, handlers
-    S->>W: Start through Host
-    W-->>S: Replies and lifecycle events
-    S-->>D: Normalized events
-    D-->>O: Progress and outcome
-    O-->>U: Board write-back
+flowchart LR
+    U[User / commander] --> O[Orchestrator]
+    O --> D[Delegate]
+    U -. direct role .-> D
+    D --> H[Session harness]
+    U -. plain worker .-> H
+    H --> T[tmux Host]
+    H --> C[Docker Host]
+    T --> L[Local guard + client]
+    C --> W[Container: guard + client]
+    L & W -. events .-> H
+    H -. normalized events .-> D
+    D -. outcome .-> O
+    O -. board write-back .-> U
 ```
 
-Arrows show runtime flow, not imports. A direct worker starts at Session and has no role outcome.
+Arrows show runtime flow, not imports. Direct workers have no role outcome or board write-back.
 
-The session harness owns the worker; a display only attaches to it. Delegate interprets a task attempt,
-while Orchestrator owns board transitions. A role outcome and a worker's lifetime are separate:
-[session operation and recovery](sessions.md#working-with-a-session) explains when to close or resume.
+The host-side [session harness](../src/ensemble/session/harness/) owns each worker and delivers events to
+registered handlers. The [guard](../src/ensemble/session/harness/guard.py) parents the client; for a TUI it
+also owns the terminal. A display only attaches: losing it does not end the worker. Delegate's task attempt
+and the worker have separate lifetimes; an outcome does not itself close a TUI.
 
-## Find a topic
+## Hosts, broker and credentials
 
-| Read when you need to… | Guide |
+| Host | Execution boundary |
 |---|---|
-| Configure trust, control/resume a session, recall a run, extend a Host | [Sessions](sessions.md) |
-| Set up or operate a board, edit local issues, understand cleanup | [Boards](board.md) |
-| Install/recover Docker workers, operate egress, images and workspaces | [Docker host](docker-host.md) |
-| Choose credential grants, rotate logins, understand security limits | [Credentials](credentials.md) |
-| Change roles, tasks, providers or the workflow | [Customizing roles and tasks](customizing-roles-and-tasks.md) |
-| Run contributor checks or real-machine acceptance | [Testing](testing.md) |
-| Move an existing installation to the current release | [Upgrading](upgrading.md) |
+| [tmux](../src/ensemble/session/hosts/tmux/) | Local guard/client processes run as you, using local client logins; tmux carries the display |
+| [Docker](../src/ensemble/session/hosts/docker/) | Each worker gets a container whose main process is the guard; its harness controls it over one attach channel |
+
+The macOS [broker](../src/broker/) builds images and provisions Docker workers. It keeps long-lived logins
+in Keychain and delivers runtime copies on container tmpfs: Claude setup-tokens, Codex access tokens,
+OpenCode provider keys, GitHub installation tokens, environment secrets and requested Linear role tokens.
+App private keys, Codex refresh tokens and enrolled Linear client secrets stay broker-side. Docker access
+and processes running as you remain trusted; a container separates the worker from the host, not its tools from its client.
+
+Docker networking goes through the external [egress proxy](https://github.com/windroc-labs/egress-proxy),
+whose [label contract](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md)
+the [broker consumes](../src/broker/internal/launcher/egress.go). The broker requires a healthy proxy before starting a worker.
+
+## Next
+
+[Install and quick start](../README.md#install) · [Customize roles and tasks](customizing-roles-and-tasks.md) ·
+[Upgrade an installation](upgrading.md) · [Contributor rules](../AGENTS.md)

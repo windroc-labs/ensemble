@@ -1,11 +1,11 @@
 # AGENTS.md
 
-Test boundaries and commands: [Testing](docs/testing.md).
+Test commands and tool pins: [verification workflow](.github/workflows/test.yml); Python test selection: `python3 .github/run_tests.py --help`.
 
 ## Gotchas
 
 - Every real-machine test (a real Keychain, real OS services, anything beyond fakes) is a mini-op runbook run on the test Mac mini (`.mini-op/runbooks/`), never on a developer's or user's Mac; `keychain_free_tests` (`tests/guard_checks/keychain.py`) fails a test file that calls a real credential store.
-- This file never loads in an agent run outside a trusted cwd ([session trust](docs/sessions.md#settings-and-trust)). An agent run reaches only its cwd, `<work_dir>/work/<ID>/agent/` and the config's `read`/`write` dirs: give a task a new path there, or it stalls on a permission nobody can grant.
+- This file never loads in an agent run outside a trusted cwd ([Delegate configuration](src/ensemble/delegate/config.toml)). An agent run reaches only its cwd, `<work_dir>/work/<ID>/agent/` and the config's `read`/`write` dirs: give a task a new path there, or it stalls on a permission nobody can grant.
 - Input rendering and write-back changes: `tests/orchestrator/unit/engine/inputs_test.py` and `tests/orchestrator/unit/engine/writeback_test.py` pin input text and Linear calls.
 - Every task has exactly one `[ensemble-progress:start]` line and no `budget` one, which start replaced (`tests/delegate/unit/team_test.py` checks): without the start report the Delegate logs `missing progress mark: start`, write-back posts no start comment, and a build's `issues.build_cutoff` loses its `Build started` cutoff.
 - Never name Linear in the team text (`src/ensemble/delegate/team/`), in `/ensemble:act-as` and `/ensemble:manage`, or in `/ensemble:board` (`skills/board/SKILL.md`) outside its `## Linear` section: only that section, the Linear layer's, does.
@@ -15,9 +15,9 @@ Test boundaries and commands: [Testing](docs/testing.md).
 - Identify Linear entities by id, never name; role app user ids come from configuration.
 - Linear's lists can lag a just-made state change: re-read an issue's state before acting on it (`src/ensemble/orchestrator/trackers/linear/ops.py:move` does).
 - Tmux implementation: `TmuxHost` runs sessions (`src/ensemble/session/hosts/tmux/host.py`); the `Viewer` shows every Host's sessions on the host tmux, holding the `Grid`, `Iterm` and `Placement` (`src/ensemble/session/viewer/`); the `TmuxCli` they share, and `TmuxPane`, a `TmuxCli` aimed at one pane: `src/ensemble/session/engine/tmux_cli.py`. `/ensemble:manage` (`skills/manage/SKILL.md`) reaches it only through `ensemble-session`.
-- Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`: `host.py`; a tui or headless worker's `DockerWorker`, the guard, its container's main process, over one `docker attach`: `worker.py`; maintenance, hooks, the broker client, daemon, mounts and stub beside them; [Docker operations](docs/docker-host.md)).
+- Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`: `host.py`; a tui or headless worker's `DockerWorker`, the guard, its container's main process, over one `docker attach`: `worker.py`; maintenance, hooks, the broker client, daemon, mounts and stub beside them).
 - The session's and delegate's public interfaces are frozen: `tests/guard_checks/exports.py` `session_interface_snapshot` and `delegate_interface_snapshot` (who may change `tests/session_interface.json` and `tests/delegate_interface.json`: their docstrings).
-- Run-ledger preservation and cleanup: [Board operation](docs/board.md#operating-the-board).
+- Keep `<work_dir>/logs/runs.jsonl`: deleting it breaks resume, Recover, write-back and first-claim search.
 - A `[local_clones]` clone must not move: that breaks its worktrees. Run `git -C <new path> worktree repair`, then update the entry.
 
 ## Merging

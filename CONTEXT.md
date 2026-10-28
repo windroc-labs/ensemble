@@ -109,7 +109,7 @@ The interface the Linear orchestrator's engine reads and writes issues through, 
 _Avoid_: backend
 
 **Local board**:
-The Markdown-file Tracker. Editing and operation: [Local board](docs/board.md#local-board). In code: `src/ensemble/orchestrator/trackers/local/`.
+The Markdown-file Tracker. Editing and operation: [Local issue format](src/ensemble/orchestrator/trackers/local/issue_file.py). In code: `src/ensemble/orchestrator/trackers/local/`.
 
 **Workflow**:
 The board's stages, one per orchestrated role: its input layout, the role promote hands its Handoff issues to, whether a Handoff needs instructions, its title prefix and its write-back comment leads. In code: a file of `[[stage]]` tables, the packaged `src/ensemble/orchestrator/engine/flow/workflow.toml` unless `[orchestrator] workflow` names another, which `config.load()` reads into `config.TASKS` (`engine/flow/workflow.py`).
