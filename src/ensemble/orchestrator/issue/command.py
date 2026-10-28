@@ -68,8 +68,8 @@ _RULES = (
     "  a failed renewal of a usable token printing token-error on stderr);\n"
     "  a local board ($ENSEMBLE_BOARD_DIR) directly, writing as other. An issue\n"
     "  needs no recorded run. Help needs no credentials or services.\n"
-    "  Workers use broker-delivered board settings and tokens; ordinary tasks\n"
-    "  are read-only. Missing or expired access fails without local fallback.\n"
+    "  Workers use broker-delivered board settings and role tokens.\n"
+    "  Missing or expired access fails without local fallback.\n"
     "  stdout: one JSON object of at most 8192 bytes; diagnostics go to stderr.\n"
     "  Exit 0: success; 1: the board failed (Linear: GraphQL errors, HTTP,\n"
     "  timeout); 2: usage, configuration, Keychain, a board that cannot be\n"
@@ -848,7 +848,7 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
             return USAGE
     request = _request(args, body)
     try:
-        board = worker_backend(args.command)
+        board = worker_backend()
         if board is None:
             cfg = config.load(path=config_path)
             if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args.command, request)):

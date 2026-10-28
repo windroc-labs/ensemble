@@ -47,7 +47,7 @@ def _app(name, user_id=""):
     return LinearApp(name, AppKind.ROLE, "worker", "", "", "", user_id)
 
 
-def backend(command):
+def backend():
     try:
         os.stat(DIRECTORY)
     except FileNotFoundError:
@@ -58,8 +58,7 @@ def backend(command):
         ) from None
     try:
         board = _file("board")
-        scopes = board["scopes"]
-        if scopes not in ("read", SCOPES[AppKind.ROLE]):
+        if board["scopes"] != SCOPES[AppKind.ROLE]:
             raise ValueError
         roles = {name: _app(name, user) for name, user in board["role_users"].items()}
         linear = LinearSettings(
@@ -80,6 +79,4 @@ def backend(command):
         raise IssueError(
             "Worker tracker settings are missing or invalid; ask the manager to restore access or send the current description and comments."
         ) from None
-    if scopes == "read" and command not in ("read", "list", "lookup"):
-        raise IssueError("Worker tracker access is read-only; the manager performs board writes.")
     return LinearIssues(_gql, linear)

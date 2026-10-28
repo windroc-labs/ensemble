@@ -56,8 +56,8 @@ App private keys, Codex refresh tokens and enrolled Linear client secrets stay b
 and processes running as you remain trusted; a container separates the worker from the host, not its tools from its client.
 
 Orchestrated Docker workers re-read current descriptions and comments with `ensemble-orchestrator issue read`,
-using tracker settings and tokens delivered through the broker. Ordinary tasks receive read-only access;
-`decompose` keeps its explicit write grant for creating child issues. Tracker selection stays in Orchestrator.
+using tracker settings and each role’s existing app grant delivered through the broker.
+Tracker selection and credential specs stay in Orchestrator; existing installations need no configuration change.
 
 Docker networking goes through the external [egress proxy](https://github.com/windroc-labs/egress-proxy),
 whose [label contract](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md)

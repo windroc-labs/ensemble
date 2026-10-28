@@ -2140,10 +2140,7 @@
               "additionalProperties": false
             },
             "scopes": {
-              "enum": [
-                "read",
-                "read,write,app:assignable,app:mentionable"
-              ]
+              "const": "read,write,app:assignable,app:mentionable"
             }
           },
           "required": [
@@ -2151,42 +2148,7 @@
             "board",
             "scopes"
           ],
-          "additionalProperties": false,
-          "allOf": [
-            {
-              "if": {
-                "properties": {
-                  "scopes": {
-                    "const": "read"
-                  }
-                }
-              },
-              "then": {
-                "properties": {
-                  "app": {
-                    "properties": {
-                      "role": {
-                        "const": "reader"
-                      }
-                    }
-                  }
-                }
-              },
-              "else": {
-                "properties": {
-                  "app": {
-                    "properties": {
-                      "role": {
-                        "not": {
-                          "const": "reader"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          ]
+          "additionalProperties": false
         },
         "env": {
           "type": "array",

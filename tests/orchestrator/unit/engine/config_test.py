@@ -169,7 +169,6 @@ LINEAR_DEFAULTS = {
     **dict.fromkeys(("team", "assignee_id", "task_label_group", "agent_label_group"), ""),
     "harness": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "manager": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
-    "reader": {**dict.fromkeys(config.AppKey, ""), "renewal": "broker"},
     "states": dict.fromkeys(State, ""),
     "human_members": [],
     **dict.fromkeys(("task_labels", "agent_labels", "project_repos"), {}),
@@ -1043,10 +1042,10 @@ class CommittedConfiguration(Case):
         self.assertEqual(resolved["linear"]["app"]["user_id"], role_id("engineer"))
         ordinary = config.credentials(cfg, "engineer", "build")
         self.assertEqual(ordinary["github"], github)
-        self.assertEqual(ordinary["linear"]["scopes"], "read")
+        self.assertEqual(ordinary["linear"]["scopes"], cfg.linear.roles["engineer"].scopes)
         self.assertEqual(resolved["linear"]["scopes"], cfg.linear.roles["engineer"].scopes)
 
-    def test_all_remote_roles_receive_read_access_by_default(self):
+    def test_all_remote_roles_receive_their_existing_grant_by_default(self):
         cfg = self.load(BASE)
         for name, settings in cfg.roles.items():
             for task in (None, *settings.tasks):
@@ -1054,7 +1053,7 @@ class CommittedConfiguration(Case):
                     grant = config.credentials(cfg, name, task)["linear"]
                     self.assertEqual(
                         grant["scopes"],
-                        cfg.linear.roles[name].scopes if task == "decompose" else "read",
+                        cfg.linear.roles[name].scopes,
                     )
                     self.assertEqual(
                         grant["board"]["role_users"][name], cfg.linear.roles[name].user_id
@@ -1625,44 +1624,18 @@ class TuiSessionNames(Case):
 
 
 class CredentialDeclarations(ConfigFile, Case):
-    def test_explicit_read_reference_does_not_require_the_shorthand_reader_table(self):
-        grant = config.credentials(self.load(PIPELINE), "engineer", None)["linear"]
-
-        def inline(value):
-            if isinstance(value, dict):
-                return (
-                    "{ "
-                    + ", ".join(json.dumps(k) + " = " + inline(v) for k, v in value.items())
-                    + " }"
-                )
-            return json.dumps(value)
-
-        text = "\n".join(
-            line for line in PIPELINE.splitlines() if not line.startswith("linear.reader")
-        )
-        cfg = self.load(text + "\n[roles.engineer.credentials]\nlinear = " + inline(grant) + "\n")
-        self.assertIsNone(cfg.linear.reader)
-        self.assertEqual(config.credentials(cfg, "engineer", None), {"linear": grant})
-
-    def test_reader_missing_refuses_launch_credentials_but_host_config_loads(self):
-        text = (
-            "\n".join(
-                line for line in PIPELINE.splitlines() if not line.startswith("linear.reader")
-            )
-            + "\n"
-        )
-        cfg = self.load(text)
-        self.assertIsNone(cfg.linear.reader)
-        with self.assertRaisesRegex(config.ConfigError, "distinct.*linear.reader"):
-            config.credentials(cfg, "engineer", "build")
-
-    def test_reader_cannot_alias_a_write_app(self):
-        for source in ("client-harness", "client-engineer", "client-manager"):
-            with (
-                self.subTest(source=source),
-                self.assertRaisesRegex(config.ConfigError, "linear.reader.client_id.*also"),
-            ):
-                self.load((MANAGER_LINE + PIPELINE).replace("client-reader", source))
+    def test_existing_config_launches_each_role_without_extra_app_setup(self):
+        cfg = self.load(PIPELINE)
+        for name, settings in cfg.roles.items():
+            for task in (None, *settings.tasks):
+                with self.subTest(role=name, task=task):
+                    grant = config.credentials(cfg, name, task)["linear"]
+                    app = cfg.linear.roles[name]
+                    self.assertEqual(grant["scopes"], app.scopes)
+                    self.assertEqual(
+                        grant["app"],
+                        {"role": name, **{key.value: getattr(app, key) for key in config.AppKey}},
+                    )
 
     def test_task_replaces_whole_kinds_and_keeps_unrelated_role_references(self):
         cfg = self.load(
@@ -1694,7 +1667,8 @@ class CredentialDeclarations(ConfigFile, Case):
 
     def test_absent_declarations_are_empty_and_local_declarations_overlay_packaged(self):
         self.assertEqual(
-            config.credentials(self.load(PIPELINE), "engineer", None)["linear"]["scopes"], "read"
+            config.credentials(self.load(PIPELINE), "engineer", None)["linear"]["scopes"],
+            config.SCOPES[config.AppKind.ROLE],
         )
         self.local('[roles.engineer.tasks.light-build.credentials]\nfuture = ["opaque"]\n')
         cfg = self.load(PIPELINE + "credentials = { future = false }\n")

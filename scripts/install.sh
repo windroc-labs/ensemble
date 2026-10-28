@@ -2526,13 +2526,13 @@ if not stages or not all(isinstance(v, str) and names.fullmatch(v) for stage in 
 print("\n".join(f"{role}\t{input_}" for role, input_ in stages))' "$config" "$pkg/src/ensemble/orchestrator/engine/flow/workflow.toml"
 }
 
-# linear_slots <stages>: slot, token service and secret service of each app: harness, manager, reader, then the stage roles.
+# linear_slots <stages>: slot, token service and secret service of each app: harness, manager, then the stage roles.
 linear_slots() {
   python3 -I -c '
 import os, re, sys, tomllib
 config, roles = sys.argv[1], [line.split("\t")[0] for line in sys.argv[2].splitlines()]
 # engine/config.py LINEAR_KEYS; tests/unit/install_board_test.py keeps them equal
-KNOWN = {"team", "states", "human_members", "assignee_id", "harness", "manager", "reader", "task_label_group",
+KNOWN = {"team", "states", "human_members", "assignee_id", "harness", "manager", "task_label_group",
          "task_labels", "agent_label_group", "agent_labels", "roles", "project_repos"}
 UPGRADE = "; remove them, then rerun install.sh --board linear"
 linear = {}
@@ -2564,7 +2564,7 @@ if not isinstance(role_tables, dict):
 # every role table, a stage role or not, as the orchestrator checks them all
 for name in sorted(role_tables):
     table_of(f"linear.roles.{name}", role_tables[name])
-slots = [(slot, f"linear.{slot}", table_of(f"linear.{slot}", linear.get(slot, {}))) for slot in ("harness", "manager", "reader")]
+slots = [(slot, f"linear.{slot}", table_of(f"linear.{slot}", linear.get(slot, {}))) for slot in ("harness", "manager")]
 slots += [(role, f"linear.roles.{role}", role_tables.get(role, {})) for role in roles]
 used = {}
 for slot, table, found in slots:
@@ -2665,7 +2665,7 @@ def set_(node, *keys):
     return isinstance(node, str) and node != ""
 app_keys = ("client_id", "secret_service", "token_service", "user_id")
 required = [("team",), ("task_label_group",)]
-required += [(app, key) for app in ("harness", "manager", "reader") for key in app_keys]
+required += [(app, key) for app in ("harness", "manager") for key in app_keys]
 required += [("states", state) for state in ("backlog", "todo", "in_progress", "in_review", "handoff", "done", "canceled")]
 required += [("roles", role, key) for role, _ in stages for key in app_keys]
 def published(role):
@@ -2787,7 +2787,7 @@ if dig(data, "orchestrator", "tracker") != "linear":
     plan.append(("orchestrator", "tracker", "linear"))
 fill("orchestrator.linear", "team", team)
 for slot, fields in apps.items():
-    table = f"orchestrator.linear.{slot}" if slot in ("harness", "manager", "reader") else f"orchestrator.linear.roles.{slot}"
+    table = f"orchestrator.linear.{slot}" if slot in ("harness", "manager") else f"orchestrator.linear.roles.{slot}"
     for key, value in fields.items():
         fill(table, key, value)
 fill("orchestrator.linear", "task_label_group", tasks)

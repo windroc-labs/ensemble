@@ -58,7 +58,6 @@ HEADER = (
     + 'linear.team = "{}"\n{}linear.states = {{ {} }}\n'.format(
         TEAM, HARNESS_LINE, ", ".join(f'{k} = "{v}"' for k, v in STATES.items())
     )
-    + 'linear.reader = { client_id = "client-reader", secret_service = "linear-app-reader-secret", token_service = "linear-app-reader-token", user_id = "00000000-0000-4000-8000-000000000203", renewal = "broker" }\n'
     + f'linear.task_label_group = "{TASK_GROUP}"\n'
     + 'delegates = { default = "harness", harness = { implementation = "ensemble.delegate:HarnessDelegate" } }\n'
     + 'local.issue_prefix = "LOC"\n'

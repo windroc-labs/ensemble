@@ -56,7 +56,6 @@ LINEAR_KEYS = {
     "assignee_id",
     "harness",
     "manager",
-    "reader",
     "task_label_group",
     "task_labels",
     "agent_label_group",
@@ -314,11 +313,6 @@ def _linear_settings(linear):
             **{k.value: linear["manager"].get(k, "") for k in AppKey},
             renewal=linear["manager"].get("renewal", "transport"),
         ),
-        reader=(
-            LinearApp("reader", AppKind.READER, "linear.reader", **linear["reader"])
-            if all(linear["reader"].get(k) for k in AppKey)
-            else None
-        ),
         task_label_group=linear["task_label_group"],
         agent_label_group=linear["agent_label_group"],
         roles=MappingProxyType(
@@ -414,7 +408,6 @@ def _load_config(cfg, local, board):
 def _linear(cfg, local):
     _app_table(cfg["linear"], "harness")
     _app_table(cfg["linear"], "manager")
-    _app_table(cfg["linear"], "reader")
     if missing := utils.unset(cfg, REQUIRED):
         raise ConfigError(
             f"orchestrator/config.toml: required, unset: {', '.join(missing)}: set them in {local} (orchestrator/config.toml's `# local:` lines)"
@@ -424,7 +417,6 @@ def _linear(cfg, local):
     _app(linear, "harness")
     owners = _linear_roles(linear)
     _manager(linear, owners)
-    _manager(linear, owners, "reader")
     _project_repos(linear)
     _task_labels(linear)
     _agent_labels(linear)
@@ -487,20 +479,20 @@ def _harness_services(linear):
     }
 
 
-def _manager(linear, owners, name="manager"):
+def _manager(linear, owners):
     """[linear.manager]: its set keys, each valid and no other app's (owners: _linear_roles');
     unset ones refuse only the issue commands (manager_app)."""
-    table = linear[name]
+    table = linear["manager"]
     given = tuple(k for k in AppKey if table.get(k, "") != "")
-    _app(linear, name, given)
+    _app(linear, "manager", given)
     for key in given:
         taken = owners["service" if key in _SERVICES else key]
         if table[key] in taken:
             raise ConfigError(
-                f"orchestrator/config.toml: linear.{name}.{key} {table[key]!r} is also "
+                f"orchestrator/config.toml: linear.manager.{key} {table[key]!r} is also "
                 f"{taken[table[key]]}"
             )
-        taken[table[key]] = f"linear.{name}.{key}"
+        taken[table[key]] = f"linear.manager.{key}"
 
 
 _SERVICES = (AppKey.SECRET_SERVICE, AppKey.TOKEN_SERVICE)
@@ -774,34 +766,29 @@ def _resolve_roles(cfg, overlay, delegate_cls, index):
 def _credential_table(cfg, role, table, where, *, default=False):
     if not isinstance(table, dict):
         raise ConfigError(f"orchestrator/config.toml: [{where}] must be a table")
-    out = {"linear": "read", **table} if default else dict(table)
+    out = {"linear": "role", **table} if default else dict(table)
     if isinstance(out.get("linear"), str):
-        if out["linear"] not in ("role", "read"):
+        if out["linear"] != "role":
             raise ConfigError(
-                f'orchestrator/config.toml: [{where}] linear shorthand must be "role" or "read"'
+                f'orchestrator/config.toml: [{where}] linear shorthand must be "role"'
             )
         if cfg["tracker"] is not TrackerKind.LINEAR:
             del out["linear"]
         else:
             linear = cfg["linear"]
-            scopes = "read" if out["linear"] == "read" else SCOPES[AppKind.ROLE]
-            app_role = "reader" if scopes == "read" else role
-            app = linear["reader"] if scopes == "read" else linear["roles"][role]
-            if scopes != "read" or all(app.get(k) for k in AppKey):
-                out["linear"] = {
-                    "scopes": scopes,
-                    "app": {"role": app_role, **{k.value: app[k] for k in AppKey}},
-                    "board": {
-                        **{k: linear[k] for k in ("team", "states", "project_repos")},
-                        "human_members": linear.get("human_members", []),
-                        "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
-                        "task_label_group": linear["task_label_group"],
-                        "agent_label_group": linear["agent_label_group"],
-                        "role_users": {
-                            name: app["user_id"] for name, app in linear["roles"].items()
-                        },
-                    },
-                }
+            app = linear["roles"][role]
+            out["linear"] = {
+                "scopes": SCOPES[AppKind.ROLE],
+                "app": {"role": role, **{k.value: app[k] for k in AppKey}},
+                "board": {
+                    **{k: linear[k] for k in ("team", "states", "project_repos")},
+                    "human_members": linear.get("human_members", []),
+                    "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
+                    "task_label_group": linear["task_label_group"],
+                    "agent_label_group": linear["agent_label_group"],
+                    "role_users": {name: app["user_id"] for name, app in linear["roles"].items()},
+                },
+            }
     try:
         json.dumps(out, allow_nan=False)
     except (TypeError, ValueError):
@@ -814,12 +801,7 @@ def _credential_table(cfg, role, table, where, *, default=False):
 def credentials(cfg: Config, role, task: str | None) -> dict:
     """A fresh spec: task values replace whole same-kind role values."""
     settings = cfg.roles[role]
-    result = utils.thaw({**settings.credentials, **settings.task_credentials.get(task or "", {})})
-    if result.get("linear") == "read":
-        raise ConfigError(
-            "Worker issue reads require a distinct [orchestrator.linear.reader] app; configure client_id, secret_service, token_service and user_id, then enroll it with ensemble-broker login linear on the host."
-        )
-    return result
+    return utils.thaw({**settings.credentials, **settings.task_credentials.get(task or "", {})})
 
 
 def _runnable_inputs(cfg, roles):

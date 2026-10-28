@@ -59,7 +59,6 @@ class AppKind(StrEnum):
     HARNESS = "harness"
     ROLE = "role"
     MANAGER = "manager"
-    READER = "reader"
 
 
 SCOPES = MappingProxyType(
@@ -67,7 +66,6 @@ SCOPES = MappingProxyType(
         AppKind.HARNESS: "read,write",
         AppKind.ROLE: "read,write,app:assignable,app:mentionable",
         AppKind.MANAGER: "read,write,app:assignable",
-        AppKind.READER: "read",
     }
 )
 
@@ -108,7 +106,6 @@ class LinearSettings:
     agent_labels: Mapping[str, str]
     project_repos: Mapping[str, str]
     roles: Mapping[str, LinearApp]
-    reader: LinearApp | None = None
 
 
 @dataclass(frozen=True)

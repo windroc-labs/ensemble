@@ -34,7 +34,7 @@ type LinearRequest struct {
 
 const LinearRoleScopes = "read,write,app:assignable,app:mentionable"
 
-func ValidLinearScopes(s string) bool { return s == "read" || s == LinearRoleScopes }
+func ValidLinearScopes(s string) bool { return s == LinearRoleScopes }
 
 const LinearDir = "/run/ensemble/secrets/linear"
 

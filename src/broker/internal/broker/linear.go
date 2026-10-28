@@ -50,8 +50,6 @@ func (a LinearIdentity) scopes() string {
 		return "read,write,app:assignable"
 	case "role":
 		return credential.LinearRoleScopes
-	case "reader":
-		return "read"
 	}
 	return ""
 }

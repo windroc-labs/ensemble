@@ -25,11 +25,7 @@ type linearContainerRecord struct {
 }
 
 func roleIdentity(a credential.LinearApp) LinearIdentity {
-	kind := "role"
-	if a.Role == "reader" {
-		kind = "reader"
-	}
-	return LinearIdentity{Name: a.Role, Kind: kind, ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
+	return LinearIdentity{Name: a.Role, Kind: "role", ClientID: a.ClientID, UserID: a.UserID, SecretService: a.SecretService, TokenService: a.TokenService}
 }
 
 // containerAccount accepts only the exact active role binding enrolled on the host.

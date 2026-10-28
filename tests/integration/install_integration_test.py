@@ -187,7 +187,7 @@ ITERM_FILES = (
     "HTTPStorages/com.googlecode.iterm2.binarycookies",
 )
 SECRET_Q = r"password data for new item:"
-SLOTS = ("harness", "manager", "reader", "researcher", "pm", "engineer")
+SLOTS = ("harness", "manager", "researcher", "pm", "engineer")
 STATES = ("Backlog", "Todo", "In Progress", "In Review", "Handoff", "Done", "Canceled")
 
 
@@ -205,7 +205,7 @@ def app_config(slot):
 
 
 def app_table(slot):
-    table = slot if slot in ("harness", "manager", "reader") else f"roles.{slot}"
+    table = slot if slot in ("harness", "manager") else f"roles.{slot}"
     return f"\n[orchestrator.linear.{table}]\n" + "".join(
         f'{key} = "{value}"\n' for key, value in app_config(slot).items()
     )
@@ -623,7 +623,7 @@ class InstallTest(Case):
             answers.append((SECRET_Q, f"k-SENTINEL-{slot}"))
             app = (
                 linear.get(slot, {})
-                if slot in ("harness", "manager", "reader")
+                if slot in ("harness", "manager")
                 else linear.get("roles", {}).get(slot, {})
             )
             if not app.get("client_id"):
@@ -4055,7 +4055,7 @@ exec /bin/rm "$@"
             "linear",
             "--launchd",
             answers=[
-                *self.secrets("harness", "reader", "researcher", "pm", "engineer"),
+                *self.secrets("harness", "researcher", "pm", "engineer"),
                 (WRITE_Q, "y"),
             ],
         )
@@ -4158,7 +4158,7 @@ exec /bin/rm "$@"
             "linear",
             "--launchd",
             then=[
-                *self.secrets("harness", "manager", "reader"),
+                *self.secrets("harness", "manager"),
                 (SECRET_Q, "k-SENTINEL-wrong"),
                 ("Linear OAuth Client ID for researcher:", "client-researcher"),
             ],
@@ -4762,7 +4762,7 @@ exec /bin/rm "$@"
                 for role in ("researcher", "engineer", "reviewer")
             )
         )
-        slots = ("harness", "manager", "reader", "researcher", "engineer", "reviewer")
+        slots = ("harness", "manager", "researcher", "engineer", "reviewer")
         board = [(PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")]  # no document role: no docs repo
         result = self.configured(
             '[orchestrator]\nworkflow = "~/wf.toml"\n', then=[*self.secrets(*slots), *board]
@@ -4789,7 +4789,7 @@ exec /bin/rm "$@"
             "# Reviewer\n\n## Tasks\n\n- `triage`: Review.\n\n## Rules\n- `build`: ignored.\n"
         )
         Path(self.home, "wf.toml").write_text('[[stage]]\nrole = "reviewer"\ninput = "build"\n')
-        slots = ("harness", "manager", "reader", "reviewer")
+        slots = ("harness", "manager", "reviewer")
         result = self.configured(
             '[delegate]\nteam_dirs = ["~/custom-team"]\n[orchestrator]\nworkflow = "~/wf.toml"\n',
             then=[*self.secrets(*slots), (PROJECT_Q, ""), (WRITE_Q, "y"), (WRITE_Q, "y")],

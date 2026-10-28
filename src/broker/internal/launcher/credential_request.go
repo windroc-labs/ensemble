@@ -90,9 +90,6 @@ func parseLinear(data []byte) (*credential.LinearRequest, error) {
 		return nil, bad
 	}
 	a, b := r.App, r.Board
-	if (a.Role == "reader") != (r.Scopes == "read") {
-		return nil, bad
-	}
 	if !credential.ValidLinearScopes(r.Scopes) || b.RoleUsers == nil || !credentialReference(b.TaskLabelGroup) || (b.AgentLabelGroup != "" && !credentialReference(b.AgentLabelGroup)) {
 		return nil, bad
 	}

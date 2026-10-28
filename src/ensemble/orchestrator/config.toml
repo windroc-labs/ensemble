@@ -69,11 +69,10 @@ credentials = {}
 [roles.engineer.tasks.decompose.credentials]
 linear = "role"
 
-# credentials: kind → reference, with no secret values; each remote-board role also gets linear = "read".
+# credentials: kind → reference, with no secret values; each remote-board role also gets linear = "role".
 # Broker validates kinds and values.
 # [roles.<role>.tasks.<task>.credentials] replaces whole same-kind role values, keeping other kinds.
-# linear = "read" requests read-only access; "role" keeps the role app's full grant for explicit writing tasks.
-# "read" selects [linear.reader]; "role" selects [linear.roles.<role>]. Both include non-secret board settings;
+# linear = "role" selects [linear.roles.<role>] with its existing grant and non-secret board settings;
 # omitted on local boards.
 # Tasks must appear in the role's Tasks index. A run without a task uses only role credentials.
 # Local declarations use the orchestrator. prefix; credentials in [core] overlays are refused.
@@ -166,22 +165,6 @@ user_id = ""
 # local: secret_service = "linear-app-manager-secret"
 # local: token_service = "linear-app-manager-token"
 # local: user_id = "00000000-0000-4000-8000-000000000001"
-
-# Worker reads use a separate OAuth app: different scopes on a write app revoke its existing tokens.
-# Configure and enroll this reader on the host before launching ordinary Docker issue runs.
-[linear.reader]
-renewal = "broker"
-client_id = ""
-secret_service = ""
-token_service = ""
-user_id = ""
-
-# local: [orchestrator.linear.reader]
-# local: renewal = "broker"
-# local: client_id = "reader-client-id"
-# local: secret_service = "linear-app-reader-secret"
-# local: token_service = "linear-app-reader-token"
-# local: user_id = "00000000-0000-4000-8000-000000000003"
 
 # The team's workflow states the code uses.
 #   <state>  local, required for each of backlog, todo, in_progress, in_review, handoff, done, canceled: its Linear state id

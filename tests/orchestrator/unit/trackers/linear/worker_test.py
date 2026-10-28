@@ -26,10 +26,8 @@ class Worker(Case):
     def setUp(self):
         super().setUp()
         cfg_path = Path(self.home) / "board.toml"
-        cfg_path.write_text(
-            CONFIG + '\n[roles.engineer.tasks.decompose.credentials]\nlinear = "role"\n'
-        )
-        self.grant = config.credentials(config.load(path=str(cfg_path)), "engineer", "decompose")[
+        cfg_path.write_text(CONFIG)
+        self.grant = config.credentials(config.load(path=str(cfg_path)), "engineer", "build")[
             "linear"
         ]
         self.directory = Path(self.home) / "delivered"
@@ -44,7 +42,7 @@ class Worker(Case):
             )
         )
         self.board = self.directory / "board.json"
-        self.board.write_text(json.dumps(self.grant["board"] | {"scopes": "read"}))
+        self.board.write_text(json.dumps(self.grant["board"] | {"scopes": self.grant["scopes"]}))
         original_open, original_stat = builtins.open, os.stat
 
         def translated(path):
@@ -116,13 +114,6 @@ class Worker(Case):
             ["comment 2", "comment 1"],
         )
 
-    def test_read_only_refuses_write_before_network(self):
-        code, _, err = self.run_cli(
-            ["move", "TASK-2", "done"], mock.Mock(side_effect=AssertionError("write sent"))
-        )
-        self.assertEqual(code, 2)
-        self.assertIn("read-only", err)
-
     def test_bad_missing_and_expired_files_fail_without_local_fallback(self):
         good = self.token.read_text()
         for value in (
@@ -141,8 +132,7 @@ class Worker(Case):
         self.board.unlink()
         self.assertEqual(self.run_cli(["read", "TASK-2"], mock.Mock())[0], 2)
 
-    def test_decompose_keeps_explicit_write_grant_and_assignment_metadata(self):
-        self.board.write_text(json.dumps(self.grant["board"] | {"scopes": self.grant["scopes"]}))
+    def test_ordinary_run_can_write_with_role_grant_and_assignment_metadata(self):
         body = self.directory / "body.md"
         body.write_text("child requirement")
         gql = create_gql()

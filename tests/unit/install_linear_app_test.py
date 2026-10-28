@@ -15,37 +15,6 @@ USER = "00000000-0000-4000-8000-000000000123"
 
 
 class LinearAppInstall(Case):
-    def test_reader_alias_is_rejected_before_request_or_maintenance(self):
-        for writer in ("transport", "broker"):
-            for source in ("configured", "planned"):
-                with self.subTest(writer=writer, source=source):
-                    self.requests.clear()
-                    self.config.write_text(
-                        '[orchestrator.linear.reader]\nclient_id = "client-engineer"\n'
-                        f'user_id = "{USER}"\nrenewal = "{writer}"\n'
-                        + (
-                            '[orchestrator.linear.roles.engineer]\nclient_id = "client-engineer"\n'
-                            if source == "configured"
-                            else ""
-                        )
-                    )
-                    self.output.write_text(
-                        json.dumps(
-                            {"engineer": {"client_id": "client-engineer", "user_id": USER}}
-                            if source == "planned"
-                            else {}
-                        )
-                    )
-                    with self.assertRaisesRegex(app.InstallError, "same Linear app"):
-                        app.prepare(
-                            str(self.config),
-                            "reader",
-                            "token-reader",
-                            "secret-reader",
-                            str(self.output),
-                        )
-                    self.assertEqual(self.requests, [])
-
     def test_writer_selection_is_read_only_and_invalid_values_fail(self):
         self.assertEqual(app.writer(str(self.config), "pm"), "transport")
         with self.config.open("a") as file:
@@ -257,7 +226,6 @@ class LinearAppInstall(Case):
         for slot, table, kind in (
             ("harness", "harness", AppKind.HARNESS),
             ("manager", "manager", AppKind.MANAGER),
-            ("reader", "reader", AppKind.READER),
             ("pm", "roles.pm", AppKind.ROLE),
         ):
             with self.subTest(slot=slot):

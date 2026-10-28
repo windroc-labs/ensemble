@@ -20,25 +20,10 @@ Existing GitHub/env configuration stays in place; request kinds do not yet repla
 
 ### Linear container credentials
 
-Ordinary issue runs now need a separate read-only app in `[orchestrator.linear.reader]`; run
-`scripts/install.sh --board linear` to configure it, or set `client_id`, `secret_service`, `token_service`,
-`user_id` and `renewal = "broker"` there yourself. Enable client credentials on that app. Enroll it through
-`ensemble-broker login linear` with `name = reader`, `kind = reader` and those public app fields, following
-[Linear broker renewal](#linear-broker-renewal). Its Client ID and Keychain services must differ from every
-write app's: requesting different scopes on the same app revokes its existing tokens. Reader maintenance and
-container issuance always use `read`. No client secret is delivered to a worker.
-
-The orchestrator uses this reader by default; the `decompose` task keeps its existing explicit role write grant.
-Restart existing workers after enrollment so their saved credential specs include access. A failed re-read
-reports an error; the manager sends the current description and comments through the run's existing input channel.
-
-Before declaring a role app in `linear`:
-
-1. Enable client credentials on the existing role app; keep the same scopes for host and container.
-2. Enroll it using [Linear broker renewal](#linear-broker-renewal), with that role's name and public app values,
-   `kind = role`, and `renewal = "broker"` for its host transport. Complete the cutover before starting callers.
-
-Changing the app's scopes invalidates its other tokens.
+Issue runs use their role app’s existing grant and board settings through the broker’s credential spec path.
+Existing installations need no new app, configuration, installation or upgrade step for issue re-reads.
+No client secret is delivered to a worker. A failed re-read reports an error; the manager sends the current
+description and comments through the run’s existing input channel.
 
 For request validation, delivery paths and modes, the maintenance swap, and revocation, see
 [Broker credential implementation](../src/broker/internal/credential). The worker CLI consumes these files directly.
@@ -278,7 +263,7 @@ is `client_id` in `[orchestrator.linear.roles.pm]`).
 | a `Tasks` label group, its id from `issueLabels { nodes { id name isGroup } }` | `linear.task_label_group` |
 | `decompose` under `Tasks`, required for PM promotion; other task labels (`build`, `light-build`, …) optional | `linear.task_labels.decompose`, `linear.task_labels.<task>` |
 | an `Agent` label group and one label per client, optional; both or neither | `linear.agent_label_group`, `linear.agent_labels` |
-| the harness's, manager's, reader's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager`, `linear.reader` and `linear.roles.<role>` |
+| the harness's, manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
 | the humans subscribed on In Review | `linear.human_members` |
 | the human PM and decompose questions are assigned to, optional: their Linear user id | `linear.assignee_id` |
 | the Linear project of each product repo, optional | `linear.project_repos` |
@@ -308,7 +293,7 @@ token to the broker; cleanup removes only the items it created. A key the orches
 The Linear board's harness, manager and roles are OAuth apps now; member accounts and personal API keys are gone.
 On a Linear board, switch once, in this order:
 
-1. Create the six apps (harness, manager, reader, one per role) in Linear › Settings › API › Applications: Client
+1. Create the five apps (harness, manager, one per role) in Linear › Settings › API › Applications: Client
    credentials on, Public and Webhooks off ([Linear presets](#linear-presets)).
 2. Stop the board's launchd jobs and start no router by hand; wait until no run is left.
 3. Write down the value of each old setting, `linear.harness_key`, `linear.manager_key` and each
@@ -354,7 +339,7 @@ Copy the identity's six public values from its config table into a local `linear
 }
 ```
 
-`kind` is `harness`, `manager`, `reader` (fixed `read` scope) or `role` (verifier included). The name and services are 1–128 ASCII letters, digits
+`kind` is `harness`, `manager` or `role` (verifier included). The name and services are 1–128 ASCII letters, digits
 or `._@+-`, not `.` or `..`; the client ID 1–256 printable ASCII characters without whitespace; the user ID a lowercase
 UUID. The secret and token services differ and are no broker service; enrollment rejects an alias of another identity
 before changing access. Enroll it:
@@ -366,7 +351,7 @@ before changing access. Enroll it:
 It may ask the login Keychain password on the terminal, then open a macOS SecurityAgent dialog to change the client
 secret item's access: enter the login Keychain password and click **Allow**. It records a pending binding before
 changing access, so after a failure rerun the same enrollment.
-Then set `renewal = "broker"` in its `[orchestrator.linear.harness]`, `[orchestrator.linear.manager]`, `[orchestrator.linear.reader]` or
+Then set `renewal = "broker"` in its `[orchestrator.linear.harness]`, `[orchestrator.linear.manager]` or
 `[orchestrator.linear.roles.<role>]` table in `~/.ensemble/config.local.toml` and, callers still stopped, run
 `/usr/local/libexec/ensemble/ensemble-broker linear-maintain < linear-identity.json`; success contains version 1,
 `renewed` and `expires_at`, never a token. Then restart callers. Repeat for the next identity, including verifier when configured. An unconfigured

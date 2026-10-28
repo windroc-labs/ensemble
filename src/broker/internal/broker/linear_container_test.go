@@ -219,62 +219,6 @@ func TestLinearContainerLifecycle(t *testing.T) {
 	}
 }
 
-func TestLinearContainerReadScope(t *testing.T) {
-	l, k, h, calls := linearRig(t)
-	writer := linearApp("engineer")
-	enrollLinear(t, l, k, writer)
-	if _, err := l.Maintain(context.Background(), writer); err != nil {
-		t.Fatal(err)
-	}
-	hostBefore := string(h.values[[2]string{writer.TokenService, writer.TokenService}])
-	a := linearApp("reader")
-	a.Kind = "reader"
-	a.UserID = "00000000-0000-4000-8000-000000000002"
-	enrollLinear(t, l, k, a)
-	if _, err := l.Maintain(context.Background(), a); err != nil {
-		t.Fatal(err)
-	}
-	data, _ := json.Marshal(map[string]any{"app": containerApp(a), "scopes": "read"})
-	var request credential.LinearRequest
-	if err := json.Unmarshal(data, &request); err != nil {
-		t.Fatal(err)
-	}
-	commands, _, _, err := l.Issue(context.Background(), request, "reader")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range commands {
-		c.Erase()
-	}
-	if _, err := l.Refresh(context.Background(), request, "reader", func([]string, []byte) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	issued := 0
-	for _, form := range *calls {
-		if form.Get("grant_type") == "" {
-			continue
-		}
-		issued++
-		want := "read"
-		if form.Get("client_id") == writer.ClientID {
-			want = writer.scopes()
-		}
-		if form.Get("scope") != want {
-			t.Fatalf("scope = %q", form.Get("scope"))
-		}
-	}
-	if issued != 4 {
-		t.Fatalf("issuances = %d", issued)
-	}
-	if string(h.values[[2]string{writer.TokenService, writer.TokenService}]) != hostBefore {
-		t.Fatal("writer token changed")
-	}
-	request.App = containerApp(writer)
-	if _, _, _, err := l.Issue(context.Background(), request, "bad-scope"); err == nil {
-		t.Fatal("write identity accepted for a read-only token")
-	}
-}
-
 func TestLinearContainerErrorsHideSecrets(t *testing.T) {
 	l, k, _, _ := linearRig(t)
 	a := linearApp("engineer")
