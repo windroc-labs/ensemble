@@ -53,6 +53,9 @@ class Stream:
         self.thread.join(WAIT)
         if self.thread.is_alive():
             raise AssertionError(f"events() did not finish within {WAIT}s")
+        for item in list(self.queue.queue):
+            if isinstance(item, BaseException):
+                raise item
 
     def next(self, poke=None, *, idle=True):
         """Next event within WAIT s; idle=False skips IdleTimeout; poke runs meanwhile."""

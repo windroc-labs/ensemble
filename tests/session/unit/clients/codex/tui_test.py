@@ -924,6 +924,9 @@ class TuiTest(Base):
                 )
         self.assertEqual(run.limit("■ You’ve hit your usage limit. Try again later."), LimitHit())
         self.assertEqual(
+            run.limit("■ Quota exceeded. Check your plan and billing details."), LimitHit()
+        )
+        self.assertEqual(
             run.limit("■ You've hit your usage limit. Try again at Jan 2th, 2027 3:04 AM."),
             LimitHit(),
         )

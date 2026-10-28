@@ -202,14 +202,14 @@ def serve(case, channel: Channel, answer, *, count: int | None = 1) -> list[tupl
     done = threading.Event()
 
     def run():
-        deadline = time.monotonic() + ANSWER_WAIT
-        while not done.is_set() and (count is None or time.monotonic() < deadline):
+        deadline = _clock() + ANSWER_WAIT
+        while not done.is_set() and (count is None or _clock() < deadline):
             for ident, op, data in channel.pending():
                 served.append((op, data))
                 answer(ident, op, data)
                 if len(served) == count:
                     return
-            time.sleep(0.01)
+            _pause(0.01)
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
