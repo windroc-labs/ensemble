@@ -521,7 +521,7 @@ class Reopen(CliCase):
         self.record()
         for option in (
             *("--client", "--cwd=/tmp", "--resume", "--c", "--cw", "--cl=codex", "--res"),
-            *("--host", "--h=tmux", "--ho", "--account", "--acc=work", "--a"),
+            *("--host", "--h=tmux", "--ho"),
         ):
             with self.subTest(option=option):
                 result, stdout, stderr = self.reopen(option, "x", "--", "--cwd")
@@ -531,26 +531,17 @@ class Reopen(CliCase):
         result, _, stderr = self.reopen("--", "--client-flag")
         self.assertEqual(result, 0, stderr)
 
-    def test_reopen_restarts_on_the_recorded_account(self):
-        self.record(env={"ENSEMBLE_ACCOUNT": "work", "OTHER": "x"})
-        result, _, stderr = self.reopen("--display", "none")
-        self.assertEqual(result, 0, stderr)
-        command = self.calls[0][0]
-        self.assertEqual(command[command.index("--account") :][:2], ("--account", "work"))
-        self.assertLess(command.index("--account"), command.index("--display"))
-
-    def test_reopen_refuses_a_record_whose_env_is_not_a_table(self):
-        self.record(env=["ENSEMBLE_ACCOUNT=work"])
-        result, stdout, stderr = self.reopen("--display", "none")
-        self.assertEqual((result, stdout), (1, ""))
-        self.assertIn("no run record at", stderr)
-        self.assertEqual(self.calls, [])
-
-    def test_reopen_without_a_recorded_account_passes_none(self):
-        self.record(env={"ENSEMBLE_ACCOUNT": ""})
+    def test_reopen_leaves_the_account_to_the_session(self):
+        """WDRC-367: a recorded account is never restored; one given is passed on."""
+        self.record(env={"ENSEMBLE_ACCOUNT": "work"})
         result, _, stderr = self.reopen("--display", "none")
         self.assertEqual(result, 0, stderr)
         self.assertNotIn("--account", self.calls[0][0])
+        self.roster.remove("researcher-0f8fad5b")
+        result, _, stderr = self.reopen("--account", "home")
+        self.assertEqual(result, 0, stderr)
+        command = self.calls[0][0]
+        self.assertEqual(command[command.index("--account") :][:2], ("--account", "home"))
 
     def test_reopen_refuses_a_run_that_still_answers_alive(self):
         self.record()

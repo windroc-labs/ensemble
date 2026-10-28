@@ -1,6 +1,5 @@
-"""A role's run config (resolve: the core config, then the caller's overlays) and accounts table, one
-run's params and its client-neutral access intent (access), whose env is the session env its
-commands need.
+"""A role's run config (resolve: the core config, then the caller's overlays), one run's params
+and its client-neutral access intent (access), whose env is the session env its commands need.
 An overlay can widen read, write and commands, so a caller passes only operator-controlled
 config as one. A runtime overlay may also supply the caller's gate command; config files cannot.
 """
@@ -46,7 +45,6 @@ RUN_KEYS = frozenset(
     }
 )
 OVERLAY_KEYS = RUN_KEYS | {"gate"}
-ACCOUNTS_KEY = "accounts"
 ENVIRONMENT_KEY = "environment"  # a config role table's; engine/config.py checks it
 OUTPUT_KEYS = frozenset({"type", "repo", "branch", "dir", "host"})
 OLD_KEYS = frozenset({"default_task", "tasks"})
@@ -113,33 +111,6 @@ def resolve(
             f"task {task!r} is not one of {role}'s tasks ({', '.join(tasks)})"
         )
     return replace(run, role_title=title_of(*found))
-
-
-def accounts(
-    role: str,
-    *,
-    overlays: Sequence[Mapping] = (),
-    label: tuple[str, str] = ("run overlay", "overlay"),
-    config: str = CONFIG,
-    local: str = LOCAL,
-    cfg: Mapping | None = None,
-) -> dict[str, str]:
-    """`role`'s accounts (client name: account name) from the layers resolve takes, entry by entry,
-    each layer's global table then its role's; an entry "" is unset. Run after resolve accepted the
-    same layers.
-    """
-    source, where = label
-    out: dict[str, str] = {}
-    for layer, prefix in (
-        (config_of(config, local, cfg), ""),
-        *((o, f"{where}.") for o in overlays),
-    ):
-        try:
-            out |= _accounts(layer, prefix)
-            out |= _accounts(layer.get("roles", {}).get(role, {}), f"{prefix}roles.{role}.")
-        except ConfigError as e:
-            raise ConfigError(f"{source}: {e}" if prefix else str(e)) from None
-    return {client: account for client, account in out.items() if account}
 
 
 def trusted_dirs(
@@ -246,7 +217,6 @@ def _check(cfg: Mapping) -> None:
         if hint := utils.renamed_key(key):
             raise ConfigError(f"unknown key {key!r}{hint}")
     _check_output(cfg, "output", str)
-    _accounts(cfg, "")
     for r, table in cfg.get("roles", {}).items():
         _check_role(table, r, "", str, RUN_KEYS | {ENVIRONMENT_KEY})
 
@@ -258,9 +228,8 @@ def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
     for key in (ENVIRONMENT_KEY, "environments"):
         if key in overlay:
             raise _untrusted(f"{where}.{key}")
-    _check_keys(overlay, OVERLAY_KEYS | {"roles", ACCOUNTS_KEY}, f"[{where}]")
+    _check_keys(overlay, OVERLAY_KEYS | {"roles"}, f"[{where}]")
     _check_output(overlay, f"{where}.output", _boxed)
-    _accounts(overlay, f"{where}.")
     if "roles" not in overlay:
         return
     if not isinstance(overlay["roles"], Mapping):
@@ -290,20 +259,8 @@ def _check_role(
     table: Mapping, role: str, prefix: str, shown: Callable[[str], str], keys: frozenset = RUN_KEYS
 ) -> None:
     check_old_keys(table, role, prefix)
-    _check_keys(table, keys | {ACCOUNTS_KEY}, shown(f"{prefix}roles.{role}"))
+    _check_keys(table, keys, shown(f"{prefix}roles.{role}"))
     _check_output(table, f"{prefix}roles.{role}.output", shown)
-    _accounts(table, f"{prefix}roles.{role}.")
-
-
-def _accounts(table: Mapping, prefix: str) -> Mapping[str, str]:
-    """`table`'s accounts table, `[<prefix>accounts]` in its errors; absent: empty."""
-    found = table.get(ACCOUNTS_KEY, {})
-    where = f"[{prefix}{ACCOUNTS_KEY}]"
-    if not isinstance(found, Mapping):
-        raise ConfigError(f"{where} must be a table")
-    if bad := next((k for k, v in found.items() if not isinstance(v, str)), None):
-        raise ConfigError(f"{where} {bad} must be text")
-    return found
 
 
 def _check_output(table: Mapping, where: str, shown: Callable[[str], str]) -> None:

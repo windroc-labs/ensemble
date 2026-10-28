@@ -14,7 +14,6 @@ from ensemble.delegate.composer.base import TEAM
 from ensemble.delegate.composer.run import (
     RUN_KEYS,
     access,
-    accounts,
     bind,
     check_old_keys,
     resolve,
@@ -791,71 +790,28 @@ class Client(Fake):
         self.assertEqual(got, want)
 
 
-class Accounts(Fake):
-    """A role's accounts table (client name to account name): role, then global, then each
-    overlay, entry by entry; never a run key.
-    """
+class MovedAccounts(Fake):
+    """WDRC-367: account selection is session's; a delegate accounts table names its new key."""
 
-    def accounts(self, role="writer", **kw):
-        return accounts(role, config=self.config, local=self.local_file, **kw)
-
-    def test_the_role_table_then_the_global_one_per_client(self):
-        self.assertEqual(self.accounts(), {})
-        self.local('[roles.writer.accounts]\nclaude = "work"\n')
-        self.assertEqual((self.accounts(), self.accounts("editor")), ({"claude": "work"}, {}))
-        self.local(
-            '[accounts]\nclaude = "home"\ncodex = "c"\n[roles.writer.accounts]\nclaude = "work"\n'
-        )
-        self.assertEqual(self.accounts(), {"claude": "work", "codex": "c"})
-        self.assertEqual(self.accounts("editor"), {"claude": "home", "codex": "c"})
-
-    def test_each_overlay_in_order_entry_by_entry(self):
-        self.local('[roles.writer.accounts]\nclaude = "work"\ncodex = "c"\n')
-        overlays = (
-            {"accounts": {"claude": "board"}},
-            {"roles": {"writer": {"accounts": {"codex": "x", "opencode": "o"}}}},
-        )
-        self.assertEqual(
-            self.accounts(overlays=overlays), {"claude": "board", "codex": "x", "opencode": "o"}
-        )
-        self.assertEqual(self.accounts(overlays=({"accounts": {"claude": ""}},)), {"codex": "c"})
-        self.assertEqual(self.accounts("editor", overlays=overlays), {"claude": "board"})
-
-    def test_the_run_config_is_unchanged(self):
-        self.assertNotIn("accounts", RUN_KEYS)
-        self.assertNotIn("accounts", {f.name for f in fields(RunConfig)})
-        before = self.resolved()
-        self.local('[accounts]\nclaude = "home"\n[roles.writer.accounts]\nclaude = "work"\n')
-        overlays = ({"accounts": {"claude": "b"}, "roles": {"writer": {"accounts": {}}}},)
-        self.assertEqual(self.resolved(overlays=overlays), before)
-
-    def test_a_non_table_or_a_non_string_entry_is_refused_by_resolve_and_accounts(self):
+    def test_every_accounts_table_is_refused_naming_the_session_key(self):
+        moved = "; moved to [session.clients.<client>] account"
         for local, overlay, want in (
-            ('[roles.writer]\naccounts = "work"\n', {}, "[roles.writer.accounts] must be a table"),
+            ('[accounts]\nclaude = "work"\n', {}, f"unknown key 'accounts' in [delegate]{moved}"),
             (
-                "[roles.writer.accounts]\nclaude = 3\n",
+                '[roles.writer.accounts]\nclaude = "work"\n',
                 {},
-                "[roles.writer.accounts] claude must be text",
+                f"unknown key 'accounts' in roles.writer{moved}",
             ),
-            ('accounts = "work"\n', {}, "[accounts] must be a table"),
-            ("[accounts]\nclaude = true\n", {}, "[accounts] claude must be text"),
+            ("", {"accounts": {}}, f"run overlay: unknown key 'accounts' in [overlay]{moved}"),
             (
                 "",
-                {"roles": {"writer": {"accounts": ["work"]}}},
-                "run overlay: [overlay.roles.writer.accounts] must be a table",
-            ),
-            (
-                "",
-                {"accounts": {"claude": 1}},
-                "run overlay: [overlay.accounts] claude must be text",
+                {"roles": {"writer": {"accounts": {"claude": "w"}}}},
+                f"run overlay: unknown key 'accounts' in [overlay.roles.writer]{moved}",
             ),
         ):
             with self.subTest(want=want):
                 self.local(local)
-                self.assertEqual(self.refused(overlays=(overlay,)), want)
-                with self.assertRaises(ConfigError) as cm:
-                    self.accounts(overlays=(overlay,))
-                self.assertEqual(str(cm.exception), want)
+                self.assertTrue(self.refused(overlays=(overlay,)).endswith(want))
 
 
 class TeamRoles(Fake):

@@ -568,33 +568,16 @@ class Policy(Base):
                 start.assert_not_called()
 
 
-class Accounts(Base):
-    """plan puts the effective client's account (its role's accounts table) into the session env."""
+class SessionEnv(Base):
+    """plan never selects an account (WDRC-367: the session does)."""
 
-    def test_the_effective_clients_entry_only(self):
-        accounts = {"claude": "work", "codex": ""}
-        for client, keys, want in (
-            ("claude", None, {"ENSEMBLE_ACCOUNT": "work"}),
-            (None, {"client": "claude"}, {"ENSEMBLE_ACCOUNT": "work"}),
-            ("codex", None, {}),
-            ("fake", {"client": "claude"}, {}),
-        ):
-            with self.subTest(client=client, keys=keys):
-                got, _ = self.planned(client=client, keys=keys, accounts=accounts)
-                self.assertEqual(dict(got.session.env), want)
-                self.assertEqual(got.session.client, client or "claude")
-        got, _ = self.planned(client="claude")
-        self.assertEqual(dict(got.session.env), {})
-
-    def test_it_joins_the_policy_env_and_a_docker_runs_users(self):
+    def test_the_policy_env_and_a_docker_runs_users_only(self):
         self.local('[policy.claude]\nenv = { K = "v" }\n')
-        got, _ = self.planned(client="claude", accounts={"claude": "work"})
-        self.assertEqual(dict(got.session.env), {"K": "v", "ENSEMBLE_ACCOUNT": "work"})
+        got, _ = self.planned(client="claude")
+        self.assertEqual(dict(got.session.env), {"K": "v"})
         self.driver.docker = True
-        got, _ = self.planned(client="claude", mode="tui", out=None, accounts={"claude": "w"})
-        self.assertEqual(
-            (got.session.env["ENSEMBLE_ACCOUNT"], got.session.env["ENSEMBLE_USERS"]), ("w", "[]")
-        )
+        got, _ = self.planned(client="claude", mode="tui", out=None)
+        self.assertEqual(dict(got.session.env), {"K": "v", "ENSEMBLE_USERS": "[]"})
 
 
 class InstructionPlans(InstructionCase):

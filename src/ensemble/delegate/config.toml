@@ -5,7 +5,7 @@
 # keys in that table.
 #
 # Each layer reads only its own keys (paths from the repo root): the Composer (src/ensemble/delegate/composer/)
-# the run keys, [output], [accounts], [roles.<role>], trusted_dirs and team_dirs; src/ensemble/delegate/team/tools/repo.py
+# the run keys, [output], [roles.<role>], trusted_dirs and team_dirs; src/ensemble/delegate/team/tools/repo.py
 # users and trusted_dirs; src/ensemble/delegate/config.py [delegates]; the Delegate
 # (src/ensemble/delegate/engine/plan.py) [policy.<client>]. [clients] and [hosts]: src/ensemble/session/config.toml.
 #
@@ -87,13 +87,8 @@ branch = ""
 dir = ""
 host = ""
 
-# Accounts: client name → the account (a [clients.<client>.accounts] name: src/ensemble/session/config.toml)
-# a run on that client starts on; merged entry by entry, global → role ([roles.<role>.accounts]) → each overlay (the
-# orchestrator's among them). Only the run's client's entry counts, so a role run on another client gets none; no
-# entry or "" → none. An unregistered one refuses the run
-[accounts]
-# local: [delegate.accounts]
-# local: claude = "work"
+# A run's Claude account is the session's choice ([clients.claude] account: src/ensemble/session/config.toml); an
+# accounts table here, global, a role's or an overlay's, is a config error naming that key (docs/upgrading.md)
 
 # Roles: [roles.<role>], a role's run keys; its tasks are its charter's index (core's team/roles/<role>.md › Tasks). A
 # role table holding task-level keys (default_task, a tasks table) is an error.
@@ -118,7 +113,6 @@ host = ""
 #                 with <Workdir>, <team> or <role team> gets it as approved when that quoting changed it; [] → none
 # A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role
-#   accounts      [roles.<role>.accounts]: [accounts] above, for that role, entry by entry
 
 # ── Researcher ──────────────────────────────────────────
 [roles.researcher]
