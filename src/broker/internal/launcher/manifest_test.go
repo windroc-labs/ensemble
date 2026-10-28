@@ -29,7 +29,7 @@ func TestManifestFixtures(t *testing.T) {
 	for _, c := range fixtures.Cases(t, "manifest") {
 		t.Run(c.File, func(t *testing.T) {
 			m, err := ParseManifest(c.Data)
-			if c.Valid {
+			if c.Valid && c.Expected.Stage != "manifest" {
 				if err != nil || m.Name == "" || m.Labels == nil {
 					t.Fatalf("%+v %v", m, err)
 				}

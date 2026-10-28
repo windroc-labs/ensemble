@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"maps"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -28,9 +27,6 @@ type Manifest struct {
 	Lock, LockOwner                                                                             string            // optional lock name and readable owner
 	Gateway                                                                                     string            // the egress proxy's caller network key; workers without the field
 	Prefetch                                                                                    *Prefetch         // the repo cloned into a new workspace; nil without the field
-
-	// Credentials is the credential request; nil without the field.
-	Credentials CredentialRequest
 }
 
 // Prefetch is the repo a start clones into the workspace volume it creates: Repo owner/name, Ref a branch or tag
@@ -40,14 +36,6 @@ type Prefetch struct{ Repo, Ref string }
 // Secret is one environment secret a start writes: Item is its keychain reference (ValidEnvItem), File its name in
 // the container's secrets directory.
 type Secret struct{ Item, File string }
-
-// Grant is one GitHub installation token's scope: App's token limited to Permissions, reaching Repo (owner/name)
-// alone, or every repository of every installation when Repo is "".
-type Grant struct {
-	App         string
-	Permissions map[string]string
-	Repo        string
-}
 
 // A workspace volume's labels: its kind (always kind) and its mount point.
 const (
@@ -79,8 +67,6 @@ var (
 	claudeAccountPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	// An environment secret's name, as Claude accounts: lowercase so the keychain's case handling cannot merge two.
 	envNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
-	// A team role's name: the credential request's linear role.
-	rolePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 )
 
 // envItemPrefix starts every environment secret's keychain service; the broker package's envServicePrefix is the same.
@@ -135,15 +121,6 @@ func ValidClaudeAccount(name string) bool {
 
 func hasControl(s string) bool {
 	return strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
-}
-
-// str is raw's string when it is a JSON string without control characters.
-func str(raw json.RawMessage) (string, bool) {
-	var s string
-	if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &s) != nil || hasControl(s) {
-		return "", false
-	}
-	return s, true
 }
 
 // ParseManifest validates a manifest against the protocol's schema; every failure is manifest_rejected.
@@ -203,6 +180,13 @@ func ParseManifest(data []byte) (Manifest, error) {
 		return reject("empty manifest")
 	}
 
+	str := func(raw json.RawMessage) (string, bool) {
+		var s string
+		if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &s) != nil || hasControl(s) {
+			return "", false
+		}
+		return s, true
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
 		return reject("not a JSON object")
@@ -361,11 +345,23 @@ func ParseManifest(data []byte) (Manifest, error) {
 		m.Prefetch = &Prefetch{Repo: repo, Ref: ref}
 	}
 
-	credentials, problem := mergedCredentials(fields)
-	if problem != "" {
-		return reject("%s", problem)
+	for _, source := range []string{"environment_credentials", "credentials"} {
+		raw, present := fields[source]
+		if !present {
+			continue
+		}
+		var text string
+		if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &text) != nil {
+			return reject("%s: want JSON text", source)
+		}
+		var spec map[string]json.RawMessage
+		if json.Unmarshal([]byte(text), &spec) != nil || spec == nil {
+			return reject("%s: want a JSON object", source)
+		}
+		if len(spec) > 0 {
+			return reject("%s: not served by this broker", source)
+		}
 	}
-	m.Credentials = credentials
 
 	var labels map[string]json.RawMessage
 	if raw := fields["labels"]; len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &labels) != nil {
@@ -390,105 +386,4 @@ func (m Manifest) StateDir() string {
 		return m.OpencodeDir
 	}
 	return m.ClaudeDir
-}
-
-// object is raw's members when it is a JSON object.
-func object(raw json.RawMessage) (map[string]json.RawMessage, bool) {
-	var fields map[string]json.RawMessage
-	if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &fields) != nil {
-		return nil, false
-	}
-	return fields, true
-}
-
-// list is raw's elements when it is a JSON array of 1 to most.
-func list(raw json.RawMessage, most int) ([]json.RawMessage, bool) {
-	var items []json.RawMessage
-	if len(raw) == 0 || raw[0] != '[' || json.Unmarshal(raw, &items) != nil || len(items) == 0 || len(items) > most {
-		return nil, false
-	}
-	return items, true
-}
-
-// onlyKeys is whether every key of fields is one of keys.
-func onlyKeys(fields map[string]json.RawMessage, keys ...string) bool {
-	for key := range fields {
-		if !slices.Contains(keys, key) {
-			return false
-		}
-	}
-	return true
-}
-
-// parseGrant shares the legacy GitHub validation without echoing reference values.
-func parseGrant(raw json.RawMessage) (Grant, string) {
-	fields, ok := object(raw)
-	if !ok {
-		return Grant{}, "want an object"
-	}
-	if !onlyKeys(fields, "app", "permissions", "repo") {
-		return Grant{}, "an unknown key"
-	}
-	rawApp, hasApp := fields["app"]
-	app, okApp := str(rawApp)
-	rawPermissions, hasPermissions := fields["permissions"]
-	var permissions map[string]string
-	okPermissions := len(rawPermissions) > 0 && rawPermissions[0] == '{' && json.Unmarshal(rawPermissions, &permissions) == nil && len(permissions) > 0
-	rawRepo, hasRepo := fields["repo"]
-	repo, okRepo := str(rawRepo)
-	switch {
-	case !hasApp:
-		return Grant{}, "app missing"
-	case !okApp || !appPattern.MatchString(app):
-		return Grant{}, "app not valid"
-	case !hasPermissions:
-		return Grant{}, "permissions missing"
-	case !okPermissions:
-		return Grant{}, "permissions not valid"
-	case githubapi.CheckPermissions(permissions) != nil:
-		return Grant{}, permissionProblem(permissions)
-	case hasRepo && (!okRepo || !githubapi.ValidRepo(repo)):
-		return Grant{}, "repo not valid"
-	}
-	return Grant{App: app, Permissions: permissions, Repo: repo}, ""
-}
-
-// permissionProblem names the first entry of permissions githubapi.CheckPermissions refuses: "<name> not valid" for a
-// permission GitHub knows, else "an unknown key".
-func permissionProblem(permissions map[string]string) string {
-	for _, name := range slices.Sorted(maps.Keys(permissions)) {
-		if githubapi.CheckPermissions(map[string]string{name: permissions[name]}) == nil {
-			continue
-		}
-		if githubapi.CheckPermissions(map[string]string{name: "read"}) == nil || githubapi.CheckPermissions(map[string]string{name: "write"}) == nil {
-			return name + " not valid"
-		}
-		return "an unknown key"
-	}
-	return "permissions not valid"
-}
-
-// parseEnvSecret shares the legacy environment item and file constraints.
-func parseEnvSecret(raw json.RawMessage) (Secret, string) {
-	fields, ok := object(raw)
-	if !ok {
-		return Secret{}, "want an object"
-	}
-	rawItem, hasItem := fields["item"]
-	item, okItem := str(rawItem)
-	rawFile, hasFile := fields["file"]
-	file, okFile := str(rawFile)
-	switch {
-	case !onlyKeys(fields, "item", "file"):
-		return Secret{}, "an unknown key"
-	case !hasItem:
-		return Secret{}, "item missing"
-	case !hasFile:
-		return Secret{}, "file missing"
-	case !okItem || !ValidEnvItem(item):
-		return Secret{}, "item not valid"
-	case !okFile || !validSecretFile(file):
-		return Secret{}, "file not valid"
-	}
-	return Secret{Item: item, File: file}, ""
 }

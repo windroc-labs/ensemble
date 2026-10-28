@@ -1,12 +1,8 @@
 import json
-import os
-import tempfile
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from ensemble import session
-from ensemble.session.hosts.docker import broker
 from tests.case import REPO, Case
 
 PROTOCOL = Path(REPO, "src/broker/protocol/docker-broker")
@@ -95,7 +91,8 @@ class DockerBrokerProtocol(Case):
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(
             set(names),
-            {p.name for p in (PROTOCOL / "fixtures").glob("*.json")} - {"index.json"},
+            {p.name for p in (PROTOCOL / "fixtures").glob("*.json")}
+            - {"index.json", "credential-dirs.json"},
         )
         covered = set()
         for case in index["cases"]:
@@ -136,26 +133,6 @@ class DockerBrokerProtocol(Case):
             for valid in (True, False):
                 self.assertIn((definition, valid), covered)
 
-    def test_credential_dirs_match_request_kinds(self):
-        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
-        dirs = json.loads((PROTOCOL / "fixtures/credential-dirs.json").read_text())
-        kinds = list(schema["$defs"]["credential_spec"]["properties"])
-        self.assertEqual(list(dirs), kinds)
-        self.assertEqual(
-            {
-                kind: d["const"]
-                for kind, d in schema["$defs"]["credential_dirs"]["properties"].items()
-            },
-            dirs,
-        )
-        for kind, path in dirs.items():
-            with self.subTest(kind=kind):
-                self.assertEqual(path, f"/run/ensemble/secrets/{kind}")
-                for other in set(dirs.values()) - {path}:
-                    self.assertFalse(
-                        Path(path).is_relative_to(other) or Path(other).is_relative_to(path)
-                    )
-
     def test_credential_size_limits(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         validator = Draft202012Validator({**schema, "$ref": "#/$defs/credential_spec"})
@@ -172,40 +149,16 @@ class DockerBrokerProtocol(Case):
                 spec = {"env": [{"item": "ensemble-broker-env/a", "file": "a" * length}]}
                 self.assertEqual(validator.is_valid(spec), valid)
 
-    def test_a_broker_only_fixture_kind_is_transported_unchanged(self):
+    def test_a_broker_only_fixture_kind_fits_the_manifest_envelopes(self):
         fixture = json.loads((PROTOCOL / "fixtures/credential-spec-test-kind.json").read_text())
         extension = json.loads((PROTOCOL / "test-kind.schema.json").read_text())
-        self.assertTrue(
-            Draft202012Validator(extension).is_valid(json.loads(fixture["credentials"]))
-        )
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         production = Draft202012Validator({**schema, "$ref": "#/$defs/credential_spec"})
-        self.assertFalse(production.is_valid(json.loads(fixture["credentials"])))
-        caller, environment = fixture["credentials"], fixture["environment_credentials"]
-        spec = session.Spec(
-            workdir="/work",
-            access=session.Access(cwd="/work"),
-            credentials=caller,
-            environment_credentials=environment,
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "g.json")
-            broker.write_manifest(
-                path,
-                name="worker_1",
-                generation="0" * 32,
-                image="ensemble-worker:" + "a" * 64,
-                cwd="/work",
-                workspace="ensemble-ws-worker_1",
-                home=("claude_dir", "/home/claude"),
-                hook_path="/usr/local/bin/ensemble-session",
-                github="",
-                credentials=spec.credentials,
-                environment_credentials=spec.environment_credentials,
-            )
-            manifest = json.loads(Path(path).read_text())
-        for key in ("credentials", "environment_credentials"):
-            self.assertEqual(manifest[key].encode(), fixture[key].encode())
+        for value in fixture.values():
+            self.assertTrue(Draft202012Validator(extension).is_valid(json.loads(value)))
+            self.assertFalse(production.is_valid(json.loads(value)))
+        manifest = json.loads((PROTOCOL / "fixtures/manifest-valid.json").read_text())
+        self.assertTrue(Draft202012Validator(schema).is_valid({**manifest, **fixture}))
 
     def test_manifest_required_fields_and_rejected_unknown_fields_are_exercised(self):
         index = json.loads((PROTOCOL / "fixtures/index.json").read_text())

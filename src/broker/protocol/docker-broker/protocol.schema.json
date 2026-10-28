@@ -101,68 +101,71 @@
           "type": "null"
         },
         {
-          "type": "object",
-          "properties": {
-            "app": {
-              "type": "string",
-              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
-            },
-            "permissions": {
-              "type": "object",
-              "minProperties": 1,
-              "propertyNames": {
-                "enum": [
-                  "actions",
-                  "administration",
-                  "checks",
-                  "codespaces",
-                  "contents",
-                  "dependabot_secrets",
-                  "deployments",
-                  "environments",
-                  "issues",
-                  "metadata",
-                  "packages",
-                  "pages",
-                  "pull_requests",
-                  "repository_custom_properties",
-                  "repository_hooks",
-                  "secret_scanning_alerts",
-                  "secrets",
-                  "security_events",
-                  "single_file",
-                  "statuses",
-                  "vulnerability_alerts",
-                  "workflows"
-                ]
-              },
-              "additionalProperties": {
-                "enum": [
-                  "read",
-                  "write"
-                ]
-              },
-              "properties": {
-                "metadata": {
-                  "const": "read"
-                },
-                "workflows": {
-                  "const": "write"
-                }
-              }
-            },
-            "repo": {
-              "$comment": "A repo grant: its token reaches this repository alone; absent: every repository of every installation.",
-              "$ref": "#/$defs/github_repo"
-            }
-          },
-          "required": [
-            "app",
-            "permissions"
-          ],
-          "additionalProperties": false
+          "$ref": "#/$defs/github_grant"
         }
       ]
+    },
+    "github_grant": {
+      "type": "object",
+      "properties": {
+        "app": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+        },
+        "permissions": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "enum": [
+              "actions",
+              "administration",
+              "checks",
+              "codespaces",
+              "contents",
+              "dependabot_secrets",
+              "deployments",
+              "environments",
+              "issues",
+              "metadata",
+              "packages",
+              "pages",
+              "pull_requests",
+              "repository_custom_properties",
+              "repository_hooks",
+              "secret_scanning_alerts",
+              "secrets",
+              "security_events",
+              "single_file",
+              "statuses",
+              "vulnerability_alerts",
+              "workflows"
+            ]
+          },
+          "additionalProperties": {
+            "enum": [
+              "read",
+              "write"
+            ]
+          },
+          "properties": {
+            "metadata": {
+              "const": "read"
+            },
+            "workflows": {
+              "const": "write"
+            }
+          }
+        },
+        "repo": {
+          "$comment": "A repo grant: its token reaches this repository alone; absent: every repository of every installation.",
+          "$ref": "#/$defs/github_repo"
+        }
+      },
+      "required": [
+        "app",
+        "permissions"
+      ],
+      "additionalProperties": false
     },
     "github_repo": {
       "$comment": "A github.com repository, owner/name; GitHub forbids the names . and ..",
@@ -179,27 +182,6 @@
       "contentSchema": {
         "$ref": "#/$defs/credential_spec"
       }
-    },
-    "credential_dirs": {
-      "$comment": "Each credential request kind's directory in the container, under the secrets tmpfs /run/ensemble/secrets.",
-      "type": "object",
-      "properties": {
-        "github": {
-          "const": "/run/ensemble/secrets/github"
-        },
-        "linear": {
-          "const": "/run/ensemble/secrets/linear"
-        },
-        "env": {
-          "const": "/run/ensemble/secrets/env"
-        }
-      },
-      "required": [
-        "github",
-        "linear",
-        "env"
-      ],
-      "additionalProperties": false
     },
     "volume": {
       "type": "string",
@@ -320,17 +302,11 @@
                 "maxLength": 255,
                 "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "not": {
-                  "enum": [
-                    ".",
-                    ".."
-                  ]
+                  "enum": [".", ".."]
                 }
               }
             },
-            "required": [
-              "item",
-              "file"
-            ],
+            "required": ["item", "file"],
             "additionalProperties": false
           }
         },
@@ -363,9 +339,7 @@
               "$ref": "#/$defs/git_ref"
             }
           },
-          "required": [
-            "repo"
-          ],
+          "required": ["repo"],
           "additionalProperties": false
         },
         "credentials": {
@@ -1961,12 +1935,18 @@
     "audit_warning": {
       "const": "audit_write_failed"
     },
+    "credential_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[!-~]+$"
+    },
     "credential_spec": {
-      "$comment": "Broker-only interpretation. Both declarations are independently checked; caller replaces whole same-kind environment values. No secret values. Runtime also rejects duplicate JSON keys, equal app services and duplicate env filenames.",
+      "$comment": "Broker-only contract: independently validate both declarations, then replace whole same-kind environment values with the caller value. No secret values. Runtime kind validation and issuance are not enabled; nonempty declarations are refused.",
       "type": "object",
       "properties": {
         "github": {
-          "$ref": "#/$defs/github/oneOf/1"
+          "$ref": "#/$defs/github_grant"
         },
         "linear": {
           "type": "object",
@@ -1985,10 +1965,7 @@
                   }
                 },
                 "client_id": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256,
-                  "pattern": "^[!-~]+$"
+                  "$ref": "#/$defs/credential_reference"
                 },
                 "user_id": {
                   "type": "string",
@@ -1998,20 +1975,14 @@
                   "type": "string",
                   "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
                   "not": {
-                    "enum": [
-                      ".",
-                      ".."
-                    ]
+                    "enum": [".", ".."]
                   }
                 },
                 "token_service": {
                   "type": "string",
                   "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
                   "not": {
-                    "enum": [
-                      ".",
-                      ".."
-                    ]
+                    "enum": [".", ".."]
                   }
                 }
               },
@@ -2028,55 +1999,31 @@
               "type": "object",
               "properties": {
                 "team": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256,
-                  "pattern": "^[!-~]+$"
+                  "$ref": "#/$defs/credential_reference"
                 },
                 "states": {
                   "type": "object",
                   "properties": {
                     "backlog": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256,
-                      "pattern": "^[!-~]+$"
+                      "$ref": "#/$defs/credential_reference"
                     },
                     "todo": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256,
-                      "pattern": "^[!-~]+$"
+                      "$ref": "#/$defs/credential_reference"
                     },
                     "in_progress": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256,
-                      "pattern": "^[!-~]+$"
+                      "$ref": "#/$defs/credential_reference"
                     },
                     "in_review": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256,
-                      "pattern": "^[!-~]+$"
+                      "$ref": "#/$defs/credential_reference"
                     },
                     "handoff": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256,
-                      "pattern": "^[!-~]+$"
+                      "$ref": "#/$defs/credential_reference"
                     },
                     "done": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256,
-                      "pattern": "^[!-~]+$"
+                      "$ref": "#/$defs/credential_reference"
                     },
                     "canceled": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 256,
-                      "pattern": "^[!-~]+$"
+                      "$ref": "#/$defs/credential_reference"
                     }
                   },
                   "required": [
@@ -2102,10 +2049,7 @@
                         }
                       },
                       "additionalProperties": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 256,
-                        "pattern": "^[!-~]+$"
+                        "$ref": "#/$defs/credential_reference"
                       }
                     },
                     "agent_labels": {
@@ -2117,10 +2061,7 @@
                         }
                       },
                       "additionalProperties": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 256,
-                        "pattern": "^[!-~]+$"
+                        "$ref": "#/$defs/credential_reference"
                       }
                     }
                   },
@@ -2145,10 +2086,7 @@
                 "human_members": {
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256,
-                    "pattern": "^[!-~]+$"
+                    "$ref": "#/$defs/credential_reference"
                   }
                 }
               },
@@ -2183,9 +2121,7 @@
       "type": "object",
       "required": [
         "credentials",
-        "environment_credentials",
-        "expected_file",
-        "directory"
+        "environment_credentials"
       ],
       "additionalProperties": false,
       "properties": {
@@ -2193,12 +2129,6 @@
           "type": "string"
         },
         "environment_credentials": {
-          "type": "string"
-        },
-        "expected_file": {
-          "type": "string"
-        },
-        "directory": {
           "type": "string"
         }
       }
