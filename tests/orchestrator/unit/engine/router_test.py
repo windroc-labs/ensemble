@@ -1220,6 +1220,14 @@ class AttendedEntry(OuterBase):
             (["--tui", "--events"], None),
             (["--tui", "--display", "--events", "e"], None),
             (["--brake", "pm", "--tui"], None),
+            (
+                ["--dry-run", "--dry-run"],
+                {**base, "tui": False, "dry": True, "display": None, "events": None},
+            ),
+            (
+                ["--issue", ID, "--dry-run"],
+                {**base, "tui": False, "dry": True, "issue": ID, "display": None, "events": None},
+            ),
         ):
             with self.subTest(argv=argv):
                 self.assertEqual(router.options(argv), want)

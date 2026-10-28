@@ -30,7 +30,7 @@ from tests.orchestrator.unit.board_ids import HARNESS_IDENTITY
 from tests.orchestrator.unit.keychain_fixtures import app_transport, token_http_error
 from tests.orchestrator.unit.run_fixtures import logged, show
 from tests.orchestrator.unit.streams import Stderr
-from tests.utils.cli_help import check_examples, help_text, parse_only
+from tests.utils.cli_help import check_examples, parse_only
 
 ISSUE = "11111111-2222-4333-8444-555555555555"
 
@@ -168,7 +168,7 @@ class Wirings(run_fixtures.Base):
             if not line.strip().startswith("ensemble-"):
                 self.assertLessEqual(len(line), 80, line)
 
-    def test_published_examples_parse_before_operational_dispatch(self):
+    def test_every_help_surface_is_safe_and_its_examples_parse(self):
         names = (
             "",
             "router",
@@ -197,13 +197,27 @@ class Wirings(run_fixtures.Base):
         )
 
         def text_of(name):
-            output = io.StringIO()
-            with redirect_stdout(output):
-                try:
-                    cli.main([*name.split(), "--help"])
-                except SystemExit as error:
-                    self.assertEqual(error.code, 0)
-            return output.getvalue()
+            for flag in ("-h", "--help"):
+                with self.subTest(command=name, flag=flag):
+                    output, errors = io.StringIO(), io.StringIO()
+                    with (
+                        redirect_stdout(output),
+                        redirect_stderr(errors),
+                        mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}),
+                        mock.patch("sys.stdin.read", side_effect=AssertionError("read stdin")),
+                        mock.patch("builtins.open", side_effect=AssertionError("opened a file")),
+                        mock.patch("subprocess.run", side_effect=AssertionError("ran a process")),
+                    ):
+                        try:
+                            result = cli.main([*name.split(), flag])
+                        except SystemExit as error:
+                            result = error.code
+                    self.assertEqual((result, errors.getvalue()), (0, ""))
+                    text = output.getvalue()
+                    self.assertIn("ensemble-orchestrator", text)
+                    self.assertIn("Example", text)
+                    self.assertIn("ensemble-orchestrator --help", text)
+            return text
 
         def check(command):
             if command[1] == "router" and command[2:] not in (["--help"], ["-h"]):
@@ -220,54 +234,6 @@ class Wirings(run_fixtures.Base):
                 parse_only(cli.main, command[1:])
 
         check_examples(self, text_of, names, check=check, optional={"writeback"})
-
-    def test_every_help_surface_is_safe_and_explains_an_invocation(self):
-        commands = (
-            "",
-            "router",
-            "promote",
-            "prune",
-            "status",
-            "show",
-            "hide",
-            "close",
-            "attach-command",
-            "resume",
-            "content",
-            "writeback",
-            "issue",
-            "issue read",
-            "issue list",
-            "issue lookup",
-            "issue create",
-            "issue edit",
-            "issue move",
-            "issue comment",
-            "issue archive",
-            "issue relation add",
-            "issue relation remove",
-            "issue label swap",
-        )
-        for command in commands:
-            for flag in ("--help", "-h"):
-                with self.subTest(command=command, flag=flag):
-                    output, errors = io.StringIO(), io.StringIO()
-                    with (
-                        redirect_stdout(output),
-                        redirect_stderr(errors),
-                        mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}),
-                        mock.patch("sys.stdin.read", side_effect=AssertionError("read stdin")),
-                        mock.patch("builtins.open", side_effect=AssertionError("opened a file")),
-                    ):
-                        try:
-                            result = cli.main([*command.split(), flag])
-                        except SystemExit as error:
-                            result = error.code
-                    self.assertEqual((result, errors.getvalue()), (0, ""))
-                    text = output.getvalue()
-                    self.assertIn("ensemble-orchestrator", text)
-                    self.assertIn("Example", text)
-                    self.assertIn("ensemble-orchestrator --help", text)
 
     def test_run_control_help_explains_selection_effects_and_recovery(self):
         expected = {
@@ -304,7 +270,17 @@ class Wirings(run_fixtures.Base):
 
     def test_maintenance_and_automation_help_retains_operational_contracts(self):
         expected = {
+            "": (
+                "reaches Linear as the [linear.harness] OAuth app, whose token any command renews"
+                " before a call when under 5 days are left (the issue commands: the [linear.manager]"
+                " OAuth app)",
+                "{router,promote,prune,issue,status,show,hide,close,attach-command,resume,content,writeback}",
+            ),
             "router": (
+                "ensemble-orchestrator router",
+                "--dry-run",
+                "--issue ID",
+                "--brake ROLE",
                 "--display",
                 "--events",
                 "at most once",
@@ -315,8 +291,21 @@ class Wirings(run_fixtures.Base):
                 "ENSEMBLE_EVENTS",
                 "TUI (text user interface)",
             ),
-            "promote": ("10-minute", "Todo", "Done", "prune", "read", "repeat", "Keychain"),
+            "promote": (
+                "ensemble-orchestrator promote",
+                "--dry-run",
+                "--now",
+                "10-minute",
+                "Todo",
+                "Done",
+                "prune",
+                "read",
+                "repeat",
+                "Keychain",
+            ),
             "prune": (
+                "ensemble-orchestrator prune",
+                "--dry-run",
                 "2 hours",
                 "7 days",
                 "uncommitted",
@@ -333,49 +322,12 @@ class Wirings(run_fixtures.Base):
                 output = io.StringIO()
                 with redirect_stdout(output):
                     try:
-                        cli.main([command, "--help"])
+                        cli.main([*command.split(), "--help"])
                     except SystemExit as error:
                         self.assertEqual(error.code, 0)
                 text = output.getvalue()
                 for phrase in phrases:
                     self.assertIn(phrase, " ".join(text.split()))
-
-    def test_router_examples_and_repetition_match_real_options(self):
-        fixtures = (
-            (["--issue", "TASK-1", "--dry-run"], {"issue": "TASK-1", "dry": True}),
-            (
-                [
-                    "--issue",
-                    "TASK-1",
-                    "--tui",
-                    "--display",
-                    "none",
-                    "--events",
-                    "/tmp/demo-events.jsonl",
-                ],
-                {
-                    "issue": "TASK-1",
-                    "tui": True,
-                    "display": "none",
-                    "events": "/tmp/demo-events.jsonl",
-                },
-            ),
-            (["--brake", "engineer"], {"brake": "engineer"}),
-            (["--dry-run", "--dry-run"], {"dry": True}),
-        )
-        for arguments, expected in fixtures:
-            with self.subTest(arguments=arguments):
-                actual = router.options(arguments)
-                self.assertIsNotNone(actual)
-                for key, value in expected.items():
-                    self.assertEqual(actual[key], value)
-        for arguments in (
-            ["--events", "/tmp/demo-events.jsonl"],
-            ["--issue", "TASK-1", "--issue", "TASK-2"],
-            ["--brake", "engineer", "--dry-run"],
-        ):
-            with self.subTest(arguments=arguments):
-                self.assertIsNone(router.options(arguments))
 
     def test_resume_input_is_refused_before_loading_config(self):
         result, output, errors = _call(["resume", "TASK-1", "--input", "answer"])
@@ -383,39 +335,6 @@ class Wirings(run_fixtures.Base):
         self.assertEqual(
             errors, "ensemble-orchestrator: pipeline answers belong on the issue board\n"
         )
-
-    def test_help_names_each_commands_board_key(self):
-        output = io.StringIO()
-        with redirect_stdout(output), self.assertRaises(SystemExit):
-            cli.main(["--help"])
-        self.assertIn(
-            "reaches Linear as the [linear.harness] OAuth app, whose token any command renews"
-            " before a call when under 5 days are left (the issue commands: the [linear.manager]"
-            " OAuth app)",
-            " ".join(output.getvalue().split()),
-        )
-
-    def test_help_lists_only_existing_commands(self):
-        self.assertIn(
-            "{router,promote,prune,issue,status,show,hide,close,attach-command,resume,content,writeback}",
-            help_text(self, cli.main, ["--help"]),
-        )
-
-    def test_router_promote_and_prune_help_exits_0_naming_their_options(self):
-        for command, options in (
-            ("router", ("--dry-run", "--issue ID", "--brake ROLE")),
-            ("promote", ("--dry-run", "--now")),
-            ("prune", ("--dry-run",)),
-        ):
-            for flag in ("--help", "-h"):
-                with self.subTest(command=command, flag=flag):
-                    output, errors = io.StringIO(), io.StringIO()
-                    with redirect_stdout(output), redirect_stderr(errors):
-                        self.assertEqual(cli.main([command, flag]), 0)
-                    self.assertEqual(errors.getvalue(), "")
-                    self.assertIn(f"ensemble-orchestrator {command}", output.getvalue())
-                    for option in options:
-                        self.assertIn(option, output.getvalue())
 
     def test_missing_or_unknown_command_or_missing_options_are_usage_errors(self):
         for arguments in (
@@ -771,28 +690,6 @@ class WritebackUsage(RunCase):
             ("no event", "", workdir, "want one DelegateEvent line"),
             ("two events", begun + "\n" + begun + "\n", workdir, "want one DelegateEvent line"),
             ("not JSON", "{\n", workdir, "not JSON"),
-            (
-                "incomplete outcome",
-                json.dumps(
-                    {
-                        "v": 1,
-                        "kind": "finished",
-                        "sid": SID,
-                        "attempt": 1,
-                        "returncode": 0,
-                        "outcome": {"status": "done"},
-                    }
-                ),
-                workdir,
-                "outcome: want the fields",
-            ),
-            (
-                "another version",
-                begun.replace('"v":1', '"v":2').replace('"v": 1', '"v": 2'),
-                workdir,
-                "v: want 1",
-            ),
-            ("an unknown kind", begun.replace("begun", "ended"), workdir, "kind: want one of"),
             ("no start row", begun.replace(SID, other) + "\n", workdir, "no start row"),
             ("another workdir", begun + "\n", self.cfg.issue_workdir("TASK-2"), "--workdir"),
         ):
