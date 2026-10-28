@@ -231,7 +231,11 @@ def _pool_account(spec: Spec, client: Client, host: Host) -> str | None:
 
 
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
-    if spec.env.get(ACCOUNT_ENV) or (pool := _pooled(setup, name, client, host)) is None:
+    if spec.env.get(ACCOUNT_ENV):
+        return spec
+    if account := client._account():
+        return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
+    if (pool := _pooled(setup, name, client, host)) is None:
         return spec
     if (account := accounts.best(pool)) is None:
         return spec

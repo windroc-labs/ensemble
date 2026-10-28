@@ -239,7 +239,7 @@ SESSION_NAME_RULE = f"{TAG.pattern} but not {NO_DISPLAY}"
 
 
 COMMAND = "ensemble-session"
-ACCOUNT_SET_BY = f"{ACCOUNT_ENV} is set by --account or a role's accounts table"
+ACCOUNT_SET_BY = f"{ACCOUNT_ENV} is set by --account or [clients.<client>].account"
 DEFAULT_ACCOUNT = "default"
 RESUME = (COMMAND, "resume")
 

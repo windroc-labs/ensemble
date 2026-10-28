@@ -1761,6 +1761,12 @@ class AccountPoolTest(Base):
         self.assertEqual(self.started_env(**{ACCOUNT_ENV: "default"})[ACCOUNT_ENV], "default")
         self.probe.assert_not_called()
 
+    def test_a_configured_account_runs_unprobed_unless_one_is_selected(self):
+        with mock.patch.object(PoolClient, "_account", return_value="work"):
+            self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
+            self.assertEqual(self.started_env(**{ACCOUNT_ENV: "default"})[ACCOUNT_ENV], "default")
+        self.probe.assert_not_called()
+
     def test_with_no_reading_known_a_start_selects_none(self):
         self.probe.side_effect = None
         self.probe.return_value = None

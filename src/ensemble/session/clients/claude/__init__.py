@@ -7,10 +7,10 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 from ensemble.session.clients.base import Client
-from ensemble.session.clients.claude.common import ClaudeCommon, added_dirs
+from ensemble.session.clients.claude.common import TABLE, ClaudeCommon, added_dirs
 from ensemble.session.clients.claude.headless import ClaudeHeadless
 from ensemble.session.clients.claude.tui import ClaudeTui
-from ensemble.session.engine.types import SessionInfo, Spec
+from ensemble.session.engine.types import ConfigError, SessionInfo, Spec
 from ensemble.utils import LOCAL_ENV_VARS
 
 
@@ -36,7 +36,7 @@ class ClaudeClient(Client):
         "--from-pr",
         "--teleport",
     )
-    keys = frozenset({"flags", "allow", "tiers", "efforts", "env", "modes", "accounts"})
+    keys = frozenset({"flags", "allow", "tiers", "efforts", "env", "modes", "accounts", "account"})
     client_note = ClaudeCommon.NOTE
     session_env = "CLAUDECODE"
     identity_env = tuple(key for key in ClaudeCommon.UNSET if key not in LOCAL_ENV_VARS)
@@ -44,6 +44,14 @@ class ClaudeClient(Client):
     def __init__(self, config):
         super().__init__(config)
         self.common = ClaudeCommon(self.config, selector=self.select_session)
+        account = self.config.get("account", "")
+        if not isinstance(account, str):
+            raise ConfigError(f"{TABLE}.account must be a string")
+        if account and account not in self.common.accounts:
+            raise ConfigError(
+                f"{TABLE}.account {account!r}: not a registered account"
+                f" ([clients.claude.accounts.{account}])"
+            )
 
     def headless(self):
         return ClaudeHeadless(self.common)
@@ -53,6 +61,9 @@ class ClaudeClient(Client):
 
     def _accounts(self):
         return frozenset(self.common.accounts)
+
+    def _account(self):
+        return self.config.get("account", "")
 
     def usage_probe(self):
         return self.common.probe()

@@ -28,24 +28,28 @@
 #   allow            tool rules pre-approved for every session (--allowedTools), after the run's commands and read
 #                    rules; empty → none
 #   env              variables added to every command's environment, over the client's defaults; empty → none
+#   account          the account (default or a [clients.claude.accounts.<name>]) every start that selects none runs
+#                    on; empty → each start picks the one with the most usage left (docs/architecture.md › Claude
+#                    accounts). Only --account overrides it
 # [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog
 #                            skipped (docs/architecture.md › Client policy)
 # [clients.claude.tiers]    tier "1".."4" → its --model
 # [clients.claude.efforts]  effort (low, medium, high, xhigh, max) → its --effort
 #                            starting a run whose tier or effort has no entry here is a config error
-# [clients.claude.accounts.<name>]  a Claude account a worker or role may select (ENSEMBLE_ACCOUNT); only the Docker
-#                    Host uses it, injecting that account's setup-token alone (ensemble-broker login claude <name>;
-#                    docs/architecture.md › Claude accounts); <name> 1–64 lowercase letters, digits, ., _ or -, never
-#                    setup-token. default, the account of no selection, is always registered; selecting an
-#                    unregistered name is a config error. None packaged; no secret:
+# [clients.claude.accounts.<name>]  a Claude account, selected by account above or a worker's --account
+#                    (ENSEMBLE_ACCOUNT); only the Docker Host uses it, injecting that account's setup-token alone
+#                    (ensemble-broker login claude <name>; docs/architecture.md › Claude accounts); <name> 1–64
+#                    lowercase letters, digits, ., _ or -, never setup-token. default, the account of no selection, is
+#                    always registered; selecting an unregistered name is a config error. None packaged; no secret:
 #   dir              its CLAUDE_CONFIG_DIR on the host, ~ expanded, absolute; absent → ~/.claude; never on default.
-#                    Nothing reads it yet (a planned per-account usage probe)
+#                    The usage probe reads it, so log it in to the account whose setup-token the broker holds
 #   account          a display string, e.g. its login email
 [clients.claude]
 implementation = "ensemble.session.clients.claude:ClaudeClient"
 max_runs = 0
 flags = ["--settings", '{"enabledPlugins": {"ensemble@windroc": false}}']
 allow = []
+account = ""
 # local: [session.clients.claude]
 # local: allow = ["<rule>"]
 

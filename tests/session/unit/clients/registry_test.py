@@ -601,6 +601,7 @@ class Committed(Case):
                 "max_runs": 0,
                 "flags": ["--settings", PLUGIN_OFF],
                 "allow": [],
+                "account": "",
                 "modes": {
                     "auto": ["--permission-mode", "auto"],
                     "yolo": [
