@@ -524,6 +524,9 @@ class LocalTracker(Tracker):
     def notify(self, key, people):
         return ""
 
+    def assign(self, key, user):
+        """None: a local board's assignee is the issue's role."""
+
     def link(self, key, url, title):
         def change(text, found):
             if any(each.url == url for each in found.links):

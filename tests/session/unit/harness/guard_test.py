@@ -23,9 +23,53 @@ from tests.session.case import Case
 class GuardTest(Case):
     def test_wide_character_at_right_margin_and_combining_mark_wrap_safely(self):
         screen = guard.Screen()
-        screen.append(("a" * 119 + "中\u0301").encode())
-        self.assertEqual(screen.text(None), "a" * 119 + "\n中\u0301")
-        self.assertTrue(all(len(row) == 120 for row in screen.cells))
+        screen.append(("a" * 79 + "中\u0301").encode())
+        self.assertEqual(screen.text(None), "a" * 79 + "\n中\u0301")
+        self.assertTrue(all(len(row) == 80 for row in screen.cells))
+
+    def test_size_parses_columns_x_rows_into_rows_and_columns(self):
+        self.assertEqual(guard.size("100x30"), (30, 100))
+        self.assertEqual(guard.size("65535x1"), (1, 65535))
+        for value in ("0x24", "80x0", "-80x24", "80x-24", "80.5x24", "80", "axb", "80x24x1"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                guard.size(value)
+        with self.assertRaises(argparse.ArgumentTypeError):
+            guard.size("65536x24")
+
+    def test_size_defaults_to_80x24_and_parses_the_given_one(self):
+        command = ["--hook-socket", self.home + "/hook", "--", "true"]
+        self.assertEqual(guard.arguments().parse_args(command).size, (24, 80))
+        self.assertEqual(
+            guard.arguments().parse_args(["--size", "100x30", *command]).size, (30, 100)
+        )
+
+    def test_an_invalid_size_is_a_usage_error(self):
+        with (
+            mock.patch.object(sys, "stderr", io.StringIO()) as stderr,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            guard.main(["--size", "0x24", "--hook-socket", self.home + "/hook", "--", "true"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--size", stderr.getvalue())
+
+    def test_the_pty_and_screen_start_at_the_given_size(self):
+        runtime = self.runtime(terminal=True, size=(30, 100))
+        self.assertEqual((runtime.screen.rows, runtime.screen.columns), (30, 100))
+        with (
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket"),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl") as ioctl,
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(guard.subprocess, "Popen", return_value=mock.Mock(pid=100)),
+        ):
+            library.return_value.prctl.return_value = 0
+            runtime.start()
+        sized = [c for c in ioctl.call_args_list if c.args[1] == termios.TIOCSWINSZ]
+        self.assertEqual([struct.unpack("HHHH", c.args[2]) for c in sized], [(30, 100, 0, 0)])
 
     def test_pending_uninspectable_child_has_a_bounded_close_deadline(self):
         runtime = self.runtime()
@@ -394,13 +438,14 @@ class GuardTest(Case):
             runtime.emit(b"x" * (guard.BUFFER_MAX + 1))
         self.assertFalse(runtime.output)
 
-    def runtime(self, *, terminal=False, display_grace=False):
+    def runtime(self, *, terminal=False, display_grace=False, size=guard.SIZE):
         return guard.Guard(
             argparse.Namespace(
                 hook_socket=self.home + "/hook",
                 display_socket=None,
                 display_grace=display_grace,
                 terminal=terminal,
+                size=size,
                 command=["fake"],
             )
         )
@@ -600,8 +645,8 @@ class GuardTest(Case):
         runtime.peers[peer] = ("display", guard.Decoder())
         return peer
 
-    def test_the_pty_takes_the_latest_display_size_and_without_one_the_readable_one(self):
-        runtime = self.runtime(terminal=True)
+    def test_the_pty_takes_the_latest_display_size_and_without_one_the_given_one(self):
+        runtime = self.runtime(terminal=True, size=(30, 100))
         runtime.master = 20
         first, second = self.display(runtime), self.display(runtime)
 
@@ -625,13 +670,13 @@ class GuardTest(Case):
             ],
             [
                 (20, termios.TIOCSWINSZ, (rows, columns, 0, 0))
-                for rows, columns in ((19, 33), (50, 200), (20, 34), (50, 200), (40, 120))
+                for rows, columns in ((19, 33), (50, 200), (20, 34), (50, 200), (30, 100))
             ],
         )
         self.assertEqual(runtime.input, b"typed")
-        runtime.screen.append(b"x" * 120)
+        runtime.screen.append(b"x" * 100)
         runtime.command(b"q", b'{"lines": null}')
-        self.assertEqual(json.loads(runtime.output[-1][0][5:]), {"text": "x" * 120})
+        self.assertEqual(json.loads(runtime.output[-1][0][5:]), {"text": "x" * 100})
 
     def test_a_display_closing_with_its_client_redraws_nothing(self):
         runtime = self.runtime(terminal=True)
@@ -964,7 +1009,7 @@ class LeaseTest(Case):
         self.assertEqual(os.stat(self.lease).st_mode & 0o777, 0o600)
         self.assertFalse(os.get_inheritable(lease))
         self.assertIsNone(guard.hold_lease(self.lease))
-        args = argparse.Namespace(hook_socket=self.run + "/hook", lease=self.lease)
+        args = argparse.Namespace(hook_socket=self.run + "/hook", lease=self.lease, size=guard.SIZE)
         runtime = guard.Guard(args, lease)
         self.assertEqual(runtime.directory, self.run)
         runtime.state("exited")
@@ -1044,6 +1089,7 @@ HANDOFF = {
     "env": {"SECRET": "s3cret"},
     "terminal": True,
     "generation": GEN,
+    "size": "100x30",
 }
 
 
@@ -1077,6 +1123,10 @@ class LaunchTest(Case):
             handoff(generation="A" * 32),
             handoff(generation="a" * 31),
             handoff(generation=1),
+            handoff(size="80"),
+            handoff(size="0x24"),
+            handoff(size="65536x24"),
+            handoff(size=[80, 24]),
         ]
         for data in defects:
             with self.subTest(data=data[:40]), self.assertRaises(ValueError) as caught:
@@ -1166,6 +1216,7 @@ class ServeTest(Case):
                 "hook_socket": f"{run}/hook",
                 "display_socket": f"{run}/display",
                 "display_grace": False,
+                "size": (30, 100),
                 "command": ["client", "--flag"],
             },
         )
@@ -1213,6 +1264,7 @@ class HeartbeatTest(Case):
             display_socket=None,
             display_grace=False,
             terminal=False,
+            size=guard.SIZE,
             command=["fake"],
         )
         return guard.Guard(args, **options)

@@ -53,7 +53,7 @@ MANAGER, SID, IDLE, WAIT, Stream = (
 TABLE = {
     "implementation": "ensemble.session.clients.claude:ClaudeClient",
 }
-TRUST = "Quick safety check: Is this a project you created or one you trust? 1. Yes, I trust this folder 2. No, exit"
+TRUST = "Quick safety check: Is this a project you created or one you trust?\n1. Yes, I trust this folder\n2. No, exit"
 LIMIT = "You've hit your weekly limit · resets Oct 15, 2027, 9am (UTC)"
 RESETS = datetime(2027, 10, 15, 9, tzinfo=UTC).timestamp()
 # Another process: attaches by name, sends text, prints [sid, state, reply, its first TurnEnd,
@@ -254,6 +254,69 @@ class TurnsTest(Live):
             (handle.alive(), [r.name for r in self.session_cls.list("w1")], self.panes()),
             (True, ["w1"], 1),
         )
+
+
+class MidTurnTest(Live):
+    """Input Claude joins to its running turn, its UserPromptSubmit run (Claude Code 2.1.312): a
+    send while the turn's tool runs, or a background task's notice. The turn goes on to its Stop.
+    """
+
+    def test_a_send_mid_turn_joins_it(self):
+        steps = [{"kind": "queued", "answer": "Noted.", "prompted": True}, "Done."]
+        handle = self.start("w1", scenario={"steps": steps})
+        stream = self.stream(handle)
+        self.assertEqual(stream.next(idle=False), TurnStarted())
+        transcript = handle.info().transcript
+
+        def tool_runs():  # its hook runs before Claude writes the transcript
+            return any('"tool_use"' in line for line in live_tmux.events(transcript))
+
+        live_tmux.wait(tool_runs, what="the turn's tool")
+        handle.send("also this")
+        self.assertEqual(
+            [stream.next(idle=False) for _ in range(2)], [Activity("Bash"), TurnEnd("Done.", 0)]
+        )
+        stream.quiet(1.0)
+
+        def done():
+            self.poke()
+            found = [line.split()[1:3] for line in live_tmux.events(self.events)]
+            return found if found[-1:] == [["w1", "done"]] else None
+
+        self.assertEqual(  # the joined send's answer, then the turn's one end
+            live_tmux.wait(done, what="w1's done line"), [["w1", "reply"], ["w1", "done"]]
+        )
+
+    def test_background_notices_mid_turn_join_it_no_send(self):
+        """Each of a council's background agents ends with a notice (WDRC-278): each joins."""
+        steps = [
+            "Waiting.",
+            {"kind": "tool", "name": "Agent"},
+            *(
+                {"kind": "notice", "text": f"<task-notification>agent {n} done</task-notification>"}
+                for n in range(3)
+            ),
+            "Done.",
+        ]
+        handle = self.start("w1", scenario={"steps": steps})
+        stream = self.stream(handle)
+        self.assertEqual(
+            [stream.next(idle=False) for _ in range(3)],
+            [TurnStarted(), Activity("Agent"), TurnEnd("Done.", 0)],
+        )
+        stream.quiet(1.0)
+        self.lines("w1 done")
+
+    def test_a_background_notice_mid_turn_joins_it(self):
+        notice = "<task-notification>sleep 30 completed</task-notification>"
+        steps = ["Waiting.", {"kind": "notice", "text": notice}, "Done."]
+        handle = self.start("w1", scenario={"steps": steps})
+        stream = self.stream(handle)
+        self.assertEqual(
+            [stream.next(idle=False) for _ in range(2)], [TurnStarted(), TurnEnd("Done.", 0)]
+        )
+        stream.quiet(1.0)
+        self.lines("w1 done")
 
 
 def delivered(events: list) -> list[str]:

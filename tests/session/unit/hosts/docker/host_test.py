@@ -2233,6 +2233,18 @@ class AttachTargetTest(Base):
 
 
 class GuardedStartTest(StartBase):
+    def test_the_guard_takes_the_hosts_hidden_size(self):
+        self.host = DockerHost(
+            "docker",
+            {"docker": DOCKER, "hidden_size": "100x30"},
+            run=self.docker,
+            broker=self.broker,
+        )
+        handle = self.start()
+        [(_, _, proc)] = self.execs
+        self.assertEqual(proc.handoff["size"], "100x30")
+        handle.close()
+
     def test_owned_terminal_attaches_to_the_main_process_guard_without_tmux(self):
         handle = self.start()
         self.assertIsInstance(handle, worker_module.DockerWorker)
@@ -2249,6 +2261,7 @@ class GuardedStartTest(StartBase):
                 "env": {"AGENT_HOME": self.home_dir, "K": "v"},
                 "terminal": True,
                 "generation": GEN,
+                "size": "80x24",
             },
         )
         self.assertEqual((kw["stderr"], kw["stdin"], kw["stdout"]), (DEVNULL, PIPE, PIPE))
@@ -2561,6 +2574,7 @@ class HeadlessWorkerTest(StartBase):
                 "env": {"AGENT_HOME": self.home_dir, "K": "v"},
                 "terminal": False,
                 "generation": GEN,
+                "size": "80x24",
             },
         )
         self.assertEqual(self.host_record()["kind"], "headless")

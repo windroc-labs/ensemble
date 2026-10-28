@@ -123,6 +123,9 @@ class Tracker(ABC):
         """Notes for failures."""
 
     @abstractmethod
+    def assign(self, key: str, user: str) -> None: ...
+
+    @abstractmethod
     def links(self, key: str) -> set[str]: ...
 
     @abstractmethod

@@ -41,6 +41,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.modes.client_adapters.tui import Tui
 from ensemble.utils import number
 
+AFTER_LIMIT = "ensemble_after_limit"  # on_hook's mark on a prompt that follows a usage limit
 LIMIT = re.compile(r"You've hit your ((?:[\w']+ ){0,3})limit|Usage limit reached")
 WHEN = re.compile(
     (
@@ -208,15 +209,23 @@ class ClaudeTui(Tui):
             self._pending = None
             self.offset = 0
 
+    def _accept_turn(self, identifier):
+        """Claude's hooks carry no turn id: a prompt while its turn is open is input Claude joins
+        to that turn (a send, a background task's notice).
+        """
+        return not self._turn_open and super()._accept_turn(identifier)
+
     def hook_events(self, label, payload):
         native = payload.get("session_id")
         if not isinstance(native, str) or native not in self._ids:
             return []
+        if label == "UserPromptSubmit" and payload.get(AFTER_LIMIT) is True:
+            self._turn_open = False  # a usage limit ended it, though no hook may have said so
         return super().hook_events(label, payload)
 
     def replay(self, records):
         """Ends in the latest turn's state, not the oldest's: no LimitHit given live yet (the replay
-        gives none), and a Stop since the hook log's last prompt leaves its text unseen unless it is
+        gives none), a Stop since the hook log's last prompt leaves its text unseen unless it is
         the transcript's newest.
         """
         found: list[SessionEvent | ClientBound] = [*self.observe()]
@@ -322,7 +331,31 @@ def on_hook(call: HookCall) -> dict | None:
     if not isinstance(native, str) or native not in ids:
         return None
     replies.on_hook(call, began=began)  # a Stop's replies precede the Host hook's done
+    current = call.payload.get("transcript_path")
+    current = current if isinstance(current, str) and os.path.isabs(current) else path
+    if call.label == "UserPromptSubmit" and _limit_last(current):
+        return {**call.payload, AFTER_LIMIT: True}
     return call.payload
+
+
+def _limit_last(path: str) -> bool:
+    """The transcript's newest main-thread assistant record is a usage-limit API error: read as the
+    prompt's hook runs, after the limit it follows and before any later record.
+    """
+    try:
+        data = read(path, limit=TAIL, tail=True) or b""
+    except ValueError:  # a NUL or a lone surrogate in the path
+        return False
+    for line in reversed(data.split(b"\n")):
+        try:
+            record = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(record, dict) or record.get("isSidechain") is True:
+            continue
+        if record.get("type") == "assistant":
+            return record.get("isApiErrorMessage") is True and record.get("error") == "rate_limit"
+    return False
 
 
 def _chain(path: str, sid: str, config_dir: str) -> list[tuple[str, str | None, str | None]]:

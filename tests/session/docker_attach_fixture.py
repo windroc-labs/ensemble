@@ -193,6 +193,7 @@ def worker(directory: str, proc: subprocess.Popen, client: list[str], *, remove=
             "env": {},
             "terminal": False,
             "generation": GEN,
+            "size": "80x24",
         }
     )
     handle.await_start()

@@ -105,6 +105,7 @@ class LinearSettings:
     team: str
     states: Mapping[str, str]
     human_members: tuple[str, ...]
+    assignee_id: str
     harness: LinearApp
     # unset keys are ""; calls take it from config.manager_app
     manager: LinearApp
@@ -170,13 +171,14 @@ class Config:
 class Writers:
     """A run's write-back side of its tracker: tracker writes as the run's role, harness posts the
     session comment; states: each State's value as Tracker.move returns it; humans: who In Review
-    notifies (lowercase); repos: project → owner/name."""
+    notifies (lowercase); repos: project → owner/name; assignee: a question's, "" none."""
 
     tracker: Tracker
     harness: Tracker
     states: Mapping[str, str]
     humans: tuple[str, ...]
     repos: Mapping[str, str]
+    assignee: str = ""
 
 
 @dataclass(frozen=True)

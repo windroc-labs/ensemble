@@ -192,6 +192,7 @@ class Stage:
     failed: str
     first_failure: Literal["ready", "review"]
     approve: bool
+    assign: bool
     files: bool
     deliverable: bool
     hint: str

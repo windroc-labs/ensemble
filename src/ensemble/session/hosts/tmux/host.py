@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from dataclasses import replace
 
 from ensemble.session.engine.tmux_cli import (
     NAME,
@@ -106,7 +107,7 @@ class TmuxHost(Host):
         line = self.settings.get("status_line", False)
         if not isinstance(line, bool):
             raise ConfigError("status_line: want true or false")
-        return TuiSettings(line)
+        return replace(super().tui_settings(), status_line=line)
 
     def list(self) -> list[str]:
         """Its tmux sessions, and its live (or unknown) workers whose display is gone."""

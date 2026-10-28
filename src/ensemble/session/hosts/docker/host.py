@@ -987,6 +987,7 @@ class DockerHost(Host):
                 "env": self._exec_env(launch, created.started, github[0]),
                 "terminal": terminal,
                 "generation": generation,
+                "size": "{}x{}".format(*self.tui_settings().hidden_size),
             }
             argv, docker_env = docker_call(self.docker, "attach", "--sig-proxy=false", container)
             proc = subprocess.Popen(
