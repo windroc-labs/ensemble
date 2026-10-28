@@ -423,7 +423,7 @@ Each run refreshes the selected Claude Code/Codex marketplaces and updates their
 before reading installed files. An update or version check failure stops with the client's name and reason.
 For OpenCode, when `--ref` (default `<tag>`) names a newer commit than the one it last downloaded, it deletes
 OpenCode's copy and downloads it again. Each successful install selects its plugin for all `~/.ensemble/bin` commands,
-ignoring other clients’ caches and older OpenCode packages ([commands](../README.md#commands)).
+ignoring other clients’ caches and older OpenCode packages ([launcher](../skills/manage/scripts/launcher)).
 Rerun the installer once to refresh older launchers and record that selection, even if their files already exist.
 After a client plugin update removes the selected directory, the next command selects that same client's newest
 installed ensemble copy, records its path and reports it on stderr; no installer rerun is needed. It never selects
