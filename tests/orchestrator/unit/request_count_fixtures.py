@@ -1,5 +1,4 @@
-"""A promote run, prune included, against a counting fake Linear at a real host's scale: 297 work
-dirs (30 with agent files), 3 role apps; requests counted by phase and query constant."""
+"""Promote and prune against a counting fake Linear at a real host's scale (297 work dirs)."""
 
 import importlib
 import io
@@ -24,7 +23,7 @@ ENGINEER_ID = role_id("engineer")
 
 
 def _names():
-    """Query text: "module.CONSTANT" of the Linear tracker package, linear_tracker's and ops' first."""
+    """Query text: "module.CONSTANT", linear_tracker's and ops' first."""
     found, mods = {}, sorted(m.name for m in pkgutil.iter_modules(linear_pkg.__path__))
     for mod in dict.fromkeys(["linear_tracker", "ops", *mods]):
         module = importlib.import_module(f"{linear_pkg.__name__}.{mod}")
@@ -42,8 +41,7 @@ NAMES = _names()
 
 
 class Counted:
-    """One gql: prune's queries to gql_for, the rest to FakeLinear; counts {phase: Counter(name)}, a
-    query no constant holds as "unnamed: <text>"."""
+    """One gql: prune's to gql_for, the rest to FakeLinear; counts by phase."""
 
     def __init__(self, promote_fake, prune_fake):
         self.promote_fake, self.prune_fake = promote_fake, prune_fake
@@ -58,8 +56,7 @@ class Counted:
 
 
 class HostScale(PruneScenario):
-    """counted_run(at, changed) runs promote.main once; changed: idents updated a minute before at,
-    which the change feed lists by its updatedAt filter, as Linear does."""
+    """counted_run runs promote.main once; changed: idents updated a minute before at."""
 
     def setUp(self):
         super().setUp()
@@ -68,7 +65,7 @@ class HostScale(PruneScenario):
             f'[orchestrator]\nwork_dir = "{self.root}"\n' + CORE_LOCAL,
         )
         self.config_path = os.path.join(self.root, "config.toml")
-        write(self.config_path, tp.PM_NEXT)  # the packaged workflow: 3 linear.roles
+        write(self.config_path, tp.PM_NEXT)  # 3 linear.roles
         self.counted = Counted(self._handoffs(), self._board())
 
     def _handoffs(self):
@@ -120,14 +117,14 @@ class HostScale(PruneScenario):
         children["TASK-258"] = {"TASK-902": "completed"}
         children["TASK-902"] = {"TASK-903": "unstarted"}  # refused, a level down
         children["TASK-259"] = {f"TASK-{2000 + i}": "completed" for i in range(59)}
-        children["TASK-259"]["TASK-2059"] = "started"  # refused, on the second page
-        children["TASK-263"] = {"TASK-904": "completed", "TASK-905": "canceled"}  # held: unlisted
+        children["TASK-259"]["TASK-2059"] = "started"  # refused, page 2
+        children["TASK-263"] = {"TASK-904": "completed", "TASK-905": "canceled"}  # held
         children["TASK-904"] = {"TASK-906": "completed"}
         bare += [add(n, "In Review", [(30, "In Review")]) for n in range(264, 276)]
         bare += [add(n, "Todo", [(10, "Todo")]) for n in range(276, 286)]
         bare += [add(n, "Backlog", [(300, "Backlog")]) for n in range(286, 293)]
         bare += [add(n, "Triage", [(30, "Triage")]) for n in range(293, 296)]
-        deleted = ["TASK-296", "TASK-297"]  # Linear no longer has them
+        deleted = ["TASK-296", "TASK-297"]  # gone from Linear
         for ident in agent:
             self.record(ident, f"00000000-0000-4000-8000-{int(ident[5:]):012d}", [ident.lower()])
         for ident in bare + deleted:
@@ -153,7 +150,7 @@ class HostScale(PruneScenario):
     def counted_run(self, at=NOW, changed=()):
         """{phase: {constant: count}}."""
         board = self.counted.prune_fake.issues
-        for ident in changed:  # a move into its own state: updatedAt a minute before at
+        for ident in changed:  # a move into its own state
             state, moves = board[ident]
             board[ident] = (state, [*moves, ((NOW - at).total_seconds() / 3600 + 1 / 60, state)])
         self.counted.phase, self.counted.counts = SETUP, {}
@@ -171,9 +168,7 @@ class HostScale(PruneScenario):
         return {p: dict(c) for p, c in self.counted.counts.items()}
 
     def runs(self):
-        """The four runs RequestCountTest pins: cold; 5 minutes later, warm with 5 issues changed;
-        3 minutes later, nothing changed (TASK-1003 still waits); a day later, past prune's
-        backstop, with 3 changed."""
+        """RequestCountTest's runs: cold, warm (+5 min), quiet (+8 min), next_day (past BACKSTOP)."""
         warm = {"TASK-1", "TASK-9", "TASK-10", "TASK-264", "TASK-276"}
         return {
             "cold": self.counted_run(),
