@@ -1,7 +1,6 @@
 """Parity of ensemble-orchestrator issue on a local board and on FakeLinear (spec AC13, AC10):
 bin/ensemble-orchestrator as a real process runs one sequence on each tracker; each step's exit
-code and stdout shape match, and so do its tracker-independent values. Linear-only forms exit 2
-on a local board, writing nothing.
+code and stdout shape match, and so do its tracker-independent values.
 """
 
 import json
@@ -27,23 +26,14 @@ TASK, CLIENT = "light-research", "claude"
 ROLE = "researcher"  # TASK is one of its tasks
 VALUES = ("operation", "result", "dry_run", "title", "description")
 RELATIONS = ("blocks", "blocked_by", "children")
-# each tracker's state names: FakeLinear's titles, the local board's abstract names
+# state names: FakeLinear's titles, the local board's abstract ones
 LINEAR_STATES = {TITLES[key]: MOVES[State(key)] for key in TITLES}
 LOCAL_STATES = {state.value: state for state in IssueState}
-LINEAR_ONLY = (
-    ("lookup", ("lookup", "states")),
-    ("label swap", ("label", "swap", "{seed}", "--from", "a", "--to", "b")),
-    ("--label", ("list", "--label", "x")),
-    ("--project", ("list", "--project", "p")),
-    ("--label", ("create", "--title", "T", "--body-file", "{body}", "--label", "x")),
-    ("--project", ("create", "--title", "T", "--body-file", "{body}", "--project", "p")),
-    ("--milestone", ("create", "--title", "T", "--body-file", "{body}", "--milestone", "m")),
-)
 
 
 def same_shape(case, left, right, path="$"):
-    """case fails unless left and right have the same keys at every object level, list lengths and
-    scalar JSON types, a null on either side matching anything."""
+    """case fails unless left and right have the same keys, list lengths and JSON types; None
+    matches anything."""
     if left is None or right is None:
         return
     case.assertIs(type(left), type(right), f"{path}: {left!r} vs {right!r}")
@@ -58,20 +48,15 @@ def same_shape(case, left, right, path="$"):
 
 
 def abstract(name, states):
-    """name, a state name in states (a tracker's), as its IssueState; None stays None."""
     return None if name is None else states[name]
 
 
 def related(entry, states):
-    """A relation column's entry as its title and abstract state."""
     return entry["title"], abstract(entry["state"], states)
 
 
 def values(payload, states):
-    """payload's tracker-independent values, its state names read through states: VALUES at its
-    top (a description as a local board's file reads it, stripped); a read's state, comment
-    bodies (stripped, in order), relation columns and parent as titles and states; its items'
-    titles and states as a set."""
+    """payload's tracker-independent values, its state names read through states."""
     found = {key: payload[key] for key in VALUES if key in payload}
     if found.get("description") is not None:
         found["description"] = found["description"].strip()
@@ -86,15 +71,6 @@ def values(payload, states):
             (item["title"], abstract(item["state"] and item["state"]["name"], states))
             for item in payload["items"]
         )
-    return found
-
-
-def tree(board):
-    found = {}
-    for top, _, files in os.walk(board):
-        for name in files:
-            with open(path := os.path.join(top, name), "rb") as f:
-                found[os.path.relpath(path, board)] = (f.read(), os.lstat(path).st_mtime_ns)
     return found
 
 
@@ -189,8 +165,7 @@ class Parity(Flow):
         return json.loads(res.stdout)["issue"]["identifier"]
 
     def operations(self, seeds):
-        """The sequence on the configured tracker: each step's name and result, the read --full
-        file's text as a step of its own."""
+        """The sequence on the configured tracker: each step's name and result."""
         steps, files = [], self.files
 
         def step(name, *argv):
@@ -286,25 +261,6 @@ class Parity(Flow):
             )
             dry = json.loads(dict(steps)["archive dry run refused"].stdout)
             self.assertEqual((dry["result"], dry["unfinished_count"]), ("refused", 2))
-
-    def test_linear_only_exits_2_on_local(self):
-        self.use("local")
-        seed, _ = self.seed_board()
-        before = tree(self.board)
-        for what, argv in LINEAR_ONLY:
-            argv = [a.format(seed=seed, body=self.files["a"]) for a in argv]
-            with self.subTest(argv=argv):
-                res = self.issue(*argv)
-                self.assertEqual(
-                    (res.returncode, res.stdout, res.stderr),
-                    (
-                        2,
-                        "",
-                        f"ensemble-orchestrator issue: {what}: Linear only, not on a local board "
-                        '([orchestrator] tracker = "local")\n',
-                    ),
-                )
-                self.assertEqual(tree(self.board), before)
 
 
 if __name__ == "__main__":

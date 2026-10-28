@@ -1,8 +1,7 @@
 """A claimed run launched by router.outer (entry.py launch), headless: its harness on a private tmux
-server, fake_claude as client `claude`, each event written back by ensemble-orchestrator writeback over
-FakeLinear's HTTP. Done runs write back as writeback_test pins them, plus the session comment by
-its session id; a run with no outcome; a usage limit (FR-59) and its resume; a resume after a lost
-ledger write (FR-54).
+server, fake_claude as client `claude`, each event written back by `writeback` over FakeLinear's
+HTTP. Done runs and prune; a run with no outcome; a usage limit (FR-59) and its resume; a resume
+after a lost ledger write (FR-54).
 """
 
 import os
@@ -184,9 +183,21 @@ class Done(Run):
             self.issue(ID)["attachments"], [{"url": outcome["url"], "title": outcome["title"]}]
         )
 
-    def test_prune_deletes_a_finished_runs_agent_files_and_keeps_its_records(self):
-        self.seed("researcher")
-        self.launch([mark("start", PICK), block(RESEARCH)])
+    def test_a_researcher_run_then_prune_deletes_its_agent_files_and_keeps_its_records(self):
+        self.done(
+            "researcher",
+            "Research started:",
+            RESEARCH,
+            [
+                READ,
+                SUBSCRIBE,
+                post("comment", f"Three queues compared.\nRedis streams fit best.\n\n{DOC}"),
+                attach(DOC, "Queue options"),
+                REREAD,
+                TO_REVIEW,
+            ],
+            ["start", "comment", f"attach:{DOC}", "move:in_review", "outcome"],
+        )
         os.makedirs(checkout_path(self.rd, "o", "n", ID))
         agent = session_cwd(self.rd)
 
@@ -208,22 +219,6 @@ class Done(Run):
         self.assertIn(f"prune prune-removed {ID} what=agent dir", self.said())
         self.assertFalse(os.path.lexists(agent))
         self.assertEqual((kept(), self.ledger(ID)), (before, ledger))
-
-    def test_a_researcher_run(self):
-        self.done(
-            "researcher",
-            "Research started:",
-            RESEARCH,
-            [
-                READ,
-                SUBSCRIBE,
-                post("comment", f"Three queues compared.\nRedis streams fit best.\n\n{DOC}"),
-                attach(DOC, "Queue options"),
-                REREAD,
-                TO_REVIEW,
-            ],
-            ["start", "comment", f"attach:{DOC}", "move:in_review", "outcome"],
-        )
 
     def test_a_pm_run(self):
         self.done(

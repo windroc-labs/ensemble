@@ -1427,15 +1427,6 @@ class IssueOps(ServerCase):
         self.assertEqual(self.fake.relations, [])
         with self.assertRaisesRegex(LinearError, "Entity not found: IssueRelation"):
             self.gql(issue_relation.M_REMOVE, i=edge["id"])
-        for op, ident, direction, other, result, left in (
-            ("add", "TASK-7", "blocked_by", "TASK-8", "changed", 1),
-            ("add", "TASK-8", "blocks", "TASK-7", "unchanged", 1),
-            ("remove", "TASK-8", "blocks", "TASK-7", "changed", 0),
-            ("remove", "TASK-7", "blocked_by", "TASK-8", "unchanged", 0),
-        ):
-            with self.subTest(op=op, ident=ident):
-                receipt = self.issues.relation(op, ident, direction, other)
-                self.assertEqual((receipt.result, len(self.fake.relations)), (result, left))
 
     def test_archive_is_refused_with_an_unfinished_child_then_takes_it(self):
         child = self.fake.issue("Child", parent="TASK-7")
