@@ -26,6 +26,7 @@ from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 CORE_TASKS = os.path.join(REPO, "src", "ensemble", "delegate", "team", "tasks")
+CORE_TEAM = os.path.dirname(CORE_TASKS)
 MARK = "[ensemble-progress:start] the topic"
 NOTE = (
     f"# Note\n\n## Steps\n\n1. **Report progress:**\n   {MARK}\n2. **Write.** Write it.\n\n"
@@ -87,7 +88,8 @@ class ComposerTeamDirs(child.Case):
             with self.subTest(resume=resume):
                 got = self.composed(resume=resume)
                 self.assertEqual(
-                    (got["intent"]["dirs"], got["intent"]["reads"]), ([], [self.tasks])
+                    (got["intent"]["dirs"], got["intent"]["reads"]),
+                    ([], [self.tasks, CORE_TEAM]),
                 )
                 self.assertEqual(TASKS_PARAM.search(got["prompt"])[1], self.tasks)
                 self.assertEqual(got["prompt"].startswith(RESUME), resume)
@@ -143,7 +145,7 @@ class TeamDirs(Integration):
         self.assertIn(f"`{self.tasks}`", plan["prompt"])
         self.assertEqual(
             (plan["cwd"], plan["dirs"], plan["reads"]),
-            (Layout(self.work).agent, [], [self.tasks]),
+            (Layout(self.work).agent, [], [self.tasks, CORE_TEAM]),
         )
         self.assertEqual(os.listdir(self.work), [])
         self.assertEqual(self.calls(), [])

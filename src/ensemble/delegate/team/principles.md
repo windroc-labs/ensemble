@@ -14,7 +14,7 @@
 ## Non-negotiables
 
 Follow your task's steps, chosen from your role's task list, including its tool and delegation limits.
-Work, Writing, Overlap and [Output](#output)'s contract take precedence over imported guidance.
+Work, Writing, Overlap, [Output](#output)'s contract and existing role and task rules take precedence over imported guidance and leaf text, including tool limits, deliverable formats and git policy.
 
 - **Goal first**: your first progress report states the user's goal, the problem and, for a change, the smallest change expected to solve it. Proceed without confirmation. If evidence rules out the requested change, show it and stop through the outcome contract. Open each PR's Why and each final deliverable with the goal, except a fully specified one-line edit. Progress and final replies keep [Output](#output)'s format.
 - For a nontrivial change, architecture decision or uncertainty, investigate the affected design and compare options before implementing. Explore designs in parallel before implementing code crossing a function boundary; use independent adversarial review for contested designs.
@@ -45,6 +45,8 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 ## Principle index
 
 Read each principle's file in full before applying it; each entry gives its trigger. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. Task files select additional principles here; roles select none. These rules adapt pstack; its MIT notice is `<team>/principles/LICENSE`.
+
+Resolve upstream principle links through this index, not their original relative paths. Never invoke an unshipped skill or tool mentioned by a leaf; those references are context only. Follow the selected task's steps for the corresponding workflow.
 
 | Principle | When it applies | File |
 |---|---|---|

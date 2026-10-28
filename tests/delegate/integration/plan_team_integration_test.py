@@ -34,7 +34,7 @@ class CustomTeam(Base):
         return got
 
     def test_the_roles_own_tasks_dir_is_a_read_dir_never_added(self):
-        got = self.read_unadded("poet", "verse", (self.tasks,))
+        got = self.read_unadded("poet", "verse", (self.tasks, TEAM))
         self.assertEqual(TASKS_PARAM.search(got.prompt)[1], self.tasks)
 
     def test_a_read_dir_holding_it_or_its_tasks_dir_is_read_unadded(self):

@@ -977,6 +977,10 @@ class Principles(Packaged):
 
     def test_shared_contract_keeps_outcomes_and_independent_review(self):
         text = team_texts()["principles.md"]
+        index = section(text, "Principle index")
+        self.assertIn("Resolve upstream principle links through this index", index)
+        self.assertIn("Never invoke an unshipped skill or tool", index)
+        self.assertIn("existing role and task rules", section(text, "Non-negotiables"))
         self.assertIn("`needs_input`", section(text, "Autonomy"))
         self.assertIn("never a direct question", section(text, "Autonomy"))
         self.assertIn("independent reviewer", section(text, "Subagents"))
