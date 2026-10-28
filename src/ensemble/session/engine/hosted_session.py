@@ -238,6 +238,16 @@ def _host_class(setup: _Setup, name: str) -> tuple[type[Host], dict]:
         raise ConfigError(f"[hosts.{name}].implementation: {e}") from None
 
 
+def _asked_to_close(channel: Channel) -> bool:
+    """Its owner's confirmed close; False once it is gone unasked; a refusal is OwnerRefused."""
+    try:
+        return channel.request(Op.CLOSE)
+    except Unanswered:
+        raise
+    except SessionError as error:
+        raise OwnerRefused(str(error)) from error
+
+
 def _host_key(setup: _Setup, name: str) -> str:
     table = json.dumps([name, thaw(setup.hosts.tables[name])], sort_keys=True)
     return hashlib.sha256(table.encode()).hexdigest()
@@ -1002,13 +1012,15 @@ class HostedSession(Session):
             )
         if state is not None and (channel := channel_bound(name, state)) is not None:
             store.check()
-            try:
-                if channel.request(Op.CLOSE):
-                    return
-            except Unanswered:
-                raise
-            except SessionError as error:
-                raise OwnerRefused(str(error)) from error
+            if _asked_to_close(channel):
+                return
+        if state is None and generation is None and (found := on._headless_owner(name)):
+            if sid not in (None, found["sid"]):
+                raise SessionError(f"session {name}: expected sid {sid!r}, found {found['sid']!r}")
+            channel = channel_bound(name, found)
+            if channel is None or not _asked_to_close(channel):
+                confirmed_end(on, name, found["generation"])()
+            return
         try:
             clients = [store.read()["client"]]
         except SessionError:

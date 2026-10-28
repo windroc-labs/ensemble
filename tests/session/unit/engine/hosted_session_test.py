@@ -3183,6 +3183,26 @@ class OwnedHeadlessTest(HostedTuiBase):
         self.assertIn(TurnEnd("done", 0), self.pumped(owned))
         self.assertEqual(owned.confirm_end(WAIT), 0)
 
+    def test_a_named_runs_host_metadata_carries_its_harness_and_the_sid_it_runs_as(self):
+        """The sid its Host records is the one its harness.json names, so close finds it."""
+        starts = []
+
+        def worker(name, _launch, metadata):
+            starts.append(metadata)
+            return ScriptedWorker(name, metadata["generation"], [], None)
+
+        self.host.headless_worker = worker
+        self.channel = Channel.create()
+        spec = dataclasses.replace(self.spec(), client="fake", mode="headless", name="w1")
+        owned = self.session.own(spec, owner=self.channel.directory)
+        self.addCleanup(owned.stop)
+        [metadata] = starts
+        self.assertEqual(
+            (metadata["harness"], metadata["sid"], metadata["generation"]),
+            (self.channel.directory, owned.sid, owned.generation),
+        )
+        self.assertRegex(owned.sid, "^[0-9a-f-]{36}$")
+
     def test_stop_returns_its_interrupted_turn_and_its_exit_is_confirmed(self):
         owned = self.own()
         final = owned.stop()
@@ -3968,8 +3988,8 @@ class OwnedStart(Case):
                     )
 
 
-class BoundOwnerTest(HostedTuiBase):
-    """attach and retire of a tui session whose session.json names a session harness."""
+class BoundOwnerBase(HostedTuiBase):
+    """A tui session whose session.json names a session harness, and that harness's moves."""
 
     def setUp(self):
         super().setUp()
@@ -4025,6 +4045,10 @@ class BoundOwnerTest(HostedTuiBase):
         thread = threading.Thread(target=answer)
         thread.start()
         self.addCleanup(thread.join)
+
+
+class BoundOwnerTest(BoundOwnerBase):
+    """attach and retire of a tui session whose session.json names a session harness."""
 
     def test_attach_of_a_bound_owner_is_its_control_view(self):
         self.owner()
@@ -4210,6 +4234,69 @@ class BoundOwnerTest(HostedTuiBase):
         with self.assertRaisesRegex(SessionError, "expected sid 'other'"):
             self.session.retire("w1", sid="other")
         self.assertFalse(os.path.exists(os.path.join(self.channel.directory, "requests")))
+
+
+class HeadlessOwnerTest(BoundOwnerBase):
+    """retire of a named headless run: no session.json; its Host's record names its harness."""
+
+    def setUp(self):
+        super().setUp()
+        os.unlink(os.path.join(self.root, "w1", "session.json"))
+        self.host.processes.pop("w1")
+        found = {
+            "owner": self.channel.directory,
+            "sid": SID,
+            "generation": self.state["generation"],
+        }
+        patcher = mock.patch.object(self.host, "_headless_owner", return_value=found, create=True)
+        self.headless_owner = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_retire_asks_its_harness_to_close(self):
+        for sid in (None, SID):
+            with self.subTest(sid=sid):
+                self.serve(let_go=self.owner())
+                self.session.retire("w1", sid=sid)
+                self.assertEqual(self.served, [Op.CLOSE])
+        self.headless_owner.assert_called_with("w1")
+        self.host.calls.release.assert_not_called()
+
+    def test_a_refused_or_unconfirmed_close_raises(self):
+        self.owner()
+        self.serve(ok=False, error="cannot close w1")
+        with self.assertRaisesRegex(engine_types.OwnerRefused, "cannot close w1"):
+            self.session.retire("w1")
+        self.serve(ok=False, error="w1: worker exit not confirmed", unanswered=True)
+        with self.assertRaisesRegex(Unanswered, "not confirmed"):
+            self.session.retire("w1")
+
+    def test_another_sid_raises_asking_nothing(self):
+        self.owner()
+        with self.assertRaisesRegex(SessionError, f"expected sid 'other', found {SID!r}"):
+            self.session.retire("w1", sid="other")
+        self.assertEqual(self.channel.requests(), [])
+
+    def test_an_unbound_or_vanished_harness_closes_only_a_confirmed_absent_worker(self):
+        generation = self.state["generation"]
+        for bound, found in (
+            (False, Liveness.UNKNOWN),
+            (False, Liveness.ABSENT),
+            (True, Liveness.UNKNOWN),
+            (True, Liveness.ABSENT),
+        ):
+            with self.subTest(bound=bound, found=found):
+                self.host.calls.reset_mock()
+                self.host.calls.worker_liveness.return_value = found
+                self.owner(**({} if bound else {"name": "w2"}))
+                vanished = mock.patch.object(Channel, "request", return_value=False)
+                with vanished, contextlib.ExitStack() as stack:
+                    if not bound:
+                        stack.enter_context(self.assertLogs("session", "WARNING"))
+                    if found == Liveness.UNKNOWN:
+                        stack.enter_context(self.assertRaisesRegex(Unanswered, "still running"))
+                    self.session.retire("w1")
+                released = [mock.call("w1", generation)] * (found == Liveness.ABSENT)
+                self.assertEqual(self.host.calls.release.call_args_list, released)
 
 
 class DeadOwner(HostedTuiBase):

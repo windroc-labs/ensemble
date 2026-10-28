@@ -2656,7 +2656,8 @@ class HeadlessWorkerTest(StartBase):
         harness = os.path.join(self.home, ".ensemble", "harness", "a" * 32)
         self.headless(harness=harness)
         self.assertEqual(
-            (self.host_record()["owner"], self.host_record()["host"]), (harness, "docker")
+            {key: self.host_record()[key] for key in ("owner", "host", "sid", "generation")},
+            {"owner": harness, "host": "docker", "sid": "s1", "generation": GEN},
         )
         self.assertFalse(os.path.lexists(tui_lock("w")))
 
