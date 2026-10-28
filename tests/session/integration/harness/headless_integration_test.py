@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -30,7 +29,7 @@ from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import HARNESS_ROOT
 from ensemble.session.hosts.tmux import TmuxHost, managed
-from tests.session import harnesses, live_tmux
+from tests.session import harnesses, live_tmux, threads
 from tests.session.case import HOSTS, REPO, Case, harnessed
 from tests.session.cli_support import logged
 from tests.session.integration.clients.claude import fake_claude
@@ -84,15 +83,7 @@ class Headless(Recording, Case):
 
     def drain(self, view: OwnedSession) -> list:
         """view.events() to its end, its turn events only; fails, stopping it, past WAIT."""
-        executor = ThreadPoolExecutor(max_workers=1)
-        try:
-            found = executor.submit(lambda: list(view.events())).result(timeout=WAIT)
-        except TimeoutError:
-            view.stop()
-            self.fail(f"events() did not end within {WAIT}s")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-        return [e for e in found if type(e).__name__ in TURNS]
+        return [e for e in threads.drain(self, view, wait=WAIT) if type(e).__name__ in TURNS]
 
     def succeeds(self, spec: Spec, reply: str) -> None:
         view = self.owned(spec)

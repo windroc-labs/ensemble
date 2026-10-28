@@ -1,27 +1,23 @@
-"""A new client is one importable module plus one [clients.<name>] table naming it as
-module.path:Class: a temp copy of the session and utils packages, the fake client's package copied in outside
-them as module extension_client (a name unrelated to the client's) and its table appended to the
-copy's ensemble/session/config.toml, nothing else changed, runs a headless session through Session.start in a
-child Python whose PYTHONPATH is only the copy's site directory and that module's dir. A table without its
-module, or a module without its table, fails there before anything starts.
+"""A new client is a module plus a [clients.<name>] table naming its module.path:Class: the fake
+client copied outside a session and utils copy as module extension_client, its table in the copy's
+config.toml, runs headless in a child whose PYTHONPATH is that site and module dir only. A table
+without its module, or a module without its table, fails before anything starts.
 """
 
 import json
 import os
 import shutil
 import subprocess
-import tempfile
 import unittest
 
 from tests.session import fake_client
 from tests.session.case import PY, REPO, Case, child_env
+from tests.session.integration.support import SKIP, site_copy
+from tests.utils.sandbox import scratch
 
 TIMEOUT = 60  # seconds
-SKIP = shutil.ignore_patterns("__pycache__")
-PROJECTS = ("session", "utils")
 MODULE = "extension_client"
-# The child: configures the session from the copy's session config, starts client argv[2] headless
-# in workdir argv[1] and prints its events; a ConfigError exits 1, its text on stderr.
+# The child starts client argv[2] headless in argv[1]; a ConfigError exits 1, text on stderr.
 CHILD = """import dataclasses, json, sys
 from ensemble.session import Access, ConfigError, Mode, Session, Spec
 from ensemble.session.engine.config import read_config
@@ -55,51 +51,22 @@ print(json.dumps({"argv": launch.argv[1:-1], "pythonpath": launch.env.get("PYTHO
 
 class ExtensionClientIntegration(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
-        self.site = os.path.join(self.root, "site")
-        self.src = os.path.join(self.site, "ensemble", "session")
+        self.root = scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO))
         self.extensions = os.path.join(self.root, "extensions")
-        self.package(MODULE)
-        self.package("untabled")
-        for project in PROJECTS:
-            shutil.copytree(
-                os.path.join(REPO, "src", "ensemble", project),
-                os.path.join(self.site, "ensemble", project),
-                ignore=SKIP,
-                dirs_exist_ok=True,
-            )
+        self.site = site_copy(self.root, client=(self.extensions, MODULE))
+        shutil.copytree(
+            os.path.dirname(fake_client.__file__),
+            os.path.join(self.extensions, "untabled"),
+            ignore=SKIP,
+        )
+        self.src = os.path.join(self.site, "ensemble", "session")
         self.srcs = os.pathsep.join((self.site, self.extensions))
         self.config = os.path.join(self.src, "config.toml")
-        os.chmod(self.config, 0o600)
         self.home = os.path.join(self.root, "home")
         os.mkdir(self.home)
         self.temp = os.path.join(self.root, "tmp")
         os.mkdir(self.temp)
         self.work = os.path.join(self.root, "work")
-        scenario = os.path.join(self.root, "scenario.json")
-        with open(scenario, "w", encoding="utf-8") as f:
-            json.dump(
-                [
-                    {"out": {"type": "session", "id": "native-1"}},
-                    {"out": {"type": "message", "text": "hi"}},
-                    {"out": {"type": "result", "text": "done"}},
-                ],
-                f,
-            )
-        self.table(
-            f'[clients.fake]\nimplementation = "{MODULE}:FakeClient"\n'
-            f"scenario = {json.dumps(scenario)}\nlog = {json.dumps(os.path.join(self.root, 'log.jsonl'))}\n"
-        )
-
-    def package(self, name: str) -> None:
-        """The fake client's package copied in as top-level package <name>, outside session."""
-        shutil.copytree(
-            os.path.dirname(fake_client.__file__),
-            os.path.join(self.extensions, name),
-            ignore=SKIP,
-        )
 
     def table(self, text: str) -> None:
         with open(self.config, "a", encoding="utf-8") as f:

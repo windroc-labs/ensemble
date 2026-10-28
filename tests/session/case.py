@@ -1,5 +1,5 @@
-"""Case, every session test's base; HOSTS, configured, harnessed, packaged_hosts; PY, child_env;
-REPO, SRC, ROOTS; PLUGIN_BIN; SID; SPAWNS, the process starts; no_spawn.
+"""Case, the session tests' base; HOSTS, configured, harnessed, packaged_hosts; PY, child_env;
+REPO, SRC, PACKAGE_ROOTS, ROOTS; PLUGIN_BIN; SID; SPAWNS, the process starts; no_spawn.
 """
 
 import contextlib
@@ -22,6 +22,7 @@ from tests.utils.sandbox import clean_env, project_roots
 BUNDLE = os.environ.get("ENSEMBLE_SESSION_BUNDLE")
 ROOTS = (BUNDLE,) if BUNDLE else project_roots(REPO)
 SRC = dict.fromkeys(("session", "utils"), BUNDLE) if BUNDLE else packages(ROOTS)
+PACKAGE_ROOTS = (SRC["session"], SRC["utils"])
 RUN_WITH = run_with(ROOTS)
 PLUGIN_BIN = os.path.join(REPO, "bin")
 PY = (sys.executable, "-P", "-S")
@@ -64,7 +65,7 @@ def harnessed(clients) -> type[HostedSession]:
 
 class Case(TreeCase):
     """Also self.session_cls, of self.session_dependencies; starts run their harness on a thread
-    (harnesses.Threaded), joined at its end.
+    (harnesses.Threaded), joined at the end.
     """
 
     _case_clear = True

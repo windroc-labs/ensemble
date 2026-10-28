@@ -38,10 +38,9 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.modes.tui import TuiMode
 from ensemble.utils import LOCAL_ENV_VARS
-from tests.session.case import ROOTS, SRC
+from tests.session.case import PACKAGE_ROOTS, ROOTS, SRC
 from tests.session.codex_tui import PlanCase
 from tests.session.fakes.terminal import MemoryHost
-from tests.session.source_roots import PACKAGE_ROOTS
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,

@@ -1,6 +1,7 @@
-from ensemble.session.clients.common import check_selection, scan, split_flags
+from ensemble.session.clients.codex import CodexClient
+from ensemble.session.clients.common import check_selection, scan, select, split_flags
 from ensemble.session.engine.types import ConfigError
-from tests.session.case import Case
+from tests.session.case import SID, Case
 
 
 class FlagsTest(Case):
@@ -82,3 +83,34 @@ class FlagsTest(Case):
             with self.subTest(flag=flag), self.assertRaisesRegex(ConfigError, "picks the session"):
                 check_selection((flag,), ("-r", "--resume"))
         check_selection(("--model", "--resume", "--", "-r"), ("-r", "--resume"), ("--model",))
+        forbidden = ("--resume", "-r", "resume", "fork", "--last")
+        for flags in (("--", *forbidden), ("--resumes", "--continued", "--teleport-x")):
+            with self.subTest(flags=flags):
+                check_selection(flags, forbidden)
+
+    def test_selection_words_used_as_option_values_are_not_selectors(self):
+        codex = (CodexClient.forbidden_selection, CodexClient.valued_flags)
+        for flags in (
+            ("--add-dir", "fork"),
+            ("--add-dir=resume",),
+            ("--enable", "hooks"),
+            ("-c", "model=x"),
+            ("-cmodel=x",),
+        ):
+            with self.subTest(flags=flags):
+                check_selection(flags, *codex)
+        with self.assertRaisesRegex(ConfigError, "fork: picks the session"):
+            check_selection(("--add-dir", "safe", "fork"), *codex)
+
+    def test_selection_uses_declared_syntax_and_uuid_validation(self):
+        syntax = (("--session-id",), ("--resume",))
+        self.assertEqual(select(SID, syntax, uuid=True, resume=False), ("--session-id", SID))
+        self.assertEqual(select(SID, syntax, uuid=True, resume=True), ("--resume", SID))
+        self.assertEqual(select("native", ((), ("resume",)), resume=False), ())
+        self.assertEqual(select("native", ((), ("resume",)), resume=True), ("resume", "native"))
+        for native in ("abc", SID.upper(), SID + "\n"):
+            with (
+                self.subTest(native=native),
+                self.assertRaisesRegex(ConfigError, "session ids are UUIDs"),
+            ):
+                select(native, syntax, uuid=True, resume=False)

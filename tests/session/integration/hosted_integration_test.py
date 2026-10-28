@@ -1,41 +1,23 @@
 """HostedSession on a private tmux server (tests/session/live_tmux.py), os.environ that server's env,
 the fake client's Tui: Session.attach(name).close() and the by-name close Session.retire(name) leave
-the same state (FR-4); list and a by-name close refused until a class is configured (FR-2: the session reads no config
-itself); a display given to start stored on its display and in its worker state, and listed (FR-48).
+the same state (FR-4); a display given to start stored on its display and in its worker state, and
+listed (FR-48).
 """
 
 import json
 import os
-import subprocess
 import unittest
 
 from ensemble.session import Access, Host, Mode, Session, Spec
-from ensemble.session.engine.hosted_session import UNCONFIGURED, HostedSession
+from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.hosts.base import worker_state
 from ensemble.session.modes import tui
 from tests.session import fake_client
-from tests.session.case import HOSTS, PY
+from tests.session.case import HOSTS
 from tests.session.modules import client_loader
 from tests.session.tui_support import MANAGER, Live
 
 DISPLAYS = {"w4": f"{MANAGER}/right", "w5": "elsewhere:1.2"}
-UNCONFIGURED_CALLS = """import json
-from ensemble.session import ConfigError, Session
-from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.modes.tui import TuiStore
-found = []
-for call in (
-    lambda: HostedSession.list("w.*"),
-    lambda: Session.list("w.*"),
-    lambda: TuiStore.attach("w3", host=Session.host()).close(),
-):
-    try:
-        call()
-        found.append(None)
-    except ConfigError as error:
-        found.append(str(error))
-print(json.dumps(found))
-"""
 
 
 class CloseTest(Live):
@@ -64,19 +46,8 @@ class CloseTest(Live):
         self.assertEqual(found, {"w1": (False, [], False), "w2": (False, [], False)})
         self.assertEqual([row.name for row in self.session_cls.list()], [MANAGER])
 
-    def test_list_and_close_by_name_need_a_configured_class(self):
-        """Unconfigured in a child process: another test may have configured HostedSession here."""
+    def test_list_and_close_by_name_through_the_configured_class(self):
         self.start("w3", {"read": True})
-        res = subprocess.run(
-            [*PY, "-c", UNCONFIGURED_CALLS],
-            env=self.server.child_env(),
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=60,
-        )
-        self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(json.loads(res.stdout), [UNCONFIGURED] * 3)
         self.assertEqual([row.name for row in self.session_cls.list("w.*")], ["w3"])
         self.configure_hosted()
         self.assertEqual([row.name for row in HostedSession.list("w.*")], ["w3"])

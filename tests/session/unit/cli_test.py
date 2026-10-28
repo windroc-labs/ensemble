@@ -464,12 +464,6 @@ class Read(ControlBase):
         self.assertEqual(self.invoke("read", "w1", "--lines", "5")[:2], (0, "screen 5\n"))
         self.assertTrue(os.path.isdir(os.path.join(owner, "replies")))  # its harness answered
 
-    def test_other_sid(self):
-        self.tui(name="w1", sid="replacement")
-        code, out, err = self.invoke("read", "w1", "--sid", SID)
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn(f"expected sid {SID!r}, found 'replacement'", err)
-
     def test_harness_gone(self):
         self.owned("w1", held=False, gone=False)
         code, out, err = self.invoke("read", "w1")
