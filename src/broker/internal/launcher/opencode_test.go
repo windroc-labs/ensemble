@@ -30,7 +30,7 @@ func opencodeManifest(t *testing.T, edit func(map[string]any)) string {
 }
 
 func withGitHub(fields map[string]any) {
-	fields["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
+	fields["credentials"] = `{"github":{"app":"ensemble-broker-bot","permissions":{"contents":"write","pull_requests":"write","workflows":"write","checks":"read","actions":"read","statuses":"read"}}}`
 }
 
 // opencodeHost fails any read of the Claude or Codex credentials and of the Codex version policy.
@@ -231,17 +231,16 @@ func TestStartOpencode(t *testing.T) {
 		h, d, codexCreds := opencodeHost(&world{labels: goodLabels()}, tokens)
 		var edit func(map[string]any)
 		if github {
-			edit = withGitHub
+			edit = func(f map[string]any) { withGitHub(f) }
 		}
 		got, err := h.Start(context.Background(), opencodeManifest(t, edit))
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := StartResult{Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
+		want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
 			Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 		if github {
-			id := botID
-			want.GitHubUserID = &id
+			want.Env = map[string]string{"ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]", "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]", "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com", "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]", "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"}
 		}
 		gotJSON, _ := json.Marshal(got)
 		wantJSON, _ := json.Marshal(want)

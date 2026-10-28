@@ -186,7 +186,7 @@ effort = "low"
 #   lock      a lock name ([a-z0-9][a-z0-9_.-]{0,62}): one running container per name; a locked run keeps its
 #             container and lock until its user closes it or its client exits; unset → none
 #   prefetch  true: clone the input's one Reference `Repo:` at its optional `Ref:` line into the new workspace; the
-#             container's only GitHub token is one for a github [output]'s repo alone, contents: write
+#             clone token is temporary; container credentials come only from explicit declarations
 [environment.docker]
 image = "@worker"
 gateway = "workers"

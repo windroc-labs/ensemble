@@ -166,12 +166,12 @@ type Clients struct {
 }
 
 type StartResult struct {
-	Container    string    `json:"container"`
-	Endpoint     string    `json:"endpoint"`
-	ImageDigest  string    `json:"image_digest"`
-	Clients      Clients   `json:"clients"`
-	GitHubUserID *int64    `json:"github_user_id"`
-	Deadline     *Deadline `json:"deadline"`
+	Container   string            `json:"container"`
+	Endpoint    string            `json:"endpoint"`
+	ImageDigest string            `json:"image_digest"`
+	Clients     Clients           `json:"clients"`
+	Env         map[string]string `json:"env"`
+	Deadline    *Deadline         `json:"deadline"`
 }
 
 type StatusResult struct {

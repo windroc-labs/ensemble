@@ -112,11 +112,11 @@ func TestStartGitHub(t *testing.T) {
 	if len(tokens.permissions) != 1 || !maps.Equal(tokens.permissions[0], fixtureSet) {
 		t.Fatalf("issued with %v, want the manifest's set", tokens.permissions)
 	}
-	if got.GitHubUserID == nil || *got.GitHubUserID != botID {
-		t.Fatalf("user ID %v", got.GitHubUserID)
-	}
-	if out, _ := json.Marshal(got); !strings.Contains(string(out), `"github_user_id":343764394`) {
-		t.Fatalf("%s", out)
+	bot := "ensemble-broker-bot[bot]"
+	email := "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+	expected := map[string]string{"ENSEMBLE_PR_AUTHOR": bot, "GIT_AUTHOR_NAME": bot, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": bot, "GIT_COMMITTER_EMAIL": email}
+	if !maps.Equal(got.Env, expected) {
+		t.Fatalf("bot env: %v", got.Env)
 	}
 	commands := startCommands(t, d)
 	if len(commands) != 2 || commands[0].Argv[0] != "inject" || !slices.Equal(commands[1].Argv, []string{"write", "acme"}) || string(commands[1].Stdin) != "ghs_token" {
@@ -128,10 +128,10 @@ func TestStartGitHubNull(t *testing.T) {
 	tokens := &fakeTokens{}
 	h, _ := githubHost(&world{labels: goodLabels()}, tokens)
 	got, err := h.Start(context.Background(), validManifest(t))
-	if err != nil || got.Deadline != nil || got.GitHubUserID != nil || len(tokens.calls) != 0 {
+	if err != nil || got.Deadline != nil || len(got.Env) != 0 || len(tokens.calls) != 0 {
 		t.Fatalf("%+v %v %q", got, err, tokens.calls)
 	}
-	if out, _ := json.Marshal(got); !strings.Contains(string(out), `"github_user_id":null`) {
+	if out, _ := json.Marshal(got); !strings.Contains(string(out), `"env":{}`) {
 		t.Fatalf("%s", out)
 	}
 }
@@ -174,7 +174,7 @@ func TestStartGitHubFailureRollsBack(t *testing.T) {
 // A repo grant's renewal names the manifest's repo, so the broker renews that repository's slot alone.
 func TestMaintainRepoGrant(t *testing.T) {
 	path := fixtureManifest(t, "manifest-github-app.json", func(f map[string]any) {
-		f["github"].(map[string]any)["repo"] = "acme/out"
+		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet, "repo": "acme/out"})
 	})
 	tokens := &fakeTokens{}
 	h := mountHost()

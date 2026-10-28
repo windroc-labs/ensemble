@@ -6,6 +6,12 @@
     "claude": "2.1.0",
     "codex": "codex-cli 0.100.0"
   },
-  "github_user_id": 343764394,
-  "deadline": null
+  "deadline": null,
+  "env": {
+    "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+    "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+    "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+    "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+    "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+  }
 }

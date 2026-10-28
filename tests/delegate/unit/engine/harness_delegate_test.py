@@ -544,7 +544,9 @@ class VerifierDockerTest(HarnessCase):
         super().setUp()
         self.settings(default="docker")
         with open(self.local, "a", encoding="utf-8") as file:
-            file.write('[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n')
+            file.write(
+                '[orchestrator.roles.engineer.credentials.github]\napp = "ensemble-broker-bot"\npermissions = {contents = "write"}\n'
+            )
         self.calls, self.programs, self.refusals = [], [], {}
         path = os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
         for patcher in (

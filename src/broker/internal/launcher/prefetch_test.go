@@ -331,7 +331,7 @@ func TestPrefetchWithRepoGrant(t *testing.T) {
 	h, d, tokens := prefetchHost(t, w)
 	write := map[string]string{"contents": "write"}
 	path := prefetchManifest(t, h, func(f map[string]any) {
-		f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": write, "repo": "acme/out"}
+		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": write, "repo": "acme/out"})
 	})
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
@@ -365,7 +365,7 @@ func TestEnvironmentWithoutPrefetchKeepsGitHub(t *testing.T) {
 		delete(f, "prefetch")
 		f["gateway"] = "mini-op"
 		f["secrets"] = []any{map[string]any{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}}
-		f["github"] = map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet}
+		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet})
 	})
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
