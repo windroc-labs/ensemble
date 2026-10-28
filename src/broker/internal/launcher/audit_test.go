@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -146,9 +147,9 @@ type reportingTokens struct {
 	rec *audit.Recorder
 }
 
-func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) (func(), []protocol.Expiry, error) {
+func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
 	r.rec.Add(c, audit.Credential{Kind: audit.GitHubToken, Result: audit.Issued, Account: "acme"})
-	return r.fakeTokens.Issue(ctx, app, repo, permissions, c, exec)
+	return r.fakeTokens.Issue(ctx, app, repo, permissions, c)
 }
 
 func TestStartLineHoldsItsOwnTokens(t *testing.T) {
@@ -161,7 +162,7 @@ func TestStartLineHoldsItsOwnTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := kinds(readLines(t, path)[0]); !slices.Equal(got, []string{"claude-setup-token issued", "github-installation-token issued"}) {
+	if got := kinds(readLines(t, path)[0]); !slices.Equal(got, []string{"github-installation-token issued", "claude-setup-token issued"}) {
 		t.Fatal(got)
 	}
 }
@@ -183,7 +184,7 @@ func TestStartFailureLine(t *testing.T) {
 		_, err := h.Start(context.Background(), githubManifest(t))
 		rec.Flush(err)
 		l := readLines(t, path)[0]
-		if l.Error == nil || *l.Error != "github_failed" || !slices.Equal(kinds(l), []string{"claude-setup-token issued", "claude-setup-token withdrawn"}) {
+		if l.Error == nil || *l.Error != "github_failed" || len(l.Credentials) != 0 {
 			t.Fatalf("%+v %v", l, kinds(l))
 		}
 	})
@@ -193,7 +194,7 @@ func TestStartFailureLine(t *testing.T) {
 		rec, path := audited(t, &h, "start", "")
 		_, err := h.Start(context.Background(), githubManifest(t))
 		rec.Flush(err)
-		if got := kinds(readLines(t, path)[0]); !slices.Equal(got, []string{"claude-setup-token issued"}) {
+		if got := kinds(readLines(t, path)[0]); len(got) != 0 {
 			t.Fatalf("a container the rollback could not remove still holds its credential: %v", got)
 		}
 	})
@@ -260,7 +261,7 @@ func TestCloseLine(t *testing.T) {
 			[]string{"env-secret withdrawn ensemble-broker-env/dummy"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+			d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 				if args[0] == "container" {
 					if !slices.Equal(args, []string{"container", "inspect", "--format", `{"env":{{json .Config.Env}},"labels":{{json .Config.Labels}}}`, container}) {
 						t.Errorf("%q", args)

@@ -79,22 +79,27 @@ func (o OpencodeKeys) Ready(providers []string) error {
 	return nil
 }
 
-// Inject writes each provider's key into the container's secrets tmpfs through exec's stdin, never showing a keychain
-// dialog. Errors are opencodeError's, wrap docker.ErrUnreachable or are opaque: no Docker stderr, no keychain detail.
-func (o OpencodeKeys) Inject(providers []string, exec func(argv []string, stdin []byte) error) error {
+// Inject prepares all provider writes; on success the caller owns their buffers.
+func (o OpencodeKeys) Inject(providers []string) (commands []credential.Command, err error) {
+	defer func() {
+		if err != nil {
+			for _, command := range commands {
+				command.Erase()
+			}
+			commands = nil
+		}
+	}()
 	for _, p := range providers {
-		key, err := readSecret(o.Keychain, opencodeService, p)
-		if err != nil {
-			return opencodeError(p, err)
+		key, readErr := readSecret(o.Keychain, opencodeService, p)
+		if readErr != nil {
+			return commands, opencodeError(p, readErr)
 		}
-		err = credential.Deliver(exec, credential.File{Dir: opencodeKeyDir, Name: p + ".key"}, key)
+		command, prepErr := credential.Prepare(credential.File{Dir: opencodeKeyDir, Name: p + ".key"}, key)
 		erase(key)
-		if errors.Is(err, docker.ErrUnreachable) {
-			return fmt.Errorf("API key injection: %w", docker.ErrUnreachable)
+		if prepErr != nil {
+			return commands, prepErr
 		}
-		if err != nil {
-			return errors.New("writing an OpenCode provider API key into the container failed")
-		}
+		commands = append(commands, command)
 	}
-	return nil
+	return commands, nil
 }

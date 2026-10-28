@@ -616,21 +616,12 @@ func (c Credentials) Ready(account string) error {
 	return nil
 }
 
-// Inject writes account's token, and no other, into the container's secrets tmpfs through exec's stdin.
-// The token read never shows a keychain dialog: one it would need, or a locked keychain, fails here.
-// Errors are keychainError's, wrap docker.ErrUnreachable or are opaque: no Docker stderr, no keychain detail.
-func (c Credentials) Inject(account string, exec func(argv []string, stdin []byte) error) error {
+// Inject prepares account's token without a keychain dialog; the caller owns the command.
+func (c Credentials) Inject(account string) (credential.Command, error) {
 	token, err := c.Keychain.Get(account)
 	defer erase(token)
 	if err != nil {
-		return keychainError(account, err)
+		return credential.Command{}, keychainError(account, err)
 	}
-	err = credential.Deliver(exec, credential.File{Dir: docker.SecretsDir, Name: "claude"}, token)
-	if errors.Is(err, docker.ErrUnreachable) {
-		return fmt.Errorf("token injection: %w", docker.ErrUnreachable)
-	}
-	if err != nil {
-		return errors.New("writing the token into the container failed")
-	}
-	return nil
+	return credential.Prepare(credential.File{Dir: docker.SecretsDir, Name: "claude"}, token)
 }

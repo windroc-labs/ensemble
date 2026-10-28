@@ -128,7 +128,7 @@ func (w *lockWorld) respond(args []string) ([]byte, error, bool) {
 func (w *lockWorld) host(t *testing.T, name string, now int64) (Host, string, *fakeDocker) {
 	t.Helper()
 	h, base := startHost(&world{labels: goodLabels(), volume: "matching"}, &fakeCreds{})
-	d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		out, err, handled := w.respond(args)
 		if handled {
 			if w.after != nil {
@@ -136,7 +136,7 @@ func (w *lockWorld) host(t *testing.T, name string, now int64) (Host, string, *f
 			}
 			return out, err
 		}
-		return base.respond(args)
+		return base.respond(args, stdin)
 	}}
 	h.Docker = d
 	h.Now = func() time.Time { return time.Unix(now, 0) }

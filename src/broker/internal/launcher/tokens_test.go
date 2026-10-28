@@ -146,7 +146,7 @@ func TestReadTokensWithoutOrWithCorruptRecordIsEmpty(t *testing.T) {
 // tokenStartHost starts a Codex worker_1 with GitHub tokens in a real state directory.
 func tokenStartHost(t *testing.T) (Host, string, string, *fakeTokens, *fakeCodexCreds, *fakeDocker) {
 	t.Helper()
-	h, d := startHost(&world{labels: goodLabels(), versions: []string{"claude 2", "codex-cli 0.163.0"}}, &fakeCreds{})
+	h, d := startHost(&world{labels: labelsWithVersion("codex", "0.163.0")}, &fakeCreds{})
 	h.Home = t.TempDir()
 	h.Schedule = StateSchedule{Home: h.Home, Safe: h.Safe}
 	h.Versions = &fakeVersions{}

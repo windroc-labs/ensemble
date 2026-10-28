@@ -58,12 +58,7 @@ func TestClaudeStartsWithoutCodexVersionPreparation(t *testing.T) {
 			if strings.Contains(progress.String(), "update-codex") {
 				t.Fatal(progress.String())
 			}
-			secrets := 0
-			for _, call := range d.calls {
-				if slices.Contains(call, "inject") || slices.Contains(call, "write") {
-					secrets++
-				}
-			}
+			secrets := len(startCommands(t, d))
 			if secrets != 2 {
 				t.Fatalf("Claude/GitHub injection count %d", secrets)
 			}
@@ -124,9 +119,9 @@ func TestCheckCodex(t *testing.T) {
 		version string
 		ok      bool
 	}{
-		{"codex-cli 0.163.0", true}, {"codex-cli 0.164.0", true}, {"codex-cli 1.0.0", true},
-		{"codex-cli 0.162.999", false},
-		{"0.163.0", false}, {"codex-cli 0.163.0-beta", false}, {"codex-cli  0.163.0", false}, {"codex 0.163.0", false}, {"", false},
+		{"0.163.0", true}, {"0.164.0", true}, {"1.0.0", true},
+		{"0.162.999", false},
+		{"codex-cli 0.163.0", false}, {"0.163.0-beta", false}, {" 0.163.0", false}, {"codex 0.163.0", false}, {"", false},
 	} {
 		t.Run(c.version, func(t *testing.T) {
 			err := checkCodex(c.version)
@@ -148,7 +143,7 @@ func TestCheckCodex(t *testing.T) {
 func TestCodexImageVersionCheckedBeforeSecrets(t *testing.T) {
 	for _, version := range []string{"codex-cli 0.162.999", "codex-cli bad"} {
 		t.Run(version, func(t *testing.T) {
-			h, d := startHost(&world{labels: goodLabels(), versions: []string{"claude 2", version, "1.19.3"}}, &fakeCreds{})
+			h, d := startHost(&world{labels: labelsWithVersion("codex", strings.TrimPrefix(version, "codex-cli "))}, &fakeCreds{})
 			h.Codex = &fakeCodexCreds{}
 			_, err := h.Start(context.Background(), codexManifest(t))
 			if e := protoErr(t, err); e.Code != protocol.StartFailed || !strings.Contains(e.Message, "rebuild the worker image") {

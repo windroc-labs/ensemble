@@ -185,16 +185,22 @@ func TestCodexContainerCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := slices.Clone(k.data)
-	var payload []byte
-	expiry, err := c.Inject(context.Background(), func(argv []string, stdin []byte) error {
-		if !n.locked || bytes.Contains([]byte(strings.Join(argv, " ")), []byte("secret")) {
-			t.Fatal("unlocked injection or secret argv")
-		}
-		payload = slices.Clone(stdin)
-		return nil
-	})
-	if err != nil || expiry != codexNow.Add(time.Hour).Format(time.RFC3339) {
-		t.Fatalf("expiry %s: %v", expiry, err)
+	login, err := c.Inject(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !n.locked || strings.Contains(strings.Join(login.Command.Argv, " "), "secret") {
+		t.Fatal("unlocked preparation or secret argv")
+	}
+	payload := slices.Clone(login.Command.Stdin)
+	if login.Expiry != codexNow.Add(time.Hour).Format(time.RFC3339) {
+		t.Fatal(login.Expiry)
+	}
+	if err := login.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(login.Command.Stdin, make([]byte, len(login.Command.Stdin))) {
+		t.Fatal("carrier not erased")
 	}
 	var auth codexAuthDocument
 	if json.Unmarshal(payload, &auth) != nil || auth.Mode != "chatgpt" || auth.Tokens.Refresh != "" || auth.Tokens.ID != "fake-id-secret" || auth.Tokens.Account != "fake-account-secret" {
@@ -206,7 +212,7 @@ func TestCodexContainerCredential(t *testing.T) {
 }
 
 func TestCodexContainerPreflightFailures(t *testing.T) {
-	for _, failure := range []string{"missing", "expired", "native", "trust", "inject"} {
+	for _, failure := range []string{"missing", "expired", "native", "trust"} {
 		t.Run(failure, func(t *testing.T) {
 			c, n, k := codexFixture(t)
 			if err := c.Login(context.Background(), io.Discard); err != nil {
@@ -222,13 +228,9 @@ func TestCodexContainerPreflightFailures(t *testing.T) {
 			case "trust":
 				k.access = added()
 			}
-			called := false
-			_, err := c.Inject(context.Background(), func([]string, []byte) error {
-				called = true
-				return errors.New("fake-refresh-secret")
-			})
-			if err == nil || strings.Contains(err.Error(), "fake-refresh-secret") || called != (failure == "inject") || n.locked {
-				t.Fatal("failure leaked credentials, lock or executed injection")
+			_, err := c.Inject(context.Background())
+			if err == nil || strings.Contains(err.Error(), "fake-refresh-secret") || n.locked {
+				t.Fatal("failure leaked credentials or lock")
 			}
 		})
 	}
@@ -248,8 +250,8 @@ func TestCodexWriteFailureCodeAndCause(t *testing.T) {
 		{"other", "fake-account-secret\n", "credential writer exited 1 without a known diagnostic", nil},
 		{"command", "", "credential writer failed", errors.New("context canceled")},
 	} {
-		for _, command := range []string{"start", "refresh"} {
-			t.Run(tc.name+"/"+command, func(t *testing.T) {
+		{
+			t.Run(tc.name, func(t *testing.T) {
 				c, _, _ := codexFixture(t)
 				if err := c.Login(context.Background(), io.Discard); err != nil {
 					t.Fatal(err)
@@ -261,13 +263,8 @@ func TestCodexWriteFailureCodeAndCause(t *testing.T) {
 					return &docker.CommandError{Exit: 1, Stderr: tc.stderr}
 				}
 				var err error
-				want := protocol.StartFailed
-				if command == "start" {
-					_, err = c.Inject(context.Background(), exec)
-				} else {
-					want = protocol.RefreshFailed
-					_, err = c.Refresh(context.Background(), exec, func(string) error { return nil })
-				}
+				want := protocol.RefreshFailed
+				_, err = c.Refresh(context.Background(), exec, func(string) error { return nil })
 				var e *protocol.Error
 				if !errors.As(err, &e) || e.Code != want || e.Cause != tc.cause || e.Message != "Writing Codex credentials into the container failed" {
 					t.Fatalf("%#v", err)

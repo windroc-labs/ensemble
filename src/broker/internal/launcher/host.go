@@ -1,5 +1,5 @@
 // Package launcher builds worker images and starts and closes their containers.
-// It never touches the keychain or a token: injection goes through Credentials and Tokens.
+// Providers read credentials; the launcher delivers their opaque commands.
 package launcher
 
 import (
@@ -15,63 +15,51 @@ import (
 
 	"ensemble/broker/internal/audit"
 	"ensemble/broker/internal/codex"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 	"ensemble/broker/internal/releases"
 )
 
-// Credentials is the broker package's side of start: each Claude account's setup-token, which the launcher never sees.
+// Credentials prepares the selected Claude token; the caller executes and erases the command.
 type Credentials interface {
-	Ready(account string) error // *protocol.Error: login_required or keychain_failed
-	// Inject writes account's token through exec, which runs argv as agent in the container being started.
-	// Its errors are *protocol.Error (login_required, keychain_failed), wrap docker.ErrUnreachable
-	// or are opaque, carrying no Docker stderr.
-	Inject(account string, exec func(argv []string, stdin []byte) error) error
+	Ready(account string) error
+	Inject(account string) (credential.Command, error)
 }
 
-// CodexCredentials is the broker package's side of a Codex start; the launcher never sees the login.
+// CodexInjection holds the account lock until Finish, including actual delivery and expiry publication.
+type CodexInjection struct {
+	Command credential.Command
+	Expiry  string
+	Finish  func() error
+}
+
 type CodexCredentials interface {
 	Ready(context.Context) error
-	// Inject writes the login into a container through exec, as Credentials.Inject does, and returns its expiry
-	// (RFC 3339).
-	Inject(ctx context.Context, exec func([]string, []byte) error) (string, error)
-	// Refresh writes the current login into a container through exec and publishes its expiry before returning it.
+	Inject(context.Context) (CodexInjection, error)
 	Refresh(ctx context.Context, exec func([]string, []byte) error, publish func(string) error) (string, error)
 }
 
-// ProviderKeys is the broker package's side of an OpenCode start: the listed providers' API keys, which the launcher
-// never sees. Errors are as Credentials'.
+// ProviderKeys transfers owned provider-key commands to the caller.
 type ProviderKeys interface {
 	Ready(providers []string) error
-	// Inject writes each provider's key through exec, as Credentials.Inject does.
-	Inject(providers []string, exec func(argv []string, stdin []byte) error) error
+	Inject(providers []string) ([]credential.Command, error)
 }
 
-// EnvSecrets is the broker package's side of a start's environment secrets, which the launcher never sees: each item
-// is a reference, ensemble-broker-env/<name>. Errors are as Credentials'.
 type EnvSecrets interface {
 	Ready(items []string) error
-	// Inject writes one secret's value through exec, as Credentials.Inject does, to the file s.File.
-	Inject(s Secret, exec func(argv []string, stdin []byte) error) error
+	Inject(s Secret) (credential.Command, error)
 }
 
-// Tokens is the broker package's GitHub side: a container's installation tokens, which the launcher never sees.
-// Errors are *protocol.Error, wrap docker.ErrUnreachable, or are opaque, carrying no Docker stderr.
+// Tokens prepares startup writes; refresh remains synchronous. Errors never carry credential values.
 type Tokens interface {
-	Ready(app string) error              // manifest_rejected for another App; login_required or keychain_failed for its key
-	BotUserID(app string) (int64, error) // login_required or keychain_failed for the bot user ID login github saved
-	// Issue writes one token per installation of app into container through exec, or with repo ("": none) a repo
-	// grant: one token, for that repository alone. On failure it has revoked every token it issued and revoke is nil.
-	// On success revoke (never nil) revokes every token it issued, once, for a start that fails afterwards.
-	Issue(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) (revoke func(), _ []protocol.Expiry, _ error)
-	// Refresh writes a new token per current installation of app (or repo's, as Issue) over container's; replaced
-	// tokens expire.
+	Ready(app string) error
+	BotUserID(app string) (int64, error)
+	// Issue revokes all issued tokens on preparation failure. On success the caller owns
+	// commands and revoke, which revokes every issued token once if startup later fails.
+	Issue(ctx context.Context, app, repo string, permissions map[string]string, container string) ([]credential.Command, func(), []protocol.Expiry, error)
 	Refresh(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
-	// Revoke revokes the tokens read from container's token files through read, within its own deadlines; nothing
-	// read, nothing revoked. It never fails its caller.
 	Revoke(ctx context.Context, container string, read func(ctx context.Context, argv []string) ([]byte, error))
-	// Prefetch clones ref ("": the default branch) of repo into dir through run, which starts the helper container
-	// with argv and the token as stdin, and revokes the token once run returns.
 	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error
 }
 

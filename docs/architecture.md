@@ -408,6 +408,26 @@ restate the identical text; different text, including different JSON whitespace,
 A new start uses its supplied values, replacing any previous session's declarations. Configuration changes and
 workspace files cannot replace a resumed run's saved values.
 
+Board runs (`router`, including `ensemble-crew issue`) resolve `[orchestrator.roles.<role>.credentials]`
+and `[orchestrator.roles.<role>.tasks.<task>.credentials]`: each task value replaces the whole role value of
+the same kind, retaining other kinds. A run without a task uses only role values; no declarations yields `{}`. New runs pass
+the result as JSON text; resumes omit it and keep the saved spec. Issue bodies and comments never supply it.
+`router --dry-run` prints the resolved object in each new-run preview; a resume supplies no replacement.
+Credentials in the orchestrator's `[core]` or `[core.roles.<role>]` overlays are configuration errors.
+
+Declarations check JSON-compatible table shape, the role's task index and the orchestrator-only `linear = "role"` shorthand;
+broker owns kind names and values. The shorthand expands to that role's app references and only the board keys
+listed below, without reading any secret. It requires `tracker = "linear"`; explicit reference objects stay opaque.
+For example, to declare the engineer app for `light-build` on a configured Linear board:
+
+```toml
+[orchestrator.roles.engineer.tasks.light-build.credentials]
+linear = "role"
+```
+
+The packaged declarations are empty. Installer-written GitHub grants and the decompose task declaration are
+follow-up work; nonempty specs still require the broker implementation described below.
+
 The target contract assigns kind interpretation to the broker alone: both declarations require independent
 validation; the caller's whole value replaces an environment value of the same kind, retaining other kinds.
 Duplicate JSON keys, trailing content, non-objects and unknown or invalid kinds must fail with `manifest_rejected`
@@ -779,6 +799,8 @@ default = "docker"   # role runs: the client in a container, their drive a local
 ```
 
 `[session.hosts.docker]` keys: `docker` (the CLI, default `/usr/local/bin/docker`), `plugins`, `github.app` (the App slug; `""`: none), `github.permissions` (each token's permissions) and `isolated` (`true`: yolo mode, the container the boundary; `false`: auto mode). Then `ensemble-crew worker NAME --client claude|codex|opencode` starts NAME in its own container; the other verbs and the Viewer work as on tmux. Each start, restart or resume runs a new container from the current image; restart and resume keep the client history, a new start empties its client state dir, and all keep the [workspace volume](#workspace-volumes); `ensemble-session resume <name>` (never `client-resume`) continues a conversation. A container gets user `agent` with all capabilities dropped, no Docker socket, only its egress network, a workspace volume at cwd, credentials on tmpfs and, with GitHub configured, the App's bot identity; each checkout runs its own `.githooks/`.
+
+Start reads the three build-verified client versions from image labels. One exec checks image content and bootstraps client state as `agent`; an optional separate root exec installs the hook. One credential exec delivers all client credentials, environment secrets and GitHub owners' tokens through stdin, confirming only completed writes. Providers return owned commands; the launcher erases their buffers and keeps the Codex account lock through delivery and expiry publication. Preparation failures deliver nothing; later failures revoke issued GitHub tokens and roll back the container. Each startup stage retains its own failure message.
 
 Docker role runs refuse host `read`/`write` dirs, a role `cwd`, custom `team_dirs` roles and multiple or non-GitHub target repos. An engineer opens its draft PR as the App's bot.
 

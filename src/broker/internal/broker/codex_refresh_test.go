@@ -80,7 +80,7 @@ func TestCodexRenewalValidationAndCleanup(t *testing.T) {
 			if failure == "write" {
 				k.writeErr = errors.New("fake-refresh-secret")
 			}
-			_, err := c.Inject(ctx, func([]string, []byte) error { t.Fatal("injected failed renewal"); return nil })
+			_, err := c.Inject(ctx)
 			if err == nil || strings.Contains(err.Error(), "fake-refresh-secret") {
 				t.Fatalf("unsafe failure: %v", err)
 			}
@@ -99,14 +99,18 @@ func TestCodexRenewalValidationAndCleanup(t *testing.T) {
 func TestCodexManagedCarrierAndPublicationLock(t *testing.T) {
 	c, n, _ := renewalFixture(t)
 	var auth codexAuthDocument
-	_, err := c.Inject(context.Background(), func(_ []string, data []byte) error {
-		if !n.locked {
-			t.Fatal("publication outside account lock")
-		}
-		return json.Unmarshal(data, &auth)
-	})
+	login, err := c.Inject(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !n.locked {
+		t.Fatal("preparation outside account lock")
+	}
+	if err := json.Unmarshal(login.Command.Stdin, &auth); err != nil {
+		t.Fatal(err)
+	}
+	if err := login.Finish(); err != nil || n.locked {
+		t.Fatalf("finish: %v locked=%v", err, n.locked)
 	}
 	if auth.Mode != "chatgpt" || auth.Tokens.Refresh != "" || auth.Tokens.ID != "fake-id-secret" {
 		t.Fatal("wrong native guarded-reload carrier")
@@ -249,7 +253,10 @@ func TestCodexLoginWinsAgainstQueuedRefresh(t *testing.T) {
 	<-n.enter
 	<-loginStarted
 	go func() {
-		_, err := c.Inject(context.Background(), func([]string, []byte) error { return nil })
+		login, err := c.Inject(context.Background())
+		if err == nil {
+			err = login.Finish()
+		}
 		result <- err
 	}()
 	<-n.enter
