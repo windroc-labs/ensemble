@@ -782,7 +782,7 @@ def _docs(roles, local, work):
                 raise ConfigError(f"core: document role {role}: github dir must be relative")
             outs[role] = output
             dirs[role] = output["dir"]
-        elif output["type"] in ("local", "orchestrator"):
+        elif output["type"] == "local":
             dirs[role] = os.path.join(work, "docs", role)
         else:
             raise ConfigError(

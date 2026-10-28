@@ -72,7 +72,7 @@ team_dirs = []
 
 # Destination; a lower level's [output] replaces the whole table.
 #   type    required: github (publish to repo, branch, dir) | local (save to the caller's out path) | pull-request (a PR
-#           on the target repo) | orchestrator (return it through the outcome only)
+#           on the target repo)
 #   repo    github: required; <owner>/<name>
 #   branch  github: required
 #   dir     github: required; the folder in the repo
@@ -155,8 +155,14 @@ type = "pull-request"
 # ── Verifier ────────────────────────────────────────────
 [roles.verifier]
 
+# repo: required; "" → every verifier run is a configuration error
 [roles.verifier.output]
-type = "orchestrator"
+type = "github"
+repo = ""
+branch = "main"
+dir = "Verification/"
+# local: [delegate.roles.verifier.output]
+# local: repo = "<owner>/<name>"
 
 [roles.verifier.environment]   # Environments below
 name = "mini-op"

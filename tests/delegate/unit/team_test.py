@@ -10,7 +10,6 @@ from ensemble.delegate.composer.base import TEAM, outline
 from ensemble.delegate.composer.teams import START
 from ensemble.delegate.engine.config import read_config
 from ensemble.utils import unfenced
-from tests.delegate.case import Case
 from tests.delegate.unit.composer.prompts import (
     RUN,
     composed,
@@ -25,6 +24,7 @@ from tests.delegate.unit.composer.shipped import (
     PICK,
     REPO_ARGS,
     TASKS,
+    Packaged,
     RealConfig,
     catalog,
     guide,
@@ -84,7 +84,7 @@ def output_rules(prompt):
     return prompt.split("\n# Output\n", 1)[1].split("\n## Destination\n", 1)[0]
 
 
-class Acceptance(Case):
+class Acceptance(Packaged):
     def test_each_requested_command_runs_a_team_tool(self):
         for role in roles():
             for command in composed(role)[1].commands:
@@ -152,30 +152,28 @@ class Acceptance(Case):
         for label in ("high", "medium", "low", "single-source", "unverified"):
             self.assertIn(f"`{label}`", writing)
 
-    def test_local_and_orchestrator_destinations_name_deliverable_file(self):
-        for dest in ("local", "orchestrator"):
-            with self.subTest(dest=dest):
-                prompt = composed(
-                    "researcher", overlays=[{"roles": {"researcher": {"output": {"type": dest}}}}]
-                )[0]
-                destination = section(prompt, "Destination")
-                self.assertIn(
-                    (
-                        "Write the deliverable to `<Workdir>/out.md` and name that file in the outcome's "
-                        "`deliverable_file`"
-                    ),
-                    destination,
-                )
-                self.assertNotIn("outcome's `deliverable`", destination)
-                self.assertIn("Leave `url` empty.", destination)
-                self.assertEqual(prompt.count("`<Workdir>/out.md`"), 1)
-                self.assertIn(
-                    (
-                        "\n- `deliverable_file`: a `.md` file in `<Workdir>` holding the deliverable, in place "
-                        "of `deliverable`, when [Output › Destination](#destination) says so.\n"
-                    ),
-                    prompt,
-                )
+    def test_a_local_destination_names_deliverable_file(self):
+        prompt = composed(
+            "researcher", overlays=[{"roles": {"researcher": {"output": {"type": "local"}}}}]
+        )[0]
+        destination = section(prompt, "Destination")
+        self.assertIn(
+            (
+                "Write the deliverable to `<Workdir>/out.md` and name that file in the outcome's "
+                "`deliverable_file`"
+            ),
+            destination,
+        )
+        self.assertNotIn("outcome's `deliverable`", destination)
+        self.assertIn("Leave `url` empty.", destination)
+        self.assertEqual(prompt.count("`<Workdir>/out.md`"), 1)
+        self.assertIn(
+            (
+                "\n- `deliverable_file`: a `.md` file in `<Workdir>` holding the deliverable, in place "
+                "of `deliverable`, when [Output › Destination](#destination) says so.\n"
+            ),
+            prompt,
+        )
 
     def test_publishing_destinations_name_no_outcome_deliverable(self):
         for role in roles():
@@ -203,7 +201,7 @@ class Acceptance(Case):
                 self.assertEqual(output_rules(destined("researcher", output)), returning)
 
     def test_every_destination_has_the_write_once_rule(self):
-        for output in ({"type": "local"}, {"type": "orchestrator"}, *PUBLISHING):
+        for output in ({"type": "local"}, *PUBLISHING):
             for docker in (False, True):
                 with self.subTest(output=output["type"], docker=docker):
                     self.assertIn(
@@ -217,7 +215,7 @@ class Acceptance(Case):
         for role, task in runs():
             with self.subTest(role=role, task=task):
                 self.assertEqual(output_rules(composed(role, task)[0]).count(NO_COMMENTS), 1)
-        for output in ({"type": "local"}, {"type": "orchestrator"}, *PUBLISHING):
+        for output in ({"type": "local"}, *PUBLISHING):
             for docker in (False, True):
                 with self.subTest(output=output["type"], docker=docker):
                     self.assertIn(
@@ -231,7 +229,7 @@ class Acceptance(Case):
             self.assertIn("## Resume", [line.rstrip() for _, line in unfenced(text)], name)
 
 
-class Shipped(Case):
+class Shipped(Packaged):
     def test_text_holds_only_the_placeholders_render_fills(self):
         inline = {"role", "role_anchor", "task", "language", "deliverable"}
         for rel, text in team_texts().items():

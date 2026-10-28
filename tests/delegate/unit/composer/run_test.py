@@ -458,7 +458,7 @@ class Overlays(Fake):
             "writer",
             "long-note",
             overlays=(
-                {"tier": 4, "effort": "high", "output": {"type": "orchestrator"}},
+                {"tier": 4, "effort": "high", "output": {"type": "pull-request"}},
                 {"roles": {"writer": {"tier": 1, "output": {"type": "local"}}}},
             ),
         )
@@ -466,8 +466,8 @@ class Overlays(Fake):
             (run.tier, run.effort, run.language, run.task, run.output),
             (1, "high", "French", "long-note", {"type": "local"}),
         )
-        run = self.resolved(overlays=({"output": {"type": "orchestrator"}},))
-        self.assertEqual((run.effort, run.output), ("max", {"type": "orchestrator"}))
+        run = self.resolved(overlays=({"output": {"type": "pull-request"}},))
+        self.assertEqual((run.effort, run.output), ("max", {"type": "pull-request"}))
         self.assertEqual(self.resolved(overlays=({},)), self.resolved())
 
     def test_an_overlay_rejects_unknown_and_legacy_keys(self):
