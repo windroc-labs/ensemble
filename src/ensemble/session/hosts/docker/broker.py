@@ -553,9 +553,8 @@ def write_manifest(
     repo: str = "",
     credentials: CredentialRequest | None = None,
 ) -> None:
-    """github: the App; its token's permissions and repo, the legacy github, unless credentials
-    names github: then the request's grants, and github null. One source per kind: ConfigError
-    for permissions or repo beside credentials.github, or secrets beside credentials.env.
+    """github: the App, and the legacy github's unless credentials names github (then null).
+    One source per kind: ConfigError on a double.
     """
     request = credentials or CredentialRequest()
     if request.github and (permissions is not None or repo):

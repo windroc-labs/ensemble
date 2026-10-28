@@ -109,9 +109,8 @@ class Spec:
     client None: the role's; `out` None: `<run>/out.md` for a session run, else nothing is saved;
     `team` None: the built-in one. name and events: tui only for plan(); HarnessDelegate takes them
     in every mode (`name`: its agent session, `<name>-drive` its harness's; `events`: also the
-    detached harness's outcome line). `credentials`: the run's part of its credential request
-    (github, linear; the delegate adds the environment's env), set only by the orchestrator's run
-    path (WDRC-268 FR-33), never by CLI options, overlays or run input.
+    detached harness's outcome line). `credentials`: the run's part of its credential request,
+    set only by the orchestrator (docs/architecture.md › Credentials).
     """
 
     input: str
@@ -127,7 +126,7 @@ class Spec:
     repo: str | None = None
     cwd: str | None = None
     team: Team | None = None
-    credentials: CredentialRequest | None = None  # no Plan passes it on yet
+    credentials: CredentialRequest | None = None
 
     def __post_init__(self):
         if self.credentials is None:

@@ -456,9 +456,7 @@ class EnvironmentSpec:
 
 
 def _rejected(key) -> str:
-    """A rejected key's problem, naming it only when a credential request knows the name: a key
-    may be a pasted value.
-    """
+    """Its problem, naming the key only when known: a key may be a pasted value."""
     kinds = (kind.name for kind in dataclass_fields(CredentialRequest))
     known = {*kinds, "role", "permissions", "repo", "item", "file", *GITHUB_PERMISSIONS}
     return f"{key} not valid" if key in known else "an unknown key"
@@ -500,16 +498,10 @@ def _entry_problem(entry) -> str:
 
 @dataclass(frozen=True, kw_only=True)
 class CredentialRequest:
-    """A run's credential request (WDRC-268 FR-32): every credential the broker puts in its
-    container, by reference only, never a value; a kind absent (github (), linear None, env ())
-    is none of it. github: grants {"permissions", "repo"?}, one installation token each of the
-    Docker Host's App, reaching repo alone, or without one every repository of every installation
-    (that grant then alone); linear: {"role"}, whose Linear app token; env: environment secrets
-    {"item", "file"}, as EnvironmentSpec.secrets.
-
-    The seam: the orchestrator resolves the run's part, github and linear, on the delegate Spec;
-    the delegate adds env from the environment for the session Spec. Errors name kind, index and
-    a known key only: a rejected key or value may be a pasted secret.
+    """A run's credential request (WDRC-268 FR-32; docs/architecture.md › Credentials), references
+    only, a kind absent none. github: grants {"permissions", "repo"?}, one token each (no repo:
+    every repository, then alone); linear: {"role"}; env: as EnvironmentSpec.secrets. Errors name
+    no value.
     """
 
     github: tuple[Mapping, ...] = ()
@@ -523,7 +515,7 @@ class CredentialRequest:
         repos: list[str] = []
         for index, grant in enumerate(github):
             problem = _grant_problem(grant)
-            repo = "" if problem else grant.get("repo", "").lower()  # GitHub's names: any case
+            repo = "" if problem else grant.get("repo", "").lower()
             if not problem and not repo and len(github) > 1:
                 problem = "repo missing beside another grant"
             elif not problem and repo in repos:

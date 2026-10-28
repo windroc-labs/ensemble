@@ -44,7 +44,6 @@ def _encode(value: object) -> object:
 
 
 def _encoded(value, **given) -> dict:
-    """A dataclass's fields, each _encode'd but those `given`."""
     return {
         field.name: given[field.name]
         if field.name in given
@@ -54,12 +53,11 @@ def _encoded(value, **given) -> dict:
 
 
 def _credentials(request: CredentialRequest | None) -> dict | None:
-    """The request form: _encode's empty kinds are a request from_fields refuses."""
+    """The request form: from_fields refuses _encode's empty kinds."""
     return None if request is None else request.persisted()
 
 
 def _request(found: Mapping | None) -> CredentialRequest | None:
-    """A record's credentials; one written before them has none."""
     return None if found is None else CredentialRequest.from_fields(found)
 
 
