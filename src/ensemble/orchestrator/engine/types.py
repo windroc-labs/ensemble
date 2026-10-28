@@ -23,6 +23,8 @@ class Role:
     tasks: tuple[str, ...]
     max_runs: int
     run: delegate.RunConfig
+    credentials: Mapping = field(default_factory=dict)
+    task_credentials: Mapping[str, Mapping] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

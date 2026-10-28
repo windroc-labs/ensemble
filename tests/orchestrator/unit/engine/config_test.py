@@ -295,7 +295,7 @@ class ConfigurationLoading(ConfigFile, Case):
             ),
             (
                 BASE.replace(solo, role("dummy-tester", 'tasks = ["x"]', "read_only = []")),
-                "[roles.dummy-tester] has unknown keys: read_only, tasks",
+                "[roles.dummy-tester] has unknown keys: read_only",
             ),
             (BARE, missing(", ".join(f"linear.roles.dummy-tester.{k}" for k in config.AppKey))),
             (x + "max_runs = 2\n", "[linear.roles.dummy-tester] has unknown keys: max_runs"),
@@ -1011,7 +1011,10 @@ class CommittedConfiguration(Case):
         )
         self.assertEqual(committed["linear"], LINEAR_DEFAULTS)
         self.assertEqual(
-            committed["roles"], dict.fromkeys(("researcher", "pm", "engineer"), {"max_runs": 3})
+            committed["roles"],
+            dict.fromkeys(
+                ("researcher", "pm", "engineer"), {"max_runs": 3, "credentials": {}, "tasks": {}}
+            ),
         )
 
     def test_packaged_config_has_no_client_run_limit(self):
@@ -1580,6 +1583,111 @@ class TuiSessionNames(Case):
 
     def test_the_name_is_the_prefix_and_the_sid_head(self):
         self.assertEqual(config.tui_name("engineer", ID, SID), A)
+
+
+class CredentialDeclarations(ConfigFile, Case):
+    def test_task_replaces_whole_kinds_and_keeps_unrelated_role_references(self):
+        cfg = self.load(
+            PIPELINE
+            + 'credentials = { github = { app = "role-app", permissions = { contents = "write" } }, env = [{ item = "ref", file = "key" }] }\n'
+            + '[roles.engineer.tasks.light-build.credentials]\ngithub = { app = "task-app" }\n'
+        )
+        expected = {"github": {"app": "task-app"}, "env": [{"item": "ref", "file": "key"}]}
+        self.assertEqual(config.credentials(cfg, "engineer", "light-build"), expected)
+        self.assertEqual(
+            config.credentials(cfg, "engineer", None)["github"],
+            {"app": "role-app", "permissions": {"contents": "write"}},
+        )
+        self.assertEqual(
+            config.credentials(cfg, "engineer", "build"),
+            config.credentials(cfg, "engineer", None),
+        )
+        resolved = config.credentials(cfg, "engineer", "light-build")
+        resolved["env"][0]["file"] = "changed"
+        self.assertEqual(config.credentials(cfg, "engineer", "light-build"), expected)
+        with self.assertRaises(TypeError):
+            cfg.roles["engineer"].credentials["github"]["app"] = "changed"
+        with self.assertRaises(TypeError):
+            cfg.roles["engineer"].task_credentials["light-build"]["github"] = {}
+
+    def test_absent_declarations_are_empty_and_local_declarations_overlay_packaged(self):
+        self.assertEqual(config.credentials(self.load(PIPELINE), "engineer", None), {})
+        self.local('[roles.engineer.tasks.light-build.credentials]\nfuture = ["opaque"]\n')
+        cfg = self.load(PIPELINE + "credentials = { future = false }\n")
+        self.assertEqual(config.credentials(cfg, "engineer", "light-build"), {"future": ["opaque"]})
+        self.assertEqual(config.credentials(cfg, "engineer", None), {"future": False})
+
+    def test_linear_role_expands_only_the_runs_app_and_allowlisted_board_keys(self):
+        self.local('linear.human_members = ["user@example.com"]\n')
+        cfg = self.load(MANAGER_LINE + PIPELINE + '[roles.engineer.credentials]\nlinear = "role"\n')
+        app = role_app("engineer")
+        expected = {
+            "app": {
+                "role": "engineer",
+                **{k.value: getattr(app, k) for k in config.AppKey},
+            },
+            "board": {
+                "team": TEAM,
+                "states": STATES,
+                "labels": {"task_labels": {}, "agent_labels": {}},
+                "project_repos": {},
+                "human_members": ["user@example.com"],
+            },
+        }
+        self.assertEqual(config.credentials(cfg, "engineer", None), {"linear": expected})
+        cfg = self.load(PIPELINE + '[roles.pm.tasks.product-design.credentials]\nlinear = "role"\n')
+        self.assertEqual(
+            config.credentials(cfg, "pm", "product-design")["linear"]["app"]["role"], "pm"
+        )
+
+    def test_broker_owns_kind_names_and_explicit_reference_values(self):
+        values = 'future = [1, false]\ngithub = "invalid-for-broker"\nlinear = { app = "opaque" }\n'
+        cfg = self.load(PIPELINE + "[roles.engineer.credentials]\n" + values)
+        self.assertEqual(
+            config.credentials(cfg, "engineer", None),
+            {"future": [1, False], "github": "invalid-for-broker", "linear": {"app": "opaque"}},
+        )
+
+    def test_declaration_shapes_and_task_names_name_the_bad_table(self):
+        cases = (
+            ("credentials = []\n", "roles.engineer.credentials"),
+            ("tasks = []\n", "roles.engineer.tasks"),
+            ('tasks = { build = "bad" }\n', "roles.engineer.tasks.build"),
+            (
+                "[roles.engineer.tasks.build]\ncredentials = false\n",
+                "roles.engineer.tasks.build.credentials",
+            ),
+            ("[roles.engineer.tasks.build]\nextra = {}\n", "roles.engineer.tasks.build"),
+            ("[roles.engineer.tasks.made-up.credentials]\n", "roles.engineer.tasks.made-up"),
+            ("[roles.engineer.tasks.research.credentials]\n", "roles.engineer.tasks.research"),
+            ('[roles.engineer.credentials]\nlinear = "other"\n', "roles.engineer.credentials"),
+            (
+                '[roles.engineer.tasks.build.credentials]\nlinear = "other"\n',
+                "roles.engineer.tasks.build.credentials",
+            ),
+        )
+        for text, where in cases:
+            with self.subTest(text=text), self.assertRaises(config.ConfigError) as cm:
+                self.load(PIPELINE + text)
+            self.assertIn(f"[{where}]", str(cm.exception))
+
+    def test_linear_shorthand_needs_a_linear_board_but_explicit_values_are_opaque(self):
+        self.local('tracker = "local"\n')
+        with self.assertRaisesRegex(config.ConfigError, "roles.engineer.credentials.*linear"):
+            self.load(PIPELINE + '[roles.engineer.credentials]\nlinear = "role"\n')
+        cfg = self.load(PIPELINE + "[roles.engineer.credentials]\nlinear = { future = true }\n")
+        self.assertEqual(config.credentials(cfg, "engineer", None), {"linear": {"future": True}})
+
+    def test_core_credentials_are_rejected_even_when_the_delegate_accepts_any_overlay(self):
+        self.local(
+            '[delegates]\ndefault = "catalog"\n'
+            '[delegates.catalog]\nimplementation = "tests.orchestrator.unit.engine.config_test:CatalogDelegate"\n'
+        )
+        for where in ("core", "core.roles.engineer"):
+            with self.subTest(where=where), self.assertRaises(config.ConfigError) as cm:
+                self.load(PIPELINE + f"[{where}]\ncredentials = {{}}\n")
+            self.assertIn("credentials", str(cm.exception))
+            self.assertIn("overlay" + where.removeprefix("core"), str(cm.exception))
 
 
 class RunnableRoles(ConfigFile, Case):
