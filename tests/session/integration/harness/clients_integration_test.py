@@ -7,7 +7,6 @@ import os
 import shlex
 import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -21,6 +20,7 @@ from tests.session.case import HOSTS, REPO, Case
 from tests.session.cli_support import WorkerCase, logged
 from tests.session.integration.clients.codex import fake_tui
 from tests.session.integration.clients.opencode import fake_opencode
+from tests.utils.sandbox import scratch
 
 HANDLER = "tests.session.integration.harness.recording_handler"
 TURNS = ("TurnStarted", "TurnFailed", "TurnEnd", "Exited")
@@ -104,9 +104,7 @@ class ClaudeTest(Conversation, WorkerCase):
 
 class CodexTest(Conversation, Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name).resolve()
+        root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         home, work = root / "home", root / "work"
         cwd, codex_home = work / "project", home / ".codex"
         for path in (home, cwd, codex_home):
@@ -174,9 +172,7 @@ class CodexTest(Conversation, Case):
 @unittest.skipIf(NODE is None, "node is not on PATH: the OpenCode TUI tests run plugin.js under it")
 class OpenCodeTest(Conversation, Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name).resolve()
+        root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         home, work = root / "home", root / "work"
         cwd = work / "project"
         for path in (home, cwd):

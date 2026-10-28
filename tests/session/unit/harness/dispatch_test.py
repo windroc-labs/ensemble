@@ -2,7 +2,6 @@
 event handed to every handler in order, a failure retried with the same ids.
 """
 
-import json
 import os
 import sys
 import threading
@@ -28,6 +27,7 @@ from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.dispatch import Dispatch, load_handlers
 from ensemble.session.harness.types import Logged
 from tests.session.case import Case
+from tests.utils.jsonl import read_jsonl
 
 WAIT = 5
 
@@ -79,10 +79,7 @@ class Base(Case):
         return found
 
     def deliveries(self) -> list[dict]:
-        if not os.path.exists(self.channel.deliveries):
-            return []
-        with open(self.channel.deliveries, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.channel.deliveries, missing_ok=True)
 
 
 class DispatchTest(Base):

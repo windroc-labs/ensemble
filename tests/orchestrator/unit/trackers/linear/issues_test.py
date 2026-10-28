@@ -11,7 +11,6 @@ from ensemble.orchestrator.engine.types import (
 )
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
 from tests.orchestrator.case import Case
-from tests.orchestrator.process_fixtures import CalledProcessError, TimeoutExpired
 from tests.orchestrator.unit.issue_fixtures import (
     Gql,
     Routes,
@@ -23,6 +22,7 @@ from tests.orchestrator.unit.issue_fixtures import (
     new_issue,
     team_ref,
 )
+from tests.utils.process_fixtures import CalledProcessError, TimeoutExpired
 
 TEAMS = LookupQuery(resource=Resource.TEAMS, query=None, team=None, project=None)
 

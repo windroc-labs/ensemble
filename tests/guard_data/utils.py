@@ -15,4 +15,9 @@ NO_COVER_ALLOWED = {
 }
 
 
-EMBEDDED_PROGRAMS_ALLOWED = {}
+EMBEDDED_PROGRAMS_ALLOWED = {
+    (
+        "tests/utils/bin_fixtures.py",
+        "c710e2832b40273e5a68ddb9026256785f0d2f47e44d3f285c6132d45114a427",
+    ): "Existing executable-selection fixture checks the system interpreter meets Python 3.11.",
+}

@@ -1,22 +1,11 @@
 """A dead harness's callback, as callback.sweep sees it, without a process: a held callback lock and
-an os.killpg fake; a clock whose time.sleep advances time.monotonic.
+an os.killpg fake.
 """
 
 import fcntl
 import os
 import signal
 import unittest
-from unittest import mock
-
-
-class Clock:
-    def __init__(self, case: unittest.TestCase):
-        self.now = 0.0
-        case.enterContext(mock.patch("time.monotonic", side_effect=lambda: self.now))
-        case.enterContext(mock.patch("time.sleep", side_effect=self.advance))
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
 
 
 class Orphan:

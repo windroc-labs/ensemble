@@ -5,7 +5,6 @@ whose stored text is the answer, on the tmux Host, with fake Claude and a live h
 import glob
 import json
 import os
-import tempfile
 import time
 from pathlib import Path
 from unittest import mock
@@ -16,6 +15,7 @@ from ensemble.utils import read_reply
 from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.sandbox import scratch
 
 WAIT = 15
 ANSWER = "half done\nnext: tests"
@@ -25,9 +25,7 @@ class RepliesTest(Case):
     host = "tmux"
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home, self.work = self.root / "home", self.root / "work"
         self.config = self.home / ".claude"
         for path in (self.home, self.work, self.config):

@@ -2,7 +2,6 @@
 
 import os
 import re
-import subprocess
 import time
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -24,6 +23,7 @@ from tests.orchestrator.integration.flow_fixtures import (
 from tests.orchestrator.integration.segments import agent_calls
 from tests.orchestrator.unit.board_ids import HARNESS_USER, TASK_GROUP, role_id
 from tests.session import live_tmux
+from tests.utils.sandbox import gone
 
 ENGINEER = role_id("engineer")
 ID, OTHER, SOURCE = "TASK-7", "TASK-8", "TASK-12"
@@ -216,13 +216,6 @@ class MaxRuns(Parity):
         self.assertEqual((second["kind"], second["issue"]), ("start", OTHER))
         self.wait_end(second["sid"], OTHER)
         self.assertEqual((self.state(ID), self.state(OTHER)), ("in_review", "in_review"))
-
-
-def gone(pid):
-    res = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=TIMEOUT
-    )
-    return res.stdout.strip() == "" or res.stdout.strip().startswith("Z")
 
 
 class Recover(Parity):

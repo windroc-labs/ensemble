@@ -8,7 +8,6 @@ import os
 import re
 import shlex
 import subprocess
-import tempfile
 import unittest
 
 from ensemble.delegate.composer import Composer, RunParams
@@ -18,9 +17,10 @@ from tests.delegate.case import Case
 from tests.delegate.skills.act_as import argv, head, prefix
 from tests.delegate.verifier import VERIFIER
 from tests.session import harnesses
+from tests.session.case import SID
 from tests.utils.case import local_section
+from tests.utils.sandbox import scratch
 
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 ROLES = ("researcher", "pm", "engineer", "verifier", "dummy-tester")
 INPUT = "Compare A and B."
 ENSEMBLE = re.compile(r"python3 -P (?:-m ensemble\.[\w.]+|<team>/tools/[\w-]+\.py) \w+")
@@ -29,10 +29,8 @@ REPO = "python3 -P <team>/tools/repo.py"
 
 class Instruction(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.proj = scratch(self)
         self.addCleanup(harnesses.end, self.home)
-        self.proj = os.path.realpath(tmp.name)
         self.adhoc = os.path.join(self.ensemble, "adhoc")
         self.local = os.path.join(self.ensemble, "config.local.toml")
         self.config()

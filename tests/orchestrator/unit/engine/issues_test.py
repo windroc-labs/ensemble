@@ -12,10 +12,8 @@ from ensemble.orchestrator.engine.flow.types import (
 )
 from ensemble.orchestrator.trackers.linear import linear_tracker
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker, Selves
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import SID, Case
 from tests.orchestrator.unit.board_ids import HARNESS_USER, PACKAGED_FLOW, workflow_file
-
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
 SELVES = Selves(HARNESS_USER, frozenset())
 

@@ -16,6 +16,7 @@ from ensemble.session.engine.types import HookCall
 from ensemble.utils import STALE_AGE, file_lock, read_reply
 from tests.session.case import SPAWNS
 from tests.session.unit.clients.codex.support import NATIVE, Base
+from tests.utils.clock import FakeClock
 
 NAME = "w1"
 
@@ -30,19 +31,6 @@ def _said(role, *texts):
             "content": [{"type": kind, "text": text} for text in texts],
         },
     }
-
-
-class Clock:
-    """A fake monotonic clock that sleep advances."""
-
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.now += seconds
 
 
 class RepliesBase(Base):
@@ -301,7 +289,7 @@ class SteerTest(RepliesBase):
 
     def test_lock_held_skips_within_budget(self):
         self.open_turn()
-        clock = Clock()
+        clock = FakeClock(1000.0)
         with (
             mock.patch.object(replies.time, "monotonic", clock),
             mock.patch.object(replies.time, "sleep", clock.sleep),
@@ -436,7 +424,7 @@ class PumpTest(RepliesBase):
         def open_(name, *args, **kwargs):
             if name == rollout and not ran:  # Stop's unlocked scan: a pump's settle commits first
                 ran.append(True)
-                clock = Clock()
+                clock = FakeClock(1000.0)
                 replies.settle(
                     self.state_file,
                     deadline=clock() + 1,
@@ -460,7 +448,7 @@ class PumpTest(RepliesBase):
         self.open_turn()
         self.steer("status?")
         self.append(_said("user", "status?"), _said("assistant", "answer"))
-        hook_clock, link, seen = Clock(), os.link, []
+        hook_clock, link, seen = FakeClock(1000.0), os.link, []
 
         def claimed(*args, **kwargs):
             link(*args, **kwargs)

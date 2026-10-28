@@ -37,7 +37,7 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
 from ensemble.utils import parse_time
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import SID, Case
 from tests.orchestrator.integration import fake_linear
 from tests.orchestrator.integration.fake_transport import install, refuse_keychain
 from tests.orchestrator.unit.board_ids import (
@@ -67,8 +67,6 @@ ENGINEER_USER = role_id("engineer")
 PROJECT = {"id": "121166b1-191a-4461-bec4-42f1c2dc0ddd", "name": "Widgets"}
 
 LABEL = "00000000-0000-4000-8000-000000000031"
-
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
 PR = "https://github.com/acme/widgets/pull/1"
 

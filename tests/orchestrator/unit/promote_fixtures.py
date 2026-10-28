@@ -3,7 +3,6 @@
 import io
 import json
 import os
-import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime, timedelta
 
@@ -23,6 +22,7 @@ from tests.orchestrator.unit.board_ids import (
 from tests.orchestrator.unit.board_ids import STATES as IDS_BY_KEY
 from tests.orchestrator.unit.board_ids import role as role_table
 from tests.orchestrator.unit.run_fixtures import logged, show
+from tests.utils.sandbox import scratch
 
 NOW = datetime(2026, 9, 27, 15, 0, tzinfo=UTC)
 
@@ -207,9 +207,7 @@ class Base(run_fixtures.Base):
     def setUp(self):
         super().setUp()
         self.write_local(f'work_dir = "{self.work}"\n')
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.config_path = os.path.join(tmp.name, "config.toml")
+        self.config_path = os.path.join(scratch(self, real=False), "config.toml")
         self.write_config(CONFIG)
         self.fake = FakeLinear()
 

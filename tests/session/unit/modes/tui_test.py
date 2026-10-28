@@ -61,13 +61,12 @@ from ensemble.session.modes.base import POINTER
 from ensemble.utils import ACCOUNT_ENV as ACCOUNT
 from ensemble.utils import STALE_AGE, StatusState, inode_lock, over_argv
 from tests.session import fake_client
-from tests.session.case import PLUGIN_BIN, Case
+from tests.session.case import PLUGIN_BIN, SID, Case
 from tests.session.fakes.terminal import MemoryHost, ScreenHost
 from tests.session.tmux_host_support import Base as TmuxBase
+from tests.utils.sandbox import scratch
 
 NAME = "w1"
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 TS = "2026-10-11T12:00:00.000+00:00"
 
@@ -173,9 +172,7 @@ class Base(Case):
         self.root = os.path.join(self.ensemble, "tui")
         self.dir = os.path.join(self.root, NAME)
         self.hooks = os.path.join(self.dir, "hooks.jsonl")
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.events = os.path.join(self.home, "events")
         self.host = ScreenHost()
         self.log = []

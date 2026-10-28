@@ -6,7 +6,6 @@ identity_drop and _select_account.
 import inspect
 import itertools
 import os
-import tempfile
 from unittest import mock
 
 from ensemble.session.clients.base import Client
@@ -29,6 +28,7 @@ from ensemble.utils import ACCOUNT_ENV as ACCOUNT
 from ensemble.utils import load_class
 from tests.session.case import HOSTS, Case
 from tests.session.fakes.terminal import MemoryHost
+from tests.utils.sandbox import scratch
 
 MEMBERS = ["poll", "returncode", "screen", "send", "start", "state", "stop"]
 KINDS = {
@@ -321,9 +321,7 @@ class PluginPathTest(ChildEnvTest):
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.plugin = os.path.join(os.path.realpath(tmp.name), "plugin root", "bin")
+        self.plugin = os.path.join(scratch(self), "plugin root", "bin")
         os.makedirs(self.plugin)
         command = os.path.join(self.plugin, "ensemble-session")
         with open(command, "w", encoding="utf-8") as f:

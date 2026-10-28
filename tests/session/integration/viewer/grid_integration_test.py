@@ -6,7 +6,6 @@ import io
 import os
 import re
 import subprocess
-import tempfile
 import time
 from unittest import mock
 
@@ -20,6 +19,7 @@ from ensemble.session.viewer.viewer import fold
 from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN, Case, configured
 from tests.session.processes import reject_command
+from tests.utils.sandbox import scratch
 
 MANAGER = "mgr"
 
@@ -45,9 +45,7 @@ class Live(Case):
         patch = reject_command("osascript")
         patch.start()
         self.addCleanup(patch.stop)
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.cwd = os.path.realpath(tmp.name)
+        self.cwd = scratch(self)
         self.host = TmuxHost("tmux")
         self.settings = {}
         self.configure()

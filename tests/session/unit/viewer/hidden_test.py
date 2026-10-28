@@ -8,9 +8,8 @@ from contextlib import redirect_stderr
 
 from ensemble.session.viewer import hidden
 from ensemble.utils import STALE_AGE
-from tests.session.case import Case
+from tests.session.case import SID, Case
 
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 
 

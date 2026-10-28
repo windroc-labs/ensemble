@@ -25,7 +25,7 @@ from ensemble.orchestrator.engine.types import (
 from ensemble.orchestrator.trackers.linear import client, linear_tracker, ops
 from ensemble.utils import temp_dirs
 from tests.delegate.workdir import checkout_path
-from tests.orchestrator.process_fixtures import CompletedProcess
+from tests.orchestrator.case import SID
 from tests.orchestrator.prune_fixtures import (
     NOW,
     PRUNE_QUERIES,
@@ -41,9 +41,9 @@ from tests.orchestrator.unit.board_ids import FINISHED, HARNESS_IDENTITY, role_i
 from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
 from tests.orchestrator.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from tests.orchestrator.unit.run_fixtures import CORE_LOCAL, logged, show
+from tests.utils.process_fixtures import CompletedProcess
 
 A, B = "engineer-TASK-7-0b6f2c1e", "dummy-tester-TASK-7-7c1d9e2f"
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 OTHER_SID = "7c1d9e2f-0a3b-4c5d-8e6f-1a2b3c4d5e6f"
 
 

@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
 import threading
 import unittest
 import unittest.mock
@@ -29,6 +28,7 @@ from tests.delegate.case import Case
 from tests.delegate.unit.composer.shipped import (
     SCHEMA_SHA256,
 )
+from tests.utils.sandbox import scratch
 
 DONE = {"status": "done", "title": "T", "summary": "S", "deliverable": "# Doc\n"}
 FILE = {"status": "done", "title": "T", "summary": "S", "deliverable_file": "out.md"}
@@ -45,9 +45,7 @@ def schema():
 
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.work = os.path.join(self.tmp, "work")
 
     def check(self, data, output=None, hosts=GH):

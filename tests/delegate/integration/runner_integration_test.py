@@ -18,7 +18,8 @@ from ensemble.delegate.engine import runner
 from ensemble.delegate.engine.runner import FIX
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result, Stopped
 from ensemble.utils import printable
-from tests.delegate.replies import bare, block, running
+from tests.delegate.case import SID
+from tests.delegate.replies import bare, block
 from tests.delegate.runner import (
     FAILED,
     GH,
@@ -26,13 +27,13 @@ from tests.delegate.runner import (
     INVALID_ERROR,
     NEEDS,
     PR,
-    SID,
     Base,
     UnstreamedClient,
     ended,
 )
 from tests.delegate.unit.runs import DONE, START, limit, said
 from tests.session.modules import client_loader
+from tests.utils.sandbox import pid_exists as running
 
 UPDRAFT = {"status": "converged", "head": "a" * 40}
 VIEW = {"state": "OPEN", "isDraft": True, "headRefOid": "a" * 40, "statusCheckRollup": []}

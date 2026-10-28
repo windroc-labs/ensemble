@@ -6,6 +6,7 @@ import os
 import signal
 import tempfile
 import threading
+import unittest
 from pathlib import Path
 from unittest import mock
 
@@ -202,3 +203,48 @@ class Leaks(Case):
 
     def test_the_grace_outlasts_a_controller_waiting_for_its_client(self):
         self.assertGreaterEqual(sandbox.CONTROL_GRACE, TIMEOUT + 2)
+
+
+class Probes(Case):
+    def test_a_pid_exists_unless_signal_0_finds_no_process(self):
+        with mock.patch("os.kill") as kill:
+            self.assertTrue(sandbox.pid_exists(7))
+        kill.assert_called_once_with(7, 0)
+        with mock.patch("os.kill", side_effect=ProcessLookupError):
+            self.assertFalse(sandbox.pid_exists(7))
+        with mock.patch("os.kill", side_effect=PermissionError), self.assertRaises(PermissionError):
+            sandbox.pid_exists(7)
+
+    def test_a_pid_runs_while_ps_shows_it_in_a_state_other_than_zombie(self):
+        for stat, running in (("S+\n", True), ("Z+\n", False), ("", False)):
+            with (
+                self.subTest(stat=stat),
+                mock.patch("subprocess.run", return_value=mock.Mock(stdout=stat)) as ps,
+            ):
+                self.assertEqual((sandbox.running(7), sandbox.gone(7, 5)), (running, not running))
+            self.assertEqual(ps.call_args_list[0].args, (["ps", "-o", "stat=", "-p", "7"],))
+            self.assertEqual(
+                ps.call_args_list[0].kwargs["env"], {"PATH": os.defpath, "LC_ALL": "C"}
+            )
+            self.assertEqual([c.kwargs["timeout"] for c in ps.call_args_list], [60, 5])
+
+    def test_kill_sends_sigkill_and_ignores_a_gone_or_foreign_pid(self):
+        for error in (None, ProcessLookupError, PermissionError):
+            with self.subTest(error=error), mock.patch("os.kill", side_effect=error) as kill:
+                self.assertIsNone(sandbox.kill(7))
+            kill.assert_called_once_with(7, signal.SIGKILL)
+
+
+class Scratch(Case):
+    def test_a_scratch_dir_is_real_or_raw_under_its_parent_until_cleanup(self):
+        link = os.path.join(self.home, "link")
+        os.symlink(self.home, link)
+        owner = unittest.TestCase()
+        real, raw = sandbox.scratch(owner, link), sandbox.scratch(owner, link, real=False)
+        default = sandbox.scratch(owner)
+        self.assertEqual(os.path.dirname(raw), link)
+        self.assertEqual(os.path.dirname(real), os.path.realpath(self.home))
+        self.assertEqual(os.path.dirname(default), os.path.realpath(tempfile.gettempdir()))
+        self.assertTrue(all(map(os.path.isdir, (real, raw, default))))
+        owner.doCleanups()
+        self.assertFalse(any(map(os.path.exists, (real, raw, default))))

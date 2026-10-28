@@ -4,7 +4,6 @@ import io
 import json
 import os
 import shutil
-import tempfile
 import unittest
 import unittest.mock
 
@@ -28,6 +27,7 @@ from tests.delegate.repo import (
     pr_list,
     repo,
 )
+from tests.utils.sandbox import scratch
 
 
 def dry_push(argv):
@@ -83,9 +83,7 @@ class PlanDocs(Case):
         """Updraft resumes only from <worktree>/.updraft/; a copy elsewhere is not a plan doc.
         Updraft rewrites a plan doc's RESUME at every phase change, so the newest is the last touched.
         """
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        wt = tmp.name
+        wt = scratch(self, real=False)
 
         def doc(path, resume):
             path = os.path.join(wt, path)

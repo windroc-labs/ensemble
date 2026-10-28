@@ -1,5 +1,5 @@
-"""Standard-library exception fixtures without importing launch APIs into unit tests."""
+"""Subprocess value types for unit tests, without importing launch APIs."""
 
-from subprocess import DEVNULL, PIPE, STDOUT, TimeoutExpired
+from subprocess import DEVNULL, PIPE, STDOUT, CalledProcessError, CompletedProcess, TimeoutExpired
 
-__all__ = ["DEVNULL", "PIPE", "STDOUT", "TimeoutExpired"]
+__all__ = ["DEVNULL", "PIPE", "STDOUT", "CalledProcessError", "CompletedProcess", "TimeoutExpired"]

@@ -12,7 +12,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 
 from ensemble.delegate import DelegateEvent
@@ -23,10 +22,13 @@ from tests.delegate import drives
 from tests.delegate.case import PY, PYTHONPATH, Case
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
-from tests.delegate.replies import block, mark, running
+from tests.delegate.replies import block, mark
 from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import pid_exists as running
+from tests.utils.sandbox import scratch
 
 MANAGER = "mgr"
 ROLE = "dummy-tester"
@@ -45,9 +47,7 @@ RESUME = (*RUN[:-1], "resume")
 
 class Detach(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.server = None
         self.proj, self.work, self.bin, self.no_tmux = (
             os.path.join(self.dir, d) for d in ("proj", "work", "bin", "tmux")
@@ -271,11 +271,7 @@ class Detach(Case):
         return "--on-event", shlex.join(argv)
 
     def delivered(self) -> list[dict]:
-        try:
-            with open(self.callbacks, encoding="utf-8") as stream:
-                return [json.loads(line) for line in stream]
-        except FileNotFoundError:
-            return []
+        return read_jsonl(self.callbacks, missing_ok=True)
 
 
 def shape(lines: list[str]) -> list[str]:

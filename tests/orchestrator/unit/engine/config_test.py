@@ -6,7 +6,6 @@ import io
 import json
 import os
 import plistlib
-import tempfile
 import tomllib
 from importlib.resources import files
 from pathlib import Path
@@ -18,19 +17,17 @@ from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.types import AppKind, LinearApp, State, TrackerKind
 from ensemble.utils import temp_dirs
 from tests.delegate.fakes.delegate import FakeDelegate
-from tests.orchestrator.case import REPO, ROOTS, Case
+from tests.orchestrator.case import REPO, ROOTS, SID, Case
 from tests.orchestrator.config_fixtures import (
     BARE,
     BASE,
     CORE_LOCAL,
     HARNESS_DELEGATE,
     PIPELINE,
-    SID,
     SLUG,
     ConfigFile,
     write,
 )
-from tests.orchestrator.process_fixtures import DEVNULL, CompletedProcess
 from tests.orchestrator.unit.board_ids import (
     HARNESS_APP,
     HARNESS_LINE,
@@ -49,6 +46,8 @@ from tests.orchestrator.unit.board_ids import (
     workflow_line,
 )
 from tests.utils.case import local_section
+from tests.utils.process_fixtures import DEVNULL, CompletedProcess
+from tests.utils.sandbox import scratch
 
 LABEL1, LABEL2 = "00000000-0000-4000-8000-000000000021", "00000000-0000-4000-8000-000000000022"
 AGENT_GROUP = "00000000-0000-4000-8000-000000000023"
@@ -1176,9 +1175,8 @@ class CommittedConfiguration(Case):
 
     def test_a_bad_workflow_stops_load(self):
         local = HEADER + role("researcher") + role("pm") + role("engineer")
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        flow = Path(tmp.name, "workflow.toml")
+        tmp = scratch(self, real=False)
+        flow = Path(tmp, "workflow.toml")
         for text, message in (
             ("[[stage]\n", "Expected ']]'"),
             (
@@ -1189,7 +1187,7 @@ class CommittedConfiguration(Case):
             flow.write_text(text, encoding="utf-8")
             with self.subTest(text):
                 with (
-                    mock.patch("importlib.resources.files", lambda _: Path(tmp.name)),
+                    mock.patch("importlib.resources.files", lambda _: Path(tmp)),
                     self.assertRaises(config.ConfigError) as cm,
                 ):
                     self.load(local)

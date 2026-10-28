@@ -13,6 +13,7 @@ from tests.delegate.integration.cli import ASKING, Integration
 from tests.delegate.replies import block, mark
 from tests.session import live_tmux
 from tests.utils.contracts.ctl import AnswerCtlContract
+from tests.utils.jsonl import read_jsonl
 
 WAIT_FOR_PATH = """import sys, time
 from pathlib import Path
@@ -116,8 +117,7 @@ class DelegateCtlContract(AnswerCtlContract, Integration):
 
     def input_of(self, record):
         def inputs():
-            with open(os.path.join(record.workdir, "run", "run.jsonl"), encoding="utf-8") as stream:
-                records = [json.loads(line) for line in stream]
+            records = read_jsonl(os.path.join(record.workdir, "run", "run.jsonl"))
             return [entry["text"] for entry in records if entry["kind"] == "input"]
 
         live_tmux.wait(lambda: len(inputs()) == 2, what="the answer input record")

@@ -63,6 +63,7 @@ from tests.delegate.unit.composer.teams import (
 )
 from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
+from tests.utils.sandbox import scratch
 
 TEXTS = {
     "guide.md": (
@@ -82,9 +83,7 @@ class Fake(Case):
     """A team root, config and local file in a temp dir; a HOME of the test's own for team dirs."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.root = os.path.join(self.tmp, "team")
         self.config = os.path.join(self.tmp, "config.toml")
         self.local_file = os.path.join(self.tmp, "config.local.toml")

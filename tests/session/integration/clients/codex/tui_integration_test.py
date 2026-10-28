@@ -12,7 +12,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -42,6 +41,9 @@ from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN, PY, REPO, ROOTS, Case, configured
 from tests.session.integration.clients.codex import fake_codex, fake_tui
 from tests.session.unit.clients.codex.support import CHILD, NATIVE, Base
+from tests.utils import sandbox
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import running, scratch
 
 WAIT = 15
 
@@ -111,10 +113,7 @@ class Stream:
 
 class Live(Case):
     def setUp(self):
-        parent = os.environ.get("ENSEMBLE_TEST_TMP", REPO)
-        tmp = tempfile.TemporaryDirectory(dir=parent)
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home, self.work, self.extra = (self.root / n for n in ("home", "work", "extra"))
         self.cwd, self.codex_home = self.work / "project", self.home / ".codex"
         for path in (self.home, self.cwd, self.codex_home, self.extra):
@@ -182,11 +181,7 @@ class Live(Case):
         return handle
 
     def logged(self):
-        return (
-            [json.loads(line) for line in self.log.read_text().splitlines()]
-            if self.log.exists()
-            else []
-        )
+        return read_jsonl(self.log, missing_ok=True)
 
     def calls(self, mode="tui"):
         return [row for row in self.logged() if row.get("mode") == mode]
@@ -291,14 +286,7 @@ class HookTrustIntegrationTest(Live):
         )
         self.assertFalse((self.codex_home / "config.toml").exists())
 
-    @staticmethod
-    def pid_exists(pid):
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        else:
-            return True
+    pid_exists = staticmethod(sandbox.pid_exists)
 
     def test_disabled_unknown_malformed_and_mismatched_catalogs_never_start_interactive(self):
         cases = (
@@ -478,12 +466,6 @@ class HookTrustIntegrationTest(Live):
         def cleanup(pid):
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(pid, signal.SIGKILL)
-
-        def running(pid):
-            result = subprocess.run(
-                ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
-            )
-            return bool(result.stdout.strip()) and not result.stdout.strip().startswith("Z")
 
         for index, action in enumerate(("stop", "term")):
             with self.subTest(action=action):

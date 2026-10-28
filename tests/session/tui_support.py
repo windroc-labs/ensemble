@@ -1,9 +1,8 @@
-"""Shared test fixtures and support."""
+"""Tui session test support."""
 
 import json
 import os
 import queue
-import tempfile
 import threading
 import time
 from unittest import mock
@@ -18,17 +17,17 @@ from ensemble.session.engine.types import (
     Spec,
 )
 from tests.session import fake_client, live_tmux
+from tests.session.case import SID as SID
 from tests.session.case import Case, configured
 from tests.session.modules import client_loader
 from tests.session.threads import capture_errors
+from tests.utils.sandbox import scratch
 
 MANAGER = "mgr"
 
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+IDLE = 0.5  # s: idle_timeout
 
-IDLE = 0.5  # idle_timeout, in seconds
-
-WAIT = 20  # upper bound on any wait, in seconds
+WAIT = 20  # s: any wait's bound
 
 DIALOG = "Pick one: 1. this 2. that"
 
@@ -56,7 +55,7 @@ class Stream:
             raise AssertionError(f"events() did not finish within {WAIT}s")
 
     def next(self, poke=None, *, idle=True):
-        """The next event within WAIT s; idle=False skips IdleTimeout, poke runs between checks."""
+        """Next event within WAIT s; idle=False skips IdleTimeout; poke runs meanwhile."""
         deadline = time.monotonic() + WAIT
         while True:
             try:
@@ -73,7 +72,7 @@ class Stream:
                 return item
 
     def until_exited(self) -> list:
-        """The events up to Exited, IdleTimeouts dropped."""
+        """Events up to Exited, IdleTimeouts dropped."""
         found = [self.next(idle=False)]
         while not isinstance(found[-1], Exited):
             found.append(self.next(idle=False))
@@ -92,9 +91,7 @@ class Live(Case):
         patch = mock.patch.dict(os.environ, self.server.env(), clear=True)
         patch.start()
         self.addCleanup(patch.stop)
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.workdir = os.path.join(self.dir, "work")
         self.events = os.path.join(self.dir, "events")
         self.clients = {
@@ -108,7 +105,7 @@ class Live(Case):
         self.session_cls = self.fake_session()
 
     def fake_session(self, **dependencies) -> type[HostedSession]:
-        """A session class of self.clients loading the fake client, with `dependencies`."""
+        """self.clients' session class, loading the fake client."""
         return configured(
             self.clients,
             class_loader=client_loader({"ensemble.session.clients.fake": fake_client}),
@@ -116,9 +113,7 @@ class Live(Case):
         )
 
     def start(self, name: str, *steps, sid=None, events=None, **kwargs) -> Session:
-        """Tui session `name` of the fake client running `steps`, its events file self.events
-        unless given.
-        """
+        """Tui session `name` of the fake client running `steps`; events: self.events."""
         with open(self.clients["fake"]["scenario"], "w") as f:
             json.dump(list(steps), f)
         handle = self.session_cls.start(
@@ -138,9 +133,7 @@ class Live(Case):
         return handle
 
     def lines(self, *want: str, events: str | None = None) -> None:
-        """Waits until the events file's (self.events unless given) lines, times dropped, are
-        `want`; pokes the server meanwhile.
-        """
+        """Waits until the events file's lines, times dropped, are `want`; pokes meanwhile."""
 
         def check():
             self.poke()

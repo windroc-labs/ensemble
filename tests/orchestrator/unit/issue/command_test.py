@@ -34,7 +34,6 @@ from ensemble.orchestrator.issue.output import partial_message, refusal
 from ensemble.orchestrator.trackers.linear import client
 from ensemble.orchestrator.trackers.local.issues import LocalIssues
 from tests.orchestrator.case import Case
-from tests.orchestrator.process_fixtures import CalledProcessError, TimeoutExpired
 from tests.orchestrator.unit.board_ids import (
     HARNESS_LINE,
     MANAGER_APP,
@@ -84,6 +83,7 @@ from tests.orchestrator.unit.keychain_fixtures import (
     renewed,
     token_http_error,
 )
+from tests.utils.process_fixtures import CalledProcessError, TimeoutExpired
 
 
 # The manager app's Keychain with a token days from expiry and its client secret.

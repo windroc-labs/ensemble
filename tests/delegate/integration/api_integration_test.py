@@ -1,13 +1,11 @@
-"""A run planned and executed in process over
-tests/session/integration/clients/claude/fake_claude.py (on PATH as `claude`, the session config's
-Client table), HOME and CLAUDE_CONFIG_DIR temp: the callback order over a real process (FR-17), the
-fix resume (FR-21), a usage limit (FR-58).
+"""A run planned and executed in process over fake_claude.py (on PATH as `claude`, the session
+config's Client table), HOME and CLAUDE_CONFIG_DIR temp: the callback order over a real process
+(FR-17), the fix resume (FR-21), a usage limit (FR-58).
 """
 
 import io
 import json
 import os
-import tempfile
 import unittest
 from contextlib import redirect_stderr
 from unittest import mock
@@ -19,18 +17,18 @@ from ensemble.delegate.engine.runner import FIX
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit
 from tests.delegate.case import Case, packaged
 from tests.delegate.integration.cli import DONE, RESETS, SID, UNSAVED, UNSAVED_ERROR
-from tests.delegate.replies import block, mark, option, prompt, running
+from tests.delegate.replies import block, mark, option, prompt
 from tests.delegate.runner import executed
 from tests.session.integration.clients.claude import fake_claude
+from tests.utils.sandbox import pid_exists as running
+from tests.utils.sandbox import scratch
 
 
 class Base(Case):
     """dummy-tester's echo over the fake `claude` in workdir `work`, the cwd its agent dir."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = os.path.realpath(tmp.name)
+        root = scratch(self)
         self.work, bin_dir = os.path.join(root, "work"), os.path.join(root, "bin")
         os.mkdir(bin_dir)
         self.out = os.path.join(self.work, "out.md")
@@ -75,8 +73,8 @@ class Base(Case):
             return [json.loads(line) for line in f]
 
     def kinds(self) -> list[str]:
-        """run.jsonl's kinds, the first client_session moved after the input: its session harness
-        may bind the client before the run notes the input.
+        """run.jsonl's kinds, the first client_session moved after the input: its harness may
+        bind the client before the run notes the input.
         """
         with open(os.path.join(Layout(self.work).run, "run.jsonl")) as f:
             kinds = [json.loads(line)["kind"] for line in f]

@@ -55,7 +55,7 @@ from ensemble.orchestrator.trackers.linear import (
 )
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker, Selves
 from ensemble.utils import one_line
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import SID, Case
 from tests.orchestrator.prune_fixtures import NOW, ROLES, TEAM_OBJ
 from tests.orchestrator.unit.board_ids import (
     DUPLICATE,
@@ -98,7 +98,6 @@ BASE = {
     "Q_IDS": "fd0f74d3cdd0d0a34ba9f12805652c7ecedebd4d75e003bece27d4d9912f9b95",
     "Q_UPSTREAM": "be140943c548c5d9b8dc0940cd9dd8c712469da812be4997e0d9ebc3fad38eda",
 }
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 REF = (SID, "session")
 CID = ops.client_id(SID, "session")
 NOT_FOUND = LinearError("linear api error: [{'message': 'Entity not found: Comment'}]")

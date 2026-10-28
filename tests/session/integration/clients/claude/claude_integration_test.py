@@ -14,7 +14,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 import uuid
@@ -43,15 +42,15 @@ from ensemble.session.engine.types import (
     Window,
 )
 from ensemble.utils import exhausted
-from tests.session.case import PLUGIN_BIN, PY, Case, child_env
+from tests.session.case import PLUGIN_BIN, PY, SID, Case, child_env
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
 from tests.session.integration.clients.claude import fake_claude
-from tests.utils.sandbox import git
+from tests.utils.sandbox import git, kill, scratch
+from tests.utils.sandbox import pid_exists as running
 
 WAIT = 20  # upper bound on any wait, in seconds
 IDLE = 0.5  # idle_timeout, in seconds
-SETTLE = 0.5  # seconds a caller gets to wait in events() again after printing an event
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+SETTLE = 0.5  # seconds a caller gets to wait in events() again after printing one
 RESETS = 1760000000
 TABLE = {
     "implementation": "ensemble.session.clients.claude:ClaudeClient",
@@ -90,25 +89,9 @@ except KeyboardInterrupt:
 """
 
 
-def running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def kill(pid: int) -> None:
-    """SIGKILL to a test's stray process, if it still runs."""
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
-
-
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.workdir = os.path.join(self.dir, "work")
         self.file = os.path.join(self.dir, "scenario.json")
         self.log = os.path.join(self.dir, "claude.log")

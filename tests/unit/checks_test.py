@@ -1,9 +1,8 @@
 import importlib
 import os
 import types
-import unittest
 
-from tests.case import REPO, SRC, Case
+from tests.case import SRC, Case
 from tests.checks import MODULES, checks, discover
 
 
@@ -19,17 +18,6 @@ class RealTree(Case):
                     module = importlib.import_module(".".join(parts))
                     real = os.path.realpath(module.__file__)
                     self.assertEqual(os.path.commonpath([src, real]), src)
-
-
-def _guard_test(name):
-    def test(self):
-        self.assertEqual(list(checks(REPO, names={name})), [(name, [])])
-
-    return test
-
-
-for _guard_name, _guard in discover():
-    setattr(RealTree, f"test_guard_{_guard_name}", _guard_test(_guard_name))
 
 
 class Discovery(Case):
@@ -50,15 +38,6 @@ class Discovery(Case):
         )
         with self.assertRaisesRegex(ValueError, "unknown guard"):
             list(checks("/repo", names={"missing"}, modules=(module,)))
-
-    def test_each_discovered_guard_has_exactly_one_schedulable_test(self):
-        names = unittest.defaultTestLoader.getTestCaseNames(RealTree)
-        self.assertEqual(
-            sorted(
-                name.removeprefix("test_guard_") for name in names if name.startswith("test_guard_")
-            ),
-            [name for name, _ in discover()],
-        )
 
     def test_every_concern_module_contributes_its_public_functions_once_by_name(self):
         found = discover()

@@ -2,13 +2,12 @@
 
 import os
 import subprocess
-import tempfile
 import unittest
 import unittest.mock
 
 from ensemble.utils.git import common_dir
 from tests.utils.case import Case
-from tests.utils.sandbox import clean_env, git
+from tests.utils.sandbox import clean_env, git, scratch
 
 
 class CommonDir(Case):
@@ -33,9 +32,7 @@ class CommonDir(Case):
                 self.assertIn("not a git repository", proc.stderr)
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.clone, self.bare = (
             os.path.join(self.tmp, "clone"),
             os.path.join(self.tmp, "origin.git"),

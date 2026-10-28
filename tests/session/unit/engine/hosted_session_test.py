@@ -74,7 +74,7 @@ from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.utils import ACCOUNT_ENV, Record, StatusState, exhausted, inode_lock, load_class
 from tests.session import fake_client, harnesses
-from tests.session.case import HOSTS, REPO, SPAWNS, SRC, Case
+from tests.session.case import HOSTS, REPO, SRC, Case, no_spawn
 from tests.session.fakes.container_host import HOMED as HOMED_HOST
 from tests.session.fakes.container_host import NAMED as NAMED_HOST
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
@@ -96,7 +96,9 @@ from tests.session.hosted_support import (
     listed,
 )
 from tests.session.threads import capture_errors
-from tests.utils.sandbox import owned_directory
+from tests.utils.clock import FakeClock
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import owned_directory, scratch
 
 UNCONFIGURED = "session not configured: call Session.configure first"
 FAKE_HOSTS = {"fake": {"implementation": "tests.session.fakes.host:FakeHost"}}
@@ -466,15 +468,8 @@ class ConfiguredTest(Case):
 
 class InspectTest(Base):
     def inspect(self, spec):
-        with contextlib.ExitStack() as stack:
-            starts = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in SPAWNS
-            ]
-            answer = self.session.inspect(spec)
-        for start in starts:
-            start.assert_not_called()
-        return answer
+        with no_spawn():
+            return self.session.inspect(spec)
 
     def test_historical_status_resolves_the_recorded_cwd_inside_session(self):
         os.makedirs(self.workdir)
@@ -938,20 +933,13 @@ class InProcessTest(Base):
         """An in_process session started and drained, each of SPAWNS failing meanwhile and never
         called.
         """
-        with contextlib.ExitStack() as stack:
-            spawns = [
-                stack.enter_context(mock.patch(target, side_effect=AssertionError(target)))
-                for target in SPAWNS
-            ]
+        with no_spawn():
             session = self.start(mode="in_process", **kwargs)
             found = self.drain(session)
-        for spawn in spawns:
-            spawn.assert_not_called()
         return session, found
 
     def logged(self) -> list[dict]:
-        with open(self.log, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log)
 
     def test_cleanup_joins_a_stopped_runs_thread_before_removing_its_files(self):
         self.steps({"sleep": 0.3})
@@ -1109,19 +1097,8 @@ class InProcessTest(Base):
         self.assertEqual(found[-2:], [Reply("b"), Exited(0)])
 
 
-class Clock:
-    """The session's clock and time.monotonic's stand-in: `now` moves only when a StubMode
-    waits.
-    """
-
-    now = 0.0
-
-    def monotonic(self) -> float:
-        return self.now
-
-
 class StubMode:
-    """A BaseMode on a Clock: poll(timeout) gives the next script item (at, events, ended) once the
+    """A BaseMode on a FakeClock: poll(timeout) gives the next script item (at, events, ended) once the
     clock reaches `at`, else ([], False), moving the clock to `at` or on by timeout, whichever is
     sooner; past LATE s it raises, so a session that never ends fails. returncode() gives `code`;
     every call is logged in `calls`.
@@ -1169,12 +1146,10 @@ class StubMode:
 
 class EventsOverAModeTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
-        self.clock = Clock()
+        self.dir = scratch(self, real=False)
+        self.clock = FakeClock()
         self.configured = harnesses.Threaded.configured(
-            clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock.monotonic
+            clients={}, hosts=parsed(HOSTS, "tmux"), clock=self.clock
         )
 
     def session(self, *script, code=0, idle_timeout=None, **kwargs) -> HostedSession:

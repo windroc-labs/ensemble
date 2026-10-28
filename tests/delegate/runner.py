@@ -4,7 +4,6 @@ import io
 import json
 import os
 import shutil
-import tempfile
 from contextlib import redirect_stderr
 from dataclasses import replace
 from unittest import mock
@@ -19,9 +18,8 @@ from tests.delegate.replies import completed_steps
 from tests.delegate.unit.runs import DONE, NAME, turn
 from tests.session import fake_client
 from tests.session.modules import client_loader
-
-SID = "11111111-2222-3333-4444-555555555555"
-
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import scratch
 
 NEEDS = {**DONE, "status": "needs_input", "questions": ["Which repo?"], "deliverable": ""}
 
@@ -80,9 +78,7 @@ class Base(Case):
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = os.path.realpath(tmp.name)
+        self.tmp = scratch(self)
         self.work = os.path.join(self.tmp, "work")
         self.out = os.path.join(self.work, "out.md")
         self.channel = os.path.join(Layout(self.work).run, "run.jsonl")
@@ -162,8 +158,7 @@ class Base(Case):
             self.err = err.getvalue()
 
     def records(self) -> list[dict]:
-        with open(self.channel) as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.channel)
 
     def kinds(self) -> list[str]:
         return [e["kind"] for e in self.records()]
@@ -172,8 +167,7 @@ class Base(Case):
         return [e for e in self.records() if e["kind"] == kind][-1]
 
     def launches(self) -> list[dict]:
-        with open(self.log) as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log)
 
     def read(self, path) -> str:
         with open(path) as f:

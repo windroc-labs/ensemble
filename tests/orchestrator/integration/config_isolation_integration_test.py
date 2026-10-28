@@ -12,20 +12,19 @@ from unittest import mock
 from ensemble import delegate
 from ensemble.orchestrator.engine import config
 from ensemble.utils import GUARD, SHORT
-from tests.orchestrator.case import ORCH_ROOT, PY, REPO, Case, child_env
+from tests.orchestrator.case import ORCH_ROOT, PY, REPO, SID, Case, child_env
 from tests.orchestrator.config_fixtures import (
     CORE_TABLES,
     CORE_TOP,
     HARNESS_DELEGATE,
     HTTPS,
     PIPELINE,
-    SID,
     SLUG,
     STEPS,
     ConfigFile,
     write,
 )
-from tests.utils.sandbox import clean_env, git
+from tests.utils.sandbox import clean_env, git, scratch
 
 IMPORT_ALONE = """import json, os, sys
 opened = []
@@ -188,9 +187,7 @@ class ConfigurationLoading(ConfigFile, Case):
 class TeamDirectoryIsolation(ConfigFile, Case):
     def setUp(self):
         super().setUp()
-        team = tempfile.TemporaryDirectory(dir=REPO)
-        self.addCleanup(team.cleanup)
-        self.team = os.path.realpath(team.name)
+        self.team = scratch(self, REPO)
         writer = (
             "# Writer\n\nYou write.\n\n## Tasks\n\nPick the task below that fits the input; unsure → `one-pager` "
             "(`<tasks>/one-pager.md`).\n\n- `one-pager` (`<tasks>/one-pager.md`): a brief; always; light.\n"

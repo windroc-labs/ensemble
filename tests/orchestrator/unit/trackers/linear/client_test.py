@@ -16,7 +16,6 @@ from ensemble.orchestrator.engine.types import LinearError
 from ensemble.orchestrator.trackers.linear import client, ops
 from ensemble.utils import one_line
 from tests.orchestrator.case import Case
-from tests.orchestrator.process_fixtures import TimeoutExpired
 from tests.orchestrator.unit.board_ids import TEAM
 from tests.orchestrator.unit.keychain_fixtures import (
     HARNESS,
@@ -41,6 +40,7 @@ from tests.orchestrator.unit.linear_fixtures import (
     respond,
 )
 from tests.orchestrator.unit.outage import FAILURES, failing
+from tests.utils.process_fixtures import TimeoutExpired
 
 
 class BrokerToken(Case):

@@ -1,12 +1,9 @@
-"""Case, every delegate test's base; the committed [clients] (committed); child helpers (PY,
-child_env); this tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
+"""Case, every delegate test's base; committed, packaged; PY, child_env; SID; import roots
+(REPO, SRC, ROOTS, PYTHONPATH).
 """
 
 import os
 import sys
-import tempfile
-import unittest
-from unittest import mock
 
 import ensemble
 from ensemble.delegate.engine.drivers import AgentDriver
@@ -14,25 +11,17 @@ from ensemble.session import Session
 from ensemble.session.engine.config import read_config
 from tests.session import harnesses
 from tests.session.case import configured
-from tests.utils.sandbox import CALLER_SESSION, clean_env, project_roots
+from tests.utils.case import REPO as REPO
+from tests.utils.case import ROOTS, RUN_WITH, SRC, TreeCase, foreign
+from tests.utils.sandbox import CALLER_SESSION, clean_env
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ROOTS = project_roots(REPO)
-SRC = {
-    name: root
-    for root in ROOTS
-    for name in os.listdir(os.path.join(root, "ensemble"))
-    if os.path.isfile(os.path.join(root, "ensemble", name, "__init__.py"))
-}
 PYTHONPATH = os.pathsep.join(ROOTS)
-RUN_WITH = os.pathsep.join(os.path.relpath(root, REPO) for root in ROOTS)
 PY = (sys.executable, "-P", "-S")
+SID = "11111111-2222-3333-4444-555555555555"
 
 
 def committed(local: str = os.devnull) -> dict:
-    """The session config's [clients], `local` merged (default none), even under
-    Case.configure_session.
-    """
+    """The session config's [clients], `local` merged."""
     return read_config(local=local)["clients"]
 
 
@@ -42,35 +31,20 @@ def packaged(**dependencies) -> type[Session]:
     return configured(config["clients"], config["hosts"]["tmux"], **dependencies)
 
 
-class Case(unittest.TestCase):
-    """Fails a test whose ensemble is not exactly this tree's, else runs it (whatever its setUp) in
-    a fresh temp HOME, self.home (self.ensemble: its .ensemble), a fresh session class
-    (self.session_cls) and its FakeDriver, minus CALLER_SESSION; a start of a class with injected
-    callables runs its session harness on a thread (harnesses.Threaded), joined at its end.
+class Case(TreeCase):
+    """Minus CALLER_SESSION; also self.session_cls and its self.driver; starts run their harness
+    on a thread (harnesses.Threaded), joined at its end.
     """
 
-    def run(self, result=None):
-        if foreign := _foreign():
-            result = self.defaultTestResult() if result is None else result
-            result.startTest(self)
-            try:
-                self.fail(foreign)
-            except self.failureException:
-                result.addFailure(self, sys.exc_info())
-            result.stopTest(self)
-            return result
-        with (
-            tempfile.TemporaryDirectory() as self.home,
-            mock.patch.dict(os.environ, {"HOME": self.home, "ENSEMBLE_CONTROL_ROOT": self.home}),
-            harnesses.joined(),
-        ):
-            for key in CALLER_SESSION:
-                os.environ.pop(key, None)
-            self.ensemble = os.path.join(self.home, ".ensemble")
-            os.mkdir(self.ensemble)
-            self.configure_session({})
-            self.addCleanup(harnesses.end, self.home)
-            return super().run(result)
+    def _case_foreign(self) -> str | None:
+        return _foreign()
+
+    def _case_enter(self, stack) -> None:
+        stack.enter_context(harnesses.joined())
+        for key in CALLER_SESSION:
+            os.environ.pop(key, None)
+        self.configure_session({})
+        self.addCleanup(harnesses.end, self.home)
 
     def configure_session(self, clients, tmux=None) -> None:
         self.session_cls = configured(clients, tmux, **getattr(self, "session_dependencies", {}))
@@ -78,27 +52,7 @@ class Case(unittest.TestCase):
 
 
 def _foreign(modules=None) -> str | None:
-    own = {os.path.realpath(os.path.join(r, "ensemble")) for r in ROOTS}
-    for path in ensemble.__path__:
-        if os.path.realpath(path) not in own:
-            return f"ensemble.__path__ holds {path}, not only this tree's: run with PYTHONPATH={RUN_WITH}"
-    if missing := own - {os.path.realpath(p) for p in ensemble.__path__}:
-        return (
-            f"ensemble.__path__ lacks {', '.join(sorted(missing))}: run with PYTHONPATH={RUN_WITH}"
-        )
-    for name, module in list((sys.modules if modules is None else modules).items()):
-        top, _, sub = name.partition(".")
-        where = getattr(module, "__file__", None)
-        if top == "ensemble" and sub and "." not in sub and where:
-            found = os.path.dirname(os.path.dirname(where))
-            found = os.path.dirname(found) if os.path.basename(where) == "__init__.py" else found
-            root = SRC.get(sub)
-            if root is None or os.path.realpath(found) != os.path.realpath(root):
-                return (
-                    f"{name} is imported from {found}, not this tree's {root}: "
-                    f"run with PYTHONPATH={RUN_WITH}"
-                )
-    return None
+    return foreign(ensemble, ROOTS, SRC, RUN_WITH, modules)
 
 
 def child_env(base=None, *extra: str) -> dict[str, str]:

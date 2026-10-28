@@ -83,10 +83,6 @@ EMBEDDED_PROGRAMS_ALLOWED = {
         "9eab95e939ba98ce47fe6013b159a0526b7a4d2e044077d2b53755ba304ec33f",
     ): "Existing callback recorder fixture delays a child to observe callback ordering.",
     (
-        "tests/delegate/integration/bin_integration_test.py",
-        "c710e2832b40273e5a68ddb9026256785f0d2f47e44d3f285c6132d45114a427",
-    ): "Existing executable-selection fixture checks the system interpreter meets Python 3.11.",
-    (
         "tests/delegate/integration/child_env_integration_test.py",
         "118b630ac258347793732e1124cc9ae51b0aba0fd29877ba2917e9a82d2cb6e0",
     ): "Existing environment fixture captures client launch environments from a separate caller process.",

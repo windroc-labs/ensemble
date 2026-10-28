@@ -1,10 +1,9 @@
-"""The fake ctl, a fake Record's ctl and resume command, installed as ensemble-orchestrator (a ctl
-Record accepts) and run as `python3 -P ctl.py <dir> <sub> …`:
-status, show (exit 1: one cannot show) and close answer for the Records on stdin (a bad line:
-exit 2) from <dir>/sessions.json (name → alive, state, outcome, showable, hidden, display; an
-unknown name is gone); start NAME [--display D] and resume NAME print the Record, resume of a live
-one starting nothing. content NAME or one stdin Record prints its content. Start honors ENSEMBLE_SID or creates a UUID; resume preserves the saved sid
-and rejects an environment mismatch. Each call goes to <dir>/calls.jsonl.
+"""The fake ctl, installed as ensemble-orchestrator and run as `python3 -P ctl.py <dir> <sub> …`:
+status, show (exit 1: cannot show) and close answer the stdin Records (bad line: exit 2) from
+<dir>/sessions.json (name → alive, state, outcome, showable, hidden, display; unknown: gone);
+start NAME [--display D] and resume NAME print the Record, resuming a live one starts nothing;
+content NAME or one stdin Record prints its content. Start honors ENSEMBLE_SID or makes a UUID;
+resume keeps the saved sid, rejecting a mismatch. Calls go to <dir>/calls.jsonl.
 """
 
 import argparse
@@ -42,6 +41,15 @@ def install(bin_dir: str, state_dir: str) -> str:
     files.save(path, f'#!/bin/sh\nexec {shlex.join((*argv, os.path.abspath(state_dir)))} "$@"\n')
     os.chmod(path, 0o755)
     return COMMAND
+
+
+def record(name: str, display: str | None = None, *, sid: str | None = None) -> Record:
+    resume = (COMMAND, "resume", name)
+    return Record(1, "fake", name, (name,), sid, None, (COMMAND,), resume, display, None)
+
+
+def lines(*items: Record | Status) -> str:
+    return "".join(i.to_line() + "\n" for i in items)
 
 
 def set_session(state_dir: str, name: str, **fields) -> None:
@@ -104,11 +112,8 @@ def _start(state_dir: str, args, call: dict) -> int:
             return 2
     else:
         sid = str(uuid.uuid4()) if supplied is None else supplied
-    resume = (COMMAND, "resume", args.name)
     try:
-        record = Record(
-            1, "fake", args.name, (args.name,), sid, None, (COMMAND,), resume, display, None
-        )
+        started = record(args.name, display, sid=sid)
     except RecordError as e:
         print(f"{COMMAND}: {e}", file=sys.stderr)
         return 2
@@ -117,7 +122,7 @@ def _start(state_dir: str, args, call: dict) -> int:
         live = {"alive": True, "state": "working", "outcome": None, "display": display, "sid": sid}
         sessions[args.name] = {**session, **live}
         _save(state_dir, sessions)
-    print(record.to_line())
+    print(started.to_line())
     return 0
 
 
@@ -125,20 +130,7 @@ def _answer(state_dir: str, args, call: dict) -> int:
     sub = args.sub
     try:
         if sub == "content" and args.name is not None:
-            records = [
-                Record(
-                    1,
-                    "fake",
-                    args.name,
-                    (args.name,),
-                    None,
-                    None,
-                    (COMMAND,),
-                    (COMMAND, "resume", args.name),
-                    None,
-                    None,
-                )
-            ]
+            records = [record(args.name)]
         else:
             records = [Record.parse(line) for line in sys.stdin]
         if sub == "content" and len(records) != 1:
@@ -146,18 +138,18 @@ def _answer(state_dir: str, args, call: dict) -> int:
     except RecordError as e:
         print(f"{COMMAND}: stdin: {e}", file=sys.stderr)
         return 2
-    call["names"] = [record.name for record in records]
+    call["names"] = [each.name for each in records]
     sessions = _sessions(state_dir)
     failed = 0
-    for record in records:
-        session = _session(sessions, record.name)
+    for each in records:
+        session = _session(sessions, each.name)
         if sub == "content":
-            print(f"content {record.name}")
+            print(f"content {each.name}")
         elif sub == "status":
             shown = session["alive"] and session["showable"]
-            attach = f"{COMMAND} attach {record.name}" if shown else None
+            attach = f"{COMMAND} attach {each.name}" if shown else None
             status = Status(
-                name=record.name,
+                name=each.name,
                 alive=session["alive"],
                 state=session["state"],
                 outcome=session["outcome"],
@@ -166,10 +158,10 @@ def _answer(state_dir: str, args, call: dict) -> int:
             )
             print(status.to_line())
         elif sub == "show" and not session["showable"]:
-            print(f"session {record.name}: host fake cannot show", file=sys.stderr)
+            print(f"session {each.name}: host fake cannot show", file=sys.stderr)
             failed = 1
         elif sub == "close":
-            sessions[record.name] = {**session, "alive": False, "state": "gone"}
+            sessions[each.name] = {**session, "alive": False, "state": "gone"}
     if sub == "close":
         _save(state_dir, sessions)
     return failed

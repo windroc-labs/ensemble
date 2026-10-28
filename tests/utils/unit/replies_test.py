@@ -1,21 +1,19 @@
 """utils/replies.py: save_reply and read_reply, the reply store beside an events file."""
 
 import os
-import tempfile
 import time
 from unittest import mock
 
 from ensemble.utils import REPLY_MAX, read_reply, replies, save_reply
 from tests.utils.case import Case
+from tests.utils.sandbox import scratch
 
 ID = "0123456789abcdef0123456789abcdef"
 
 
 class RepliesTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.events = os.path.join(tmp.name, "events")
+        self.events = os.path.join(scratch(self, real=False), "events")
         self.store = self.events + ".replies"
 
     def test_save_then_read(self):

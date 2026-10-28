@@ -38,6 +38,7 @@ from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import SIGNALS, start_phase
 from tests.session.case import Case
+from tests.utils.jsonl import read_jsonl
 
 GEN = "g1"
 WAIT = 5
@@ -134,10 +135,7 @@ class Base(Case):
         return thread
 
     def logged(self) -> list[dict]:
-        if not os.path.exists(self.channel.events):
-            return []
-        with open(self.channel.events, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.channel.events, missing_ok=True)
 
     def types(self) -> list[str]:
         return [record["type"] for record in self.logged()]

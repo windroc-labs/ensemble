@@ -5,7 +5,6 @@ trusted_dirs, bind and the access intent (the old driver's access tests, less th
 
 import os
 import shlex
-import tempfile
 from dataclasses import fields, replace
 from unittest import mock
 
@@ -37,6 +36,7 @@ from tests.delegate.unit.composer.shipped import (
 )
 from tests.delegate.unit.composer.teams import EDITOR, FILES, POET, RUN_CONFIG, VERSE
 from tests.utils.case import local_section
+from tests.utils.sandbox import scratch
 
 TIER = "tier must be an integer 1–4"
 CLIENT = "client must be a non-empty one-line name, got "
@@ -46,9 +46,7 @@ class Fake(Case):
     """A team root, config and local file in a temp dir; a HOME of the test's own."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.root = os.path.join(self.tmp, "team")
         self.config = os.path.join(self.tmp, "config.toml")
         self.local_file = os.path.join(self.tmp, "config.local.toml")
@@ -94,9 +92,7 @@ class Params(Case):
         )
 
     def test_the_deliverable_is_out_under_the_real_workdir_else_tmp_deliverable(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = os.path.realpath(tmp.name)
+        root = scratch(self)
         wd, elsewhere = (os.path.join(root, d) for d in ("wd", "elsewhere"))
         os.makedirs(os.path.join(wd, "sub"))
         os.makedirs(elsewhere)

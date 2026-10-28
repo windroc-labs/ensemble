@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import tempfile
 import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -58,6 +57,7 @@ from tests.orchestrator.unit.run_fixtures import (
 from tests.orchestrator.unit.streams import Stderr
 from tests.orchestrator.unit.target_fixtures import FakeRun, ok
 from tests.orchestrator.unit.target_fixtures import api as repo_info
+from tests.utils.sandbox import scratch
 
 NOW = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
 
@@ -391,9 +391,7 @@ class Base(run_fixtures.Base):
         super().setUp()
         self.keychain_calls = []
         self.write_local(f'work_dir = "{self.work}"\n')
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
+        self.tmp = scratch(self, real=False)
         self.config_path = os.path.join(self.tmp, "config.toml")
         self.write_config(CONFIG)
         self.lines, self.hist, self.names = [], {}, {}

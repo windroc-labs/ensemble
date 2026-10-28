@@ -1,5 +1,5 @@
 """router.py as a subprocess: it detaches the run's LinearRun, whose drive runs as a local process
-and calls back ensemble-orchestrator writeback; fake_claude as client claude, FakeLinear over HTTP.
+and calls back ensemble-orchestrator writeback; fake_claude as claude, FakeLinear over HTTP.
 A claim runs to In Review; a crash resumes the same session; a Linear failure mid write-back fails
 its callback, and Recover then writes the outcome back in process, without an agent; a Linear outage stops a tick and --issue; a tick's usage gate; a long description reaches the run; a
 SIGTERM'd harness ends its run and its agent; the researcher's gate runs on a session's PYTHONPATH.
@@ -29,6 +29,7 @@ from tests.orchestrator.integration.flow_fixtures import (
 from tests.orchestrator.integration.segments import FIRST_WRITE, agent_calls, lookup
 from tests.orchestrator.unit.board_ids import HARNESS_USER, role_id
 from tests.session import live_tmux
+from tests.utils.sandbox import gone
 
 ENGINEER = role_id("engineer")
 ID, TITLE, BRANCH = "TASK-7", "ENG: Session registry", "TASK-7-session-registry"
@@ -80,7 +81,7 @@ HARNESS_MODULE = "-m ensemble.delegate.engine.harness"
 
 
 def ancestor(pid):
-    """pid's parent and its command line."""
+    """pid's parent and command line."""
     res = subprocess.run(
         ["ps", "-o", "ppid=", "-p", str(pid)],
         capture_output=True,
@@ -97,13 +98,6 @@ def ancestor(pid):
         check=True,
     )
     return parent, res.stdout
-
-
-def gone(pid):
-    res = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=TIMEOUT
-    )
-    return res.stdout.strip() == "" or res.stdout.strip().startswith("Z")
 
 
 class Router(TmuxFlow):

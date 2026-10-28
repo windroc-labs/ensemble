@@ -27,6 +27,7 @@ from ensemble.session.modes.base import POINTER
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session.fakes.terminal import GuardHost
 from tests.session.headless_support import NOTHING, SID, HeadlessCase, StubClient, StubRun
+from tests.utils.sandbox import kill
 
 WAIT = 10  # upper bound on any wait, in seconds
 SLEEPER = "import time; time.sleep(60)"
@@ -68,12 +69,6 @@ RAISING = """import time
 print('{"raise": "boom"}', flush=True)
 time.sleep(60)
 """
-
-
-def kill(pid: int) -> None:
-    """SIGKILL to a test's stray process, if it still runs."""
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
 
 
 class Base(HeadlessCase):

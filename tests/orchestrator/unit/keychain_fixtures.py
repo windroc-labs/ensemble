@@ -1,4 +1,4 @@
-"""A fake Keychain behind /usr/bin/security and a fake Linear token endpoint, for app identities."""
+"""Fake macOS Keychain and Linear token endpoint for app identities."""
 
 import io
 import json
@@ -12,7 +12,7 @@ from unittest import mock
 from ensemble.orchestrator.engine.types import AppKind, LinearApp
 from ensemble.orchestrator.trackers.linear import client
 from tests.orchestrator.case import system_probe
-from tests.orchestrator.process_fixtures import CalledProcessError, CompletedProcess
+from tests.utils.process_fixtures import CalledProcessError, CompletedProcess
 
 SECRET = "app-SECRET-sentinel"
 OLD = "tok-OLD-sentinel"
@@ -30,7 +30,6 @@ SENTINELS = (SECRET, OLD, NEW, SECRET.encode().hex(), OLD.encode().hex(), NEW.en
 
 
 def record(token=OLD, days=10.0):
-    """A token record expiring days from now."""
     expires = datetime.now(UTC) + timedelta(days=days)
     return json.dumps(
         {"access_token": token, "expires_at": expires.isoformat()}, separators=(",", ":")
@@ -47,9 +46,8 @@ def renewed(case, value, since):
 
 
 class Keychain:
-    """items: {service: (account, value)}; calls: each (argv, stdin); fail_write: -i writes
-    nothing; race: the value another process writes over ours; raises: what lookups without -w
-    raise. Other subprocesses: system_probe."""
+    """items: {service: (account, value)}; calls: each (argv, stdin); race: the value another
+    process writes over ours; raises: what lookups without -w raise."""
 
     def __init__(self, entries=None, *, fail_write=False, race=None, raises=None):
         self.items = {s: (s, v) for s, v in (entries or {}).items()}
@@ -90,8 +88,8 @@ class Keychain:
 
 
 class Endpoint:
-    """urlopen: the token endpoint answers answer (dict, bytes or exception), GraphQL data or
-    data(query, variables); tokens, graphql: the requests made."""
+    """urlopen: token requests get answer (dict, bytes or exception), GraphQL gets data or
+    data(query, variables); tokens, graphql: requests seen."""
 
     def __init__(self, answer=None, data=None):
         self.answer = {"access_token": NEW, "expires_in": 30 * 86400} if answer is None else answer

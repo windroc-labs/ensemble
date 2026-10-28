@@ -1,6 +1,5 @@
 """The workflow: the packaged file's Stages, a stage's defaults, its lazy read and its checks."""
 
-import tempfile
 import tomllib
 from importlib.resources import files
 from pathlib import Path
@@ -10,6 +9,7 @@ from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import Stage
 from tests.orchestrator.case import Case
+from tests.utils.sandbox import scratch
 
 HINT = "To change the target repo, edit the description's `Repo:` line."
 GOOD = '[[stage]]\nrole = "pm"\ninput = "design"\ntitle_prefix = "PRD"\n'
@@ -146,9 +146,7 @@ class StageDefaults(Case):
 
 class WorkflowFile(Case):
     def write(self, text):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        path = Path(tmp.name, "flow.toml")
+        path = Path(scratch(self, real=False), "flow.toml")
         if text is not None:
             path.write_text(text, encoding="utf-8")
         return str(path)

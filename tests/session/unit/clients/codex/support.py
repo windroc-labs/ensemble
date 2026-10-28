@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -13,6 +12,7 @@ from ensemble.session.clients.codex.common import SessionStore
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import LOCAL_CONTEXT, Access, Launch, Permission, Spec
 from tests.session.case import REPO, Case
+from tests.utils.sandbox import scratch
 
 PLUGIN_OFF = ("-c", "plugins.ensemble@windroc.enabled=false")
 TOOLS_OFF = (
@@ -76,9 +76,7 @@ def committed_tui(
 
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory(dir=os.environ.get("ENSEMBLE_TEST_TMP", REPO))
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(scratch(self, os.environ.get("ENSEMBLE_TEST_TMP", REPO)))
         self.home = self.root / "home"
         self.work = self.root / "work"
         self.cwd = self.work / "project"

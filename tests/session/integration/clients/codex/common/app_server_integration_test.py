@@ -14,6 +14,7 @@ from pathlib import Path
 from ensemble.session.clients.codex import CodexClient
 from tests.session.case import REPO, SRC, Case
 from tests.session.integration.clients.codex import fake_app_server
+from tests.utils.jsonl import read_jsonl
 
 
 def shadowable(script):
@@ -76,11 +77,7 @@ class AppServerIntegrationTest(Case):
             path.rmdir()
 
     def logged(self):
-        return (
-            [json.loads(line) for line in self.log.read_text().splitlines()]
-            if self.log.exists()
-            else []
-        )
+        return read_jsonl(self.log, missing_ok=True)
 
     def probe(self, case="normal", timeout=2, **env):
         self.log.unlink(missing_ok=True)

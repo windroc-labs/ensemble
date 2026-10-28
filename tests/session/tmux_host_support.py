@@ -13,6 +13,7 @@ from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import ProcessControl
 from tests.session.case import Case
 from tests.session.tmux_fixtures import FakeTmux, which
+from tests.utils.sandbox import scratch
 
 PROCESS = "4242 $3 %7 4343"
 
@@ -34,9 +35,7 @@ def fake_tmux(runner: FakeTmux) -> mock.Mock:
 
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.tool = os.path.join(self.dir, "tool")
         Path(self.tool).touch(mode=0o700)
         self.enterContext(which(self.tool))

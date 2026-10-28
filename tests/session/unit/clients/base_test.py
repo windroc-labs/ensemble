@@ -37,10 +37,9 @@ from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadle
 from ensemble.session.modes.client_adapters.in_process import InProcess
 from ensemble.session.modes.client_adapters.tui import Tui
 from ensemble.utils import sid_error
+from tests.session.case import SID as UUID
 from tests.session.case import Case
 from tests.session.client_adapters_support import DetailedTui, StubHeadless, StubInProcess, StubTui
-
-UUID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 class StubClient(Client):

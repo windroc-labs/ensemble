@@ -8,7 +8,6 @@ import os
 import re
 import shutil
 import stat
-import tempfile
 import threading
 import time
 import unittest
@@ -18,15 +17,14 @@ from unittest import mock
 
 from ensemble.utils import ConfinedFileError, ConfinedReason, files, holds, read_confined
 from tests.utils.case import Case
+from tests.utils.sandbox import scratch
 
 DATA = b"0123456789"
 
 
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = tmp.name
+        self.dir = scratch(self, real=False)
         self.path = os.path.join(self.dir, "f")
 
     def content(self) -> bytes:
@@ -613,9 +611,7 @@ class RemoveTree(Base):
 
 class ConfinedRead(Case):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name).resolve()
+        self.root = Path(scratch(self))
         self.path = self.root / "result.md"
         self.path.write_bytes(b"complete")
 
@@ -683,9 +679,7 @@ if __name__ == "__main__":
 
 class EventsFileTest(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
+        self.root = scratch(self)
 
     def test_created_0600_and_made_absolute(self):
         here = os.getcwd()

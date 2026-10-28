@@ -10,7 +10,6 @@ import os
 import re
 import signal
 import sys
-import tempfile
 import threading
 import time
 import types
@@ -37,6 +36,9 @@ from tests.session import fake_client
 from tests.session.case import Case
 from tests.session.modules import client_loader
 from tests.session.threads import capture_errors
+from tests.utils.jsonl import read_jsonl
+from tests.utils.sandbox import kill, scratch
+from tests.utils.sandbox import pid_exists as running
 
 WAIT = 20  # s, bound on any wait
 IDLE = 0.3  # s, idle_timeout
@@ -109,25 +111,9 @@ def out(kind, **fields) -> dict:
     return {"out": {"type": kind, **fields}}
 
 
-def running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def kill(pid: int) -> None:
-    """SIGKILL to a stray process, if any."""
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.kill(pid, signal.SIGKILL)
-
-
 class Base(Case):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.dir = os.path.realpath(tmp.name)
+        self.dir = scratch(self)
         self.workdir = os.path.join(self.dir, "work")
         self.scenario = os.path.join(self.dir, "scenario.json")
         self.log = os.path.join(self.dir, "client.log")
@@ -194,8 +180,7 @@ class Base(Case):
         return found
 
     def logged(self) -> list[dict]:
-        with open(self.log, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+        return read_jsonl(self.log)
 
     def forget(self):
         """Drops the client log."""

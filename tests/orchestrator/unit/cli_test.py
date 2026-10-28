@@ -33,7 +33,7 @@ from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
 from tests.orchestrator.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
 from tests.orchestrator.unit.run_fixtures import logged, show
 from tests.orchestrator.unit.streams import Stderr
-from tests.utils.cli_help import examples, parse_only
+from tests.utils.cli_help import check_examples, help_text, parse_only
 
 ISSUE = "11111111-2222-4333-8444-555555555555"
 
@@ -182,7 +182,7 @@ class Wirings(run_fixtures.Base):
                 self.assertLessEqual(len(line), 80, line)
 
     def test_published_examples_parse_before_operational_dispatch(self):
-        for name in (
+        names = (
             "",
             "router",
             "promote",
@@ -207,34 +207,32 @@ class Wirings(run_fixtures.Base):
             "issue relation add",
             "issue relation remove",
             "issue label swap",
-        ):
+        )
+
+        def text_of(name):
             output = io.StringIO()
             with redirect_stdout(output):
                 try:
                     cli.main([*name.split(), "--help"])
                 except SystemExit as error:
                     self.assertEqual(error.code, 0)
-            published = list(examples(output.getvalue()))
-            if name != "writeback":
-                self.assertTrue(published, name)
-            for command in published:
-                with self.subTest(name=name, command=command), redirect_stdout(io.StringIO()):
-                    if command[1] == "router" and command[2:] not in (["--help"], ["-h"]):
-                        self.assertIsNotNone(router.options(command[2:]))
-                    elif command[1] in {"promote", "prune"}:
-                        with (
-                            mock.patch.dict(os.environ),
-                            mock.patch(
-                                "builtins.open", side_effect=StopIteration("config boundary")
-                            ),
-                            mock.patch(
-                                "pathlib.Path.open", side_effect=StopIteration("config boundary")
-                            ),
-                            self.assertRaises(StopIteration),
-                        ):
-                            cli.main(command[1:])
-                    else:
-                        parse_only(cli.main, command[1:])
+            return output.getvalue()
+
+        def check(command):
+            if command[1] == "router" and command[2:] not in (["--help"], ["-h"]):
+                self.assertIsNotNone(router.options(command[2:]))
+            elif command[1] in {"promote", "prune"}:
+                with (
+                    mock.patch.dict(os.environ),
+                    mock.patch("builtins.open", side_effect=StopIteration("config boundary")),
+                    mock.patch("pathlib.Path.open", side_effect=StopIteration("config boundary")),
+                    self.assertRaises(StopIteration),
+                ):
+                    cli.main(command[1:])
+            else:
+                parse_only(cli.main, command[1:])
+
+        check_examples(self, text_of, names, check=check, optional={"writeback"})
 
     def test_every_help_surface_is_safe_and_explains_an_invocation(self):
         commands = (
@@ -402,13 +400,9 @@ class Wirings(run_fixtures.Base):
         )
 
     def test_help_lists_only_existing_commands(self):
-        output = io.StringIO()
-        with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
-            cli.main(["--help"])
-        self.assertEqual(raised.exception.code, 0)
         self.assertIn(
             "{router,promote,prune,issue,status,show,hide,close,attach-command,resume,content,writeback}",
-            output.getvalue(),
+            help_text(self, cli.main, ["--help"]),
         )
 
     def test_router_promote_and_prune_help_exits_0_naming_their_options(self):

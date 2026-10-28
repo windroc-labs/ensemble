@@ -7,7 +7,6 @@ callback lock names, then waits for that lock.
 import contextlib
 import fcntl
 import io
-import json
 import os
 import signal
 from unittest import mock
@@ -24,8 +23,10 @@ from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
 from ensemble.utils import OutcomeStatus, Stopped
 from tests.delegate.case import Case
-from tests.delegate.harness import SID
-from tests.delegate.unit.engine.orphans import Clock, Orphan
+from tests.delegate.unit.engine.orphans import Orphan
+from tests.session.case import SID
+from tests.utils.clock import FakeClock
+from tests.utils.jsonl import read_jsonl
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 RUN = {"sid": SID, "attempt": 3}
@@ -150,11 +151,7 @@ class Delivery(Case):
         self.callback = EventCallback(ARGV, self.store, **RUN)
 
     def errors(self, work=None) -> list[dict]:
-        try:
-            with open(os.path.join(work or self.work, "run.jsonl"), encoding="utf-8") as file:
-                rows = [json.loads(line) for line in file]
-        except FileNotFoundError:
-            return []
+        rows = read_jsonl(os.path.join(work or self.work, "run.jsonl"), missing_ok=True)
         return [row for row in rows if row["kind"] == "callback_error"]
 
     def lock_text(self) -> str:
@@ -303,7 +300,7 @@ class Delivery(Case):
 
     def test_a_callback_lock_held_5_s_spawns_nothing_and_is_one_callback_error_row(self):
         self.hold()
-        clock = Clock(self)
+        clock = FakeClock().patch(self)
         self.assertIsNone(self.callback(Begun(SID)))
         self.assertEqual(Child.calls, [])
         self.assertGreaterEqual(clock.now, CALLBACK_STOP_WAIT)
@@ -349,7 +346,7 @@ class Delivery(Case):
 class Sweep(Case):
     def setUp(self):
         self.store = store(os.path.join(self.home, "w"))
-        self.clock = Clock(self)
+        self.clock = FakeClock().patch(self)
         self.killpg = self.enterContext(mock.patch("os.killpg"))
 
     def orphan(self, text: str = f"{PID} {PARENT}\n") -> Orphan:

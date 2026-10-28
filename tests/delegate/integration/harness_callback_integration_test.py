@@ -20,6 +20,7 @@ from tests.delegate.fakes.harness_session import DrivenDelegate, FailingSession,
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block, mark
 from tests.delegate.unit.runs import DONE
+from tests.utils.jsonl import read_jsonl
 
 PROGRESS = "回显 one"
 OUTCOME = {**DONE, "deliverable": "# 文档\n二\n"}
@@ -37,18 +38,13 @@ class CallbackCase(HarnessCase):
         return [sys.executable, "-P", "-S", callback_recorder.__file__, log or self.log, *rules]
 
     def delivered(self, log=None) -> list[dict]:
-        try:
-            with open(log or self.log, encoding="utf-8") as file:
-                return [json.loads(line) for line in file]
-        except FileNotFoundError:
-            return []
+        return read_jsonl(log or self.log, missing_ok=True)
 
     def events(self, log=None) -> list[DelegateEvent]:
         return [DelegateEvent.parse(entry["line"]) for entry in self.delivered(log)]
 
     def errors(self) -> list[str]:
-        with open(os.path.join(Layout(self.work).run, "run.jsonl"), encoding="utf-8") as file:
-            rows = [json.loads(line) for line in file]
+        rows = read_jsonl(os.path.join(Layout(self.work).run, "run.jsonl"))
         return [row["error"] for row in rows if row["kind"] == "callback_error"]
 
 

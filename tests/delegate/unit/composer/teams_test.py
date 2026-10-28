@@ -5,7 +5,6 @@ TeamRuns).
 
 import os
 import re
-import tempfile
 from unittest import mock
 
 from ensemble.delegate.composer import Composer, ConfigError
@@ -33,6 +32,7 @@ from tests.delegate.case import Case
 from tests.delegate.unit.composer.shipped import catalog
 from tests.delegate.unit.composer.teams import FILES, INTRO, POET, STEPS, VERSE, WRITER
 from tests.utils.case import local_section
+from tests.utils.sandbox import scratch
 
 CONFIG = """\
 tier = 2
@@ -65,12 +65,10 @@ class Fake(Case):
     """A team root, config and local file in a temp dir; a HOME of the test's own for team dirs."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tmp = tmp.name
-        self.root = os.path.join(tmp.name, "team")
-        self.config = os.path.join(tmp.name, "config.toml")
-        self.local_file = os.path.join(tmp.name, "config.local.toml")
+        self.tmp = scratch(self, real=False)
+        self.root = os.path.join(self.tmp, "team")
+        self.config = os.path.join(self.tmp, "config.toml")
+        self.local_file = os.path.join(self.tmp, "config.local.toml")
         self.write(self.root, FILES)
         self.configure(CONFIG)
 

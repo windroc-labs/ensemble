@@ -18,6 +18,7 @@ from tests.manager.live_crew import MANAGER, LiveCrew, Owner, has_pair, logged
 from tests.session import live_tmux
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_tui
+from tests.utils.sandbox import pid_exists as _running
 
 PERMISSION = {"kind": "hook", "event": "PermissionRequest", "tool_name": "Edit"}
 EXTRA = '[session.clients.ext]\nimplementation = "ensemble.session.clients.claude:ClaudeClient"\n'
@@ -89,14 +90,6 @@ class WorkerTest(LiveCrew):
         self.assertTrue(self.live("w1"))
         self.assertTrue(has_pair(logged(self.log("w1"))[-1]["argv"], "--resume", record.sid))
         self.assertEqual(self.roster()["w1"].state, State.LIVE)
-
-
-def _running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
 
 
 class OwnerCloseTest(LiveCrew):
