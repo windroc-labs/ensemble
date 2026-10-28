@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -27,8 +26,6 @@ const (
 	linearTokenURL      = "https://api.linear.app/oauth/token"
 )
 
-var linearName = regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,128}$`)
-var linearUser = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 var errLinear = errors.New("Linear broker maintenance failed; check enrollment and broker installation, then rerun")
 
 // ErrLinearStale is linear-maintain meeting a broker Linear item an earlier broker build wrote, which retrust repairs.
@@ -56,10 +53,10 @@ func (a LinearIdentity) scopes() string {
 	return ""
 }
 
-func linearSafe(s string) bool { return linearName.MatchString(s) && s != "." && s != ".." }
+func linearSafe(s string) bool { return credential.ValidLinearService(s) }
 
 func (a LinearIdentity) check() error {
-	if !linearSafe(a.Name) || !linearSafe(a.SecretService) || !linearSafe(a.TokenService) || a.SecretService == a.TokenService || a.scopes() == "" || !linearUser.MatchString(a.UserID) || len(a.ClientID) == 0 || len(a.ClientID) > 256 || strings.ContainsFunc(a.ClientID, func(r rune) bool { return r <= 0x20 || r > 0x7e }) {
+	if a.Kind == "role" && !credential.ValidLinearRole(a.Name) || !linearSafe(a.Name) || !linearSafe(a.SecretService) || !linearSafe(a.TokenService) || a.SecretService == a.TokenService || a.scopes() == "" || !credential.ValidLinearUser(a.UserID) || len(a.ClientID) == 0 || len(a.ClientID) > 256 || strings.ContainsFunc(a.ClientID, func(r rune) bool { return r <= 0x20 || r > 0x7e }) {
 		return errLinear
 	}
 	for _, service := range []string{a.SecretService, a.TokenService} {

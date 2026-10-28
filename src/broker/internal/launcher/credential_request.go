@@ -2,7 +2,6 @@ package launcher
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 
 	"ensemble/broker/internal/credential"
@@ -10,15 +9,21 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-func (m *Manifest) parseCredentials(fields map[string]json.RawMessage) error {
-	merged := map[string]json.RawMessage{}
+type credentialRequest struct {
+	GitHub *githubRequest
+	Env    []Secret
+	Linear *credential.LinearRequest
+}
+
+func parseCredentials(fields map[string]json.RawMessage) (credentialRequest, error) {
+	var merged credentialRequest
 	for _, source := range []string{"environment_credentials", "credentials"} {
 		raw, present := fields[source]
 		if !present {
 			continue
 		}
-		reject := func(kind string) error {
-			return protocol.New(protocol.ManifestRejected, "Manifest rejected: "+source+": invalid "+kind)
+		reject := func(kind string) (credentialRequest, error) {
+			return credentialRequest{}, protocol.New(protocol.ManifestRejected, "Manifest rejected: "+source+": invalid "+kind)
 		}
 		var text string
 		if json.Unmarshal(raw, &text) != nil || string(raw) == "null" {
@@ -29,48 +34,29 @@ func (m *Manifest) parseCredentials(fields map[string]json.RawMessage) error {
 			return reject("credential object")
 		}
 		for kind, value := range spec {
-			valid := false
 			switch kind {
 			case "github":
-				var parsed Manifest
-				valid = string(value) != "null" && parsed.parseGitHub(value) == nil
+				merged.GitHub, err = parseGitHub(value)
+				if err != nil || merged.GitHub == nil {
+					return reject(kind)
+				}
 			case "env":
-				var parsed Manifest
-				valid = parsed.parseSecrets(value) == nil && len(parsed.Secrets) > 0
+				merged.Env, err = parseSecrets(value)
+				if err != nil || len(merged.Env) == 0 {
+					return reject(kind)
+				}
 			case "linear":
-				_, err := parseLinear(value)
-				valid = err == nil
+				merged.Linear, err = parseLinear(value)
+				if err != nil {
+					return reject(kind)
+				}
 			default:
-				return protocol.New(protocol.ManifestRejected, "Manifest rejected: "+source+": unknown kind "+kind)
+				return credentialRequest{}, protocol.New(protocol.ManifestRejected, "Manifest rejected: "+source+": unknown kind "+kind)
 			}
-			if !valid {
-				return reject(kind)
-			}
-			merged[kind] = value
 		}
 	}
-	for kind, value := range merged {
-		switch kind {
-		case "github":
-			if m.GitHubApp != "" {
-				return protocol.New(protocol.ManifestRejected, "Manifest rejected: github specified twice")
-			}
-			_ = m.parseGitHub(value)
-		case "env":
-			if _, exists := fields["secrets"]; exists {
-				return protocol.New(protocol.ManifestRejected, "Manifest rejected: env specified twice")
-			}
-			_ = m.parseSecrets(value)
-		case "linear":
-			m.Linear, _ = parseLinear(value)
-		}
-	}
-	return nil
+	return merged, nil
 }
-
-var rolePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-var linearServicePattern = regexp.MustCompile(`^[A-Za-z0-9._@+-]{1,128}$`)
-var linearUserPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func credentialReference(s string) bool {
 	return len(s) > 0 && len(s) <= 256 && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x21 || r > 0x7e })
@@ -104,11 +90,11 @@ func parseLinear(data []byte) (*credential.LinearRequest, error) {
 		return nil, bad
 	}
 	a, b := r.App, r.Board
-	if !rolePattern.MatchString(a.Role) || a.Role == "harness" || a.Role == "manager" || !credentialReference(a.ClientID) || !linearUserPattern.MatchString(a.UserID) {
+	if !credential.ValidLinearRole(a.Role) || a.Role == "harness" || a.Role == "manager" || !credentialReference(a.ClientID) || !credential.ValidLinearUser(a.UserID) {
 		return nil, bad
 	}
 	for _, s := range []string{a.SecretService, a.TokenService} {
-		if !linearServicePattern.MatchString(s) || s == "." || s == ".." {
+		if !credential.ValidLinearService(s) {
 			return nil, bad
 		}
 	}

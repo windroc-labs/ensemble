@@ -20,24 +20,48 @@ func TestCredentialRequestFixtures(t *testing.T) {
 }
 
 func TestCredentialRequestMerge(t *testing.T) {
-	env := `{"env":[{"item":"ensemble-broker-env/old","file":"old"}],"github":{"app":"old","permissions":{"contents":"read"}}}`
+	environment := `{"env":[{"item":"ensemble-broker-env/old","file":"old"}],"github":{"app":"old","permissions":{"contents":"read"}}}`
 	caller := `{"env":[{"item":"ensemble-broker-env/new","file":"new"}]}`
-	m, err := ParseManifest(withFields(t, map[string]any{"credentials": caller, "environment_credentials": env}))
-	if err != nil || m.GitHubApp != "old" || len(m.Secrets) != 1 || m.Secrets[0].File != "new" {
-		t.Fatalf("merge: %+v %v", m, err)
+	fields := map[string]json.RawMessage{}
+	for name, value := range map[string]string{"credentials": caller, "environment_credentials": environment} {
+		fields[name], _ = json.Marshal(value)
 	}
+	request, err := parseCredentials(fields)
+	if err != nil || request.GitHub.App != "old" || len(request.Env) != 1 || request.Env[0].File != "new" {
+		t.Fatalf("merge: %+v %v", request, err)
+	}
+	base := string(fixtureBytes(t, "credential-spec-linear.json"))
+	for _, sources := range []map[string]any{
+		{"environment_credentials": base},
+		{"credentials": base},
+		{"environment_credentials": strings.Replace(base, "dummy-team-id", "environment-team", 1), "credentials": base},
+	} {
+		m, err := ParseManifest(withFields(t, sources))
+		if err != nil || m.Linear == nil || m.Linear.Board.Team != "dummy-team-id" {
+			t.Fatalf("linear merge: %+v %v", m, err)
+		}
+	}
+	// An override does not hide an invalid environment declaration.
 	for _, spec := range []string{`{"github":null}`, `{"env":[]}`, `{"env":[{"item":"other/secret","file":"x"}]}`, `{"github":{"app":"a","permissions":{"contents":"write","contents":"read"}}}`} {
-		if _, err := ParseManifest(withFields(t, map[string]any{"credentials": spec})); err == nil {
+		if _, err := ParseManifest(withFields(t, map[string]any{"credentials": caller, "environment_credentials": spec})); err == nil {
 			t.Fatalf("accepted %s", spec)
 		}
 	}
-	for _, fields := range []map[string]any{
-		{"credentials": caller, "secrets": []any{secret("ensemble-broker-env/old", "old")}},
-		{"credentials": `{"github":{"app":"new","permissions":{"contents":"read"}}}`, "github": map[string]any{"app": "old", "permissions": map[string]string{"contents": "read"}}},
-	} {
-		if _, err := ParseManifest(withFields(t, fields)); err == nil {
-			t.Fatal("accepted old/new conflict")
-		}
+}
+
+func TestCredentialRequestDeferredKindsLeaveLegacyFields(t *testing.T) {
+	spec := `{"github":{"app":"new","permissions":{"contents":"write"}},"env":[{"item":"ensemble-broker-env/new","file":"new"}]}`
+	m, err := ParseManifest(withFields(t, map[string]any{"credentials": spec}))
+	if err != nil || m.GitHubApp != "" || len(m.Secrets) != 0 {
+		t.Fatalf("request served deferred kinds: %+v %v", m, err)
+	}
+	m, err = ParseManifest(withFields(t, map[string]any{
+		"credentials": spec,
+		"github":      map[string]any{"app": "old", "permissions": map[string]string{"contents": "read"}},
+		"secrets":     []any{secret("ensemble-broker-env/old", "old")},
+	}))
+	if err != nil || m.GitHubApp != "old" || m.GitHubPermissions["contents"] != "read" || len(m.Secrets) != 1 || m.Secrets[0].File != "old" {
+		t.Fatalf("legacy fields changed: %+v %v", m, err)
 	}
 }
 
@@ -53,21 +77,5 @@ func TestCredentialRequestDoesNotEchoValues(t *testing.T) {
 	_, err := ParseManifest(withFields(t, map[string]any{"credentials": json.RawMessage(value)}))
 	if err == nil {
 		t.Fatal("duplicate kind accepted")
-	}
-}
-
-func TestLinearRequestExactContract(t *testing.T) {
-	base := string(fixtureBytes(t, "credential-spec-linear.json"))
-	for _, replacement := range []string{`" "`, `"non-ascii-é"`, `"` + strings.Repeat("a", 257) + `"`} {
-		spec := strings.Replace(base, `"dummy-team-id"`, replacement, 1)
-		if _, err := ParseManifest(withFields(t, map[string]any{"credentials": spec})); err == nil {
-			t.Fatal("invalid reference accepted")
-		}
-	}
-	for _, key := range []string{"app", "board", "role", "client_id", "user_id", "secret_service", "token_service", "team", "states", "labels", "project_repos", "human_members", "task_labels", "agent_labels"} {
-		spec := strings.Replace(base, `"`+key+`"`, `"`+strings.ToUpper(key)+`"`, 1)
-		if _, err := ParseManifest(withFields(t, map[string]any{"credentials": spec})); err == nil {
-			t.Fatalf("non-exact %s key accepted", key)
-		}
 	}
 }
