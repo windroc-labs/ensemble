@@ -9,6 +9,7 @@ from ensemble.orchestrator.engine.flow.types import (
     BOTH_DIRECTIONS,
     IDENT_ERROR,
     ISSUE_ID,
+    PRIORITY_NAMES,
     PRIORITY_NUMBERS,
 )
 from ensemble.orchestrator.engine.types import (
@@ -95,6 +96,7 @@ class LocalIssues:
             "state": None
             if state is None
             else {"id": state.value, "name": state.value, "type": TYPES[state]},
+            "priority": PRIORITY_NAMES[found.priority],
             "labels": _labels(found),
             "project": None,
             "milestone": None,
