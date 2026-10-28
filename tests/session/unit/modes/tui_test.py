@@ -1778,6 +1778,14 @@ class StartupTui(ScanTui):
 
 
 class StartupSendTest(Base):
+    def test_a_rejected_plan_command_cannot_hold_the_next_send(self):
+        mode = self.started_with(prompt="")
+        self.ready(turn=False)
+        self.assertTrue(mode.send("/plan implement this"))
+        mode.poll(0)
+        self.assertTrue(mode.send("implement without plan"))
+        self.assertEqual(self.sent()[-2:], [Paste("implement without plan"), Key("Enter")])
+
     def test_cancellation_during_the_press_lock_wait_prevents_key_input(self):
         mode = self.started_with()
         pending = [True]

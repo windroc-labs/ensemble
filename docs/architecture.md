@@ -248,7 +248,7 @@ flowchart LR
   P --> A[Acknowledge send]
 ```
 
-Turn changes come from accepted hook/native events through normal polling. A subsequent Codex send waits for the preceding prompt’s accepted turn before choosing its path; empty input and local slash commands do not require acceptance. `/init`, `/compact`, and `/plan` or `/review` with instructions start work; the latter two without instructions open local controls.
+Turn changes come from accepted hook/native events through normal polling. A subsequent Codex send waits for the preceding ordinary prompt’s accepted turn before choosing its path. Empty input and slash commands do not imply turn acceptance: commands can be rejected locally without a turn event; actual command turns are tracked through the same accepted events.
 
 Pending input requests stay in `requests/` until answered; the caller deleting a timed-out request cancels it. Input is revalidated before dispatch and after acquiring the send lock. A waiting send holds later sends and presses in order while polling, screen, stop and close remain available; exit refuses pending input.
 

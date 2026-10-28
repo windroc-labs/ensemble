@@ -138,10 +138,10 @@ class TuiTest(Base):
             ("/plan", False),
             ("/unknown", False),
             ("hello", True),
-            ("/init", True),
-            ("/compact", True),
-            ("/review check this", True),
-            ("/plan implement this", True),
+            ("/init", False),
+            ("/compact", False),
+            ("/review check this", False),
+            ("/plan implement this", False),
         ):
             with self.subTest(text=text):
                 self.assertEqual(run._starts_turn(text), expected)
