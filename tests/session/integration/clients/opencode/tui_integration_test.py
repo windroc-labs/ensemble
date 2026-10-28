@@ -338,6 +338,14 @@ class TuiSessions(Case):
         )
         self.assertEqual(self.words(1)[-1], "w1 done")
 
+    def test_a_compact_after_the_turn_leaves_it_done(self):
+        self.scene([[{"text": "answered"}, {"compactAfter": "summary"}]])
+        handle, stream = self.start()
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("answered"))
+        stream.quiet()
+        self.assertEqual(handle.status().state, StatusState.DONE)
+        self.assertEqual(self.words(1), ["w1 done"])
+
     def test_a_recovered_error_does_not_fail_the_turn(self):
         error = {"name": "ContextOverflowError", "data": {"message": "compacting"}}
         self.scene([[{"error": error, "recover": True}, {"tool": "read"}, {"text": "done anyway"}]])

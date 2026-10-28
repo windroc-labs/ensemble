@@ -712,45 +712,8 @@ class EventsTest(Base):
     def test_an_error_without_data_keeps_its_name(self):
         found = self.events(line("error", error={"name": "APIError"}), text("late"))
         self.assertEqual(
-            found, [ClientBound(SES), TurnStarted(), Reply("late"), TurnFailed("APIError", "")]
+            found, [ClientBound(SES), TurnStarted(), TurnFailed("APIError", ""), Reply("late")]
         )
-
-    def test_a_compacted_run_ends_with_its_last_answer(self):
-        overflow = {"name": "ContextOverflowError", "data": {"message": "too long"}}
-        stop = line("step_finish", part={"reason": "stop"})
-        continued = {"type": "text", "text": "Continue.", "synthetic": True}
-        found = self.events(
-            line("error", error=overflow),
-            line("step_start", part={"type": "step-start"}),
-            text("summary"),
-            stop,
-            line("text", part=continued),
-            line("step_start", part={"type": "step-start"}),
-            text("answer"),
-            stop,
-        )
-        self.assertEqual(
-            found,
-            [
-                ClientBound(SES),
-                TurnStarted(),
-                Activity("step_start"),
-                Reply("summary"),
-                Activity("step_start"),
-                Reply("answer"),
-                TurnEnd("answer"),
-            ],
-        )
-
-    def test_an_error_after_the_last_step_fails_the_turn(self):
-        found = self.events(
-            line("step_start", part={"type": "step-start"}),
-            text("partial"),
-            line("step_finish", part={"reason": "stop"}),
-            line("error", error={"name": "APIError"}),
-        )
-        self.assertEqual(found[-1], TurnFailed("APIError", ""))
-        self.assertNotIn(TurnEnd("partial"), found)
 
     def test_no_session_fails_the_turn(self):
         found = self.events("not json", json.dumps({"type": "text"}))

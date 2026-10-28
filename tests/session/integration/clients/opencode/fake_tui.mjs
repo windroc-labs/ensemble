@@ -11,6 +11,7 @@
 // failed), {lateUser: ms} (the whole turn, its user message too, saved ms after its idle),
 // {compact: text} (a context overflow's auto compaction: its error, compaction user message,
 // summary `text`, then a synthetic continue message, or after an earlier turn the input again),
+// {compactAfter: text} (a /compact after the turn's idle: no message to go on, then idle again),
 // {foreign}, {busy}, {reinit}, {nested}. Each start and nested probe is a FAKE_LOG line.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -135,6 +136,24 @@ async function user(fields) {
   await emit("message.part.updated", { part: first });
 }
 
+// compaction.ts: its request, then its summary `text`.
+async function summarize(text, auto) {
+  await user({ type: "compaction", auto, overflow: auto });
+  await emit("session.status", { sessionID: native, status: { type: "busy" } });
+  const piece = { id: `prt_${++part}`, sessionID: native, type: "text", text };
+  const summary = assistant([piece]);
+  Object.assign(summary.info, { summary: true, mode: "compaction" });
+  save(summary);
+  await emit("message.part.updated", { part: piece });
+  await emit("message.updated", { info: summary.info });
+}
+
+async function idle() {
+  await emit("session.status", { sessionID: native, status: { type: "idle" } });
+  await emit("session.idle", { sessionID: native });
+  for (const info of users) await emit("message.updated", { info: { ...info, summary: { diffs: [] } } });
+}
+
 async function step(item) {
   if ("text" in item) {
     const session = item.child ? CHILD : native;
@@ -184,14 +203,7 @@ async function step(item) {
     const overflowed = assistant([]);
     save(overflowed);
     await emit("message.updated", { info: overflowed.info });
-    await user({ type: "compaction", auto: true, overflow: true });
-    await emit("session.status", { sessionID: native, status: { type: "busy" } });
-    const text = { id: `prt_${++part}`, sessionID: native, type: "text", text: item.compact };
-    const summary = assistant([text]);
-    Object.assign(summary.info, { summary: true, mode: "compaction" });
-    save(summary);
-    await emit("message.part.updated", { part: text });
-    await emit("message.updated", { info: summary.info });
+    await summarize(item.compact, true);
     if (earlier) await user({ type: "text", text: prompt });
     else await user({ type: "text", text: "Continue.", synthetic: true, metadata: { compaction_continue: true } });
     await emit("session.status", { sessionID: native, status: { type: "busy" } });
@@ -228,10 +240,14 @@ async function turn(text, steps, first) {
   await user({ type: "text", text });
   await emit("session.status", { sessionID: native, status: { type: "busy" } });
   for (const item of steps) if (await step(item)) break;
-  await emit("session.status", { sessionID: native, status: { type: "idle" } });
-  await emit("session.idle", { sessionID: native });
-  for (const info of users) await emit("message.updated", { info: { ...info, summary: { diffs: [] } } });
+  await idle();
   earlier = true;
+  const after = steps.find((item) => "compactAfter" in item);
+  if (after) {
+    users = [];
+    await summarize(after.compactAfter, false);
+    await idle();
+  }
   for (const [ms, message] of late.splice(0)) setTimeout(() => messages.push(message), ms);
   if (held) {
     const turnMessages = held;

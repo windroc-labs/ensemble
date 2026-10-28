@@ -23,7 +23,7 @@ let compacting = false; // compaction's request seen, not the message after it
 let reported = new Set(); // text messages delivered in this user turn; busy steps do not reset it
 let completed = new Set(); // completion events can precede the corresponding API records
 let busy = false;
-let failed = false;
+let open = false; // a turn begun, not yet idle: busy and idle outside one (a /compact) are no turn's
 let error = null; // the root's session.error, the turn's failure unless a busy shows it recovered
 let started = false;
 let chain = Promise.resolve();
@@ -133,7 +133,7 @@ function begin(id) {
   turnUser = id;
   reported = new Set();
   completed = new Set();
-  failed = false;
+  open = true;
   error = null;
   call("turn.started", { turn_id: id });
 }
@@ -160,21 +160,18 @@ function handle(event, client) {
       if (p.sessionID !== root || p.status?.type !== "busy") return;
       seen.clear();
       error = null;
-      if (!busy) call("session.busy");
+      if (!busy && open) call("session.busy");
       busy = true;
       return;
     case "session.idle": {
       if (p.sessionID !== root) return;
       busy = false;
       compacting = false;
-      // A fatal error's turn idles twice (its halt, then its run's end); only new input clears it.
-      if (failed) return;
-      if (error) {
-        failed = true;
-        call("session.error", error);
-        return;
-      }
-      report(client, true);
+      // A fatal error's turn idles twice (its halt, then its run's end): the first ends it.
+      if (!open) return;
+      open = false;
+      if (error) call("session.error", error);
+      else report(client, true);
       return;
     }
     case "session.error":

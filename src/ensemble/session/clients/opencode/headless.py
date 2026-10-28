@@ -43,7 +43,7 @@ class OpenCodeHeadless(Homed, JsonHeadless):
         self.common = common
         self.cwd, self.sid = "", ""
         self.bound, self.failed, self.last = False, False, ""
-        self.native, self.finished, self.error = "", False, None
+        self.native, self.finished = "", False
 
     def launch(self, spec: Spec):
         context, common = self._context, self.common
@@ -73,7 +73,7 @@ class OpenCodeHeadless(Homed, JsonHeadless):
         )
         self.cwd, self.sid = cwd, sid
         self.bound, self.failed, self.last = False, False, ""
-        self.native, self.finished, self.error = "", False, None
+        self.native, self.finished = "", False
         return Launch(
             (
                 found.python if found else os.path.realpath(sys.executable),
@@ -97,13 +97,7 @@ class OpenCodeHeadless(Homed, JsonHeadless):
         yield from super().events(lines)
         if not self.bound:
             yield TurnFailed("no_session", "opencode ended before it started a session")
-        elif self.failed:
-            return
-        elif self.error is not None:
-            yield self.error
-        elif self.finished:
-            yield TurnEnd(self.last)
-        else:
+        elif not self.failed and not self.finished:
             yield TurnFailed("incomplete_turn", "opencode ended without a final step")
 
     def parse(self, record: dict):
@@ -125,11 +119,7 @@ class OpenCodeHeadless(Homed, JsonHeadless):
             if isinstance(kind, str):
                 yield Activity(kind)
             return
-        if kind == "step_start":
-            self.error = None
         if kind == "text":
-            if part.get("synthetic") is True:
-                return
             value = part.get("text")
             if isinstance(value, str) and value.strip():
                 self.last = value
@@ -154,14 +144,17 @@ class OpenCodeHeadless(Homed, JsonHeadless):
             self.failed = True
             yield Blocked(kind)
         elif kind == "step_finish" and part.get("reason") == "stop":
-            self.finished = True
+            if not self.failed and not self.finished:
+                self.finished = True
+                yield TurnEnd(self.last)
         elif kind == "error":
+            self.failed = True
             error = record.get("error")
             error = error if isinstance(error, dict) else {}
             data = error.get("data")
             message = data.get("message") if isinstance(data, dict) else None
             name = error.get("name")
-            self.error = TurnFailed(
+            yield TurnFailed(
                 name if isinstance(name, str) else "error",
                 message if isinstance(message, str) else "",
             )
