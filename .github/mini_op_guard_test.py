@@ -104,10 +104,10 @@ class Tree(unittest.TestCase):
         path.write_text(text)
         return path
 
-    def run_guard(self, environ=None):
+    def run_guard(self, environ=None, argv=()):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = guard.main([], root=self.root, environ=environ or {})
+            code = guard.main(list(argv), root=self.root, environ=environ or {})
         return code, out.getvalue()
 
 
@@ -201,9 +201,9 @@ class PullRequestTest(Tree):
         path.write_text(json.dumps({"pull_request": pr}))
         return {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(path)}
 
-    def run_with(self, git, environ):
+    def run_with(self, git, environ, argv=("--pr-text",)):
         with mock.patch.object(guard.subprocess, "run", git):
-            return self.run_guard(environ)
+            return self.run_guard(environ, argv)
 
     def test_pr_fields_rejected(self):
         for kind, line in (
@@ -280,13 +280,37 @@ class PullRequestTest(Tree):
                 code, out = self.run_with(git, self.event())
                 self.assertEqual(code, 0, out)
 
-    def test_push_event_scans_files_only(self):
-        git = FakeGit()
-        code, _ = self.run_with(
-            git, {"GITHUB_EVENT_NAME": "push", "GITHUB_EVENT_PATH": "/nonexistent"}
-        )
-        self.assertEqual(code, 0)
-        self.assertEqual(git.calls, [])
+    def test_default_scans_files_only(self):
+        for name in ("push", "pull_request"):
+            with self.subTest(event=name):
+                git = FakeGit()
+                environ = {**self.event(body="see 10.20.30.40"), "GITHUB_EVENT_NAME": name}
+                code, out = self.run_with(git, environ, argv=())
+                self.assertEqual(code, 0, out)
+                self.assertEqual(out, "mini-op guard: 0 files clean\n")
+                self.assertEqual(git.calls, [])
+
+    def test_pr_text_skips_the_tree(self):
+        self.write(".mini-op/runbooks/x.md", "ssh admin@10.20.30.40\n")
+        code, out = self.run_with(FakeGit(), self.event())
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out, "PR fields clean\n")
+
+    def test_pr_text_needs_a_pull_request_event(self):
+        for environ in ({}, {"GITHUB_EVENT_NAME": "push"}):
+            with self.subTest(environ=environ):
+                git = FakeGit()
+                code, out = self.run_with(git, environ)
+                self.assertEqual(code, 1)
+                self.assertEqual(out, "mini-op guard: not a pull_request event\n")
+                self.assertEqual(git.calls, [])
+
+    def test_unknown_arguments_print_usage(self):
+        for argv in (["--files"], ["--pr-text", "--pr-text"], ["x"]):
+            err = io.StringIO()
+            with self.subTest(argv=argv), contextlib.redirect_stderr(err):
+                self.assertEqual(guard.main(argv, root=self.root, environ={}), 2)
+                self.assertIn("usage: mini_op_guard.py [--pr-text]", err.getvalue())
 
     def test_fail_closed(self):
         bad_json = self.root / "bad.json"
