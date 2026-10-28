@@ -31,7 +31,7 @@ from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import DRAIN_WAIT, HarnessDelegate
 from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
-from ensemble.delegate.engine.runner import report
+from ensemble.delegate.engine.runner import STOP_LIMIT, report
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
@@ -46,6 +46,7 @@ from ensemble.session import (
     Session,
     SessionBusy,
     SessionError,
+    TurnEnd,
     Unanswered,
 )
 from ensemble.session import ConfigError as SessionConfigError
@@ -72,6 +73,14 @@ from tests.session.unit.hosts.docker import support
 from tests.utils.process_fixtures import DEVNULL, STDOUT
 
 ORPHAN = 4242
+
+
+def gives_up():
+    """HarnessSession's next worker ends its attempt without an outcome (a nudge, then STOP_LIMIT
+    more turn ends), its session left open.
+    """
+    HarnessSession.script = (TurnEnd("No outcome block."),) * (1 + STOP_LIMIT)
+    HarnessSession.lingers = True
 
 
 class RealSpawn(DrivenDelegate):
@@ -583,11 +592,12 @@ class IdentityTest(HarnessCase):
         replacement = HarnessSession.start(
             replace(original.spec, sid=SID.replace("0", "1")), host="agent"
         )
-        self.assertFalse(view.status().alive)
         with self.assertRaisesRegex(ConfigError, "still alive"):
             view.resume(input="answer")
         with self.assertRaisesRegex(ConfigError, "still alive"):
             self.make()
+        FakeControl(self.metadata()["drive"]).close()  # its drive ends, its worker gone
+        self.assertEqual((view.status().alive, view.status().state), (False, "gone"))
         view.close()
         self.assertTrue(replacement.alive())
 
@@ -889,11 +899,8 @@ class CleanTest(HarnessCase):
         self.assertTrue(os.path.isdir(os.path.join(self.agent(), "tmp")))
 
     def test_scratch_refuses_an_agent_session_left_open_after_its_run(self):
-        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
-        self.make(spec=spec).detach()
-        view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-        view.close()
-        HarnessSession.script = (Reply("No outcome block."), Exited(0))
+        view = self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID))
+        gives_up()
         view.run()
         self.assertFalse(view.alive())
         os.makedirs(os.path.join(self.agent(), "tmp"), exist_ok=True)
@@ -1035,7 +1042,7 @@ class RunEndTest(HarnessCase):
     def test_an_agent_session_left_open_keeps_it(self):
         view = self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID))
         self.fill()
-        HarnessSession.script = (Reply("No outcome block."), Exited(0))
+        gives_up()
         view.run()
         self.assertEqual(sorted(os.listdir(self.tmp)), ["deep", "deliverable.md", "link", "msg"])
 
@@ -1461,12 +1468,18 @@ class ResumeInputTest(HarnessCase):
 
 class ResumeModeTest(HarnessCase):
     def gave_up(self, mode):
-        """A detached run whose harness ended without an outcome, a tui agent session left open."""
+        """A run ended without an outcome: a tui one's worker gave up, its session left open; a
+        headless one's detached harness ended.
+        """
         spec = Spec("input", self.work, mode=mode, client="fake", sid=SID)
-        self.make(spec=spec).detach()
-        view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-        view.close()
-        HarnessSession.script = (Reply("No outcome block."), Exited(0))
+        if mode == "tui":
+            view = self.make(spec=spec)
+            gives_up()
+        else:
+            self.make(spec=spec).detach()
+            view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
+            view.close()
+            HarnessSession.script = (Reply("No outcome block."), Exited(0))
         self.assertIsNone(view.run().outcome)
         self.assertFalse(view.alive())
 
@@ -1616,11 +1629,8 @@ class StatusTest(HarnessCase):
         self.assertEqual((view.status().alive, view.status().state), (False, "gone"))
 
     def test_a_tui_run_ended_without_an_outcome_shows_its_agents_word(self):
-        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
-        self.make(spec=spec).detach()
-        view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-        view.close()
-        HarnessSession.script = (Reply("No outcome block."), Exited(0))
+        view = self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID))
+        gives_up()
         self.assertIsNone(view.run().outcome)
         status = view.status()
         self.assertEqual((status.alive, status.state, status.outcome), (False, "working", None))
@@ -1671,12 +1681,9 @@ class UnansweredTest(HarnessCase):
         )
 
     def gave_up(self):
-        """A detached tui run whose harness ended without an outcome, its agent session left open."""
-        spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
-        self.make(spec=spec).detach()
-        view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-        view.close()
-        HarnessSession.script = (Reply("No outcome block."), Exited(0))
+        """A tui run whose worker gave up without an outcome, its agent session left open."""
+        view = self.make(spec=Spec("input", self.work, mode="tui", client="fake", sid=SID))
+        gives_up()
         self.assertIsNone(view.run().outcome)
         return view
 
@@ -1697,6 +1704,7 @@ class UnansweredTest(HarnessCase):
         record = self.make(spec=spec).detach()
         view = DrivenDelegate.attach(record)
         HarnessSession.live[record.sessions[0]].stop()
+        FakeControl(self.metadata()["drive"]).close()  # its drive ends, its worker gone
         self.assertEqual((view.status().alive, view.status().state), (False, "gone"))
 
     def test_a_start_waits_through_an_attach_that_did_not_answer(self):
@@ -2600,16 +2608,17 @@ class EnvironmentTest(HarnessCase):
 class OwnedRun(HarnessCase):
     """An owned tui run (its preflight takes the handler): run() starts the worker, then waits for
     the attempt's Result its handler stores, ending the attempt itself only while opening past the
-    idle timeout or once its worker is gone.
+    idle timeout or once its worker is gone. Its worker sends no event: a test stores what its
+    handler would.
     """
 
     NEEDS = Result(0, Outcome(OutcomeStatus.NEEDS_INPUT, "T", "S", questions=["Q"]))
 
     def setUp(self):
         super().setUp()
-        HarnessSession.owns = True
+        HarnessSession.script, HarnessSession.lingers = (), True
         LockingSession.reset()
-        LockingSession.owns = True
+        LockingSession.lingers = True
         self.lines: list[str] = []
         self.enterContext(
             mock.patch("subprocess.Popen", side_effect=lambda _argv, **_kw: Child(self.lines))
@@ -2667,12 +2676,15 @@ class OwnedRun(HarnessCase):
             (HANDLER, {"workdir": self.work, "worker": 1}, module_roots()),
         )
         self.assertEqual(self.metadata()["plan"]["session"]["handlers"][0]["state"]["worker"], 1)
-        for owns, mode in ((False, "tui"), (True, "headless")):
-            with self.subTest(owns=owns, mode=mode):
-                HarnessSession.owns = owns
-                self.work = os.path.join(self.home, f"{owns}-{mode}")
-                spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode=mode)
-                self.assertEqual(self.make(spec=spec)._state.plan.session.handlers, ())
+        self.work = os.path.join(self.home, "headless")
+        spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="headless")
+        self.assertEqual(self.make(spec=spec)._state.plan.session.handlers, ())
+        HarnessSession.owns = False
+        self.work = os.path.join(self.home, "refused")
+        spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
+        with self.assertRaisesRegex(ConfigError, "^handlers: fake tui has no session harness yet$"):
+            self.make(spec=spec)
+        self.assertFalse(os.path.exists(Layout(self.work).run))
 
     def test_run_returns_the_result_the_handler_stored_and_stops_nothing(self):
         view = self.owned()
@@ -2832,7 +2844,7 @@ class OwnedRun(HarnessCase):
     def test_a_locked_needs_input_is_waiting_and_attachable(self):
         """A crew entry is waiting on an outcome needs_input while not alive (crew._reconciled)."""
         HarnessSession.reset(showable=True)
-        HarnessSession.owns = True
+        HarnessSession.lingers = True
         view = self.owned(lock="dummy-lock")
         _seen, on = self.at_begun(
             lambda: (self.record.bind(1, 1), self.record.complete(1, self.NEEDS, sid=SID))

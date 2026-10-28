@@ -520,9 +520,7 @@ def notice_key(root: str) -> re.Pattern:
 
 
 def manifest_credentials(request: CredentialRequest, app: str) -> dict:
-    """The manifest form of request (protocol $defs.credentials): each grant names app, the
-    Docker Host's [hosts.docker.github] App.
-    """
+    """The manifest form of request ($defs.credentials): each grant names app."""
     found = request.persisted()
     if "github" in found:
         if not app:

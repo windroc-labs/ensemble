@@ -394,7 +394,7 @@ func TestRunArguments(t *testing.T) {
 	}
 	run := detached(d)
 	cwd, claude := home+"/src/project", home+"/.ensemble/docker-state/worker_1/claude"
-	want := []string{"run", "--detach", "--name", container, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent",
+	want := []string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", container, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent",
 		"--network", workersNetwork, "--env", "HTTP_PROXY=" + workersProxy, "--env", "HTTPS_PROXY=" + workersProxy,
 		"--env", "http_proxy=" + workersProxy, "--env", "https_proxy=" + workersProxy,
 		"--env", "NO_PROXY=localhost,127.0.0.1,::1", "--env", "no_proxy=localhost,127.0.0.1,::1",
@@ -403,7 +403,7 @@ func TestRunArguments(t *testing.T) {
 		"--label", "ensemble.session=worker_1", "--label", "ensemble.generation=0123456789abcdef0123456789abcdef", "--label", "ensemble.client=claude", "--label", "team=crew",
 		"--mount", "type=volume,source=" + volume + ",target=" + cwd + ",volume-nocopy", "--mount", "type=bind,source=" + claude + ",target=" + claude,
 		"--tmpfs", "/run/ensemble/secrets:rw,noexec,nosuid,nodev,size=65536,mode=0700,uid=1001,gid=1002",
-		"--entrypoint", "/usr/bin/tini", digest, "--", "sleep", "infinity"}
+		"--entrypoint", "/usr/bin/tini", digest, "--", "/opt/ensemble/venv/bin/python", "-I", "/opt/ensemble/src/ensemble/session/harness/guard.py", "--serve"}
 	if !slices.Equal(run, want) {
 		t.Fatalf("run argv\n got %q\nwant %q", run, want)
 	}

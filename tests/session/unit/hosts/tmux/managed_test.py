@@ -142,6 +142,25 @@ class ManagedTest(Case):
         self.assertEqual(
             argv[start : start + 3], ["--terminal", "--display-grace", "--display-socket"]
         )
+        self.assertEqual(argv[start + 4 : start + 6], ["--size", "80x24"])
+
+    def test_terminal_worker_guard_and_display_take_the_hidden_size(self):
+        proc = mock.Mock()
+        proc.stdout.read.side_effect = [
+            guard.json_frame(b"s", {"pid": 123}),
+            guard.json_frame(b"x", {"returncode": 0}),
+            b"",
+        ]
+        host = TmuxHost("tmux", {"hidden_size": "100x30"}, tmux=mock.Mock())
+        with (
+            mock.patch.object(managed.subprocess, "Popen", return_value=proc) as spawn,
+            mock.patch.object(os, "set_blocking"),
+        ):
+            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel.close()
+        argv = spawn.call_args.args[0]
+        self.assertEqual(argv[argv.index("--size") + 1], "100x30")
+        self.assertEqual(host.tmux.start.call_args.kwargs["size"], (100, 30))
 
     def test_never_started_name_is_absent(self):
         self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.ABSENT)
@@ -182,6 +201,26 @@ class ManagedTest(Case):
         os.chmod(directory + "/" + generation + "/lease", 0o600)
         self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
         self.assertEqual(managed.liveness("tmux", "worker", "b" * 32), Liveness.UNKNOWN)
+
+    def test_a_concurrent_probe_is_no_live_guard(self):
+        """Probes take the lease shared: one probing (as ls or a tmux hook does) while another asks
+        makes no ended worker LIVE; only its guard's exclusive lease does.
+        """
+        generation = "a" * 32
+        directory = managed.location("tmux", "worker")
+        managed.private_directory(directory + "/" + generation)
+        managed.save_json(directory + "/current.json", {"generation": generation})
+        managed.save_json(
+            directory + "/" + generation + "/state.json",
+            {"generation": generation, "state": "exited"},
+        )
+        lease = managed.lease_file(directory + "/" + generation + "/lease")
+        try:
+            managed.fcntl.flock(lease, managed.fcntl.LOCK_SH)
+            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
+            self.assertFalse(managed.held(directory + "/" + generation + "/lease"))
+        finally:
+            os.close(lease)
 
     def test_display_teardown_kills_only_its_generation(self):
         tmux = mock.Mock()

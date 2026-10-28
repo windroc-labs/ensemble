@@ -3059,6 +3059,33 @@ class OwnedTest(HostedTuiBase):
             (view.sid, view.generation, view.mode), (SID, owned.generation, Mode.IN_PROCESS)
         )
 
+    def test_a_named_headless_view_without_its_harness_closes_only_a_confirmed_absent_worker(self):
+        spec = self.spec(client="fake", mode="headless", name="w1", sid=SID)
+        for named, found, released in (
+            (True, Liveness.ABSENT, True),
+            (True, Liveness.UNKNOWN, False),
+            (False, Liveness.ABSENT, False),
+        ):
+            with self.subTest(named=named, found=found):
+                host = mock.Mock(_named_headless=named)
+                host.worker_liveness.return_value = found
+                with mock.patch.object(self.session_cls, "host", return_value=host):
+                    view = self.session_cls._view(
+                        Channel.create(),
+                        name="w1",
+                        client="fake",
+                        sid=SID,
+                        generation="g7",
+                        mode=Mode.HEADLESS,
+                        spec=spec,
+                    )
+                if found == Liveness.UNKNOWN:
+                    with self.assertRaisesRegex(engine_types.Unanswered, "still running"):
+                        view.close()
+                else:
+                    view.close()
+                self.assertEqual(host._release.call_args_list, [mock.call("w1", "g7")] * released)
+
     def test_confirm_end_unanswered_is_none(self):
         owned = self.own()
         self.host.processes["w1"].calls.read.side_effect = engine_types.Unanswered(

@@ -1,5 +1,21 @@
 # Upgrading
 
+## Broker protocol 34: credential request field
+
+Broker protocol 34 adds the start manifest's optional `credentials`, a run's credential request (`github`, `linear`
+and `env` credentials, by reference only). No run sends one yet, and this broker refuses a start naming any kind in it.
+Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
+refuses an older protocol's broker. Nothing else changes.
+
+## Broker protocol 32: the guard is the Docker container's main process
+
+The broker now starts each worker container with the guard as its main process, and the harness reaches it over
+`docker attach` ([Harness-owned workers](architecture.md#harness-owned-workers)), so a killed harness no longer leaves
+its container running. Install this release's broker with its plugin (`scripts/install.sh` does both); the plugin
+refuses an older broker. Close every running Docker session first (`ensemble-session ls`, then
+`ensemble-session close NAME`): an older container has no guard for this release's harness to attach to.
+Conversations stay: resume them after the upgrade.
+
 ## The delegate's drive: harness_host removed
 
 A detached run's drive (`<agent>-drive`) now runs as a local process the delegate starts itself
@@ -23,13 +39,6 @@ older release started, so before upgrading:
 
 Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
 listed, and the next Docker start removes its container as debris.
-
-## Broker protocol 34: credential request field
-
-Broker protocol 34 adds the start manifest's optional `credentials`, a run's credential request (`github`, `linear`
-and `env` credentials, by reference only). No run sends one yet, and this broker refuses a start naming any kind in it.
-Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
-refuses an older protocol's broker. Nothing else changes.
 
 ## Broker protocol 31: output-repo token beside prefetch
 
@@ -181,6 +190,7 @@ is `client_id` in `[orchestrator.linear.roles.pm]`).
 | an `Agent` label group and one label per client, optional; both or neither | `linear.agent_label_group`, `linear.agent_labels` |
 | the harness's, the manager's and each role's OAuth app (below) | `client_id`, `secret_service`, `token_service`, `user_id` of `linear.harness`, `linear.manager` and `linear.roles.<role>` |
 | the humans subscribed on In Review | `linear.human_members` |
+| the human a PM question's issue is assigned to, optional: their Linear user id | `linear.assignee_id` |
 | the Linear project of each product repo, optional | `linear.project_repos` |
 
 Each OAuth app:

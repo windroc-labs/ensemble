@@ -176,13 +176,15 @@ def lease_file(path: str, *, create: bool = True) -> int:
 
 
 def held(path: str) -> bool:
-    """Whether another holds lock file `path`; absent: free."""
+    """Whether another holds lock file `path` (its owner's exclusive lock; a probe's shared one
+    never counts); absent: free.
+    """
     try:
         descriptor = lease_file(path, create=False)
     except FileNotFoundError:
         return False
     try:
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
     except BlockingIOError:
         return True
     finally:
@@ -235,8 +237,8 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
         check_directory(run)
         descriptor = lease_file(os.path.join(run, "lease"), create=False)
         try:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:  # shared: a concurrent probe is no live guard
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
                 return Liveness.LIVE
             value = load_json(os.path.join(run, "state.json"))
@@ -330,6 +332,7 @@ def _spawn(
     host, name, launch, run, *, terminal, display=None, events=None, metadata=None
 ) -> TmuxManagedProcess:
     generation = os.path.basename(run)
+    settings = host.tui_settings()
     save_json(os.path.join(run, "state.json"), {"generation": generation, "state": "starting"})
     lease = lease_file(os.path.join(run, "lease"))
     try:
@@ -344,6 +347,7 @@ def _spawn(
         if terminal:
             argv += ["--terminal", "--display-grace"]
             argv += ["--display-socket", os.path.join(run, "display")]
+            argv += ["--size", "{}x{}".format(*settings.hidden_size)]
         argv += ["--", *launch.argv]
         # Launch.env passes verbatim; the PTY is no tmux pane, the display relays its bytes.
         environment = {
@@ -389,7 +393,8 @@ def _spawn(
                 cwd=launch.cwd,
             ),
             events=events,
-            status_line=host.tui_settings().status_line,
+            status_line=settings.status_line,
+            size=settings.hidden_size,
             tags={
                 "@kind": "guard",
                 "@generation": generation,
