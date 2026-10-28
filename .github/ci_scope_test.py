@@ -26,8 +26,6 @@ MANIFESTS = {
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
 WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/test.yml"
-# A PR title or body edit; a base change also fires `edited` but carries changes.base.
-TEXT_EDIT = "github.event.action == 'edited' && !github.event.changes.base"
 
 
 def bumped(text, version="0.4.0"):
@@ -648,7 +646,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("  merge_group:\n    types: [checks_requested]", WORKFLOW.read_text())
         ci = job("ci")
         self.assertRegex(ci, r"needs:.*\bbroker\b")
-        self.assertIn("if: ${{ always() && ", ci)
+        self.assertIn("if: ${{ always() }}", ci)
         self.assertNotIn("actions: write", ci)
         self.assertIn("run: python3 .github/ci_scope.py --gate", ci)
         self.assertIn("github.event_name != 'push'", job("unit"))
@@ -658,23 +656,23 @@ class Workflow(unittest.TestCase):
         self.assertIn("github.event.merge_group.head_sha", worker)
         self.assertIn("github.event.merge_group.base_sha", worker)
 
-    def test_text_edit_runs_no_job_and_keeps_the_code_runs_ci(self):
+    def test_pr_edits_start_no_ci_run(self):
         text = WORKFLOW.read_text()
-        self.assertIn("  pull_request:\n    types: [opened, synchronize, reopened, edited]\n", text)
+        self.assertIn("  pull_request:\n    types: [opened, synchronize, reopened]\n", text)
+        for obsolete in ("edited", "changes.base", "text-edit", "CI skipped"):
+            with self.subTest(obsolete=obsolete):
+                self.assertNotIn(obsolete, text)
         self.assertIn(
-            "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}"
-            f"${{{{ ({TEXT_EDIT}) && format('-text-edit-{{0}}', github.run_id) || '' }}}}\n",
+            "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
             text,
         )
         for name in ("changes", "mini-op"):
             with self.subTest(job=name):
-                self.assertIn(f"    if: ${{{{ !({TEXT_EDIT}) }}}}\n", job(name))
+                self.assertNotRegex(job(name), r"(?m)^    if:")
         ci = job("ci")
-        self.assertIn(f"    if: ${{{{ always() && !({TEXT_EDIT}) }}}}\n", ci)
-        self.assertIn(
-            f"    name: ${{{{ ({TEXT_EDIT}) && 'CI skipped on a PR text edit' || 'CI' }}}}\n", ci
-        )
-        self.assertEqual(text.count(TEXT_EDIT), 5)
+        self.assertIn("    if: ${{ always() }}\n", ci)
+        self.assertIn("    name: CI\n", ci)
         jobs = set(re.findall(r"(?m)^  ([\w-]+):$", text.split("\njobs:\n", 1)[1]))
         self.assertLessEqual({"changes", "lint", "unit", "mini-op", "ci"}, jobs)
         for name in jobs - {"changes", "mini-op", "ci"}:

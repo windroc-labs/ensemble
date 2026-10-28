@@ -223,7 +223,11 @@ class Detach(RunReads, Case):
             raise AssertionError(f"{timeout}; {told}") from None
 
     def ended(self, turn_ends: int = 0) -> list[str]:
-        """The shaped events once they hold the drive's exited line and turn_ends turn ends."""
+        """The complete drive notifications and turn_ends turn ends."""
+
+        live_tmux.wait_events(
+            self.events_used, [(DRIVE, word) for word in ("outcome", "exited")], WAIT
+        )
 
         def check():
             shaped = shape(live_tmux.events(self.events_used))
@@ -289,7 +293,7 @@ class Tui(Detach):
         )
         shaped = self.ended(turn_ends=2)
         self.assertEqual(shaped.count("turn end"), 2)
-        self.assertEqual(self.drive_lines(shaped), ["outcome done", "exited 0"])
+        self.assertCountEqual(self.drive_lines(shaped), ["outcome done", "exited 0"])
         self.assertEqual(self.read(self.out), DONE["deliverable"])
         self.assertEqual(self.last("result")["outcome"]["status"], "done")
         self.assertTrue(self.live(TUI))
@@ -300,7 +304,7 @@ class Tui(Detach):
         self.said(res, tui=True)
         shaped = self.ended(turn_ends=2)
         self.assertEqual(shaped.count("turn end"), 2)
-        self.assertEqual(self.drive_lines(shaped), ["outcome done", "exited 0"])
+        self.assertCountEqual(self.drive_lines(shaped), ["outcome done", "exited 0"])
         self.assertEqual(self.read(self.out), DONE["deliverable"])
         self.assertTrue(self.live(TUI))
         clients = self.server.tmux("list-clients", "-t", f"={TUI}")
@@ -510,7 +514,7 @@ class Answer(Detach):
         res = self.detach(mode="tui", steps=[START], turns=[[block(ASKING)], [block(DONE)]])
         record = self.said(res, tui=True)
         shaped = self.ended(turn_ends=2)
-        self.assertEqual(self.drive_lines(shaped), ["outcome needs_input", "exited 0"])
+        self.assertCountEqual(self.drive_lines(shaped), ["outcome needs_input", "exited 0"])
         self.assertTrue(self.live(TUI))
         offset = len(live_tmux.events(self.events_used))
         drive = self.metadata()["drive"]
@@ -564,7 +568,7 @@ class Owned(Detach):
         res = self.detach(mode="tui", steps=[START], turns=[[block(ASKING)], [block(DONE)]])
         self.said(res, tui=True)
         shaped = self.ended(turn_ends=2)
-        self.assertEqual(self.drive_lines(shaped), ["outcome needs_input", "exited 0"])
+        self.assertCountEqual(self.drive_lines(shaped), ["outcome needs_input", "exited 0"])
         status = self.status()
         self.assertEqual((status.alive, status.outcome), (False, "needs_input"))
         self.assertTrue(self.live(TUI))

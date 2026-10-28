@@ -26,6 +26,7 @@ from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 CORE_TASKS = os.path.join(REPO, "src", "ensemble", "delegate", "team", "tasks")
+CORE_TEAM = os.path.dirname(CORE_TASKS)
 MARK = "[ensemble-progress:start] the topic"
 NOTE = (
     f"# Note\n\n## Steps\n\n1. **Report progress:**\n   {MARK}\n2. **Write.** Write it.\n\n"
@@ -87,17 +88,20 @@ class ComposerTeamDirs(child.Case):
             with self.subTest(resume=resume):
                 got = self.composed(resume=resume)
                 self.assertEqual(
-                    (got["intent"]["dirs"], got["intent"]["reads"]), ([], [self.tasks])
+                    (got["intent"]["dirs"], got["intent"]["reads"]),
+                    ([], [self.tasks, CORE_TEAM, self.team]),
                 )
                 self.assertEqual(TASKS_PARAM.search(got["prompt"])[1], self.tasks)
                 self.assertEqual(got["prompt"].startswith(RESUME), resume)
                 self.assertEqual(os.listdir(self.work), [])
 
-    def test_a_read_dir_holding_the_team_dir_composes_unadded(self):
-        self.local(f"[delegate.roles.writer]\nread = [{json.dumps(self.team)}]\n", "a")
+    def test_an_extra_read_dir_keeps_core_and_role_team_reads_unadded(self):
+        extra = os.path.join(self.work, "extra")
+        self.local(f"[delegate.roles.writer]\nread = [{json.dumps(extra)}]\n", "a")
         got = self.composed()
         self.assertEqual(
-            (got["intent"]["dirs"], got["intent"]["reads"]), ([], [self.tasks, self.team])
+            (got["intent"]["dirs"], got["intent"]["reads"]),
+            ([], [self.tasks, CORE_TEAM, self.team, extra]),
         )
 
     def test_a_write_dir_holding_the_team_dir_is_refused(self):
@@ -143,7 +147,7 @@ class TeamDirs(Integration):
         self.assertIn(f"`{self.tasks}`", plan["prompt"])
         self.assertEqual(
             (plan["cwd"], plan["dirs"], plan["reads"]),
-            (Layout(self.work).agent, [], [self.tasks]),
+            (Layout(self.work).agent, [], [self.tasks, CORE_TEAM, self.team]),
         )
         self.assertEqual(os.listdir(self.work), [])
         self.assertEqual(self.calls(), [])
@@ -158,6 +162,10 @@ class TeamDirs(Integration):
         )
 
     def test_a_run_in_headless_mode_reads_its_task_from_its_tasks_dir(self):
+        with open(os.path.join(self.env["HOME"], ".ensemble", "config.local.toml"), "a") as f:
+            f.write(
+                f"[delegate.roles.writer]\nread = [{json.dumps(os.path.join(self.work, 'extra'))}]\n"
+            )
         res = self.drive([mark("start", "noting"), block(DONE)], "--task", "note")
         self.assertEqual(res.returncode, 0, res.stderr)
         for line in ("Progress (start): noting", "delegate: status done"):
@@ -165,6 +173,8 @@ class TeamDirs(Integration):
         (call,) = self.calls()
         self.assertIn(f"`{self.tasks}`", call["argv"][-1])
         self.assertIn(f"Read(/{self.tasks}/**)", call["argv"])
+        self.assertIn(f"Read(/{CORE_TEAM}/**)", call["argv"])
+        self.assertIn(f"Read(/{self.team}/**)", call["argv"])
         self.assertEqual((call["cwd"], added(call["argv"])), (Layout(self.work).agent, []))
         self.assertFalse(os.path.exists(os.path.join(self.work, "tasks")))
         self.assertEqual(self.read(self.out), DONE["deliverable"])

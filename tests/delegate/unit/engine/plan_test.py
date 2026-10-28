@@ -314,7 +314,7 @@ class Refusals(Base):
 
 
 class Planned(Base):
-    KEYS = {"read": ["{{team}}"], "commands": ["x --dir {{workdir}}/src *"]}
+    KEYS = {"read": [], "commands": ["x --dir {{workdir}}/src *"]}
 
     def setUp(self):
         super().setUp()
@@ -729,7 +729,7 @@ class Docker(DockerCase):
     def test_host_dir_grants_are_refused_naming_their_key(self):
         for keys, word in (
             ({"read": ["~/x"]}, "read"),
-            ({"read": ["{{team}}", "repo"]}, "read"),
+            ({"read": ["repo"]}, "read"),
             ({"write": ["~/y"]}, "write"),
             ({"cwd": self.tmp}, "cwd"),
         ):

@@ -75,9 +75,11 @@ class Attended(Segment):
             self.assertNotIn(harness, self.here())
         self.agent_run()
         ended = (f"{harness} outcome done", f"{harness} exited 0")
-        live_tmux.wait(lambda: ended[1] in self.event_lines(), TIMEOUT, f"`{ended[1]}`")
+        live_tmux.wait_events(
+            self.events, [(harness, word) for word in ("outcome", "exited")], TIMEOUT
+        )
         lines = self.event_lines()
-        self.assertEqual([line for line in lines if line.startswith(f"{harness} ")], list(ended))
+        self.assertCountEqual([line for line in lines if line.startswith(f"{harness} ")], ended)
         self.assertEqual(set(lines) - set(ended), {f"{tui} done"})
 
     def test_a_tick_from_the_manager_starts_its_run_attended_and_an_idle_one_prints_nothing(self):

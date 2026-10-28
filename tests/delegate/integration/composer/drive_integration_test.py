@@ -24,7 +24,7 @@ class NewRun(child.Case):
             got["intent"],
             {
                 "dirs": [self.work],
-                "reads": [TASKS],
+                "reads": [TASKS, os.path.dirname(TASKS)],
                 "writes": [],
                 "commands": [],
                 "gate": "",

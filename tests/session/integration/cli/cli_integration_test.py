@@ -202,9 +202,16 @@ class ConfigTest(SessionCliCase):
     def test_a_local_overlay_sets_the_tmux_hosts_status_line(self):
         self.record(self.start("w0"))
         self.assertEqual(self.server.option("w0", "status"), "off")
+        before = self.server.tmux("show-options", "-g").stdout
+        keys = ("status", "status-left", "status-left-length")
+        other = [self.server.option("w0", key) for key in keys]
         self.local_config("[session.hosts.tmux]\nstatus_line = true\n")
-        self.record(self.start("w1"))
-        self.assertEqual(self.server.option("w1", "status"), "on")
+        name = "engineer-WDRC-281-502d679e"
+        self.record(self.start(name))
+        self.assertEqual(self.server.option(name, "status"), "on")
+        self.assertEqual(self.server.option(name, "status-left-length"), str(len(name) + 3))
+        self.assertEqual(self.server.tmux("show-options", "-g").stdout, before)
+        self.assertEqual([self.server.option("w0", key) for key in keys], other)
 
     def test_a_bad_config_or_host_or_client_override_exits_2_with_its_reason_first(self):
         local = "config: ~/.ensemble/config.local.toml"

@@ -103,14 +103,8 @@ class ReplyTest(WorkerCase):
 class EarlyDeathTest(WorkerCase):
     def test_a_client_that_exits_at_once_exits_1_with_its_last_lines_and_keeps_its_pane(self):
         res = self.start("w2", "--", "--bogus")
-        self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
-        lines = res.stderr.splitlines()
-        head = "ensemble-session: w2: claude exited 2 at once; its last lines:"
-        self.assertIn(head, lines, res.stderr)
-        self.assertEqual(lines[: lines.index(head)], ["session w2: tmux attach -t '=w2'"])
-        self.assertIn(
-            "claude: error: unrecognized arguments: --bogus", lines[lines.index(head) + 1 :]
-        )
+        lines = self.assert_early_exit(res, "w2", 2)
+        self.assertIn("claude: error: unrecognized arguments: --bogus", lines)
         self.assertTrue(self.live("w2"))
         self.assertEqual(self.pane("w2", "#{pane_dead}"), "1")
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
@@ -191,13 +185,10 @@ class ColorTest(WorkerCase):
     def test_exit_in_the_launch_turn_still_fails_start(self):
         # The terminal may echo /color before exit; only the command log proves it was read.
         res = self.start("w1", steps=[{"kind": "exit"}])
-        self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
-        lines = res.stderr.splitlines()
-        head = "ensemble-session: w1: claude exited 0 at once"
-        self.assertEqual(lines[0], ATTACH, res.stderr)
-        self.assertIn(lines[1], (head, f"{head}; its last lines:"), res.stderr)
+        self.assert_early_exit(res, "w1", 0)
         self.assertEqual(self.commands("w1"), [])
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
+        self.assertIsNone(self.dir_record("w1"))
 
     def test_dialog_start_says_color_not_set(self):
         # before SessionStart, as Claude's: no opening is due before it shows

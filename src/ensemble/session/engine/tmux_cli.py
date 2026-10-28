@@ -1,6 +1,4 @@
-"""TmuxCli: every tmux call through runner (subprocess.run's signature) and sleep. start and
-detach hand a launch to a new pane (EXEC). Listings skip VIEW sessions.
-"""
+"""Tmux through an injected subprocess runner and sleep; listings skip VIEW sessions."""
 
 from __future__ import annotations
 
@@ -71,9 +69,6 @@ USER_OPTION = re.compile(r"@[A-Za-z0-9_-]+")
 
 
 PAUSE = 0.5
-
-
-# lose Ctrl, send nothing or differ between them
 
 
 PROCESS = "#{pid} #{session_id} #{pane_id} #{pane_pid}"
@@ -162,7 +157,6 @@ LAST_LINES = 2000
 
 
 def _own_pane(name: str, dead: str, process: str, panes: dict[str, str]) -> tuple[str | None, str]:
-    """The pane for a session's last lines, and its pane_dead."""
     if not process:
         return name, dead
     if not PROCESS_ID.fullmatch(process):
@@ -356,7 +350,18 @@ def _decorations(session: str, events: str | None, *, status_line: bool) -> list
 
 
 def status(session: str, *, on: bool) -> list[str]:
-    return ["set-option", "-t", f"={session}:", "status", "on" if on else "off"]
+    target = f"={session}:"
+    command = ["set-option", "-t", target, "status", "on" if on else "off"]
+    if on:
+        command += [
+            ";",
+            "set-option",
+            "-t",
+            target,
+            "status-left-length",
+            str(len(f"[{session}] ")),
+        ]
+    return command
 
 
 class TmuxCli:
@@ -425,7 +430,6 @@ class TmuxCli:
         return int(code) if code.isdecimal() else PaneStatus.UNKNOWN
 
     def kill(self, target: str) -> None:
-        """Kills the pane a pane id names, else the whole named session."""
         if PANE.fullmatch(target):
             self.checked(["kill-pane", "-t", target])
         else:
@@ -441,7 +445,6 @@ class TmuxCli:
         )
 
     def keys(self, target: str, *names: str) -> None:
-        """Presses tmux keys (Enter, Escape, C-c); a name tmux would misread raises TuiError first."""
         target = address(target)
         for name in names:
             if name.startswith("-") or name.endswith(";"):
@@ -486,11 +489,10 @@ class TmuxCli:
         return [name for (name,) in found if name]
 
     def listing(self, match=None, *, views: bool = False) -> list[dict]:
-        """NAME sessions `match` fullmatches (None: all), by name: tags, pane state, `shown` (no
-        client: None; else the newest client's host session, "" if none or not NAME), a dead pane's
-        last LAST_LINES lines; bad or empty fields None, wrong-width rows dropped; [] without a
-        server, TuiError (why) when tmux fails. Reads @process's pane (gone: dead; bad: dead None), else the active.
-        views: only VIEW sessions, else none.
+        """Sorted NAME sessions fullmatching match (None: all); views selects VIEW only.
+        shown: newest client's host session (no client: None; invalid: ""). Invalid fields:
+        None; wrong-width rows dropped; absent server: []; other failures: TuiError.
+        Reads @process's pane (gone: dead; bad: dead None), else active; dead: LAST_LINES.
         """
         found = self._table(["list-sessions", *(VIEWS if views else VIEWLESS), "-F", LISTING], 9)
         rows = sorted(
@@ -555,11 +557,10 @@ class TmuxCli:
         tags: Mapping[str, str] | None = None,
         size: tuple[int, int] = HIDDEN_SIZE,
     ) -> str:
-        """argv in a new detached session keeping its pane after exit, in cwd with env (terminal keys
-        the pane's, PWD cwd). Every option and the pane-died hook (@state dead, dead line to
-        @events) go in that one tmux call, so instant deaths log. Opens no pane; refuses an existing
-        session untouched; argv goes via a 0600 handover file. Returns process() once argv exec'd;
-        raising, leaves no own session.
+        """Detached launch; retains dead pane, inherits pane's terminal keys, PWD=cwd.
+        Options and pane-died hook share one call so instant deaths log. Existing session:
+        untouched; argv: 0600 handover file; result: process() after exec; failure: removes
+        only own session. Opens no display pane.
         """
         argv, cwd, env = launch.argv, launch.cwd, launch.env
         session_name(session)
