@@ -25,6 +25,7 @@ Listed = Literal[IssueState.READY, IssueState.RUNNING]
 
 class Tracker(ABC):
     batch = 1  # snapshots' idents per call
+    kept: frozenset[str] = frozenset()  # idents of issues prune skips
 
     @abstractmethod
     def state_name(self, state: IssueState) -> str: ...

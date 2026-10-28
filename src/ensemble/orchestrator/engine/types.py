@@ -106,6 +106,7 @@ class LinearSettings:
     agent_labels: Mapping[str, str]
     project_repos: Mapping[str, str]
     roles: Mapping[str, LinearApp]
+    keep_label: str = ""  # "": unset
 
 
 @dataclass(frozen=True)
