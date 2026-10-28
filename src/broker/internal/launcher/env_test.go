@@ -18,9 +18,10 @@ const envValue = "FAKE-ENV-VALUE"
 
 // fakeEnv is the environment secrets: ready fails Ready; failOn fails Inject of that item; calls records each call.
 type fakeEnv struct {
-	ready  error
-	failOn map[string]error
-	calls  []string
+	prepared [][]byte
+	ready    error
+	failOn   map[string]error
+	calls    []string
 }
 
 func (e *fakeEnv) Ready(items []string) error {
@@ -33,7 +34,9 @@ func (e *fakeEnv) Inject(s Secret) (credential.Command, error) {
 	if err := e.failOn[s.Item]; err != nil {
 		return credential.Command{}, err
 	}
-	return credential.Command{Argv: []string{"inject-env", s.File}, Stdin: []byte(envValue + "-" + s.Item)}, nil
+	data := []byte(envValue + "-" + s.Item)
+	e.prepared = append(e.prepared, data)
+	return credential.Command{Argv: []string{"inject-env", s.File}, Stdin: data}, nil
 }
 
 var dummySecrets = []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/ssh", "id_ed25519")}

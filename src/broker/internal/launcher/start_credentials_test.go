@@ -63,6 +63,7 @@ func TestStartCredentialDelivery(t *testing.T) {
 		runErr   error
 		message  string
 		issued   int
+		prepare  bool
 	}{
 		{response: `{"completed":0}`, message: "Injecting the Claude token failed."},
 		{response: `{"completed":1}`, message: "Writing ensemble-broker-env/dummy into the container failed.", issued: 1},
@@ -78,11 +79,16 @@ func TestStartCredentialDelivery(t *testing.T) {
 		{response: `{"completed":"secret"}`},
 		{runErr: errors.New("secret")},
 		{runErr: docker.ErrUnreachable},
+		{prepare: true, message: "Writing ensemble-broker-env/ssh into the container failed."},
 	} {
 		t.Run(tc.response+fmt.Sprint(tc.runErr), func(t *testing.T) {
 			tokens := &fakeTokens{owners: []string{"first", "second"}}
-			h, _ := githubHost(&world{labels: goodLabels(), batchReply: &tc.response, execErr: failOn(credentialBatch, tc.runErr)}, tokens)
-			h.Env = &fakeEnv{}
+			h, d := githubHost(&world{labels: goodLabels(), batchReply: &tc.response, execErr: failOn(credentialBatch, tc.runErr)}, tokens)
+			env := &fakeEnv{}
+			h.Env = env
+			if tc.prepare {
+				env.failOn = map[string]error{"ensemble-broker-env/ssh": errors.New("secret")}
+			}
 			rec, path := audited(t, &h, "start", "")
 			_, err := h.Start(context.Background(), fixtureManifest(t, "manifest-github-app.json", withSecrets(dummySecrets)))
 			rec.Flush(err)
@@ -101,7 +107,7 @@ func TestStartCredentialDelivery(t *testing.T) {
 					want = "Cannot reach Docker Desktop; start it and retry."
 				}
 				e := protoErr(t, err)
-				if e.Message != want || e.Code != wantCode || e.Cleanup != protocol.Removed || !slices.Contains(tokens.calls, "revoke "+container) {
+				if e.Message != want || e.Code != wantCode || e.Cleanup != protocol.Removed || slices.Contains(tokens.calls, "revoke "+container) == tc.prepare {
 					t.Fatalf("error=%+v tokens=%v", e, tokens.calls)
 				}
 			}
@@ -113,15 +119,24 @@ func TestStartCredentialDelivery(t *testing.T) {
 			if len(credentials) != want {
 				t.Fatalf("credentials=%+v want %d", credentials, want)
 			}
+			prepared := append(h.Creds.(*fakeCreds).prepared, env.prepared...)
+			prepared = append(prepared, tokens.prepared...)
+			want = 5
+			if tc.prepare {
+				want = 2
+				if len(startCommands(t, d)) != 0 {
+					t.Fatal("preparation failure delivered credentials")
+				}
+			}
+			if len(prepared) != want {
+				t.Fatalf("prepared %d buffers, want %d", len(prepared), want)
+			}
+			for _, data := range prepared {
+				if slices.ContainsFunc(data, func(b byte) bool { return b != 0 }) {
+					t.Fatal("owned credential buffer not erased")
+				}
+			}
 		})
-	}
-}
-
-func TestStartPreparationDoesNotDeliverCredentials(t *testing.T) {
-	h, d, _ := envHost(&world{labels: goodLabels()}, &fakeEnv{failOn: map[string]error{"ensemble-broker-env/ssh": errors.New("secret")}})
-	_, err := h.Start(context.Background(), editedManifest(t, withSecrets(dummySecrets)))
-	if err == nil || len(startCommands(t, d)) != 0 {
-		t.Fatalf("preparation failure delivered credentials: %v", err)
 	}
 }
 

@@ -19,6 +19,7 @@ var expiry = []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00
 // fakeTokens records the launcher's Tokens calls; each err field fails its method. An issued set's revocation is the
 // call "revoke <container>"; close's Revoke is "read-revoke <container>", reading the token files when readFiles.
 type fakeTokens struct {
+	prepared                    [][]byte
 	owners                      []string
 	calls                       []string
 	ready, user, issue, refresh error
@@ -55,7 +56,9 @@ func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[
 	}
 	var commands []credential.Command
 	for _, owner := range owners {
-		commands = append(commands, credential.Command{Argv: []string{"write", owner}, Stdin: []byte("ghs_token")})
+		data := []byte("ghs_token")
+		f.prepared = append(f.prepared, data)
+		commands = append(commands, credential.Command{Argv: []string{"write", owner}, Stdin: data})
 	}
 	return commands, func() {
 		f.calls = append(f.calls, "revoke "+c)

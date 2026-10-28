@@ -29,6 +29,7 @@ const (
 )
 
 type fakeCreds struct {
+	prepared  [][]byte
 	ready     error
 	injectErr error
 	calls     []string // "ready <account>" and "inject <account>", in turn
@@ -40,7 +41,12 @@ func (c *fakeCreds) Ready(account string) error {
 }
 func (c *fakeCreds) Inject(account string) (credential.Command, error) {
 	c.calls = append(c.calls, "inject "+account)
-	return credential.Command{Argv: []string{"inject"}, Stdin: []byte(fakeToken)}, c.injectErr
+	if c.injectErr != nil {
+		return credential.Command{}, c.injectErr
+	}
+	data := []byte(fakeToken)
+	c.prepared = append(c.prepared, data)
+	return credential.Command{Argv: []string{"inject"}, Stdin: data}, nil
 }
 
 func goodLabels() map[string]string {
