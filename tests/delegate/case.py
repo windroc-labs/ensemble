@@ -1,5 +1,5 @@
-"""Case, every delegate test's base; committed, packaged; PY, child_env; import roots (REPO,
-SRC, ROOTS, PYTHONPATH).
+"""Case, every delegate test's base; committed, packaged; PY, child_env; SID; import roots
+(REPO, SRC, ROOTS, PYTHONPATH).
 """
 
 import os
@@ -17,6 +17,7 @@ from tests.utils.sandbox import CALLER_SESSION, clean_env
 
 PYTHONPATH = os.pathsep.join(ROOTS)
 PY = (sys.executable, "-P", "-S")
+SID = "11111111-2222-3333-4444-555555555555"
 
 
 def committed(local: str = os.devnull) -> dict:

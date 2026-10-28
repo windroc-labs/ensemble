@@ -12,14 +12,13 @@ from unittest import mock
 from ensemble import delegate
 from ensemble.orchestrator.engine import config
 from ensemble.utils import GUARD, SHORT
-from tests.orchestrator.case import ORCH_ROOT, PY, REPO, Case, child_env
+from tests.orchestrator.case import ORCH_ROOT, PY, REPO, SID, Case, child_env
 from tests.orchestrator.config_fixtures import (
     CORE_TABLES,
     CORE_TOP,
     HARNESS_DELEGATE,
     HTTPS,
     PIPELINE,
-    SID,
     SLUG,
     STEPS,
     ConfigFile,

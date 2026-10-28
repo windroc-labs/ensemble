@@ -1,5 +1,5 @@
-"""Case, every orchestrator test's base; child helpers (PY, child_env, ORCH_ROOT); this
-tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
+"""Case, every orchestrator test's base; child helpers (PY, child_env, ORCH_ROOT); SID;
+this tree's import roots (REPO, SRC, ROOTS, PYTHONPATH).
 """
 
 import os
@@ -19,6 +19,7 @@ from tests.utils.sandbox import clean_env
 PYTHONPATH = os.pathsep.join(ROOTS)
 PY = (sys.executable, "-P", "-s")
 ORCH_ROOT = os.path.join(REPO, "src")
+SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
 
 class Case(TreeCase):

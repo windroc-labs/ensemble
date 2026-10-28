@@ -29,7 +29,7 @@ from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import ConfigError, Hosts, TuiSettings
 from ensemble.utils import load_class
 from tests.session import fake_client, harnesses
-from tests.session.case import HOSTS, Case, configured
+from tests.session.case import HOSTS, SID, Case, configured
 from tests.session.modules import client_loader
 from tests.utils.sandbox import scratch
 
@@ -569,7 +569,6 @@ class ClientTest(Base):
         )
 
 
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 PLUGIN_OFF = '{"enabledPlugins": {"ensemble@windroc": false}}'
 
 

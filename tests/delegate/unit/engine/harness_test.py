@@ -17,9 +17,8 @@ from ensemble.delegate.engine import harness
 from ensemble.delegate.engine.types import Begun, Result
 from ensemble.session import SIGNALS, SessionError
 from ensemble.utils import Stopped
-from tests.delegate.case import Case
+from tests.delegate.case import SID, Case
 
-SID = "11111111-2222-3333-4444-555555555555"
 DONE = Result(0, Outcome("done", "Title", "Summary"))
 ASKING = Result(0, Outcome("needs_input", "Title", "Summary", questions=["Which?"]))
 NO_OUTCOME = Result(1, None, "no outcome after 3 turn ends")

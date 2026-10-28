@@ -17,14 +17,13 @@ from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.types import AppKind, LinearApp, State, TrackerKind
 from ensemble.utils import temp_dirs
 from tests.delegate.fakes.delegate import FakeDelegate
-from tests.orchestrator.case import REPO, ROOTS, Case
+from tests.orchestrator.case import REPO, ROOTS, SID, Case
 from tests.orchestrator.config_fixtures import (
     BARE,
     BASE,
     CORE_LOCAL,
     HARNESS_DELEGATE,
     PIPELINE,
-    SID,
     SLUG,
     ConfigFile,
     write,

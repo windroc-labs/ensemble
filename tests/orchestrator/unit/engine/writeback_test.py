@@ -47,7 +47,7 @@ from ensemble.orchestrator.trackers.linear import (
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from ensemble.session import SessionStatus
 from ensemble.utils import OutcomeStatus
-from tests.orchestrator.case import Case
+from tests.orchestrator.case import SID, Case
 from tests.orchestrator.linear_run_case import SID as RUN_SID
 from tests.orchestrator.linear_run_case import ReadyDelegate, RunCase
 from tests.orchestrator.unit import board_ids, run_fixtures
@@ -56,8 +56,6 @@ from tests.orchestrator.unit.run_fixtures import logged, show
 from tests.orchestrator.unit.writeback_fixtures import APPROVE_MAPPED, DOC, PR, PRD
 
 ID, UUID = "ENG-7", "11111111-2222-4333-8444-555555555555"
-
-SID = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
 
 OTHER_SID = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
 

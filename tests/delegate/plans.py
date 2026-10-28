@@ -17,9 +17,6 @@ from tests.session.modules import client_loader
 from tests.utils.case import local_section
 from tests.utils.sandbox import scratch
 
-SID = "11111111-2222-3333-4444-555555555555"
-
-
 TASKS = os.path.join(TEAM, "tasks")
 
 

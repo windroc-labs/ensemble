@@ -23,8 +23,8 @@ from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
 from ensemble.utils import OutcomeStatus, Stopped
 from tests.delegate.case import Case
-from tests.delegate.harness import SID
 from tests.delegate.unit.engine.orphans import Orphan
+from tests.session.case import SID
 from tests.utils.clock import FakeClock
 from tests.utils.jsonl import read_jsonl
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired

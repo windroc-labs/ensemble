@@ -42,7 +42,7 @@ from ensemble.session.engine.types import (
     Window,
 )
 from ensemble.utils import exhausted
-from tests.session.case import PLUGIN_BIN, PY, Case, child_env
+from tests.session.case import PLUGIN_BIN, PY, SID, Case, child_env
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
 from tests.session.integration.clients.claude import fake_claude
 from tests.utils.sandbox import git, kill, scratch
@@ -50,8 +50,7 @@ from tests.utils.sandbox import pid_exists as running
 
 WAIT = 20  # upper bound on any wait, in seconds
 IDLE = 0.5  # idle_timeout, in seconds
-SETTLE = 0.5  # seconds a caller gets to wait in events() again after printing an event
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+SETTLE = 0.5  # seconds a caller gets to wait in events() again after printing one
 RESETS = 1760000000
 TABLE = {
     "implementation": "ensemble.session.clients.claude:ClaudeClient",

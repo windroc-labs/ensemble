@@ -7,8 +7,7 @@ from pathlib import Path
 
 from ensemble.utils import Record
 from tests.delegate.case import PY, REPO, Case, child_env
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+from tests.session.case import SID
 
 
 class Open(Case):

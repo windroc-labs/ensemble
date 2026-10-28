@@ -1,5 +1,5 @@
 """Case, every session test's base; HOSTS, configured, packaged_hosts; PY, child_env; REPO, SRC,
-ROOTS; PLUGIN_BIN; SPAWNS, the process starts; no_spawn.
+ROOTS; PLUGIN_BIN; SID; SPAWNS, the process starts; no_spawn.
 """
 
 import contextlib
@@ -25,6 +25,7 @@ SRC = dict.fromkeys(("session", "utils"), BUNDLE) if BUNDLE else packages(ROOTS)
 RUN_WITH = run_with(ROOTS)
 PLUGIN_BIN = os.path.join(REPO, "bin")
 PY = (sys.executable, "-P", "-S")
+SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 SPAWNS = ("subprocess.Popen", "os.fork", "os.posix_spawn", "os.posix_spawnp")
 HOSTS = {"tmux": {"implementation": "ensemble.session.hosts.tmux:TmuxHost"}}
 

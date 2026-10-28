@@ -44,7 +44,7 @@ from ensemble.session import (
 )
 from ensemble.session.engine.types import Activity
 from ensemble.utils import Stopped
-from tests.delegate.case import Case
+from tests.delegate.case import SID, Case
 from tests.delegate.replies import bare, block
 from tests.delegate.repo import ok
 from tests.delegate.runner import (
@@ -53,7 +53,6 @@ from tests.delegate.runner import (
     LEFT_OPEN,
     PENDING,
     PR,
-    SID,
     Base,
     executed,
 )

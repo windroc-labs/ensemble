@@ -21,13 +21,12 @@ from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import NotShowable, SessionBusy, SessionError
 from ensemble.utils import Record, Status
-from tests.delegate.case import Case, committed
+from tests.delegate.case import SID, Case, committed
 from tests.delegate.cli_case import (
     HARNESS,
     HEADS,
     KEYS,
     PLACEMENT,
-    SID,
     TUI,
     Base,
     RefusingClient,
@@ -38,10 +37,10 @@ from tests.delegate.fakes.harness_session import (
     RecordingHost,
     harness_launches,
 )
-from tests.delegate.harness import SID as HARNESS_SID
 from tests.delegate.harness import HarnessCase
 from tests.delegate.unit.runs import DONE
 from tests.session import fake_client
+from tests.session.case import SID as HARNESS_SID
 from tests.session.case import no_spawn
 from tests.session.modules import client_loader
 from tests.utils.case import local_section

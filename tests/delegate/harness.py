@@ -18,10 +18,9 @@ from tests.delegate.fakes.harness_session import (
 from tests.delegate.replies import block
 from tests.delegate.unit.runs import DONE
 from tests.delegate.verifier import VERIFIER
+from tests.session.case import SID
 from tests.utils.case import local_section
 from tests.utils.sandbox import owned_directory
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 class ViewedHarnessDelegate(DrivenDelegate):

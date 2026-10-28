@@ -43,9 +43,8 @@ from ensemble.session.harness.types import Op
 from ensemble.session.hosts.base import stored_record
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
-from tests.session.case import Case
+from tests.session.case import SID, Case
 
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 ENVIRONMENT = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-lock")
 

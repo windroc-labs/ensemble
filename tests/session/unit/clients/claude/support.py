@@ -21,7 +21,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.engine.types import Spec as BaseSpec
 from ensemble.utils import LOCAL_ENV_VARS
-from tests.session.case import Case
+from tests.session.case import SID, Case
 from tests.utils.sandbox import scratch
 
 
@@ -36,8 +36,6 @@ class ClaudeCommon(UnconfiguredCommon):
 
 
 Spec = BaseSpec
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 CEILING = {"CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS": "3600000"}
 TUI_DEFAULTS = {"CLAUDE_CODE_DISABLE_AGENT_VIEW": "1"}

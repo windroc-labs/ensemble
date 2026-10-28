@@ -21,7 +21,6 @@ from tests.utils.case import local_section
 from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import scratch
 
-SID = "11111111-2222-3333-4444-555555555555"
 TUI = "dummy-tester-11111111"
 HARNESS = f"{TUI}-drive"
 

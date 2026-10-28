@@ -9,6 +9,7 @@ from unittest import mock
 from ensemble.orchestrator.engine import runs
 from ensemble.orchestrator.engine.types import Claim, ConfigError
 from tests.orchestrator import case
+from tests.orchestrator.case import SID as SID_A
 from tests.utils.sandbox import scratch
 
 NOW = datetime(2026, 9, 27, 3, 0, tzinfo=UTC)
@@ -402,7 +403,7 @@ class StartedTask(Case):
         self.assertEqual((runs.claim(self.log, "TASK-1", SID_A), runs.parse_log(self.log)), want)
 
 
-SID_A, SID_B = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d", "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
+SID_B = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
 
 UUID = "11111111-2222-4333-8444-555555555555"
 

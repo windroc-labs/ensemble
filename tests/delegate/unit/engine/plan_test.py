@@ -21,8 +21,8 @@ from ensemble.delegate.engine.plan import place, plan
 from ensemble.delegate.engine.types import Layout, Resolved
 from ensemble.delegate.event.reply import OUTCOME, PROGRESS
 from ensemble.session import Access, EnvironmentSpec, RunLog
-from tests.delegate.case import REPO, SRC, packaged
-from tests.delegate.plans import SID, TASKS, Base, write_team
+from tests.delegate.case import REPO, SID, SRC, packaged
+from tests.delegate.plans import TASKS, Base, write_team
 from tests.delegate.repo import fail, ok
 from tests.delegate.unit.engine.instruction import CLIENTS, GITHUB, ROLES, InstructionCase
 from tests.delegate.verifier import VERIFIER

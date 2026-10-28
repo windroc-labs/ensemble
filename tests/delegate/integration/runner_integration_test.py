@@ -18,6 +18,7 @@ from ensemble.delegate.engine import runner
 from ensemble.delegate.engine.runner import FIX
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result, Stopped
 from ensemble.utils import printable
+from tests.delegate.case import SID
 from tests.delegate.replies import bare, block
 from tests.delegate.runner import (
     FAILED,
@@ -26,7 +27,6 @@ from tests.delegate.runner import (
     INVALID_ERROR,
     NEEDS,
     PR,
-    SID,
     Base,
     UnstreamedClient,
     ended,

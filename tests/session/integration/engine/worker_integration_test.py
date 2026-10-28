@@ -9,9 +9,7 @@ import unittest
 from ensemble.session import SessionError
 from ensemble.session.engine import worker
 from ensemble.session.engine.worker import Worker, WorkerState
-from tests.session.case import Case
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+from tests.session.case import SID, Case
 
 
 class StateFileTest(Case):
