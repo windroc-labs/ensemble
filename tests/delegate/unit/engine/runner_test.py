@@ -226,13 +226,13 @@ class InProcess(Base):
 
     def test_silence_longer_than_the_idle_timeout_is_recorded_and_the_run_goes_on(self):
         self.write(
-            os.path.join(self.ensemble, "config.local.toml"), "[delegate]\nidle_timeout = 0.3\n"
+            os.path.join(self.ensemble, "config.local.toml"), "[delegate]\nidle_timeout = 0.1\n"
         )
-        r = self.go({"sleep": 1.0}, said(START, block(DONE)))
+        r = self.go({"sleep": 0.3}, said(START, block(DONE)))
         self.assertEqual(r.outcome.status, "done")
         idle = [e for e in self.records() if e["kind"] == "idle"]
         self.assertTrue(idle)
-        self.assertEqual({e["seconds"] for e in idle}, {0.3})
+        self.assertEqual({e["seconds"] for e in idle}, {0.1})
 
     def test_an_invalid_block_is_fixed_by_one_resume_of_the_session(self):
         r = self.go(said(START, block(INVALID)), fixes=[said(block(DONE))])

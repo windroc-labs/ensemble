@@ -634,10 +634,8 @@ class InstructionPlans(InstructionCase):
                 self.assertEqual(got.prompt, instruction.prompt)
 
 
-class Docker(Base):
-    """A run whose agent Host is the Docker Host: only the image's team, in its agent dir, its
-    Reference repo by name and its deliverable inline.
-    """
+class DockerCase(Base):
+    """Plans whose agent Host is the Docker Host, a tui run unless given a mode."""
 
     def setUp(self):
         super().setUp()
@@ -646,6 +644,17 @@ class Docker(Base):
 
     def planned(self, *args, **kw):
         return super().planned(*args, **{"mode": "tui", **kw})
+
+    def origin(self, url, code=0):
+        """subprocess.run answering git's `remote get-url origin` with `url`."""
+        done = fail("fatal: no remote") if code else ok(url)
+        return mock.patch("subprocess.run", return_value=done)
+
+
+class Docker(DockerCase):
+    """A run whose agent Host is the Docker Host: only the image's team, in its agent dir, its
+    Reference repo by name and its deliverable inline.
+    """
 
     def test_a_runtime_gate_is_passed_unchanged_to_each_mode(self):
         for mode in ("headless", "tui"):
@@ -705,11 +714,6 @@ class Docker(Base):
         self.assertIn("deliverable_file", got.prompt)
         self.assertIn(f"- `<tasks>`: `{TASKS}`", got.prompt)
 
-    def origin(self, url, code=0):
-        """subprocess.run answering git's `remote get-url origin` with `url`."""
-        done = fail("fatal: no remote") if code else ok(url)
-        return mock.patch("subprocess.run", return_value=done)
-
     def test_a_local_reference_repo_is_rewritten_to_its_name(self):
         clone = os.path.join(self.tmp, "clone")
         text = f"Reference: T\nTitle: x\nRepo: {clone}\n\nBody Repo: {clone}\n"
@@ -755,7 +759,7 @@ class Docker(Base):
 SECRET = {"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}
 
 
-class PrefetchTest(Docker):
+class PrefetchTest(DockerCase):
     """A resolved environment's prefetch target: the Reference block's one Repo: and optional Ref:,
     syntax-checked before any git call (WDRC-109 FR-52).
     """

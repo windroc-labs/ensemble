@@ -18,7 +18,6 @@ import os
 import shutil
 import signal
 import sys
-import threading
 import unittest
 import uuid
 from collections.abc import Callable
@@ -74,6 +73,7 @@ from tests.session.unit.hosts.docker import support
 from tests.utils.clock import FakeClock
 from tests.utils.jsonl import read_jsonl
 from tests.utils.process_fixtures import DEVNULL, STDOUT
+from tests.utils.sandbox import CALLER_SESSION
 
 ORPHAN = 4242
 
@@ -491,29 +491,23 @@ class DockerPreflightTest(HarnessCase):
 
 
 class CallerSessionTest(HarnessCase):
-    """The Docker classes pass in a caller's tmux pane and agent session, as on CI: a plain
-    unittest run in an agent's shell once leaked TMUX (the viewer's placement then ran tmux through
-    their patched Popen) and ENSEMBLE_AGENT_SESSION (a nested run refused)."""
-
-    maxDiff = None
+    """The Docker classes, HarnessCases, pass in a caller's tmux pane and agent session
+    (CALLER_SESSION), as on CI: a plain unittest run in an agent's shell once leaked TMUX (the
+    viewer's placement then ran tmux through their patched Popen) and ENSEMBLE_AGENT_SESSION (a
+    nested run refused)."""
 
     def test_the_docker_tests_ignore_the_callers_tmux_and_agent_session(self):
-        caller = {
-            "TMUX": "/tmp/tmux-1/default,1,0",
-            "TMUX_PANE": "%1",
-            "ENSEMBLE_AGENT_SESSION": "1",
-        }
-        loader = unittest.defaultTestLoader
-        suite = unittest.TestSuite(
-            loader.loadTestsFromTestCase(case) for case in (DockerPreflightTest, VerifierDockerTest)
-        )
-        cases, result = suite.countTestCases(), unittest.TestResult()
-        with mock.patch.dict(os.environ, caller):
-            suite.run(result)
-        failed = [f"{t.id()}: {tb.splitlines()[-1]}" for t, tb in result.failures + result.errors]
-        self.assertEqual(failed, [])
-        self.assertGreater(cases, 0)
-        self.assertEqual((result.testsRun, result.skipped), (cases, []))
+        seen = {}
+
+        class Probe(HarnessCase):
+            def test_the_environment(self):
+                seen.update((key, os.environ.get(key)) for key in CALLER_SESSION)
+
+        result = unittest.TestResult()
+        with mock.patch.dict(os.environ, dict.fromkeys(CALLER_SESSION, "caller")):
+            Probe("test_the_environment").run(result)
+        self.assertEqual((result.testsRun, result.errors, result.failures), (1, [], []))
+        self.assertEqual(seen, dict.fromkeys(CALLER_SESSION))
 
 
 class VerifierClientTest(HarnessCase):
@@ -3199,6 +3193,16 @@ class OwnedRun(HarnessCase):
             DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
         self.assertEqual(agent.sent, ["the answer"])
 
+    def returns_at_first_sleep(self, fd: int):
+        """time.sleep patched: its first call closes `fd`, the drive returning; later ones return."""
+        fds = [fd]
+
+        def sleep(_seconds):
+            with contextlib.suppress(IndexError):
+                os.close(fds.pop())
+
+        return mock.patch("time.sleep", side_effect=sleep)
+
     def stopped_run_whose_drive_holds_the_run_lock(self, result: Result | None = None) -> int:
         """A completed owned run (default: stopped), its worker gone, its run lock held here: the
         descriptor.
@@ -3217,8 +3221,8 @@ class OwnedRun(HarnessCase):
         status = again.status()
         self.assertEqual((status.alive, status.state), (True, StatusState.WORKING))
         self.assertFalse(again.alive())  # not alive from its Finished on
-        threading.Timer(0.3, os.close, (fd,)).start()
-        again.resume()
+        with self.returns_at_first_sleep(fd):
+            again.resume()
         self.assertEqual(self.metadata()["attempt"], 2)
 
     def test_resume_input_waits_for_a_drive_whose_worker_exited(self):
@@ -3227,8 +3231,8 @@ class OwnedRun(HarnessCase):
         view.driver.session.liveness = Liveness.ABSENT
         fd = os.open(os.path.join(Layout(self.work).run, "delegate.run.lock"), os.O_RDWR)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        threading.Timer(0.3, os.close, (fd,)).start()
-        DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
+        with self.returns_at_first_sleep(fd):
+            DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume(input="the answer")
         data = self.metadata()
         self.assertEqual((data["attempt"], data["spec"]["input"]), (2, "the answer"))
 
