@@ -20,7 +20,13 @@ from pathlib import Path
 import ci_scope
 import isolation
 
-from tests.utils.sandbox import clean_env, kill_processes, leaked_processes, stop_tmux_servers
+from tests.utils.sandbox import (
+    CONTROL_GRACE,
+    clean_env,
+    kill_processes,
+    leaked_processes,
+    stop_tmux_servers,
+)
 
 STATE = "RUN_TESTS_STATE"
 COVERAGE = "RUN_TESTS_COVERAGE"
@@ -229,9 +235,9 @@ def selection_parallel(title, value, workers, selectors):
     return parallel(title, commands, os.environ.get("RUN_TESTS_REPORT_DIR"))
 
 
-def supervise(title):
+def supervise(title, *, grace=CONTROL_GRACE):
     """None in the child; in the parent, the child's exit code (128 + signal for a signal), or 1 when
-    it passed but left processes or tmux servers behind.
+    it passed but left processes or tmux servers behind for grace seconds.
     """
     if supervised_child():
         return None
@@ -282,7 +288,7 @@ def supervise(title):
                     tail.append(line)
         finally:
             servers = stop_tmux_servers(tmp, env)
-        processes = leaked_processes((tmp, workspace))
+        processes = leaked_processes((tmp, workspace), grace=grace)
         kill_processes(processes)
         with open(state, encoding="utf-8") as file:
             lines = file.read().splitlines()
