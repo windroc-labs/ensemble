@@ -12,6 +12,8 @@ from unittest import mock
 from ensemble.orchestrator.engine import (
     log,
 )
+from ensemble.orchestrator.engine.flow import handoff
+from ensemble.orchestrator.engine.flow.types import Issue
 from ensemble.orchestrator.engine.types import LinearError
 from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
@@ -83,6 +85,24 @@ def show(event):
         if k not in ("ts", "src", "kind", "issue", "traceback")
     ]
     return " ".join([event["kind"], *([event["issue"]] if "issue" in event else []), *fields])
+
+
+def flow_issue(
+    description="",
+    *,
+    ident,
+    title,
+    project=None,
+    uuid="uuid-1",
+    created_at="2026-09-01T00:00:00.000Z",
+    notes=(),
+    links=(),
+    linked=(),
+):
+    """A tracker-read flow Issue; each test file binds its defaults with functools.partial."""
+    url = f"https://linear.app/t/issue/{ident}"
+    parts = (title, description, created_at, project, tuple(notes), tuple(links), tuple(linked))
+    return Issue(uuid, ident, url, *parts, handoff=handoff.parse_handoff(description))
 
 
 def node(title="ENG: Session registry", description="Add a session registry.", comments=()):

@@ -1,15 +1,14 @@
 """First-claim candidate search at its Linear and gh boundaries (FR-29, FR-21, FR-30, NFR-3)."""
 
 import json
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
 from ensemble.orchestrator.engine import config, related
 from ensemble.orchestrator.engine.config import Docs
-from ensemble.orchestrator.engine.flow.handoff import parse_handoff
 from ensemble.orchestrator.engine.flow.types import (
     Found,
-    Issue,
 )
 from ensemble.orchestrator.engine.types import (
     InputError,
@@ -24,6 +23,7 @@ from ensemble.orchestrator.trackers.linear.ops import NOT_FOUND
 from ensemble.utils import SHORT
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.board_ids import PACKAGED_FLOW, STATES, TEAM, workflow_file
+from tests.orchestrator.unit.run_fixtures import flow_issue
 from tests.orchestrator.unit.target_fixtures import FakeRun, ok
 
 DOCS = Docs("windroc/team-docs", "main", {"researcher": "Research/", "pm": "Product Design/"})
@@ -40,20 +40,7 @@ def listing(*names):
     return ok(json.dumps([{"name": n, "type": "file"} for n in names]))
 
 
-def issue(title="Queue backends", description="", ident="TASK-9"):
-    return Issue(
-        "uuid-9",
-        ident,
-        f"https://linear.app/t/issue/{ident}",
-        title,
-        description,
-        "2026-09-01T00:00:00.000Z",
-        "p-1",
-        (),
-        (),
-        (),
-        handoff=parse_handoff(description),
-    )
+issue = partial(flow_issue, ident="TASK-9", title="Queue backends", project="p-1")
 
 
 def handoff(source):

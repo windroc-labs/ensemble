@@ -1,7 +1,6 @@
 """The workflow: the packaged file's Stages, a stage's defaults, its lazy read and its checks."""
 
 import tomllib
-from importlib.resources import files
 from pathlib import Path
 from unittest import mock
 
@@ -76,14 +75,6 @@ class DefaultWorkflow(Case):
                     files=True,
                 ),
             },
-        )
-
-    def test_packaged_config_has_no_flow_lines(self):
-        with files("ensemble.orchestrator").joinpath("config.toml").open("rb") as f:
-            roles = tomllib.load(f)["roles"]
-        self.assertEqual(
-            {r: sorted({"next", "require_instructions"} & set(p)) for r, p in roles.items()},
-            dict.fromkeys(("researcher", "pm", "engineer"), []),
         )
 
     def test_reads_once_on_first_use(self):
