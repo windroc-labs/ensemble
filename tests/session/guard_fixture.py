@@ -10,6 +10,14 @@ import time
 from pathlib import Path
 
 
+def _publish(path, text: str) -> None:
+    """path holding text, whole: a test polls for its existence, then reads it."""
+    temporary = f"{path}.{os.getpid()}.tmp"
+    with open(temporary, "w", encoding="utf-8") as stream:
+        stream.write(text)
+    os.replace(temporary, path)
+
+
 def client(directory: str, *, daemon: bool) -> None:
     root = Path(directory)
     record = root / "transcript.json"
@@ -19,7 +27,7 @@ def client(directory: str, *, daemon: bool) -> None:
         [sys.executable, "-I", __file__, "child", directory, *(["--daemon"] if daemon else [])],
         start_new_session=True,
     )
-    (root / "client.pid").write_text(str(os.getpid()))
+    _publish(root / "client.pid", str(os.getpid()))
     for line in sys.stdin:
         if line.strip() == "recall":
             print(json.loads(record.read_text())["phrase"], flush=True)
@@ -40,7 +48,7 @@ def child(directory: str, *, daemon: bool) -> None:
             return
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    Path(directory, "child.pid").write_text(str(os.getpid()))
+    _publish(Path(directory, "child.pid"), str(os.getpid()))
     while True:
         time.sleep(1)
 
@@ -65,8 +73,9 @@ def harness(directory: str, *, terminal: bool, daemon: bool) -> None:
         terminal=terminal,
         metadata={"sid": "same-conversation"},
     )
-    Path(directory, "harness.json").write_text(
-        json.dumps({"guard": worker.proc.pid, "generation": worker.generation})
+    _publish(
+        Path(directory, "harness.json"),
+        json.dumps({"guard": worker.proc.pid, "generation": worker.generation}),
     )
     while True:
         time.sleep(1)
