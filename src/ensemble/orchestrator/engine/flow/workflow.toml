@@ -14,6 +14,7 @@
 #   question              the lead of write-back's needs-input comment; default "Question:"
 #   first_failure         the state a failed first run's issue moves to: ready or review (default)
 #   approve               a done run's comment ends with the approve line; default false
+#   assign                a needs-input run assigns its issue to config.toml's assignee_id; default false
 #   files                 write-back's comment lists the run's files; default false
 #   deliverable           a done run's comment is its done lead and summary, unquoted, and a second comment
 #                         holds its deliverable as saved (<workdir>/run/out.md, or the role's document), in full;
@@ -49,6 +50,7 @@ done = ""
 question = ""
 failed = ""
 approve = true
+assign = true
 
 [[stage]]
 role = "engineer"

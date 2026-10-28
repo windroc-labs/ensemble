@@ -1,5 +1,5 @@
 """Claude mid-turn replies: queued messages joined to a turn, their answers' reply lines, the
-watcher.
+owning harness's settle; no hook starts a process (FR-38).
 """
 
 import contextlib
@@ -14,6 +14,7 @@ from ensemble.session.clients.claude import ClaudeClient, replies
 from ensemble.session.clients.claude.tui import on_hook
 from ensemble.session.engine.types import Access, HookCall, Spec
 from ensemble.utils import file_lock, read_reply
+from tests.session.case import SPAWNS
 from tests.session.unit.clients.claude.support import SID, Base
 
 NAME = "w1"
@@ -73,7 +74,8 @@ class RepliesBase(Base):
         self.callback = self.run.hook_callback().state
         self.events = os.path.join(self.tmp, "events")
         open(self.events, "w", encoding="utf-8").close()
-        self.spawned = self.enterContext(mock.patch.object(shared.subprocess, "Popen"))
+        for spawn in SPAWNS:
+            self.enterContext(mock.patch(spawn, side_effect=AssertionError(spawn)))
         self.stderr = self.enterContext(contextlib.redirect_stderr(io.StringIO()))
         self.state_file = replies.state_path(self.callback["store"], self.work, SID)
 
@@ -113,9 +115,8 @@ class RepliesBase(Base):
     def stop(self, final):
         self.hook("Stop", last_assistant_message=final)
 
-    def watch(self, sleep=None):
-        clock = Clock()
-        return replies.watch(self.state_file, clock=clock, sleep=sleep or clock.sleep)
+    def pump(self):
+        replies.settle_pending(self.callback["store"], self.work, SID)
 
 
 class TurnTest(RepliesBase):
@@ -126,14 +127,12 @@ class TurnTest(RepliesBase):
         self.append(said(text("done")))
         self.stop("done")
         self.assertEqual(self.lines(), [])
-        self.spawned.assert_not_called()
         self.assertFalse(self.state()["turn"]["open"])
 
     def test_interjection_answer_before_more_tools_is_a_reply(self):
         self.open_turn()
         self.append(ENQUEUE, RESULT)
         self.hook("PostToolUse", tool_name="Bash")
-        self.assertEqual(self.spawned.call_count, 1)
         self.append(QUEUED, said(text("MID ANSWER 6")), said(tool()))
         self.hook("PostToolUse", tool_name="Bash")
         self.assertEqual(self.answers(), ["MID ANSWER 6"])
@@ -221,12 +220,11 @@ class TurnTest(RepliesBase):
         self.stop("real")
         self.assertEqual(self.answers(), ["real"])
 
-    def test_prompt_mid_turn_keeps_the_turn_and_starts_a_watcher(self):
+    def test_prompt_mid_turn_keeps_the_turn(self):
         self.open_turn()
         start = self.state()["turn"]["start"]
         self.hook("UserPromptSubmit", prompt="status?")
         self.assertEqual(self.state()["turn"]["start"], start)
-        self.assertEqual(self.spawned.call_count, 1)
 
     def test_stale_open_turn_is_replaced(self):
         self.open_turn()
@@ -234,7 +232,6 @@ class TurnTest(RepliesBase):
         with mock.patch.object(replies.time, "time", return_value=later):
             self.hook("UserPromptSubmit", prompt="next")
         self.assertEqual(self.state()["turn"]["start"], os.path.getsize(self.path))
-        self.spawned.assert_not_called()
 
     def test_stop_failure_and_session_start_close(self):
         for label in ("StopFailure", "SessionStart"):
@@ -250,7 +247,7 @@ class TurnTest(RepliesBase):
         self.append(ENQUEUE, RESULT, QUEUED, said(text("once")))
         for _ in range(3):
             self.hook("PostToolUse", tool_name="Bash")
-        self.watch()
+        self.pump()
         self.stop("once")
         self.stop("once")
         self.assertEqual(self.answers(), ["once"])
@@ -332,34 +329,41 @@ class GuardTest(RepliesBase):
         self.assertTrue(self.state()["turn"]["open"])
 
 
-class WatcherTest(RepliesBase):
-    def test_post_tool_use_with_a_queued_message_spawns_the_watcher(self):
+class PumpTest(RepliesBase):
+    """B2: the owning harness's pump announces an answer no hook follows; the hooks start no
+    process (RepliesBase fails any spawn) and leave no watch lock.
+    """
+
+    def test_hooks_with_a_queued_message_start_no_process(self):
         self.open_turn()
         self.append(ENQUEUE)
         self.hook("PostToolUse", tool_name="Bash")
-        ((args, _),) = self.spawned.call_args_list
-        self.assertEqual(args[0][4:], [replies.WATCH, self.state_file])
-        self.assertEqual(replies.WATCH, "ensemble.session.clients.claude.watch")
+        self.hook("UserPromptSubmit", prompt="status?")
+        folder = os.path.dirname(self.state_file)
+        self.assertEqual([n for n in os.listdir(folder) if n.endswith(".watch.lock")], [])
 
-    def test_watcher_writes_reply_without_stop(self):
+    def test_the_pump_writes_a_reply_without_a_hook(self):
         self.open_turn()
         self.append(ENQUEUE, RESULT)
         self.hook("PostToolUse", tool_name="Bash")
-        clock, polls = Clock(), []
-
-        def sleep(seconds):
-            polls.append(seconds)
-            if len(polls) == 2:
-                self.append(QUEUED, said(text("answer")))
-            clock.sleep(seconds)
-
-        self.assertEqual(replies.watch(self.state_file, clock=clock, sleep=sleep), 0)
+        self.append(QUEUED, said(text("answer")))
+        self.pump()
         self.assertEqual(self.answers(), ["answer"])
-        self.assertLessEqual(clock.now - 1000.0, 2 * shared.POLL + shared.IDLE_EXIT + shared.POLL)
+        self.pump()
+        self.stop("answer")
+        self.assertEqual(self.answers(), ["answer"])
 
-    def test_watcher_ends_once_the_turn_closes(self):
+    def test_a_held_lock_is_left_to_the_next_pump(self):
         self.open_turn()
-        self.append(ENQUEUE)
+        self.append(ENQUEUE, RESULT)
         self.hook("PostToolUse", tool_name="Bash")
-        self.stop("done")
-        self.assertEqual(self.watch(), 0)
+        self.append(QUEUED, said(text("answer")))
+        with file_lock(self.state_file, wait=False):
+            self.pump()
+        self.assertEqual(self.answers(), [])
+        self.pump()
+        self.assertEqual(self.answers(), ["answer"])
+
+    def test_without_a_state_file_the_pump_writes_nothing(self):
+        self.pump()
+        self.assertFalse(os.path.exists(os.path.dirname(self.state_file)))

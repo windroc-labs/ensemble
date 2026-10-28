@@ -51,6 +51,7 @@ LINEAR_KEYS = {
     "team",
     "states",
     "human_members",
+    "assignee_id",
     "harness",
     "manager",
     "task_label_group",
@@ -295,6 +296,7 @@ def _linear_settings(linear):
     return LinearSettings(
         team=linear["team"],
         human_members=tuple(linear.get("human_members") or ()),
+        assignee_id=linear.get("assignee_id", ""),
         harness=LinearApp(
             "harness",
             AppKind.HARNESS,

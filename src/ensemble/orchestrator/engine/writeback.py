@@ -75,6 +75,7 @@ class Context:
     host: str = "github.com"
     document: str | None = None
     published: str = ""
+    assignee: str = ""
 
 
 LEDGER = "writeback.json"
@@ -117,6 +118,7 @@ def context(cfg, role, writers: Writers, *, ident, issue_id, sid, resume, projec
         host=cfg.repo_host(role),
         document=cfg.docs.local_out(role, ident, sid),
         published=_published(cfg.roles[role].run.output, cfg.repo_host(role)),
+        assignee=writers.assignee,
     )
 
 
@@ -433,6 +435,15 @@ def _attach(ctx, url, title, attached):
         ctx.tracker.link(ctx.issue_id, url, title)
 
 
+def _assign(ctx):
+    """A failure is a note, as notify's."""
+    try:
+        ctx.tracker.assign(ctx.issue_id, ctx.assignee)
+    except (LinearError, Unavailable, OSError, subprocess.SubprocessError) as e:
+        return f"\n\nCould not assign {ctx.assignee}: {one_line(e)}"
+    return ""
+
+
 def _finish(ctx, o, steps="", *, move=True):
     task, issue = TASKS[ctx.role], ctx.issue_id
     body, state, url = _completion_body(ctx, o)
@@ -462,6 +473,8 @@ def _finish(ctx, o, steps="", *, move=True):
     ):
         return False
     if state == "in_review" and move:
+        if task.assign and o.status == OutcomeStatus.NEEDS_INPUT and ctx.assignee:
+            body += _assign(ctx)
         body += ctx.tracker.notify(issue, ctx.humans)
     if _post(ctx, f"{steps}comment", body):
         return False

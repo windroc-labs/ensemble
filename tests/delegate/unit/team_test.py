@@ -333,6 +333,22 @@ class Shipped(Packaged):
         self.assertNotRegex(text, r"(?<!/)updraft:")
         self.assertIn("`/updraft:review` again with the same `doc`", text.split("## Resume", 1)[1])
 
+    def test_product_design_settles_open_questions_with_updraft_council_before_finishing(self):
+        text = task_text("product-design")
+        step = text.split("8. **Council.**", 1)[1].split("\n9.", 1)[0]
+        self.assertIn("\n9. **Finish.**", text)
+        for literal in (
+            "`/updraft:council`",
+            "changes external state or can't be undone",
+            "stays there, for the user",
+            "write each decision into the PRD",
+            "the author's call",
+            "`needs_input`",
+        ):
+            self.assertIn(literal, step)
+        self.assertIn("what you can't settle → Open questions", text.split("5. **Self-grill**")[1])
+        self.assertIn("never run it again", text.split("## Resume", 1)[1])
+
     def test_the_engineer_charter_has_six_sections_and_updraft_adds_its_lines_verbatim(self):
         with open(os.path.join(TEAM, "roles", "engineer.md")) as f:
             charter = f.read()
