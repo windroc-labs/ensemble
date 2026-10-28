@@ -25,8 +25,9 @@ class BrokerJob(Case):
                 block = job(workflow, "broker")
                 found = steps(block)
                 names = list(found)
-                for name in ("Gofmt", "Go vet", "Go test"):
+                for name in ("Go vet", "Go test"):
                     self.assertIn(name, names)
+                self.assertEqual("Gofmt" in names, workflow == "test.yml")
                 self.assertEqual(names.index("Staticcheck"), names.index("Go vet") + 1)
                 self.assertIn(f"        run: {STATICCHECK}\n", found["Staticcheck"])
                 self.assertNotIn("continue-on-error", block)
@@ -62,11 +63,9 @@ class BrokerJob(Case):
     def test_macos_coverage_runs_on_main_push_broker_prs_or_manual_dispatch(self):
         text = (WORKFLOWS / "broker-macos.yml").read_text()
         events = re.search(r"(?ms)^on:\n(.*?)(?=^\S|\Z)", text)[1]
-        self.assertIn("  push:\n    branches: [main]", events)
-        self.assertIn(
-            "  pull_request:\n    paths: [.github/workflows/broker-macos.yml, src/broker/**]",
-            events,
-        )
+        paths = "    paths: [.github/workflows/broker-macos.yml, src/broker/**]\n"
+        self.assertIn(f"  push:\n    branches: [main]\n{paths}", events)
+        self.assertIn(f"  pull_request:\n{paths}", events)
         self.assertIn("  workflow_dispatch:", events)
         self.assertEqual(
             re.findall(r"(?m)^  (\w+):", events), ["push", "pull_request", "workflow_dispatch"]
