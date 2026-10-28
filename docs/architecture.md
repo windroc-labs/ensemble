@@ -388,13 +388,33 @@ read `/run/ensemble/secrets/`. The App private key, Codex refresh token and enro
 the broker; a provider API key or an environment secret is the same long-lived value in every container that lists
 it. Each container copy is 0400 on the container's tmpfs and goes with the container.
 
-**Credential spec** (interface only): the caller supplies references, never secret
+**Credential spec**: the caller supplies references, never secret
 values. Delegate and session `Spec` each carry `credentials` and `environment_credentials` as `str | None`; the
 second is the selected environment's declaration. They never parse, validate, interpret or merge their contents.
 Their records preserve both strings. The start manifest reserves two optional JSON strings, omitting only `None`;
 decoding the outer manifest recovers the original UTF-8 JSON text, including whitespace and escapes.
 This envelope keeps malformed opaque text from changing the surrounding manifest. There is no Python credential
 type or kind registry. tmux does not inject from these fields.
+
+Board runs (`router`, including `ensemble-crew issue`) resolve `[orchestrator.roles.<role>.credentials]`
+and `[orchestrator.roles.<role>.tasks.<task>.credentials]`: each task value replaces the whole role value of
+the same kind, retaining other kinds. A run without a task uses only role values; no declarations yields `{}`. New runs pass
+the result as JSON text; resumes omit it and keep the saved spec. Issue bodies and comments never supply it.
+`router --dry-run` prints the resolved object in each new-run preview; a resume supplies no replacement.
+Credentials in the orchestrator's `[core]` or `[core.roles.<role>]` overlays are configuration errors.
+
+Declarations check table shape, the role's task index and the orchestrator-only `linear = "role"` shorthand;
+broker owns kind names and values. The shorthand expands to that role's app references and only the board keys
+listed below, without reading any secret. It requires `tracker = "linear"`; explicit reference objects stay opaque.
+For example, to declare the engineer app for `light-build` on a configured Linear board:
+
+```toml
+[orchestrator.roles.engineer.tasks.light-build.credentials]
+linear = "role"
+```
+
+The packaged declarations are empty. Installer-written GitHub grants and the decompose task declaration are
+follow-up work; nonempty specs still require the broker implementation described below.
 
 The target contract assigns kind interpretation to the broker alone: both declarations require independent
 validation; the caller's whole value replaces an environment value of the same kind, retaining other kinds.

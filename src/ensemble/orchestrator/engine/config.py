@@ -781,7 +781,7 @@ def _credential_table(cfg, role, table, where):
     return out
 
 
-def credentials(cfg: Config, role: str, task: str | None) -> dict:
+def credentials(cfg: Config, role, task: str | None) -> dict:
     """A fresh spec: task values replace whole same-kind role values."""
     settings = cfg.roles[role]
     return utils.thaw({**settings.credentials, **settings.task_credentials.get(task or "", {})})

@@ -731,7 +731,10 @@ class IssueBlockers(Base):
             (
                 "claim",
                 f"TASK-2 https://linear.app/x/TASK-2 {PD}",
-                ["pick TASK-2 queue=1", "preview TASK-2 client=b client_source=default"],
+                [
+                    "pick TASK-2 queue=1",
+                    "preview TASK-2 client=b client_source=default credentials={}",
+                ],
             ),
             ("plan", "new", []),
         ):
@@ -772,6 +775,53 @@ class RouterEntry(OuterBase):
         return self.tick(
             self.fake, *argv, live=live, again=True, tty=tty, outer=outer, now=now, clock=clock
         )
+
+    def test_board_start_passes_only_configured_credentials_to_delegate(self):
+        self.write_config(
+            OUTER
+            + '[roles.engineer.credentials]\ngithub = { app = "engineer" }\n'
+            + '[roles.engineer.tasks.light-build.credentials]\nlinear = "role"\n'
+            + f'[linear.task_labels]\nlight-build = "{LIGHT}"\n'
+        )
+        self.todo["labels"] = [label("Light Build", LIGHT)]
+        self.fake.node["description"] = 'credentials: {"env": [{"item": "untrusted"}]}'
+        self.assertEqual(self.entry("--issue", ID), 0)
+        spec = self.api.detached[-1][1]
+        self.assertEqual(spec.task, "light-build")
+        resolved = json.loads(spec.credentials)
+        self.assertEqual(set(resolved), {"github", "linear"})
+        self.assertEqual(resolved["github"], {"app": "engineer"})
+        self.assertEqual(resolved["linear"]["app"]["role"], "engineer")
+
+    def test_dry_run_prints_resolved_board_credentials_for_issue_and_tick(self):
+        self.write_config(
+            OUTER
+            + '[roles.engineer.credentials]\ngithub = { app = "engineer" }\n'
+            + '[roles.engineer.tasks.light-build.credentials]\nlinear = "role"\n'
+            + f'[linear.task_labels]\nlight-build = "{LIGHT}"\n'
+        )
+        self.todo["labels"] = [label("Light Build", LIGHT)]
+        for argv in (("--issue", ID, "--dry-run"), ("--dry-run",)):
+            with self.subTest(argv=argv):
+                self.assertEqual(self.entry(*argv), 0)
+                previews = [json.loads(line) for line in self.raw.splitlines()]
+                preview = next(p for p in previews if p["kind"] == "preview")
+                resolved = preview["credentials"]
+                self.assertEqual(set(resolved), {"github", "linear"})
+                self.assertEqual(resolved["github"], {"app": "engineer"})
+                self.assertEqual(resolved["linear"]["app"]["role"], "engineer")
+                self.assertEqual((self.api.detached, self.fake.mutations), ([], []))
+
+    def test_bad_credential_config_exits_two_before_board_access(self):
+        for text in (
+            '[roles.engineer.credentials]\nlinear = "other"\n',
+            "[roles.engineer.tasks.made-up.credentials]\n",
+            "[core]\ncredentials = {}\n",
+        ):
+            with self.subTest(text=text):
+                self.write_config(OUTER + text)
+                self.assertEqual(self.entry("--issue", ID), 2)
+                self.assertEqual((self.api.detached, self.fake.queries), ([], []))
 
     def test_claims_then_detaches_its_linear_run_after_its_start_row(self):
         for argv, said in (
@@ -1786,14 +1836,17 @@ class RouterLocking(TickBase):
                 [
                     "plan mode=new queue=1",
                     "pick TASK-1 queue=1",
-                    "preview TASK-1 client=a client_source=default",
+                    "preview TASK-1 client=a client_source=default credentials={}",
                 ],
             )
             self.assertRegex(self.said()[-1], "^usage client=a ")
             self.assertEqual(self.tick(fake, "--dry-run", "--issue", "TASK-1"), 0)
             self.assertEqual(
                 self.said(),
-                ["pick TASK-1 queue=1", "preview TASK-1 client=a client_source=default"],
+                [
+                    "pick TASK-1 queue=1",
+                    "preview TASK-1 client=a client_source=default credentials={}",
+                ],
             )
             out = io.StringIO()
             with redirect_stdout(out):
@@ -2142,11 +2195,11 @@ class ClaimUsageGates(Base):
             self.said(),
             [
                 "pick TASK-1 queue=2",
-                "preview TASK-1 client=a client_source=default",
+                "preview TASK-1 client=a client_source=default credentials={}",
                 "usage client=a usage=unknown allowed=false",
                 "usage-skip TASK-1 client=a reason=usage unknown",
                 "pick TASK-2 queue=2",
-                "preview TASK-2 client=b client_source=default",
+                "preview TASK-2 client=b client_source=default credentials={}",
                 "usage client=b usage=five_hour=10% weekly=10% allowed=true",
             ],
         )
@@ -2411,7 +2464,9 @@ class LocalBoard(TickBase):
                 )
         for again in (False, True):
             self.assertEqual(self.tick(self.fake(), "--dry-run", again=again), 0)
-            self.assertIn("preview LOC-2 client=a client_source=default", self.said())
+            self.assertIn(
+                "preview LOC-2 client=a client_source=default credentials={}", self.said()
+            )
             diagnostic = [s for s in self.said() if s.startswith("dependency-cycle ")]
             self.assertEqual(len(diagnostic), 1)
             self.assertIn("LOC-1 -> LOC-1", diagnostic[0])
@@ -2466,7 +2521,7 @@ class LocalBoard(TickBase):
             raise AssertionError("the transport was called")
 
         self.assertEqual(self.tick(transport, "--dry-run"), 0, self.err)
-        self.assertIn("preview LOC-1 client=a client_source=default", self.said())
+        self.assertIn("preview LOC-1 client=a client_source=default credentials={}", self.said())
 
 
 class ScheduledUsageGates(TickBase):
@@ -2656,7 +2711,9 @@ class ScheduledUsageGates(TickBase):
                     else:
                         self.assertIn("client=b client_source=label", said)
                     if not explicit:
-                        self.assertIn("preview TASK-2 client=a client_source=default", said)
+                        self.assertIn(
+                            "preview TASK-2 client=a client_source=default credentials={}", said
+                        )
                     expected = ["TASK-1"] if explicit else ["TASK-1", "TASK-2"]
                     self.assertEqual([v["i"] for q, v in fake.queries if q == RECHECK], expected)
                     self.unchanged(fake)
@@ -2790,7 +2847,7 @@ class ScheduledUsageGates(TickBase):
                     "usage-skip TASK-1 client=a reason=usage unknown",
                     "plan mode=new queue=1",
                     "pick TASK-2 queue=1",
-                    "preview TASK-2 client=b client_source=default",
+                    "preview TASK-2 client=b client_source=default credentials={}",
                     b,
                 ],
                 ["a", "b"],
@@ -2803,7 +2860,7 @@ class ScheduledUsageGates(TickBase):
                     "plan TASK-1 mode=resume sid=a",
                     "plan mode=new queue=1",
                     "pick TASK-2 queue=1",
-                    "preview TASK-2 client=b client_source=default",
+                    "preview TASK-2 client=b client_source=default credentials={}",
                     b,
                 ],
                 ["a", "b"],
@@ -3919,7 +3976,10 @@ class ExplicitIssueRuns(TickBase):
             (
                 "todo",
                 todo,
-                ["pick TASK-1 queue=1", "preview TASK-1 client=a client_source=default"],
+                [
+                    "pick TASK-1 queue=1",
+                    "preview TASK-1 client=a client_source=default credentials={}",
+                ],
             ),
             (
                 "resume",
@@ -3968,9 +4028,21 @@ class ExplicitIssueRuns(TickBase):
         light = [label("Light Research", LIGHT)]
         deep = [label("Deep Research", DEEP)]
         cases = (
-            ("listed", lambda: todo(light), "preview TASK-1 client=a client_source=default tier=3"),
-            ("unlisted", lambda: todo(deep), "preview TASK-1 client=a client_source=default"),
-            ("no task", lambda: todo([]), "preview TASK-1 client=a client_source=default"),
+            (
+                "listed",
+                lambda: todo(light),
+                "preview TASK-1 client=a client_source=default tier=3 credentials={}",
+            ),
+            (
+                "unlisted",
+                lambda: todo(deep),
+                "preview TASK-1 client=a client_source=default credentials={}",
+            ),
+            (
+                "no task",
+                lambda: todo([]),
+                "preview TASK-1 client=a client_source=default credentials={}",
+            ),
             ("resume", lambda: resumable("light-research"), "plan TASK-1 mode=resume sid=a tier=3"),
             (
                 "resume unlisted",
@@ -5351,12 +5423,12 @@ class ScheduledRuns(TickScenario):
                 "plan mode=new queue=4",
                 "claim-skip TASK-3 to=in_review reason=reached 4 attempts",
                 "pick TASK-5 queue=4",
-                "preview TASK-5 client=a client_source=default",
+                "preview TASK-5 client=a client_source=default credentials={}",
                 "usage client=a usage=five_hour=10% weekly=10% allowed=true",
                 "pick TASK-6 queue=4",
-                "preview TASK-6 client=a client_source=default",
+                "preview TASK-6 client=a client_source=default credentials={}",
                 "pick TASK-4 queue=4",
-                "preview TASK-4 client=b client_source=default",
+                "preview TASK-4 client=b client_source=default credentials={}",
                 "usage client=b usage=five_hour=10% weekly=10% allowed=true",
             ],
         )
@@ -5376,7 +5448,7 @@ class ScheduledRuns(TickScenario):
             [
                 "plan mode=new queue=1",
                 "pick TASK-1 queue=1",
-                "preview TASK-1 client=a client_source=default",
+                "preview TASK-1 client=a client_source=default credentials={}",
                 f"usage client=a {why} allowed=false",
                 f"usage-skip TASK-1 client=a reason=usage {why}",
                 "pick-none reason=nothing claimable",
@@ -5400,7 +5472,7 @@ class ScheduledRuns(TickScenario):
             [
                 'plan mode=new queue=1 live={"engineer": "1/1", "pm": "1/1"}',
                 "pick TASK-2 queue=1",
-                "preview TASK-2 client=a client_source=default",
+                "preview TASK-2 client=a client_source=default credentials={}",
                 "usage client=a usage=five_hour=10% weekly=10% allowed=true",
             ],
         )
