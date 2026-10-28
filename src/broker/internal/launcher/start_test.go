@@ -647,6 +647,9 @@ func TestRollback(t *testing.T) {
 			if e.Code != tc.code || e.Cleanup != tc.cleanup || !hasCall(d, "rm") {
 				t.Fatalf("%+v %q", e, d.verbs())
 			}
+			if name == "hook" && e.Message != "Installing the hook stub failed." {
+				t.Fatal(e)
+			}
 			if tc.cleanup == protocol.Failed && (e.CleanupError == "" || e.Container != container) {
 				t.Fatalf("%+v", e)
 			}
