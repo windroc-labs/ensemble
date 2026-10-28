@@ -5,11 +5,14 @@
 Broker protocol 34 adds optional `credentials` and `environment_credentials` JSON-text strings to the start manifest.
 Delegate and session carry both unchanged. Kind validation, merging and issuance remain follow-up work.
 The decoded contract is `{github: {app, permissions, repo?}, linear: {app, board}, env: [{item, file}]}`; every kind is
-optional. No run sends these fields yet; the broker accepts empty objects and refuses any nonempty declaration.
+optional. New board runs send the orchestrator's resolved declarations (an empty object when none are configured);
+resumes keep the stored spec. The broker accepts empty objects and refuses any nonempty declaration.
 Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
 refuses an older protocol's broker. This interface-only change requires no configuration migration. The existing
 `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal,
-explicit role/task declarations, `--credentials`, and the no-implicit-credentials rule are not enabled here.
+`--credentials`, and the no-implicit-credentials rule are not enabled here. Orchestrator role/task declarations
+are available as described in [Credential spec](architecture.md#credentials); nonempty declarations require
+the broker follow-up before they can start a Docker container.
 GitHub grants (including verifier output) will move to orchestrator/CLI declarations; environment secrets will move
 to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
 errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for the contract.

@@ -1,5 +1,6 @@
 """Packaged orchestrator settings, registered Delegates and resolved role runs."""
 
+import json
 import os
 import re
 import subprocess
@@ -778,6 +779,12 @@ def _credential_table(cfg, role, table, where):
                 "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
             },
         }
+    try:
+        json.dumps(out, allow_nan=False)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"orchestrator/config.toml: [{where}] references must have a JSON-compatible shape"
+        ) from None
     return out
 
 

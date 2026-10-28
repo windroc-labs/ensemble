@@ -1618,7 +1618,13 @@ class CredentialDeclarations(ConfigFile, Case):
         self.assertEqual(config.credentials(cfg, "engineer", None), {"future": False})
 
     def test_linear_role_expands_only_the_runs_app_and_allowlisted_board_keys(self):
-        self.local('linear.human_members = ["user@example.com"]\n')
+        self.local(
+            'linear.human_members = ["user@example.com"]\n'
+            + f'linear.agent_label_group = "{AGENT_GROUP}"\n'
+            + f'linear.task_labels = {{ light-build = "{LABEL1}" }}\n'
+            + f'linear.agent_labels = {{ claude = "{LABEL2}" }}\n'
+            + f'linear.project_repos = {{ "{P1}" = "acme/project" }}\n'
+        )
         cfg = self.load(MANAGER_LINE + PIPELINE + '[roles.engineer.credentials]\nlinear = "role"\n')
         app = role_app("engineer")
         expected = {
@@ -1629,8 +1635,11 @@ class CredentialDeclarations(ConfigFile, Case):
             "board": {
                 "team": TEAM,
                 "states": STATES,
-                "labels": {"task_labels": {}, "agent_labels": {}},
-                "project_repos": {},
+                "labels": {
+                    "task_labels": {"light-build": LABEL1},
+                    "agent_labels": {"claude": LABEL2},
+                },
+                "project_repos": {P1: "acme/project"},
                 "human_members": ["user@example.com"],
             },
         }
@@ -1647,6 +1656,15 @@ class CredentialDeclarations(ConfigFile, Case):
             config.credentials(cfg, "engineer", None),
             {"future": [1, False], "github": "invalid-for-broker", "linear": {"app": "opaque"}},
         )
+
+    def test_non_json_toml_shape_is_a_table_specific_configuration_error(self):
+        for table in ("roles.engineer.credentials", "roles.engineer.tasks.build.credentials"):
+            for value in ("2026-10-28", "nan"):
+                with self.subTest(table=table, value=value):
+                    with self.assertRaises(config.ConfigError) as cm:
+                        self.load(PIPELINE + f"[{table}]\nfuture = {value}\n")
+                    self.assertIn(f"[{table}]", str(cm.exception))
+                    self.assertIn("JSON", str(cm.exception))
 
     def test_declaration_shapes_and_task_names_name_the_bad_table(self):
         cases = (

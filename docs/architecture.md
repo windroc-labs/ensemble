@@ -403,7 +403,7 @@ the result as JSON text; resumes omit it and keep the saved spec. Issue bodies a
 `router --dry-run` prints the resolved object in each new-run preview; a resume supplies no replacement.
 Credentials in the orchestrator's `[core]` or `[core.roles.<role>]` overlays are configuration errors.
 
-Declarations check table shape, the role's task index and the orchestrator-only `linear = "role"` shorthand;
+Declarations check JSON-compatible table shape, the role's task index and the orchestrator-only `linear = "role"` shorthand;
 broker owns kind names and values. The shorthand expands to that role's app references and only the board keys
 listed below, without reading any secret. It requires `tracker = "linear"`; explicit reference objects stay opaque.
 For example, to declare the engineer app for `light-build` on a configured Linear board:

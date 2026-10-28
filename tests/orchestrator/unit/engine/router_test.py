@@ -817,6 +817,7 @@ class RouterEntry(OuterBase):
             '[roles.engineer.credentials]\nlinear = "other"\n',
             "[roles.engineer.tasks.made-up.credentials]\n",
             "[core]\ncredentials = {}\n",
+            "[roles.engineer.credentials]\nfuture = 2026-10-28\n",
         ):
             with self.subTest(text=text):
                 self.write_config(OUTER + text)
@@ -1604,6 +1605,23 @@ class LabelClients(TickBase):
                         said[plan + 1],
                         f"restart TASK-1 sid=old client=a client_source={source} resumed=b",
                     )
+
+    def test_dry_run_restart_prints_current_credentials_without_claim_or_launch(self):
+        self.write_config(
+            AGENT_TOP
+            + CONFIG
+            + AGENT_LABELS
+            + '[roles.researcher.credentials]\nfuture = { ref = "current" }\n'
+        )
+        for argv in (("--dry-run",), ("--issue", "TASK-1", "--dry-run")):
+            with self.subTest(argv=argv):
+                _, fake = self.interrupted("b", [label("changed", AGENT_A, AGENT_GROUP)])
+                self.assertEqual(self.tick(fake, *argv), 0)
+                events = [json.loads(line) for line in self.raw.splitlines()]
+                plan = next(event for event in events if event["kind"] == "plan")
+                self.assertEqual((plan["mode"], plan["client"]), ("new", "a"))
+                self.assertEqual(plan["credentials"], {"future": {"ref": "current"}})
+                self.unchanged(fake)
 
     def test_a_usage_blocked_restart_logs_only_its_usage_skip(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
