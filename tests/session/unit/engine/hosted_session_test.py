@@ -1767,6 +1767,14 @@ class AccountPoolTest(Base):
             self.assertEqual(self.started_env(**{ACCOUNT_ENV: "default"})[ACCOUNT_ENV], "default")
         self.probe.assert_not_called()
 
+    def test_usage_is_the_configured_accounts_reading(self):
+        self.outputs = {"/d": "10,10", "/w": "20,100"}
+        with mock.patch.object(PoolClient, "_account", return_value="work"):
+            self.assertTrue(exhausted(self.usage()))
+            hosted_session.accounts.hold("pool", "work", None)
+            self.assertEqual(self.usage().five_hour.used_percent, 100.0)
+        self.assertEqual(self.usage(), Usage(Window(10, None), Window(10, None)))
+
     def test_with_no_reading_known_a_start_selects_none(self):
         self.probe.side_effect = None
         self.probe.return_value = None

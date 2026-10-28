@@ -1108,6 +1108,8 @@ class HostedSession(Session):
                 found.usage_probe(),
                 container=host._client_context().container is not None,
             )
+        if account := found._account():
+            return pool[account]
         return None if (name := accounts.best(pool)) is None else pool[name]
 
     @classmethod
