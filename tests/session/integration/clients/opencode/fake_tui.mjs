@@ -12,7 +12,8 @@
 // {compact: text} (a context overflow's auto compaction: its error, compaction user message,
 // summary `text`, then a synthetic continue message, or after an earlier turn the input again),
 // {compactAfter: text} (a /compact after the turn's idle: no message to go on, then idle again),
-// {foreign}, {busy}, {reinit}, {nested}. Each start and nested probe is a FAKE_LOG line.
+// {join: N} (the next N stdin lines saved mid-turn as user messages OpenCode's running loop takes,
+// each then a busy step), {shell} (busy before the turn's user message, as `!cmd` runs), {foreign}, {busy}, {reinit}, {nested}. Each start and nested probe is a FAKE_LOG line.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -207,6 +208,13 @@ async function step(item) {
     if (earlier) await user({ type: "text", text: prompt });
     else await user({ type: "text", text: "Continue.", synthetic: true, metadata: { compaction_continue: true } });
     await emit("session.status", { sessionID: native, status: { type: "busy" } });
+  } else if ("join" in item) {
+    for (let n = 0; n < item.join; n++) {
+      const text = await next();
+      if (text === null) return true;
+      await user({ type: "text", text });
+      await emit("session.status", { sessionID: native, status: { type: "busy" } });
+    }
   } else if ("foreign" in item) {
     await emit("session.created", { info: { id: FOREIGN } });
     await emit("session.status", { sessionID: FOREIGN, status: { type: "busy" } });
@@ -237,8 +245,10 @@ async function turn(text, steps, first) {
   held = lateUser ? [] : null;
   users = [];
   prompt = text;
+  const shell = steps.some((item) => "shell" in item);
+  if (shell) await emit("session.status", { sessionID: native, status: { type: "busy" } });
   await user({ type: "text", text });
-  await emit("session.status", { sessionID: native, status: { type: "busy" } });
+  if (!shell) await emit("session.status", { sessionID: native, status: { type: "busy" } });
   for (const item of steps) if (await step(item)) break;
   await idle();
   earlier = true;
