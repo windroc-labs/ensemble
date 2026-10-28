@@ -96,7 +96,7 @@ class EndTest(Case):
         stuck = FakeControl(os.path.join(self.root, "stuck"), ends=None)
         with (
             mock.patch.object(drives, "KILL_WAIT", 0.1),
-            self.assertRaisesRegex(AssertionError, "drive still running after 0.1s, then killed"),
+            self.assertRaisesRegex(AssertionError, "drives still running after 0.1s, then killed"),
         ):
             drives.stop(stuck, wait=0.1)
         self.assertEqual(stuck.calls, ["terminate", "kill"])
