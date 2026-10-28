@@ -1,6 +1,6 @@
-// A fake `opencode` TUI: loads the plugins its OPENCODE_CONFIG_CONTENT lists, as OpenCode 1.19.3
+// A fake `opencode` TUI: loads the plugins its OPENCODE_CONFIG_CONTENT lists, as OpenCode 1.19.4
 // does, and plays FAKE_SCENARIO's turns ("turns", or "resume" for a --session start) as OpenCode bus
-// events to them. The first turn's text is --prompt's (a fresh start), the rest stdin lines. A step:
+// events to them; after a turn's idle it saves the turn's user messages again (their summary diffs). The first turn's text is --prompt's (a fresh start), the rest stdin lines. A step:
 // {text, late?: ms, reads?, child?, repeat?, synthetic?, ignored?} (late: saved after idle;
 // reads: hidden for N API reads), {tool, permission?, pattern?},
 // {bash, child?} (backend ask emits permission.asked, then --auto replies or stdin "allow" does),
@@ -8,7 +8,8 @@
 // line "answer" or "dismiss"), {error, recover?} (recovered: the turn goes on, as
 // after a compaction), {unsaved} (an assistant message never completed), {errored} (one that
 // failed), {lateUser: ms} (the whole turn, its user message too, saved ms after its idle),
-// {foreign}, {busy}, {reinit}, {nested}. Each start and nested probe is a FAKE_LOG line.
+// {compact: text} (a context overflow's auto compaction: its error, compaction user message,
+// summary `text` and synthetic continue message), {foreign}, {busy}, {reinit}, {nested}. Each start and nested probe is a FAKE_LOG line.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -54,6 +55,7 @@ const messages = [];
 const hidden = new Map();
 const late = []; // [ms after the turn's idle, a message saved then]
 let held = null; // a lateUser turn's messages, saved together later
+let users = []; // the turn's user messages, saved again after its idle
 function save(message) {
   (held ?? messages).push(message);
 }
@@ -119,6 +121,16 @@ async function ask(permission, pattern, session) {
   await emit("permission.replied", { sessionID: session, requestID: "per_1", reply: "once" });
 }
 
+// A user message and its first part: the input's text, or one OpenCode makes itself.
+async function user(fields) {
+  const info = { id: `msg_${++part}`, sessionID: native, role: "user", time: { created: Date.now() } };
+  const first = { id: `prt_${++part}`, sessionID: native, messageID: info.id, ...fields };
+  save({ info, parts: [first] });
+  users.push(info);
+  await emit("message.updated", { info });
+  await emit("message.part.updated", { part: first });
+}
+
 async function step(item) {
   if ("text" in item) {
     const session = item.child ? CHILD : native;
@@ -161,6 +173,23 @@ async function step(item) {
       return true;
     }
     await emit("session.status", { sessionID: native, status: { type: "busy" } });
+  } else if ("compact" in item) {
+    // processor.ts halt on an overflow, then compaction.ts: the run goes on
+    const error = { name: "ContextOverflowError", data: { message: "context overflow" } };
+    await emit("session.error", { sessionID: native, error });
+    const overflowed = assistant([]);
+    save(overflowed);
+    await emit("message.updated", { info: overflowed.info });
+    await user({ type: "compaction", auto: true, overflow: true });
+    await emit("session.status", { sessionID: native, status: { type: "busy" } });
+    const text = { id: `prt_${++part}`, sessionID: native, type: "text", text: item.compact };
+    const summary = assistant([text]);
+    Object.assign(summary.info, { summary: true, mode: "compaction" });
+    save(summary);
+    await emit("message.part.updated", { part: text });
+    await emit("message.updated", { info: summary.info });
+    await user({ type: "text", text: "Continue.", synthetic: true, metadata: { compaction_continue: true } });
+    await emit("session.status", { sessionID: native, status: { type: "busy" } });
   } else if ("foreign" in item) {
     await emit("session.created", { info: { id: FOREIGN } });
     await emit("session.status", { sessionID: FOREIGN, status: { type: "busy" } });
@@ -187,15 +216,15 @@ function assistant(parts, session = native) {
 
 async function turn(text, steps, first) {
   if (first && !opts.session) await emit("session.created", { info: { id: native } });
-  const user = { id: `msg_${++part}`, sessionID: native, role: "user", time: { created: Date.now() } };
   const lateUser = steps.find((item) => "lateUser" in item)?.lateUser;
   held = lateUser ? [] : null;
-  save({ info: user, parts: [{ type: "text", text }] });
-  await emit("message.updated", { info: user });
+  users = [];
+  await user({ type: "text", text });
   await emit("session.status", { sessionID: native, status: { type: "busy" } });
   for (const item of steps) if (await step(item)) break;
   await emit("session.status", { sessionID: native, status: { type: "idle" } });
   await emit("session.idle", { sessionID: native });
+  for (const info of users) await emit("message.updated", { info: { ...info, summary: { diffs: [] } } });
   for (const [ms, message] of late.splice(0)) setTimeout(() => messages.push(message), ms);
   if (held) {
     const turnMessages = held;

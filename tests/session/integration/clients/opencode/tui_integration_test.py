@@ -25,6 +25,7 @@ from ensemble.session.engine.types import (
     Mode,
     Reply,
     Spec,
+    StatusState,
     TurnEnd,
     TurnFailed,
     TurnStarted,
@@ -337,25 +338,31 @@ class TuiSessions(Case):
         )
         self.assertEqual(self.words(1)[-1], "w1 done")
 
-    def test_a_failed_turn_cannot_later_succeed_without_another_accepted_input(self):
+    def test_a_recovered_error_does_not_fail_the_turn(self):
         error = {"name": "ContextOverflowError", "data": {"message": "compacting"}}
-        self.scene(
-            [
-                [{"error": error, "recover": True}, {"tool": "read"}, {"text": "done anyway"}],
-                [{"text": "next turn"}],
-            ]
-        )
+        self.scene([[{"error": error, "recover": True}, {"tool": "read"}, {"text": "done anyway"}]])
+        _, stream = self.start()
+        found = stream.until(TurnEnd)
+        self.assertFalse(any(isinstance(event, TurnFailed) for event in found))
+        self.assertEqual(found[-2:], [Reply("done anyway"), TurnEnd("done anyway")])
+
+    def test_a_compacted_turn_ends_done_with_its_own_reply(self):
+        self.scene([[{"compact": "summary"}, {"text": "recovered"}], [{"text": "next turn"}]])
         handle, stream = self.start()
-        found = stream.until(TurnFailed)
-        self.assertEqual(found[-1], TurnFailed("ContextOverflowError", "compacting"))
-        found += stream.until(Reply)
-        self.assertFalse(any(isinstance(event, TurnEnd) for event in found))
-        stream.quiet()
-        handle.send("continue")
         self.assertEqual(
             stream.until(TurnEnd),
-            [TurnStarted(), Activity(), Reply("next turn"), TurnEnd("next turn")],
+            [TurnStarted(), Activity(""), Reply("recovered"), TurnEnd("recovered")],
         )
+        stream.quiet()
+        self.assertEqual(handle.status().state, StatusState.DONE)
+        self.assertEqual(self.words(1), ["w1 done"])
+        handle.send("again")
+        self.assertEqual(
+            stream.until(TurnEnd),
+            [TurnStarted(), Activity(""), Reply("next turn"), TurnEnd("next turn")],
+        )
+        stream.quiet()
+        self.assertEqual(handle.status().state, StatusState.DONE)
 
     def test_a_fresh_restart_rebinds_the_root_session_once(self):
         self.common.bind(str(self.cwd), "run-1", fake_opencode.NATIVE)
