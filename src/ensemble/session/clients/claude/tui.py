@@ -86,7 +86,6 @@ class ClaudeTui(Tui):
     START, START_MATCHER = "SessionStart", "^(startup|resume)$"
     dialogs = ("Quick safety check",)
     opening = (START, "/color")
-    _ready = START
     _opening_mid_turn = True  # an immediate command: Claude Code runs it mid-turn
     _remote_owned = True
 

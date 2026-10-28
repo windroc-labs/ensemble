@@ -238,7 +238,7 @@ function handle(event, client) {
 
 export const Ensemble = async ({ client }) => {
   if (hook === null) return {};
-  if (!started) call("plugin.start");
+  if (!started && root !== null) call("plugin.start");
   started = true;
   return { event: async ({ event }) => handle(event, client) };
 };

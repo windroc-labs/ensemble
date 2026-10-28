@@ -938,13 +938,7 @@ class TuiMode(BaseMode):
         blocked or the send lock is held.
         """
         now = time.monotonic()
-        if (
-            self._opening is None
-            or self._due is None
-            or self._gone
-            or now < self._due
-            or not self._input_ready()
-        ):
+        if self._opening is None or self._due is None or self._gone or now < self._due:
             return
         waits = self._held or self._launching or now < self._checked + POLL_SCREEN
         if waits or self._active_turn and (self._turn_blocked or not self.run._opening_mid_turn):
@@ -972,7 +966,9 @@ class TuiMode(BaseMode):
             if isinstance(event, TurnStarted):
                 self._active_turn, self._launching, self._interrupting = True, False, False
             elif isinstance(event, TurnEnd | TurnFailed):
-                self._active_turn, self._launching, self._interrupting = False, False, False
+                self._active_turn = False
+                if self.run._interrupt is not None:
+                    self._launching, self._interrupting = False, False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
                 self._held = isinstance(event, Blocked)
             if isinstance(event, Blocked | TurnEnd | TurnFailed | TurnStarted):
@@ -1081,10 +1077,13 @@ class TuiMode(BaseMode):
     def _input_ready(self) -> bool:
         return self._ready_at is not None and time.monotonic() >= self._ready_at
 
-    def send(self, text: str, *, pending: Callable[[], bool] | None = None) -> bool:
+    def send(self, text: str) -> bool:
+        return self._try_send(text, lambda: True)
+
+    def _try_send(self, text: str, pending: Callable[[], bool]) -> bool:
         with self._store.sending():
             self._running()
-            if pending is not None and not pending():
+            if not pending():
                 return False
             if not self._input_ready():
                 return False
@@ -1118,10 +1117,13 @@ class TuiMode(BaseMode):
         if prompted:
             self._store.mark_prompted(self._generation, submitted=True)
 
-    def press(self, keys: Sequence[KeyPress], *, pending: Callable[[], bool] | None = None) -> None:
+    def press(self, keys: Sequence[KeyPress]) -> None:
+        self._try_press(keys, lambda: True)
+
+    def _try_press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None:
         with self._store.sending():
             self._running()
-            if pending is None or pending():
+            if pending():
                 self._owner().press(keys)
 
     def screen(self, lines: int | None = None) -> str:

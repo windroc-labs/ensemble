@@ -66,8 +66,6 @@ class Base(Case):
 
 class LaunchTest(Base):
     def test_a_fresh_start_submits_its_prompt(self):
-        self.assertEqual(self.run_tui()._ready, tui.START)
-        self.assertIsNone(self.run_tui()._interrupt)
         launch = self.launch(self.spec(tier=1))
         self.assertEqual(
             launch.argv,
@@ -273,14 +271,6 @@ class CommitTest(Base):
 
 
 class OnHookTest(Base):
-    def test_plugin_start_is_journaled_before_a_fresh_session_exists_without_binding(self):
-        state = {"cwd": self.cwd, "store": self.client.common.store}
-        payload = {"session_id": None, "turn_id": None}
-        call = HookCall(tui.START, payload, "run-1", self.home, None, state)
-        self.assertEqual(tui.on_hook(call), payload)
-        self.assertIsNone(self.client.common.native(self.cwd, "run-1"))
-        self.assertEqual(self.run_tui().hook_events(tui.START, payload), [])
-
     def call(self, payload, **state) -> dict | None:
         state = {"cwd": self.cwd, "store": self.client.common.store, **state}
         return tui.on_hook(HookCall("session.idle", payload, "run-1", self.home, None, state))

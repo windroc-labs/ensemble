@@ -127,8 +127,6 @@ class TuiSessions(Case):
         self.assertEqual(call["argv"], ["--model", "ollama/qwen3.6:35b-mlx", "--prompt=Hello"])
         self.assertEqual(call["cwd"], str(self.cwd))
         self.assertEqual(call["config"]["permission"]["bash"], "ask")
-        hooks = read_jsonl(self.home / ".ensemble" / "tui" / "w1" / "hooks.jsonl")
-        self.assertEqual([row["label"] for row in hooks].count("plugin.start"), 1)
 
     def test_a_send_works_then_ends_with_the_new_reply(self):
         self.scene([[{"text": "one"}], [{"tool": "read"}, {"text": "two"}]])
@@ -468,8 +466,6 @@ class TuiSessions(Case):
         last = self.calls()[-1]
         self.assertEqual(last["argv"], ["--session", NATIVE, "--model", "ollama/qwen3.6:35b-mlx"])
         self.assertEqual(last["env"]["session"], NATIVE)
-        hooks = read_jsonl(self.home / ".ensemble" / "tui" / "w1" / "hooks.jsonl")
-        self.assertEqual([row["label"] for row in hooks].count("plugin.start"), 1)
 
     def test_a_resume_of_a_run_that_bound_no_session_starts_a_fresh_one(self):
         """WDRC-366: a run killed before OpenCode saved its session left no binding."""

@@ -1789,7 +1789,7 @@ class StartupSendTest(Base):
             return flock(fd, how)
 
         with mock.patch("fcntl.flock", side_effect=after_wait):
-            mode.press([KeyPress.parse("Enter")], pending=lambda: pending[0])
+            mode._try_press([KeyPress.parse("Enter")], lambda: pending[0])
         self.terminal.calls.press.assert_not_called()
 
     def test_a_superseding_turn_is_interrupted_again(self):
@@ -1813,7 +1813,7 @@ class StartupSendTest(Base):
             return flock(fd, how)
 
         with mock.patch("fcntl.flock", side_effect=after_wait):
-            self.assertFalse(mode.send("canceled", pending=lambda: pending[0]))
+            self.assertFalse(mode._try_send("canceled", lambda: pending[0]))
         self.assertEqual(self.sent(), [])
         self.assertEqual(mode._store.prompts(mode.generation), (0, 0))
 
@@ -1825,10 +1825,8 @@ class StartupSendTest(Base):
         self.assertTrue(mode.send("next"))
         self.assertEqual(self.sent()[-2:], [Paste("next"), Key("Enter")])
 
-    def started_with(self, *, prompt="opening", interrupt=True):
+    def started_with(self, *, prompt="opening"):
         run = StartupTui(self.client)
-        if not interrupt:
-            run._interrupt = None
         self.mode = self.start(run, prompt=prompt)
         self.terminal = self.mode._terminal
         self.terminal.calls.send.reset_mock()
@@ -1907,17 +1905,6 @@ class StartupSendTest(Base):
         self.assertEqual(mode.poll(0), ([TurnEnd("finished")], False))
         self.assertTrue(mode.send("next"))
         self.assertEqual(self.sent(), [Key("Escape"), Paste("next"), Key("Enter")])
-
-    def test_other_clients_wait_only_for_startup_then_keep_their_mid_turn_send(self):
-        mode = self.started_with(interrupt=False)
-        self.assertFalse(mode.send("next"))
-        self.assertEqual(self.sent(), [])
-        self.ready()
-        self.assertTrue(mode.send("one"))
-        self.append(record("ready"))
-        mode.poll(0)
-        self.assertTrue(mode.send("two"))
-        self.assertEqual(self.sent(), [Paste("one"), Key("Enter"), Paste("two"), Key("Enter")])
 
     def test_an_interrupt_failure_is_refused_without_a_prompt_marker(self):
         mode = self.started_with()

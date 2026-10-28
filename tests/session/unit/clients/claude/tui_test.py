@@ -99,8 +99,6 @@ class TuiArgvTest(Base):
 
     def test_session_start_hook_outside_hooks(self):
         self.assertEqual(ClaudeTui.opening, ("SessionStart", "/color"))
-        self.assertEqual(ClaudeTui._ready, "SessionStart")
-        self.assertIsNone(ClaudeTui._interrupt)
         self.assertNotIn("SessionStart", ClaudeTui.hooks)
         (entry,) = json.loads(self.tui(config={}).argv[6])["hooks"]["SessionStart"]
         self.assertEqual(entry["matcher"], "^(startup|resume)$")
