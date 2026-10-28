@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"ensemble/broker/internal/protocol"
@@ -20,8 +22,8 @@ const (
 )
 
 // defaultImage is the newest default worker image: a broker-built image whose variant record names no base image,
-// newest by the record's mtime (a build's last use).
-func (h Host) defaultImage(ctx context.Context) (imageInfo, error) {
+// newest by the record's mtime (a build's last use). With none, it builds one from run's package, as build does.
+func (h Host) defaultImage(ctx context.Context, run string) (imageInfo, error) {
 	type candidate struct {
 		key string
 		at  time.Time
@@ -52,7 +54,21 @@ func (h Host) defaultImage(ctx context.Context) (imageInfo, error) {
 			return info, nil
 		}
 	}
-	return imageInfo{}, protocol.New(protocol.StartFailed, "No default worker image to prefetch with; run ensemble-broker build without a base image.")
+	var v variant
+	if data, err := os.ReadFile(h.recordPath(strings.TrimPrefix(run, "ensemble-worker:"))); err != nil || json.Unmarshal(data, &v) != nil || !filepath.IsAbs(v.Package) {
+		return imageInfo{}, protocol.New(protocol.StartFailed, "No default worker image to prefetch with, and no build record of "+run+" to build one from; run ensemble-broker build without a base image.")
+	}
+	built, err := h.Build(ctx, v.Package, BuildSpec{}, -1)
+	var e *protocol.Error
+	if errors.As(err, &e) && e.Code != protocol.DockerUnreachable {
+		// start's protocol has no build_failed.
+		return imageInfo{}, &protocol.Error{Code: protocol.StartFailed, Message: "No default worker image to prefetch with; building it failed: " + e.Message,
+			Cause: e.Cause, Cleanup: protocol.NotNeeded}
+	}
+	if err != nil {
+		return imageInfo{}, err
+	}
+	return h.checkImage(ctx, built.Image)
 }
 
 // prefetch clones m's prefetch repo into its new workspace volume through a throwaway helper: the default worker
@@ -63,7 +79,7 @@ func (h Host) prefetch(ctx context.Context, c string, m Manifest, run imageInfo,
 	if err != nil {
 		return err
 	}
-	helper, err := h.defaultImage(ctx)
+	helper, err := h.defaultImage(ctx, m.Image)
 	if err != nil {
 		return err
 	}
