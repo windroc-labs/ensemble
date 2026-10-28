@@ -87,7 +87,7 @@ FOOTER = "Answer in a comment, then move this issue back to {state}."
 _IDS = rf"(?i:none)|{ISSUE_ID}(?:(?:\s*,\s*|\s+){ISSUE_ID})*"
 # a decompose summary's leading `Created <ids>; reused <ids>`; text after it is never posted
 DECOMPOSED = re.compile(
-    rf"\s*(?i:created)\s+({_IDS})\s*;\s*(?i:reused)\s+({_IDS})[ \t]*(?:$|[.;\n])"
+    rf"\s*(?i:created)\s+({_IDS})\s*;\s*(?i:reused)\s+({_IDS})[ \t]*(?:$|[.;\n](?!\s*{ISSUE_ID}))"
 )
 LIMIT = "Usage limit,"
 # a failed attempt's own steps; a later valid outcome keeps the normal ones

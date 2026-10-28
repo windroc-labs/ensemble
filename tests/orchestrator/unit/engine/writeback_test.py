@@ -445,13 +445,18 @@ class DecomposeCompletion(Base):
                 "Created AGE-52, AGE-53; reused AGE-40, AGE-41",
             ),
             (
-                "Created AGE-52; reused AGE-40. AGE-49 keeps its old edge to AGE-38.",
+                "Created AGE-52; reused AGE-40. The old edge from AGE-49 to AGE-38 stays.",
                 "Created AGE-52; reused AGE-40",
             ),
             (
-                "Created AGE-52; reused none\nAGE-49: the old edge stays.",
+                "Created AGE-52; reused none\nNote: AGE-49 keeps its old edge.",
                 "Created AGE-52; reused none",
             ),
+            ("Created AGE-52; reused AGE-40. AGE-49 keeps its old edge.", unreadable),
+            ("Created AGE-52; reused none\nAGE-49: the old edge stays.", unreadable),
+            ("Created AGE-52; reused AGE-40; AGE-41", unreadable),
+            ("Created AGE-52; reused AGE-40;AGE-41, AGE-42", unreadable),
+            ("Created AGE-52; reused AGE-40. AGE-41", unreadable),
             (
                 "Created AGE-52 AGE-53; reused AGE-40 AGE-41",
                 "Created AGE-52, AGE-53; reused AGE-40, AGE-41",
