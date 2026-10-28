@@ -283,6 +283,10 @@ class Host(ABC):
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         return None
 
+    def _headless_owner(self, name: str) -> Mapping[str, str] | None:
+        """The harness dir, sid and generation owning named headless run `name` (Docker)."""
+        return None
+
     def __init__(self, name: str, settings: Mapping | None = None) -> None:
         self.name = name
         self.settings = thaw(settings or {})

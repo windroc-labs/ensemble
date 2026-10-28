@@ -561,6 +561,36 @@ class DisplayGone(ControlBase):
         self.assertNotIn("docker", err)
 
 
+class HeadlessElsewhere(ControlBase):
+    """A named headless run on a Host other than the default: close finds it by its Host's
+    record and asks its harness.
+    """
+
+    def setUp(self):
+        super().setUp()
+        with open(Path(self.ensemble, "config.local.toml"), "a") as f:
+            f.write(
+                '[session.hosts]\ndefault = "other"\n[session.hosts.other]\n'
+                'implementation = "tests.session.unit.cli_test:ElsewhereHost"\n'
+            )
+        self.channel = channel = Channel.create()
+        fd = os.open(channel.lock, os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.locks[channel.directory] = fd
+        self.addCleanup(lambda: self.locks.get(channel.directory) and self.let_go(channel))
+        found = {"owner": channel.directory, "sid": SID, "generation": "g" * 32}
+        channel.write_status({"state": "running", "name": "h1", **found})
+        patcher = mock.patch.object(CliHost, "_headless_owner", return_value=found, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_close_asks_its_harness_on_its_own_host(self):
+        served = self.serve(self.channel, {"ok": True})
+        with mock.patch("subprocess.Popen", side_effect=FileNotFoundError(2, "no tmux", "tmux")):
+            code, out, err = self.invoke("close", "h1")
+        self.assertEqual((code, out, served), (0, "", [Op.CLOSE]), err)
+
+
 class Ls(HostedTuiBase):
     def setUp(self):
         super().setUp()

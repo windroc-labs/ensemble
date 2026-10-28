@@ -736,6 +736,8 @@ class HarnessDelegate(Delegate):
             live = agent is not None and _live(agent)
             if agent is not None:
                 agent.close()
+            elif unanswered is None:
+                self._close_foreground(state)
         if unanswered is None:
             self._stop_owned(closed=live)
         unchecked = (
@@ -750,6 +752,19 @@ class HarnessDelegate(Delegate):
             raise SessionError(f"{error}{also}") from error
         if unchecked is not None:
             raise Unanswered(unchecked)
+
+    def _close_foreground(self, state: DelegateState) -> None:
+        if state.plan.spec.mode != Mode.HEADLESS or state.detached or not self._alive(state):
+            return
+        if not state.plan.docker:
+            raise SessionError(
+                f"close {state.agent_name}: a foreground headless run off Docker has no close"
+                " route; end it in its terminal"
+            )
+        try:
+            self.session_cls.retire(state.agent_name, sid=state.plan.sid, host=state.host)
+        except SessionConfigError as error:
+            raise ConfigError(str(error)) from None
 
     def _control(self, path: str | None) -> ProcessControl | None:
         if path is None:

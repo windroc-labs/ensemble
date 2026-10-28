@@ -512,6 +512,23 @@ class ThroughItsHost(Base):
         self.assertEqual(host.starts[0][2], {"generation": mode.generation})
         self.assertEqual(mode.opening_pending, None)
 
+    def test_a_named_run_names_its_owner_as_its_harness(self):
+        host = HomeHost()
+        spec = Spec(
+            workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub", name="w1"
+        )
+        HeadlessMode.start(
+            spec,
+            StubClient(Launch(NOTHING, transcript="/t.jsonl"), run=HomedRun),
+            registry=self.session_cls._config().registry,
+            record=self.recorded.append,
+            host=host,
+            owner="/h",
+        )
+        metadata = host.starts[0][2]
+        self.assertEqual((metadata["harness"], metadata["sid"]), ("/h", SID))
+        self.assertNotIn("owner", metadata)
+
     def test_returncode_is_the_hosts_confirmed_code_then_closes_the_worker_once(self):
         worker = ScriptedWorker(code=None, codes=[None, 3])
         mode = self.start_on(WorkerHost(worker))

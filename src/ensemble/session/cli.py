@@ -506,7 +506,7 @@ def _configure() -> Hosts:
 
 def _host_of(name: str, hosts: Hosts) -> str:
     """The configured Host the worker state of session `name` names (its display gone or not),
-    else the one listing it, else the default.
+    else the one whose named headless run it is, else the one listing it, else the default.
     """
     try:
         recorded = TuiMode.snapshot(name).get("host")
@@ -514,7 +514,9 @@ def _host_of(name: str, hosts: Hosts) -> str:
         recorded = None
     if isinstance(recorded, str) and recorded in hosts.tables:
         return recorded
-    return next((h for h in hosts.tables if name in Session.host(h).list()), hosts.default)
+    found = (h for h in hosts.tables if Session.host(h)._headless_owner(name) is not None)
+    listed = (h for h in hosts.tables if name in Session.host(h).list())
+    return next(found, None) or next(listed, hosts.default)
 
 
 def _shown(name: str, hosts: Hosts) -> Host:
