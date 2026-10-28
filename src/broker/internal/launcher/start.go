@@ -35,22 +35,6 @@ func asAgent(container string, argv ...string) []string {
 	return append([]string{"exec", "--user", "agent", container}, argv...)
 }
 
-// probe reads every client's version; the image installed them.
-func (h Host) probe(ctx context.Context, container string) (Clients, error) {
-	var versions [3]string
-	var errs []error
-	for i, client := range []string{"claude", "/opt/ensemble/clients/bin/codex", "/opt/ensemble/clients/bin/opencode"} {
-		out, err := h.Docker.Run(ctx, asAgent(container, client, "--version"), nil)
-		line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-		versions[i] = strings.TrimSpace(line)
-		if err == nil && (versions[i] == "" || hasControl(versions[i])) {
-			err = errors.New(client + " --version gave no usable version")
-		}
-		errs = append(errs, err)
-	}
-	return Clients{Claude: versions[0], Codex: versions[1], Opencode: versions[2]}, errors.Join(errs...)
-}
-
 func taken(c string) *protocol.Error {
 	return protocol.New(protocol.StartFailed, "Container "+c+" already exists; close it first.")
 }
@@ -375,9 +359,9 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 	}
 	lap("bootstrap")
-	clients, err := h.probe(ctx, c)
+	clients, err := startClients(labels)
 	if err != nil {
-		return StartResult{}, held, failure(err, protocol.StartFailed, "Cannot run the image's clients.")
+		return StartResult{}, held, err
 	}
 	lap("clients")
 	switch m.Client {

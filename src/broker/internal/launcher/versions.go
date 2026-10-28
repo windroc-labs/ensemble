@@ -14,6 +14,15 @@ type CodexVersions interface {
 	Verify() (codex.Installation, error)
 }
 
+// startClients reads the versions verified when the image was built.
+func startClients(labels map[string]string) (Clients, error) {
+	v, ok := imageClients(labels)
+	if !ok {
+		return Clients{}, protocol.New(protocol.StartFailed, "Image client version labels are missing or invalid; rebuild the worker image with ensemble-broker build.")
+	}
+	return Clients{Claude: v.Claude + " (Claude Code)", Codex: "codex-cli " + v.Codex, Opencode: v.Opencode}, nil
+}
+
 func (h Host) versionPolicy() error {
 	if h.Versions == nil {
 		return protocol.New(protocol.StartFailed, "Codex version policy unavailable; reinstall the broker.")

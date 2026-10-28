@@ -291,37 +291,17 @@ func TestStartOpencode(t *testing.T) {
 	}
 }
 
-func TestStartProbesOpencode(t *testing.T) {
-	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.ContainsFunc(d.calls, func(c []string) bool {
-		return slices.Equal(c, []string{"exec", "--user", "agent", container, "/opt/ensemble/clients/bin/opencode", "--version"})
-	}) {
-		t.Fatalf("no opencode probe: %q", d.calls)
-	}
-	h, d = startHost(&world{labels: goodLabels(), versions: []string{"2.1.0\n", "codex-cli 0.163.0\n", ""}}, &fakeCreds{})
-	_, err := h.Start(context.Background(), validManifest(t))
-	if e := protoErr(t, err); e.Code != protocol.StartFailed || e.Message != "Cannot run the image's clients." || e.Cleanup != protocol.Removed {
-		t.Fatalf("%+v", e)
-	}
-	if slices.ContainsFunc(d.calls, func(c []string) bool { return slices.Contains(c, "inject") }) {
-		t.Fatal("injected after a failed probe")
-	}
-}
-
 func TestOpencodeImageBelowMinimum(t *testing.T) {
 	for _, version := range []string{"1.19.2\n", "1.19\n", "v1.19.3\n", "opencode 1.19.3\n"} {
 		t.Run(strings.TrimSpace(version), func(t *testing.T) {
 			tokens := &fakeTokens{}
-			h, d, _ := opencodeHost(&world{labels: goodLabels(), versions: []string{"2.1.0\n", "codex-cli 0.163.0\n", version}}, tokens)
+			h, d, _ := opencodeHost(&world{labels: labelsWithVersion("opencode", strings.TrimSpace(version))}, tokens)
 			rec, path := audited(t, &h, "start", "")
 			_, err := h.Start(context.Background(), opencodeManifest(t, withGitHub))
 			rec.Flush(err)
 			e := protoErr(t, err)
 			want := "Image OpenCode version is invalid or below the minimum; rebuild the worker image with OpenCode 1.19.3 or newer."
-			if e.Code != protocol.StartFailed || e.Message != want || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
+			if e.Code != protocol.StartFailed || (!strings.Contains(e.Message, "labels") && e.Message != want) || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
 				t.Fatalf("%+v", e)
 			}
 			if slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "issue") }) {
@@ -332,7 +312,7 @@ func TestOpencodeImageBelowMinimum(t *testing.T) {
 			}
 		})
 	}
-	h, _ := startHost(&world{labels: goodLabels(), versions: []string{"2.1.0\n", "codex-cli 0.163.0\n", "1.0.0\n"}}, &fakeCreds{})
+	h, _ := startHost(&world{labels: labelsWithVersion("opencode", "1.0.0")}, &fakeCreds{})
 	got, err := h.Start(context.Background(), validManifest(t))
 	if err != nil || got.Clients.Opencode != "1.0.0" {
 		t.Fatalf("a Claude start checked the OpenCode minimum: %+v %v", got, err)

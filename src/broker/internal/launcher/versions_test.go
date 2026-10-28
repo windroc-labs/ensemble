@@ -148,7 +148,7 @@ func TestCheckCodex(t *testing.T) {
 func TestCodexImageVersionCheckedBeforeSecrets(t *testing.T) {
 	for _, version := range []string{"codex-cli 0.162.999", "codex-cli bad"} {
 		t.Run(version, func(t *testing.T) {
-			h, d := startHost(&world{labels: goodLabels(), versions: []string{"claude 2", version, "1.19.3"}}, &fakeCreds{})
+			h, d := startHost(&world{labels: labelsWithVersion("codex", strings.TrimPrefix(version, "codex-cli "))}, &fakeCreds{})
 			h.Codex = &fakeCodexCreds{}
 			_, err := h.Start(context.Background(), codexManifest(t))
 			if e := protoErr(t, err); e.Code != protocol.StartFailed || !strings.Contains(e.Message, "rebuild the worker image") {

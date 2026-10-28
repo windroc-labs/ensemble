@@ -46,7 +46,7 @@ func (c *fakeCreds) Inject(account string, exec func(argv []string, stdin []byte
 }
 
 func goodLabels() map[string]string {
-	return map[string]string{"ensemble.key": imageKey, "ensemble.version": "1.2.3", "ensemble.agent-uid": "1001", "ensemble.agent-gid": "1002"}
+	return map[string]string{"ensemble.key": imageKey, "ensemble.version": "1.2.3", "ensemble.agent-uid": "1001", "ensemble.agent-gid": "1002", "ensemble.claude-version": "2.1.0", "ensemble.codex-version": "0.163.0", "ensemble.opencode-version": "1.19.3"}
 }
 
 // world is a scripted Docker Desktop: each field steers one kind of call.
@@ -61,7 +61,6 @@ type world struct {
 	exists          bool // container already present
 	runErr          error
 	execErr         func(args []string) error
-	versions        []string
 	rmErr           error
 	rmSilent        bool // rm --force exits 0 without echoing: the container was absent
 	unreachable     bool
@@ -77,7 +76,6 @@ type world struct {
 }
 
 func (w *world) docker() *fakeDocker {
-	probes := 0
 	return &fakeDocker{respond: func(args []string) ([]byte, error) {
 		if w.unreachable {
 			return nil, docker.ErrUnreachable
@@ -166,23 +164,7 @@ func (w *world) docker() *fakeDocker {
 					return nil, err
 				}
 			}
-			if slices.Contains(args, "--version") {
-				v := "2.1.0 (Claude Code)\n"
-				if slices.ContainsFunc(args, func(s string) bool { return strings.HasSuffix(s, "/codex") || strings.HasSuffix(s, "/codex.next") }) {
-					v = "codex-cli 0.163.0\n"
-				}
-				if slices.ContainsFunc(args, func(s string) bool { return strings.HasSuffix(s, "/opencode") }) {
-					v = "1.19.3\n"
-				}
-				if probes < len(w.versions) {
-					v = w.versions[probes]
-				}
-				probes++
-				if v == "" {
-					return nil, &docker.CommandError{Exit: 127, Stderr: "not found"}
-				}
-				return []byte(v), nil
-			}
+
 			return nil, nil
 		}
 		return nil, errors.New("unexpected " + strings.Join(args, " "))
@@ -519,7 +501,6 @@ func TestStartOrder(t *testing.T) {
 		"--interactive --user -s",
 		"agent /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
 		"root /opt/ensemble/venv/bin/python -I /opt/ensemble/lib/bootstrap.py",
-		"agent claude --version", "agent /opt/ensemble/clients/bin/codex --version", "agent /opt/ensemble/clients/bin/opencode --version",
 		"--interactive --user inject"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
@@ -636,8 +617,6 @@ func TestRollback(t *testing.T) {
 	}{
 		"bootstrap":           {&world{execErr: failOn("claude", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
 		"hook":                {&world{execErr: failOn("hook", cmdErr)}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
-		"clients":             {&world{versions: []string{"2.1.0\n", ""}}, &fakeCreds{}, protocol.StartFailed, protocol.Removed},
-		"clients unreachable": {&world{execErr: failOn("--version", docker.ErrUnreachable)}, &fakeCreds{}, protocol.DockerUnreachable, protocol.Removed},
 		"inject":              {&world{}, &fakeCreds{injectErr: errors.New("opaque")}, protocol.StartFailed, protocol.Removed},
 		"inject unreachable":  {&world{}, &fakeCreds{injectErr: docker.ErrUnreachable}, protocol.DockerUnreachable, protocol.Removed},
 		"inject keychain":     {&world{}, &fakeCreds{injectErr: protocol.New(protocol.KeychainFailed, "denied")}, protocol.KeychainFailed, protocol.Removed},
@@ -717,7 +696,6 @@ func TestCauseOnlyWhereNamed(t *testing.T) {
 	cmdErr := &docker.CommandError{Exit: 1, Stderr: "boom detail"}
 	for name, w := range map[string]*world{
 		"bootstrap": {execErr: failOn("claude", cmdErr)},
-		"clients":   {execErr: failOn("--version", cmdErr)},
 	} {
 		w.labels = goodLabels()
 		h, _ := startHost(w, &fakeCreds{})

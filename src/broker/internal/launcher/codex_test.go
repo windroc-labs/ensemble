@@ -50,7 +50,7 @@ func codexManifest(t *testing.T, edits ...func(map[string]any)) string {
 }
 
 func TestCodexStartIsolation(t *testing.T) {
-	h, d := startHost(&world{labels: goodLabels(), versions: []string{"claude 2", "codex-cli 0.163.0"}}, &fakeCreds{ready: errors.New("Claude must not be read")})
+	h, d := startHost(&world{labels: labelsWithVersion("codex", "0.163.0")}, &fakeCreds{ready: errors.New("Claude must not be read")})
 	creds, v := &fakeCodexCreds{}, &fakeVersions{}
 	h.Codex, h.Versions = creds, v
 	result, err := h.Start(context.Background(), codexManifest(t))
@@ -77,7 +77,7 @@ func TestCodexStartIsolation(t *testing.T) {
 
 func TestCodexStartPreflightAndVersion(t *testing.T) {
 	for _, preflight := range []bool{true, false} {
-		h, d := startHost(&world{labels: goodLabels(), versions: []string{"claude 2", "codex-cli 0.162.999"}}, &fakeCreds{})
+		h, d := startHost(&world{labels: labelsWithVersion("codex", "0.162.999")}, &fakeCreds{})
 		creds := &fakeCodexCreds{}
 		if preflight {
 			creds.err = protocol.New(protocol.LoginRequired, "login codex")
@@ -138,7 +138,7 @@ func TestCodexMountBoundary(t *testing.T) {
 // rolls back with no further Codex call, and one that fails its preflight injects nothing.
 func TestCodexStartRollbackMakesNoCodexCall(t *testing.T) {
 	newHost := func() (Host, *fakeCodexCreds, *fakeEnv, *[]string) {
-		h, _ := startHost(&world{labels: goodLabels(), versions: []string{"claude 2", "codex-cli 0.163.0"}}, &fakeCreds{})
+		h, _ := startHost(&world{labels: labelsWithVersion("codex", "0.163.0")}, &fakeCreds{})
 		var log []string
 		creds, env := &fakeCodexCreds{log: &log}, &fakeEnv{failOn: map[string]error{}}
 		h.Codex, h.Versions, h.Env = creds, &fakeVersions{}, env
