@@ -955,7 +955,7 @@ class CleanTest(HarnessCase):
         remove.assert_not_called()
         self.assertFalse(os.path.lexists(self.agent()))
 
-    def test_clean_of_an_unparseable_record_deletes_files_only(self):
+    def test_clean_of_an_unparsable_record_deletes_files_only(self):
         self.make()
         remove = self.workspaces("ensemble-ws-a")
         for record in ({"version": 2}, None):
