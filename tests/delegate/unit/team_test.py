@@ -716,69 +716,44 @@ class Real(RealConfig):
         ):
             self.assertIn(phrase, task_text("deep-research"))
 
-    def test_engineers_fix_root_causes_by_the_method_file(self):
+    def test_engineers_follow_the_pinned_method_files(self):
         prompt, _ = composed("engineer")
         self.assertEqual(parameters(prompt)["<team>"], f"`{TEAM}`")
         rules = section(prompt, "Rules")
-        fix = item(rules, "Fix root causes")
-        self.assertEqual(
-            fix,
-            ": when debugging, read and follow the **fix-root-causes method** "
-            "`<team>/methods/fix-root-causes.md`. Every brief to a sub-agent (producer, reviewer) "
-            "names that file for the sub-agent to read.\n",
-        )
-        self.assertLess(
-            rules.index("- **No mutation testing**"), rules.index("- **Fix root causes**")
-        )
-        with open(os.path.join(TEAM, "methods", "fix-root-causes.md"), encoding="utf-8") as f:
-            method = f.read()
-        self.assertEqual(method, PSTACK_FIX_ROOT_CAUSES)
-        for role, task in runs():
-            if role != "engineer":
-                self.assertNotIn("fix-root-causes", composed(role, task)[0], (role, task))
-
-    def test_engineers_subtract_before_they_add_by_the_method_file(self):
-        rules = section(composed("engineer")[0], "Rules")
-        self.assertEqual(
-            item(rules, "Subtract before you add"),
-            ": for every change, read and follow the **subtract-before-you-add method** "
-            "`<team>/methods/subtract-before-you-add.md`. Every brief to a sub-agent "
-            "(producer, reviewer) names that file for the sub-agent to read.\n",
-        )
         labels = re.findall(r"^- \*\*(.*?)\*\*", rules, re.MULTILINE)
-        self.assertEqual(
-            labels.index("Subtract before you add"), labels.index("Fix root causes") + 1
+        methods = (
+            ("Fix root causes", "fix-root-causes.md", PSTACK_FIX_ROOT_CAUSES, 1),
+            (
+                "Subtract before you add",
+                "subtract-before-you-add.md",
+                PSTACK_SUBTRACT_BEFORE_YOU_ADD,
+                2,
+            ),
+            (
+                "Redesign from first principles",
+                "redesign-from-first-principles.md",
+                PSTACK_REDESIGN_FROM_FIRST_PRINCIPLES,
+                3,
+            ),
         )
-        with open(
-            os.path.join(TEAM, "methods", "subtract-before-you-add.md"), encoding="utf-8"
-        ) as f:
-            self.assertEqual(f.read(), PSTACK_SUBTRACT_BEFORE_YOU_ADD)
-        for role, task in runs():
-            if role != "engineer":
-                self.assertNotIn("subtract-before-you-add", composed(role, task)[0], (role, task))
-
-    def test_engineers_redesign_from_first_principles_by_the_method_file(self):
-        rules = section(composed("engineer")[0], "Rules")
-        self.assertEqual(
-            item(rules, "Redesign from first principles"),
-            ": for every change, read and follow the **redesign-from-first-principles method** "
-            "`<team>/methods/redesign-from-first-principles.md`. Every brief to a sub-agent "
-            "(producer, reviewer) names that file for the sub-agent to read.\n",
-        )
-        labels = re.findall(r"^- \*\*(.*?)\*\*", rules, re.MULTILINE)
-        self.assertEqual(
-            labels.index("Redesign from first principles"),
-            labels.index("Subtract before you add") + 1,
-        )
-        with open(
-            os.path.join(TEAM, "methods", "redesign-from-first-principles.md"), encoding="utf-8"
-        ) as f:
-            self.assertEqual(f.read(), PSTACK_REDESIGN_FROM_FIRST_PRINCIPLES)
-        for role, task in runs():
-            if role != "engineer":
-                self.assertNotIn(
-                    "redesign-from-first-principles", composed(role, task)[0], (role, task)
+        for label, method_file, pinned_text, rule_order in methods:
+            with self.subTest(method=method_file):
+                method = method_file.removesuffix(".md")
+                when = "when debugging" if method == "fix-root-causes" else "for every change"
+                self.assertEqual(
+                    item(rules, label),
+                    f": {when}, read and follow the **{method} method** "
+                    f"`<team>/methods/{method_file}`. Every brief to a sub-agent "
+                    "(producer, reviewer) names that file for the sub-agent to read.\n",
                 )
+                self.assertEqual(
+                    labels.index(label), labels.index("No mutation testing") + rule_order
+                )
+                with open(os.path.join(TEAM, "methods", method_file), encoding="utf-8") as f:
+                    self.assertEqual(f.read(), pinned_text)
+                for role, task in runs():
+                    if role != "engineer":
+                        self.assertNotIn(method, composed(role, task)[0], (role, task))
 
     def test_the_summary_is_short_and_details_go_in_the_deliverable(self):
         for role, task in runs():
