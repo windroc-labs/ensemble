@@ -388,7 +388,7 @@ read `/run/ensemble/secrets/`. The App private key, Codex refresh token and enro
 the broker; a provider API key or an environment secret is the same long-lived value in every container that lists
 it. Each container copy is 0400 on the container's tmpfs and goes with the container.
 
-**Credential spec** (interface only): the caller supplies references, never secret
+**Credential spec**: the caller supplies references, never secret
 values. Delegate and session `Spec` each carry `credentials` and `environment_credentials` as `str | None`; the
 second is the selected environment's declaration. They never parse, validate, interpret or merge their contents.
 Their records preserve both strings. The start manifest reserves two optional JSON strings, omitting only `None`;
@@ -396,10 +396,10 @@ decoding the outer manifest recovers the original UTF-8 JSON text, including whi
 This envelope keeps malformed opaque text from changing the surrounding manifest. There is no Python credential
 type or kind registry. tmux does not inject from these fields.
 
-The target contract assigns kind interpretation to the broker alone: both declarations require independent
+The broker alone interprets kinds: both declarations require independent
 validation; the caller's whole value replaces an environment value of the same kind, retaining other kinds.
 Duplicate JSON keys, trailing content, non-objects and unknown or invalid kinds must fail with `manifest_rejected`
-(exit 3) before container or credential operations. Kind validation, merging and issuance are follow-up work. The
+(exit 3) before container or credential operations. The broker serves all three kinds through its existing credential delivery batch; Linear joins the token maintenance scheduler. The
 production schema is `src/broker/protocol/docker-broker/protocol.schema.json` (`credentials`: text envelope;
 `credential_spec`: decoded object); JSON Schema's `contentSchema` is an annotation, so broker validation is mandatory.
 
@@ -411,11 +411,23 @@ production schema is `src/broker/protocol/docker-broker/protocol.schema.json` (`
 
 `board.states` contains the seven workflow-state keys; `board.labels` contains `task_labels` and `agent_labels`
 string maps. All five board keys are required; label and project maps and the human-member list may be empty.
-The schema excludes `harness` and `manager` role labels. Issuance must also bind supplied app references to the
-broker's enrolled role identity, including refusal of disguised harness/manager apps.
+The schema excludes `harness` and `manager` role labels. Issuance also binds every supplied app reference to the broker's exact active enrolled role identity, including refusal of disguised harness/manager apps before container creation.
+A missing or unreadable enrollment returns `login_required`. New declarations conflict with a non-null legacy `github`
+or a legacy `secrets` field of the same kind; the broker refuses that ambiguity.
 The shared `credential-spec-test-kind.json` and test-only `test-kind.schema.json` exercise a broker extension without
 changing either Python layer. Production rejects that test kind. All paths remain on the secrets tmpfs; the
 `credential-dirs.json` fixture fixes their non-overlapping roots. Client/account login credentials stay separate.
+
+Linear writes `token.json` (`access_token`, `expires_at`) and `board.json` (only the validated board object) under
+its directory, both 0400. The app reference and root secret are never copied into the container. It requests a separate
+client_credentials token with the role app's existing scopes, leaving the host token and its write-back untouched.
+The existing maintenance tick renews it ten minutes before expiry, atomically replaces the token file, then revokes
+the old token. A failed write revokes the new token; a failed start revokes everything it issued. Close reads back
+and revokes the container token before removing its tmpfs. Failed read/revocation is audited without a value; a
+container lost without close leaves its token to expire (up to 30 days). No Linear token is persisted by the broker.
+[Linear's OAuth contract](https://linear.app/developers/oauth-2-0-authentication) permits parallel client_credentials
+tokens with identical scopes and individual revocation. Enable client credentials for the role app; changing its
+scopes invalidates its other tokens. Host renewal keeps using its existing shared token path.
 
 Protocol 34 accepts absent declarations or JSON-text empty objects and refuses every nonempty declaration before
 side effects, without interpreting kinds. Malformed envelopes and non-object contents also fail with
@@ -438,7 +450,7 @@ an empty new spec does not yet remove their implicit grants.
 | environment secret | Docker | whatever a container's tools use it for ([Environment secrets](#environments)); issue one for ensemble alone | `ensemble-broker-env/<name>` / `<name>`; copy `/run/ensemble/secrets/env/<file>` | item: the broker; copy: three-way, and any process running as the user can start a container listing any `ensemble-broker-env/*` item | until replaced or deleted, or its `--expires` date | rotate it at its source, then `<B> login env <name>`; `security delete-generic-password -s ensemble-broker-env/<name>` deletes it; running containers keep the old copy until closed |
 | Linear harness app | host | router, promote, prune, a run's issue read and run comments; scopes `read,write` | client secret: `linear.harness.secret_service`; token and expiry (`{"access_token", "expires_at"}`): `linear.harness.token_service`; Client ID `linear.harness.client_id`, app user `linear.harness.user_id` | [Keychain items](#keychain-items) | token 30 days | transport: rotate the client secret in Linear › Settings › API › Applications (revoking every token of the app), `security add-generic-password -U -s <secret service> -a <secret service> -w` with the new one, then `security delete-generic-password -s <token service>`; broker: [Linear broker renewal](upgrading.md#linear-broker-renewal) |
 | Linear manager app | host | the `ensemble-orchestrator issue` commands; scopes `read,write,app:assignable` | as the harness's: `linear.manager.secret_service`, `linear.manager.token_service`, `linear.manager.client_id`, `linear.manager.user_id` | [Keychain items](#keychain-items) | token 30 days | as the harness app's |
-| Linear role apps | host | role write-back: comments, state moves, subscriptions, attachments, retitles; scopes `read,write,app:assignable,app:mentionable` | `linear.roles.<role>.secret_service`, `linear.roles.<role>.token_service`, with `client_id` and `user_id` | [Keychain items](#keychain-items) | token 30 days | as the harness app's |
+| Linear role apps | host; requested Docker runs |  role write-back: comments, state moves, subscriptions, attachments, retitles; scopes `read,write,app:assignable,app:mentionable` | `linear.roles.<role>.secret_service`, `linear.roles.<role>.token_service`, with `client_id` and `user_id` | [Keychain items](#keychain-items) | token 30 days | as the harness app's |
 
 Each Linear call (router, promote, prune, write-back, `issue`; not `--dry-run`, which logs a `token` line with the days
 left) first requests its app a new `client_credentials` token when the stored one is missing, undated, expired or has
@@ -506,6 +518,10 @@ count is `0`. Each search covers every mount (the workspace volume, the binds, t
 | Linear tokens | `docker exec "$C" sh -c 'env \| grep -ci linear; find / \( -path /proc -o -path /sys \) -prune -o -name config.local.toml -print 2>/dev/null \| wc -l'` |
 | host `gh` login | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -path "*/gh/hosts.yml" -print 2>/dev/null \| wc -l; env \| grep -c "^GH_TOKEN="'` |
 | Docker socket | `docker exec "$C" sh -c 'find / \( -path /proc -o -path /sys \) -prune -o -type s -name "*docker*" -print 2>/dev/null \| wc -l; command -v docker \| wc -c; env \| grep -c "^DOCKER_HOST="'` |
+
+A run declaring `linear` additionally holds exactly one Linear token file,
+`/run/ensemble/secrets/linear/token.json`, on tmpfs; `board.json` contains no token or app entries. Runs without
+`linear` hold neither file. The zero environment/config counts above apply to both.
 
 ### Risks
 
