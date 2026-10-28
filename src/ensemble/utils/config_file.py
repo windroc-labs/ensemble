@@ -7,6 +7,7 @@ Only supplied layers are read and validated, against their own and lower files, 
 (RENAMED_KEYS, MOVED_KEYS), inside tolerate_unknown_keys reported and dropped; nested tables are
 validated by their owners. Flat local keys are rejected.
 Explicit paths replace files; the defaults stay their validation schema.
+Opaque paths preserve values and replace them wholesale; * matches one key.
 """
 
 import contextlib
@@ -46,10 +47,15 @@ def tolerate_unknown_keys(report: Callable[[str], None]) -> Iterator[None]:
         _TOLERATED.pop()
 
 
-def merge(base: dict, over: dict) -> dict:
+def merge(base: dict, over: dict, *, opaque: tuple[tuple[str, ...], ...] = ()) -> dict:
     out = dict(base)
     for k, v in over.items():
-        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+        nested = tuple(path[1:] for path in opaque if path and path[0] in (k, "*"))
+        out[k] = (
+            merge(out[k], v, opaque=nested)
+            if () not in nested and isinstance(v, dict) and isinstance(out.get(k), dict)
+            else v
+        )
     return out
 
 
@@ -90,6 +96,7 @@ def read_resources(
     local: str = LOCAL,
     paths: Mapping[str, str] | None = None,
     validate: Callable[[str, str, Mapping], None] | None = None,
+    opaque: tuple[tuple[str, ...], ...] = (),
 ) -> dict:
     resources = tuple(resources)
     configs, known = {}, {}
@@ -136,20 +143,20 @@ def read_resources(
         schema = merge(schema, merge(*known[section]))
         overlay = found.get(section, {})
         checked = {}
-        for keys, value in _leaves(overlay, ()):
+        for keys, value in _leaves(overlay, (), opaque=opaque):
             if keys[0] not in schema:
                 error = f"{local}: unknown key {keys[0]!r} in [{section}]{renamed_key(keys[0])}"
                 if not _TOLERATED:
                     raise ConfigFileError(error)
                 _TOLERATED[-1](error)
                 continue
-            if value == {}:
+            if value == {} and not _opaque(keys, opaque):
                 continue
             table = checked
             for key in keys[:-1]:
                 table = table.setdefault(key, {})
             table[keys[-1]] = value
-        out = merge(out, merge(config, checked))
+        out = merge(out, merge(config, checked, opaque=opaque), opaque=opaque)
     return out
 
 
@@ -188,12 +195,22 @@ def _has(table, keys) -> bool:
     return True
 
 
-def _leaves(table: Mapping, at: tuple) -> Iterator[tuple[tuple, object]]:
+def _opaque(keys: tuple, paths: tuple[tuple[str, ...], ...]) -> bool:
+    return any(
+        len(keys) == len(path)
+        and all(want in (key, "*") for key, want in zip(keys, path, strict=True))
+        for path in paths
+    )
+
+
+def _leaves(
+    table: Mapping, at: tuple, *, opaque: tuple[tuple[str, ...], ...] = ()
+) -> Iterator[tuple[tuple, object]]:
     if not table and at:
         yield at, {}
     for k, v in table.items():
-        if isinstance(v, Mapping):
-            yield from _leaves(v, (*at, k))
+        if isinstance(v, Mapping) and not _opaque((*at, k), opaque):
+            yield from _leaves(v, (*at, k), opaque=opaque)
         else:
             yield (*at, k), v
 

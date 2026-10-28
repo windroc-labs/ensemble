@@ -34,7 +34,9 @@ class Direct(Case):
                     "image": "dummy-env:test",
                     "lock": "dummy-lock",
                     "plugins": ["dummy-plugin"],
-                    "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
+                    "credentials": {
+                        "env": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}]
+                    },
                 }
             },
             "roles": {"engineer": {"environment": {"name": "dummy", "gateway": "ignored"}}},
@@ -94,10 +96,12 @@ class Direct(Case):
                 "gateway": "workers",
                 "lock": "dummy-lock",
                 "plugins": ["dummy-plugin"],
-                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "prefetch": None,
-                "github_repo": None,
             },
+        )
+        self.assertEqual(
+            json.loads(argv[argv.index("--environment-credentials") + 1]),
+            {"env": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}]},
         )
         self.assertFalse({"--prompt", "--role", "--task", "--input", "--out"} & set(argv))
         self.assertEqual(argv[argv.index("--cwd") + 1], self.home)

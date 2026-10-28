@@ -9,5 +9,6 @@
   "hook_path": "/usr/local/bin/ensemble-session",
   "labels": {
     "team": "crew"
-  }
+  },
+  "environment_credentials": "{\"env\":[{\"item\":\"ensemble-broker-env/dummy\",\"file\":\"dummy.txt\"},{\"item\":\"ensemble-broker-env/mini-ssh\",\"file\":\"id_ed25519\"}]}"
 }

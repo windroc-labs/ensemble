@@ -398,6 +398,22 @@ class Resources(Case):
         self.assertNotIn("ghost", read_resources(self.resources)["roles"])
         self.assertNotIn("ghost", read_resources(self.resources[:2])["roles"])
 
+    def test_opaque_values_survive_extraction_and_replace_complete_subtrees(self):
+        paths = (("roles", "*", "payload"),)
+        packaged = Path(self.root, self.package, "delegate", "config.toml")
+        packaged.write_text(DELEGATE + "[roles.pm.payload]\nold = { x = 1 }\n")
+        for source, expected in (("{}", {}), ("{ future = {} }", {"future": {}})):
+            with self.subTest(source=source):
+                self.local(f"[delegate.roles.pm]\npayload = {source}\n")
+                found = read_resources(self.resources, opaque=paths)
+                self.assertEqual(found["roles"]["pm"]["payload"], expected)
+        self.local("")
+        Path(self.root, self.package, "orchestrator", "config.toml").write_text(
+            ORCH + "[roles.pm.payload]\nnext = {}\n"
+        )
+        found = read_resources(self.resources, opaque=paths)
+        self.assertEqual(found["roles"]["pm"]["payload"], {"next": {}})
+
     def test_a_malformed_local_file_propagates(self):
         self.local("x = [\n")
         with self.assertRaises(tomllib.TOMLDecodeError):

@@ -109,6 +109,24 @@ func TestSnapshotKey(t *testing.T) {
 	}
 }
 
+func TestStageOrchestratorPackage(t *testing.T) {
+	e := newBuildEnv(t)
+	files := []string{"cli.py", "config.toml", "engine/router.py", "trackers/local/board.py", "issue/command.py"}
+	for _, rel := range files {
+		putFile(t, filepath.Join(e.pkg, "src/ensemble/orchestrator", rel), rel)
+	}
+	stage := t.TempDir()
+	if _, _, err := e.host().stage(e.pkg, BuildSpec{}, stage); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range files {
+		data, err := os.ReadFile(filepath.Join(stage, "package/src/ensemble/orchestrator", rel))
+		if err != nil || string(data) != rel {
+			t.Errorf("staged orchestrator %s = %q, %v", rel, data, err)
+		}
+	}
+}
+
 func TestPrepareUmask(t *testing.T) {
 	e := newBuildEnv(t)
 	h := e.host()
@@ -310,6 +328,7 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "session")
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/utils/sample.py"), "utils")
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/delegate/sample.py"), "delegate")
+	putFile(t, filepath.Join(e.pkg, "src/ensemble/orchestrator/sample.py"), "orchestrator")
 	e.fake = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		switch args[0] {
 		case "build":
@@ -557,7 +576,7 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/python3 ",
+		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/ensemble-orchestrator /opt/ensemble/bin/python3 ",
 		"install -d -o agent -g agent -m 0700 /run/ensemble\n",
 		"COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
 		`python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients`,
@@ -574,6 +593,8 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 		"COPY src/ensemble/session /opt/ensemble/src/ensemble/session\n",
 		"COPY src/ensemble/utils /opt/ensemble/src/ensemble/utils\n",
 		"COPY src/ensemble/delegate /opt/ensemble/src/ensemble/delegate\n",
+		"COPY src/ensemble/orchestrator /opt/ensemble/src/ensemble/orchestrator\n",
+		`printf '%s\n' '#!/bin/sh' 'export PYTHONPATH=/opt/ensemble/src' 'exec /opt/ensemble/venv/bin/python -P -m ensemble.orchestrator.cli "$@"' > /opt/ensemble/bin/ensemble-orchestrator`,
 		"python3 -m venv --system-site-packages /opt/ensemble/venv",
 		`printf '%s\n' /opt/ensemble/src > "$(/opt/ensemble/venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/ensemble.pth"`,
 		`printf '%s\n' '#!/bin/sh' 'exec /opt/ensemble/venv/bin/python "$@"' > /opt/ensemble/bin/python3`,
@@ -782,7 +803,7 @@ func TestAFailedRefreshKeepsTheImage(t *testing.T) {
 func otherPackage(t *testing.T) string {
 	pkg := t.TempDir()
 	putFile(t, filepath.Join(pkg, ".claude-plugin/plugin.json"), `{"version":"1.2.3"}`)
-	for _, rel := range []string{"src/ensemble/session/sample.py", "src/ensemble/utils/sample.py", "src/ensemble/delegate/sample.py"} {
+	for _, rel := range []string{"src/ensemble/session/sample.py", "src/ensemble/utils/sample.py", "src/ensemble/delegate/sample.py", "src/ensemble/orchestrator/sample.py"} {
 		putFile(t, filepath.Join(pkg, rel), "other")
 	}
 	return pkg

@@ -195,7 +195,7 @@ class Base(Case):
             self.ep,
             "sha256:" + "b" * 64,
             {},
-            github_user_id=None,
+            env={},
             deadline=None,
         )
         self.broker = FakeBroker(self.order, started)
@@ -284,7 +284,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '33'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '35'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             f"gh logged in), then {BROKER} retrust; scripts/install.sh", str(caught.exception)
@@ -335,20 +335,19 @@ class ConfigTest(Base):
                 "docker": "/usr/local/bin/docker",
                 "plugins": [UPDRAFT],
                 "isolated": True,
-                "github": {"app": "", "permissions": PERMISSIONS},
             },
         )
         self.assertEqual(Host.parse_hosts(table).default, "tmux")
         settings = {k: v for k, v in table["docker"].items() if k != "implementation"}
         host = DockerHost("docker", settings)
         self.assertEqual(
-            (host.docker, host.github, host.github_permissions, host.plugins, host._isolated),
-            ("/usr/local/bin/docker", "", PERMISSIONS, (UPDRAFT,), True),
+            (host.docker, host.plugins, host._isolated),
+            ("/usr/local/bin/docker", (UPDRAFT,), True),
         )
         bare = DockerHost("docker", {"docker": DOCKER})
         self.assertEqual(
-            (bare.github, bare.github_permissions, bare.plugins, bare._isolated),
-            ("", {}, (), False),
+            (bare.plugins, bare._isolated),
+            ((), False),
         )
         self.assertTrue(DockerHost("docker", {"docker": DOCKER, "isolated": True})._isolated)
         named = DockerHost(
@@ -360,20 +359,14 @@ class ConfigTest(Base):
         )
         self.assertEqual(named.plugins, (UPDRAFT, "b.c@owner/market_1-x#" + "a" * 40))
 
-    def test_a_local_permissions_table_overrides_the_packaged_one_key_by_key(self):
+    def test_legacy_github_config_is_an_unknown_key(self):
         local = os.path.join(self.home, "config.local.toml")
         with open(local, "w") as f:
-            f.write(
-                '[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n'
-                '[session.hosts.docker.github.permissions]\nstatuses = "write"\nissues = "write"\n'
-            )
+            f.write('[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n')
         settings = read_config(local=local)["hosts"]["docker"]
         del settings["implementation"]
-        host = DockerHost("docker", settings)
-        self.assertEqual(host.github, "ensemble-broker-bot")
-        self.assertEqual(
-            host.github_permissions, {**PERMISSIONS, "statuses": "write", "issues": "write"}
-        )
+        with self.assertRaisesRegex(ConfigError, "unknown key 'github' in"):
+            DockerHost("docker", settings)
 
     def test_bad_settings_name_their_key(self):
         for settings, key in (
@@ -382,34 +375,6 @@ class ConfigTest(Base):
             (
                 {"docker": DOCKER, "mount_roots": ["~/src"]},
                 r"^unknown key 'mount_roots' in \[hosts.docker\]; delete it: workspaces are volumes$",
-            ),
-            (
-                {"docker": DOCKER, "github": "ensemble-broker-bot"},
-                r"^\[hosts.docker\] github: want a table$",
-            ),
-            (
-                {"docker": DOCKER, "github": {"app": "a", "x": 1}},
-                r"^unknown key 'x' in \[hosts.docker.github\]$",
-            ),
-            (
-                {"docker": DOCKER, "github": {"app": 1}},
-                r"^\[hosts.docker.github\] app: want a string$",
-            ),
-            ({"docker": DOCKER, "github": {}}, r"^\[hosts.docker.github\] app: want a string$"),
-            *(
-                (
-                    {"docker": DOCKER, "github": {"app": "a", "permissions": permissions}},
-                    r"^\[hosts.docker.github\] permissions: want a table of permission = level strings$",
-                )
-                for permissions in ("contents", ["contents"], {"contents": 1}, {"contents": None})
-            ),
-            (
-                {"docker": DOCKER, "github": {"app": "a", "permissions": {}}},
-                r"^\[hosts.docker.github\] permissions: want at least one with app set$",
-            ),
-            (
-                {"docker": DOCKER, "github": {"app": "a"}},
-                r"^\[hosts.docker.github\] permissions: want at least one with app set$",
             ),
             *(
                 (
@@ -765,7 +730,6 @@ class StartTest(StartBase):
                     "client": "agent",
                     "agent_dir": self.home_dir,
                     "hook_path": os.path.join(REPO, "bin", "ensemble-session"),
-                    "github": None,
                     "labels": {},
                 },
             )
@@ -1064,21 +1028,21 @@ class StartTest(StartBase):
                 self.assertEqual([step[0] for step in self.order], ["ps"])
                 self.assertEqual(os.listdir(self.home_dir), ["keep"])
 
-    def test_a_github_app_reaches_the_manifest_the_env_and_the_expiry_file(self):
-        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
-        self.broker.started = replace(self.broker.started, github_user_id=343764394)
-        self.start()
+    def test_broker_environment_is_applied_without_interpreting_credentials(self):
+        identity = {"ENSEMBLE_PR_AUTHOR": BOT, **GIT_IDENTITY, "FUTURE_IDENTITY": "opaque"}
+        self.broker.started = replace(self.broker.started, env=identity)
+        self.launch = replace(self.launch, env={**self.launch.env, "GIT_AUTHOR_NAME": "caller"})
+        spec = ' {"github":{"app":"ensemble-bot","permissions":{"contents":"write"}}} '
+        self.start(credentials=spec)
         with open(os.path.join(self.state, f"{GEN}.json")) as f:
-            self.assertEqual(
-                json.load(f)["github"], {"app": "ensemble-bot", "permissions": PERMISSIONS}
-            )
-        env = self.guard_env()
-        self.assertEqual(env["ENSEMBLE_PR_AUTHOR"], "ensemble-bot[bot]")
-        self.assertEqual({key: env.get(key) for key in GIT_IDENTITY}, GIT_IDENTITY)
+            manifest = json.load(f)
+        self.assertEqual(manifest["credentials"], spec)
+        self.assertNotIn("github", manifest)
+        self.assertEqual({k: self.guard_env()[k] for k in identity}, identity)
         with open(os.path.join(self.state, f"{GEN}.deadline.json")) as f:
             self.assertIsNone(json.load(f))
 
-    def test_no_github_app_writes_null_and_no_author(self):
+    def test_no_broker_environment_adds_no_author(self):
         self.start()
         env = self.guard_env()
         self.assertNotIn("ENSEMBLE_PR_AUTHOR", env)
@@ -1094,7 +1058,7 @@ class StartTest(StartBase):
             self.ep,
             "sha256:" + "b" * 64,
             {"claude": "2.1.0"},
-            github_user_id=None,
+            env={},
             deadline=None,
         )
         result = os.path.join(self.state, f"{GEN}.result.json")
@@ -1297,18 +1261,6 @@ class StartTest(StartBase):
             found = json.load(f)
         self.assertEqual((found["cwd"], found["workspace"]), (cwd, "ensemble-ws-w"))
 
-    def test_a_bot_user_id_that_does_not_match_the_app_rolls_back(self):
-        for github, user_id in (("ensemble-broker-bot", None), ("", 343764394)):
-            with self.subTest(github=github, user_id=user_id):
-                self.host.github = github
-                self.broker.started = replace(self.broker.started, github_user_id=user_id)
-                with self.assertRaisesRegex(
-                    SessionError, "broker: bad response to start: github_user_id"
-                ):
-                    self.start()
-                self.assertEqual(self.order[-1], ("close", CONTAINER))
-                self.assertNotIn("guard", self.order)
-
     def test_a_foreign_container_or_endpoint_rolls_back(self):
         for changes in (
             {"container": f"ensemble-x-{GEN}"},
@@ -1430,7 +1382,6 @@ ENV_SOURCE = "gamma@owner/market#" + "e" * 40
 ENVIRONMENT = EnvironmentSpec(
     image="dummy-env:test",
     gateway="mini-op",
-    secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
     plugins=("dummy-plugin", BETA, ENV_SOURCE),
     lock="dummy-lock",
 )
@@ -1446,6 +1397,64 @@ class EnvironmentTest(StartBase):
     def manifest(self):
         with open(os.path.join(self.state, f"{GEN}.json")) as f:
             return json.load(f)
+
+    def test_manifest_preserves_both_credential_declarations(self):
+        for value in (' {"future-kind": [1]}\n', "{", "{}", ""):
+            with self.subTest(value=value):
+                self.start(credentials=value, environment_credentials=' {"other": 2} ')
+                manifest = self.manifest()
+                self.assertEqual(manifest["credentials"], value)
+                self.assertEqual(manifest["environment_credentials"], ' {"other": 2} ')
+        self.start()
+        self.assertNotIn("credentials", self.manifest())
+        self.assertNotIn("environment_credentials", self.manifest())
+
+    def test_resume_reissues_saved_declarations_after_close(self):
+        values = {"credentials": ' {"future-kind": [1]}\n', "environment_credentials": "{"}
+        self.start(**values)
+        self.assertEqual({key: self.host_record()[key] for key in values}, values)
+        self.close_quietly(self.handle)
+        self.handle = None
+        self.history()
+        with open(os.path.join(self.cwd, "credentials.json"), "w") as f:
+            f.write('{"replacement": true}')
+        self.start(resume="1")
+        self.assertEqual({key: self.manifest()[key] for key in values}, values)
+        self.start(resume="1", **values)
+        self.assertEqual({key: self.manifest()[key] for key in values}, values)
+
+    def test_resume_refuses_different_or_new_declarations_before_start(self):
+        self.history()
+        for key in ("credentials", "environment_credentials"):
+            for saved, given in ((None, "{}"), ("{}", " {} "), ("{}", ""), ("{}", "{")):
+                self.record(**{key: saved})
+                metadata = {**self.METADATA, "resume": "1", key: given}
+                for check in (
+                    lambda metadata=metadata: self.host._preflight("w", self.launch, metadata),
+                    lambda metadata=metadata: self.host._validate("w", self.launch, metadata),
+                    lambda key=key, given=given: self.start(resume="1", **{key: given}),
+                ):
+                    with self.subTest(key=key, saved=saved, given=given):
+                        self.order.clear()
+                        with self.assertRaisesRegex(
+                            ConfigError, f"resume: {key} differs"
+                        ) as caught:
+                            check()
+                        self.assertNotIn("future-kind", str(caught.exception))
+                        self.assertEqual(self.order, [])
+
+    def test_fresh_start_does_not_inherit_saved_credentials(self):
+        self.record(credentials="{}", environment_credentials="{}")
+        self.start()
+        self.assertNotIn("credentials", self.manifest())
+        self.assertNotIn("environment_credentials", self.manifest())
+
+    def test_another_identity_does_not_inherit_saved_credentials(self):
+        self.record(sid="another", credentials="{}", environment_credentials="{}")
+        self.history()
+        self.start(resume="1")
+        self.assertNotIn("credentials", self.manifest())
+        self.assertNotIn("environment_credentials", self.manifest())
 
     def resumable(self, environment):
         """w's host.json from a start in `environment` (absent: a pre-upgrade one), its history."""
@@ -1496,63 +1505,48 @@ class EnvironmentTest(StartBase):
         self.assertEqual(self.broker.built, {"base_image": None, "image_plugins": ()})
 
     def test_manifest_carries_the_environment(self):
-        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
-        self.broker.started = replace(self.broker.started, github_user_id=343764394)
+        self.broker.started = replace(
+            self.broker.started, env={"ENSEMBLE_PR_AUTHOR": BOT, **GIT_IDENTITY}
+        )
         self.start(environment=carried(ENVIRONMENT))
         manifest = self.manifest()
         self.assertEqual(
-            {key: manifest.get(key) for key in ("gateway", "secrets", "lock", "lock_owner")},
+            {key: manifest.get(key) for key in ("gateway", "lock", "lock_owner")},
             {
                 "gateway": "mini-op",
-                "secrets": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}],
                 "lock": "dummy-lock",
                 "lock_owner": "w",
             },
         )
         self.assertNotIn("prefetch", manifest)
-        self.assertEqual(manifest["github"]["app"], "ensemble-bot")
+        self.assertNotIn("github", manifest)
+        self.assertNotIn("secrets", manifest)
         self.assertEqual(self.guard_env()["ENSEMBLE_PR_AUTHOR"], BOT)
 
-    def test_prefetch_drops_the_github_app(self):
-        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
+    def test_prefetch_has_no_implicit_github_credential(self):
         self.start(environment=carried(PREFETCHED))
         manifest = self.manifest()
         self.assertEqual(manifest["prefetch"], {"repo": "o/r", "ref": "main"})
-        self.assertIsNone(manifest["github"])
+        self.assertNotIn("github", manifest)
         env = self.guard_env()
         self.assertNotIn("ENSEMBLE_PR_AUTHOR", env)
         self.assertFalse(set(GIT_IDENTITY) & set(env))
 
-    def test_github_repo_gets_a_contents_write_repo_grant(self):
-        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
+    def test_prefetch_passes_the_declared_repo_grant_unchanged(self):
+        spec = '{"github":{"app":"ensemble-bot","repo":"o/out","permissions":{"contents":"write"}}}'
         mounts = []
-        for environment, user_id in (
-            (PREFETCHED, None),
-            (replace(PREFETCHED, github_repo="o/out"), 343764394),
-        ):
-            self.broker.started = replace(self.broker.started, github_user_id=user_id)
-            self.start(environment=carried(environment), home_persistent='["sessions"]')
+        for credentials in (None, spec):
+            self.start(
+                environment=carried(PREFETCHED),
+                credentials=credentials,
+                home_persistent='["sessions"]',
+            )
             with open(os.path.join(self.state, f"{GEN}.plan.json")) as f:
                 mounts.append(json.load(f)["mounts"])
-        manifest = self.manifest()
-        self.assertEqual(
-            manifest["github"],
-            {"app": "ensemble-bot", "permissions": {"contents": "write"}, "repo": "o/out"},
-        )
-        self.assertEqual(manifest["prefetch"], {"repo": "o/r", "ref": "main"})
-        env = self.guard_env()
-        self.assertEqual(env["ENSEMBLE_PR_AUTHOR"], BOT)
-        self.assertEqual({key: env[key] for key in GIT_IDENTITY}, GIT_IDENTITY)
+        self.assertEqual(self.manifest()["credentials"], spec)
+        self.assertEqual(self.manifest()["prefetch"], {"repo": "o/r", "ref": "main"})
+        self.assertNotIn("github", self.manifest())
         self.assertEqual(mounts[1], mounts[0])
-
-    def test_github_repo_without_app_is_a_config_error(self):
-        environment = carried(replace(PREFETCHED, github_repo="o/out"))
-        message = r"^environment github_repo o/out: needs \[hosts\.docker\.github\] app$"
-        self.order.clear()
-        with self.assertRaisesRegex(ConfigError, message):
-            self.start(environment=environment)
-        self.assertEqual([call[0] for call in self.order], ["ps"])
-        self.assertFalse(os.path.exists(os.path.join(self.state, f"{GEN}.json")))
 
     def test_busy_start_raises_session_busy(self):
         self.broker.error = BrokerError(75, "busy", "Lock held.", "not_needed", None, holder=HOLDER)
@@ -1591,12 +1585,11 @@ class EnvironmentTest(StartBase):
             )
 
     def test_resume_differing_only_in_prefetch_runs_the_stored_one_without_github(self):
-        self.host.github, self.host.github_permissions = "ensemble-bot", PERMISSIONS
         self.resumable(PREFETCHED.persisted())
         self.start(resume="1", environment=carried(ENVIRONMENT))
         manifest = self.manifest()
         self.assertEqual(manifest["prefetch"], {"repo": "o/r", "ref": "main"})
-        self.assertIsNone(manifest["github"])
+        self.assertNotIn("github", manifest)
         self.assertNotIn("ENSEMBLE_PR_AUTHOR", self.guard_env())
         self.assertEqual(self.host_record()["environment"], PREFETCHED.persisted())
 

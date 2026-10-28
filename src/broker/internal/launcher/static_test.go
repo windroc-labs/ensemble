@@ -62,11 +62,11 @@ func TestStartRefusesExpiredStatic(t *testing.T) {
 	for _, kind := range staticKinds {
 		for _, held := range []bool{true, false} {
 			w := newLockWorld()
+			h, base, d := w.host(t, "worker_1")
 			if held {
-				w.add("windroc-lock-dummy", "created", map[string]string{"windroc.lock.mutex": "dummy", "windroc.lock.since": "1000"})
+				holdStartLock(t, h.Home)
 				w.add("ensemble-other-1", "running", map[string]string{"windroc.lock": "dummy", "windroc.lock.owner": "other"})
 			}
-			h, base, d := w.host(t, "worker_1", 1000)
 			kind.setup(&h)
 			h.Static = &fakeStatic{loads: []map[string]credential.Static{records(kind.ref, expired)}}
 			raw, err := os.ReadFile(base)
@@ -88,7 +88,7 @@ func TestStartRefusesExpiredStatic(t *testing.T) {
 				t.Fatalf("%s held=%v: %+v", kind.ref, held, e)
 			}
 			for _, c := range d.calls {
-				if line := strings.Join(c, " "); c[0] == "create" || c[0] == "run" || c[0] == "volume" || strings.Contains(line, "ensemble-worker_1-") || strings.Contains(line, "windroc-lock") || strings.Contains(line, "windroc.lock") {
+				if line := strings.Join(c, " "); c[0] == "create" || c[0] == "run" || c[0] == "volume" || strings.Contains(line, "ensemble-worker_1-") || strings.Contains(line, "windroc.lock") {
 					t.Fatalf("%s held=%v: docker %q", kind.ref, held, c)
 				}
 			}
@@ -111,7 +111,7 @@ func staticStartHost(t *testing.T, static *fakeStatic) (Host, string, string, *f
 	}
 	path := editedManifest(t, func(f map[string]any) {
 		f["claude_dir"] = filepath.Join(parent, "claude")
-		f["secrets"] = []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/ssh", "id_ed25519")}
+		withSecrets(dummySecrets)(f)
 	})
 	return h, path, filepath.Join(parent, "0123456789abcdef0123456789abcdef.static.json"), d
 }

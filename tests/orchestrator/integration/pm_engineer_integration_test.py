@@ -25,6 +25,19 @@ PRD = "# PRD: Session registry\n\nThe registry maps each tmux session to its run
 
 
 class PmToEngineer(Segment):
+    def test_decompose_done_completes_both_issues_with_ticket_table(self):
+        child = self.pm_to_engineer()
+        source = handoff.parse_handoff(self.issue(child)["description"]).source
+        before = list(self.sent("promote.M_CREATE"))
+        self.promote(source, "pm", "engineer")
+        self.assertEqual(self.sent("promote.M_CREATE"), before)
+        self.claim(
+            child, "engineer", self.agent_script("engineer", "done", child), task="decompose"
+        )
+        self.agent_run()
+        self.assertEqual((self.state(source), self.state(child)), ("done", "done"))
+        self.assertEqual(self.attachments(child), [])
+
     def transcript_path(self, ident, sid):
         """The Claude client's transcript of sid run in ident's agent dir."""
         cwd = session_cwd(os.path.join(self.workdirs, ident))

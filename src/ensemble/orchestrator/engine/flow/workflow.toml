@@ -3,7 +3,7 @@
 # key takes the default after its name.
 # [orchestrator] workflow in ~/.ensemble/config.local.toml names a file in this format that replaces this one whole.
 #   role                  a role the Delegate knows (a charter in core or [delegate] team_dirs)
-#   input                 research, design or build: the role's input layout and write-back
+#   input                 research, design or build: input layout and write-back
 #   next                  the stage promote hands this stage's Handoff issues to; "" (default) → the last stage
 #   require_instructions  true (default) → a Handoff issue with no comment by anyone but the harness and the
 #                         role apps goes back to In Review

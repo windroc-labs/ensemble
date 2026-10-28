@@ -58,6 +58,7 @@ class Tui(TmuxFlow):
             uuid=UUID,
             project=PROJECT["id"],
             target=None,
+            task=None,
         )
         res = self.script(ENTRY, "tui", ID, SID, "pm", "claude", display, "Do it.\n")
         self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)

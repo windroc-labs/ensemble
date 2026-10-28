@@ -100,7 +100,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			}
 		}
 	}
-	var userID *int64
+	env := map[string]string{}
 	if m.GitHubApp != "" {
 		if err := h.GitHub.Ready(m.GitHubApp); err != nil {
 			return StartResult{}, err
@@ -109,7 +109,13 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		if err != nil {
 			return StartResult{}, err
 		}
-		userID = &id
+		bot := m.GitHubApp + "[bot]"
+		email := strconv.FormatInt(id, 10) + "+" + bot + "@users.noreply.github.com"
+		env = map[string]string{
+			"ENSEMBLE_PR_AUTHOR": bot,
+			"GIT_AUTHOR_NAME":    bot, "GIT_AUTHOR_EMAIL": email,
+			"GIT_COMMITTER_NAME": bot, "GIT_COMMITTER_EMAIL": email,
+		}
 	}
 	if len(m.Secrets) > 0 {
 		items := make([]string, len(m.Secrets))
@@ -118,6 +124,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 		if err := h.Env.Ready(items); err != nil {
 			return StartResult{}, err
+		}
+	}
+	if m.Linear != nil {
+		if err := h.Linear.Ready(m.Linear.App); err != nil {
+			return StartResult{}, injected(err, protocol.StartFailed, "Preparing Linear credentials failed.")
 		}
 	}
 	if err := h.checkStatic(staticRefs(m)); err != nil {
@@ -143,8 +154,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		// Registered before the lock's, so it runs after every rollback of the container. A start that lost the
-		// container name to another leaves the workspace to that one.
+		// A start that lost the container name to another leaves the workspace to that one.
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
@@ -158,31 +168,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	var held holding
 	if m.Lock != "" {
-		mutex, err := h.acquireMutex(ctx, m.Lock, info.ID)
+		lock, err := h.startLock(m.Lock)
 		if err != nil {
 			return StartResult{}, err
 		}
-		defer func() {
-			if cleanup := h.releaseMutex(ctx, mutex); cleanup != nil {
-				if retErr == nil {
-					held.revokeGitHub()
-					h.rollback(ctx, c, cleanup)
-					h.dropTokens(m)
-					h.withdraw(c, m, held, cleanup)
-					result, retErr = StartResult{}, cleanup
-				} else {
-					var e *protocol.Error
-					if errors.As(retErr, &e) {
-						e.Message += " " + cleanup.Message
-						if e.Code == protocol.Busy {
-							e.Code, e.Holder = protocol.StartFailed, nil
-						}
-					} else {
-						retErr = cleanup
-					}
-				}
-			}
-		}()
+		defer lock.Close()
 		holder, err := h.lockHolder(ctx, m.Lock, "")
 		if err != nil {
 			return StartResult{}, err
@@ -201,7 +191,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		if !errors.As(err, &e) {
 			e = protocol.New(protocol.StartFailed, "Start failed.")
 		}
-		held.revokeGitHub()
+		held.revokeTokens()
 		h.rollback(ctx, c, e)
 		h.dropTokens(m)
 		if e.Code == protocol.Busy && e.Cleanup == protocol.Failed {
@@ -211,7 +201,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		h.withdraw(c, m, held, e)
 		return StartResult{}, e
 	}
-	result.GitHubUserID = userID
+	result.Env = env
 	return result, nil
 }
 
@@ -254,12 +244,16 @@ type holding struct {
 	client  bool
 	secrets []string
 	github  func()
+	linear  func()
 }
 
-// revokeGitHub revokes the GitHub tokens this start issued, if any: the container's removal alone leaves them live.
-func (held holding) revokeGitHub() {
+// revokeTokens revokes this start's issued tokens; removing the container leaves them live.
+func (held holding) revokeTokens() {
 	if held.github != nil {
 		held.github()
+	}
+	if held.linear != nil {
+		held.linear()
 	}
 }
 
@@ -429,6 +423,16 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		batch.step(message, nil)
 		lap("github")
 	}
+	var linearExpiry string
+	if m.Linear != nil {
+		var writes []credential.Command
+		writes, held.linear, linearExpiry, err = h.Linear.Issue(ctx, *m.Linear, c)
+		if err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the Linear credentials failed.")
+		}
+		batch.commands = append(batch.commands, writes...)
+		batch.step("Injecting the Linear credentials failed.", nil)
+	}
 	if err := h.deliverStart(ctx, c, &batch); err != nil {
 		return StartResult{}, held, err
 	}
@@ -438,10 +442,13 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		}
 	}
 	lap("credentials")
-	if err := h.startTokens(m, codexExpiry, expiries); err != nil {
+	if err := h.startTokens(m, codexExpiry, expiries, linearExpiry); err != nil {
 		return StartResult{}, held, err
 	}
 	delivered := TokenRecord{Expires: map[credential.Kind][]string{credential.GitHub: expiryTimes(expiries)}}
+	if linearExpiry != "" {
+		delivered.Expires[credential.Linear] = []string{linearExpiry}
+	}
 	if codexExpiry != nil {
 		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
@@ -452,13 +459,16 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 }
 
 // startTokens records the expiries a start delivered.
-func (h Host) startTokens(m Manifest, codexExpiry *string, github []protocol.Expiry) error {
+func (h Host) startTokens(m Manifest, codexExpiry *string, github []protocol.Expiry, linearExpiry string) error {
 	var err error
 	if codexExpiry != nil {
 		err = h.recordTokens(m, credential.Codex, []string{*codexExpiry}, nil)
 	}
 	if err == nil && m.GitHubApp != "" {
 		err = h.recordTokens(m, credential.GitHub, expiryTimes(github), nil)
+	}
+	if err == nil && linearExpiry != "" {
+		err = h.recordTokens(m, credential.Linear, []string{linearExpiry}, nil)
 	}
 	if err == nil {
 		return nil

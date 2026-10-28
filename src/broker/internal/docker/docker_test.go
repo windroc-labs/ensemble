@@ -3,12 +3,15 @@ package docker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"ensemble/broker/internal/fixtures"
 )
 
 func TestBoundary(t *testing.T) {
@@ -165,5 +168,20 @@ func TestAbsentNetwork(t *testing.T) {
 		if got := Absent(&CommandError{Exit: 1, Stderr: stderr}); got != want {
 			t.Errorf("Absent(%q) = %v", stderr, got)
 		}
+	}
+}
+
+func TestCredentialDirsFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(fixtures.Dir(), "credential-dirs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirs map[string]string
+	if err := json.Unmarshal(data, &dirs); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"github": GitHubDir, "linear": LinearDir, "env": EnvDir}
+	if !reflect.DeepEqual(dirs, want) {
+		t.Fatalf("credential-dirs.json %v, want %v", dirs, want)
 	}
 }

@@ -13,7 +13,15 @@ def main():
     assert sys.argv[1:6] == ["-P", "-s", "-m", "ensemble.session.cli", "start"]
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("name")
-    for option in ("host", "client", "cwd", "environment-spec", "account", "display"):
+    for option in (
+        "host",
+        "client",
+        "cwd",
+        "environment-spec",
+        "environment-credentials",
+        "account",
+        "display",
+    ):
         parser.add_argument(f"--{option}")
     args = parser.parse_args(sys.argv[6:])
     sid = os.environ.get("ENSEMBLE_SID") or str(uuid.uuid4())

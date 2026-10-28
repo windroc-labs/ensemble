@@ -40,6 +40,7 @@ from tests.orchestrator.unit.outage import FAILURES, FIELDS, failing
 from tests.orchestrator.unit.promote_fixtures import (
     AGENT,
     CONFIG,
+    DECOMPOSE_LABEL,
     MANAGER,
     NOW,
     OTHER,
@@ -842,6 +843,77 @@ class PromotionIdempotency(Base):
         self.assertEqual(len(self.fake.children), 2)
 
 
+class DecomposePromotion(Base):
+    LABEL = DECOMPOSE_LABEL
+
+    def setUp(self):
+        super().setUp()
+        self.write_config(PM_NEXT)
+
+    def test_pm_handoff_creates_one_decompose_and_keeps_source_approved(self):
+        src = self.ready(role="pm", title="PRD: Queue")
+        self.assertEqual(self.run_main(), 0)
+        (child,) = self.fake.children.values()
+        self.assertEqual(
+            {
+                k: child[k]
+                for k in (
+                    "projectId",
+                    "delegateId",
+                    "assigneeId",
+                    "stateId",
+                    "priority",
+                    "title",
+                    "labelIds",
+                )
+            },
+            {
+                "projectId": "p-dr",
+                "delegateId": role_id("engineer"),
+                "assigneeId": None,
+                "stateId": IDS_BY_KEY["todo"],
+                "priority": 2,
+                "title": "ENG: Queue",
+                "labelIds": [self.LABEL],
+            },
+        )
+        self.assertIn("Handoff from DR-1: https://l/DR-1", child["description"])
+        self.assertIn("build X", instructions(child["description"]))
+        self.assertEqual(src["state"], "Handoff")
+        self.assertEqual(src["relations"], [child["id"]])
+        before = list(self.fake.mutations)
+        self.assertEqual(self.run_main(), 0)
+        self.assertEqual(self.fake.mutations, before)
+
+    def test_relation_failure_reuses_created_issue(self):
+        src = self.ready(role="pm")
+        self.fake.fail[linear_tracker.M_RELATE] = "offline"
+        self.run_main()
+        self.assertEqual(len(self.fake.children), 1)
+        self.assertEqual(src["state"], "Handoff")
+        self.fake.fail.clear()
+        self.run_main()
+        self.assertEqual(len(self.fake.children), 1)
+        self.assertEqual(src["relations"], [next(iter(self.fake.children))])
+        self.assertEqual(src["state"], "Handoff")
+
+    def test_new_review_cycle_creates_a_new_decompose(self):
+        src = self.ready(role="pm")
+        self.run_main()
+        self.fake.moved("DR-1", 20, "In Review", frm=STATES["In Progress"])
+        self.fake.moved("DR-1", 10, "Handoff", frm=STATES["In Review"])
+        self.run_main()
+        self.assertEqual(len(self.fake.children), 2)
+        self.assertEqual(src["state"], "Handoff")
+
+    def test_missing_decompose_label_never_creates_a_build_issue(self):
+        self.write_config(PM_NEXT.replace(f'linear.task_labels.decompose = "{self.LABEL}"\n', ""))
+        self.ready(role="pm")
+        self.run_main()
+        self.assertEqual(self.fake.children, {})
+        self.assertIn("linear.task_labels.decompose", self.out)
+
+
 class ChildTitles(Case):
     def test_child_title(self):
         for prefix, src_prefix, src, want in (
@@ -910,7 +982,8 @@ class PromotionScope(Base):
         (child,) = self.fake.children.values()
         self.assertEqual((child["projectId"], child["title"]), ("p-pd", "ENG: Title PD-1"))
         self.assertNotIn("## Instructions", child["description"])
-        self.assertEqual(src["state"], "Done")
+        self.assertEqual(src["state"], "Handoff")
+        self.assertEqual(child["labelIds"], [DECOMPOSE_LABEL])
 
     def test_handoff_scans_role_delegates_in_projects(self):
         self.ready("DR-1", role=None)
@@ -938,8 +1011,8 @@ class LocalBoardPromotion(Base):
         os.environ[config.BOARD_ENV] = self.board
         self.write_config(CONFIG.replace('tracker = "linear"', 'tracker = "local"'))
 
-    def approved(self, *, comments="###\nGo on.\n", age=30):
-        path = os.path.join(self.board, "researcher/approved/LOC-1 Queue survey.md")
+    def approved(self, *, comments="###\nGo on.\n", age=30, role="researcher"):
+        path = os.path.join(self.board, f"{role}/approved/LOC-1 Queue survey.md")
         os.makedirs(os.path.dirname(path))
         self.write(
             path,
@@ -987,6 +1060,16 @@ class LocalBoardPromotion(Base):
         self.assertEqual(self.fake.calls, [])
         [(board, *_)] = FakePruner.calls
         self.assertIsInstance(board(None), LocalTracker)
+
+    def test_pm_local_promotion_keeps_build_and_completes_source(self):
+        self.write_config(PM_NEXT.replace('tracker = "linear"', 'tracker = "local"'))
+        self.approved(role="pm")
+        self.assertEqual(self.run_main(), 0, self.err)
+        port = self.tracker()
+        self.assertEqual(port.read("LOC-1").state, IssueState.DONE)
+        self.assertEqual(port.read("LOC-2").state, IssueState.READY)
+        self.assertIsNone(port.recheck("LOC-2").task.name)
+        self.assertEqual(port.issue("LOC-2").handoff.source, "LOC-1")
 
     def test_waits_inside_the_window(self):
         self.approved(age=5)
@@ -1118,7 +1201,10 @@ class RequestCountTest(HostScale):
             },
             "next_day": {
                 "setup": SETUP_REQUESTS,
-                "promote": {"linear_tracker.Q_HANDOFF": 1, **PROMOTION},
+                "promote": {
+                    "linear_tracker.Q_HANDOFF": 1,
+                    **{k: v for k, v in PROMOTION.items() if not k.startswith("ops.")},
+                },
                 "prune": {
                     "linear_tracker.Q_CHANGED": 1,
                     "linear_tracker.Q_SNAPSHOTS": 6,
@@ -1136,5 +1222,5 @@ class RequestCountTest(HostScale):
         self.assertLessEqual(max(sum(r["prune"].values()) for r in found.values()), cap)
         self.assertEqual(
             {name: sum(sum(p.values()) for p in r.values()) for name, r in found.items()},
-            {"cold": 45, "warm": 10, "quiet": 5, "next_day": 30},
+            {"cold": 45, "warm": 10, "quiet": 5, "next_day": 27},
         )

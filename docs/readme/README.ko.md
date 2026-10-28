@@ -1,123 +1,117 @@
-<div align="center">
+# Ensemble
 
-# ensemble
+[English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [日本語](README.ja.md) · [Português](README.pt.md) · [简体中文](README.zh-CN.md)
 
-[English](../../README.md) · [中文](README.zh-CN.md) · [日本語](README.ja.md) · **한국어** · [Español](README.es.md) · [Français](README.fr.md) · [Português](README.pt.md)
+Ensemble을 사용하면 코딩 에이전트와 팀으로 일할 수 있습니다. 커맨더와 대화하거나, 역할에 작업을 위임하거나,
+보드가 역할 간에 작업을 배분하도록 할 수 있습니다. Claude Code, Codex, OpenCode는 같은 세션 제어 기능을 공유합니다.
 
-[![CI](https://github.com/windroc-labs/ensemble/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/windroc-labs/ensemble/actions/workflows/test.yml?query=branch%3Amain) [![Worker image](https://github.com/windroc-labs/ensemble/actions/workflows/worker-image.yml/badge.svg?branch=main)](https://github.com/windroc-labs/ensemble/actions/workflows/worker-image.yml?query=branch%3Amain) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../../LICENSE)
+<a id="what"></a>
+## 실행할 수 있는 것
 
-</div>
+![다섯 가지 실천 단계: Drive, Equip, Systematize, Orchestrate, Master](../images/levels.svg)
 
-*이 문서는 번역본입니다. 공식 버전은 영어 README입니다.*
+필요한 범위를 선택하세요. 워커는 클라이언트와의 대화입니다. 역할은 여기에 역할 규정, 작업, 결과를 더합니다.
+보드는 역할 실행을 예약하고 그 결과를 이슈에 기록합니다. 보드로는 Linear 또는 로컬 Markdown을 사용할 수 있습니다.
 
-Linear 보드 또는 Markdown issue 파일로 구성된 로컬 보드에서 코딩 에이전트(Claude Code, Codex, 호스트 Ollama 모델로 도는 OpenCode)를 무인으로 실행합니다. Orchestrator는 교체 가능한 Tracker 인터페이스로 issue를 읽고 쓰며, `[orchestrator] tracker`로 `local`(기본값) 또는 `linear`를 선택합니다. workflow 파일이 단계와 담당 role을 정의합니다. 각 role은 한 번에 최대 `max_runs`개의 issue를 처리하고 결과물을 검토하도록 돌려줍니다. 승인하면 다음 role이 이어받습니다.
+<a id="why"></a>
+## 팀을 사용하는 이유
 
-개발자: [`AGENTS.md`](../../AGENTS.md).
+![단일 에이전트, 수동으로 조율하는 여러 에이전트, 커맨더가 조율하는 ensemble 팀](../images/compare.svg)
 
-```mermaid
-flowchart LR
-    R["researcher<br>deep-research, research, light-research"] -->|"report → Approve → promote"| P["pm<br>product-design"]
-    P -->|"PRD → Approve → promote"| E["engineer<br>build, light-build"] -->|pull request| Y[you]
-    T[ensemble-orchestrator router] -.->|claims ready issues| R & P & E
-```
+에이전트를 따로 실행하면 누군가 작업을 배분하고 응답을 추적해야 합니다. 커맨더는 Crew를 사용해 하나의 대화에서
+이러한 실행을 시작하고, 살펴보고, 재개합니다. 어떤 작업을 승인하고 검토할지는 여전히 사용자가 결정합니다.
 
-## 레이어 구조
+<a id="how-it-works"></a>
+## 작동 방식
 
-ensemble은 레이어로 구성되며, 각 레이어는 한 가지 일만 하고 바로 아래 레이어만 호출합니다. 아래 두 레이어인 Session과 Delegate는 단독으로 쓸 수 있는 범용 구성 요소이며, 그 위에 자체 오케스트레이션을 만들 수도 있습니다. Orchestrator에서는 workflow 파일로 단계를 바꾸고 Tracker 인터페이스를 구현해 다른 보드에 연결합니다. 확장할 때는 새 에이전트 client를 Session에, 새 role과 task를 Delegate에 추가합니다.
+![계층 경계: Manager 명령, Orchestrator, Delegate, Session, 공유 Utils](../images/layers.svg)
 
-![ensemble 레이어(위에서 아래로): Manager(사용자 인터페이스), Orchestrator(오케스트레이션, Linear 및 로컬 보드 tracker), Delegate(role 레이어), Session(client 어댑터)](../images/layers.svg)
+![런타임 경계: 세션 하니스, 로컬 및 Docker 가드, broker 자격 증명, 외부 통신 프록시](../images/system.svg)
 
-| 레이어 | 하는 일 | 시작점 |
-|---|---|---|
-| Manager | 아래 레이어들의 드라이버. 대화하는 에이전트로, worker, role run, 보드 run을 시작하고 감시하며 보고합니다. | [데모](#데모-manager-하나-worker-여럿) |
-| Orchestrator | workflow 파일에 따라 role을 실행하고, 교체 가능한 tracker로 Linear 또는 로컬 Markdown 보드에 연결합니다. | [보드](../architecture.md#board) |
-| Delegate (코어) | session을 통해 role이 하나의 task를 실행하게 하고, 검사된 결과를 돌려줍니다. 단독으로도 쓸 수 있는 Claude Code 및 Codex 플러그인입니다. | [설치](#설치) |
-| Session | tmux 또는 Docker 컨테이너에서 코딩 에이전트(Claude Code, Codex, OpenCode)를 시작, 감시, 재개합니다. 모든 client에서 같은 방식입니다. | [Sessions](../architecture.md#session-settings) |
+제어, 자격 증명 전달, 네트워크 경로는 서로 구분됩니다. [아키텍처 개요](../architecture.md)에서 각 부분의 책임과 신뢰 관계를 설명하며,
+구현 세부 사항은 연결된 소스 코드에서 확인할 수 있습니다.
 
-기본 workflow는 에이전트가 어떻게 일해야 하는지에 대한 제 철학입니다(리서치, PRD, 빌드 순으로, 각 단계 사이에 사람의 검토). `[orchestrator] workflow`로 다른 workflow 파일을 선택하며, 빈 값이면 기본 파일을 사용합니다. role과 task 자체도 직접 편집할 수 있습니다([role과 task 사용자 지정](../customizing-roles-and-tasks.md)).
-
-## 왜 ensemble인가
-
-![코딩 에이전트와 일하는 방식: 에이전트 하나, 여러 에이전트를 수동으로, ensemble](../images/compare.svg)
-
-에이전트 하나로는 계속 기다려야 합니다. 여러 에이전트를 수동으로 돌리면 모든 프롬프트, 검사, 승인이 당신을 거칩니다. ensemble에서는 manager와 대화하고, manager가 worker를 시작하고 감시하며 보고합니다.
-
-## AI agent를 마스터하는 다섯 level
-
-코딩 agent와 일하는 것은 사다리와 같습니다. 각 level은 아래 level 위에 엔지니어링 분야를 하나씩 더하고, 핵심은 문제에 맞는 level을 고르는 것입니다.
-
-![AI agent를 마스터하는 다섯 level: Drive, Equip, Systematize, Orchestrate, Master, ensemble은 4와 5 사이](../images/levels.svg)
-
-| Level | 분야 | 의미 |
-|---|---|---|
-| 1. Drive | prompt engineering과 context engineering | 대화형 prompting, context 관리, 어떤 일에 어떤 모델을 쓸지 아는 것. |
-| 2. Equip | tools, skills, MCP | agent에게 도구를 줘서 바깥 세계(파일, API, 브라우저, MCP server)에 닿아 직접 다루게 하되, 권한과 sandbox 안에서. |
-| 3. Systematize | state engineering | 하나의 workflow를 상태 기계로 돌리기: 정해진 단계, 재시도, 멱등한 단계, 인계. |
-| 4. Orchestrate | loop engineering | 여러 agent: fan-out, planner와 verifier, 라우팅, 동시 실행과 quota 한도. |
-| 5. Master | environment engineering | 가드레일과 agent-oriented 환경: 사람이 아니라 agent를 위해 만든 도구, 검사, 검증으로 가장 쉬운 길이 곧 옳은 길이 되게 하기(Lauren Tan의 생각). |
-
-아직 level 3이 아니라고요? [updraft](https://github.com/windroc-labs/updraft)을 써 보세요. 적어도 거기까지는 데려다줍니다. ensemble의 레이어(맨 위 표)는 더 올라갑니다. Session은 agent의 대화를 돌리고 손을 쓸 host를 줍니다(level 1–2). Delegate는 role 하나를 task 하나에 검사가 붙은 workflow로 돌립니다(3). Orchestrator와 그 위의 manager는 여러 agent를 조율합니다(4와 5 사이). 여기에 당신이 맨 위에서 환경, 경계, 관문을 정하면 Master가 됩니다. 다만 ensemble의 검증은 아직 조금 부족합니다. 목표는 level 5, 그리고 그 너머입니다.
-
-## 데모: manager 하나, worker 여럿
-
-보드 없이, 에이전트 하나(manager)와 대화하는 것만으로 ensemble을 실행할 수 있습니다. `ctmux <name>`으로 그 session을 열고, Claude Code나 Codex를 시작한 뒤 `/ensemble:manage`를 호출합니다. 평범한 말로 일을 맡기면 task마다 worker를 시작하고, 이벤트를 감시하고, pull request를 검사한 뒤 보고합니다.
-
-명령: [빠른 시작](#빠른-시작).
-
+<a id="install"></a>
 ## 설치
 
-각 client가 플러그인을 직접 설치합니다. 업그레이드 전에 [Upgrading](../upgrading.md)을 확인하세요.
+Apple silicon Mac에서 [windroc 마켓플레이스](https://github.com/windroc-labs/agent-plugins-marketplace/blob/main/.claude-plugin/marketplace.json)에
+고정된 릴리스의 설치 프로그램을 실행하세요.
+`<tag>`를 해당 파일에 있는 ensemble의 `source.ref`로 바꾸세요.
 
-| Client | 설치 |
+```sh
+curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash
+```
+
+Keychain에서 `sudo` 비밀번호를 전달하려면 스크립트를 먼저 다운로드하세요. stdin으로 스크립트 본문까지 전달할 수는 없습니다. `<item>`을 Keychain 서비스 이름으로 바꾸세요.
+
+```bash
+(f=$(mktemp) && trap 'rm -f "$f"' EXIT && curl -fsSL -o "$f" https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh && security find-generic-password -s <item> -w | bash "$f" --password-stdin)
+```
+
+| 플래그 | 읽는 값 |
 |---|---|
-| Claude Code | `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, 다음 `/plugin install ensemble@windroc` |
-| Codex 0.156.0+ | `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`(이미 추가한 것을 갱신하려면 `codex plugin marketplace upgrade windroc`), 다음 `codex plugin add ensemble@windroc`. `codex plugin list -m windroc`에 설치되고 활성화된 것으로 보여야 합니다. |
+| `--password-stdin` | stdin에서 `sudo` 비밀번호를 읽으며, 공급자 키보다 먼저 전달합니다 |
 
-아래 항목은 아무것도 검사하지 않습니다. 하나라도 없으면 에이전트 run이 실패합니다.
+설치 프로그램은 사용할 클라이언트, 워커를 로컬 또는 Docker 중 어디에서 실행할지, 보드를 설정할지를 묻습니다.
+선택한 의존성과 플러그인을 설치하고, 필요한 로그인을 요청하며, `ctmux`를 설정합니다.
+설치가 중단되었다면 다시 실행하여 마무리하세요. 옵션은 저장소 체크아웃에서 `bash scripts/install.sh --help`로 확인할 수 있습니다.
+기존 설치가 있다면 먼저 [업그레이드](../upgrading.md)를 읽으세요.
 
-| 요구 사항 | 용도 |
-|---|---|
-| `claude` CLI, Python 3.11+ | 모든 에이전트 run |
-| [`updraft`](https://github.com/windroc-labs/updraft) 플러그인, host worker의 client에: Claude Code는 `/plugin marketplace add windroc-labs/agent-plugins-marketplace`, 다음 `/plugin install updraft@windroc`; Codex는 `codex plugin marketplace add windroc-labs/agent-plugins-marketplace`, 다음 `codex plugin add updraft@windroc`. Docker worker는 이미지 안에 독립적으로 설치합니다([플러그인](../architecture.md#plugins)). | engineer의 build task(`/updraft:build`, `/updraft:light-build`)와 PM의 PRD 리뷰(`/updraft:review`). 그 외에는 필요 없음. |
-| tmux 3.3–3.8 | `tmux` Host의 tui run |
-| `127.0.0.1`에서만 듣고 컨텍스트 길이 65536 이상, tier 모델을 pull한 [Ollama](https://ollama.com); `tmux`에서는 OpenCode 1.x도(`npm install -g opencode-ai@1.19.3`) | OpenCode만([Docker host › OpenCode on Docker](../architecture.md#opencode-on-docker), [OpenCode sessions](../customizing-roles-and-tasks.md#opencode-sessions)) |
-| `git`, 로그인된 `gh` | 코딩(checkout, pull request)과 GitHub 대상. 그 외에는 필요 없음. |
-| 실행 중인 iTerm2 | 기본 iTerm2 분할 |
-| 실행 중인 Docker Desktop; broker `B`(`/usr/local/libexec/ensemble/ensemble-broker`), `sh <plugin dir>/src/broker/install.sh`로 설치(`sudo`와 로그인된 `gh` 필요); 로그인은 각각 한 번: `B login claude`(`claude setup-token` 붙여넣기), `B login github ensemble-broker-bot`, Codex는 `sudo B install-codex <version>` 후 `B login codex`; OpenCode는 필요 없음 | Docker Host 전용([Docker host](../architecture.md#docker-host)); 호스트에 Node는 필요 없음. 각 자격 증명의 권한, 저장 위치, 폐기 방법: [Credentials](../architecture.md#credentials). |
+선택한 클라이언트에 필요한 모델 계정 또는 제공자를 사용하세요. OpenCode 제공자 및 네트워크 설정은
+[역할 및 작업 사용자 지정](../customizing-roles-and-tasks.md#opencode-sessions)에 있습니다.
+호스트의 `gh`에는 대상 저장소에서 push 및 PR 작업을 수행할 권한이 필요합니다. 클래식 토큰에는 `repo`, `read:org`, `gist`가 필요하며,
+세분화된 토큰에는 검사 결과를 확인하기 위한 Actions 읽기 권한도 필요합니다.
 
-ensemble이 시작하는 session이 당신의 설정을 어떻게 불러오는지, 그리고 그 안에서 일부 명령이 거부되는 이유: [Session settings](../architecture.md#session-settings).
+### GitHub App
 
-| 명령 | 하는 일 |
-|---|---|
-| `ctmux <name>` | commander의 tmux session을 엽니다. iTerm2에서는 네이티브 창, 다른 터미널에서는 일반 tmux attach, tmux 안에서는 전환입니다. `ctmux --install`은 ctmux와 네 명령 `ensemble-crew`, `ensemble-session`, `ensemble-delegate`, `ensemble-orchestrator`를 `~/.ensemble/bin/`에 둡니다. 그 경로로 실행하거나 `PATH`에 추가하세요. 명령은 이번 설치에서 선택한 플러그인을 사용하며 다른 클라이언트의 남은 복사본에 영향을 받지 않습니다. 업데이트로 선택한 디렉터리가 삭제되면 다음 명령은 같은 클라이언트에 설치된 최신 복사본을 선택하고 기록한 뒤 실행하며 경로를 stderr에 표시합니다. 설치 프로그램을 다시 실행할 필요가 없습니다. 같은 클라이언트의 복사본이 남아 있지 않으면 기존 선택 오류를 유지합니다. 이전 ref에는 설치 프로그램을 사용하세요. |
-| `/ensemble:manage` | commander의 가이드라인에 따라 worker, role run, pipeline run을 시작하고 지시합니다. |
-| `/ensemble:act-as <role>[:<task>] <input>` | 이 대화에서 코어 role을 실행합니다. |
-| `/ensemble:board` | 고정된 `ensemble-orchestrator issue` 명령으로 보드의 issue를 읽고, 찾고, 만들고, 편집하고, 옮기고, 보관합니다. |
-| `ensemble-delegate run --list` | 모든 role과 task를 나열합니다. |
+`github` 자격 증명을 선언한 Docker 워커는 GitHub App을 사용합니다. 설치 프로그램은 App을 생성하지 않습니다.
+GitHub Settings › Developer settings › GitHub Apps에서 자신의 계정에만 설치할 수 있는 비공개 App을 만들고
+웹훅을 끄세요. 저장소 권한은 설치 프로그램이 작성하는 engineer 역할의 자격 증명 선언
+`[orchestrator.roles.engineer.credentials.github]`를 충족해야 합니다. 문서 출력 저장소를 포함해 워커가 push할 수 있는 저장소에만 설치하세요.
+선언이 없는 Docker run에는 GitHub 토큰이 제공되지 않습니다. 직접 시작하는 워커와 verifier의 출력 권한 설정은
+[명시적 GitHub 자격 증명](../upgrading.md#broker-protocol-35-explicit-github-credentials)을 참조하세요.
 
+개인 키를 생성하고 App ID를 기록한 다음 가져오세요.
+
+```sh
+/usr/local/libexec/ensemble/ensemble-broker login github ensemble-broker-bot \
+  --key-file KEY.pem --app-id APP_ID
+```
+
+가져온 뒤 PEM을 삭제하세요. [자격 증명 교체](../upgrading.md#credential-rotation)에서 교체와 폐기를 설명합니다.
+
+<a id="quick-start"></a>
 ## 빠른 시작
 
-1. 플러그인을 [설치](#설치)합니다.
-2. 새 Claude Code session에서 확인합니다: `/ensemble:act-as dummy-tester:echo hello`가 `hello`를 출력합니다.
-3. role을 실행합니다: `/ensemble:act-as researcher <question>`. 로컬 설정이 없으면 보고서는 `~/.ensemble/adhoc/<date>-researcher-<name>/agent/prompt.md`에 저장됩니다. 대신 게시하려면 role의 destination을 설정하세요([role과 task 사용자 지정](../customizing-roles-and-tasks.md#change-a-roles-run-settings)).
-4. Linear 또는 로컬 Markdown 보드에서 role을 실행하려면: [보드](../architecture.md#board).
+단일 작업을 실행하려면 설치된 클라이언트의 대화에서 다음을 입력하세요.
 
-## role과 task 사용자 지정
+```text
+/ensemble:act-as dummy-tester:echo hello
+```
 
-- role별 실행 설정(모델 tier, effort, client, destination, 명령): `~/.ensemble/config.local.toml`의 `[delegate.roles.<role>]`.
-- 자신만의 role, task, 템플릿: `[delegate] team_dirs`에 나열한 team 디렉터리. 추가만 하며, 내장 role은 절대 바꾸지 않습니다.
-- 확인: `ensemble-delegate run --list`, 다음 `ensemble-delegate run --role <role> --input <text> --dry-run`.
+팀을 사용하려면 커맨더 셸을 열고 클라이언트를 시작하세요.
 
-형식, 규칙, 보드의 제한: [role과 task 사용자 지정](../customizing-roles-and-tasks.md).
+```sh
+ctmux work
+claude
+```
 
+사용하는 클라이언트가 `codex` 또는 `opencode`라면 `claude` 대신 사용하세요. 해당 대화에서 다음을 호출하세요.
+
+```text
+/ensemble:manage
+```
+
+할 일과 원하는 결과물을 설명하세요. 커맨더는 Crew를 통해 워커와 역할 실행을 조율합니다.
+보드 작업에서는 `/ensemble:board`가 이슈를 조작합니다. 단계 선택 방법은
+[워크플로 사용자 지정](../customizing-roles-and-tasks.md#on-the-board)에서 설명합니다.
+
+<a id="docs"></a>
 ## 문서
 
-아래 문서는 영어입니다.
-
-| 페이지 | 내용 |
+| 필요한 내용 | 위치 |
 |---|---|
-| [Customizing roles and tasks](../customizing-roles-and-tasks.md) | 실행 설정, team 디렉터리, role과 task 파일, 검사, OpenCode session |
-| [Board](../architecture.md#board) | 설정, issue 상태와 task 라벨, router 운영, Agent 라벨(issue별 client), 로컬 보드(`tracker`, `ENSEMBLE_BOARD_DIR`, 구조, 파일 형식) |
-| [Upgrading](../upgrading.md) | 업그레이드 단계 |
-| [Core architecture](../architecture.md) | 레이어와 패키지(개발자); session 설정, `ensemble-session`, role run의 client 플래그 |
-| [Tests](../architecture.md#tests) | lint, 테스트 스위트, 커버리지, 로컬 모델로 판정할 수 있는 실기 테스트(개발자) |
+| 시스템 계층, 실행 및 신뢰 경계 | [아키텍처](../architecture.md) |
+| 모델, 제공자, 역할 설정, 사용자 고유의 작업 또는 워크플로 | [역할 및 작업 사용자 지정](../customizing-roles-and-tasks.md) |
+| 기존 설치에 필요한 변경 사항 | [업그레이드](../upgrading.md) |
+| 기여자 규칙과 검사 실행 방법 | [AGENTS.md](../../AGENTS.md) |

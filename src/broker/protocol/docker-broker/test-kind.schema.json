@@ -1,0 +1,23 @@
+{
+  "$comment": "Test-only broker extension; never part of the production kind set.",
+  "type": "object",
+  "properties": {
+    "fixture_test": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "fixture_test"
+  ],
+  "additionalProperties": false
+}

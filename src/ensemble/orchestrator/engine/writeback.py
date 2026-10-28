@@ -19,6 +19,7 @@ from traceback import format_exception
 from ensemble.delegate import DelegateEvent, Outcome, Progress
 from ensemble.orchestrator.engine import run_comments, runs
 from ensemble.orchestrator.engine.config import LOCAL, TASKS
+from ensemble.orchestrator.engine.flow import handoff, workflow
 from ensemble.orchestrator.engine.flow.tracker import Tracker
 from ensemble.orchestrator.engine.flow.types import (
     ISSUE_ID,
@@ -73,6 +74,7 @@ class Context:
     document: str | None = None
     published: str = ""
     assignee: str = ""
+    task: str | None = None
 
 
 LEDGER = "writeback.json"
@@ -97,7 +99,9 @@ ERRORS = (
 )
 
 
-def context(cfg, role, writers: Writers, *, ident, issue_id, sid, resume, project, target):
+def context(
+    cfg, role, writers: Writers, *, ident, issue_id, sid, resume, project, target, task=None
+):
     return Context(
         ident=ident,
         issue_id=issue_id,
@@ -116,6 +120,7 @@ def context(cfg, role, writers: Writers, *, ident, issue_id, sid, resume, projec
         document=cfg.docs.local_out(role, ident, sid),
         published=_published(cfg.roles[role].run.output, cfg.repo_host(role)),
         assignee=writers.assignee,
+        task=task,
     )
 
 
@@ -136,6 +141,9 @@ def for_run(cfg, role, spec: Spec, writers: Writers):
         resume=spec.mode == "resume",
         project=spec.project,
         target=None,
+        task=runs.claim(cfg.runs_log, spec.issue, spec.sid).task
+        if spec.mode == "resume"
+        else spec.task,
     )
 
 
@@ -152,6 +160,7 @@ def for_claim(cfg, claim: Claim, writers: Writers, *, attempt: int) -> Context:
             resume=attempt > 1,
             project=claim.project,
             target=claim.target,
+            task=claim.task,
         ),
         redelivered=True,
     )
@@ -293,7 +302,7 @@ def progress(ctx, event: Progress) -> bool:
     try:
         if not isinstance(event, Progress):
             return True
-        task = TASKS[ctx.role]
+        task = workflow.for_task(TASKS, ctx.role, ctx.task)
         if event.name == "start":
             return _post(ctx, "start", say(task.start, event.text)) is None
         digest = hashlib.sha256(event.text.encode()).hexdigest()[:12]
@@ -349,11 +358,16 @@ def finish(ctx, outcome: Outcome, *, steps="", move=True) -> bool:
 
 
 def _completion_body(ctx, o):
-    task, url = TASKS[ctx.role], _url(ctx, o.url)
-    if ctx.document:
+    task = workflow.for_task(TASKS, ctx.role, ctx.task)
+    url = "" if task.input == "decompose" else _url(ctx, o.url)
+    if ctx.document and task.input != "decompose":
         url = Path(ctx.document).as_uri() if o.status == OutcomeStatus.DONE else ""
     if o.status == OutcomeStatus.DONE:
-        lead, text, state = task.done, o.summary, "in_review"
+        lead, text, state = (
+            task.done,
+            o.summary,
+            "done" if task.input == "decompose" else "in_review",
+        )
         if task.input == "build" and text and not task.deliverable:
             text = "Agent report before delivery:\n\n" + "\n".join(
                 f"> {line}" for line in text.splitlines()
@@ -433,8 +447,20 @@ def _assign(ctx):
     return ""
 
 
+def _complete_source(ctx):
+    source_handoff = handoff.parse_handoff(ctx.tracker.description(ctx.ident))
+    if source_handoff is None:
+        raise IssueError(f"{ctx.ident}: missing source PRD handoff")
+    source = ctx.tracker.on_board(source_handoff.source)
+    if source is None:
+        raise IssueError(f"{source_handoff.source}: source PRD not on this board")
+    state = ctx.tracker.move(source, IssueState.DONE, frm=IssueState.APPROVED)
+    if state not in (None, ctx.states["done"]):
+        raise IssueError(f"{source_handoff.source}: source PRD left Handoff (state {state})")
+
+
 def _finish(ctx, o, steps="", *, move=True):
-    task, issue = TASKS[ctx.role], ctx.issue_id
+    task, issue = workflow.for_task(TASKS, ctx.role, ctx.task), ctx.issue_id
     body, state, url = _completion_body(ctx, o)
 
     try:
@@ -448,6 +474,8 @@ def _finish(ctx, o, steps="", *, move=True):
     report = None
     if task.deliverable and o.status == OutcomeStatus.DONE:
         report, body = _report(ctx, body)
+        if task.input == "decompose" and report is None:
+            raise IssueError(body)
 
     if (
         task.retitle
@@ -475,6 +503,14 @@ def _finish(ctx, o, steps="", *, move=True):
         and url
         and not ctx.document
         and _step(ctx, f"attach:{url}", lambda: _attach(ctx, url, o.title, attached))
+    ):
+        return False
+
+    if (
+        move
+        and task.input == "decompose"
+        and o.status == OutcomeStatus.DONE
+        and _step(ctx, f"{steps}source:done", lambda: _complete_source(ctx))
     ):
         return False
 

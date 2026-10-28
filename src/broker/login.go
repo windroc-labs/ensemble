@@ -18,7 +18,7 @@ import (
 // staticStore is the account's record of its static secrets' versions and expiries.
 func staticStore(home string) credential.StaticStore {
 	dir := filepath.Join(home, ".ensemble/docker")
-	return credential.StaticStore{Path: filepath.Join(dir, "static-secrets.json"), Lock: broker.FileLock(filepath.Join(dir, "static-secrets.lock"))}
+	return credential.StaticStore{Path: filepath.Join(dir, "static-secrets.json"), Lock: broker.FileLock(filepath.Join(dir, "static-secrets.lock"), true)}
 }
 
 // datedFlags are the login options each static kind takes beside its name.

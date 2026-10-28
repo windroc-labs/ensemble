@@ -145,6 +145,8 @@ def _launch(args) -> int:
         name=args.entry_name,
         resume=args.resume,
         work_dir=args.work_dir,
+        task=args.task,
+        credentials=args.credentials,
     )
     print(record.to_line())
     return 0
@@ -470,13 +472,15 @@ Examples:
             "ROLE",
             "Start a detached role run and track its Record",
             f"{LayerCommand.DELEGATE} run",
-            """ROLE selects a persona; downstream --task optionally selects its work type.
+            """ROLE selects a persona; --task before ROLE optionally selects its work type.
 Crew supplies --role ROLE --detach --name NAME, identity and events file.
 Requires configured role/client and downstream --input. Prints a Record.
+Without --credentials JSON before ROLE, resolves the role/task's orchestrator declaration.
+An explicit value replaces that declaration entirely; resumes reuse the saved value.
 
 Examples:
   With the built-in pm role and its client configured:
-  ensemble-crew role --manager demo --name planner pm --input 'Plan a feature'
+  ensemble-crew role --manager demo --name planner --task product-design pm --input 'Plan a feature'
   Form: role [CREW_OPTIONS] ROLE [DELEGATE_OPTIONS]
   There is no client-flags delimiter at this boundary.
   Discover roles/tasks: ensemble-delegate run --list
@@ -496,6 +500,14 @@ Examples:
         )
         launch.add_argument("--note", metavar="TEXT", help="optional roster note; default: none")
         if kind == "role":
+            launch.add_argument(
+                "--task", metavar="TASK", help="role task; default: the role's default task"
+            )
+            launch.add_argument(
+                "--credentials",
+                metavar="JSON",
+                help="opaque credential spec; default: the orchestrator's role/task declaration",
+            )
             launch.add_argument(
                 "--name",
                 dest="entry_name",
@@ -523,7 +535,15 @@ Examples:
             metavar="DOWNSTREAM_OPTIONS",
             help=f"forwarded verbatim to {owner}; defaults/values: its --help",
         )
-        launch.set_defaults(func=_launch, kind=kind, entry_name=None, resume=None, work_dir=STATE)
+        launch.set_defaults(
+            func=_launch,
+            kind=kind,
+            entry_name=None,
+            resume=None,
+            work_dir=STATE,
+            task=None,
+            credentials=None,
+        )
     attach = page(
         "attach",
         "Reconcile a roster and print recovery/monitoring commands",

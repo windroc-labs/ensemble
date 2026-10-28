@@ -81,7 +81,7 @@ func (l Linear) repairMetadata(service, account string) error {
 	if !earlierBuild(a) {
 		return errLinear
 	}
-	unlock, err := l.lock("trust/" + service + "/" + account)()
+	unlock, err := l.lock("trust/"+service+"/"+account, true)()
 	if err != nil {
 		return errLinear
 	}

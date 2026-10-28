@@ -112,7 +112,7 @@ Examples:
   in_process uses the configured in-process client runtime.
   --dry-run prints a JSON preview, writes nothing and skips launch preflight;
   it still requires valid configuration and conditional inputs. Its "environment" is the
-  resolved container environment (secrets by reference only), null for none.
+  resolved container environment, null for none.
 
 Examples:
   Discover roles/tasks before choosing one:
@@ -335,6 +335,11 @@ def _common_options(ap: argparse.ArgumentParser, *, out: str) -> None:
 def _run_options(ap: argparse.ArgumentParser) -> None:
     _common_options(ap, out="where the deliverable is saved; default <workdir>/run/out.md")
     ap.add_argument(
+        "--credentials",
+        metavar="JSON",
+        help="opaque credential references for Docker; omitted: none; in_process refuses them",
+    )
+    ap.add_argument(
         "--cwd",
         action=Once,
         metavar="PATH",
@@ -470,6 +475,7 @@ def spec_of(a, text: str) -> Spec:
         out=a.out,
         repo=a.repo,
         cwd=a.cwd,
+        credentials=getattr(a, "credentials", None),
     )
 
 

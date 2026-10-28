@@ -544,7 +544,9 @@ class VerifierDockerTest(HarnessCase):
         super().setUp()
         self.settings(default="docker")
         with open(self.local, "a", encoding="utf-8") as file:
-            file.write('[session.hosts.docker.github]\napp = "ensemble-broker-bot"\n')
+            file.write(
+                '[orchestrator.roles.engineer.credentials.github]\napp = "ensemble-broker-bot"\npermissions = {contents = "write"}\n'
+            )
         self.calls, self.programs, self.refusals = [], [], {}
         path = os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
         for patcher in (
@@ -2571,7 +2573,7 @@ image = "dummy-env:test"
 plugins = ["dummy-plugin"]
 lock = "dummy-lock"
 
-[[delegate.environments.dummy.secrets]]
+[[delegate.environments.dummy.credentials.env]]
 item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
@@ -2681,6 +2683,37 @@ class EnvironmentTest(HarnessCase):
                 self.stop(view.resume(mode=mode))
                 self.assertEqual(self.metadata()["plan"]["session"]["environment"], stored)
 
+    def test_resume_keeps_credential_declarations_outside_the_workspace(self):
+        values = {"credentials": ' {"future-kind": [1]}\n', "environment_credentials": "{"}
+        view = self.make(spec=self.spec(**values), host="docker")
+        with open(os.path.join(self.work, "agent", "credentials.json"), "w") as f:
+            f.write('{"replacement": true}')
+        self.append('[delegate.environment.docker]\ngateway = "changed"\n')
+        self.stop(self.answered(view))
+        for key, value in values.items():
+            self.assertEqual(self.metadata()["plan"]["session"][key], value)
+            self.assertEqual(getattr(HarnessSession.preflights[-1]["spec"], key), value)
+
+    def test_selected_environment_credentials_survive_config_changes_and_resume(self):
+        self.append(ACCEPTANCE)
+        caller = ' {"future-kind": [1]}\n'
+        view = self.make(spec=self.spec(credentials=caller), host="docker")
+        stored = self.metadata()["plan"]["session"]["environment_credentials"]
+        self.assertEqual(
+            json.loads(stored),
+            {"env": [{"item": "ensemble-broker-env/dummy", "file": "dummy.txt"}]},
+        )
+        with open(self.local, encoding="utf-8") as file:
+            changed = file.read().replace(
+                "ensemble-broker-env/dummy", "ensemble-broker-env/replaced"
+            )
+        with open(self.local, "w", encoding="utf-8") as file:
+            file.write(changed)
+        self.stop(self.answered(view))
+        for key, value in {"credentials": caller, "environment_credentials": stored}.items():
+            self.assertEqual(self.metadata()["plan"]["session"][key], value)
+            self.assertEqual(getattr(HarnessSession.preflights[-1]["spec"], key), value)
+
     def test_pre_upgrade_state_resumes_without_environment(self):
         view = self.make(role="engineer", spec=self.spec(task="build"), host="docker")
         data = self.metadata()
@@ -2703,7 +2736,6 @@ class EnvironmentTest(HarnessCase):
                 image="dummy-env:test",
                 gateway="workers",
                 plugins=("dummy-plugin",),
-                secrets=({"item": "ensemble-broker-env/dummy", "file": "dummy.txt"},),
                 lock="dummy-lock",
                 prefetch={"repo": "acme/app", "ref": "release/1"},
             ),

@@ -3,7 +3,7 @@
 # (clients, Docker, OpenCode provider, the board) into ~/.ensemble/config.local.toml, then only what it needs.
 # Asks sudo once, every login on the spot, and before writing your files. Rerun to finish or check.
 #   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
-# <tag>: the release the windroc marketplace pins for ensemble (README.md#install).
+# <tag>: the release the windroc marketplace pins for ensemble.
 # ENSEMBLE_INSTALL_ROOT prefixes its system paths; only tests set it.
 set -euo pipefail
 
@@ -86,7 +86,7 @@ usage() {
 usage: $synopsis
 
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
-  <tag>: the release the windroc marketplace pins for ensemble (README.md#install)
+  <tag>: the release the windroc marketplace pins for ensemble
 
   --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default
                               <tag>); with claude or codex only <tag>, as they install from the marketplace; another
@@ -870,6 +870,12 @@ if board:
         wanted += [tuple(entry) for entry in json.load(f)]
 elif only:
     want(*only)
+    if only[:2] == ["orchestrator.roles.engineer.credentials.github", "app"]:
+        table = only[0] + ".permissions"
+        for key, level in dict(contents="write", pull_requests="write", workflows="write",
+                               checks="read", actions="read", statuses="read").items():
+            if get(data, table, key) is None:
+                want(table, key, level)
 elif fresh or (get(data, "session.hosts", "default") or "tmux") != default:
     wanted.append(("session.hosts", "default", default))
 chosen = [name for name in ("claude", "codex", "opencode") if name in clients.split(",")]
@@ -2339,7 +2345,7 @@ broker_logins() {
     state_set github_app "$slug"
     state_set login_github "$sha"
   fi
-  if [ -n "$(state_get github_app)" ]; then config_file session.hosts.docker.github app "$(state_get github_app)"; fi
+  if [ -n "$(state_get github_app)" ]; then config_file orchestrator.roles.engineer.credentials.github app "$(state_get github_app)"; fi
   step "broker Codex install"
   if ! has codex; then
     skip "Codex not chosen"
@@ -2688,7 +2694,7 @@ with open(app_file, encoding="utf-8") as f:
 slots = [line.split("\t") for line in slot_lines.splitlines()]
 stages = [line.split("\t") for line in stage_lines.splitlines()]
 service = {slot: name for slot, name, _ in slots}
-roles = [slot for slot, _, _ in slots[2:]]
+roles = [role for role, _ in stages]
 data = {}
 if os.path.exists(config):
     with open(config, "rb") as f:
@@ -2939,7 +2945,7 @@ with open(out, "w", encoding="utf-8") as f:
     f.write(text)' "$pkg/launchd/com.windroc.ensemble.$1.plist" "$2" "$HOME" "$path"
 }
 
-# Says which installed board jobs launchd still runs: skipping Board or jobs leaves them in place (README).
+# Says which installed board jobs launchd still runs: skipping Board or jobs leaves them in place.
 board_jobs_loaded() {
   local job uid loaded=
   uid=$(id -u)

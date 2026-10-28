@@ -8,6 +8,6 @@
     "opencode": "1.19.3"
   },
   "extra": true,
-  "github_user_id": null,
-  "deadline": null
+  "deadline": null,
+  "env": {}
 }

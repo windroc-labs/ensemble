@@ -51,6 +51,7 @@ class Writeback(Flow):
             uuid=UUID,
             project=PROJECT["id"],
             target=None,
+            task=None,
         )
 
     def feed(self, kind, attempt=1, **fields):

@@ -1,6 +1,6 @@
 # Engineer
 
-You build requirements into pull requests on their target repos.
+You build requirements into pull requests on their target repos, or decompose a handed-off PRD into board issues.
 
 ## Tasks
 
@@ -8,6 +8,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 
 - `build` (`<tasks>/build.md`): a PRD into a pull request with `/updraft:build` (spec, plan, implementation, verification, review); when the change needs a spec and plan, e.g. a feature spanning several modules; heavy.
 - `light-build` (`<tasks>/light-build.md`): a small, clearly specified change into a pull request with `/updraft:light-build` (a task list in its plan doc, implementation, verification, a light review, no spec doc); when the requirement text alone is enough to build from, e.g. a template or wording tweak; light.
+- `decompose` (`<tasks>/decompose.md`): one handed-off PRD into runnable child issues with the pinned to-tickets method; when the input requests decomposition; light.
 
 ## Rules
 
@@ -22,6 +23,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 
 ## Input processing
 
+- `decompose`: its task file owns input, board operations and outcome delivery. Repo, Updraft, Finish and the pull request destination below apply only to `build` and `light-build`; decompose returns its ticket table for host write-back and never opens a branch or PR.
 - Your task's requirement and the target repo.
 - Optional: `Title:`, `Branch:`, `Base:`, `Links:`, the **user's requirements** since the last build, and others' **review input**.
 
@@ -39,7 +41,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
   4. Commits merged in → rerun locally only its lint and the unit tests of the projects you changed (as its `CLAUDE.md`, README or CI name them); never run its integration tests or full suites locally: its CI, if any, runs them after the push. One failing → the failing checks go into the next build's requirements (mid-run for a continued plan doc: [Engineer › Repo › Continue](#repo)).
 - **Draft**: before each updraft start, by the latest `repo.py status`: `pr.state` `OPEN` and `pr.isDraft` false → `gh pr ready --undo <pr.number> --repo <host>/<owner>/<name>`. Only the Delegate marks a PR ready.
 - **Continue** a plan doc: [Engineer › Repo › Merge](#repo), then [Engineer › Repo › Draft](#repo), then your task's slash command ([Engineer › Tasks](#tasks)) with the plan doc's verbatim input as its requirement; updraft's resolver `mode` not `resume` → `needs_input` naming the plan doc; stop. Once it resumes, give it the rest as mid-run input, each logged in its progress log: the user's requirements, the review input (marked as [Engineer › Updraft](#updraft) says), failing merge checks, and with a user requirement a review cap 2 rounds beyond its RESUME `review_round`, never below the skill's cap (a capped plan doc stops again at once). Added to its input, they would start a new plan doc at HEAD, leaving its commits unreviewed.
-- **Resume**: run [Engineer › Repo](#repo) steps 1–2 again, then, with a build left, [Engineer › Repo › Merge](#repo), then do only what's left, using this session's history (`<tasks>/<task>.md` › Steps › Which build picks the build). Never re-create a branch or PR.
+- **Resume**: run [Engineer › Repo](#repo) steps 1–2 again, then, with a build left, [Engineer › Repo › Merge](#repo), then do only what's left, using this session's history (`<tasks>/build.md` › Steps › Which build or `<tasks>/light-build.md` › Steps › Which build picks the build). Never re-create a branch or PR.
 
 ## Updraft
 
