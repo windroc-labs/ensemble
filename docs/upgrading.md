@@ -17,8 +17,6 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 Before upgrading, close workers started before this release; they cannot be resumed after it.
 Close running Docker sessions, then run `scripts/install.sh --docker` to install the protocol 34 broker.
 Existing GitHub/env configuration stays in place; request kinds do not yet replace those grants.
-For `--credentials JSON` options, defaults, host-side state and resume rules, see
-[Hosts, broker and credentials](architecture.md#hosts-broker-and-credentials).
 
 ### Linear container credentials
 
@@ -84,7 +82,7 @@ The `orchestrator` destination is removed: a local `[output] type = "orchestrato
 
 Broker protocol 33 keeps no short-lived credential in the Keychain: GitHub tokens are issued and written per command
 and revoked from memory or, at `close`, read back from the container; Codex logins keep no per-container record
-([Hosts, broker and credentials](architecture.md#hosts-broker-and-credentials)). `ensemble-broker status` loses `revocations`, and `status --cleanup` is
+([broker storage](../src/broker/internal/broker/)). `ensemble-broker status` loses `revocations`, and `status --cleanup` is
 gone. Run `scripts/install.sh --docker`: before `broker re-trust` it deletes the leftover `ensemble-broker-tokens`,
 `ensemble-broker-revocations` and `ensemble-broker-codex-grants` items and prints how many. Then close and resume every
 running Docker session: one an older broker started fails its next renewal. A token an older broker recorded is no
@@ -93,7 +91,7 @@ longer revoked and expires within the hour.
 ## Broker protocol 32: the guard is the Docker container's main process
 
 The broker now starts each worker container with the guard as its main process, and the harness reaches it over
-`docker attach` ([Session Host contract](../src/ensemble/session/hosts/base.py)), so a killed harness no longer leaves
+`docker attach` ([Docker worker](../src/ensemble/session/hosts/docker/worker.py)), so a killed harness no longer leaves
 its container running. Install this release's broker with its plugin (`scripts/install.sh` does both); the plugin
 refuses an older broker. Close every running Docker session first (`ensemble-session ls`, then
 `ensemble-session close NAME`): an older container has no guard for this release's harness to attach to.
@@ -110,8 +108,8 @@ older release detached reads as invalid; its other runs read as before.
 
 ## Session harness: close every session first
 
-This release runs every tui and headless worker, on every Host, under its [Session Host contract](../src/ensemble/session/hosts/base.py)
-and drops the in-session tmux start and the Docker relay and supervisor ([Session Host contract](../src/ensemble/session/hosts/base.py)). An extension Host runs sessions only once it implements `Host.worker`
+This release runs every tui and headless worker, on every Host, under its [session harness](../src/ensemble/session/harness/process.py)
+and drops the in-session tmux start and the Docker relay and supervisor. An extension Host runs sessions only once it implements `Host.worker`
 ([Session Host contract](../src/ensemble/session/hosts/base.py)). It keeps no compatibility with sessions an
 older release started, so before upgrading:
 
@@ -124,7 +122,7 @@ listed, and the next Docker start removes its container as debris.
 
 ## Broker protocol 31: output-repo token beside prefetch
 
-Broker protocol 31 adds the start manifest's optional `github.repo`: a [Environment configuration](../src/ensemble/delegate/config.toml) run
+Broker protocol 31 adds the start manifest's optional `github.repo`: a [prefetching](../src/ensemble/delegate/config.toml) run
 whose `[output]` is `type = "github"` (the `verifier`'s, once set so) gets one GitHub App token for that repo alone,
 `contents: write`. Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker;
 the Docker Host refuses a protocol 30 broker. Install the GitHub App on that output repo, or the run's start fails
@@ -134,7 +132,7 @@ the Docker Host refuses a protocol 30 broker. Install the GitHub App on that out
 
 Broker protocol 30 renames every broker keychain item to start with `ensemble-broker-` (`ensemble-claude` →
 `ensemble-broker-claude`, `ensemble-bot` → `ensemble-broker-bot`, `ensemble-env/<name>` → `ensemble-broker-env/<name>`
-and so on: [Credential rotation](upgrading.md#credential-rotation)), and the static secret references with
+and so on: [broker Keychain services](../src/broker/internal/broker/keychain.go)), and the static secret references with
 them: a manifest or `[[delegate.environments.<name>.secrets]]` item names `ensemble-broker-env/<name>`, and one naming
 `ensemble-env/<name>` is rejected (`manifest_rejected`). Upgrading from v0.4.1 or earlier, the maintainer gives you a
 one-time rename step; in this order:
@@ -170,7 +168,7 @@ The broker release asset no longer has a GitHub provenance attestation: the main
 that sha256. Nothing to do: install or upgrade the broker as before (`gh` still downloads it).
 
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
-credentials renew ([Session Host contract](../src/ensemble/session/hosts/base.py)). Upgrade the broker with the
+credentials renew ([Docker maintenance](../src/ensemble/session/hosts/docker/maintenance.py)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
 renewals fail, each asking for that restart, its GitHub tokens lapse within the hour and a Codex session closes at its
 old deadline. The events `client_refresh_failed`, `github_refresh_failed` and `credential_notice_failed` become
@@ -179,7 +177,7 @@ broker, then close and resume every Docker session started under 29: a protocol 
 records. Pending GitHub revocations are kept either way.
 
 Broker protocol 28 adds `notices` and `status`'s `static`, and records each Claude token's, OpenCode key's and
-environment secret's expiry ([Credential rotation](upgrading.md#credential-rotation)). Upgrade the
+environment secret's expiry ([static credential registration](../src/broker/internal/credential/static.go)). Upgrade the
 broker with the plugin. Existing items keep working with an unknown expiry; to record one, rerun the login with
 `--fresh-token` (Claude, after `claude setup-token`), `--issued` or `--expires`.
 
@@ -434,7 +432,7 @@ copy is left, the command keeps the selected-plugin error and the selection: rer
 Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
 After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
-credentials and requesting any missing logins ([Credential rotation](upgrading.md#credential-rotation)).
+credentials and requesting any missing logins ([broker command usage](../src/broker/main.go)).
 It does not edit config keys a release renames.
 
 For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,

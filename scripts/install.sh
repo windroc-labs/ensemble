@@ -3,7 +3,7 @@
 # (clients, Docker, OpenCode provider, the board) into ~/.ensemble/config.local.toml, then only what it needs.
 # Asks sudo once, every login on the spot, and before writing your files. Rerun to finish or check.
 #   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
-# <tag>: the release the windroc marketplace pins for ensemble (README.md#install).
+# <tag>: the release the windroc marketplace pins for ensemble.
 # ENSEMBLE_INSTALL_ROOT prefixes its system paths; only tests set it.
 set -euo pipefail
 
@@ -86,7 +86,7 @@ usage() {
 usage: $synopsis
 
   curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts/install.sh | bash -s -- [flags]
-  <tag>: the release the windroc marketplace pins for ensemble (README.md#install)
+  <tag>: the release the windroc marketplace pins for ensemble
 
   --ref <ref>                 git branch or tag of windroc-labs/ensemble to install the plugin and broker from (default
                               <tag>); with claude or codex only <tag>, as they install from the marketplace; another
@@ -2939,7 +2939,7 @@ with open(out, "w", encoding="utf-8") as f:
     f.write(text)' "$pkg/launchd/com.windroc.ensemble.$1.plist" "$2" "$HOME" "$path"
 }
 
-# Says which installed board jobs launchd still runs: skipping Board or jobs leaves them in place (README).
+# Says which installed board jobs launchd still runs: skipping Board or jobs leaves them in place.
 board_jobs_loaded() {
   local job uid loaded=
   uid=$(id -u)
