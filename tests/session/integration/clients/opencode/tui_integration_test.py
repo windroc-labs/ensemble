@@ -218,13 +218,30 @@ class TuiSessions(Case):
         self.assertEqual(found[-2:], [Reply("two"), TurnEnd("two")])
 
     def test_a_re_saved_user_message_starts_no_turn(self):
-        self.scene([[{"join": 1}, {"text": "one"}]], touch=True)
+        """Each idle re-saves every user message so far, joined ones and earlier turns' too."""
+        self.scene([[{"join": 1}, {"text": "one"}], [{"text": "two"}]], touch=True)
         handle, stream = self.start()
         handle.send("more")
         self.assertEqual(
             stream.until(TurnEnd), [TurnStarted(), Activity(""), Reply("one"), TurnEnd("one")]
         )
         stream.quiet()
+        handle.send("next")
+        self.assertEqual(
+            stream.until(TurnEnd), [TurnStarted(), Activity(""), Reply("two"), TurnEnd("two")]
+        )
+        stream.quiet()
+
+    def test_a_send_after_a_recovered_error_starts_a_turn(self):
+        """The error closed the turn, though OpenCode's run goes on: a send is no longer joined."""
+        error = {"name": "ContextOverflowError", "data": {"message": "compacting"}}
+        self.scene([[{"error": error, "recover": True}, {"join": 1}, {"text": "answer"}]])
+        handle, stream = self.start()
+        stream.until(TurnFailed)
+        handle.send("continue")
+        found = stream.until(TurnEnd)
+        self.assertEqual(found.count(TurnStarted()), 1)
+        self.assertEqual(found[-2:], [Reply("answer"), TurnEnd("answer")])
 
     def test_a_reply_saved_after_idle_is_still_read(self):
         self.scene([[{"text": "saved late", "late": 800}]])

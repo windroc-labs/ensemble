@@ -11,7 +11,7 @@
 // {join: N} (the next N stdin lines saved mid-turn as user messages OpenCode's running loop takes,
 // each then a busy step), {shell} (busy before the turn's user message, as `!cmd` runs),
 // {foreign}, {busy}, {reinit}, {nested}. Scenario "touch": after each idle, every user message
-// of the turn updated again, as OpenCode's summary does. Each start and nested probe is a FAKE_LOG line.
+// so far updated again, as OpenCode's summary does to its turn's. Each start and nested probe is a FAKE_LOG line.
 import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -57,7 +57,7 @@ const messages = [];
 const hidden = new Map();
 const late = []; // [ms after the turn's idle, a message saved then]
 let held = null; // a lateUser turn's messages, saved together later
-let users = []; // the turn's user messages
+const users = []; // every user message
 function save(message) {
   (held ?? messages).push(message);
 }
@@ -204,7 +204,7 @@ async function turn(text, steps, first) {
   const user = { id: `msg_${++part}`, sessionID: native, role: "user", time: { created: Date.now() } };
   const lateUser = steps.find((item) => "lateUser" in item)?.lateUser;
   held = lateUser ? [] : null;
-  users = [user];
+  users.push(user);
   const shell = steps.some((item) => "shell" in item);
   if (shell) await emit("session.status", { sessionID: native, status: { type: "busy" } });
   save({ info: user, parts: [{ type: "text", text }] });

@@ -179,9 +179,10 @@ function handle(event, client) {
       if (info.role === "user" && info.id && !users.has(info.id)) {
         users.add(info.id);
         // A prompt saved while the turn runs joins OpenCode's running loop, which ends only once
-        // it answered the newest one. One saved after the loop ended but before its idle is
-        // misfiled here, and its run has no turn.
-        if (open) {
+        // it answered the newest one; after a recovered error, whose turn already failed, it
+        // starts the next turn. One saved after the loop ended but before its idle is misfiled
+        // here, and its run has no turn.
+        if (open && !failed) {
           joined.add(info.id);
           return;
         }
