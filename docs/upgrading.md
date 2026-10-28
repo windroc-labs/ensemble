@@ -3,16 +3,17 @@
 ## Broker protocol 34: opaque credential spec interface
 
 Broker protocol 34 adds optional `credentials` and `environment_credentials` JSON-text strings to the start manifest.
-Delegate and session carry both unchanged; only the broker decodes, validates and merges them by kind (caller wins).
+Delegate and session carry both unchanged. Kind validation, merging and issuance remain follow-up work.
 The decoded contract is `{github: {app, permissions, repo?}, linear: {app, board}, env: [{item, file}]}`; every kind is
-optional. No run sends these fields yet, and this broker refuses a start naming any kind in them.
+optional. No run sends these fields yet; the broker accepts empty objects and refuses any nonempty declaration.
 Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
 refuses an older protocol's broker. This interface-only change requires no configuration migration. The existing
 `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal,
 explicit role/task declarations, `--credentials`, and the no-implicit-credentials rule are not enabled here.
 WDRC-350 will move GitHub grants (including verifier output) to orchestrator/CLI declarations; WDRC-351 will move
 environment secrets to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
-errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for each follow-up's scope.
+errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for the contract.
+
 ## Claude account selection is the session's
 
 A start that selects no Claude account runs on the registered account with the most usage left, and a run that hits a

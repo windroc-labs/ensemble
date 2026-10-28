@@ -391,27 +391,15 @@ it. Each container copy is 0400 on the container's tmpfs and goes with the conta
 **Credential spec** (interface only, WDRC-278; WDRC-268 FR-27, FR-31–39): the caller supplies references, never secret
 values. Delegate and session `Spec` each carry `credentials` and `environment_credentials` as `str | None`; the
 second is the selected environment's declaration. They never parse, validate, interpret or merge their contents.
-Their records preserve both strings. The Docker manifest writer stores them as two optional JSON strings, omitting
-only `None`; decoding the outer manifest recovers the original UTF-8 JSON text, including whitespace and escapes.
+Their records preserve both strings. The start manifest reserves two optional JSON strings, omitting only `None`;
+decoding the outer manifest recovers the original UTF-8 JSON text, including whitespace and escapes.
 This envelope keeps malformed opaque text from changing the surrounding manifest. There is no Python credential
 type or kind registry. tmux does not inject from these fields.
 
-```mermaid
-flowchart LR
-  C[Caller JSON text] --> D[Delegate]
-  E[Environment JSON text] --> D
-  D --> S[Session two opaque fields]
-  S --> M[Manifest two JSON strings]
-  M --> B[Broker validates both]
-  B --> R[Caller replaces same kind]
-```
-
-Host lifecycle and CLI wiring remain WDRC-280; this diagram describes the contract, not an enabled injection path.
-
-Only the broker decodes each string into a kind-keyed object. It validates both declarations independently, then
-replaces each environment kind with the caller's whole value when both name it, retaining other kinds. Duplicate
-JSON keys, trailing content, non-objects and unknown or invalid kinds fail with `manifest_rejected` (exit 3) before
-container or credential operations. Errors identify the source and kind without echoing reference values. The
+The target contract assigns kind interpretation to the broker alone: both declarations require independent
+validation; the caller's whole value replaces an environment value of the same kind, retaining other kinds.
+Duplicate JSON keys, trailing content, non-objects and unknown or invalid kinds must fail with `manifest_rejected`
+(exit 3) before container or credential operations. Kind validation, merging and issuance are follow-up work. The
 production schema is `src/broker/protocol/docker-broker/protocol.schema.json` (`credentials`: text envelope;
 `credential_spec`: decoded object); JSON Schema's `contentSchema` is an annotation, so broker validation is mandatory.
 
@@ -423,23 +411,17 @@ production schema is `src/broker/protocol/docker-broker/protocol.schema.json` (`
 
 `board.states` contains the seven workflow-state keys; `board.labels` contains `task_labels` and `agent_labels`
 string maps. All five board keys are required; label and project maps and the human-member list may be empty.
-The broker rejects `harness` and `manager` role labels. Binding the supplied app references to the broker's actual
-enrolled role identity, including refusal of disguised harness/manager apps, belongs to issuance in WDRC-281.
+The schema excludes `harness` and `manager` role labels. Issuance must also bind supplied app references to the
+broker's enrolled role identity, including refusal of disguised harness/manager apps.
 The shared `credential-spec-test-kind.json` and test-only `test-kind.schema.json` exercise a broker extension without
 changing either Python layer. Production rejects that test kind. All paths remain on the secrets tmpfs; the
 `credential-dirs.json` fixture fixes their non-overlapping roots. Client/account login credentials stay separate.
 
-Protocol 34 serves no new kind: any nonempty merged spec is refused before side effects. No existing startup path
-supplies these new fields yet. The current global GitHub, verifier output-repo and environment-secret paths still
-operate until the following migrations; an empty new spec does not yet remove their implicit grants.
-
-| Follow-up | Owns |
-|---|---|
-| WDRC-279 | Orchestrator role/task declarations, kind replacement, `linear = "role"` expansion with the safe board payload, router/crew role defaults and dry-run output; never read run input for credentials |
-| WDRC-280 | `--credentials` entry points for crew/delegate/session, opaque host metadata and manifest wiring, stored declarations across resume/reopen, mismatched restatement refusal, tmux ignore and in-process presence rejection; no kind interpretation |
-| WDRC-281 | Broker issuance, injection, maintenance/revocation and enrolled Linear identity checks; complete FR-36's test-kind container acceptance |
-| WDRC-350 | Move both verifier `github_repo` and global `[session.hosts.docker.github]` engineer grants onto `github`; remove session/delegate GitHub interpretation, write installer declarations, return bot identity generically, reject the old config and document migration |
-| WDRC-351 | Move environment `secrets` to environment `credentials` as `env`; carry that second opaque declaration through delegate/session, remove legacy secrets fields and reads, reject the old config and document migration |
+Protocol 34 accepts absent declarations or JSON-text empty objects and refuses every nonempty declaration before
+side effects, without interpreting kinds. Malformed envelopes and non-object contents also fail with
+`manifest_rejected`; errors name the source without echoing values. Host lifecycle, CLI and manifest-writer wiring
+remain follow-up work. Existing global GitHub, verifier output-repo and environment-secret paths still operate;
+an empty new spec does not yet remove their implicit grants.
 
 | Credential | Host | Purpose | Stored at | Readers | Lifetime | Revoke |
 |---|---|---|---|---|---|---|
