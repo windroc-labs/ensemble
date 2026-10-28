@@ -35,7 +35,7 @@ func TestErrorFixtures(t *testing.T) {
 		if !c.Valid {
 			continue
 		}
-		t.Run(c.File, func(t *testing.T) {
+		t.Run(c.Name, func(t *testing.T) {
 			var in struct {
 				ExitCode     int    `json:"exit_code"`
 				AuditWarning string `json:"audit_warning"`

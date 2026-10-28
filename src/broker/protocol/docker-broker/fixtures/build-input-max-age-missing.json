@@ -1,8 +1,0 @@
-{
-  "argv": [
-    "build",
-    "--ensemble",
-    "/opt/ensemble",
-    "--max-age"
-  ]
-}

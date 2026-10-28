@@ -1,0 +1,31 @@
+[
+  {
+    "name": "version-input",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "version"
+      ]
+    }
+  },
+  {
+    "name": "version-input-extra",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "version",
+        "--extra"
+      ]
+    }
+  }
+]

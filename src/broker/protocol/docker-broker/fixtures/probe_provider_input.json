@@ -1,0 +1,38 @@
+[
+  {
+    "name": "probe-provider-input",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "probe-provider",
+        "--provider",
+        "strata",
+        "--base-url",
+        "https://strata.test/v1"
+      ]
+    }
+  },
+  {
+    "name": "probe-provider-input-invalid",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "probe-provider",
+        "--provider",
+        "../strata",
+        "--base-url",
+        "https://strata.test/v1"
+      ]
+    }
+  }
+]

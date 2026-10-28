@@ -56,7 +56,7 @@ COMMANDS = {
 
 
 def argv(command):
-    return [BROKER, *data(f"{command}-input.json")["argv"]]
+    return [BROKER, *data(f"{command}-input")["argv"]]
 
 
 class PluginRootTest(Case):
@@ -71,7 +71,7 @@ class PluginRootTest(Case):
 
 class ResponseTest(Case):
     def test_start_environment_is_a_generic_string_map(self):
-        response = data("start-output.json")
+        response = data("start-output")
         response["env"] = {"FUTURE_KIND_IDENTITY": "opaque", "GIT_AUTHOR_NAME": "app[bot]"}
         started = Broker(FakeBroker((0, json.dumps(response), ""))).start(MANIFEST, clients=KEYS)
         self.assertEqual(started.env, response["env"])
@@ -89,7 +89,7 @@ class ResponseTest(Case):
         logger = logging.getLogger("session")
         logger.addHandler(handler)
         self.addCleanup(logger.removeHandler, handler)
-        response = {**data("close-output.json"), "audit_warning": "audit_write_failed"}
+        response = {**data("close-output"), "audit_warning": "audit_write_failed"}
         result = Broker(FakeBroker((0, json.dumps(response), "")), warning=unavailable).close(
             CONTAINER
         )
@@ -103,16 +103,16 @@ class ResponseTest(Case):
         logger = logging.getLogger("session")
         logger.addHandler(handler)
         self.addCleanup(logger.removeHandler, handler)
-        for fixture in ("start-output.json", "maintain-output.json", "close-output.json"):
+        for fixture in ("start-output", "maintain-output", "close-output"):
             response = {**data(fixture), "audit_warning": "audit_write_failed"}
-            definition = fixture.removesuffix(".json").replace("-", "_")
+            definition = fixture.replace("-", "_")
             _, call = CALLS[definition]
             fake = FakeBroker((0, json.dumps(response), ""))
             result = call(Broker(fake))
             self.assertIsNotNone(result)
             self.assertEqual(len(fake.calls), 1)
         response = {
-            **data("error-start-cleanup-failed.json"),
+            **data("error-start-cleanup-failed"),
             "audit_warning": "audit_write_failed",
         }
         fake = FakeBroker((response["exit_code"], "", json.dumps(response)))
@@ -128,9 +128,7 @@ class ResponseTest(Case):
     def test_invalid_audit_warning_is_rejected_without_leaking_its_value(self):
         for value in (None, False, [], {}, "SECRET_AUDIT_SENTINEL"):
             for failed in (False, True):
-                response = data(
-                    "error-start-cleanup-failed.json" if failed else "start-output.json"
-                )
+                response = data("error-start-cleanup-failed" if failed else "start-output")
                 response["audit_warning"] = value
                 wire = json.dumps(response)
                 fake = FakeBroker((response["exit_code"], "", wire) if failed else (0, wire, ""))
@@ -154,7 +152,7 @@ class ResponseTest(Case):
 
     def test_start_response_carrying_client_update_is_rejected(self):
         update = {"client": "codex", "result": "current"}
-        for fixture in ("start-output.json", "start-output-codex.json"):
+        for fixture in ("start-output", "start-output-codex"):
             response = data(fixture)
             started = Broker(FakeBroker((0, json.dumps(response), ""))).start(
                 MANIFEST, clients=KEYS
@@ -178,7 +176,7 @@ class ResponseTest(Case):
             for c in found
             if c["expected"]["stage"] == "response" and c["definition"] != "status_output"
         ):
-            name, definition, valid = case["file"], case["definition"], case["valid"]
+            name, definition, valid = case["name"], case["definition"], case["valid"]
             with self.subTest(name=name):
                 if definition == "error":
                     command, call = COMMANDS[data(name)["error"]["command"]]
@@ -214,7 +212,7 @@ class ResponseTest(Case):
                 )
 
     def test_maintain_notices_are_strict_and_pass_delivered_keys(self):
-        good = data("maintain-output-static.json")
+        good = data("maintain-output-static")
         fake = FakeBroker((0, json.dumps(good), ""))
         found = Broker(fake).maintain(
             CONTAINER,
@@ -274,7 +272,7 @@ class ResponseTest(Case):
         self.assertEqual((empty.notices, empty.next_check), ([], None))
 
     def test_maintain_keeps_each_components_outcome_and_passes_its_options(self):
-        good = data("maintain-output.json")
+        good = data("maintain-output")
         fake = FakeBroker((0, json.dumps(good), ""))
         found = Broker(fake).maintain(
             CONTAINER, MANIFEST, ["ensemble-broker-env/db@2:7d"], renew=True, root=REPO
@@ -295,13 +293,13 @@ class ResponseTest(Case):
         )
         self.assertEqual(found.results[0]["error"]["code"], "refresh_failed")
         self.assertEqual(found.results[1]["expires_at"], "2026-10-17T13:00:00Z")
-        plain = FakeBroker(success("maintain-output-static.json"))
+        plain = FakeBroker(success("maintain-output-static"))
         static = Broker(plain).maintain(CONTAINER, MANIFEST, root=REPO)
         self.assertEqual(plain.calls, [argv("maintain")])
         self.assertEqual((static.results, static.deadline, len(static.notices)), ([], None, 1))
 
     def test_maintain_rejects_malformed_replies(self):
-        good = data("maintain-output.json")
+        good = data("maintain-output")
         failed, ok = good["results"]
         for change in (
             {"container": "ensemble-other-0123456789abcdef0123456789abcdef"},
@@ -336,7 +334,7 @@ class ResponseTest(Case):
             )
 
     def test_start_requires_a_valid_deadline(self):
-        response = data("start-output-codex.json")
+        response = data("start-output-codex")
         started = Broker(FakeBroker((0, json.dumps(response), ""))).start(MANIFEST, clients=KEYS)
         self.assertEqual(started.deadline, response["deadline"])
         for change in (
@@ -361,7 +359,7 @@ class ResponseTest(Case):
         self.assertEqual(broker.hook_root(HOOK), REPO)
 
     def test_an_unreadable_notice_key_is_a_session_error(self):
-        response = data("maintain-output-static.json")
+        response = data("maintain-output-static")
         with tempfile.TemporaryDirectory() as root:
             path = os.path.join(root, broker.SCHEMA)
             os.makedirs(os.path.dirname(path))
@@ -385,7 +383,7 @@ class ResponseTest(Case):
 
     def test_maintain_errors_and_audit_warning(self):
         warned = []
-        response = data("maintain-output-audit-warning.json")
+        response = data("maintain-output-audit-warning")
         found = Broker(FakeBroker((0, json.dumps(response), "")), warning=warned.append).maintain(
             CONTAINER, MANIFEST, root=REPO
         )
@@ -409,10 +407,10 @@ class ResponseTest(Case):
 
     def test_parsed_successes(self):
         self.assertEqual(
-            Broker(FakeBroker(success("build-cached.json"))).build("/opt/ensemble"),
-            (data("build-cached.json")["image"], data("build-cached.json")["digest"]),
+            Broker(FakeBroker(success("build-cached"))).build("/opt/ensemble"),
+            (data("build-cached")["image"], data("build-cached")["digest"]),
         )
-        started = Broker(FakeBroker(success("start-output.json"))).start(MANIFEST, clients=KEYS)
+        started = Broker(FakeBroker(success("start-output"))).start(MANIFEST, clients=KEYS)
         self.assertEqual(
             started,
             Started(
@@ -420,60 +418,56 @@ class ResponseTest(Case):
                 endpoint="unix:///Users/example/.docker/run/docker.sock",
                 image_digest="sha256:" + "b" * 64,
                 clients={"claude": "2.1.0", "codex": "codex-cli 0.100.0", "opencode": "1.19.3"},
-                env=data("start-output.json")["env"],
+                env=data("start-output")["env"],
                 deadline=None,
             ),
         )
-        self.assertFalse(Broker(FakeBroker(success("close-absent.json"))).close(CONTAINER))
-        self.assertTrue(
-            Broker(FakeBroker(success("workspace-rm-output.json"))).workspace_rm(VOLUME)
-        )
-        self.assertFalse(
-            Broker(FakeBroker(success("workspace-rm-absent.json"))).workspace_rm(VOLUME)
-        )
-        forced = FakeBroker(success("workspace-rm-output.json"))
+        self.assertFalse(Broker(FakeBroker(success("close-absent"))).close(CONTAINER))
+        self.assertTrue(Broker(FakeBroker(success("workspace-rm-output"))).workspace_rm(VOLUME))
+        self.assertFalse(Broker(FakeBroker(success("workspace-rm-absent"))).workspace_rm(VOLUME))
+        forced = FakeBroker(success("workspace-rm-output"))
         self.assertTrue(Broker(forced).workspace_rm(VOLUME, force=True))
-        self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-force.json")["argv"]]])
+        self.assertEqual(forced.calls, [[BROKER, *data("workspace-rm-input-force")["argv"]]])
         other = (0, json.dumps({"volume": "ensemble-ws-other", "removed": True}), "")
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
             Broker(FakeBroker(other)).workspace_rm(VOLUME)
 
     def test_build_passes_only_the_package(self):
-        fake = FakeBroker(success("build-cached.json"))
+        fake = FakeBroker(success("build-cached"))
         Broker(fake).build("/opt/ensemble")
-        self.assertEqual(fake.calls, [[BROKER, *data("build-input.json")["argv"]]])
+        self.assertEqual(fake.calls, [[BROKER, *data("build-input")["argv"]]])
 
     def test_build_passes_plugins(self):
-        fake = FakeBroker(success("build-cached.json"))
+        fake = FakeBroker(success("build-cached"))
         Broker(fake).build(
             "/opt/ensemble",
             plugins=(UPDRAFT, BETA),
         )
-        argv = data("build-input-plugins.json")["argv"]
+        argv = data("build-input-plugins")["argv"]
         self.assertEqual(argv[-2:], ["--max-age", "604800"])
         self.assertEqual(fake.calls, [[BROKER, *argv[:-2]]])
 
     def test_build_progress_before_the_error_object_is_not_the_error(self):
         progress = "#5 [2/3] RUN apt-get purge -y sudo\n#5 ERROR: process exited 1\n"
-        rc, _, err = failure("error-build_failed.json")
+        rc, _, err = failure("error-build_failed")
         with self.assertRaises(BrokerError) as raised:
             Broker(FakeBroker((rc, "", progress + err))).build("/opt/ensemble")
         self.assertEqual(raised.exception.code, "build_failed")
-        found = Broker(FakeBroker((0, text("build-cached.json"), progress))).build("/opt/ensemble")
-        self.assertEqual(found[0], data("build-cached.json")["image"])
+        found = Broker(FakeBroker((0, text("build-cached"), progress))).build("/opt/ensemble")
+        self.assertEqual(found[0], data("build-cached")["image"])
         with self.assertRaises(BrokerError) as raised:
             Broker(FakeBroker((rc, "", "#7 partial\n" + err))).build("/opt/ensemble")
         self.assertEqual(raised.exception.code, "build_failed")
 
     def test_only_build_may_put_progress_before_the_error_object(self):
-        rc, _, err = failure("error-login_required.json")
+        rc, _, err = failure("error-login_required")
         with self.assertRaisesRegex(SessionError, "bad response to start") as raised:
             Broker(FakeBroker((rc, "", "progress\n" + err))).start(MANIFEST, clients=KEYS)
         self.assertNotIsInstance(raised.exception, BrokerError)
 
     def test_mismatched_exit_is_transport_failure(self):
         for result in (
-            failure("error-login_required.json", rc=9),
+            failure("error-login_required", rc=9),
             (0, "", ""),
             (0, "not json\n", ""),
             (0, '{"protocol_version": "2", "protocol_version": "2"}\n', ""),
@@ -512,12 +506,12 @@ class ResponseTest(Case):
     def test_a_client_key_set_other_than_the_schemas_is_bad(self):
         for keys in (frozenset({"claude"}), frozenset({"claude", "codex", "other"})):
             with self.subTest(keys=keys), self.assertRaisesRegex(SessionError, "bad response"):
-                Broker(FakeBroker(success("start-output.json"))).start(MANIFEST, clients=keys)
+                Broker(FakeBroker(success("start-output"))).start(MANIFEST, clients=keys)
 
 
 class LockTest(Case):
     def test_busy_error_keeps_its_holder(self):
-        for name in ("error-busy.json", "error-busy-starting.json", "error-busy-removed.json"):
+        for name in ("error-busy", "error-busy-starting", "error-busy-removed"):
             with self.subTest(name), self.assertRaises(BrokerError) as raised:
                 Broker(FakeBroker(failure(name))).start(MANIFEST, clients=KEYS)
             error = data(name)["error"]
@@ -527,36 +521,34 @@ class LockTest(Case):
 
     def test_holder_only_with_busy(self):
         for name, call in (
-            ("error-busy-missing-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
-            ("error-nonbusy-holder.json", lambda b: b.start(MANIFEST, clients=KEYS)),
+            ("error-busy-missing-holder", lambda b: b.start(MANIFEST, clients=KEYS)),
+            ("error-nonbusy-holder", lambda b: b.start(MANIFEST, clients=KEYS)),
         ):
             with self.subTest(name), self.assertRaisesRegex(SessionError, "bad response") as raised:
                 call(Broker(FakeBroker(failure(name))))
             self.assertNotIsInstance(raised.exception, BrokerError)
-        bad = data("error-busy.json")
+        bad = data("error-busy")
         for holder in ({"container": "c"}, {"container": "c", "owner": "o\x1b"}, "c"):
             with self.subTest(holder), self.assertRaisesRegex(SessionError, "bad response"):
                 error = {**bad, "error": {**bad["error"], "holder": holder}}
                 Broker(FakeBroker((75, "", json.dumps(error)))).start(MANIFEST, clients=KEYS)
 
     def test_build_argv_order(self):
-        fake = FakeBroker(success("build-cached.json"))
+        fake = FakeBroker(success("build-cached"))
         Broker(fake).build(
             "/opt/ensemble",
             plugins=(BETA,),
             base_image="dummy-env:test",
             image_plugins=("dummy-plugin", "other.plugin"),
         )
-        self.assertEqual(fake.calls, [[BROKER, *data("build-input-base-image.json")["argv"][:-2]]])
-        fake = FakeBroker(success("build-cached.json"))
+        self.assertEqual(fake.calls, [[BROKER, *data("build-input-base-image")["argv"][:-2]]])
+        fake = FakeBroker(success("build-cached"))
         Broker(fake).build(
             "/opt/ensemble",
             plugins=(BETA,),
             image_plugins=("dummy-plugin", "other.plugin"),
         )
-        self.assertEqual(
-            fake.calls, [[BROKER, *data("build-input-image-plugins.json")["argv"][:-2]]]
-        )
+        self.assertEqual(fake.calls, [[BROKER, *data("build-input-image-plugins")["argv"][:-2]]])
 
 
 class StreamTest(Case):

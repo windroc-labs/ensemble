@@ -1,0 +1,2547 @@
+[
+  {
+    "name": "manifest-valid",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-no-hook",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-empty-labels",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {}
+    }
+  },
+  {
+    "name": "manifest-empty-label-value",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": ""
+      }
+    }
+  },
+  {
+    "name": "manifest-missing-name",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-missing-generation",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-missing-image",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-missing-cwd",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "workspace": "ensemble-ws-worker_1"
+    }
+  },
+  {
+    "name": "manifest-missing-claude_dir",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-missing-labels",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session"
+    }
+  },
+  {
+    "name": "manifest-unknown-field",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "secret": "forbidden"
+    }
+  },
+  {
+    "name": "manifest-null-hook",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": null,
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-relative-cwd",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-invalid-name",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "none",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-name-newline",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker\n",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-path-nul",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/\u0000x",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-wrong-generation",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": 1,
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-arbitrary-image",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ubuntu:latest",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-reserved-label",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "ensemble.session": "other"
+      }
+    }
+  },
+  {
+    "name": "manifest-non-string-label",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": 4
+      }
+    }
+  },
+  {
+    "name": "manifest-not-object",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": []
+  },
+  {
+    "name": "runtime-claude-dir-wrong",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/tmp/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-claude-dir-symlink",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": true,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-hook-in-cwd",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/Users/example/src/project/hook",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-hook-in-claude-dir",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/Users/example/.ensemble/docker-state/worker_1/claude/hook",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-login-missing",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 5,
+      "error_code": "login_required"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "missing",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-keychain-denied",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 11,
+      "error_code": "keychain_failed"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "denied",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-image-not-broker-built",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 6,
+      "error_code": "image_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "untrusted",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-image-missing-version-label",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 6,
+      "error_code": "image_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "missing_version_label",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-docker-unreachable",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 7,
+      "error_code": "docker_unreachable"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "unreachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-egress-stopped",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 17,
+      "error_code": "egress_unavailable"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable",
+      "egress": "stopped"
+    },
+    "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-egress-unhealthy",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 17,
+      "error_code": "egress_unavailable"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable",
+      "egress": "unhealthy"
+    },
+    "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-egress-missing",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 17,
+      "error_code": "egress_unavailable"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable",
+      "egress": "missing"
+    },
+    "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-egress-not-internal",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 17,
+      "error_code": "egress_unavailable"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable",
+      "egress": "not_internal"
+    },
+    "note": "Schema-valid; broker must refuse from the fake egress proxy state before any credential or container.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-docker-sharing-denied",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 9,
+      "error_code": "start_failed"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "sharing_denied"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-missing-workspace",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-bad-workspace",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "my-volume",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-mount-root",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-mount-usr",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/usr",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-mount-in-opt-ensemble",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/opt/ensemble/lib",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-mount-home",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-mount-claude-dir",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/.ensemble/docker-state/worker_1",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-mount-missing",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": false,
+      "volume": "absent",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/gone",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-volume-label-mismatch",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "mismatched",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "runtime-volume-in-use",
+    "valid": true,
+    "expected": {
+      "stage": "runtime",
+      "exit_code": 4,
+      "error_code": "mount_rejected"
+    },
+    "context": {
+      "home": "/Users/example",
+      "cwd_exists": true,
+      "volume": "in_use",
+      "claude_dir_has_symlink": false,
+      "login": "present",
+      "image": "broker_built",
+      "docker": "reachable"
+    },
+    "note": "Schema-valid; broker must reject from the supplied fake host state before container creation, except sharing_denied which fails creation.",
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-github-app",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"actions\":\"read\",\"checks\":\"read\",\"contents\":\"write\",\"pull_requests\":\"write\",\"statuses\":\"read\",\"workflows\":\"write\"}}}"
+    }
+  },
+  {
+    "name": "manifest-github-extra-field",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"contents\":\"write\"},\"owner\":\"acme\"}}"
+    }
+  },
+  {
+    "name": "manifest-github-bad-repo",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"contents\":\"write\"},\"repo\":\"acme/..\"}}"
+    }
+  },
+  {
+    "name": "manifest-github-bad-app",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"Ensemble\",\"permissions\":{\"contents\":\"write\"}}}"
+    }
+  },
+  {
+    "name": "manifest-github-missing-permissions",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\"}}"
+    }
+  },
+  {
+    "name": "manifest-github-empty-permissions",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{}}}"
+    }
+  },
+  {
+    "name": "manifest-github-unknown-permission",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"contents\":\"write\",\"foo\":\"read\"}}}"
+    }
+  },
+  {
+    "name": "manifest-github-bad-level",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"contents\":\"admin\"}}}"
+    }
+  },
+  {
+    "name": "manifest-github-workflows-read",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"workflows\":\"read\"}}}"
+    }
+  },
+  {
+    "name": "manifest-github-empty",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\":{}}"
+    }
+  },
+  {
+    "name": "manifest-codex",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "codex",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex"
+    }
+  },
+  {
+    "name": "manifest-missing-client",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex"
+    }
+  },
+  {
+    "name": "manifest-wrong-client",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "other",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex"
+    }
+  },
+  {
+    "name": "manifest-mixed-dirs",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "codex",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex",
+      "claude_dir": "/untrusted"
+    }
+  },
+  {
+    "name": "manifest-missing-codex_dir",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "codex",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-opencode",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "opencode",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode"
+    }
+  },
+  {
+    "name": "manifest-missing-opencode_dir",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "opencode",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      }
+    }
+  },
+  {
+    "name": "manifest-opencode-claude-dir",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "opencode",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "claude_dir": "/untrusted"
+    }
+  },
+  {
+    "name": "manifest-opencode-providers",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "opencode",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_providers": [
+        "strata",
+        "lab.local"
+      ]
+    }
+  },
+  {
+    "name": "manifest-opencode-providers-ollama",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "opencode",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_providers": [
+        "ollama"
+      ]
+    }
+  },
+  {
+    "name": "manifest-opencode-providers-duplicate",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "opencode",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_providers": [
+        "strata",
+        "strata"
+      ]
+    }
+  },
+  {
+    "name": "manifest-opencode-providers-bad-name",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "opencode",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode",
+      "opencode_providers": [
+        "../strata"
+      ]
+    }
+  },
+  {
+    "name": "manifest-env",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "environment_credentials": "{\"env\":[{\"item\":\"ensemble-broker-env/dummy\",\"file\":\"dummy.txt\"},{\"item\":\"ensemble-broker-env/mini-ssh\",\"file\":\"id_ed25519\"}]}"
+    }
+  },
+  {
+    "name": "manifest-claude-account",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "claude_account": "work"
+    }
+  },
+  {
+    "name": "manifest-claude-account-bad-name",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "claude_account": "Work"
+    }
+  },
+  {
+    "name": "manifest-claude-account-setup-token",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "claude_account": "setup-token"
+    }
+  },
+  {
+    "name": "manifest-codex-claude-account",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "codex",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "codex_dir": "/Users/example/.ensemble/docker-state/worker_1/codex",
+      "claude_account": "work"
+    }
+  },
+  {
+    "name": "manifest-claude-opencode-providers",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "opencode_providers": [
+        "strata"
+      ]
+    }
+  },
+  {
+    "name": "manifest-claude-opencode-dir",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "opencode_dir": "/Users/example/.ensemble/docker-state/worker_1/opencode"
+    }
+  },
+  {
+    "name": "manifest-lock",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "dummy-lock",
+      "lock_owner": "worker_1"
+    }
+  },
+  {
+    "name": "manifest-lock-max",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "lock_owner": "worker_1"
+    }
+  },
+  {
+    "name": "manifest-lock-invalid",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "A B",
+      "lock_owner": "worker_1"
+    }
+  },
+  {
+    "name": "manifest-lock-null",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": null,
+      "lock_owner": "worker_1"
+    }
+  },
+  {
+    "name": "manifest-lock-newline",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "x\n",
+      "lock_owner": "worker_1"
+    }
+  },
+  {
+    "name": "manifest-lock-owner-empty",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "dummy-lock",
+      "lock_owner": ""
+    }
+  },
+  {
+    "name": "manifest-lock-owner-space",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "dummy-lock",
+      "lock_owner": " "
+    }
+  },
+  {
+    "name": "manifest-lock-owner-control",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "dummy-lock",
+      "lock_owner": "a\n"
+    }
+  },
+  {
+    "name": "manifest-lock-owner-null",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "dummy-lock",
+      "lock_owner": null
+    }
+  },
+  {
+    "name": "manifest-lock-missing-owner",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock": "dummy-lock"
+    }
+  },
+  {
+    "name": "manifest-lock-owner-orphan",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "lock_owner": "worker_1"
+    }
+  },
+  {
+    "name": "manifest-windroc-other",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "windroc.anything": "x"
+      }
+    }
+  },
+  {
+    "name": "manifest-gateway",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "gateway": "mini-op"
+    }
+  },
+  {
+    "name": "manifest-gateway-invalid",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "gateway": "Mini.Op"
+    }
+  },
+  {
+    "name": "manifest-prefetch",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble",
+        "ref": "release/1.2"
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-no-ref",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble"
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-bad-ref",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble",
+        "ref": "--upload-pack=x"
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-pull-ref",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble",
+        "ref": "refs/pull/1/head"
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-sha",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble",
+        "ref": "0123456789abcdef0123456789abcdef01234567"
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-space-ref",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble",
+        "ref": "a b"
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-empty-ref",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble",
+        "ref": ""
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-extra-field",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble",
+        "depth": 1
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-bad-repo",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/.."
+      }
+    }
+  },
+  {
+    "name": "manifest-prefetch-github",
+    "valid": true,
+    "expected": {
+      "stage": "manifest",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"contents\":\"write\"}}}"
+    }
+  },
+  {
+    "name": "manifest-prefetch-github-repo",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "prefetch": {
+        "repo": "windroc-labs/ensemble"
+      },
+      "credentials": "{\"github\":{\"app\":\"ensemble-broker-bot\",\"permissions\":{\"contents\":\"write\"},\"repo\":\"windroc-labs/private_docs\"}}"
+    }
+  },
+  {
+    "name": "manifest-credentials-two-values",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": "{\"github\": {\"app\": \"ensemble-broker-bot\", \"permissions\": {\"contents\": \"write\", \"pull_requests\": \"write\"}, \"repo\": \"windroc-labs/ensemble\"}}",
+      "environment_credentials": "{\"env\": [{\"item\": \"ensemble-broker-env/mini-ssh\", \"file\": \"id_ed25519\"}, {\"item\": \"ensemble-broker-env/mini-password\", \"file\": \"mini-password\"}]}"
+    }
+  },
+  {
+    "name": "manifest-credentials-wrong-envelope",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "credentials": {}
+    }
+  },
+  {
+    "name": "manifest-environment-credentials-wrong-envelope",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 3,
+      "error_code": "manifest_rejected"
+    },
+    "data": {
+      "client": "claude",
+      "name": "worker_1",
+      "generation": "0123456789abcdef0123456789abcdef",
+      "image": "ensemble-worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cwd": "/Users/example/src/project",
+      "workspace": "ensemble-ws-worker_1",
+      "claude_dir": "/Users/example/.ensemble/docker-state/worker_1/claude",
+      "hook_path": "/usr/local/bin/ensemble-session",
+      "labels": {
+        "team": "crew"
+      },
+      "environment_credentials": {}
+    }
+  }
+]

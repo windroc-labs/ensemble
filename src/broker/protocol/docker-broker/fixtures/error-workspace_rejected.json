@@ -1,9 +1,0 @@
-{
-  "exit_code": 13,
-  "error": {
-    "command": "workspace-rm",
-    "code": "workspace_rejected",
-    "message": "Example workspace_rejected.",
-    "cleanup": "not_needed"
-  }
-}

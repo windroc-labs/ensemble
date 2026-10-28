@@ -14,7 +14,7 @@ func TestOutputFixturesRoundTrip(t *testing.T) {
 		if !c.Valid {
 			continue
 		}
-		t.Run(c.File, func(t *testing.T) {
+		t.Run(c.Name, func(t *testing.T) {
 			var v any
 			switch c.Definition {
 			case "build_output":

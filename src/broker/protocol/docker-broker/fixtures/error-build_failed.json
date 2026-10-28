@@ -1,9 +1,0 @@
-{
-  "exit_code": 8,
-  "error": {
-    "command": "build",
-    "code": "build_failed",
-    "message": "Example build_failed.",
-    "cleanup": "not_needed"
-  }
-}

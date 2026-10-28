@@ -15,18 +15,21 @@ UPDRAFT = (
 BETA = "beta@owner/market#" + "b" * 40
 
 
-def cases(prefix=""):
-    with open(os.path.join(FIXTURES, "index.json")) as f:
-        return [c for c in json.load(f)["cases"] if c["file"].startswith(prefix)]
-
-
-def text(name):
-    with open(os.path.join(FIXTURES, name)) as f:
-        return f.read()
+def cases():
+    """Every table's cases, with their definition."""
+    found = []
+    for table in sorted(t for t in os.listdir(FIXTURES) if t.endswith(".json")):
+        with open(os.path.join(FIXTURES, table)) as f:
+            found += [{**c, "definition": table.removesuffix(".json")} for c in json.load(f)]
+    return found
 
 
 def data(name):
-    return json.loads(text(name))
+    return {c["name"]: c["data"] for c in cases()}[name]
+
+
+def text(name):
+    return json.dumps(data(name))
 
 
 class FakeBroker:

@@ -10,7 +10,7 @@ import (
 
 func TestCredentialRequestFixtures(t *testing.T) {
 	for _, c := range fixtures.Cases(t, "credential_spec") {
-		t.Run(c.File, func(t *testing.T) {
+		t.Run(c.Name, func(t *testing.T) {
 			_, err := ParseManifest(withFields(t, map[string]any{"credentials": string(c.Data)}))
 			if (err == nil) != c.Valid {
 				t.Fatalf("valid=%v err=%v", c.Valid, err)
@@ -20,7 +20,7 @@ func TestCredentialRequestFixtures(t *testing.T) {
 }
 
 func TestLinearCredentialRenewalRequired(t *testing.T) {
-	base := fixtureBytes(t, "credential-spec-linear.json")
+	base := fixtureBytes(t, "credential-spec-linear")
 	var spec map[string]map[string]json.RawMessage
 	if err := json.Unmarshal(base, &spec); err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestCredentialRequestMerge(t *testing.T) {
 	if err != nil || request.GitHub.App != "old" || len(request.Env) != 1 || request.Env[0].File != "new" {
 		t.Fatalf("merge: %+v %v", request, err)
 	}
-	base := string(fixtureBytes(t, "credential-spec-linear.json"))
+	base := string(fixtureBytes(t, "credential-spec-linear"))
 	for _, sources := range []map[string]any{
 		{"environment_credentials": base},
 		{"credentials": base},

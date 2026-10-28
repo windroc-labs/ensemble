@@ -1,9 +1,0 @@
-{
-  "exit_code": 16,
-  "error": {
-    "command": "maintain",
-    "code": "refresh_failed",
-    "message": "Renewal unavailable.",
-    "cleanup": "not_needed"
-  }
-}

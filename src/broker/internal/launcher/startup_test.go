@@ -13,7 +13,7 @@ func TestStartCombinedBootstrap(t *testing.T) {
 		h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 		path := validManifest(t)
 		if !hook {
-			path = fixtureManifest(t, "manifest-no-hook.json")
+			path = fixtureManifest(t, "manifest-no-hook")
 		}
 		if _, err := h.Start(context.Background(), path); err != nil {
 			t.Fatal(err)

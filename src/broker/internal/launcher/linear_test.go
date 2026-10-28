@@ -51,7 +51,7 @@ func (f *fakeLinear) Revoke(context.Context, string) error {
 }
 
 func linearManifest(t *testing.T) string {
-	return editedManifest(t, func(m map[string]any) { m["credentials"] = string(fixtureBytes(t, "credential-spec-linear.json")) })
+	return editedManifest(t, func(m map[string]any) { m["credentials"] = string(fixtureBytes(t, "credential-spec-linear")) })
 }
 
 func TestLinearStartAndRollback(t *testing.T) {
@@ -160,7 +160,7 @@ func TestLinearStartRecordsExpiry(t *testing.T) {
 	path := codexManifest(t, func(f map[string]any) {
 		f["codex_dir"] = filepath.Join(parent, "codex")
 		f["environment_credentials"] = githubSpec(t, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet})
-		f["credentials"] = string(fixtureBytes(t, "credential-spec-linear.json"))
+		f["credentials"] = string(fixtureBytes(t, "credential-spec-linear"))
 	})
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)

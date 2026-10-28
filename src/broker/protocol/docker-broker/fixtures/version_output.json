@@ -1,0 +1,28 @@
+[
+  {
+    "name": "version-output",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "protocol_version": "35"
+    }
+  },
+  {
+    "name": "version-output-extra",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "note": "Malformed broker response; caller fails closed.",
+    "data": {
+      "protocol_version": "28",
+      "extra": true
+    }
+  }
+]

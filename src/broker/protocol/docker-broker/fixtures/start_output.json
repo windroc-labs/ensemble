@@ -1,0 +1,353 @@
+[
+  {
+    "name": "start-output",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-extra",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "note": "Malformed broker response; caller fails closed.",
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "extra": true,
+      "deadline": null,
+      "env": {}
+    }
+  },
+  {
+    "name": "start-output-missing-codex",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0"
+      },
+      "deadline": null,
+      "env": {}
+    }
+  },
+  {
+    "name": "start-output-hostile-endpoint",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "tcp://example.com:2375",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": {}
+    }
+  },
+  {
+    "name": "start-output-codex",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.163.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": {
+        "at": "2026-10-18T12:00:00Z",
+        "action": "close",
+        "reason": "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume."
+      },
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-bad-deadline",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.163.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": 22,
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-malformed-deadline",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.163.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": {
+        "at": "not-time",
+        "action": "close",
+        "reason": "r"
+      },
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-missing-opencode",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0"
+      },
+      "deadline": null,
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-audit-warning",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "audit_warning": "audit_write_failed",
+      "deadline": null,
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-bad-audit-warning",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "audit_warning": "AUDIT_SECRET_SENTINEL",
+      "deadline": null,
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-missing-deadline",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "env": {
+        "ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]",
+        "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com",
+        "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]",
+        "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"
+      }
+    }
+  },
+  {
+    "name": "start-output-env-null",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": null
+    }
+  },
+  {
+    "name": "start-output-env-value",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null,
+      "env": {
+        "KEY": 1
+      }
+    }
+  },
+  {
+    "name": "start-output-env-missing",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+      "endpoint": "unix:///Users/example/.docker/run/docker.sock",
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "clients": {
+        "claude": "2.1.0",
+        "codex": "codex-cli 0.100.0",
+        "opencode": "1.19.3"
+      },
+      "deadline": null
+    }
+  }
+]

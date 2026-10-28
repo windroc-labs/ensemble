@@ -1,0 +1,43 @@
+[
+  {
+    "name": "workspace-rm-output",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "volume": "ensemble-ws-worker_1",
+      "removed": true
+    }
+  },
+  {
+    "name": "workspace-rm-absent",
+    "valid": true,
+    "expected": {
+      "stage": "response",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "volume": "ensemble-ws-worker_1",
+      "removed": false
+    }
+  },
+  {
+    "name": "workspace-rm-output-extra",
+    "valid": false,
+    "expected": {
+      "stage": "response",
+      "exit_code": null,
+      "error_code": null
+    },
+    "note": "Malformed broker response; caller fails closed.",
+    "data": {
+      "volume": "ensemble-ws-worker_1",
+      "removed": true,
+      "dirty": []
+    }
+  }
+]

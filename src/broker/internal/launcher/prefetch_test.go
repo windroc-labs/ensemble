@@ -24,7 +24,7 @@ func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 	return h, d, tokens
 }
 
-// prefetchManifest is manifest-valid.json for h's Home with prefetch acme/app at main, edit applied last.
+// prefetchManifest is fixture manifest-valid for h's Home with prefetch acme/app at main, edit applied last.
 func prefetchManifest(t *testing.T, h Host, edit func(map[string]any)) string {
 	t.Helper()
 	return editedManifest(t, func(f map[string]any) {

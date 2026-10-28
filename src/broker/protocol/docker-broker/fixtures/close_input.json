@@ -1,0 +1,35 @@
+[
+  {
+    "name": "close-input",
+    "valid": true,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 0,
+      "error_code": null
+    },
+    "data": {
+      "argv": [
+        "close",
+        "--container",
+        "ensemble-worker_1-0123456789abcdef0123456789abcdef"
+      ]
+    }
+  },
+  {
+    "name": "close-input-extra",
+    "valid": false,
+    "expected": {
+      "stage": "schema",
+      "exit_code": 2,
+      "error_code": "usage"
+    },
+    "data": {
+      "argv": [
+        "close",
+        "--container",
+        "ensemble-worker_1-0123456789abcdef0123456789abcdef",
+        "--extra"
+      ]
+    }
+  }
+]

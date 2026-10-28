@@ -67,7 +67,7 @@ func TestStartRejectsSecretManifest(t *testing.T) {
 func TestStartEnvRequestSources(t *testing.T) {
 	base := `{"env":[{"item":"ensemble-broker-env/base","file":"base"}]}`
 	caller := `{"env":[{"item":"ensemble-broker-env/caller","file":"caller"}]}`
-	linear := string(fixtureBytes(t, "credential-spec-linear.json"))
+	linear := string(fixtureBytes(t, "credential-spec-linear"))
 	for _, tc := range []struct {
 		environment, caller, item, file string
 	}{

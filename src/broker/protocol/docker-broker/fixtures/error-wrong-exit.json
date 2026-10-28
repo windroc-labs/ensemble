@@ -1,9 +1,0 @@
-{
-  "exit_code": 0,
-  "error": {
-    "command": "start",
-    "code": "manifest_rejected",
-    "message": "Invalid manifest.",
-    "cleanup": "not_needed"
-  }
-}

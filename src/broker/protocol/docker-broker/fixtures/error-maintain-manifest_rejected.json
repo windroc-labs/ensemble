@@ -1,9 +1,0 @@
-{
-  "exit_code": 3,
-  "error": {
-    "command": "maintain",
-    "code": "manifest_rejected",
-    "message": "Manifest rejected: maintain needs the container's manifest.",
-    "cleanup": "not_needed"
-  }
-}

@@ -17,7 +17,7 @@ import (
 
 const opencodeDir = home + "/.ensemble/docker-state/worker_1/opencode"
 
-// opencodeManifest is manifest-valid.json for client opencode, edit applied to its fields.
+// opencodeManifest is fixture manifest-valid for client opencode, edit applied to its fields.
 func opencodeManifest(t *testing.T, edit func(map[string]any)) string {
 	t.Helper()
 	return editedManifest(t, func(fields map[string]any) {

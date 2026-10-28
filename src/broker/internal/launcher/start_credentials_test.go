@@ -34,7 +34,7 @@ func TestStartExecBudget(t *testing.T) {
 		tokens := &fakeTokens{owners: []string{"acme", "other", "third", "fourth"}}
 		h, d := githubHost(&world{labels: goodLabels()}, tokens)
 		h.Env = &fakeEnv{}
-		path := fixtureManifest(t, "manifest-github-app.json", withSecrets(dummySecrets), func(m map[string]any) {
+		path := fixtureManifest(t, "manifest-github-app", withSecrets(dummySecrets), func(m map[string]any) {
 			if !hook {
 				delete(m, "hook_path")
 			}
@@ -90,7 +90,7 @@ func TestStartCredentialDelivery(t *testing.T) {
 				env.failOn = map[string]error{"ensemble-broker-env/ssh": errors.New("secret")}
 			}
 			rec, path := audited(t, &h, "start", "")
-			_, err := h.Start(context.Background(), fixtureManifest(t, "manifest-github-app.json", withSecrets(dummySecrets)))
+			_, err := h.Start(context.Background(), fixtureManifest(t, "manifest-github-app", withSecrets(dummySecrets)))
 			rec.Flush(err)
 			success := tc.response == `{"completed":5}` && tc.runErr == nil
 			if (err == nil) != success {
@@ -156,7 +156,7 @@ func TestStartPartialDeliveryAuditAndPersistence(t *testing.T) {
 			if err := os.MkdirAll(parent, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			path := fixtureManifest(t, "manifest-github-app.json", withSecrets(dummySecrets), func(m map[string]any) {
+			path := fixtureManifest(t, "manifest-github-app", withSecrets(dummySecrets), func(m map[string]any) {
 				m["claude_dir"] = filepath.Join(parent, "claude")
 			})
 			rec, log := audited(t, &h, "start", "")
