@@ -63,6 +63,7 @@ CACHE = "prune.json"
 TOO_BIG = "archive: too many sub-issues to read in one tick"
 QUARANTINED = "finished under 1 hour ago"
 CHANGED = "changed since archive candidate read"
+KEPT = "keep label"
 HELP = """Clean finished issues' recorded runs and files, then archive eligible issues.
 
 Usage: ensemble-orchestrator prune [--dry-run]
@@ -104,6 +105,9 @@ Prerequisites and effects:
   Done under 1 hour ago or at an unknown time, or Done without a
   pm/engineer delegate (archiving an issue archives its sub-issues and
   theirs).
+  On Linear, an issue carrying [linear] keep_label (a label id or exact
+  name) is skipped whatever its state: no run close, volume or file
+  deletion, or archive; nor is any issue it is a sub-issue of archived.
   For issues in any other state but Todo/In Progress, 7 days after both their
   latest move into it and their latest recorded run, delete their checkouts
   and temp files through their Delegate, keeping the other agent files and the
@@ -112,7 +116,8 @@ Prerequisites and effects:
   After 7 days, remove whole workdirs without agent files, including run records
   and delivery ledgers, only when their configured Delegate confirms no live
   run. Unconfigured run kinds are skipped.
-  One team read (role app ids come from config), then at most 33 requests: 3
+  One team read (role app ids come from config; with keep_label, also the
+  label and the at most 250 issues carrying it), then at most 33 requests: 3
   change-feed pages, 10 issue reads, 20 archive requests; work past a cap
   waits for a later run, and an issue whose sub-issues alone need more is
   not archived. logs/prune.json caches what was read, read again when Linear
@@ -169,12 +174,21 @@ class Pruner:
         self.cfg = cfg
         self.writable = config.writable(work) if writable is None else writable
         self.errors, self.views, self.classes, self.by_issue = 0, {}, {}, None
-        self.finished, self.anchor, self.cold = None, None, False
+        self.finished, self.anchor, self.cold, self.told = None, None, False, set()
         self.say = functools.partial(log, "prune", dry=dry)
         self.cache = os.path.join(cfg.logs_dir, CACHE)
         self.state, unreadable = prune_state.load(self.cache)
         if unreadable:
             self.say("prune-skip", once=True, reason=f"{CACHE} unreadable: {unreadable}")
+
+    def kept(self, ident):
+        """Whether ident carries the keep label, logged once a tick."""
+        if ident not in self.tracker.kept:
+            return False
+        if ident not in self.told:
+            self.told.add(ident)
+            self.say("prune-skip", ident, once=True, reason=KEPT)
+        return True
 
     def error(self, issue=None, **fields):
         self.errors += 1
@@ -301,6 +315,8 @@ class Pruner:
         self.see(issue.updated for issue in found)
         due = []
         for issue in found:
+            if self.kept(issue.ident):
+                continue
             if (ready := _due(self.now, issue.since, issue.canceled)) is None:
                 self.say(
                     "prune-skip", issue.ident, once=True, reason="archive: finish time unknown"
@@ -368,6 +384,8 @@ class Pruner:
         if root.ident != plan.ident or root.updated != plan.updated:
             return root, CHANGED
         for sub in plan.descendants:
+            if sub.ident in self.tracker.kept:
+                return sub, "has the keep label"
             if sub.ident not in finished:
                 return sub, "not an archive candidate"
             candidate = finished[sub.ident]
@@ -507,7 +525,7 @@ class Pruner:
         if found is None:
             self.say("prune-skip", ident, once=True, reason="not on the board")
             return
-        if found.state in (IssueState.READY, IssueState.RUNNING):
+        if found.state in (IssueState.READY, IssueState.RUNNING) or self.kept(ident):
             return
         if found.state not in (IssueState.DONE, IssueState.CANCELED):
             self.prune_stalled(ident, found.since)

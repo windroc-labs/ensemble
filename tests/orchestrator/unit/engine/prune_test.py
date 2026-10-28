@@ -28,6 +28,7 @@ from tests.orchestrator.prune_fixtures import (
     NOW,
     PRUNE_QUERIES,
     STATE_IDS,
+    TEAM_OBJ,
     PruneDelegate,
     PruneScenario,
     gql_for,
@@ -1070,6 +1071,109 @@ class WorkdirRetention(PruneScenario):
         self.assertEqual(gql.read, [])
         self.assertOutsideKept()
         self.assertTrue(os.path.isfile(os.path.join(self.work, "TASK-8")))
+
+
+class KeepLabel(PruneScenario):
+    """An issue carrying linear.keep_label, and every ancestor's archive, are left alone."""
+
+    def keep(self, *idents):
+        self.team = replace(TEAM_OBJ, kept=frozenset(idents))
+
+    def test_a_kept_finished_issue_keeps_its_runs_files_and_board_place(self):
+        finished = {
+            "TASK-7": ("Done", [(30, "Done")]),
+            "TASK-8": ("Canceled", [(30, "Canceled")]),
+            "TASK-17": ("Done", [(30, "Done")]),
+            "TASK-18": ("Canceled", [(30, "Canceled")]),
+        }
+        sids = {ident: f"00000000-0000-4000-8000-0000000000{ident[5:]:0>2}" for ident in finished}
+        for ident in finished:
+            self.record(ident, sids[ident], [f"engineer-{ident}"])
+        self.keep("TASK-7", "TASK-8")
+        owners = {"TASK-7": role_id("pm"), "TASK-17": role_id("pm")}
+        owners |= {"TASK-8": role_id("engineer"), "TASK-18": role_id("engineer")}
+        for dry, removed, archived in (
+            (True, "prune-plan {} what=delete the agent dir", "prune-plan {} what=archive"),
+            (False, "prune-removed {} what=agent dir", "prune-archived {}"),
+        ):
+            with self.subTest(dry=dry):
+                gql = gql_for(finished, owners=owners)
+                code, out = self.prune(gql, dry=dry)
+                close = (
+                    "prune-plan {} session={} what=close the run"
+                    if dry
+                    else "prune-closed {} session={}"
+                )
+                self.assertEqual(
+                    (code, out.splitlines()),
+                    (
+                        0,
+                        [
+                            *(
+                                line
+                                for ident in ("TASK-17", "TASK-18")
+                                for line in (
+                                    close.format(ident, sids[ident]),
+                                    removed.format(ident),
+                                )
+                            ),
+                            "prune-skip TASK-7 reason=keep label",
+                            "prune-skip TASK-8 reason=keep label",
+                            archived.format("TASK-17"),
+                            archived.format("TASK-18"),
+                        ],
+                    ),
+                )
+                self.assertEqual(gql.archived, [] if dry else ["id-TASK-17", "id-TASK-18"])
+        self.assertEqual(self.closed(), ["engineer-TASK-17", "engineer-TASK-18"])
+        for ident in ("TASK-7", "TASK-8"):
+            self.assertIsNotNone(self.checkouts(ident))
+        for ident in ("TASK-17", "TASK-18"):
+            self.assertIsNone(self.checkouts(ident))
+
+    def test_a_kept_bare_or_stalled_workdir_stays(self):
+        bare = self.cfg.issue_workdir("TASK-7")
+        self.record("TASK-7", SID, [A], agent=False)
+        PruneDelegate.end(bare)
+        self.record("TASK-8", OTHER_SID, [B], hours=9 * 24)
+        PruneDelegate.end(self.cfg.issue_workdir("TASK-8"))
+        self.keep("TASK-7", "TASK-8")
+        gql = gql_for(
+            {
+                "TASK-7": ("Done", [(8 * 24, "Done")]),
+                "TASK-8": ("In Review", [(9 * 24, "In Review")]),
+            }
+        )
+        self.assertEqual(
+            self.prune(gql),
+            (0, "prune-skip TASK-7 reason=keep label\nprune-skip TASK-8 reason=keep label"),
+        )
+        self.assertTrue(os.path.isdir(bare))
+        self.assertIsNotNone(self.checkouts("TASK-8"))
+        self.assertEqual(gql.archived, [])
+
+    def test_a_kept_sub_issue_keeps_every_ancestor(self):
+        idents = ("TASK-1", "TASK-2", "TASK-3", "TASK-4")
+        done = ("Done", [(30, "Done")])
+        tree_of = {"TASK-1": {"TASK-2": "completed"}, "TASK-2": {"TASK-3": "completed"}}
+        owners = dict.fromkeys(idents, role_id("pm"))
+        gql = gql_for(dict.fromkeys(idents, done), owners=owners, children=tree_of)
+        self.keep("TASK-3")
+        self.assertEqual(
+            self.prune(gql)[1].splitlines(),
+            [
+                "prune-skip TASK-3 reason=keep label",
+                "prune-skip TASK-1 reason=archive: sub-issue TASK-3 has the keep label",
+                "prune-skip TASK-2 reason=archive: sub-issue TASK-3 has the keep label",
+                "prune-archived TASK-4",
+            ],
+        )
+        self.assertEqual(gql.archived, ["id-TASK-4"])
+        self.keep()  # the label removed: Linear lists TASK-3 as changed
+        unlabeled = gql_for(
+            dict.fromkeys(idents[:3], done), owners=owners, children=tree_of, changed=["TASK-3"]
+        )
+        self.assertEqual(self.prune(unlabeled), (0, "prune-archived TASK-1"))
 
 
 class Stalled(PruneScenario):
