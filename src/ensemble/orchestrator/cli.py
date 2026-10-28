@@ -324,6 +324,7 @@ def _linear_writers(gql, cfg, identity):
         linear.states,
         tuple(e.lower() for e in linear.human_members),
         linear.project_repos,
+        linear.assignee_id,
     )
 
 

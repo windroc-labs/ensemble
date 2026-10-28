@@ -197,18 +197,24 @@ class KillTest(Case):
         with self.assertRaisesRegex(tmux_cli.TuiError, r"^tmux: boom$"):
             tmux_cli.TmuxCli(FakeTmux(fail={"kill-session"})).kill("s")
 
-    def test_unview_sizes_the_window_readable_then_lets_the_next_client_size_it(self):
-        fake = FakeTmux()
-        tmux_cli.TmuxCli(fake).unview("s")
-        self.assertEqual(
-            fake.calls,
-            [
-                [
-                    *("tmux", "resize-window", "-t", "=s:", "-x", "120", "-y", "40", ";"),
-                    *("set-option", "-w", "-u", "-t", "=s:", "window-size"),
-                ]
-            ],
-        )
+    def test_unview_sizes_the_window_hidden_then_lets_the_next_client_size_it(self):
+        for given, x, y in (
+            ((), "80", "24"),
+            (((100, 30),), "100", "30"),
+            (((100, 30), True), "100", "31"),  # its pane under a border row
+        ):
+            with self.subTest(given=given):
+                fake = FakeTmux()
+                tmux_cli.TmuxCli(fake).unview("s", *given[:1], border=given[1:] == (True,))
+                self.assertEqual(
+                    fake.calls,
+                    [
+                        [
+                            *("tmux", "resize-window", "-t", "=s:", "-x", x, "-y", y, ";"),
+                            *("set-option", "-w", "-u", "-t", "=s:", "window-size"),
+                        ]
+                    ],
+                )
         with self.assertRaisesRegex(tmux_cli.TuiError, r"^tmux: boom$"):
             tmux_cli.TmuxCli(FakeTmux(fail={"resize-window"})).unview("s")
 
@@ -674,6 +680,13 @@ class StartTest(StartFixture):
                 )
                 self.assertEqual(os.listdir(self.temp), [])
 
+    def test_start_sizes_the_new_sessions_pane_under_its_border_as_given(self):
+        fake = FakeTmux()
+        with which():
+            self.start(fake, size=(100, 30))
+        new = fake.calls[1]
+        self.assertEqual(new[new.index("-x") : new.index("-x") + 4], ["-x", "100", "-y", "31"])
+
     def test_start_runs_wrapper_decorates_dead_pane_without_opening_a_pane(
         self,
     ):
@@ -693,9 +706,9 @@ class StartTest(StartFixture):
                         "-s",
                         "s",
                         "-x",
-                        "120",
+                        "80",
                         "-y",
-                        "40",
+                        "25",
                         sys.executable,
                         "-I",
                         "-c",

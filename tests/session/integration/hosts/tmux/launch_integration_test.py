@@ -88,6 +88,24 @@ class LaunchTest(Case):
                 gate.touch()
                 self.assertEqual(self.exited(handle), [WorkerExit(0)])
 
+    def test_a_hidden_workers_display_pane_and_so_its_pty_take_the_hidden_size(self):
+        """The guard's PTY follows its display's pane: at start and after a hide, hidden_size."""
+        self.host = TmuxHost("tmux", {"hidden_size": "100x30"})
+        self.worker("sized", Launch((sys.executable, "-I", "-c", "input()"), cwd=self.home))
+        tmux = TmuxCli()
+
+        def pane():
+            found = tmux.checked(
+                ["display-message", "-p", "-t", "=sized:", "#{pane_width}x#{pane_height}"]
+            )
+            return found.stdout.strip()
+
+        live_tmux.wait(lambda: pane() == "100x30", what="the display pane at 100x30")
+        tmux.checked(["resize-window", "-t", "=sized:", "-x", "50", "-y", "20"])
+        self.assertEqual(pane(), "50x19")
+        tmux.unview("sized", (100, 30), border=True)
+        self.assertEqual(pane(), "100x30")
+
     def test_start_hands_a_long_argv_and_env_over_in_cwd_and_views_are_not_listed(self):
         out = os.path.join(self.home, "launched.json")
         code = "import json, os, sys, time; json.dump([sys.argv[1:], os.getcwd(), os.environ['X']], open(sys.argv[1], 'w')); time.sleep(30)"

@@ -11,19 +11,65 @@ import struct
 import sys
 import termios
 import tty
+from collections import deque
 from pathlib import Path
 from unittest import mock
 
 from ensemble.session.harness import guard
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET
 from tests.session.case import Case
 
 
 class GuardTest(Case):
     def test_wide_character_at_right_margin_and_combining_mark_wrap_safely(self):
         screen = guard.Screen()
-        screen.append(("a" * 119 + "中\u0301").encode())
-        self.assertEqual(screen.text(None), "a" * 119 + "\n中\u0301")
-        self.assertTrue(all(len(row) == 120 for row in screen.cells))
+        screen.append(("a" * 79 + "中\u0301").encode())
+        self.assertEqual(screen.text(None), "a" * 79 + "\n中\u0301")
+        self.assertTrue(all(len(row) == 80 for row in screen.cells))
+
+    def test_size_parses_columns_x_rows_into_rows_and_columns(self):
+        self.assertEqual(guard.size("100x30"), (30, 100))
+        self.assertEqual(guard.size("65535x1"), (1, 65535))
+        for value in ("0x24", "80x0", "-80x24", "80x-24", "80.5x24", "80", "axb", "80x24x1"):
+            with self.subTest(value=value), self.assertRaises(argparse.ArgumentTypeError):
+                guard.size(value)
+        with self.assertRaises(argparse.ArgumentTypeError):
+            guard.size("65536x24")
+
+    def test_size_defaults_to_80x24_and_parses_the_given_one(self):
+        command = ["--hook-socket", self.home + "/hook", "--", "true"]
+        self.assertEqual(guard.arguments().parse_args(command).size, (24, 80))
+        self.assertEqual(
+            guard.arguments().parse_args(["--size", "100x30", *command]).size, (30, 100)
+        )
+
+    def test_an_invalid_size_is_a_usage_error(self):
+        with (
+            mock.patch.object(sys, "stderr", io.StringIO()) as stderr,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            guard.main(["--size", "0x24", "--hook-socket", self.home + "/hook", "--", "true"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--size", stderr.getvalue())
+
+    def test_the_pty_and_screen_start_at_the_given_size(self):
+        runtime = self.runtime(terminal=True, size=(30, 100))
+        self.assertEqual((runtime.screen.rows, runtime.screen.columns), (30, 100))
+        with (
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket"),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl") as ioctl,
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(guard.subprocess, "Popen", return_value=mock.Mock(pid=100)),
+        ):
+            library.return_value.prctl.return_value = 0
+            runtime.start()
+        sized = [c for c in ioctl.call_args_list if c.args[1] == termios.TIOCSWINSZ]
+        self.assertEqual([struct.unpack("HHHH", c.args[2]) for c in sized], [(30, 100, 0, 0)])
 
     def test_pending_uninspectable_child_has_a_bounded_close_deadline(self):
         runtime = self.runtime()
@@ -392,13 +438,14 @@ class GuardTest(Case):
             runtime.emit(b"x" * (guard.BUFFER_MAX + 1))
         self.assertFalse(runtime.output)
 
-    def runtime(self, *, terminal=False, display_grace=False):
+    def runtime(self, *, terminal=False, display_grace=False, size=guard.SIZE):
         return guard.Guard(
             argparse.Namespace(
                 hook_socket=self.home + "/hook",
                 display_socket=None,
                 display_grace=display_grace,
                 terminal=terminal,
+                size=size,
                 command=["fake"],
             )
         )
@@ -598,8 +645,8 @@ class GuardTest(Case):
         runtime.peers[peer] = ("display", guard.Decoder())
         return peer
 
-    def test_the_pty_takes_the_latest_display_size_and_without_one_the_readable_one(self):
-        runtime = self.runtime(terminal=True)
+    def test_the_pty_takes_the_latest_display_size_and_without_one_the_given_one(self):
+        runtime = self.runtime(terminal=True, size=(30, 100))
         runtime.master = 20
         first, second = self.display(runtime), self.display(runtime)
 
@@ -623,13 +670,13 @@ class GuardTest(Case):
             ],
             [
                 (20, termios.TIOCSWINSZ, (rows, columns, 0, 0))
-                for rows, columns in ((19, 33), (50, 200), (20, 34), (50, 200), (40, 120))
+                for rows, columns in ((19, 33), (50, 200), (20, 34), (50, 200), (30, 100))
             ],
         )
         self.assertEqual(runtime.input, b"typed")
-        runtime.screen.append(b"x" * 120)
+        runtime.screen.append(b"x" * 100)
         runtime.command(b"q", b'{"lines": null}')
-        self.assertEqual(json.loads(runtime.output[-1][0][5:]), {"text": "x" * 120})
+        self.assertEqual(json.loads(runtime.output[-1][0][5:]), {"text": "x" * 100})
 
     def test_a_display_closing_with_its_client_redraws_nothing(self):
         runtime = self.runtime(terminal=True)
@@ -946,9 +993,13 @@ class LeaseTest(Case):
         self.lease = os.path.join(self.run, "lease")
 
     def main(self):
-        return guard.main(
-            ["--hook-socket", self.run + "/hook", "--lease", self.lease, "--", "true"]
-        )
+        """A serve guard's start on this lease, its run dir's."""
+        args, _, options = guard.launched({**HANDOFF, "argv": ["true"]}, b"")
+        return guard.supervise(args, self.lease, **options)
+
+    def test_argv_mode_takes_no_lease(self):
+        with mock.patch.object(sys, "stderr", io.StringIO()), self.assertRaises(SystemExit):
+            guard.main(["--hook-socket", self.run + "/hook", "--lease", self.lease, "--", "true"])
 
     def test_creates_its_private_dir_and_holds_the_lease_for_life(self):
         lease = guard.hold_lease(self.lease)
@@ -958,7 +1009,7 @@ class LeaseTest(Case):
         self.assertEqual(os.stat(self.lease).st_mode & 0o777, 0o600)
         self.assertFalse(os.get_inheritable(lease))
         self.assertIsNone(guard.hold_lease(self.lease))
-        args = argparse.Namespace(hook_socket=self.run + "/hook", lease=self.lease)
+        args = argparse.Namespace(hook_socket=self.run + "/hook", lease=self.lease, size=guard.SIZE)
         runtime = guard.Guard(args, lease)
         self.assertEqual(runtime.directory, self.run)
         runtime.state("exited")
@@ -1030,3 +1081,269 @@ class ProbeTest(Case):
                         os.unlink(os.path.join(self.run, name))
                 self.write(state, lease=lease)
                 self.assertEqual(self.probe(), "dead\n")
+
+
+GEN = "a" * 32
+HANDOFF = {
+    "argv": ["client", "--flag"],
+    "env": {"SECRET": "s3cret"},
+    "terminal": True,
+    "generation": GEN,
+    "size": "100x30",
+}
+
+
+def handoff(**changes) -> bytes:
+    return json.dumps({**HANDOFF, **changes}).encode()
+
+
+class LaunchTest(Case):
+    def test_a_valid_handoff_is_its_fields(self):
+        self.assertEqual(guard.launch(handoff()), HANDOFF)
+        self.assertEqual(guard.launch(handoff(terminal=False, env={}))["terminal"], False)
+
+    def test_every_defect_is_one_message_without_its_content(self):
+        defects = [
+            b"not json s3cret",
+            b"\xff",
+            b"[]",
+            json.dumps({k: v for k, v in HANDOFF.items() if k != "env"}).encode(),
+            handoff(extra="s3cret"),
+            handoff(argv=[]),
+            handoff(argv="client"),
+            handoff(argv=["cli\0ent"]),
+            handoff(argv=[1]),
+            handoff(env=[]),
+            handoff(env={"": "s3cret"}),
+            handoff(env={"A=B": "s3cret"}),
+            handoff(env={"A\0": "s3cret"}),
+            handoff(env={"A": "s3\0cret"}),
+            handoff(env={"A": 1}),
+            handoff(terminal=1),
+            handoff(generation="A" * 32),
+            handoff(generation="a" * 31),
+            handoff(generation=1),
+            handoff(size="80"),
+            handoff(size="0x24"),
+            handoff(size="65536x24"),
+            handoff(size=[80, 24]),
+        ]
+        for data in defects:
+            with self.subTest(data=data[:40]), self.assertRaises(ValueError) as caught:
+                guard.launch(data)
+            self.assertEqual(str(caught.exception), "invalid launch handoff")
+
+    def await_launch(self, reads, *, clock=None):
+        times = iter(clock or [0.0] * 20)
+        with (
+            mock.patch.object(guard.time, "monotonic", side_effect=lambda: next(times)),
+            mock.patch.object(guard.select, "select", return_value=([0], [], [])),
+            mock.patch.object(os, "read", side_effect=reads),
+        ):
+            return guard.await_launch(10.0)
+
+    def test_the_first_frame_is_the_handoff_and_later_bytes_stay_pending(self):
+        wire = guard.frame(b"l", handoff()) + guard.frame(b"p", b"{}") + b"i\x00"
+        found, pending = self.await_launch([wire[:3], wire[3:]])
+        self.assertEqual(found, HANDOFF)
+        self.assertEqual(pending, guard.frame(b"p", b"{}") + b"i\x00")
+
+    def test_another_first_frame_or_an_oversized_one_is_invalid(self):
+        for wire in (guard.frame(b"p", b"{}"), b"l\xff\xff\xff\xff"):
+            with (
+                self.subTest(wire=wire),
+                self.assertRaisesRegex(ValueError, "^invalid launch handoff$"),
+            ):
+                self.await_launch([wire])
+
+    def test_eof_or_the_deadline_is_no_handoff(self):
+        with self.assertRaisesRegex(ValueError, "^no launch handoff$"):
+            self.await_launch([b""])
+        with self.assertRaisesRegex(ValueError, "^no launch handoff$"):
+            self.await_launch([b"l\x00"], clock=[0.0, 11.0])
+
+    def test_the_deadline_bounds_each_wait(self):
+        times = iter([0.0, 4.0, 10.0])
+        with (
+            mock.patch.object(guard.time, "monotonic", side_effect=lambda: next(times)),
+            mock.patch.object(guard.select, "select", return_value=([], [], [])) as wait,
+            mock.patch.object(os, "read") as read,
+            self.assertRaisesRegex(ValueError, "^no launch handoff$"),
+        ):
+            guard.await_launch(10.0)
+        self.assertEqual([call.args[3] for call in wait.call_args_list], [10.0, 6.0])
+        read.assert_not_called()
+
+
+class ServeTest(Case):
+    def serve(self, reads, *, clock=(100.0, 100.0, 100.0)):
+        """main(["--serve"]) over stdin `reads`: its code and stderr; it wrote and spawned nothing."""
+        stderr, times = io.StringIO(), iter(clock)
+        with (
+            mock.patch.object(guard.time, "monotonic", side_effect=lambda: next(times)),
+            mock.patch.object(guard.select, "select", return_value=([0], [], [])) as wait,
+            mock.patch.object(os, "read", side_effect=reads),
+            mock.patch.object(os, "write") as write,
+            mock.patch.object(guard.subprocess, "Popen") as spawn,
+            mock.patch.object(sys, "stderr", stderr),
+        ):
+            code = guard.main(["--serve"])
+        write.assert_not_called()
+        spawn.assert_not_called()
+        return code, stderr.getvalue(), wait
+
+    def test_the_handoff_wait_starts_with_the_guard(self):
+        _, _, wait = self.serve([b""])
+        self.assertEqual(wait.call_args.args[3], guard.LAUNCH_WAIT)
+
+    def test_no_or_a_bad_handoff_exits_1_with_its_fixed_message_and_no_client(self):
+        for reads, message in (
+            ([b""], "no launch handoff"),
+            ([guard.frame(b"p", b"{}")], "invalid launch handoff"),
+            ([guard.frame(b"l", handoff(env={"A": 1}))], "invalid launch handoff"),
+        ):
+            with self.subTest(message=message):
+                code, stderr, _ = self.serve(reads)
+                self.assertEqual((code, stderr), (1, f"guard: {message}\n"))
+
+    def test_a_handoff_runs_its_client_under_its_run_dir(self):
+        args, lease, options = guard.launched(HANDOFF, b"pending")
+        run = f"{guard.RUN}/{GEN}"
+        self.assertEqual(
+            vars(args),
+            {
+                "terminal": True,
+                "hook_socket": f"{run}/hook",
+                "display_socket": f"{run}/display",
+                "display_grace": False,
+                "size": (30, 100),
+                "command": ["client", "--flag"],
+            },
+        )
+        self.assertEqual(lease, f"{run}/lease")
+        self.assertEqual(
+            options,
+            {
+                "env": {"SECRET": "s3cret", "ENSEMBLE_GUARD_HOOK_SOCKET": f"{run}/hook"},
+                "heartbeat": guard.HEARTBEAT,
+                "pending": b"pending",
+            },
+        )
+
+    def test_run_paths_are_the_ones_the_docker_host_names(self):
+        run = f"/run/ensemble/guard/{GEN}"
+        self.assertEqual(
+            guard.run_paths(GEN),
+            {
+                "dir": run,
+                "hook": f"{run}/hook",
+                "lease": f"{run}/lease",
+                "display": f"{run}/display",
+            },
+        )
+        self.assertEqual(guard.HOOK_ENV, GUARD_HOOK_SOCKET)
+
+    def test_a_headless_handoff_has_no_display_socket(self):
+        args, _, _ = guard.launched({**HANDOFF, "terminal": False}, b"")
+        self.assertIsNone(args.display_socket)
+
+    def test_serve_takes_no_other_option(self):
+        for argv in (["--terminal"], ["--hook-socket", "/x"], ["--", "client"]):
+            with (
+                self.subTest(argv=argv),
+                mock.patch.object(sys, "stderr", io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                guard.main(["--serve", *argv])
+
+
+class HeartbeatTest(Case):
+    def runtime(self, **options):
+        args = argparse.Namespace(
+            hook_socket=self.home + "/hook",
+            display_socket=None,
+            display_grace=False,
+            terminal=False,
+            size=guard.SIZE,
+            command=["fake"],
+        )
+        return guard.Guard(args, **options)
+
+    def test_a_serve_guard_closes_once_its_harness_is_silent_over_the_limit(self):
+        runtime = self.runtime(heartbeat=5.0)
+        runtime.heard = 100.0
+        self.assertFalse(runtime.lost(105.0))
+        self.assertTrue(runtime.lost(105.1))
+        runtime.close()
+        self.assertFalse(runtime.lost(200.0))
+        self.assertFalse(self.runtime().lost(1e9))
+
+    def test_every_channel_read_restarts_the_limit_and_feeds_its_frames(self):
+        runtime = self.runtime(heartbeat=5.0)
+        with (
+            mock.patch.object(os, "read", side_effect=[b"i\x00\x00", b"\x00\x02hi"]),
+            mock.patch.object(guard.time, "monotonic", side_effect=[50.0, 60.0]),
+        ):
+            runtime.read_channel()
+            self.assertEqual((runtime.heard, runtime.input), (50.0, b""))
+            runtime.read_channel()
+        self.assertEqual((runtime.heard, runtime.input), (60.0, b"hi"))
+
+    def test_a_silent_harness_closes_the_guard_only_with_no_bytes_waiting(self):
+        runtime = self.runtime(heartbeat=5.0)
+        runtime.heard = 0.0
+        with mock.patch.object(guard.time, "monotonic", return_value=100.0):
+            runtime.listen([0])
+            self.assertIsNone(runtime.closing)
+            runtime.listen([])
+        self.assertEqual(runtime.closing, 100.0)
+
+    def test_eof_on_the_channel_closes(self):
+        runtime = self.runtime()
+        with mock.patch.object(os, "read", return_value=b""):
+            runtime.read_channel()
+        self.assertIsNotNone(runtime.closing)
+
+    def test_a_heartbeat_frame_is_accepted_and_does_nothing_else(self):
+        runtime = self.runtime()
+        runtime.command(b"p", b"{}")
+        self.assertEqual((runtime.output, runtime.input, runtime.closing), (deque(), b"", None))
+        with self.assertRaises(ValueError):
+            runtime.command(b"p", b"[]")
+
+    def test_pending_frames_from_the_handoff_read_are_handled_at_run(self):
+        runtime = self.runtime(pending=guard.frame(b"i", b"early") + guard.frame(b"p", b"{}"))
+        runtime.proc = mock.Mock(returncode=None)
+        with (
+            mock.patch.object(runtime, "start"),
+            mock.patch.object(runtime, "tick", side_effect=OSError("stop")),
+            mock.patch.object(guard.time, "monotonic", return_value=42.0),
+            self.assertRaisesRegex(OSError, "stop"),
+        ):
+            runtime.run()
+        self.assertEqual((runtime.input, runtime.heard), (b"early", 42.0))
+
+    def test_the_handed_off_env_reaches_the_client_over_the_guards_own(self):
+        runtime = self.runtime(env={"KEEP": "handoff", "NEW": "1"})
+        runtime.args.terminal = True
+        with (
+            mock.patch.dict(os.environ, {"KEEP": "own", "OWN": "1"}),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.socket, "socket"),
+            mock.patch.object(os, "chmod"),
+            mock.patch.object(os, "openpty", return_value=(20, 21)),
+            mock.patch.object(guard.fcntl, "ioctl"),
+            mock.patch.object(os, "close"),
+            mock.patch.object(os, "listdir", return_value=[]),
+            mock.patch.object(os, "set_blocking"),
+            mock.patch.object(guard.subprocess, "Popen") as spawn,
+        ):
+            library.return_value.prctl.return_value = 0
+            spawn.return_value.pid = 100
+            os.environ.pop("TERM", None)
+            runtime.start()
+        env = spawn.call_args.kwargs["env"]
+        self.assertEqual(
+            (env["KEEP"], env["NEW"], env["OWN"], env["TERM"]),
+            ("handoff", "1", "1", "xterm-256color"),
+        )

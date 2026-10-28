@@ -28,6 +28,7 @@ def stage(role, input_, **fields):
         "failed": "",
         "first_failure": "review",
         "approve": False,
+        "assign": False,
         "files": False,
         "deliverable": False,
         "hint": "",
@@ -62,6 +63,7 @@ class DefaultWorkflow(Case):
                     retitle=True,
                     start="PRD started:",
                     approve=True,
+                    assign=True,
                 ),
                 "engineer": stage(
                     "engineer",
@@ -112,6 +114,11 @@ class StageDefaults(Case):
     def test_a_set_key_wins_even_when_empty(self):
         got = workflow.stage({"role": "a", "input": "build", "done": "", "first_failure": "ready"})
         self.assertEqual((got.done, got.first_failure, got.failed), ("", "ready", "a failed:"))
+
+    def test_assign_is_off_unless_set(self):
+        self.assertFalse(workflow.stage({"role": "a", "input": "build"}).assign)
+        self.assertTrue(workflow.stage({"role": "a", "input": "build", "assign": True}).assign)
+        self.assertEqual({r for r, s in workflow.Workflow().items() if s.assign}, {"pm"})
 
     def test_ref_and_mapped_only_are_off_unless_set(self):
         got = workflow.stage({"role": "v", "input": "build", "ref": True, "mapped_only": True})

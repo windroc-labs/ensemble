@@ -2532,8 +2532,8 @@ linear_slots() {
 import os, re, sys, tomllib
 config, roles = sys.argv[1], [line.split("\t")[0] for line in sys.argv[2].splitlines()]
 # engine/config.py LINEAR_KEYS; tests/unit/install_board_test.py keeps them equal
-KNOWN = {"team", "states", "human_members", "harness", "manager", "task_label_group", "task_labels",
-         "agent_label_group", "agent_labels", "roles", "project_repos"}
+KNOWN = {"team", "states", "human_members", "assignee_id", "harness", "manager", "task_label_group",
+         "task_labels", "agent_label_group", "agent_labels", "roles", "project_repos"}
 UPGRADE = "; see docs/upgrading.md#linear-apps"
 linear = {}
 if os.path.exists(config):

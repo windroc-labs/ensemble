@@ -27,6 +27,7 @@ NAMES = {
     "short-lived-credentials",
     "test-accounts",
     "gotchas",
+    "docker-guard-main-process",
 }
 SECRET_READERS = (
     "install-ensemble/storekey-stdin",
