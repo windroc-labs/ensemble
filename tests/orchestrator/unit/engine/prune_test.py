@@ -64,7 +64,7 @@ class RepositoryCleanup(PruneScenario):
         busy = self.mkc("TASK-50")
         gql = gql_for(
             {
-                "TASK-49": ("Done", [(30, "In Progress"), (2, "Done")]),
+                "TASK-49": ("Done", [(30, "In Progress"), (1, "Done")]),
                 "TASK-50": ("In Progress", [(30, "In Progress")]),
             }
         )
@@ -197,7 +197,7 @@ class RepositoryCleanup(PruneScenario):
         self.api.live = ["engineer-TASK-48-aaaaaaaa", "engineer-TASK-50-bbbbbbbb"]
         gql = gql_for(
             {
-                "TASK-48": ("Done", [(50, "Done"), (30, "In Progress"), (2 - 1 / 3600, "Done")]),
+                "TASK-48": ("Done", [(50, "Done"), (30, "In Progress"), (1 - 1 / 3600, "Done")]),
                 "TASK-50": ("In Progress", [(50, "Done"), (30, "In Progress")]),
             }
         )
@@ -231,9 +231,9 @@ class RepositoryCleanup(PruneScenario):
         self.assertIsNone(self.checkouts("TASK-48"))
         self.assertIsNone(self.checkouts("TASK-49"))
 
-    def test_a_done_issue_waits_2_hours_to_be_cleaned(self):
+    def test_a_done_issue_waits_1_hour_to_be_cleaned(self):
         path = self.mkc("TASK-49")
-        for hours, out in ((2 - 1 / 60, ""), (2, "prune-removed TASK-49 what=agent dir")):
+        for hours, out in ((1 - 1 / 60, ""), (1, "prune-removed TASK-49 what=agent dir")):
             with self.subTest(hours=hours):
                 gql = gql_for({"TASK-49": ("Done", [(hours, "Done")])})
                 self.assertEqual(self.prune(gql), (0, out))
@@ -332,12 +332,12 @@ class RetentionCleanup(PruneScenario):
         pruner = prune.Pruner(self.board, None, NOW, dry=False, work=self.work, cfg=self.cfg)
         self.assertEqual(pruner.writable, (self.work, *temp_dirs()))
 
-    def test_archives_pm_and_engineer_issues_finished_2h(self):
+    def test_archives_pm_and_engineer_issues_finished_1h(self):
         self.assertIn("delegate: { id: { in: $a } }", linear_tracker.Q_FINISHED)
         self.assertNotIn("assignee", linear_tracker.Q_FINISHED)
         gql = gql_for(
             {
-                "TASK-1": ("Done", [(30, "In Progress"), (2, "Done")]),
+                "TASK-1": ("Done", [(30, "In Progress"), (1, "Done")]),
                 "TASK-2": ("Canceled", [(50, "Canceled")]),
                 "TASK-3": ("Done", [(30, "Done")]),
                 "TASK-4": ("Canceled", [(2, "Canceled")]),
@@ -417,8 +417,8 @@ class RetentionCleanup(PruneScenario):
             stamps={
                 "TASK-1": {"canceledAt": 30},
                 "TASK-2": {"completedAt": 30},
-                "TASK-3": {"completedAt": 1},
-                "TASK-4": {"completedAt": 1},
+                "TASK-3": {"completedAt": 1 - 1 / 3600},
+                "TASK-4": {"completedAt": 1 - 1 / 3600},
             },
         )
         code, out = self.prune(gql)
@@ -440,8 +440,8 @@ class RetentionCleanup(PruneScenario):
         done = ("Done", [(50, "Done")])
         gql = gql_for(
             {
-                "TASK-1": ("Done", [(2 - 1 / 3600, "Done")]),
-                "TASK-2": ("Done", [(50, "Done"), (30, "In Progress"), (2 - 1 / 3600, "Done")]),
+                "TASK-1": ("Done", [(1 - 1 / 3600, "Done")]),
+                "TASK-2": ("Done", [(50, "Done"), (30, "In Progress"), (1 - 1 / 3600, "Done")]),
                 "TASK-3": ("Done", []),
                 "TASK-4": ("In Progress", [(50, "Done"), (30, "In Progress")]),
                 "TASK-5": done,
@@ -551,9 +551,9 @@ class RetentionCleanup(PruneScenario):
             (
                 "TASK-1",
                 "TASK-2",
-                ("Done", [(1, "Done")]),
+                ("Done", [(1 - 1 / 3600, "Done")]),
                 role_id("pm"),
-                "finished under 2 hours ago",
+                "finished under 1 hour ago",
             ),
             ("TASK-3", "TASK-4", ("Done", []), role_id("engineer"), "finish time unknown"),
             (
@@ -757,7 +757,7 @@ class RetentionCleanup(PruneScenario):
         self.record("TASK-8", OTHER_SID, [B])
         self.api.errors = {A: SessionError("boom")}
         gql = gql_for(
-            {"TASK-7": ("Done", [(30, "Done")]), "TASK-8": ("Done", [(2 - 1 / 3600, "Done")])}
+            {"TASK-7": ("Done", [(30, "Done")]), "TASK-8": ("Done", [(1 - 1 / 3600, "Done")])}
         )
         self.assertEqual(self.prune(gql)[0], 3)
         for ident in ("TASK-7", "TASK-8"):
@@ -1424,13 +1424,13 @@ class RequestBound(Bound):
 
     def test_a_host_clock_ahead_misses_no_reopen(self):
         self.record("TASK-7", SID, [A])
-        issues = {"TASK-7": ("Done", [(30, "In Progress"), (0.5, "Done")])}
+        issues = {"TASK-7": ("Done", [(30, "In Progress"), (0.25, "Done")])}
         gql = gql_for(issues, changed="since")
-        ahead = NOW + timedelta(hours=1)
+        ahead = NOW + timedelta(minutes=30)
         self.assertEqual(self.tick(gql, now=ahead), (0, ""))
         issues["TASK-7"] = (
             "In Progress",
-            [(30, "In Progress"), (0.5, "Done"), (-5 / 60, "In Progress")],
+            [(30, "In Progress"), (0.25, "Done"), (-5 / 60, "In Progress")],
         )
         self.assertEqual(self.tick(gql, now=ahead + timedelta(minutes=10)), (0, ""))
         self.assertEqual(gql.read, ["TASK-7"])
@@ -1752,14 +1752,18 @@ class ArchiveBound(Bound):
 
     def test_a_quarantined_sub_issue_holds_its_parent_only_until_due(self):
         gql = gql_for(
-            {"TASK-1": self.done, "TASK-2": ("Done", [(1, "Done")])},
+            {"TASK-1": self.done, "TASK-2": ("Done", [(0.5, "Done")])},
             owners={"TASK-1": role_id("pm"), "TASK-2": role_id("pm")},
             children={"TASK-1": {"TASK-2": "completed"}},
             changed=(),
         )
-        skip = "prune-skip TASK-1 reason=archive: sub-issue TASK-2 finished under 2 hours ago"
+        skip = "prune-skip TASK-1 reason=archive: sub-issue TASK-2 finished under 1 hour ago"
         self.assertEqual(self.tick(gql), (0, skip))
-        self.assertEqual(self.tick(gql, now=NOW + timedelta(hours=1)), (0, "prune-archived TASK-1"))
+        self.assertEqual(self.tick(gql, now=NOW + timedelta(minutes=29)), (0, ""))
+        self.assertEqual(gql.archived, [])
+        self.assertEqual(
+            self.tick(gql, now=NOW + timedelta(minutes=30)), (0, "prune-archived TASK-1")
+        )
         self.assertEqual(gql.archived, ["id-TASK-1"])
 
     def test_a_changed_archive_candidate_waits_for_a_consistent_list(self):
@@ -1782,7 +1786,7 @@ class ArchiveBound(Bound):
                     def recompleted(query, gql=gql, issues=issues, changed=changed, **v):
                         result = gql(query, **v)
                         if query == linear_tracker.Q_FINISHED:
-                            issues[changed] = ("Done", [(1, "Done")])
+                            issues[changed] = ("Done", [(0.5, "Done")])
                         return result
 
                     code, out = self.prune(recompleted, dry=dry)
@@ -1986,10 +1990,13 @@ class LocalBoardPrune(PruneScenario):
         self.assertIn("prune-archived LOC-1", said)
         self.assertTrue(os.path.exists(os.path.join(self.board, "researcher/done/LOC-3 x.md")))
 
-    def test_waits_2_hours(self):
-        self.issue("pm/done", "LOC-1", history="- 2026-09-27 14:00 done self\n")
+    def test_waits_1_hour(self):
+        self.issue("pm/done", "LOC-1", history="- 2026-09-27 14:01 done self\n")
         self.assertEqual(self.run_prune()[0], 0)
         self.assertEqual(self.archived(), [])
+        self.issue("pm/done", "LOC-1", history="- 2026-09-27 14:00 done self\n")
+        self.assertEqual(self.run_prune()[0], 0)
+        self.assertEqual(self.archived(), ["LOC-1 x.md"])
 
     def test_archives_a_canceled_issue_on_the_next_tick(self):
         self.issue("pm/canceled", "LOC-1", history="- 2026-09-27 14:59 canceled self\n")

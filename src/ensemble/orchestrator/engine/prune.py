@@ -50,7 +50,7 @@ from ensemble.utils import (
 )
 from ensemble.utils import run_git as git
 
-QUARANTINE = timedelta(hours=2)
+QUARANTINE = timedelta(hours=1)
 RETENTION = timedelta(days=7)
 STALL = timedelta(days=7)
 IDENT_RE = re.compile(ISSUE_ID)
@@ -61,7 +61,7 @@ BACKSTOP = timedelta(days=1)  # an entry the feed never names is read again afte
 OVERLAP = timedelta(minutes=10)  # Linear's lists lag a change
 CACHE = "prune.json"
 TOO_BIG = "archive: too many sub-issues to read in one tick"
-QUARANTINED = "finished under 2 hours ago"
+QUARANTINED = "finished under 1 hour ago"
 CHANGED = "changed since archive candidate read"
 HELP = """Clean finished issues' recorded runs and files, then archive eligible issues.
 
@@ -85,7 +85,7 @@ Prerequisites and effects:
   <board>/archive/; an unreadable board exits 2 (prune.py: <path>: <reason>).
   Configuration and executable lookup: ensemble-orchestrator --help
   For issues Canceled/Duplicate (any canceled-type state) on the next run,
-  and Done ones after 2 hours (the latest of their move into Done and
+  and Done ones after 1 hour (the latest of their move into Done and
   Linear's completedAt; unknown age is skipped), close recorded runs, then
   remove their Docker workspace volumes and delete agent files through
   their Delegate, uncommitted and unpushed work included: a cancel cannot be
@@ -97,11 +97,11 @@ Prerequisites and effects:
   preserve the default branch and unpushed branches. No fetch is performed.
   Clones under work_dir/work or temporary directories are skipped.
   Archive team issues once finished: Canceled/Duplicate on the next run
-  whatever the assignee (none or researcher too), Done ones 2 hours later and
+  whatever the assignee (none or researcher too), Done ones 1 hour later and
   only when delegated to pm/engineer apps (researcher reports stay). A Done
   issue of unknown finish time is skipped, and so is an issue with a
   sub-issue at any depth that prune would not archive itself: unfinished,
-  Done under 2 hours ago or at an unknown time, or Done without a
+  Done under 1 hour ago or at an unknown time, or Done without a
   pm/engineer delegate (archiving an issue archives its sub-issues and
   theirs).
   For issues in any other state but Todo/In Progress, 7 days after both their

@@ -98,7 +98,9 @@ class HostScale(PruneScenario):
         agent = [add(n, "Done", done) for n in range(1, 5)]  # due: closed, cleaned, archived
         agent.append(add(5, "Canceled", [(50, "Todo"), (3, "Canceled")], owner=None))
         agent.append(add(6, "Done", done, owner=role_id("researcher")))
-        agent += [add(n, "Done", [(50, "In Progress"), (1, "Done")]) for n in (7, 8)]  # quarantine
+        agent += [
+            add(n, "Done", [(50, "In Progress"), (0.5, "Done")]) for n in (7, 8)
+        ]  # quarantine
         agent += [add(n, "In Review", [(20, "In Review")]) for n in range(9, 19)]
         agent += [add(n, "In Progress", [(5, "In Progress")]) for n in range(19, 24)]
         agent += [add(n, "Todo", [(1, "Todo")]) for n in range(24, 28)]
