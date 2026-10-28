@@ -1081,7 +1081,7 @@ func TestBaseImageRequirements(t *testing.T) {
 	}
 	unexpected := "Checking base image dummy-env:test gave unexpected output."
 	lacks := func(items string) string {
-		return "Base image dummy-env:test lacks " + items + "; see docs/architecture.md#base-images."
+		return "Base image dummy-env:test lacks " + items + "; add what it lacks to the image, then retry."
 	}
 	for name, tc := range map[string]struct {
 		agent, tools, message string

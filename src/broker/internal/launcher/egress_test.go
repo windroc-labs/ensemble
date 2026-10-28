@@ -108,7 +108,7 @@ func TestEgressRefusals(t *testing.T) {
 				}
 				if !strings.Contains(e.Message, tc.want) || !strings.HasSuffix(e.Message, egressHint) ||
 					!strings.Contains(e.Message, "workers") || // the caller network, by key or network name
-					!strings.Contains(e.Message, "Start the egress proxy (~/.egress/current/start.sh") ||
+					!strings.Contains(e.Message, "Start the egress proxy with ~/.egress/current/start.sh") ||
 					(!strings.Contains(e.Message, "egress-proxy") && !strings.Contains(e.Message, "my-proxy")) {
 					t.Fatalf("message %q lacks %q, the proxy or ~/.egress/current/start.sh", e.Message, tc.want)
 				}
