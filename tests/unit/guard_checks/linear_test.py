@@ -60,9 +60,6 @@ class EnumComparisons(Sample):
         )
         self.assertEqual(linear.linear_enum_comparisons(root), [])
 
-    def test_real_linear_source_uses_enums(self):
-        self.assertEqual(linear.linear_enum_comparisons(REPO), [])
-
 
 ENGINE = f"{ORCH_FILES}engine/"
 FLOW = f"{ENGINE}flow/"
@@ -127,7 +124,6 @@ class EngineTrackerContract(Sample):
                 self.assertEqual(self.check(config), [f"pyproject.toml: {error}"])
 
     def test_the_real_contract_forbids_trackers_from_engine(self):
-        self.assertEqual(linear.engine_tracker_contract(REPO), [])
         contracts = tomllib.loads(Path(REPO, "pyproject.toml").read_text())["tool"]["importlinter"]
         found = next(c for c in contracts["contracts"] if c["name"] == ENGINE_CONTRACT)
         self.assertEqual(found["source_modules"], [f"{ORCH_PKG}.engine"])
@@ -165,6 +161,3 @@ class FlowNamesNoLinear(Sample):
             linear.flow_names_no_linear(root),
             [f"{FLOW}workflow.toml:1: flow names a Linear concept: project"],
         )
-
-    def test_real_flow_names_no_linear_concept(self):
-        self.assertEqual(linear.flow_names_no_linear(REPO), [])

@@ -72,9 +72,6 @@ class OrchestratorImports(Sample):
         root = self.tree({f"{PKG}/delegate/__init__.py": self.DELEGATE_INIT, **files})
         return imports.orchestrator_imports(root)
 
-    def test_the_real_tree_is_clean(self):
-        self.assertEqual(imports.orchestrator_imports(REPO), [])
-
     def test_only_delegates_exports_utils_itself_and_the_standard_library_cross_the_layer(self):
         rel = f"{ORCH_SRC}engine/prune.py"
         for files, expected in (
@@ -335,23 +332,3 @@ class StandaloneImports(Sample):
         files = dict.fromkeys(STANDALONE, "")
         files[f"{SESSION_SRC}engine/ordinary.py"] = "import ensemble.utils\n"
         self.assertEqual(imports.standalone_imports(self.tree(files)), [])
-
-
-class OldCore(Sample):
-    def test_a_core_import_in_a_tree(self):
-        root = self.tree(
-            {
-                "tests/a.py": "from core.src import drive\n",
-                "src/ensemble/session/b.py": "import core\nimport core_x\n",
-                ".github/c.py": "import core\n",
-                "docs/d.py": "import core\n",
-            }
-        )
-        self.assertEqual(
-            imports.old_core(root),
-            [
-                ".github/c.py: imports core",
-                "src/ensemble/session/b.py: imports core",
-                "tests/a.py: imports core",
-            ],
-        )

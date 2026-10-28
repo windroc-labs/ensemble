@@ -1,16 +1,17 @@
 """Linear's host-only metadata protocol never permits credential output."""
 
 import json
+from pathlib import Path
 
 import jsonschema
 
-from tests.case import Case
+from tests.case import REPO, Case
 
 
 class LinearHostProtocol(Case):
     def test_metadata_only_reply(self):
-        with open("src/broker/protocol/linear-host/protocol.schema.json", encoding="utf-8") as file:
-            schema = json.load(file)
+        path = Path(REPO, "src/broker/protocol/linear-host/protocol.schema.json")
+        schema = json.loads(path.read_text(encoding="utf-8"))
         validator = jsonschema.Draft202012Validator(
             {"$defs": schema["$defs"], "$ref": "#/$defs/maintained"},
             format_checker=jsonschema.FormatChecker(),

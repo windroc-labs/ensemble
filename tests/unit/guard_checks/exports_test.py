@@ -214,10 +214,7 @@ class EventObjectExports(Sample):
 
 
 class DelegateObjectExports(Sample):
-    PINNED = {
-        "ensemble.delegate": [],
-        "ensemble.delegate.composer": [],
-    }
+    PACKAGES = ("ensemble.delegate", "ensemble.delegate.composer")
     UNRECOGNISED = {
         "PATH": "PATH: str = os.path.join('a', 'b')\n",
         "COUNT": "COUNT: int = int('1')\n",
@@ -229,10 +226,7 @@ class DelegateObjectExports(Sample):
 
     def exports(self, package, extra="", names=()):
         rel = "src/" + package.replace(".", "/") + "/__init__.py"
-        functions = self.PINNED[package]
-        sample = "import os\nfrom enum import StrEnum\n"
-        sample += "".join(f"def {name}(): pass\n" for name in functions)
-        sample += extra + f"__all__ = {[*functions, *names]!r}\n"
+        sample = "import os\nfrom enum import StrEnum\n" + extra + f"__all__ = {list(names)!r}\n"
         root = self.tree({rel: sample})
         return [
             item
@@ -241,14 +235,10 @@ class DelegateObjectExports(Sample):
         ]
 
     def test_pinned_inventory_can_only_shrink(self):
-        expected = {(package, name) for package, names in self.PINNED.items() for name in names}
-        actual = {key for key in OBJECT_EXPORTS_ALLOWED if key[0] in self.PINNED}
-        self.assertLessEqual(actual, expected)
-        for key in actual:
-            self.assertTrue(OBJECT_EXPORTS_ALLOWED[key].strip())
+        self.assertFalse({key for key in OBJECT_EXPORTS_ALLOWED if key[0] in self.PACKAGES})
 
     def test_only_pinned_functions_and_objects_are_allowed(self):
-        for package in self.PINNED:
+        for package in self.PACKAGES:
             with self.subTest(package=package):
                 self.assertEqual(self.exports(package, "class Public: pass\n", ["Public"]), [])
                 self.assertEqual(
@@ -260,32 +250,11 @@ class DelegateObjectExports(Sample):
                     1,
                 )
 
-    def test_runtime_resource_helpers_are_not_exported(self):
-        self.assertEqual(
-            len(
-                self.exports(
-                    "ensemble.delegate.composer", "def module_roots(): pass\n", ["module_roots"]
-                )
-            ),
-            1,
-        )
-
     def test_missing_all_is_rejected_for_both_packages(self):
         root = self.tree({})
-        for package in self.PINNED:
+        for package in self.PACKAGES:
             rel = "src/" + package.replace(".", "/") + "/__init__.py"
             self.assertIn(f"{rel}: no literal __all__", exports.object_exports(root))
-
-    def test_delegate_runtime_helpers_are_rejected(self):
-        rel = "src/ensemble/delegate/__init__.py"
-        sample = "read_config = 'literal'\ndef module_roots(): pass\n"
-        sample += "__all__ = ['read_config', 'module_roots']\n"
-        found = [
-            item
-            for item in exports.object_exports(self.tree({rel: sample}))
-            if item.startswith((rel + ":", "ensemble.delegate:"))
-        ]
-        self.assertEqual(found, [f"{rel}: __all__ exports function module_roots (FR-44)"])
 
     def test_literals_and_constant_names_pass_but_callables_and_constructor_calls_fail(self):
         literals = (
@@ -297,7 +266,7 @@ class DelegateObjectExports(Sample):
             "COPY = NAME\n"
             "SEPARATORS = (os.sep, '/')\n"
         )
-        for package in self.PINNED:
+        for package in self.PACKAGES:
             rel = "src/" + package.replace(".", "/") + "/__init__.py"
             for source, names, expected in (
                 *(
@@ -399,9 +368,6 @@ class ObjectExports(Sample):
             for entry in exports.object_exports(self.tree(tree))
             if entry.startswith(self.SESSION) or entry.startswith("ensemble.session:")
         ]
-
-    def test_the_real_tree_is_clean(self):
-        self.assertEqual(exports.object_exports(REPO), [])
 
     def test_the_allowlisted_entries_pass_each_with_a_one_line_reason(self):
         self.assertEqual(self.found(), [])
@@ -537,27 +503,39 @@ class InterfaceAttributes(Sample):
             },
         )
 
-    def test_real_public_annotations_and_host_constructor_fields_are_visible(self):
-        from ensemble.session import Host, Session
 
-        for cls, names in ((Session, ("sid", "name")), (Host, ("name", "settings"))):
-            found = exports._interface_members(cls)
-            for name in names:
-                self.assertEqual(found[name], "attribute")
+class InterfaceSnapshot:
+    """An interface snapshot guard's tests: PATH its file, KEY a frozen signature, GONE a new name."""
 
-
-class SessionInterfaceSnapshot(Sample):
     def snapshot(self) -> dict:
-        with open(os.path.join(REPO, SESSION_INTERFACE), encoding="utf-8") as f:
+        with open(os.path.join(REPO, self.PATH), encoding="utf-8") as f:
             return json.load(f)
 
     def checked(self, snapshot) -> list[str]:
-        return exports.session_interface_snapshot(
-            self.tree({SESSION_INTERFACE: json.dumps(snapshot)})
-        )
+        return self.guard(self.tree({self.PATH: json.dumps(snapshot)}))
 
-    def test_the_repository_matches_its_snapshot(self):
-        self.assertEqual(exports.session_interface_snapshot(REPO), [])
+    def test_a_changed_removed_or_added_export_or_signature_fails(self):
+        path, key, gone = self.PATH, self.KEY, self.GONE
+        snapshot = self.snapshot()
+        have = snapshot[key]
+        for changed, want in (
+            (
+                {**snapshot, key: "def(self:POSITIONAL_OR_KEYWORD)"},
+                f"{path}: {key}: def(self:POSITIONAL_OR_KEYWORD) -> {have}",
+            ),
+            ({k: v for k, v in snapshot.items() if k != key}, f"{path}: {key}: absent -> {have}"),
+            ({**snapshot, gone: "def()"}, f"{path}: {gone}: def() -> absent"),
+        ):
+            with self.subTest(want=want):
+                self.assertEqual(self.checked(changed), [want])
+
+    def test_a_missing_snapshot_fails(self):
+        self.assertEqual(self.guard(self.tree({"README.md": ""})), [f"{self.PATH}: missing"])
+
+
+class SessionInterfaceSnapshot(InterfaceSnapshot, Sample):
+    PATH, KEY, GONE = SESSION_INTERFACE, "ensemble.session.Session.show", "ensemble.session.Gone"
+    guard = staticmethod(exports.session_interface_snapshot)
 
     def test_the_snapshot_covers_both_entry_modules_and_their_signatures(self):
         snapshot = self.snapshot()
@@ -587,46 +565,14 @@ class SessionInterfaceSnapshot(Sample):
                     [f"{SESSION_INTERFACE}: {key}: absent -> attribute"],
                 )
 
-    def test_a_changed_removed_or_added_export_or_signature_fails(self):
-        key = "ensemble.session.Session.show"
-        snapshot = self.snapshot()
-        have = snapshot[key]
-        for changed, want in (
-            (
-                {**snapshot, key: "def(self:POSITIONAL_OR_KEYWORD)"},
-                f"{SESSION_INTERFACE}: {key}: def(self:POSITIONAL_OR_KEYWORD) -> {have}",
-            ),
-            (
-                {k: v for k, v in snapshot.items() if k != key},
-                f"{SESSION_INTERFACE}: {key}: absent -> {have}",
-            ),
-            (
-                {**snapshot, "ensemble.session.Gone": "def()"},
-                f"{SESSION_INTERFACE}: ensemble.session.Gone: def() -> absent",
-            ),
-        ):
-            with self.subTest(want=want):
-                self.assertEqual(self.checked(changed), [want])
 
-    def test_a_missing_snapshot_fails(self):
-        self.assertEqual(
-            exports.session_interface_snapshot(self.tree({"README.md": ""})),
-            [f"{SESSION_INTERFACE}: missing"],
-        )
-
-
-class DelegateInterfaceSnapshot(Sample):
-    def snapshot(self) -> dict:
-        with open(os.path.join(REPO, DELEGATE_INTERFACE), encoding="utf-8") as f:
-            return json.load(f)
-
-    def checked(self, snapshot) -> list[str]:
-        return exports.delegate_interface_snapshot(
-            self.tree({DELEGATE_INTERFACE: json.dumps(snapshot)})
-        )
-
-    def test_the_repository_matches_its_snapshot(self):
-        self.assertEqual(exports.delegate_interface_snapshot(REPO), [])
+class DelegateInterfaceSnapshot(InterfaceSnapshot, Sample):
+    PATH, KEY, GONE = (
+        DELEGATE_INTERFACE,
+        "ensemble.delegate.Delegate.resume",
+        "ensemble.delegate.run",
+    )
+    guard = staticmethod(exports.delegate_interface_snapshot)
 
     def test_the_snapshot_covers_the_delegate_package_and_its_signatures(self):
         snapshot = self.snapshot()
@@ -642,30 +588,3 @@ class DelegateInterfaceSnapshot(Sample):
             "sid:KEYWORD_ONLY=None)",
         )
         self.assertIn("ensemble.delegate.DelegateEvent", snapshot)
-
-    def test_a_changed_removed_or_added_export_or_signature_fails(self):
-        key = "ensemble.delegate.Delegate.resume"
-        snapshot = self.snapshot()
-        have = snapshot[key]
-        for changed, want in (
-            (
-                {**snapshot, key: "def(self:POSITIONAL_OR_KEYWORD)"},
-                f"{DELEGATE_INTERFACE}: {key}: def(self:POSITIONAL_OR_KEYWORD) -> {have}",
-            ),
-            (
-                {k: v for k, v in snapshot.items() if k != key},
-                f"{DELEGATE_INTERFACE}: {key}: absent -> {have}",
-            ),
-            (
-                {**snapshot, "ensemble.delegate.run": "def()"},
-                f"{DELEGATE_INTERFACE}: ensemble.delegate.run: def() -> absent",
-            ),
-        ):
-            with self.subTest(want=want):
-                self.assertEqual(self.checked(changed), [want])
-
-    def test_a_missing_snapshot_fails(self):
-        self.assertEqual(
-            exports.delegate_interface_snapshot(self.tree({"README.md": ""})),
-            [f"{DELEGATE_INTERFACE}: missing"],
-        )

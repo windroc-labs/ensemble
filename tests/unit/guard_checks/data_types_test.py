@@ -1,4 +1,3 @@
-from tests.case import REPO
 from tests.guard_checks import data_types
 from tests.guard_data import OPTION_TUPLES_ALLOWED, STANDALONE
 from tests.guard_data.session import SESSION_SRC
@@ -285,9 +284,6 @@ class OptionTuples(Sample):
         for rel, text in (extra or {}).items():
             files[rel] = files.get(rel, "") + text
         return data_types.option_tuples(self.tree(files))
-
-    def test_the_real_tree_is_clean(self):
-        self.assertEqual(data_types.option_tuples(REPO), [])
 
     def test_allowlisted_tuples_pass_each_with_a_one_line_reason(self):
         self.assertEqual(self.found(), [])

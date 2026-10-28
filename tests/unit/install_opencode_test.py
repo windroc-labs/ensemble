@@ -9,13 +9,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from tests.case import REPO, Case
-
-
-def helper(script="install.sh"):
-    text = Path(REPO, "scripts", script).read_text()
-    body = text.split("opencode_config_edit() {\n", 1)[1].split("\n}\n", 1)[0]
-    return body.split("python3 -I -c '\n", 1)[1].split("' ", 1)[0]
+from tests.case import Case
+from tests.unit.install_script import program
 
 
 class OpenCodeConfigTest(Case):
@@ -29,7 +24,7 @@ class OpenCodeConfigTest(Case):
     def edit(self, *args):
         output = io.StringIO()
         with mock.patch.object(sys, "argv", ["-c", *map(str, args)]), redirect_stdout(output):
-            exec(helper(), {})
+            exec(program("opencode_config_edit"), {})
         return output.getvalue().strip()
 
     def plan(self):
@@ -213,4 +208,7 @@ class OpenCodeConfigTest(Case):
         self.assertEqual(list(self.conf.iterdir()), [self.path])
 
     def test_installer_and_cleanup_share_editor(self):
-        self.assertEqual(helper(), helper("install-cleanup.sh"))
+        self.assertEqual(
+            program("opencode_config_edit"),
+            program("opencode_config_edit", "install-cleanup.sh"),
+        )

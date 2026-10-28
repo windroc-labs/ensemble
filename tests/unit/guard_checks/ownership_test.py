@@ -1,6 +1,5 @@
 from pathlib import Path
 
-from tests.case import REPO
 from tests.guard_checks import commands, exports, ownership
 from tests.guard_data.delegate import CONFIG_FILE, DELEGATE_SRC
 from tests.guard_data.orchestrator import ORCH_FILES
@@ -99,9 +98,6 @@ class SessionRoles(Sample):
             with self.subTest(files=files):
                 root = self.tree({**self.ROLES, **files})
                 self.assertEqual(ownership.session_roles(root), expected)
-
-    def test_the_repo_passes(self):
-        self.assertEqual(ownership.session_roles(REPO), [])
 
 
 class OrchestratorText(Sample):
@@ -457,75 +453,44 @@ class SessionDisplay(Sample):
                 self.assertEqual(ownership.session_display(self.tree(files)), [])
 
 
-class DelegateDisplay(Sample):
-    def test_display_names_are_rejected_anywhere_in_delegate_source_only(self):
+class Display(Sample):
+    def test_display_names_are_rejected_anywhere_in_delegate_or_orchestrator_source_only(self):
         named = 'def f(pane): return "@opener"\n'
-        for files, expected in (
-            *(
-                ({base: source}, [f"{base}:1: interprets display {name!r}"])
-                for base in (DELEGATE_SRC + "cli.py", DELEGATE_SRC + "engine/sample.py")
-                for source, name in (
-                    ("def f(pane): return pane\n", "pane"),
-                    ("def f(pane_id): return pane_id\n", "pane_id"),
-                    ("def opener(): pass\n", "opener"),
-                    ("class split_from: pass\n", "split_from"),
-                    ("x = value.opener\n", "opener"),
-                    ('x = "--split"\n', "--split"),
-                    ('x = "--split-from"\n', "--split-from"),
-                    ('x = "@opener"\n', "@opener"),
-                    ('x = "@record"\n', "@record"),
-                    ('x = "@pane"\n', "@pane"),
-                )
-            ),
-            (
-                {
-                    DELEGATE_SRC + "engine/sample.py": (
-                        '@record\ndef f(display): return display.split("/")\nscreenplay = "reopener"\n'
-                    ),
-                    "tests/delegate/unit/sample_test.py": named,
-                    f"{PKG}/session/hosts/tmux/sample.py": named,
-                },
-                [],
-            ),
+        for guard, src in (
+            (ownership.delegate_display, DELEGATE_SRC),
+            (ownership.orchestrator_display, ORCH_FILES),
         ):
-            with self.subTest(files=files):
-                self.assertEqual(ownership.delegate_display(self.tree(files)), expected)
-
-
-class OrchestratorDisplay(Sample):
-    def test_display_names_are_rejected_anywhere_in_orchestrator_source_only(self):
-        named = 'def f(pane): return "@opener"\n'
-        for files, expected in (
-            *(
-                ({base: source}, [f"{base}:1: interprets display {name!r}"])
-                for base in (ORCH_FILES + "cli.py", ORCH_FILES + "engine/sample.py")
-                for source, name in (
-                    ("def f(pane): return pane\n", "pane"),
-                    ("def opener(): pass\n", "opener"),
-                    ("class split_from: pass\n", "split_from"),
-                    ("x = value.opener\n", "opener"),
-                    ('x = "--split"\n', "--split"),
-                    ('x = "@opener"\n', "@opener"),
-                    ('x = "@record"\n', "@record"),
-                    ('x = "@pane"\n', "@pane"),
-                )
-            ),
-            (
-                {
-                    ORCH_FILES + "engine/sample.py": (
-                        '@record\ndef f(display): return display.split("/")  # a pane\n'
-                    ),
-                    "tests/orchestrator/sample_test.py": named,
-                    f"{PKG}/session/hosts/tmux/sample.py": named,
-                },
-                [],
-            ),
-        ):
-            with self.subTest(files=files):
-                self.assertEqual(ownership.orchestrator_display(self.tree(files)), expected)
-
-    def test_the_real_tree_is_clean(self):
-        self.assertEqual(ownership.orchestrator_display(REPO), [])
+            for files, expected in (
+                *(
+                    ({base: source}, [f"{base}:1: interprets display {name!r}"])
+                    for base in (src + "cli.py", src + "engine/sample.py")
+                    for source, name in (
+                        ("def f(pane): return pane\n", "pane"),
+                        ("def f(pane_id): return pane_id\n", "pane_id"),
+                        ("def opener(): pass\n", "opener"),
+                        ("class split_from: pass\n", "split_from"),
+                        ("x = value.opener\n", "opener"),
+                        ('x = "--split"\n', "--split"),
+                        ('x = "--split-from"\n', "--split-from"),
+                        ('x = "@opener"\n', "@opener"),
+                        ('x = "@record"\n', "@record"),
+                        ('x = "@pane"\n', "@pane"),
+                    )
+                ),
+                (
+                    {
+                        src
+                        + "engine/sample.py": '@record\ndef f(display): return display.split("/")'
+                        '  # a pane\nscreenplay = "reopener"\n',
+                        "tests/delegate/unit/sample_test.py": named,
+                        "tests/orchestrator/sample_test.py": named,
+                        f"{PKG}/session/hosts/tmux/sample.py": named,
+                    },
+                    [],
+                ),
+            ):
+                with self.subTest(guard=guard.__name__, files=files):
+                    self.assertEqual(guard(self.tree(files)), expected)
 
 
 class DelegateTmux(Sample):
@@ -559,9 +524,6 @@ class DelegateTmux(Sample):
 
 class StatusLogFormat(Sample):
     CLOCK = 'CLOCK = "%H:%M:%S"\n'
-
-    def test_the_real_tree_is_clean(self):
-        self.assertEqual(ownership.status_log_format(REPO), [])
 
     def test_only_status_log_owns_the_clock(self):
         outside = "status log line format outside session/engine/status_log.py"

@@ -264,24 +264,6 @@ def _stdlib_imports(repo, paths):
     return sorted(found)
 
 
-def old_core(repo: str) -> list[str]:
-    return sorted(
-        f"{rel}: imports core"
-        for rel, text in _tree_files(repo, ".py")
-        for node in ast.walk(ast.parse(text, rel))
-        if isinstance(node, ast.Import)
-        and any(a.name.split(".")[0] == "core" for a in node.names)
-        or isinstance(node, ast.ImportFrom)
-        and (node.module or "").split(".")[0] == "core"
-        or isinstance(node, ast.Call)
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and isinstance(node.args[0].value, str)
-        and node.args[0].value.split(".")[0] == "core"
-        and ast.unparse(node.func).split(".")[-1] in {"__import__", "import_module"}
-    )
-
-
 PUBLIC_UNDERSCORE = frozenset({"os._exit"})
 
 

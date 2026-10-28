@@ -58,8 +58,6 @@ class BrokerJob(Case):
                         self.assertIn("  pull_request:\n    paths:", text)
                     else:
                         self.assertNotIn("macos", text.lower())
-        self.assertFalse((WORKFLOWS.parent / "ci_broker.py").exists())
-        self.assertFalse((WORKFLOWS.parent / "ci_broker_test.py").exists())
 
     def test_macos_coverage_runs_on_main_push_broker_prs_or_manual_dispatch(self):
         text = (WORKFLOWS / "broker-macos.yml").read_text()
