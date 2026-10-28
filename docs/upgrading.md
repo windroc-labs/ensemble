@@ -5,14 +5,26 @@
 Broker protocol 34 adds optional `credentials` and `environment_credentials` JSON-text strings to the start manifest.
 Delegate and session carry both unchanged. Kind validation, merging and issuance remain follow-up work.
 The decoded contract is `{github: {app, permissions, repo?}, linear: {app, board}, env: [{item, file}]}`; every kind is
-optional. No run sends these fields yet; the broker accepts empty objects and refuses any nonempty declaration.
+optional. Launch commands can now send these fields; the broker accepts empty objects and refuses any nonempty
+declaration until kind issuance ships.
 Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
 refuses an older protocol's broker. This interface-only change requires no configuration migration. The existing
 `[session.hosts.docker.github]`, verifier `github_repo` and delegate environment `secrets` still work. Their removal,
-explicit role/task declarations, `--credentials`, and the no-implicit-credentials rule are not enabled here.
+explicit role/task declarations and the no-implicit-credentials rule are not enabled here.
 GitHub grants (including verifier output) will move to orchestrator/CLI declarations; environment secrets will move
 to `[delegate.environments.<name>.credentials]`. Their upgrade instructions and unknown-key
 errors must ship with those migrations. See [Credential spec](architecture.md#credentials) for the contract.
+
+`ensemble-delegate run`, `ensemble-session start`, `ensemble-crew worker NAME` and `ensemble-crew role ROLE` now
+accept `--credentials JSON` (put it after NAME/ROLE for crew). Pass references only; the text is preserved unchanged.
+Omitting it declares none for a new run. tmux ignores it; in_process refuses a present declaration, including `{}`.
+Caller overlays containing `credentials` are configuration errors.
+
+Resume, restart and `ensemble-crew reopen` reuse both declarations from host-owned state, regardless of current
+configuration or workspace files. Do not give a new declaration on resume: a restatement must match the saved text
+exactly, including whitespace. To change credentials, start a new run. Existing state without these fields resumes
+with absent declarations. The separate `--environment-credentials JSON` session option carries an environment's
+opaque declaration; environment configuration migration remains separate.
 
 ## Claude account selection is the session's
 
