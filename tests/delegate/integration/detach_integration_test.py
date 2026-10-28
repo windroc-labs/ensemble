@@ -129,9 +129,9 @@ class Detach(Case):
             timeout=WAIT,
         )
 
-    def said(self, res: subprocess.CompletedProcess, *, tui: bool, fast: bool = False) -> Record:
-        """The Record line; its sessions and drive live on return (a `fast` run's drive may have
-        ended); the drive's log 0600.
+    def said(self, res: subprocess.CompletedProcess, *, tui: bool) -> Record:
+        """The Record line; its sessions and drive live on return (a tui drive may have ended with
+        its attempt while the launch waited for its opening); the drive's log 0600.
         """
         drive = self.drive_running()
         live = {TUI: self.live(TUI)} if tui else {}
@@ -148,7 +148,8 @@ class Detach(Case):
             (("ensemble-delegate",), ("ensemble-delegate", "resume", self.work)),
         )
         self.assertTrue(all(live.values()), live)
-        self.assertTrue(drive or fast, self.metadata())
+        ended = tui and self.metadata().get("result") is not None
+        self.assertTrue(drive or ended, self.metadata())
         self.assertEqual(self.metadata()["detached"], True)
         if tui:
             self.assertFalse(self.live(DRIVE))
@@ -614,7 +615,7 @@ class Owned(Detach):
     def test_continue_after_a_failed_turn_in_the_pane_is_the_next_attempt(self):
         failed = {"kind": "hook", "event": "StopFailure", "error": "server_overloaded"}
         res = self.detach(mode="tui", steps=[START, failed], turns=[[block(DONE)]])
-        self.said(res, tui=True, fast=True)
+        self.said(res, tui=True)
         self.ended()
         state = self.metadata()
         self.assertEqual(state["result"]["error"], "the client's turn failed: server_overloaded")
