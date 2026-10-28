@@ -26,6 +26,11 @@ def read_config(*, local: str = utils.LOCAL, path: str | None = None) -> dict:
         local=local,
         paths=None if path is None else {"ensemble.delegate": path},
         validate=validate,
+        opaque=(
+            ("environment", "*", "credentials"),
+            ("environments", "*", "credentials"),
+            ("roles", "*", "environment", "credentials"),
+        ),
     )
     check_environments(found)
     return found

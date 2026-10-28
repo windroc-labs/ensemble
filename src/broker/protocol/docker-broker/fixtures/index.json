@@ -2897,7 +2897,7 @@
       "valid": false,
       "expected": {
         "stage": "schema",
-        "exit_code": 2,
+        "exit_code": 3,
         "error_code": "manifest_rejected"
       }
     }

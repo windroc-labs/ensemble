@@ -3,6 +3,7 @@
 trusted_dirs().
 """
 
+import json
 import os
 import re
 import tomllib
@@ -243,6 +244,38 @@ class EnvironmentCheckTest(Case):
             DUMMY + '[delegate.roles.dummy-tester.environment]\nname = "dummy"\nprefetch = true\n'
         )
         self.assertEqual(found["roles"]["dummy-tester"]["environment"]["name"], "dummy")
+
+    def test_local_credential_values_are_preserved_whole(self):
+        for source, expected in (("{}", {}), ("{ future_kind = {} }", {"future_kind": {}})):
+            for table in (
+                "delegate.environment.docker",
+                "delegate.environments.mini-op",
+                "delegate.roles.dummy-tester.environment",
+            ):
+                with self.subTest(table=table, source=source):
+                    found = self.loaded(
+                        f"[{table}]\ncredentials = {source}\n"
+                        + (
+                            'name = "mini-op"\n'
+                            if table == "delegate.roles.dummy-tester.environment"
+                            else ""
+                        )
+                    )
+                    overrides = dict(
+                        found.get("roles", {}).get("dummy-tester", {}).get("environment", {})
+                    )
+                    name = overrides.pop(
+                        "name", "mini-op" if table == "delegate.environments.mini-op" else None
+                    )
+                    resolved = resolve_fields(
+                        found,
+                        host="docker",
+                        name=name,
+                        overrides=overrides,
+                        packaged=delegate.packaged_environments(),
+                    )
+                    assert resolved is not None
+                    self.assertEqual(json.loads(resolved.credentials), expected)
 
     def test_unknown_keys_are_refused_naming_the_table(self):
         self.refused(
