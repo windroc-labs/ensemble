@@ -112,8 +112,9 @@ class DockerWorker(ManagedProcess):
 
     def launch(self, handoff: Mapping) -> None:
         self.send_frame(b"l", json.dumps(handoff, separators=(",", ":")).encode())
-        self.beater = threading.Thread(target=self._beat, name=f"{self.name}-beat", daemon=True)
-        self.beater.start()
+        with self.condition:
+            self.beater = threading.Thread(target=self._beat, name=f"{self.name}-beat", daemon=True)
+            self.beater.start()
 
     def _beat(self) -> None:
         while True:
@@ -127,7 +128,9 @@ class DockerWorker(ManagedProcess):
 
     def end_releases(self) -> None:
         super().end_releases()
-        self._join(self.beater)
+        with self.condition:
+            beater = self.beater
+        self._join(beater)
 
     def begin(self) -> None:
         """Called after the guard started."""
