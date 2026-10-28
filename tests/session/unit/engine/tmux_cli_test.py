@@ -69,6 +69,35 @@ class DisplayErrorTest(Case):
                 )
 
 
+class StatusLineTest(Case):
+    def test_enabling_reserves_the_full_name_brackets_and_space_on_only_that_session(self):
+        for name in ("s", "engineer-WDRC-281-502d679e"):
+            with self.subTest(name=name):
+                target = f"={name}:"
+                self.assertEqual(
+                    tmux_cli.status(name, on=True),
+                    [
+                        "set-option",
+                        "-t",
+                        target,
+                        "status",
+                        "on",
+                        ";",
+                        "set-option",
+                        "-t",
+                        target,
+                        "status-left-length",
+                        str(len(name) + 3),
+                    ],
+                )
+
+    def test_disabling_only_sets_the_session_status(self):
+        self.assertEqual(
+            tmux_cli.status("worker", on=False),
+            ["set-option", "-t", "=worker:", "status", "off"],
+        )
+
+
 class ProcessIdentityTest(Case):
     FORMAT = "#{pid} #{session_id} #{pane_id} #{pane_pid}"
 
@@ -1140,8 +1169,11 @@ class StartTest(StartFixture):
                 self.assertEqual(fake._handover["argv"], [self.tool, "-x", "a b"])
                 self.assertEqual(fake._handover["env"], {"PATH": self.bin, "PWD": self.cwd})
                 self.assertEqual(fake.commands(), ["display-message", "new-session"])
+                expected = decorations("s", path, status)
+                if status_line:
+                    expected.append(["tmux", "set-option", "-t", "=s:", "status-left-length", "4"])
                 self.assertEqual(
                     fake.calls[1][fake.calls[1].index(fake.fifo) + 8 :],
-                    [*chained(decorations("s", path, status)), *recorded("s")],
+                    [*chained(expected), *recorded("s")],
                 )
         self.assertEqual(stat.S_IMODE(os.stat(events).st_mode), 0o600)
