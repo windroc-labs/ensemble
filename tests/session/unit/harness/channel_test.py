@@ -389,6 +389,24 @@ class SweepTest(Base):
 
 
 class AskTest(Base):
+    def test_kept_input_is_read_again_until_reply_or_caller_cancellation(self):
+        folder = os.path.join(self.channel.directory, "requests")
+        os.mkdir(folder)
+        ident = "b" * 32
+        path = os.path.join(folder, ident + ".json")
+        with open(path, "w") as stream:
+            json.dump({"op": "send", "data": {"text": "next"}}, stream)
+        expected = [(ident, Op.SEND, {"text": "next"})]
+        self.assertEqual(self.channel.pending(keep=(Op.SEND, Op.PRESS)), expected)
+        self.assertEqual(self.channel.pending(keep=(Op.SEND, Op.PRESS)), expected)
+        self.channel.reply(ident, ok=True)
+        self.assertEqual(self.channel.pending(keep=(Op.SEND, Op.PRESS)), [])
+        with open(path, "w") as stream:
+            json.dump({"op": "send", "data": {"text": "canceled"}}, stream)
+        self.channel.pending(keep=(Op.SEND, Op.PRESS))
+        os.unlink(path)
+        self.assertEqual(self.channel.pending(keep=(Op.SEND, Op.PRESS)), [])
+
     def serve(self, answer):
         self.served = serve(self, self.channel, lambda ident, _op, _data: answer(ident))
 

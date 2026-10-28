@@ -32,7 +32,7 @@ The test GitHub account and its App are the manager's to manage, deletions inclu
    3. Read `code` from the redirected URL; `gh api -X POST app-manifests/<code>/conversions` returns the App ID and `pem`: write the pem to `/tmp/apm-app.pem` (umask 077) with no output.
       For an existing App, get a new private key at Credentials › Key pairs (delete the older key there once the broker holds the new one) (`https://github.com/settings/apps/<app-name>/key_pairs`) › New key. Chrome downloads it into `~/Downloads`. Terminal has no Downloads permission: in an ssh session, run `umask 077; mv ~/Downloads/<downloaded-key>.pem /tmp/apm-app.pem; chmod 600 /tmp/apm-app.pem`, using the downloaded filename; never print its contents. Import it at the broker prompt (5. below; `install-ensemble.md` 6.2.5), then delete `/tmp/apm-app.pem`.
    4. `https://github.com/apps/<app-name>/installations/new`: Only select repositories › `<test-repo>` › Install.
-   5. At install.sh's broker prompt give `/tmp/apm-app.pem` and the App ID; type the login password at the prompt. If the keychain change-access dialog appears, have the user enter it there too and click Allow; otherwise continue on Terminal success (`install-ensemble.md` 6.2.11). Delete the pem after.
+   5. At install.sh's broker prompt give `/tmp/apm-app.pem` and the App ID. Handle its password and access prompts through [macOS password prompts](gotchas.md#macos-password-prompts-during-installs-and-logins). Delete the pem after.
    The current App's name, ID, installation id and repo: the request or the mini's local config.
 
 ## 4. Linear workspace
@@ -48,7 +48,7 @@ The test GitHub account and its App are the manager's to manage, deletions inclu
 ## 5. OAuth apps
 
 1. Create the five apps (harness, manager, researcher, pm, engineer) as docs/upgrading.md › Linear presets says: Client credentials on, Public and Webhooks off.
-2. Put each Client ID in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`). The install asks each app's client secret, stores it and the app's first token in the mini's keychain and fills each app's `user_id`.
+2. Put each Client ID in the mini's `~/.ensemble/config.local.toml` (template: `install-ensemble/test-board.toml`). The install asks each app's client secret, stores it and the app's first token in the mini's keychain and fills each app's `user_id`. Handle the subsequent password and access prompts through [macOS password prompts](gotchas.md#macos-password-prompts-during-installs-and-logins).
 
 ## Restore the keychain items after a reset
 
