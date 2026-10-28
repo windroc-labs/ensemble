@@ -2,8 +2,8 @@
 // (ENSEMBLE_OPENCODE_HOOK, a JSON argv; the label last, a JSON payload on stdin), one at a time.
 // The root is the resumed session (ENSEMBLE_OPENCODE_SESSION) or the first session created without
 // a parent; its children's permission asks and questions count too. State lives here, not per plugin call:
-// OpenCode calls a plugin again whenever it rebuilds its instance. A turn is the root's input: a new user
-// message, not one OpenCode's compaction makes, up to idle; OpenCode saves user messages again later.
+// OpenCode calls a plugin again whenever it rebuilds its instance. A turn: a new root user message up to
+// idle; compaction's request and the message after it (a "continue" or the input again) are no input.
 import { spawn } from "node:child_process";
 
 const hook = parse(process.env.ENSEMBLE_OPENCODE_HOOK);
@@ -19,6 +19,7 @@ const REPLY_WAIT = 5000; // ms to wait for completed messages to be saved
 const REPLY_POLL = 200;
 let turnUser = null; // the root's latest input message id
 const users = new Map(); // root user message id → whether its first part was seen
+let compacting = false; // compaction's request seen, not the message after it
 let reported = new Set(); // text messages delivered in this user turn; busy steps do not reset it
 let completed = new Set(); // completion events can precede the corresponding API records
 let busy = false;
@@ -58,13 +59,16 @@ function call(label, fields = {}) {
   chain = chain.then(() => run(label, payload));
 }
 
-// Compaction's own user messages: its request and its synthetic "continue".
-function made(part) {
-  return part?.type === "compaction" || (part?.type === "text" && part.synthetic === true && part.metadata?.compaction_continue === true);
-}
-
-function input(message) {
-  return message?.info?.role === "user" && !(message.parts ?? []).some(made);
+// Per message, whether it is input.
+function inputs(list) {
+  let after = false;
+  return list.map((m) => {
+    if (m?.info?.role !== "user") return false;
+    const request = (m.parts ?? []).some((p) => p?.type === "compaction");
+    const own = request || after;
+    after = request;
+    return !own;
+  });
 }
 
 function texts(message) {
@@ -77,11 +81,11 @@ function texts(message) {
 // The turn's messages: those after its input message (unknown: after the last one), up to the
 // next input; null while that message is not saved yet.
 function slice(list, user) {
-  const start = user ? list.findIndex((m) => m?.info?.id === user) : list.findLastIndex(input);
+  const input = inputs(list);
+  const start = user ? list.findIndex((m) => m?.info?.id === user) : input.lastIndexOf(true);
   if (user && start < 0) return null;
-  const rest = list.slice(start + 1);
-  const end = rest.findIndex(input);
-  return end < 0 ? rest : rest.slice(0, end);
+  const end = input.findIndex((yes, i) => yes && i > start);
+  return list.slice(start + 1, end < 0 ? undefined : end);
 }
 
 // Deliver completed main-thread messages before idle, including saves found by idle's poll.
@@ -162,6 +166,7 @@ function handle(event, client) {
     case "session.idle": {
       if (p.sessionID !== root) return;
       busy = false;
+      compacting = false;
       // A fatal error's turn idles twice (its halt, then its run's end); only new input clears it.
       if (failed) return;
       if (error) {
@@ -212,7 +217,9 @@ function handle(event, client) {
       if ((p.sessionID ?? part.sessionID) !== root) return;
       if (users.get(part.messageID) === false) {
         users.set(part.messageID, true);
-        if (!made(part)) begin(part.messageID);
+        if (part.type === "compaction") compacting = true;
+        else if (compacting) compacting = false;
+        else begin(part.messageID);
         return;
       }
       if (part.type !== "tool" || !TOOL.has(status)) return;

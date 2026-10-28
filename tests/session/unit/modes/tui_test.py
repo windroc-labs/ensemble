@@ -3110,6 +3110,16 @@ class ActivityTest(OwnedBase):
         self.assertEqual(host_base.activity(NAME, generation), StatusState.DONE)
         self.assertIsNone(host_base.activity(NAME, "another"))
 
+    def test_a_record_its_client_drops_marks_nothing(self):
+        mode = self.owned_start()
+        mode.run.hooks = {**mode.run.hooks, "start": HookKind.TURN_STARTED}
+        self.append(record("start", turn_id="t1"))
+        self.append(record("stop", turn_id="t1"))
+        mode.poll(0)
+        self.append(record("start", turn_id="t1"))  # its turn again: no new one
+        mode.poll(0)
+        self.assertEqual(self.activity(), f"{mode.generation} done\n")
+
     def test_each_record_marks_once(self):
         mode = self.owned_start()
         self.append(record("ask", why="y"))

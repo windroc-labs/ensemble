@@ -33,6 +33,7 @@ from ensemble.session.engine.types import (
     Key,
     KeyPress,
     Launch,
+    LimitHit,
     Liveness,
     Mode,
     NotShowable,
@@ -93,6 +94,11 @@ WORDS = {
     HookKind.ACTIVITY: StatusState.WORKING,
     HookKind.TURN_STARTED: StatusState.WORKING,
 }
+MARKED = (  # each accepted event's word: a hook record its client drops marks none
+    (TurnEnd | TurnFailed | LimitHit, StatusState.DONE),
+    (Blocked, StatusState.BLOCKED),
+    (TurnStarted | Activity, StatusState.WORKING),
+)
 SLICE = 0.1
 OPEN_AFTER = 1.0  # keys sent before a client's input box shows are lost
 POLL_SCREEN = 0.5
@@ -1009,13 +1015,13 @@ class TuiMode(BaseMode):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
         for label, payload, marker in records:
-            kind = self.run.hooks.get(label)
-            if kind is not None and (word := WORDS.get(kind)) is not None:
-                self._mark(word)
             events = self.run.hook_events(label, payload)
             if any(isinstance(e, TurnStarted | TurnEnd | TurnFailed) for e in events):
                 self._absorbed = max(self._absorbed, _sends(marker, self._generation)[1])
             found += events
+        for event in found:
+            if word := next((w for kind, w in MARKED if isinstance(event, kind)), None):
+                self._mark(word)
         self._track(found)
         return found
 

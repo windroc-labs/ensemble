@@ -346,8 +346,13 @@ class TuiSessions(Case):
         self.assertFalse(any(isinstance(event, TurnFailed) for event in found))
         self.assertEqual(found[-2:], [Reply("done anyway"), TurnEnd("done anyway")])
 
-    def test_a_compacted_turn_ends_done_with_its_own_reply(self):
-        self.scene([[{"compact": "summary"}, {"text": "recovered"}], [{"text": "next turn"}]])
+    def test_compacted_turns_end_done_with_their_own_replies(self):
+        self.scene(
+            [
+                [{"compact": "summary"}, {"text": "recovered"}],
+                [{"compact": "summary again"}, {"text": "next turn"}],
+            ]
+        )
         handle, stream = self.start()
         self.assertEqual(
             stream.until(TurnEnd),
