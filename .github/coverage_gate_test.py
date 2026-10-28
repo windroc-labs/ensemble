@@ -144,7 +144,7 @@ class Report(unittest.TestCase):
         try:
             import coverage
         except ImportError:
-            self.skipTest("coverage.py is unavailable; the Coverage CI job runs this")
+            self.skipTest("coverage.py is unavailable; CI's Unit job installs it on pull requests")
         data = coverage.CoverageData(basename=str(self.root / "data"))
         data.add_arcs({str(self.root / path): set(pairs) for path, pairs in arcs.items()})
         data.write()

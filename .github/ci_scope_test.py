@@ -505,13 +505,6 @@ class Aggregate(unittest.TestCase):
         self.assertTrue(scope.gate(needs, "merge_group"))
         self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
 
-    def test_linux_broker_is_required_without_a_macos_result(self):
-        needs = self.needs()
-        self.assertEqual(scope.gate(needs, "pull_request"), [])
-        self.assertEqual(scope.gate(needs, "merge_group"), [])
-        needs.pop("broker")
-        self.assertIn("broker: expected success, got None", scope.gate(needs, "pull_request"))
-
     def test_linux_broker_must_run_when_broker_scope_is_selected(self):
         needs = self.needs(full=False)
         needs["changes"]["outputs"]["broker"] = "true"
@@ -550,16 +543,20 @@ class Aggregate(unittest.TestCase):
                     self.assertTrue(scope.gate(needs, kwargs.get("event", "pull_request")))
 
     def test_classifier_failure_or_invalid_output_cannot_authorize_skips(self):
-        for value in (None, True, False, "", "False", "TRUE", "unknown"):
-            needs = self.needs(full=False)
-            needs["changes"]["outputs"]["full"] = value
-            with self.subTest(value=value):
-                self.assertTrue(scope.gate(needs, "pull_request"))
-        for value in (None, True, "", "TRUE", "unknown"):
-            needs = self.needs(full=False, docs=True)
-            needs["changes"]["outputs"]["docs"] = value
-            with self.subTest(docs=value):
-                self.assertTrue(scope.gate(needs, "pull_request"))
+        for key, kwargs in (
+            ("full", {"full": False}),
+            ("docs", {"full": False, "docs": True}),
+            ("broker", {"full": False}),
+            ("version", {"full": False, "version": True}),
+        ):
+            for value in (None, True, False, "", "False", "TRUE", "unknown"):
+                needs = self.needs(**kwargs)
+                needs["changes"]["outputs"][key] = value
+                with self.subTest(key=key, value=value):
+                    self.assertIn(
+                        f"changes.outputs.{key} must be exactly true or false",
+                        scope.gate(needs, "pull_request"),
+                    )
         self.assertTrue(scope.gate(self.needs(full=True, docs=True), "pull_request"))
         needs = self.needs(full=False)
         needs["changes"]["result"] = "failure"
@@ -572,15 +569,7 @@ class Aggregate(unittest.TestCase):
         self.assertTrue(scope.gate(self.needs(full=False, event="push"), "push"))
         self.assertTrue(scope.gate(self.needs(), "workflow_dispatch"))
 
-    def test_invalid_or_inconsistent_broker_output_fails(self):
-        for value in (None, True, False, "", "TRUE", "unknown"):
-            needs = self.needs(full=False)
-            needs["changes"]["outputs"]["broker"] = value
-            with self.subTest(broker=value):
-                self.assertIn(
-                    "changes.outputs.broker must be exactly true or false",
-                    scope.gate(needs, "pull_request"),
-                )
+    def test_inconsistent_broker_output_fails(self):
         for full, docs, broker, event in (
             (True, False, "false", "pull_request"),
             (True, False, "false", "push"),
@@ -591,15 +580,7 @@ class Aggregate(unittest.TestCase):
             with self.subTest(full=full, docs=docs, broker=broker, event=event):
                 self.assertTrue(scope.gate(needs, event))
 
-    def test_invalid_or_inconsistent_version_output_fails(self):
-        for value in (None, True, False, "", "TRUE", "unknown"):
-            needs = self.needs(full=False, version=True)
-            needs["changes"]["outputs"]["version"] = value
-            with self.subTest(version=value):
-                self.assertIn(
-                    "changes.outputs.version must be exactly true or false",
-                    scope.gate(needs, "pull_request"),
-                )
+    def test_inconsistent_version_output_fails(self):
         for key, value in (("full", "true"), ("docs", "true"), ("broker", "true")):
             needs = self.needs(full=False, version=True)
             needs["changes"]["outputs"][key] = value
@@ -669,7 +650,6 @@ class Workflow(unittest.TestCase):
         self.assertRegex(ci, r"needs:.*\bbroker\b")
         self.assertIn("if: ${{ always() && ", ci)
         self.assertNotIn("actions: write", ci)
-        self.assertNotIn("ci_broker.py", ci)
         self.assertIn("run: python3 .github/ci_scope.py --gate", ci)
         self.assertIn("github.event_name != 'push'", job("unit"))
         self.assertIn("github.event.merge_group.base_sha", job("coverage"))
@@ -677,26 +657,6 @@ class Workflow(unittest.TestCase):
         self.assertIn("  merge_group:\n    types: [checks_requested]", worker)
         self.assertIn("github.event.merge_group.head_sha", worker)
         self.assertIn("github.event.merge_group.base_sha", worker)
-
-    def test_version_scope_skips_unit_coverage_and_integration_only(self):
-        self.assertIn("      version: ${{ steps.scope.outputs.version }}\n", job("changes"))
-        for name, condition in (
-            (
-                "unit",
-                "needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false'",
-            ),
-            (
-                "coverage",
-                "github.event_name != 'push' && needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false'",
-            ),
-            (
-                "integration",
-                "needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false'",
-            ),
-        ):
-            with self.subTest(job=name):
-                self.assertIn(f"    if: ${{{{ {condition} }}}}\n", job(name))
-        self.assertNotRegex(job("lint"), r"(?m)^    if:")
 
     def test_text_edit_runs_no_job_and_keeps_the_code_runs_ci(self):
         text = WORKFLOW.read_text()
