@@ -399,6 +399,15 @@ def unit_directories(root):
     ]
 
 
+def balance(found, total, seconds):
+    loads, groups = [(0.0, index) for index in range(total)], [[] for _ in range(total)]
+    for test in sorted(found, key=lambda test: (-seconds(test), test.id())):
+        load, target = heapq.heappop(loads)
+        groups[target].append(test)
+        heapq.heappush(loads, (load + seconds(test), target))
+    return groups
+
+
 def shard(suite, value, durations=None):
     match = re.fullmatch(r"([1-9][0-9]*)/([1-9][0-9]*)", value)
     found = sorted(tests(suite), key=lambda test: test.id())
@@ -420,12 +429,7 @@ def shard(suite, value, durations=None):
         ):
             raise ValueError("test durations must map test IDs to finite positive seconds")
         # Hints only: discovery owns membership, including new IDs absent from the table.
-        loads = [(0.0, index) for index in range(total)]
-        groups = [[] for _ in range(total)]
-        for test in sorted(found, key=lambda test: (-durations.get(test.id(), 0.01), test.id())):
-            seconds, target = heapq.heappop(loads)
-            groups[target].append(test)
-            heapq.heappush(loads, (seconds + durations.get(test.id(), 0.01), target))
+        groups = balance(found, total, lambda test: durations.get(test.id(), 0.01))
         return unittest.TestSuite(groups[number - 1])
     return unittest.TestSuite(found[number - 1 :: total])
 
