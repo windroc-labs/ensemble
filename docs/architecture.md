@@ -862,9 +862,8 @@ python3 .github/coverage_gate.py /tmp/coverage-data origin/main
 | PR touching only root `*.md` files and/or `docs/` but `docs/architecture.md` (read by repository checks) | upper skill unit tests in `Lint style` only | skipped |
 | PR changing only the release `version` of the plugin manifests and `package.json` | skipped; every lint runs | skipped |
 | anything else, a push to `main` or `merge_group` | all layers | run |
-| PR title or body edit (`edited` without a base change) | none: every job skips and the gate reports as `CI skipped on a PR text edit`, so the code run's `CI` stands | skipped |
 
-The required `CI` aggregate accepts only the skips its scope allows. `Broker ubuntu-24.04` runs the Go checks for full scope; the `Broker macOS` and `Installer macOS` workflows run apart and never block `CI`. `Worker image` (`.github/workflows/worker-image.yml`) builds the real image when a PR changes an image input.
+The required `CI` aggregate accepts only the skips its scope allows. A PR title or body edit (`edited` without a base change) runs no job: `test.yml`'s `if:`s skip them all and its gate reports as `CI skipped on a PR text edit`, so the code run's `CI` stands while `mini-op PR text` rescans the PR text. `Broker ubuntu-24.04` runs the Go checks for full scope; the `Broker macOS` and `Installer macOS` workflows run apart and never block `CI`. `Worker image` (`.github/workflows/worker-image.yml`) builds the real image when a PR changes an image input.
 
 To regenerate the integration timing table, let a PR's whole `CI` workflow finish (rerun it for more samples), then per attempt, each into its own empty directory:
 
