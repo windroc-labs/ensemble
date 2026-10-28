@@ -1010,16 +1010,35 @@ class CommittedConfiguration(Case):
             {"tracker": "local", "task_tiers": {}, "local_clones": {}, "work_dir": "~/.ensemble"},
         )
         self.assertEqual(committed["linear"], LINEAR_DEFAULTS)
+        empty_role = {"max_runs": 3, "credentials": {}, "tasks": {}}
         self.assertEqual(
             committed["roles"],
-            dict.fromkeys(
-                ("researcher", "pm", "engineer"), {"max_runs": 3, "credentials": {}, "tasks": {}}
-            ),
+            {
+                "researcher": empty_role,
+                "pm": empty_role,
+                "engineer": {
+                    **empty_role,
+                    "tasks": {"decompose": {"credentials": {"linear": "role"}}},
+                },
+            },
         )
 
     def test_packaged_config_has_no_client_run_limit(self):
         local = HEADER + role("researcher") + role("pm") + role("engineer")
         self.assertFalse(hasattr(self.load(local), "client_max_runs"))
+
+    def test_decompose_inherits_role_credentials_and_adds_its_board_app(self):
+        github = {"app": "engineer-app", "permissions": {"contents": "write"}}
+        cfg = self.load(
+            PIPELINE
+            + "[roles.engineer.credentials]\n"
+            + 'github = { app = "engineer-app", permissions = { contents = "write" } }\n'
+        )
+        resolved = config.credentials(cfg, "engineer", "decompose")
+        self.assertEqual(resolved["github"], github)
+        self.assertEqual(resolved["linear"]["app"]["role"], "engineer")
+        self.assertEqual(resolved["linear"]["app"]["user_id"], role_id("engineer"))
+        self.assertEqual(config.credentials(cfg, "engineer", "build"), {"github": github})
 
     def test_without_local_names_what_is_missing(self):
         with self.assertRaises(config.ConfigError) as cm:
@@ -1689,10 +1708,10 @@ class CredentialDeclarations(ConfigFile, Case):
                 self.load(PIPELINE + text)
             self.assertIn(f"[{where}]", str(cm.exception))
 
-    def test_linear_shorthand_needs_a_linear_board_but_explicit_values_are_opaque(self):
+    def test_local_board_omits_role_shorthand_but_explicit_values_are_opaque(self):
         self.local('tracker = "local"\n')
-        with self.assertRaisesRegex(config.ConfigError, "roles.engineer.credentials.*linear"):
-            self.load(PIPELINE + '[roles.engineer.credentials]\nlinear = "role"\n')
+        cfg = self.load(PIPELINE + '[roles.engineer.credentials]\nlinear = "role"\n')
+        self.assertEqual(config.credentials(cfg, "engineer", None), {})
         cfg = self.load(PIPELINE + "[roles.engineer.credentials]\nlinear = { future = true }\n")
         self.assertEqual(config.credentials(cfg, "engineer", None), {"linear": {"future": True}})
 

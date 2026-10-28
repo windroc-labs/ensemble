@@ -768,17 +768,16 @@ def _credential_table(cfg, role, table, where):
                 f'orchestrator/config.toml: [{where}] linear shorthand must be "role"'
             )
         if cfg["tracker"] is not TrackerKind.LINEAR:
-            raise ConfigError(
-                f'orchestrator/config.toml: [{where}] linear = "role" needs tracker = "linear"'
-            )
-        linear = cfg["linear"]
-        out["linear"] = {
-            "app": {"role": role, **{k.value: linear["roles"][role][k] for k in AppKey}},
-            "board": {
-                **{k: linear[k] for k in ("team", "states", "project_repos", "human_members")},
-                "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
-            },
-        }
+            del out["linear"]
+        else:
+            linear = cfg["linear"]
+            out["linear"] = {
+                "app": {"role": role, **{k.value: linear["roles"][role][k] for k in AppKey}},
+                "board": {
+                    **{k: linear[k] for k in ("team", "states", "project_repos", "human_members")},
+                    "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
+                },
+            }
     try:
         json.dumps(out, allow_nan=False)
     except (TypeError, ValueError):

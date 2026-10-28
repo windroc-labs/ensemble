@@ -65,11 +65,13 @@ tasks = {}
 [roles.engineer]
 max_runs = 3
 credentials = {}
-tasks = {}
+
+[roles.engineer.tasks.decompose.credentials]
+linear = "role"
 
 # credentials: kind → reference, with no secret values; {} → none. Broker validates kinds and values.
 # [roles.<role>.tasks.<task>.credentials] replaces whole same-kind role values, keeping other kinds.
-# Only the shorthand linear = "role" is expanded here: this role's app references and non-secret board settings.
+# The shorthand linear = "role" expands to this role's app references and non-secret board settings; omitted on local boards.
 # Tasks must appear in the role's Tasks index. A run without a task uses only role credentials.
 # Local declarations use the orchestrator. prefix; credentials in [core] overlays are refused.
 
@@ -191,6 +193,7 @@ canceled = ""
 # local: light-research = "00000000-0000-0000-0000-000000000000"
 # local: build = "00000000-0000-0000-0000-000000000000"
 # local: light-build = "00000000-0000-0000-0000-000000000000"
+# local: decompose = "00000000-0000-0000-0000-000000000000"
 
 # Agent labels; optional: set agent_label_group to the Agent group's id and map each client to its child label id.
 # Both empty disables selection; otherwise set both. Client names come from Delegate configuration.
