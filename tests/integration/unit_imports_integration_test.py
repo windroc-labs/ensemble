@@ -38,11 +38,8 @@ class UnitImports(Case):
     def test_test_files_cannot_import_the_interpreter_gate(self):
         root = Path(REPO)
         files = sorted(
-            str(path)
-            for path in root.rglob("*.py")
-            if "tests" in path.relative_to(root).parts
-            or path.parent == root / ".github"
-            and path.name.endswith("_test.py")
+            [str(path) for path in (root / "tests").rglob("*.py")]
+            + [str(path) for path in (root / ".github").glob("*_test.py")]
         )
         sample = Path(self.home, "gate.py")
         sample.write_text("import isolation\nfrom isolation import Gate\n")

@@ -159,11 +159,11 @@ func TestPrefetchOrder(t *testing.T) {
 	lw := newLockWorld()
 	w := &world{labels: goodLabels()}
 	h, base, _ := prefetchHost(t, w)
-	d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		if out, err, handled := lw.respond(args); handled {
 			return out, err
 		}
-		return base.respond(args)
+		return base.respond(args, stdin)
 	}}
 	h.Docker = d
 	h.Now = func() time.Time { return time.Unix(1000, 0) }
@@ -269,7 +269,7 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 			lw := newLockWorld()
 			w := &world{labels: goodLabels()}
 			h, base, _ := prefetchHost(t, w)
-			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+			d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 				out, err, handled := lw.respond(args)
 				if handled {
 					if lw.after != nil {
@@ -277,7 +277,7 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 					}
 					return out, err
 				}
-				return base.respond(args)
+				return base.respond(args, stdin)
 			}}
 			h.Docker = d
 			h.Now = func() time.Time { return time.Unix(1000, 0) }
@@ -376,10 +376,8 @@ func TestEnvironmentWithoutPrefetchKeepsGitHub(t *testing.T) {
 	if run, _ := helperRun(d); run != nil {
 		t.Fatalf("helper ran: %q", run)
 	}
-	i := slices.IndexFunc(d.calls, func(c []string) bool {
-		return slices.Equal(c, []string{"exec", "--interactive", "--user", "agent", container, "write"})
-	})
-	if i < 0 || string(d.stdin[i]) != "ghs_token" {
+	commands := startCommands(t, d)
+	if len(commands) != 3 || commands[2].Argv[0] != "write" || string(commands[2].Stdin) != "ghs_token" {
 		t.Fatalf("no GitHub token write in %q", d.verbs())
 	}
 }
@@ -395,7 +393,7 @@ func TestDefaultImageNewest(t *testing.T) {
 	}
 	// A newer variant on a base image never counts.
 	putFile(t, filepath.Join(h.Home, ".ensemble/docker/images", strings.Repeat("e", 64)+".json"), `{"package":"/p","base_image":"x:y"}`)
-	h.Docker = &fakeDocker{respond: func(args []string) ([]byte, error) {
+	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		key := strings.TrimPrefix(ref, "ensemble-worker:")
 		labels := goodLabels()

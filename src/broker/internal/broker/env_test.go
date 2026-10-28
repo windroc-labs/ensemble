@@ -3,7 +3,6 @@ package broker
 import (
 	"bytes"
 	"errors"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -141,49 +140,35 @@ func TestEnvKeysReady(t *testing.T) {
 }
 
 func TestEnvKeysInject(t *testing.T) {
-	e := &fakeExec{}
 	k := envKeys("dummy")
-	if err := (EnvKeys{Keychain: k}).Inject(launcher.Secret{Item: "ensemble-broker-env/dummy", File: "dummy.txt"}, e.run); err != nil {
+	command, err := (EnvKeys{Keychain: k}).Inject(launcher.Secret{Item: "ensemble-broker-env/dummy", File: "dummy.txt"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer command.Erase()
 	script := "mkdir -p -m 0700 " + docker.SecretsDir + "/env && umask 0377 && set -C && cat > " + docker.SecretsDir + `/env/"$1"`
-	if want := [][]string{{"/bin/sh", "-c", script, "sh", "dummy.txt"}}; !reflect.DeepEqual(e.argv, want) || string(e.stdin[0]) != envValue+"-dummy" {
-		t.Fatalf("%q %q", e.argv, e.stdin)
+	if !slices.Equal(command.Argv, []string{"/bin/sh", "-c", script, "sh", "dummy.txt"}) || string(command.Stdin) != envValue+"-dummy" {
+		t.Fatalf("%q", command.Argv)
 	}
 	if !slices.Equal(k.reads, []string{"ensemble-broker-env/dummy/dummy"}) {
-		t.Fatalf("reads %q", k.reads)
+		t.Fatal(k.reads)
 	}
 	for _, b := range k.returned {
 		if !bytes.Equal(b, make([]byte, len(b))) {
 			t.Fatal("read buffer not erased")
 		}
 	}
-	secret := launcher.Secret{Item: "ensemble-broker-env/dummy", File: "dummy.txt"}
-	for name, tc := range map[string]struct {
-		k           *fakeSecrets
-		dockerErr   error
-		code        protocol.Code
-		message     string
-		unreachable bool
+	for _, tc := range []struct {
+		keychain *fakeSecrets
+		code     protocol.Code
 	}{
-		"docker fails": {k: envKeys("dummy"), dockerErr: &docker.CommandError{Exit: 1, Stderr: "cat: " + envValue}, code: protocol.StartFailed,
-			message: "Writing ensemble-broker-env/dummy into the container failed."},
-		"unreachable":  {k: envKeys("dummy"), dockerErr: errors.Join(docker.ErrUnreachable, errors.New(envValue)), unreachable: true},
-		"missing":      {k: envKeys(), code: protocol.LoginRequired, message: "No keychain item ensemble-broker-env/dummy: run ensemble-broker login env dummy."},
-		"needs dialog": {k: func() *fakeSecrets { k := envKeys("dummy"); k.readErr = ErrNeedsDialog; return k }(), code: protocol.KeychainFailed},
+		{envKeys(), protocol.LoginRequired},
+		{func() *fakeSecrets { k := envKeys("dummy"); k.readErr = ErrNeedsDialog; return k }(), protocol.KeychainFailed},
 	} {
-		e := &fakeExec{err: tc.dockerErr}
-		err := EnvKeys{Keychain: tc.k}.Inject(secret, e.run)
+		command, err := (EnvKeys{Keychain: tc.keychain}).Inject(launcher.Secret{Item: "ensemble-broker-env/dummy", File: "dummy.txt"})
 		var pe *protocol.Error
-		var ce *docker.CommandError
-		if err == nil || strings.Contains(err.Error(), envValue) || errors.Is(err, docker.ErrUnreachable) != tc.unreachable || errors.As(err, &ce) {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if tc.code != "" && (!errors.As(err, &pe) || pe.Code != tc.code || tc.message != "" && pe.Message != tc.message) {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if tc.dockerErr == nil && len(e.argv) != 0 {
-			t.Fatalf("%s: exec %q", name, e.argv)
+		if !errors.As(err, &pe) || pe.Code != tc.code || len(command.Stdin) != 0 || strings.Contains(err.Error(), envValue) {
+			t.Fatal(err)
 		}
 	}
 }

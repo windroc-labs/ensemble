@@ -25,7 +25,7 @@ COPY src/ensemble/utils /opt/ensemble/src/ensemble/utils
 COPY src/ensemble/delegate /opt/ensemble/src/ensemble/delegate
 COPY plugin-sources.json /opt/ensemble/plugin-sources.json
 COPY .claude-plugin/plugin.json /opt/ensemble/version.json
-COPY bootstrap.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/
+COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/
 COPY claude.json /opt/ensemble/templates/.claude.json
 ARG CLAUDE_VERSION
 ARG CODEX_VERSION

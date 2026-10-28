@@ -871,48 +871,33 @@ func TestReady(t *testing.T) {
 }
 
 func TestInject(t *testing.T) {
-	e := &fakeExec{}
 	k := &fakeKeychain{token: []byte(token)}
-	if err := (Credentials{Keychain: k}).Inject("default", e.run); err != nil {
+	command, err := (Credentials{Keychain: k}).Inject("default")
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer command.Erase()
 	script := "mkdir -p -m 0700 " + docker.SecretsDir + " && umask 0377 && set -C && cat > " + docker.SecretsDir + `/"$1"`
 	want := []string{"/bin/sh", "-c", script, "sh", "claude"}
-	if !reflect.DeepEqual(e.argv, [][]string{want}) || string(e.stdin[0]) != token {
-		t.Fatalf("%q %q", e.argv, e.stdin)
-	}
-	for _, tc := range []struct {
-		dockerErr, keyErr error
-		unreachable       bool
-	}{
-		{&docker.CommandError{Exit: 1, Stderr: "cat: " + token}, nil, false},
-		{errors.Join(docker.ErrUnreachable, errors.New(token)), nil, true},
-	} {
-		e := &fakeExec{err: tc.dockerErr}
-		err := Credentials{Keychain: &fakeKeychain{token: []byte(token), getErr: tc.keyErr}}.Inject("default", e.run)
-		if err == nil || strings.Contains(err.Error(), token) || errors.Is(err, docker.ErrUnreachable) != tc.unreachable {
-			t.Fatalf("%v", err)
-		}
-		var ce *docker.CommandError
-		if errors.As(err, &ce) {
-			t.Fatal("Docker stderr kept")
-		}
+	if !slices.Equal(command.Argv, want) || string(command.Stdin) != token {
+		t.Fatalf("%+v", command.Argv)
 	}
 }
 
-// Only the selected account's token enters the container: once, through exec's stdin; the other item is never read.
+// Only the selected account's token is prepared; the other item is never read.
 func TestInjectSelectedAccount(t *testing.T) {
 	const workToken = "sk-ant-oat01-WORK"
 	for selected, want := range map[string]string{"work": workToken, "default": token} {
 		k := accounts{"default": {token: []byte(token)}, "work": {account: "work", token: []byte(workToken)}}
-		e := &fakeExec{}
-		if err := (Credentials{Keychain: k}).Inject(selected, e.run); err != nil {
+		command, err := (Credentials{Keychain: k}).Inject(selected)
+		if err != nil {
 			t.Fatal(err)
 		}
 		other := map[string]string{"work": "default", "default": "work"}[selected]
-		if len(e.stdin) != 1 || string(e.stdin[0]) != want || k[selected].gets != 1 || k[other].gets != 0 || k[other].dialogGets != 0 || k[other].reads != 0 {
-			t.Fatalf("%s: stdin %d, reads %d/%d", selected, len(e.stdin), k[selected].gets, k[other].gets)
+		if string(command.Stdin) != want || k[selected].gets != 1 || k[other].gets != 0 || k[other].dialogGets != 0 || k[other].reads != 0 {
+			t.Fatalf("%s: stdin %d, reads %d/%d", selected, len(command.Stdin), k[selected].gets, k[other].gets)
 		}
+		command.Erase()
 		if err := k[selected].erased(); err != nil {
 			t.Fatal(err)
 		}
@@ -927,11 +912,10 @@ func TestInjectKeychainFailure(t *testing.T) {
 			ErrNeedsDialog:                "The Claude account " + account + " setup-token needs keychain approval: unlock the login keychain, or run " + ClaudeLogin(account) + ".",
 		} {
 			code := map[bool]protocol.Code{true: protocol.LoginRequired, false: protocol.KeychainFailed}[keyErr == ErrNotFound || keyErr == ErrNeedsDialog]
-			e := &fakeExec{}
-			err := Credentials{Keychain: &fakeKeychain{account: account, getErr: keyErr}}.Inject(account, e.run)
+			command, err := Credentials{Keychain: &fakeKeychain{account: account, getErr: keyErr}}.Inject(account)
 			var pe *protocol.Error
-			if !errors.As(err, &pe) || pe.Code != code || pe.Cause != "" || pe.Message != message || strings.Contains(err.Error(), token) || len(e.argv) != 0 {
-				t.Fatalf("%s %v: %v %q", account, keyErr, err, e.argv)
+			if !errors.As(err, &pe) || pe.Code != code || pe.Cause != "" || pe.Message != message || strings.Contains(err.Error(), token) || len(command.Argv) != 0 {
+				t.Fatalf("%s %v: %v %q", account, keyErr, err, command.Argv)
 			}
 		}
 	}
@@ -1097,24 +1081,26 @@ func TestTrustedItem(t *testing.T) {
 func TestStaticSecretErrorsHideKeychainDetail(t *testing.T) {
 	const sentinel = "KEYCHAIN_SENTINEL"
 	leak := errors.New("keychain status -25293: " + sentinel)
-	exec := (&fakeExec{}).run
 	var errs []error
 	claude := &fakeKeychain{token: []byte(token)}
 	claude.accessErr = leak
 	errs = append(errs, Credentials{Keychain: claude}.Ready("default"))
-	errs = append(errs, Credentials{Keychain: &fakeKeychain{token: []byte(token), getErr: leak}}.Inject("default", exec))
+	_, claudeErr := Credentials{Keychain: &fakeKeychain{token: []byte(token), getErr: leak}}.Inject("default")
+	errs = append(errs, claudeErr)
 	keys := providerKeys("strata")
 	keys.accessErr = leak
 	errs = append(errs, OpencodeKeys{Keychain: keys}.Ready([]string{"strata"}))
 	keys = providerKeys("strata")
 	keys.readErr = leak
-	errs = append(errs, OpencodeKeys{Keychain: keys}.Inject([]string{"strata"}, exec))
+	_, keyErr := OpencodeKeys{Keychain: keys}.Inject([]string{"strata"})
+	errs = append(errs, keyErr)
 	env := envKeys("dummy")
 	env.accessErr = leak
 	errs = append(errs, EnvKeys{Keychain: env}.Ready([]string{"ensemble-broker-env/dummy"}))
 	env = envKeys("dummy")
 	env.readErr = leak
-	errs = append(errs, EnvKeys{Keychain: env}.Inject(launcher.Secret{Item: "ensemble-broker-env/dummy", File: "dummy.txt"}, exec))
+	_, envErr := EnvKeys{Keychain: env}.Inject(launcher.Secret{Item: "ensemble-broker-env/dummy", File: "dummy.txt"})
+	errs = append(errs, envErr)
 	for i, err := range errs {
 		if err == nil || strings.Contains(err.Error(), sentinel) || errors.Is(err, leak) {
 			t.Errorf("%d: %v", i, err)

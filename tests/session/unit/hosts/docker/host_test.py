@@ -259,6 +259,12 @@ def _free(path):
 
 
 class ConfigTest(Base):
+    def test_tui_settings_show_the_status_line_and_keep_the_hidden_size(self):
+        host = DockerHost("docker", {"docker": DOCKER, "hidden_size": "100x30"})
+        self.assertTrue(self.host.tui_settings().status_line)
+        self.assertTrue(host.tui_settings().status_line)
+        self.assertEqual(host.tui_settings().hidden_size, (100, 30))
+
     def test_capacity_namespace_uses_the_fixed_endpoint_across_aliases(self):
         alias = DockerHost(
             "alias", {"docker": "/other/docker"}, run=self.docker, broker=self.broker

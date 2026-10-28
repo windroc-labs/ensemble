@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
@@ -25,9 +26,21 @@ func (c Codex) Ready(ctx context.Context) error {
 	return err
 }
 
-// Inject writes the access-only login into a container through exec and returns its expiry.
-func (c Codex) Inject(ctx context.Context, exec func([]string, []byte) error) (string, error) {
-	return c.deliver(ctx, protocol.StartFailed, exec, nil)
+// Inject prepares an access-only login and keeps the account locked until the caller finishes delivery.
+func (c Codex) Inject(ctx context.Context) (launcher.CodexInjection, error) {
+	s, err := c.begin(ctx, protocol.StartFailed)
+	if err != nil {
+		return launcher.CodexInjection{}, codexError(err)
+	}
+	expires, err := s.read(ctx)
+	if err != nil {
+		return launcher.CodexInjection{}, codexError(errors.Join(err, s.end()))
+	}
+	return launcher.CodexInjection{
+		Command: credential.Command{Argv: []string{launcher.Python, "-I", launcher.Bootstrap, "codex-auth"}, Stdin: s.carrier},
+		Expiry:  expires.Format(time.RFC3339),
+		Finish:  s.end,
+	}, nil
 }
 
 // Refresh writes the current access-only login into a container through exec, then publishes its expiry.

@@ -22,7 +22,7 @@ type fakeDocker struct {
 	calls   [][]string
 	stdin   [][]byte
 	ctxErrs []error
-	respond func(args []string) ([]byte, error)
+	respond func(args []string, stdin []byte) ([]byte, error)
 }
 
 func (f *fakeDocker) Run(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
@@ -30,7 +30,7 @@ func (f *fakeDocker) Run(ctx context.Context, args []string, stdin []byte) ([]by
 	f.stdin = append(f.stdin, slices.Clone(stdin))
 	f.ctxErrs = append(f.ctxErrs, ctx.Err())
 	if f.respond != nil {
-		return f.respond(args)
+		return f.respond(args, stdin)
 	}
 	return nil, nil
 }
@@ -310,7 +310,7 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "session")
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/utils/sample.py"), "utils")
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/delegate/sample.py"), "delegate")
-	e.fake = &fakeDocker{respond: func(args []string) ([]byte, error) {
+	e.fake = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		switch args[0] {
 		case "build":
 			tag := args[slices.Index(args, "--tag")+1]
@@ -499,11 +499,11 @@ func TestBuildFailures(t *testing.T) {
 	t.Run("label mismatch", func(t *testing.T) {
 		e := newBuildEnv(t)
 		inner := e.fake.respond
-		e.fake.respond = func(args []string) ([]byte, error) {
+		e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 			if args[0] == "image" && len(e.built) == 2 {
 				return inspectJSON("sha256:"+strings.Repeat("b", 64), map[string]string{"ensemble.version": "9.9.9"}, time.Time{}), nil
 			}
-			return inner(args)
+			return inner(args, stdin)
 		}
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(t, err) != protocol.BuildFailed {
 			t.Fatal(err)
@@ -512,8 +512,8 @@ func TestBuildFailures(t *testing.T) {
 	t.Run("client label mismatch", func(t *testing.T) {
 		e := newBuildEnv(t)
 		inner := e.fake.respond
-		e.fake.respond = func(args []string) ([]byte, error) {
-			out, err := inner(args)
+		e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
+			out, err := inner(args, stdin)
 			if args[0] == "build" && slices.Contains(args, "--build-arg") {
 				e.built["ensemble-worker:"+e.key]["ensemble.codex-version"] = "0.169.0"
 			}
@@ -526,7 +526,7 @@ func TestBuildFailures(t *testing.T) {
 	})
 	t.Run("unreachable", func(t *testing.T) {
 		e := newBuildEnv(t)
-		e.fake.respond = func([]string) ([]byte, error) { return nil, docker.ErrUnreachable }
+		e.fake.respond = func([]string, []byte) ([]byte, error) { return nil, docker.ErrUnreachable }
 		if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); code(t, err) != protocol.DockerUnreachable {
 			t.Fatal(err)
 		}
@@ -559,7 +559,7 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 	for _, want := range []string{
 		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/python3 ",
 		"install -d -o agent -g agent -m 0700 /run/ensemble\n",
-		"COPY bootstrap.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
+		"COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/",
 		`python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients`,
 		"ln -s /opt/ensemble/clients/bin/opencode /opt/ensemble/bin/opencode",
 		"python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex ",
@@ -767,11 +767,11 @@ func TestAFailedRefreshKeepsTheImage(t *testing.T) {
 		t.Fatal("a forced rebuild kept the image")
 	}
 	inner := e.fake.respond
-	e.fake.respond = func(args []string) ([]byte, error) {
+	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" {
 			return nil, docker.ErrUnreachable
 		}
-		return inner(args)
+		return inner(args, stdin)
 	}
 	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, 7*24*time.Hour); err == nil || err.(*protocol.Error).Code != protocol.DockerUnreachable {
 		t.Fatalf("unreachable Docker kept the image: %v", err)
@@ -792,7 +792,7 @@ func otherPackage(t *testing.T) string {
 // tagged runs once Docker tags each worker image, before its build inspects it.
 func (e *buildEnv) share(tagged func()) {
 	inner := e.fake.respond
-	e.fake.respond = func(args []string) ([]byte, error) {
+	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		switch {
 		case args[0] == "image" && args[1] == "ls" && !slices.Contains(args, "--filter"):
 			var lines []string
@@ -805,7 +805,7 @@ func (e *buildEnv) share(tagged func()) {
 			delete(e.built, args[2])
 			return nil, nil
 		}
-		out, err := inner(args)
+		out, err := inner(args, stdin)
 		if args[0] == "build" && strings.HasPrefix(args[slices.Index(args, "--tag")+1], "ensemble-worker:") {
 			tagged()
 		}
@@ -1505,12 +1505,12 @@ func TestBuildDuringCheckRebuildDoesNotWait(t *testing.T) {
 	e.releases.latest["@openai/codex"] = "0.171.0"
 	building, release := make(chan struct{}), make(chan struct{})
 	inner := e.fake.respond
-	e.fake.respond = func(args []string) ([]byte, error) {
+	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" && slices.Contains(args, "CODEX_VERSION=0.171.0") {
 			close(building)
 			<-release
 		}
-		return inner(args)
+		return inner(args, stdin)
 	}
 	done := make(chan error)
 	go func() {
@@ -1548,11 +1548,11 @@ func TestRebuildRecordsReplacedImage(t *testing.T) {
 	putFile(t, replaced, `[{"id":"`+other+`","at":"2026-10-26T11:55:00Z"},{"id":"`+stale+`","at":"2026-10-26T11:49:59Z"}]`)
 	// A long build: the clock moves on while the ensemble layer builds.
 	inner := e.fake.respond
-	e.fake.respond = func(args []string) ([]byte, error) {
+	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" && slices.Contains(args, "--build-arg") {
 			clock = clock.Add(4 * time.Minute)
 		}
-		return inner(args)
+		return inner(args, stdin)
 	}
 	again, err := h.Build(ctx, e.pkg, BuildSpec{}, 0)
 	if err != nil || !again.Rebuilt || again.Digest == first.Digest {
@@ -1569,13 +1569,13 @@ func TestRebuildRecordsReplacedImage(t *testing.T) {
 		}
 		inner := e.fake.respond
 		inspects := 0
-		e.fake.respond = func(args []string) ([]byte, error) {
+		e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 			if args[0] == "image" && args[1] == "inspect" {
 				if inspects++; inspects == 2 {
 					return nil, &docker.CommandError{Exit: 1, Stderr: "boom"}
 				}
 			}
-			return inner(args)
+			return inner(args, stdin)
 		}
 		calls := len(e.fake.calls)
 		_, err := e.host().Build(ctx, e.pkg, BuildSpec{}, 0)
