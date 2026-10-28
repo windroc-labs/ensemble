@@ -1,0 +1,63 @@
+{
+  "aggregation": "per-test median across complete successful attempts",
+  "sources": [
+    {
+      "architecture": "x86_64",
+      "attempt": 1,
+      "cpus": 4,
+      "event": "pull_request",
+      "head_sha": "cc98b8dfcd8780f90d0affb5cc21eaaa6e1ce9f0",
+      "matrix_jobs": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "python": "3.11.17",
+      "run_id": "40651052817",
+      "runner": "ubuntu-24.04",
+      "sha": "2ad61b2d7fe721dbb8abdf260e681ede3e3732dd",
+      "shard_count": 32,
+      "shards": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32"
+      ],
+      "tmux": "tmux 3.4",
+      "url": "https://github.com/windroc-labs/ensemble/actions/runs/40651052817/attempts/1"
+    }
+  ]
+}
