@@ -1501,8 +1501,11 @@ class Owned:
     def up(self) -> bool:
         return self._session._running.client_up
 
-    def try_send(self, text: str) -> bool:
-        return self._session._running.send(text) is not False
+    def try_send(self, text: str, pending: Callable[[], bool]) -> bool:
+        running = self._session._running
+        if isinstance(running, tui.TuiMode):
+            return running.send(text, pending=pending)
+        return pending() and running.send(text) is not False
 
     def press(self, keys: Sequence[KeyPress]) -> None:
         self._session.press(keys)

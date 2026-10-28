@@ -67,7 +67,7 @@ class Worker(Protocol):
     def returncode(self) -> int | None: ...
     def confirm_end(self, timeout: float) -> int | None: ...
     def view(self, channel: Channel, idle_timeout: float | None = None) -> Any: ...
-    def try_send(self, text: str) -> bool: ...
+    def try_send(self, text: str, pending: Callable[[], bool]) -> bool: ...
     def press(self, keys: Sequence[KeyPress]) -> None: ...
     def screen(self, lines: int | None = None) -> str: ...
     def redisplay(self) -> bool: ...
@@ -231,8 +231,10 @@ class Harness:
 
     def _serve(self, worker: Worker, op: Op, data: dict, ident: str) -> bool:
         """Any failure is a refusal that leaves the worker up."""
+        if op in (Op.SEND, Op.PRESS) and not self._channel.request_pending(ident):
+            return True
         try:
-            found = _served(worker, op, data)
+            found = _served(worker, op, data, lambda: self._channel.request_pending(ident))
         except (ConfigError, SessionError, ValueError) as error:
             self._answer(
                 ident, ok=False, error=str(error), unanswered=isinstance(error, Unanswered)
@@ -381,7 +383,7 @@ class Harness:
             LOG.warning("session harness %s: harness.json: %s", self._channel.directory, error)
 
 
-def _served(worker: Worker, op: Op, data: dict) -> dict | None:
+def _served(worker: Worker, op: Op, data: dict, pending: Callable[[], bool]) -> dict | None:
     """Its fields checked first (ValueError), then the worker's call."""
     if op == Op.DISPLAY:
         return {"reopened": worker.redisplay()}
@@ -389,7 +391,7 @@ def _served(worker: Worker, op: Op, data: dict) -> dict | None:
         text = data.get("text")
         if not isinstance(text, str) or len(text.encode()) > SEND_MAX:
             raise ValueError(f"{op}: want text, a string of at most {SEND_MAX} bytes")
-        return {} if worker.try_send(text) else None
+        return {} if worker.try_send(text, pending) else None
     if op == Op.PRESS:
         keys = data.get("keys")
         if (

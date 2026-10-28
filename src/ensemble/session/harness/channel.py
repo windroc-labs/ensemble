@@ -324,6 +324,9 @@ class Channel:
     def requests(self) -> list[tuple[str, Op]]:
         return [(ident, op) for ident, op, _ in self.pending()]
 
+    def request_pending(self, ident: str) -> bool:
+        return os.path.isfile(os.path.join(self._requests, ident + ".json"))
+
     def pending(self, *, keep: tuple[Op, ...] = ()) -> list[tuple[str, Op, dict]]:
         """Pending (id, op, data), oldest first, taken except `keep`; malformed ones deleted. Only the user's
         processes can write this 0700 dir; no worker or container can.

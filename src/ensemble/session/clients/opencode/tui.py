@@ -173,6 +173,8 @@ class OpenCodeTui(Homed, Tui):
 def on_hook(call: HookCall) -> dict | None:
     """Journals a call of the run's session, binding an unbound run to it; drops any other."""
     native, paths = call.payload.get("session_id"), _paths(call.state)
+    if call.label == START and native is None and paths is not None:
+        return call.payload
     if not isinstance(native, str) or not NATIVE.fullmatch(native) or paths is None:
         return None
     cwd, store = paths

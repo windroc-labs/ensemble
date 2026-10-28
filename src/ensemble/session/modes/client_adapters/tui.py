@@ -127,6 +127,9 @@ class Tui(ABC):
     def submit(self, text: str) -> tuple[Paste | Key, ...]:
         return Paste(text), Key("Enter")
 
+    def _starts_turn(self, text: str) -> bool:
+        return bool(text.strip())
+
     def hook_events(self, label: str, payload: dict) -> list[SessionEvent | ClientBound]:
         found: list[SessionEvent | ClientBound] = []
         client = self.session_id(payload)

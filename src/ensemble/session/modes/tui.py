@@ -970,7 +970,7 @@ class TuiMode(BaseMode):
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
             if isinstance(event, TurnStarted):
-                self._active_turn, self._launching = True, False
+                self._active_turn, self._launching, self._interrupting = True, False, False
             elif isinstance(event, TurnEnd | TurnFailed):
                 self._active_turn, self._launching, self._interrupting = False, False, False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
@@ -1081,9 +1081,11 @@ class TuiMode(BaseMode):
     def _input_ready(self) -> bool:
         return self._ready_at is not None and time.monotonic() >= self._ready_at
 
-    def send(self, text: str) -> bool:
+    def send(self, text: str, *, pending: Callable[[], bool] | None = None) -> bool:
         with self._store.sending():
             self._running()
+            if pending is not None and not pending():
+                return False
             if not self._input_ready():
                 return False
             if self.run._interrupt is not None:
@@ -1096,7 +1098,7 @@ class TuiMode(BaseMode):
                     return False
             self._deliver(self.run.submit(text), prompted=True)
             if self.run._interrupt is not None:
-                self._launching = True
+                self._launching = self.run._starts_turn(text)
             return True
 
     def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:

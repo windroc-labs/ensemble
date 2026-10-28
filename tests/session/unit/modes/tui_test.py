@@ -19,6 +19,7 @@ from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.claude.tui import ClaudeTui
+from ensemble.session.clients.codex.tui import CodexTui
 from ensemble.session.clients.opencode import OpenCodeClient
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
@@ -1768,6 +1769,7 @@ class Opening(ScanTui):
 class StartupTui(ScanTui):
     _ready = "ready"
     _interrupt = Key("Escape")
+    _starts_turn = CodexTui._starts_turn
     hooks = {
         **ScanTui.hooks,
         "start": HookKind.TURN_STARTED,
@@ -1776,6 +1778,39 @@ class StartupTui(ScanTui):
 
 
 class StartupSendTest(Base):
+    def test_a_superseding_turn_is_interrupted_again(self):
+        mode = self.started_with()
+        self.ready()
+        self.assertFalse(mode.send("next"))
+        self.append(record("start", turn_id="manual"), record("interrupted", turn_id="first"))
+        self.assertEqual(mode.poll(0), ([TurnStarted()], False))
+        self.assertFalse(mode.send("next"))
+        self.assertEqual(self.sent(), [Key("Escape"), Key("Escape")])
+
+    def test_cancellation_during_the_send_lock_wait_prevents_all_input(self):
+        mode = self.started_with()
+        self.ready()
+        pending = [True]
+        flock = fcntl.flock
+
+        def after_wait(fd, how):
+            if how & fcntl.LOCK_EX:
+                pending[0] = False
+            return flock(fd, how)
+
+        with mock.patch("fcntl.flock", side_effect=after_wait):
+            self.assertFalse(mode.send("canceled", pending=lambda: pending[0]))
+        self.assertEqual(self.sent(), [])
+        self.assertEqual(mode._store.prompts(mode.generation), (0, 0))
+
+    def test_local_commands_and_empty_sends_do_not_block_the_next_message(self):
+        mode = self.started_with(prompt="")
+        self.ready(turn=False)
+        for text in ("", " \n ", "/status"):
+            self.assertTrue(mode.send(text))
+        self.assertTrue(mode.send("next"))
+        self.assertEqual(self.sent()[-2:], [Paste("next"), Key("Enter")])
+
     def started_with(self, *, prompt="opening", interrupt=True):
         run = StartupTui(self.client)
         if not interrupt:

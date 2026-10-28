@@ -127,6 +127,25 @@ DIALOG_SCREENS = {
 
 
 class TuiTest(Base):
+    def test_local_commands_and_empty_input_do_not_wait_for_a_turn(self):
+        run = self.client.tui()
+        for text, expected in (
+            ("", False),
+            (" \n ", False),
+            ("/status", False),
+            ("/model", False),
+            ("/review", False),
+            ("/plan", False),
+            ("/unknown", False),
+            ("hello", True),
+            ("/init", True),
+            ("/compact", True),
+            ("/review check this", True),
+            ("/plan implement this", True),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(run._starts_turn(text), expected)
+
     def test_prompted_launch_waits_for_session_start_and_idle_launch_needs_no_turn_hook(self):
         run, _, _ = self.launch()
         self.assertEqual(run._ready, "SessionStart")

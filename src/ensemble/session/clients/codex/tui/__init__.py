@@ -393,6 +393,18 @@ class CodexTui(Tui):
         """0: Codex's Stop reports no background work, whose end starts no turn."""
         return 0
 
+    def _starts_turn(self, text: str) -> bool:
+        words = text.strip().split(maxsplit=1)
+        if not words:
+            return False
+        command = words[0]
+        return (
+            not command.startswith("/")
+            or command in ("/init", "/compact")
+            or command in ("/plan", "/review")
+            and len(words) > 1
+        )
+
     def activity(self, payload):
         value = payload.get("tool_name")
         return value if isinstance(value, str) else ""

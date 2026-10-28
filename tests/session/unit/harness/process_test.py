@@ -878,7 +878,9 @@ class RemoteOwned(FakeOwned):
     def send(self, text):
         self._did(("send", text))
 
-    def try_send(self, text):
+    def try_send(self, text, pending):
+        if not pending():
+            return False
         self.send(text)
         return True
 
@@ -914,15 +916,34 @@ class WaitingOwned(RemoteOwned):
         super().__init__(**kw)
         self.ready, self.attempts = False, []
 
-    def try_send(self, text):
+    def try_send(self, text, pending):
         self.attempts.append(text)
-        if not self.ready:
+        if not self.ready or not pending():
             return False
         self.send(text)
         return True
 
 
 class WaitingSendTest(Base):
+    def test_cancellation_during_an_earlier_screen_prevents_stale_batch_delivery(self):
+        owned = WaitingOwned()
+        owned.ready = True
+        self.queue("a", Op.SCREEN, {"lines": 1})
+        self.queue("b", Op.SEND, {"text": "canceled"})
+        screen = owned.screen
+
+        def cancel(lines):
+            if lines == 1:
+                os.unlink(os.path.join(self.channel.directory, "requests", "b" * 32 + ".json"))
+            return screen(lines)
+
+        owned.screen = cancel
+        self.running(owned)
+        self.ask(Op.SCREEN, {"lines": 2})
+        self.assertEqual(owned.inputs, [("screen", 1), ("screen", 2)])
+        self.assertEqual(owned.attempts, [])
+        self.assertTrue(self.request(Op.CLOSE))
+
     def queue(self, ident, op, data):
         folder = os.path.join(self.channel.directory, "requests")
         os.makedirs(folder, exist_ok=True)
