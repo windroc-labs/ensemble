@@ -662,6 +662,8 @@ class TuiMode(BaseMode):
         self._live, self._gone = True, False
         self._opening = opening  # start's: sent once, OPEN_AFTER s after
         self._due: float | None = None  # its label's latest record
+        self._ready_at: float | None = None if run._ready else 0.0
+        self._interrupting = False
         self._held, self._checked, self._settled = False, -POLL_SCREEN, -SETTLE_EVERY
         self._turn_blocked = False  # its dialog may outlast a later Activity
         self._active_turn = run._turn_open is True
@@ -962,9 +964,11 @@ class TuiMode(BaseMode):
     def _track(self, events: list[SessionEvent | Stderr | ClientBound]) -> None:
         for event in events:
             if isinstance(event, TurnStarted):
-                self._active_turn, self._launching = True, False
+                self._active_turn, self._launching, self._interrupting = True, False, False
             elif isinstance(event, TurnEnd | TurnFailed):
                 self._active_turn = False
+                if self.run._interrupt is not None:
+                    self._launching, self._interrupting = False, False
             if isinstance(event, Blocked | Activity | TurnEnd | TurnFailed | TurnStarted):
                 self._held = isinstance(event, Blocked)
             if isinstance(event, Blocked | TurnEnd | TurnFailed | TurnStarted):
@@ -986,6 +990,8 @@ class TuiMode(BaseMode):
         if end == self._cursor and not observed or self._replaced():
             return []
         self._cursor = end
+        if self._ready_at is None and any(label == self.run._ready for label, *_ in records):
+            self._ready_at = time.monotonic() + OPEN_AFTER
         if self._opening is not None and any(label == self._opening[0] for label, *_ in records):
             self._due = time.monotonic() + OPEN_AFTER
         found: list[SessionEvent | Stderr | ClientBound] = [*observed]
@@ -1068,10 +1074,31 @@ class TuiMode(BaseMode):
         except SessionError:
             return False
 
-    def send(self, text: str) -> None:
+    def _input_ready(self) -> bool:
+        return self._ready_at is not None and time.monotonic() >= self._ready_at
+
+    def send(self, text: str) -> bool:
+        return self._try_send(text, lambda: True)
+
+    def _try_send(self, text: str, pending: Callable[[], bool]) -> bool:
         with self._store.sending():
             self._running()
+            if not pending():
+                return False
+            if not self._input_ready():
+                return False
+            if self.run._interrupt is not None:
+                if self._launching:
+                    return False
+                if self._active_turn:
+                    if not self._interrupting:
+                        self._owner().send(self.run._interrupt)
+                        self._interrupting = True
+                    return False
             self._deliver(self.run.submit(text), prompted=True)
+            if self.run._interrupt is not None:
+                self._launching = self.run._starts_turn(text)
+            return True
 
     def _deliver(self, actions: Sequence[Paste | Key], *, prompted: bool) -> None:
         """Failing after the first action: Unanswered. prompted: marks it begun, then submitted."""
@@ -1091,9 +1118,13 @@ class TuiMode(BaseMode):
             self._store.mark_prompted(self._generation, submitted=True)
 
     def press(self, keys: Sequence[KeyPress]) -> None:
+        self._try_press(keys, lambda: True)
+
+    def _try_press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None:
         with self._store.sending():
             self._running()
-            self._owner().press(keys)
+            if pending():
+                self._owner().press(keys)
 
     def screen(self, lines: int | None = None) -> str:
         self._running()
