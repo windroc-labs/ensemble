@@ -1003,6 +1003,11 @@ class RouterEntry(OuterBase):
                 self.assertEqual(self.entry("--issue", ID), 1)
                 self.assertEqual(self.todo["state"], "In Progress")
                 self.assertEqual(self.todo.get("comments", []), [])
+                if error.args[0] == NO_DEFAULT:
+                    said = self.said()
+                    self.assertTrue([s for s in said if s.startswith(f"launch-error {ID} ")])
+                    self.assertIn("[environment.tmux]", "\n".join(said))
+                    self.assertEqual(runs.parse_log(self.runs), [])
 
     def test_automatic_retry_follows_the_label(self):
         self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)

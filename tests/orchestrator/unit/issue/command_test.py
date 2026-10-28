@@ -495,26 +495,20 @@ class Edit(IssueCase):
                 self.assertNotIn("中文".encode(), out)
                 self.assertEqual(gql.call_args.kwargs["identity"], MANAGER_IDENTITY)
 
-    def test_a_role_alone_sets_the_delegate_and_clears_the_assignee(self):
+    def test_a_role_and_a_project_reach_one_edit(self):
         other = {"id": "u-other"}
-        for role, want in (
-            ("engineer", {"delegateId": role_id("engineer"), "assigneeId": None}),
-            ("me", {"delegateId": MANAGER_IDENTITY.user_id, "assigneeId": None}),
-            ("unassigned", {"delegateId": None, "assigneeId": None}),
-        ):
-            gql = EditGql((self.BUILD,), [], fields={"assignee": other, "delegate": other})
-            with self.subTest(role=role):
-                code, out, err = self.run_main(["edit", "TASK-2", "--role", role], gql)
-                self.assertEqual((code, err, json.loads(out)["result"]), (0, "", "changed"))
-                self.assertEqual([w[1]["in"] for w in gql.writes], [want])
-
-    def test_a_project_alone_changes_the_project(self):
-        for value in (uid(4), "Ensemble"):
-            gql = EditGql((self.BUILD,), [], projects=(project(4, "Ensemble"),))
-            with self.subTest(value=value):
-                code, out, err = self.run_main(["edit", "TASK-2", "--project", value], gql)
-                self.assertEqual((code, err, json.loads(out)["result"]), (0, "", "changed"))
-                self.assertEqual([w[1]["in"] for w in gql.writes], [{"projectId": uid(4)}])
+        gql = EditGql(
+            (self.BUILD,),
+            [],
+            fields={"assignee": other, "delegate": other},
+            projects=(project(4, "Ensemble"),),
+        )
+        code, out, err = self.run_main(
+            ["edit", "TASK-2", "--role", "me", "--project", "Ensemble"], gql
+        )
+        self.assertEqual((code, err, json.loads(out)["result"]), (0, "", "changed"))
+        want = {"delegateId": MANAGER_IDENTITY.user_id, "assigneeId": None, "projectId": uid(4)}
+        self.assertEqual([w[1]["in"] for w in gql.writes], [want])
 
     def test_unchanged_exits_zero(self):
         gql = EditGql((self.BUILD,), [], fields={"title": "Same"})

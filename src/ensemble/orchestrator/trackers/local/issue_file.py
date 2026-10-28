@@ -1,5 +1,5 @@
-"""A local issue file's text read into an IssueFile, and the text edits a board write makes, each keeping every
-other line."""
+"""A local issue file's text read into an IssueFile: front matter, then the Description, Comments and
+History sections; and the text edits a board write makes, each keeping every other line."""
 
 import json
 import re
