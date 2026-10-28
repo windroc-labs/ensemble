@@ -884,8 +884,9 @@ class RemoteOwned(FakeOwned):
         self.send(text)
         return True
 
-    def press(self, keys):
-        self._did(("press", [str(key) for key in keys]))
+    def press(self, keys, pending):
+        if pending():
+            self._did(("press", [str(key) for key in keys]))
 
     def screen(self, lines=None):
         self._did(("screen", lines))

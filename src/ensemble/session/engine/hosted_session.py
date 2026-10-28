@@ -1507,8 +1507,12 @@ class Owned:
             return running.send(text, pending=pending)
         return pending() and running.send(text) is not False
 
-    def press(self, keys: Sequence[KeyPress]) -> None:
-        self._session.press(keys)
+    def press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None:
+        running = self._session._running
+        if isinstance(running, tui.TuiMode):
+            running.press(keys, pending=pending)
+        elif pending():
+            self._session.press(keys)
 
     def screen(self, lines: int | None = None) -> str:
         return self._session.screen(lines)

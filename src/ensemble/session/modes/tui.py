@@ -1118,10 +1118,11 @@ class TuiMode(BaseMode):
         if prompted:
             self._store.mark_prompted(self._generation, submitted=True)
 
-    def press(self, keys: Sequence[KeyPress]) -> None:
+    def press(self, keys: Sequence[KeyPress], *, pending: Callable[[], bool] | None = None) -> None:
         with self._store.sending():
             self._running()
-            self._owner().press(keys)
+            if pending is None or pending():
+                self._owner().press(keys)
 
     def screen(self, lines: int | None = None) -> str:
         self._running()

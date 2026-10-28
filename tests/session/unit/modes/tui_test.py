@@ -1778,6 +1778,20 @@ class StartupTui(ScanTui):
 
 
 class StartupSendTest(Base):
+    def test_cancellation_during_the_press_lock_wait_prevents_key_input(self):
+        mode = self.started_with()
+        pending = [True]
+        flock = fcntl.flock
+
+        def after_wait(fd, how):
+            if how & fcntl.LOCK_EX:
+                pending[0] = False
+            return flock(fd, how)
+
+        with mock.patch("fcntl.flock", side_effect=after_wait):
+            mode.press([KeyPress.parse("Enter")], pending=lambda: pending[0])
+        self.terminal.calls.press.assert_not_called()
+
     def test_a_superseding_turn_is_interrupted_again(self):
         mode = self.started_with()
         self.ready()
