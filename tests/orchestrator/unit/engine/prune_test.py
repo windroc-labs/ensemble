@@ -8,11 +8,12 @@ import shutil
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.delegate import ConfigError, SessionError
 from ensemble.orchestrator import cli
-from ensemble.orchestrator.engine import config, log, prune, prune_state
+from ensemble.orchestrator.engine import config, log, promote, prune, prune_state
 from ensemble.orchestrator.engine.flow.types import IssueState, Snapshot
 from ensemble.orchestrator.engine.types import (
     Entry,
@@ -1151,6 +1152,23 @@ class KeepLabel(PruneScenario):
         self.assertTrue(os.path.isdir(bare))
         self.assertIsNotNone(self.checkouts("TASK-8"))
         self.assertEqual(gql.archived, [])
+
+    def test_an_unknown_keep_label_prunes_nothing_and_leaves_promote_alone(self):
+        self.mkc("TASK-7")
+        gql = gql_for({"TASK-7": ("Done", [(30, "Done")])}, owners={"TASK-7": role_id("pm")})
+        self.team = replace(TEAM_OBJ, kept=LinearError("linear.keep_label 'Keep' is no label"))
+        with self.assertRaisesRegex(LinearError, "no label"):
+            self.prune(gql)
+        promoter = SimpleNamespace(dry=False, cfg=self.cfg)
+        before = len(logged(self.logs))
+        promote.run_prune(self.board, gql, NOW, promoter)
+        (said,) = logged(self.logs)[before:]
+        self.assertEqual(
+            (said["kind"], said["error"]),
+            ("prune-error", "LinearError: linear.keep_label 'Keep' is no label"),
+        )
+        self.assertEqual((gql.calls, gql.archived), ([], []))
+        self.assertIsNotNone(self.checkouts("TASK-7"))
 
     def test_a_kept_sub_issue_keeps_every_ancestor(self):
         idents = ("TASK-1", "TASK-2", "TASK-3", "TASK-4")

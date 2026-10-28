@@ -92,22 +92,24 @@ class KeepLabel(Case):
                         gql.calls, [(ops.Q_TEAM_KEEP, {"t": TEAM, "l": match, "k": flt})]
                     )
 
-    def test_a_label_the_team_cannot_carry_is_refused(self):
+    def test_a_label_the_team_cannot_carry_is_kept_as_the_error(self):
         for labels in ([], [{"id": LABEL2, "team": {"id": "other-team"}}]):
             with self.subTest(labels=labels):
-                with self.assertRaises(LinearError) as cm:
-                    self.read(self.gql(labels, ["TASK-1"]), "Keep")
+                found = self.read(self.gql(labels, ["TASK-1"]), "Keep")
+                self.assertEqual(found.states, dict(STATES))
+                self.assertIsInstance(found.kept, LinearError)
                 self.assertEqual(
-                    str(cm.exception),
+                    str(found.kept),
                     "orchestrator/config.toml: linear.keep_label 'Keep' is no label of team "
                     "'Team' or the workspace",
                 )
 
-    def test_more_kept_issues_than_one_page_is_refused(self):
-        with self.assertRaises(LinearError) as cm:
-            self.read(self.gql([{"id": LABEL1, "team": None}], ["TASK-1"], more=True), LABEL1)
+    def test_more_kept_issues_than_one_page_is_kept_as_the_error(self):
+        gql = self.gql([{"id": LABEL1, "team": None}], ["TASK-1"], more=True)
+        found = self.read(gql, LABEL1)
+        self.assertIsInstance(found.kept, LinearError)
         self.assertEqual(
-            str(cm.exception),
+            str(found.kept),
             f"orchestrator/config.toml: linear.keep_label {LABEL1!r}: over 250 issues carry it, "
             "more than prune reads: remove it from some",
         )

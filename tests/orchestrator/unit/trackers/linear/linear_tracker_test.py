@@ -1052,6 +1052,9 @@ class OfTeam(Case):
         self.assertEqual(
             LinearTracker.of_team(Gql(), board_linear(), kept, ROLES).kept, frozenset({"TASK-1"})
         )
+        unknown = replace(TEAM_OBJ, kept=LinearError("linear.keep_label 'Keep' is no label"))
+        found = LinearTracker.of_team(Gql(), board_linear(), unknown, ROLES)
+        self.assertRaisesRegex(LinearError, "no label", lambda: found.kept)
 
     def test_reader_from_the_settings(self):
         linear = SimpleNamespace(

@@ -799,8 +799,8 @@ class GraphQLQueries(ServerCase):
                     (team.states, team.kept), (STATES, frozenset({kept["identifier"]}))
                 )
         cfg = SimpleNamespace(team=TEAM, states=STATES, roles={}, keep_label="keep")
-        with self.assertRaisesRegex(LinearError, "linear.keep_label 'keep' is no label"):
-            ops.team_and_roles(self.gql, cfg)
+        unknown = ops.team_and_roles(self.gql, cfg)[0].kept
+        self.assertRegex(str(unknown), "linear.keep_label 'keep' is no label")
 
     def test_a_backlog_issue_is_not_in_a_todo_list(self):
         later = self.fake.issue(

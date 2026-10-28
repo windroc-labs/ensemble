@@ -284,7 +284,7 @@ class LinearTracker(Tracker):
     say: caller's logger; missing method dependencies raise TypeError. identity and timeout bind
     gql; None leaves it as given. Comment refs are client id parts; home is a project.
     Userless comments are omitted. task_group, agent_group: label groups; label_tasks,
-    label_clients: {label id: task or client}, which recheck's picks read; kept: Tracker.kept."""
+    label_clients: {label id: task or client}, which recheck's picks read; kept: Team.kept, its error raised on read."""
 
     batch = SNAPSHOT_BATCH
 
@@ -307,7 +307,7 @@ class LinearTracker(Tracker):
         label_clients=None,
         kept=frozenset(),
     ):
-        self.kept = kept
+        self._kept = kept
         self.comment_namespace = (identity.user_id,) if isinstance(identity, LinearApp) else ()
         if identity is not None:
             bound = {"identity": identity} | ({} if timeout is None else {"timeout": timeout})
@@ -321,6 +321,12 @@ class LinearTracker(Tracker):
         self.users = {role: uid for uid, role in (roles or {}).items()}
         self.states = {states[k]: v for k, v in STATES.items()} if states else {}
         self.ids = {v: states[k] for k, v in MOVES.items()} if states else {}
+
+    @property
+    def kept(self):
+        if isinstance(self._kept, LinearError):
+            raise self._kept
+        return self._kept
 
     def state_name(self, state: IssueState) -> str:
         if state not in self.state_names:

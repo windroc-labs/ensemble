@@ -117,13 +117,14 @@ Prerequisites and effects:
   and delivery ledgers, only when their configured Delegate confirms no live
   run. Unconfigured run kinds are skipped.
   One team read (role app ids come from config; with keep_label, also the
-  label and the at most 250 issues carrying it), then at most 33 requests: 3
-  change-feed pages, 10 issue reads, 20 archive requests; work past a cap
-  waits for a later run, and an issue whose sub-issues alone need more is
-  not archived. logs/prune.json caches what was read, read again when Linear
-  reports a change or after a day (a dry run never writes it). An issue
-  Linear no longer has is skipped; one moved to another team finishes by
-  its state there.
+  label and the at most 250 issues carrying it: no such label, or more such
+  issues, is a configuration error and prunes nothing), then at most 33
+  requests: 3 change-feed pages, 10 issue reads, 20 archive requests; work
+  past a cap waits for a later run, and an issue whose sub-issues alone need
+  more is not archived. logs/prune.json caches what was read, read again when
+  Linear reports a change or after a day (a dry run never writes it). An
+  issue Linear no longer has is skipped; one moved to another team finishes
+  by its state there.
   Events go to orchestrator.jsonl (src prune); preview JSON lines go to stderr.
   Exit 0: completed; 1: Linear unavailable (logged once a day), unknown
   inventory or failed step after remaining steps; 2: configuration error
@@ -170,6 +171,7 @@ class Pruner:
         self.now, self.dry, self.work = now, dry, work
         self.budget = Budget(gql)
         self.tracker = board(self.budget)
+        self.kept = self.tracker.kept
         self.run_git = run or config.shell
         self.cfg = cfg
         self.writable = config.writable(work) if writable is None else writable
@@ -181,9 +183,9 @@ class Pruner:
         if unreadable:
             self.say("prune-skip", once=True, reason=f"{CACHE} unreadable: {unreadable}")
 
-    def kept(self, ident):
+    def is_kept(self, ident):
         """Whether ident carries the keep label, logged once a tick."""
-        if ident not in self.tracker.kept:
+        if ident not in self.kept:
             return False
         if ident not in self.told:
             self.told.add(ident)
@@ -315,7 +317,7 @@ class Pruner:
         self.see(issue.updated for issue in found)
         due = []
         for issue in found:
-            if self.kept(issue.ident):
+            if self.is_kept(issue.ident):
                 continue
             if (ready := _due(self.now, issue.since, issue.canceled)) is None:
                 self.say(
@@ -384,7 +386,7 @@ class Pruner:
         if root.ident != plan.ident or root.updated != plan.updated:
             return root, CHANGED
         for sub in plan.descendants:
-            if sub.ident in self.tracker.kept:
+            if sub.ident in self.kept:
                 return sub, "has the keep label"
             if sub.ident not in finished:
                 return sub, "not an archive candidate"
@@ -525,7 +527,7 @@ class Pruner:
         if found is None:
             self.say("prune-skip", ident, once=True, reason="not on the board")
             return
-        if found.state in (IssueState.READY, IssueState.RUNNING) or self.kept(ident):
+        if found.state in (IssueState.READY, IssueState.RUNNING) or self.is_kept(ident):
             return
         if found.state not in (IssueState.DONE, IssueState.CANCELED):
             self.prune_stalled(ident, found.since)

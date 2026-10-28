@@ -22,7 +22,8 @@ class Team:
     name: str
     states: dict[str, str]
     finished: frozenset[str]
-    kept: frozenset[str] = frozenset()  # identifiers of its issues carrying linear.keep_label
+    # identifiers of its issues carrying linear.keep_label, or why they are unknown
+    kept: frozenset[str] | LinearError = frozenset()
 
 
 M_COMMENT = "mutation($i: String!, $b: String!) { commentCreate(input: { issueId: $i, body: $b }) { success } }"
@@ -165,26 +166,26 @@ def team(gql, linear):
 
 def team_and_roles(gql, linear):
     """Read the team, with the issues carrying linear.keep_label when set, as the harness; role
-    ids come solely from configuration."""
+    ids come solely from configuration. A keep_label error is kept for prune alone to raise."""
     keep = linear.keep_label
     if not keep:
         return team(gql, linear), role_ids(linear.roles)
     match = {"id" if UUID_RE.fullmatch(keep) else "name": {"eq": keep}}
     flt = {"team": {"id": {"eq": linear.team}}, "labels": {"some": match}}
     data = gql(Q_TEAM_KEEP, t=linear.team, l=match, k=flt)
-    found = _team(data["teams"]["nodes"], linear)
+    found, issues = _team(data["teams"]["nodes"], linear), data["issues"]
     if not any(n["team"] in (None, {"id": found.id}) for n in data["issueLabels"]["nodes"]):
-        raise LinearError(
+        kept = LinearError(
             f"orchestrator/config.toml: linear.keep_label {keep!r} is no label of team "
             f"{found.name!r} or the workspace"
         )
-    issues = data["issues"]
-    if issues["pageInfo"]["hasNextPage"]:
-        raise LinearError(
+    elif issues["pageInfo"]["hasNextPage"]:
+        kept = LinearError(
             f"orchestrator/config.toml: linear.keep_label {keep!r}: over {KEPT} issues carry it, "
             "more than prune reads: remove it from some"
         )
-    kept = frozenset(n["identifier"] for n in issues["nodes"])
+    else:
+        kept = frozenset(n["identifier"] for n in issues["nodes"])
     return replace(found, kept=kept), role_ids(linear.roles)
 
 
