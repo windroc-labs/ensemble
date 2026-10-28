@@ -1,7 +1,5 @@
-"""One role's run to its Result: an invalid outcome gets one fix of the same session, a usage limit
-or a failed turn ends the run, the deliverable is saved to `out`; records go to the run dir's
-run.jsonl (the session's workdir). A Mode's policy (POLICIES) starts the session, sends the fix and
-answers each turn end and IdleTimeout: go on (None), END or GiveUp.
+"""One role's run to its Result: an invalid outcome gets one fix; the deliverable goes to `out`,
+records to run.jsonl. A Mode's policy (POLICIES) answers each turn end: None, END or GiveUp.
 """
 
 import contextlib
@@ -28,7 +26,7 @@ from ensemble.delegate.engine.types import (
     Result,
     Stopped,
 )
-from ensemble.delegate.event.outcome import SAVES_DELIVERABLE, drop_files
+from ensemble.delegate.event.outcome import drop_files
 from ensemble.delegate.event.outcome import read as read_outcome
 from ensemble.delegate.event.reply import OUTCOME, marks, outcome_block, outcome_only
 from ensemble.delegate.event.types import InvalidOutcome, Outcome, Updraft
@@ -95,9 +93,8 @@ class Headless:
 
 
 class Tui(Headless):
-    """FR-23: the first turn end without an outcome block gets NUDGE, STOP_LIMIT more give up; a
-    progress mark resets that count; a turn end with work pending is ignored. FR-24: an IdleTimeout
-    gives up. The session is left open, locked or not.
+    """FR-23: a turn end without an outcome gets NUDGE, STOP_LIMIT more give up (a progress mark
+    resets it); FR-24: an IdleTimeout gives up. The session is left open.
     """
 
     stops_client = False
@@ -158,9 +155,7 @@ def say(text: str) -> None:
 
 
 def to_stderr(text: str) -> None:
-    """Dropped once stderr is dead: EIO, its terminal hung up; EPIPE, its reader gone. Its fd
-    then is /dev/null, else the exit-time flush fails: exit 120.
-    """
+    """Dropped once stderr is dead (EIO, EPIPE); its fd then /dev/null, else exit 120 at flush."""
     try:
         sys.stderr.write(text)
         sys.stderr.flush()
@@ -196,9 +191,7 @@ def execute(
     on_event: Callable[[Event], None] | None = None,
     ending: Callable[[BaseException], Result] | None = None,
 ) -> Result:
-    """Run an accepted plan; every returned Result has one final Finished event; `ending` ends
-    one that raised (else stopped).
-    """
+    """Run an accepted plan; each Result has one final Finished event."""
     emit = on_event or (lambda _event: None)
     if not driver.session_based:
         instruction = driver.start(p.driver_spec)
@@ -242,9 +235,7 @@ def closing(result: Result) -> dict:
 
 
 def stopped(error: BaseException) -> Result:
-    """How a run that raised `error` ends: code `error.code` for a Stopped or an int-coded
-    SystemExit, else 1; error `stopped: <Type>[: text]` on one line.
-    """
+    """A raised run's code (a Stopped's or int SystemExit's, else 1) and `stopped: <Type>`."""
     code = getattr(error, "code", None)
     return Result(
         code if isinstance(error, (Stopped, SystemExit)) and isinstance(code, int) else 1,
@@ -407,7 +398,7 @@ class Attempt:
                 try:
                     save(s.out, outcome.deliverable)
                 except OSError as e:
-                    if kind in SAVES_DELIVERABLE:
+                    if kind == "local":
                         raise
                     say(f"delegate: cannot save the deliverable to {s.out}: {e}")
                     self.note("save_error", error=str(e))

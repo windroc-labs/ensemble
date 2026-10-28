@@ -33,12 +33,7 @@ OBJECT_EXPORT_MODULES = (
 OBJECT_EXPORTS_ALLOWED = {}
 
 
-OPTION_TUPLES_ALLOWED = {
-    (
-        f"src/{PKG}/delegate/event/outcome.py",
-        "SAVES_DELIVERABLE",
-    ): "the destinations whose deliverable comes back, a subset",
-}
+OPTION_TUPLES_ALLOWED = {}
 
 
 COMMAND_SRC = (f"src/{PKG}/delegate/",)

@@ -11,6 +11,7 @@ from tests.delegate.unit.composer.prompts import (
     composed,
     parameters,
 )
+from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 
 TASKS = os.path.join(TEAM, "tasks")
@@ -33,7 +34,9 @@ type = "github"
 repo = "windroc/team-docs"
 branch = "main"
 dir = "Product Design/"
+
 """
+FIXTURE += VERIFIER
 
 API = [
     "ConfigError",
@@ -144,10 +147,17 @@ def team_texts():
     return out
 
 
-class RealConfig(Case):
+class Packaged(Case):
+    """The packaged config, only the verifier's required repo set locally."""
+
     def setUp(self):
-        self.local(FIXTURE)
+        self.local(VERIFIER)
 
     def local(self, text):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
             f.write(local_section(text, "delegate"))
+
+
+class RealConfig(Packaged):
+    def setUp(self):
+        self.local(FIXTURE)

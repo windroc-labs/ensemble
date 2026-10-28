@@ -2,13 +2,13 @@
 drive a real local process.
 """
 
-import contextlib
 import json
 import os
 import sys
 from pathlib import Path
 
-from ensemble.utils import ProcessControl, Record
+from ensemble.utils import Record
+from tests.delegate import drives
 from tests.delegate.integration.cli import ASKING, Integration
 from tests.delegate.replies import block, mark
 from tests.session import live_tmux
@@ -30,6 +30,7 @@ class DelegateCtlContract(AnswerCtlContract, Integration):
 
     def setUp(self):
         super().setUp()
+        self.addCleanup(drives.end, self.root)
         self.started_records = {}
 
     def call(self, *argv, stdin="", sid=None):
@@ -67,7 +68,6 @@ class DelegateCtlContract(AnswerCtlContract, Integration):
         self.assertEqual(done.returncode, 0, done.stderr)
         record = Record.parse(done.stdout)
         self.started_records[name] = record
-        self.addCleanup(self.stop_drive, record.workdir)
         live_tmux.wait(
             lambda: any(
                 path.stat().st_size
@@ -88,15 +88,6 @@ class DelegateCtlContract(AnswerCtlContract, Integration):
         """The drive control path delegate.json `record` names."""
         with open(record, encoding="utf-8") as file:
             return json.load(file).get("drive")
-
-    def stop_drive(self, workdir):
-        """A drive the test left running, killed before the temp dirs go."""
-        with contextlib.suppress(OSError):
-            path = self.drive_of(os.path.join(workdir, "run", "delegate.json"))
-            control = None if path is None else ProcessControl.attach(path)
-            if control is not None and control.running():
-                control.kill()
-                live_tmux.wait(lambda: not control.live(), what="the left drive gone")
 
     def refuse(self):
         return self.call(
