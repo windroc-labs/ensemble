@@ -225,7 +225,12 @@ class Segment(TmuxFlow):
         if author == HUMAN:
             return f"human: {body}"
         if author in ROLE_OF:
-            if body.startswith(config.TASKS[ROLE_OF[author]].start):
+            if body.startswith(
+                tuple(
+                    workflow.for_task(config.TASKS, ROLE_OF[author], task).start
+                    for task in (None, "decompose")
+                )
+            ):
                 return "start"
             if found := [k for text, k in self.texts.items() if text in body]:
                 return found[0]
