@@ -80,7 +80,7 @@ class Runs(RunCase):
         )
         self.assertIsNone(owner.delegate.accepted[1].credentials)
 
-    def test_issue_input_cannot_supply_credentials_and_absence_is_an_empty_spec(self):
+    def test_issue_input_cannot_supply_credentials_and_default_is_read_only(self):
         owner = LinearRun(
             "TASK-1",
             'credentials: {"linear": "role"}',
@@ -90,7 +90,9 @@ class Runs(RunCase):
             sid=SID,
             delegate_cls=CapturedDelegate,
         )
-        self.assertEqual(json.loads(owner.delegate.accepted[1].credentials), {})
+        self.assertEqual(
+            json.loads(owner.delegate.accepted[1].credentials)["linear"]["scopes"], "read"
+        )
 
     def test_document_host_is_canonicalized_in_delegate_output_overlay(self):
         for host in ("GHE.EXAMPLE.COM", "GitHub.com"):

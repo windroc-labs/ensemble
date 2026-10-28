@@ -82,14 +82,22 @@ func exactCredentialObject(data []byte, keys ...string) map[string]json.RawMessa
 func parseLinear(data []byte) (*credential.LinearRequest, error) {
 	bad := protocol.New(protocol.ManifestRejected, "Manifest rejected: invalid linear")
 	var r credential.LinearRequest
-	object := exactCredentialObject(data, "app", "board")
+	object := exactCredentialObject(data, "app", "board", "scopes")
 	app := exactCredentialObject(object["app"], "role", "client_id", "user_id", "secret_service", "token_service")
-	board := exactCredentialObject(object["board"], "team", "states", "labels", "project_repos", "human_members")
+	board := exactCredentialObject(object["board"], "team", "states", "labels", "project_repos", "human_members", "role_users", "task_label_group", "agent_label_group")
 	labels := exactCredentialObject(board["labels"], "task_labels", "agent_labels")
 	if object == nil || app == nil || board == nil || labels == nil || json.Unmarshal(data, &r) != nil {
 		return nil, bad
 	}
 	a, b := r.App, r.Board
+	if !credential.ValidLinearScopes(r.Scopes) || b.RoleUsers == nil || !credentialReference(b.TaskLabelGroup) || (b.AgentLabelGroup != "" && !credentialReference(b.AgentLabelGroup)) {
+		return nil, bad
+	}
+	for role, user := range b.RoleUsers {
+		if !credential.ValidLinearRole(role) || !credential.ValidLinearUser(user) {
+			return nil, bad
+		}
+	}
 	if !credential.ValidLinearRole(a.Role) || a.Role == "harness" || a.Role == "manager" || !credentialReference(a.ClientID) || !credential.ValidLinearUser(a.UserID) {
 		return nil, bad
 	}

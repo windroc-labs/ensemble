@@ -69,9 +69,11 @@ credentials = {}
 [roles.engineer.tasks.decompose.credentials]
 linear = "role"
 
-# credentials: kind → reference, with no secret values; {} → none. Broker validates kinds and values.
+# credentials: kind → reference, with no secret values; each remote-board role also gets linear = "read".
+# Broker validates kinds and values.
 # [roles.<role>.tasks.<task>.credentials] replaces whole same-kind role values, keeping other kinds.
-# The shorthand linear = "role" expands to this role's app references and non-secret board settings; omitted on local boards.
+# linear = "read" requests read-only access; "role" keeps the role app's full grant for explicit writing tasks.
+# Both expand to this role's app references and non-secret board settings; omitted on local boards.
 # Tasks must appear in the role's Tasks index. A run without a task uses only role credentials.
 # Local declarations use the orchestrator. prefix; credentials in [core] overlays are refused.
 

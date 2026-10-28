@@ -15,6 +15,7 @@ from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.log import config_error
 from ensemble.orchestrator.engine.types import (
     KEYCHAIN_NAME,
+    SCOPES,
     UUID_RE,
     AppKind,
     Config,
@@ -751,31 +752,39 @@ def _resolve_roles(cfg, overlay, delegate_cls, index):
             p.get("max_runs", 1),
             run,
             utils.freeze(
-                _credential_table(cfg, name, p.get("credentials", {}), f"{where}.credentials")
+                _credential_table(
+                    cfg, name, p.get("credentials", {}), f"{where}.credentials", default=True
+                )
             ),
             utils.freeze(task_credentials),
         )
     return out
 
 
-def _credential_table(cfg, role, table, where):
+def _credential_table(cfg, role, table, where, *, default=False):
     if not isinstance(table, dict):
         raise ConfigError(f"orchestrator/config.toml: [{where}] must be a table")
-    out = dict(table)
+    out = {"linear": "read", **table} if default else dict(table)
     if isinstance(out.get("linear"), str):
-        if out["linear"] != "role":
+        if out["linear"] not in ("role", "read"):
             raise ConfigError(
-                f'orchestrator/config.toml: [{where}] linear shorthand must be "role"'
+                f'orchestrator/config.toml: [{where}] linear shorthand must be "role" or "read"'
             )
         if cfg["tracker"] is not TrackerKind.LINEAR:
             del out["linear"]
         else:
             linear = cfg["linear"]
+            scopes = "read" if out["linear"] == "read" else SCOPES[AppKind.ROLE]
             out["linear"] = {
+                "scopes": scopes,
                 "app": {"role": role, **{k.value: linear["roles"][role][k] for k in AppKey}},
                 "board": {
-                    **{k: linear[k] for k in ("team", "states", "project_repos", "human_members")},
+                    **{k: linear[k] for k in ("team", "states", "project_repos")},
+                    "human_members": linear.get("human_members", []),
                     "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
+                    "task_label_group": linear["task_label_group"],
+                    "agent_label_group": linear["agent_label_group"],
+                    "role_users": {name: app["user_id"] for name, app in linear["roles"].items()},
                 },
             }
     try:

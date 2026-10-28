@@ -19,6 +19,21 @@ func TestCredentialRequestFixtures(t *testing.T) {
 	}
 }
 
+func TestLinearCredentialScopes(t *testing.T) {
+	base := string(fixtureBytes(t, "credential-spec-linear.json"))
+	for _, scope := range []string{"read", "admin", "", "read,write"} {
+		spec := strings.Replace(base, "read,write,app:assignable,app:mentionable", scope, 1)
+		m, err := ParseManifest(withFields(t, map[string]any{"credentials": spec}))
+		if scope == "read" {
+			if err != nil || m.Linear.Scopes != scope {
+				t.Fatalf("read scope: %v", err)
+			}
+		} else if err == nil {
+			t.Fatalf("accepted scope %q", scope)
+		}
+	}
+}
+
 func TestCredentialRequestMerge(t *testing.T) {
 	environment := `{"env":[{"item":"ensemble-broker-env/old","file":"old"}],"github":{"app":"old","permissions":{"contents":"read"}}}`
 	caller := `{"env":[{"item":"ensemble-broker-env/new","file":"new"}]}`

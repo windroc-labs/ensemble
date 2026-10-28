@@ -302,11 +302,17 @@
                 "maxLength": 255,
                 "pattern": "^[^/\\u0000-\\u001f\\u007f-\\u009f]+$",
                 "not": {
-                  "enum": [".", ".."]
+                  "enum": [
+                    ".",
+                    ".."
+                  ]
                 }
               }
             },
-            "required": ["item", "file"],
+            "required": [
+              "item",
+              "file"
+            ],
             "additionalProperties": false
           }
         },
@@ -339,7 +345,9 @@
               "$ref": "#/$defs/git_ref"
             }
           },
-          "required": ["repo"],
+          "required": [
+            "repo"
+          ],
           "additionalProperties": false
         },
         "credentials": {
@@ -1975,14 +1983,20 @@
                   "type": "string",
                   "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
                   "not": {
-                    "enum": [".", ".."]
+                    "enum": [
+                      ".",
+                      ".."
+                    ]
                   }
                 },
                 "token_service": {
                   "type": "string",
                   "pattern": "^[A-Za-z0-9._@+-]{1,128}$",
                   "not": {
-                    "enum": [".", ".."]
+                    "enum": [
+                      ".",
+                      ".."
+                    ]
                   }
                 }
               },
@@ -2088,6 +2102,29 @@
                   "items": {
                     "$ref": "#/$defs/credential_reference"
                   }
+                },
+                "task_label_group": {
+                  "$ref": "#/$defs/credential_reference"
+                },
+                "agent_label_group": {
+                  "anyOf": [
+                    {
+                      "const": ""
+                    },
+                    {
+                      "$ref": "#/$defs/credential_reference"
+                    }
+                  ]
+                },
+                "role_users": {
+                  "type": "object",
+                  "propertyNames": {
+                    "pattern": "^[a-z][a-z0-9-]{0,62}$"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  }
                 }
               },
               "required": [
@@ -2095,14 +2132,24 @@
                 "states",
                 "labels",
                 "project_repos",
-                "human_members"
+                "human_members",
+                "role_users",
+                "task_label_group",
+                "agent_label_group"
               ],
               "additionalProperties": false
+            },
+            "scopes": {
+              "enum": [
+                "read",
+                "read,write,app:assignable,app:mentionable"
+              ]
             }
           },
           "required": [
             "app",
-            "board"
+            "board",
+            "scopes"
           ],
           "additionalProperties": false
         },

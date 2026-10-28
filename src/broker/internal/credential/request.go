@@ -13,9 +13,12 @@ type LinearApp struct {
 
 // LinearBoard contains only the non-secret board settings a run can use.
 type LinearBoard struct {
-	Team   string            `json:"team"`
-	States map[string]string `json:"states"`
-	Labels struct {
+	RoleUsers       map[string]string `json:"role_users"`
+	TaskLabelGroup  string            `json:"task_label_group"`
+	AgentLabelGroup string            `json:"agent_label_group"`
+	Team            string            `json:"team"`
+	States          map[string]string `json:"states"`
+	Labels          struct {
 		TaskLabels  map[string]string `json:"task_labels"`
 		AgentLabels map[string]string `json:"agent_labels"`
 	} `json:"labels"`
@@ -24,9 +27,14 @@ type LinearBoard struct {
 }
 
 type LinearRequest struct {
-	App   LinearApp   `json:"app"`
-	Board LinearBoard `json:"board"`
+	Scopes string      `json:"scopes"`
+	App    LinearApp   `json:"app"`
+	Board  LinearBoard `json:"board"`
 }
+
+const LinearRoleScopes = "read,write,app:assignable,app:mentionable"
+
+func ValidLinearScopes(s string) bool { return s == "read" || s == LinearRoleScopes }
 
 const LinearDir = "/run/ensemble/secrets/linear"
 

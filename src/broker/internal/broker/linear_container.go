@@ -51,7 +51,10 @@ func (l Linear) Ready(app credential.LinearApp) error {
 }
 
 // containerToken issues separately from the host's shared token and never publishes it there.
-func (l Linear) containerToken(ctx context.Context, app credential.LinearApp) (linearAccess, error) {
+func (l Linear) containerToken(ctx context.Context, app credential.LinearApp, scopes string) (linearAccess, error) {
+	if !credential.ValidLinearScopes(scopes) {
+		return linearAccess{}, errLinear
+	}
 	account, err := l.containerAccount(app)
 	if err != nil {
 		return linearAccess{}, errLinear
@@ -61,7 +64,7 @@ func (l Linear) containerToken(ctx context.Context, app credential.LinearApp) (l
 	if err != nil || !linearClean(string(secret)) {
 		return linearAccess{}, errLinear
 	}
-	token, _, err := l.request(ctx, account.Identity, string(secret))
+	token, _, err := l.request(ctx, account.Identity, string(secret), scopes)
 	return token, err
 }
 
@@ -139,7 +142,7 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 	if err := l.read("container/"+c, &existing); !errors.Is(err, ErrNotFound) {
 		return nil, nil, "", errLinear
 	}
-	token, err := l.containerToken(ctx, r.App)
+	token, err := l.containerToken(ctx, r.App, r.Scopes)
 	if err != nil {
 		return nil, nil, "", errLinear
 	}
@@ -151,7 +154,10 @@ func (l Linear) Issue(ctx context.Context, r credential.LinearRequest, c string)
 		return nil, nil, "", errLinear
 	}
 	command := linearCommand(token, false)
-	board, _ := json.Marshal(r.Board)
+	board, _ := json.Marshal(struct {
+		credential.LinearBoard
+		Scopes string `json:"scopes"`
+	}{r.Board, r.Scopes})
 	defer erase(board)
 	config, _ := credential.Prepare(credential.File{Dir: credential.LinearDir, Name: "board.json"}, board)
 	return []credential.Command{command, config}, func() { _ = l.Revoke(ctx, c) }, token.ExpiresAt, nil
@@ -167,7 +173,7 @@ func (l Linear) Refresh(ctx context.Context, r credential.LinearRequest, c strin
 	if l.read("container/"+c, &record) != nil || record.Closed {
 		return "", errLinear
 	}
-	token, err := l.containerToken(ctx, r.App)
+	token, err := l.containerToken(ctx, r.App, r.Scopes)
 	if err != nil {
 		return "", errLinear
 	}

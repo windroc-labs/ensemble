@@ -1038,7 +1038,24 @@ class CommittedConfiguration(Case):
         self.assertEqual(resolved["github"], github)
         self.assertEqual(resolved["linear"]["app"]["role"], "engineer")
         self.assertEqual(resolved["linear"]["app"]["user_id"], role_id("engineer"))
-        self.assertEqual(config.credentials(cfg, "engineer", "build"), {"github": github})
+        ordinary = config.credentials(cfg, "engineer", "build")
+        self.assertEqual(ordinary["github"], github)
+        self.assertEqual(ordinary["linear"]["scopes"], "read")
+        self.assertEqual(resolved["linear"]["scopes"], cfg.linear.roles["engineer"].scopes)
+
+    def test_all_remote_roles_receive_read_access_by_default(self):
+        cfg = self.load(BASE)
+        for name, settings in cfg.roles.items():
+            for task in (None, *settings.tasks):
+                with self.subTest(role=name, task=task):
+                    grant = config.credentials(cfg, name, task)["linear"]
+                    self.assertEqual(
+                        grant["scopes"],
+                        cfg.linear.roles[name].scopes if task == "decompose" else "read",
+                    )
+                    self.assertEqual(
+                        grant["board"]["role_users"][name], cfg.linear.roles[name].user_id
+                    )
 
     def test_without_local_names_what_is_missing(self):
         with self.assertRaises(config.ConfigError) as cm:
@@ -1611,7 +1628,11 @@ class CredentialDeclarations(ConfigFile, Case):
             + 'credentials = { github = { app = "role-app", permissions = { contents = "write" } }, env = [{ item = "ref", file = "key" }] }\n'
             + '[roles.engineer.tasks.light-build.credentials]\ngithub = { app = "task-app" }\n'
         )
-        expected = {"github": {"app": "task-app"}, "env": [{"item": "ref", "file": "key"}]}
+        expected = {
+            "linear": config.credentials(cfg, "engineer", None)["linear"],
+            "github": {"app": "task-app"},
+            "env": [{"item": "ref", "file": "key"}],
+        }
         self.assertEqual(config.credentials(cfg, "engineer", "light-build"), expected)
         self.assertEqual(
             config.credentials(cfg, "engineer", None)["github"],
@@ -1630,11 +1651,16 @@ class CredentialDeclarations(ConfigFile, Case):
             cfg.roles["engineer"].task_credentials["light-build"]["github"] = {}
 
     def test_absent_declarations_are_empty_and_local_declarations_overlay_packaged(self):
-        self.assertEqual(config.credentials(self.load(PIPELINE), "engineer", None), {})
+        self.assertEqual(
+            config.credentials(self.load(PIPELINE), "engineer", None)["linear"]["scopes"], "read"
+        )
         self.local('[roles.engineer.tasks.light-build.credentials]\nfuture = ["opaque"]\n')
         cfg = self.load(PIPELINE + "credentials = { future = false }\n")
-        self.assertEqual(config.credentials(cfg, "engineer", "light-build"), {"future": ["opaque"]})
-        self.assertEqual(config.credentials(cfg, "engineer", None), {"future": False})
+        self.assertEqual(
+            config.credentials(cfg, "engineer", "light-build"),
+            {"linear": config.credentials(cfg, "engineer", None)["linear"], "future": ["opaque"]},
+        )
+        self.assertEqual(config.credentials(cfg, "engineer", None)["future"], False)
 
     def test_linear_role_expands_only_the_runs_app_and_allowlisted_board_keys(self):
         self.local(
@@ -1647,6 +1673,7 @@ class CredentialDeclarations(ConfigFile, Case):
         cfg = self.load(MANAGER_LINE + PIPELINE + '[roles.engineer.credentials]\nlinear = "role"\n')
         app = role_app("engineer")
         expected = {
+            "scopes": app.scopes,
             "app": {
                 "role": "engineer",
                 **{k.value: getattr(app, k) for k in config.AppKey},
@@ -1660,6 +1687,9 @@ class CredentialDeclarations(ConfigFile, Case):
                 },
                 "project_repos": {P1: "acme/project"},
                 "human_members": ["user@example.com"],
+                "role_users": {r: a.user_id for r, a in cfg.linear.roles.items()},
+                "task_label_group": cfg.linear.task_label_group,
+                "agent_label_group": cfg.linear.agent_label_group,
             },
         }
         self.assertEqual(config.credentials(cfg, "engineer", None), {"linear": expected})

@@ -2890,6 +2890,26 @@
         "exit_code": 3,
         "error_code": "manifest_rejected"
       }
+    },
+    {
+      "file": "credential-spec-linear-read.json",
+      "definition": "credential_spec",
+      "valid": true,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": ""
+      }
+    },
+    {
+      "file": "credential-spec-linear-invalid-scope.json",
+      "definition": "credential_spec",
+      "valid": false,
+      "expected": {
+        "stage": "schema",
+        "exit_code": 2,
+        "error_code": "manifest_rejected"
+      }
     }
   ]
 }
