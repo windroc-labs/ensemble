@@ -28,6 +28,8 @@ MANIFESTS = {
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
 WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/test.yml"
+# A PR title or body edit; a base change also fires `edited` but carries changes.base.
+TEXT_EDIT = "github.event.action == 'edited' && !github.event.changes.base"
 
 
 def bumped(text, version="0.4.0"):
@@ -671,7 +673,7 @@ class Workflow(unittest.TestCase):
         self.assertIn("  merge_group:\n    types: [checks_requested]", WORKFLOW.read_text())
         ci = job("ci")
         self.assertRegex(ci, r"needs:.*\bbroker\b")
-        self.assertIn("if: ${{ always() }}", ci)
+        self.assertIn("if: ${{ always() && ", ci)
         self.assertNotIn("actions: write", ci)
         self.assertNotIn("ci_broker.py", ci)
         self.assertIn("run: python3 .github/ci_scope.py --gate", ci)
@@ -700,9 +702,30 @@ class Workflow(unittest.TestCase):
         ):
             with self.subTest(job=name):
                 self.assertIn(f"    if: ${{{{ {condition} }}}}\n", job(name))
-        for name in ("lint", "mini-op"):
+        self.assertNotRegex(job("lint"), r"(?m)^    if:")
+
+    def test_text_edit_runs_no_job_and_keeps_the_code_runs_ci(self):
+        text = WORKFLOW.read_text()
+        self.assertIn("  pull_request:\n    types: [opened, synchronize, reopened, edited]\n", text)
+        self.assertIn(
+            "concurrency:\n  group: ${{ github.workflow }}-${{ github.ref }}"
+            f"${{{{ ({TEXT_EDIT}) && format('-text-edit-{{0}}', github.run_id) || '' }}}}\n",
+            text,
+        )
+        for name in ("changes", "mini-op"):
             with self.subTest(job=name):
-                self.assertNotRegex(job(name), r"(?m)^    if:")
+                self.assertIn(f"    if: ${{{{ !({TEXT_EDIT}) }}}}\n", job(name))
+        ci = job("ci")
+        self.assertIn(f"    if: ${{{{ always() && !({TEXT_EDIT}) }}}}\n", ci)
+        self.assertIn(
+            f"    name: ${{{{ ({TEXT_EDIT}) && 'CI skipped on a PR text edit' || 'CI' }}}}\n", ci
+        )
+        self.assertEqual(text.count(TEXT_EDIT), 5)
+        jobs = set(re.findall(r"(?m)^  ([\w-]+):$", text.split("\njobs:\n", 1)[1]))
+        self.assertLessEqual({"changes", "lint", "unit", "mini-op", "ci"}, jobs)
+        for name in jobs - {"changes", "mini-op", "ci"}:
+            with self.subTest(job=name):
+                self.assertRegex(job(name), r"(?m)^    needs: \[(.*, )?changes(, .*)?\]$")
 
     def test_docs_keep_skill_checks_without_allocating_broker_runners(self):
         self.assertIn("    if: ${{ needs.changes.outputs.broker == 'true' }}", job("broker"))
