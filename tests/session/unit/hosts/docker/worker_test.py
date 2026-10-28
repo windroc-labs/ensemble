@@ -229,6 +229,7 @@ class HookTest(Base):
                 display_socket=None,
                 display_grace=False,
                 terminal=False,
+                size=guard.SIZE,
                 command=["fake"],
             )
         )
@@ -577,3 +578,75 @@ class EndTest(Base):
         channel.close()
         self.assertEqual(channel.state(), Liveness.ABSENT)
         self.assertFalse(self.owner_open())
+
+
+class LaunchTest(Base):
+    HANDOFF = {"argv": ["c"], "env": {}, "terminal": False, "generation": GEN}
+
+    def launched(self, write=None):
+        """A started worker that sent its handoff; the frames it wrote, as written."""
+        channel = self.make()
+        frames, more = [], threading.Event()
+
+        def written(_fd, data):
+            if write is not None:
+                write(data)
+            frames.extend(guard.Decoder().feed(bytes(data)))
+            more.set()
+            return len(data)
+
+        patches = (
+            mock.patch.object(select, "select", return_value=([], [99], [])),
+            mock.patch.object(os, "write", side_effect=written),
+        )
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        channel.launch(self.HANDOFF)
+        return channel, frames
+
+    def beats(self, frames, count):
+        deadline = threading.Event()
+        for _ in range(int(WAIT / 0.05)):
+            if sum(kind == b"p" for kind, _ in frames) >= count:
+                return True
+            deadline.wait(0.05)
+        return False
+
+    def test_the_handoff_goes_first_then_a_heartbeat_every_beat(self):
+        channel, frames = self.launched()
+        self.assertEqual(
+            frames[0], (b"l", json.dumps(self.HANDOFF, separators=(",", ":")).encode())
+        )
+        self.assertTrue(self.beats(frames, 2))
+        self.assertTrue(all(frame == (b"p", b"{}") for frame in frames[1:]))
+        channel.accept(b"x", b'{"returncode":0}')
+        assert channel.beater is not None
+        channel.beater.join(WAIT)
+        self.assertFalse(channel.beater.is_alive())
+
+    def test_the_heartbeat_outpaces_the_guards_limit(self):
+        self.assertLessEqual(worker.BEAT, 2)
+        self.assertLess(2, guard.HEARTBEAT)
+
+    def test_a_failed_channel_ends_the_heartbeat_quietly(self):
+        channel, frames = self.launched()
+        self.assertTrue(self.beats(frames, 1))
+        with mock.patch.object(os, "write", side_effect=OSError("gone")):
+            assert channel.beater is not None
+            channel.beater.join(WAIT)
+        self.assertFalse(channel.beater.is_alive())
+        self.assertEqual(channel.failure, "guard input: gone")
+
+    def test_the_heartbeat_stops_before_the_end_shuts_stdin(self):
+        shut, writes_after_shut = threading.Event(), []
+        channel, frames = self.launched(
+            lambda data: shut.is_set() and writes_after_shut.append(data)
+        )
+        self.assertTrue(self.beats(frames, 1))
+        channel.end_releases()
+        assert channel.beater is not None
+        self.assertFalse(channel.beater.is_alive())
+        shut.set()
+        threading.Event().wait(worker.BEAT * 1.5)
+        self.assertEqual(writes_after_shut, [])

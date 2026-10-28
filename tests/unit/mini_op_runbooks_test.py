@@ -26,6 +26,7 @@ NAMES = {
     "manager-on-mini",
     "test-accounts",
     "gotchas",
+    "docker-guard-main-process",
 }
 SECRET_READERS = (
     "install-ensemble/storekey-stdin",

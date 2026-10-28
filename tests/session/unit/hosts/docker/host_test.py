@@ -48,7 +48,7 @@ from ensemble.session.hosts.docker.broker import (
     BrokerError,
     client_keys,
 )
-from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT
+from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT, docker_call
 from ensemble.session.hosts.docker.host import (
     KEPT_RETRY,
     PROMPT_STAGE,
@@ -60,7 +60,7 @@ from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
 from tests.session.unit.hosts.docker.support import FakeBroker as BrokerRunner
 from tests.session.unit.hosts.docker.support import data
-from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
+from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 DOCKER = "/usr/local/bin/docker"
 # The packaged config's GitHub token permissions.
@@ -275,7 +275,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '31'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '32'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             "install or upgrade it: see docs/architecture.md#docker-install", str(caught.exception)
@@ -508,20 +508,19 @@ def _read(path):
         return stream.read()
 
 
-class GuardExec:
-    """`docker exec -i` of the guard over real pipes: its start frame at once, its exit frame once
-    told to close (or by exit()).
+class GuardAttach:
+    """`docker attach` to the main-process guard over real pipes: its start frame once the launch
+    handoff came (`handoff`, decoded), its exit frame once told to close (or by exit()).
     """
 
     def __init__(self, argv):
-        self.args, self.pid, self.returncode = argv, 7777, None
+        self.args, self.pid, self.returncode, self.handoff = argv, 7777, None, None
         read_in, write_in = os.pipe()
         read_out, self._out = os.pipe()
         self.stdin = os.fdopen(write_in, "wb", buffering=0)
         self.stdout = os.fdopen(read_out, "rb", buffering=0)
         self._in = os.fdopen(read_in, "rb", buffering=0)
         self.exited = threading.Event()
-        self.write(b"s", {"pid": 1})
         threading.Thread(target=self._serve, daemon=True).start()
 
     def write(self, kind, value):
@@ -531,8 +530,11 @@ class GuardExec:
     def _serve(self):
         decoder = guard.Decoder()
         while data := self._in.read(65536):
-            for kind, _ in decoder.feed(data):
-                if kind == b"c":
+            for kind, payload in decoder.feed(data):
+                if self.handoff is None and kind == b"l":
+                    self.handoff = guard.launch(payload)
+                    self.write(b"s", {"pid": 1})
+                elif kind == b"c":
                     self.exit(0)
         self._in.close()
 
@@ -550,7 +552,7 @@ class GuardExec:
 
 
 class StartBase(Base):
-    """An owned start's metadata and launch, its guard a GuardExec."""
+    """An owned start's metadata and launch, its guard reached by a GuardAttach."""
 
     METADATA = {
         "sid": "s1",
@@ -577,9 +579,9 @@ class StartBase(Base):
         )
 
     def guard_popen(self, argv, **kw):
-        if "--hook-socket" in argv:
+        if argv[3:4] == ["attach"]:
             self.order.append("guard")
-            proc = GuardExec(argv)
+            proc = GuardAttach(argv)
             self.execs.append((argv, kw, proc))
             self.addCleanup(proc.exit, 0)
             return proc
@@ -612,9 +614,8 @@ class StartBase(Base):
             handle.close()
 
     def guard_env(self):
-        """The env the last guard exec passed into its container."""
-        argv, kw, _ = self.execs[-1]
-        return {argv[i + 1]: kw["env"][argv[i + 1]] for i, arg in enumerate(argv) if arg == "--env"}
+        """The env the last launch handoff gave its client."""
+        return self.execs[-1][2].handoff["env"]
 
     def owner_held(self):
         os.makedirs(self.state, exist_ok=True)
@@ -734,6 +735,7 @@ class StartTest(StartBase):
         ):
             self.start(prompt_file="/run/ensemble/prompt/prompt.md", prompt="x")
         self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertNotIn("guard", self.order)
 
     def test_staging_failure_rolls_back_the_container(self):
         with (
@@ -744,6 +746,7 @@ class StartTest(StartBase):
         ):
             self.start()
         self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertNotIn("guard", self.order)
 
     def test_the_build_holds_the_whitelisted_plugins(self):
         self.host.plugins = (
@@ -2230,28 +2233,44 @@ class AttachTargetTest(Base):
 
 
 class GuardedStartTest(StartBase):
-    def test_owned_terminal_execs_the_guard_without_tmux(self):
+    def test_the_guard_takes_the_hosts_hidden_size(self):
+        self.host = DockerHost(
+            "docker",
+            {"docker": DOCKER, "hidden_size": "100x30"},
+            run=self.docker,
+            broker=self.broker,
+        )
+        handle = self.start()
+        [(_, _, proc)] = self.execs
+        self.assertEqual(proc.handoff["size"], "100x30")
+        handle.close()
+
+    def test_owned_terminal_attaches_to_the_main_process_guard_without_tmux(self):
         handle = self.start()
         self.assertIsInstance(handle, worker_module.DockerWorker)
         self.assertTrue(handle.remote)
-        [(argv, kw, _)] = self.execs
-        run = f"/run/ensemble/guard/{GEN}"
+        [(argv, kw, proc)] = self.execs
         self.assertEqual(
-            argv,
-            [
-                *(DOCKER, "--host", self.ep, "exec", "-i", "--workdir", self.cwd),
-                *("--env", "AGENT_HOME", "--env", "K", "--env", "ENSEMBLE_GUARD_HOOK_SOCKET"),
-                *(CONTAINER, PYTHON, "-I", worker_module.GUARD),
-                *("--terminal", "--display-socket", f"{run}/display"),
-                *("--hook-socket", f"{run}/hook", "--lease", f"{run}/lease", "--"),
-                *("with-secrets", "--client", "agent", "agent", "--flag"),
-            ],
+            argv, [DOCKER, "--host", self.ep, "attach", "--sig-proxy=false", CONTAINER]
         )
-        self.assertEqual(kw["env"]["ENSEMBLE_GUARD_HOOK_SOCKET"], f"{run}/hook")
+        self.assertEqual(kw["env"], docker_call(DOCKER)[1])
+        self.assertEqual(
+            proc.handoff,
+            {
+                "argv": ["with-secrets", "--client", "agent", "agent", "--flag"],
+                "env": {"AGENT_HOME": self.home_dir, "K": "v"},
+                "terminal": True,
+                "generation": GEN,
+                "size": "80x24",
+            },
+        )
+        self.assertEqual((kw["stderr"], kw["stdin"], kw["stdout"]), (DEVNULL, PIPE, PIPE))
         self.assertTrue(kw["close_fds"] and kw["start_new_session"])
         self.assertNotIn("pass_fds", kw)
         execs = self.docker.execs()
         self.assertFalse(any("tmux" in call for call in execs), execs)
+        self.assertFalse(any(worker_module.GUARD in call for call in execs), execs)
+        self.assertFalse([c for c in self.order if isinstance(c, list) and c[:1] == ["start"]])
         self.assertFalse(any(isinstance(c, tuple) and c[0] == "popen" for c in self.order))
         self.assertEqual(self.host_record()["kind"], "tui")
         self.assertNotIn("mode", self.host_record())
@@ -2280,12 +2299,12 @@ class GuardedStartTest(StartBase):
                 self.host.worker("w", self.launch, terminal=False, metadata=self.METADATA)
 
     def test_a_start_failing_after_its_handle_closes_the_owner_lock_once(self):
-        class Broken(GuardExec):
+        class Broken(GuardAttach):
             def write(self, kind, value):
                 super().write(b"z" if kind == b"s" else kind, value)
 
         def popen(argv, **_):
-            if "--hook-socket" in argv:
+            if argv[3:4] == ["attach"]:
                 proc = Broken(argv)
                 self.addCleanup(proc.exit, 0)
                 return proc
@@ -2547,8 +2566,17 @@ class HeadlessWorkerTest(StartBase):
 
     def test_a_headless_worker_records_its_kind_and_is_never_listed_or_attachable(self):
         handle = self.headless()
-        [(argv, _, _)] = self.execs
-        self.assertNotIn("--terminal", argv)
+        [(_, _, proc)] = self.execs
+        self.assertEqual(
+            proc.handoff,
+            {
+                "argv": ["with-secrets", "--client", "agent", "agent", "--flag"],
+                "env": {"AGENT_HOME": self.home_dir, "K": "v"},
+                "terminal": False,
+                "generation": GEN,
+                "size": "80x24",
+            },
+        )
         self.assertEqual(self.host_record()["kind"], "headless")
         self.assertNotIn("mode", self.host_record())
         self.listed("w")

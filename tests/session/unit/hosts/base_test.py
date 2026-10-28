@@ -8,6 +8,7 @@ import inspect
 import json
 import operator
 import os
+import re
 import signal
 import tomllib
 from types import MappingProxyType
@@ -48,6 +49,11 @@ per_column = 2
 implementation = "pkg.b:BHost"
 """
 NAMES = "a, b_2"
+HIDDEN_ERROR = '[hosts] hidden_size: want "<columns>x<rows>", each 1 to 9999, e.g. "80x24"'
+HIDDEN_INVALID = (
+    *("0x24", "80x0", "-80x24", "80x-24", "80.5x24", "80x24.0", "80", "axb", " 80x24", "10000x24"),
+    *(80, 80.5, None, True, [80, 24], {"columns": 80, "rows": 24}),
+)
 
 ABSTRACT = {
     Host: {"list"},
@@ -154,6 +160,23 @@ class HostDefaults(Case):
                 self.assertRaisesRegex(ConfigError, r"^\[hosts.m\] isolated: want true or false$"),
             ):
                 MinimalHost("m", {"isolated": value})
+
+    def test_hidden_size_is_the_hosts_own_80x24_when_absent_and_never_in_settings(self):
+        for settings, size in (
+            ({}, (80, 24)),
+            ({"hidden_size": "100x30", "root": "/x"}, (100, 30)),
+            ({"hidden_size": "9999x1"}, (9999, 1)),
+        ):
+            with self.subTest(settings=settings):
+                host = MinimalHost("m", settings)
+                left = {k: v for k, v in settings.items() if k != "hidden_size"}
+                self.assertEqual((host.tui_settings().hidden_size, host.settings), (size, left))
+        for value in HIDDEN_INVALID:
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ConfigError, f"^{re.escape(HIDDEN_ERROR)}$"),
+            ):
+                MinimalHost("m", {"hidden_size": value})
 
     def test_each_host_gets_its_own_mutable_settings_even_from_read_only_ones(self):
         given = MappingProxyType({"sizes": (1, [2]), "grid": MappingProxyType({"a": 1})})
@@ -308,6 +331,25 @@ class ParseHosts(Case):
         for found, message in cases:
             with self.subTest(found=found, message=message):
                 self.refused(found, message)
+
+    def test_hidden_size_goes_into_every_hosts_table(self):
+        hosts = Host.parse_hosts(
+            table(TWO.replace('default = "a"', 'default = "a"\nhidden_size = "100x30"'))
+        )
+        self.assertEqual(
+            {name: hosts.tables[name].get("hidden_size") for name in hosts.tables},
+            {"a": "100x30", "b_2": "100x30"},
+        )
+        self.assertNotIn("hidden_size", Host.parse_hosts(table()).tables["a"])
+
+    def test_an_invalid_hidden_size_or_one_in_a_hosts_table_is_refused(self):
+        for value in HIDDEN_INVALID:
+            with self.subTest(value=value):
+                self.refused({**table(), "hidden_size": value}, HIDDEN_ERROR)
+        self.refused(
+            table(TWO.replace("per_column = 2", 'hidden_size = "80x24"')),
+            "[hosts.a] hidden_size: set it in [hosts], for every Host",
+        )
 
     def test_the_class_is_never_loaded(self):
         found = table(TWO.replace("pkg.mod:AHost", "ensemble.session.hosts.tmux:TmuxHost"))

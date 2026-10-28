@@ -1,6 +1,6 @@
 """The guard (stdlib only, run by path): every Host's managed worker runs it as the client's direct
-parent (WDRC-199 FR-13 to FR-15). Its argv and channel protocol: docs/architecture.md › Guard
-protocol.
+parent (WDRC-199 FR-13 to FR-15), a Docker worker's as its container's main process (`--serve`).
+Its argv and channel protocol: docs/architecture.md › Guard protocol.
 """
 
 import argparse
@@ -32,8 +32,14 @@ READ_SIZE = 65536
 TICK = 0.05
 DISPLAY_GRACE = 2.0  # a client dead at once still reaches the display its Host starts at launch
 UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
-SIZE = (40, 120)  # rows, columns of a PTY no display sizes: read and events stay unwrapped
+SIZE = (24, 80)  # rows, columns of a PTY no display sizes, without --size
+SIZE_ARG = re.compile(r"([1-9][0-9]*)x([1-9][0-9]*)")
 DELIVERY = re.compile(r"[0-9a-f]{32}")
+GENERATION = re.compile(r"[0-9a-f]{32}")
+RUN = "/run/ensemble/guard"  # a --serve guard's run dirs, one per generation
+LAUNCH_WAIT = 60.0  # s from its start a --serve guard waits for its launch handoff
+HEARTBEAT = 5.0  # s a --serve guard runs on with no byte from its harness
+HOOK_ENV = "ENSEMBLE_GUARD_HOOK_SOCKET"
 
 
 def frame(kind: bytes, payload: bytes) -> bytes:
@@ -80,10 +86,63 @@ def hook_message(data: bytes) -> dict:
     return value
 
 
+def launch(data: bytes) -> dict:
+    """A launch handoff's fields; one fixed ValueError, never its content (env, credentials)."""
+    try:
+        value = json.loads(data)
+    except (ValueError, RecursionError):
+        value = None
+    if not (
+        isinstance(value, dict)
+        and set(value) == {"argv", "env", "terminal", "generation", "size"}
+        and isinstance(value["argv"], list)
+        and value["argv"]
+        and all(isinstance(arg, str) and "\0" not in arg for arg in value["argv"])
+        and isinstance(value["env"], dict)
+        and all(
+            key
+            and "=" not in key
+            and "\0" not in key
+            and isinstance(item, str)
+            and "\0" not in item
+            for key, item in value["env"].items()
+        )
+        and type(value["terminal"]) is bool
+        and isinstance(value["generation"], str)
+        and GENERATION.fullmatch(value["generation"])
+        and isinstance(value["size"], str)
+        and SIZE_ARG.fullmatch(value["size"])
+        and all(int(n) < 1 << 16 for n in value["size"].split("x"))
+    ):
+        raise ValueError("invalid launch handoff")
+    return value
+
+
+def await_launch(deadline: float) -> tuple[dict, bytes]:
+    """The launch handoff, stdin's first frame, and the bytes read after it."""
+    decoder = Decoder()
+    while (left := deadline - time.monotonic()) > 0:
+        if not select.select([0], [], [], left)[0]:
+            continue
+        data = os.read(0, READ_SIZE)
+        if not data:
+            break
+        try:
+            found = decoder.feed(data)
+        except ValueError:
+            raise ValueError("invalid launch handoff") from None
+        if found:
+            if found[0][0] != b"l":
+                raise ValueError("invalid launch handoff")
+            rest = b"".join(frame(kind, payload) for kind, payload in found[1:])
+            return launch(found[0][1]), rest + bytes(decoder.pending)
+    raise ValueError("no launch handoff")
+
+
 class Screen:
     """Bounded VT screen; visible cells and scrollback have separate ownership."""
 
-    def __init__(self, limit=1 << 20, *, rows=40, columns=120):
+    def __init__(self, limit=1 << 20, *, rows=SIZE[0], columns=SIZE[1]):
         self.limit, self.rows, self.columns = limit, rows, columns
         self.cells = [[" "] * columns for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
@@ -245,6 +304,14 @@ def fit(cells: list[list[str]], row: int, rows: int, columns: int) -> tuple[list
     return lines + [[" "] * columns for _ in range(rows - len(lines))], row - shift
 
 
+def size(value: str) -> tuple[int, int]:
+    """--size COLUMNSxROWS, each 1 to 65535, as (rows, columns)."""
+    found = SIZE_ARG.fullmatch(value)
+    if found is None or not all(int(n) < 1 << 16 for n in found.groups()):
+        raise argparse.ArgumentTypeError(f"want COLUMNSxROWS, each 1 to 65535: {value!r}")
+    return int(found[2]), int(found[1])
+
+
 def window(data: bytes) -> tuple[int, int]:
     value = json.loads(data)
     if (
@@ -364,8 +431,18 @@ def child_setup(slave: int | None) -> None:
 
 
 class Guard:
-    def __init__(self, args, lease: int | None = None):
+    def __init__(
+        self,
+        args,
+        lease: int | None = None,
+        *,
+        env: dict[str, str] | None = None,
+        heartbeat: float | None = None,
+        pending: bytes = b"",
+    ):
         self.args = args
+        self.env, self.heartbeat, self.pending = env, heartbeat, pending
+        self.heard = 0.0
         self.proc = None
         self.master = None
         self.streams = {}
@@ -378,8 +455,9 @@ class Guard:
         self.input_end = False  # a headless client's stdin closes once input is written
         self.input_closed = False
         self.decoder = Decoder()
-        self.screen = Screen()
-        self.size = SIZE
+        self.unsized = args.size  # the PTY's (rows, columns) while no display sizes it
+        self.screen = Screen(rows=self.unsized[0], columns=self.unsized[1])
+        self.size = self.unsized
         self.sizes = {}  # display peer: its terminal's (rows, columns), the latest last
         self.known = {}
         self.closing = None
@@ -392,7 +470,7 @@ class Guard:
         self.displayed = False
         self.children_pending = False
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
-        self.directory = os.path.dirname(args.lease if lease is not None else args.hook_socket)
+        self.directory = os.path.dirname(args.hook_socket)
 
     def state(self, status: str) -> None:
         if self.lease is None:
@@ -417,7 +495,13 @@ class Guard:
         try:
             if self.args.terminal:
                 self.master, slave = os.openpty()
-                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", *SIZE, 0, 0))
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", *self.size, 0, 0))
+            env = None
+            if self.env is not None or slave is not None:
+                env = {**os.environ, **(self.env or {})}
+                # A Docker client inherits no TERM; without one it draws no color.
+                if slave is not None:
+                    env.setdefault("TERM", "xterm-256color")
             self.proc = subprocess.Popen(
                 self.args.command,
                 stdin=slave if slave is not None else subprocess.PIPE,
@@ -426,8 +510,7 @@ class Guard:
                 start_new_session=True,
                 close_fds=True,
                 preexec_fn=lambda: child_setup(slave),
-                # A Docker client inherits no TERM; without one it draws no color.
-                env={"TERM": "xterm-256color", **os.environ} if slave is not None else None,
+                env=env,
             )
             self.spawned = time.monotonic()
         finally:
@@ -470,8 +553,8 @@ class Guard:
             self.follow()
 
     def follow(self) -> None:
-        """The PTY at the latest sized display's size, else SIZE; a change redraws its client."""
-        size = next(reversed(self.sizes.values()), SIZE)
+        """The PTY at the latest sized display's size, else unsized; a change redraws its client."""
+        size = next(reversed(self.sizes.values()), self.unsized)
         if self.master is not None and size != self.size:
             fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", *size, 0, 0))
             self.screen.resize(*size)
@@ -515,6 +598,8 @@ class Guard:
                 self.input.extend(data)
         elif kind == b"c" and json.loads(data) == {}:
             self.close()
+        elif kind == b"p" and json.loads(data) == {}:
+            pass
         elif kind == b"k" and json.loads(data) == {}:
             if self.taken:
                 self.ack(*self.taken.popleft())
@@ -526,6 +611,28 @@ class Guard:
             self.emit(json_frame(b"v", {"text": self.screen.text(lines)}))
         else:
             raise ValueError("invalid guard command")
+
+    def read_channel(self) -> None:
+        """Harness bytes: each read restarts the heartbeat limit; EOF is a close."""
+        data = os.read(0, READ_SIZE)
+        if not data:
+            self.close()
+            return
+        self.heard = time.monotonic()
+        for kind, payload in self.decoder.feed(data):
+            self.command(kind, payload)
+
+    def listen(self, ready) -> None:
+        """After a select, so a guard frozen past the limit (docker pause) reads its bytes first."""
+        if 0 not in ready and self.lost(time.monotonic()):
+            self.close()
+
+    def lost(self, now: float) -> bool:
+        return (
+            self.heartbeat is not None
+            and self.closing is None
+            and now - self.heard > self.heartbeat
+        )
 
     def write_input(self, *, ended: bool) -> None:
         """Queued input to the client while it runs, never after; at end of input its stdin closes
@@ -650,6 +757,9 @@ class Guard:
         try:
             self.start()
             assert self.proc is not None
+            self.heard = time.monotonic()
+            for kind, payload in self.decoder.feed(self.pending):
+                self.command(kind, payload)
             ended = False
             scan_due = 0.0
             while True:
@@ -682,14 +792,10 @@ class Guard:
                     readers += [p for p, (role, _) in self.peers.items() if role != "ack"]
                     readers += list(self.servers) if len(self.peers) < 64 else []
                 ready, _, _ = select.select(readers, [], [], TICK)
+                self.listen(ready)
                 for descriptor in ready:
                     if descriptor == 0:
-                        data = os.read(0, READ_SIZE)
-                        if not data:
-                            self.close()
-                        else:
-                            for kind, payload in self.decoder.feed(data):
-                                self.command(kind, payload)
+                        self.read_channel()
                     elif not isinstance(descriptor, int) and descriptor in self.servers:
                         if self.servers[descriptor] == "display":
                             self.take_display(descriptor)
@@ -848,39 +954,90 @@ def probe(directory: str) -> str:
         os.close(descriptor)
 
 
-def main(argv: list[str] | None = None) -> int:
+def arguments() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--attach")
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--hook-socket")
     parser.add_argument("--display-socket")
     parser.add_argument("--display-grace", action="store_true")
-    parser.add_argument("--lease")
+    parser.add_argument("--size", type=size, default=SIZE)
     parser.add_argument("--probe")
+    parser.add_argument("--serve", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = arguments()
     args = parser.parse_args(argv)
     if args.attach:
         return attach(args.attach)
     if args.probe:
         print(probe(args.probe))
         return 0
+    if args.serve:
+        if (
+            args.command
+            or args.hook_socket
+            or args.display_socket
+            or args.terminal
+            or args.size != SIZE
+        ):
+            parser.error("--serve takes no other option")
+        return serve()
     if args.command[:1] == ["--"]:
         args.command.pop(0)
     if not args.command or not args.hook_socket:
         parser.error("--hook-socket and a client command are required")
+    return supervise(args, None)
+
+
+def serve() -> int:
+    """A Docker worker container's main process: its client as the launch handoff says."""
+    try:
+        found, pending = await_launch(time.monotonic() + LAUNCH_WAIT)
+    except (OSError, ValueError) as error:
+        print(f"guard: {error}", file=sys.stderr)
+        return 1
+    args, lease, options = launched(found, pending)
+    return supervise(args, lease, **options)
+
+
+def run_paths(generation: str) -> dict[str, str]:
+    run = f"{RUN}/{generation}"
+    return {"dir": run, "hook": f"{run}/hook", "lease": f"{run}/lease", "display": f"{run}/display"}
+
+
+def launched(found: dict, pending: bytes) -> tuple[argparse.Namespace, str, dict]:
+    """A handoff's guard args, lease path and Guard options."""
+    paths = run_paths(found["generation"])
+    args = argparse.Namespace(
+        terminal=found["terminal"],
+        hook_socket=paths["hook"],
+        display_socket=paths["display"] if found["terminal"] else None,
+        display_grace=False,
+        size=size(found["size"]),
+        command=found["argv"],
+    )
+    env = {**found["env"], HOOK_ENV: args.hook_socket}
+    return args, paths["lease"], {"env": env, "heartbeat": HEARTBEAT, "pending": pending}
+
+
+def supervise(args, lease_path: str | None, **options) -> int:
     signal.pthread_sigmask(signal.SIG_SETMASK, ())
     # A handled disposition is reset by exec; clients must not inherit ignored HUP.
     lease = None
-    if args.lease:
+    if lease_path:
         try:
-            lease = hold_lease(args.lease)
+            lease = hold_lease(lease_path)
         except OSError as error:
-            print(f"guard: {args.lease}: {error.strerror}", file=sys.stderr)
+            print(f"guard: {lease_path}: {error.strerror}", file=sys.stderr)
             return 1
         if lease is None:
             print("guard: lease held", file=sys.stderr)
             return 1
-    runtime = Guard(args, lease)
+    runtime = Guard(args, lease, **options)
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda _sig, _frame: runtime.close())
     try:

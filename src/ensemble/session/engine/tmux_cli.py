@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from ensemble.session.engine.status_log import SessionStatusLog
 from ensemble.session.engine.types import (
+    HIDDEN_SIZE,
     Launch,
     Liveness,
     PaneStatus,
@@ -111,7 +112,10 @@ DEAD_EVENT = (
 
 BORDER = " #{session_name} #{@state} "
 
-READABLE = ("-x", "120", "-y", "40")
+
+def sized(size: tuple[int, int], *, border: bool = False) -> tuple[str, ...]:
+    """tmux's -x/-y for a pane of size (columns, rows), border: under a border row."""
+    return ("-x", str(size[0]), "-y", str(size[1] + border))
 
 
 TERMINAL_KEYS = (
@@ -427,10 +431,12 @@ class TmuxCli:
         else:
             self.checked(["kill-session", "-t", address(target, "")])
 
-    def unview(self, session: str) -> None:
+    def unview(
+        self, session: str, size: tuple[int, int] = HIDDEN_SIZE, *, border: bool = False
+    ) -> None:
         target = address(session)
         self.checked(
-            ["resize-window", "-t", target, *READABLE, ";"]
+            ["resize-window", "-t", target, *sized(size, border=border), ";"]
             + ["set-option", "-w", "-u", "-t", target, "window-size"]
         )
 
@@ -547,6 +553,7 @@ class TmuxCli:
         events: str | None = None,
         status_line: bool = False,
         tags: Mapping[str, str] | None = None,
+        size: tuple[int, int] = HIDDEN_SIZE,
     ) -> str:
         """argv in a new detached session keeping its pane after exit, in cwd with env (terminal keys
         the pane's, PWD cwd). Every option and the pane-died hook (@state dead, dead line to
@@ -587,7 +594,7 @@ class TmuxCli:
                     PROCESS,
                     "-s",
                     session,
-                    *READABLE,
+                    *sized(size, border=True),
                     *wrapper,
                     ";",
                     "set-option",
