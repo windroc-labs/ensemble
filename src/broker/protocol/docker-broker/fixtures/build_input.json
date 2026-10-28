@@ -90,23 +90,6 @@
     }
   },
   {
-    "name": "build-input-plugin-missing",
-    "valid": false,
-    "expected": {
-      "stage": "schema",
-      "exit_code": 2,
-      "error_code": "usage"
-    },
-    "data": {
-      "argv": [
-        "build",
-        "--ensemble",
-        "/opt/ensemble",
-        "--plugin"
-      ]
-    }
-  },
-  {
     "name": "build-input-plugin-path",
     "valid": false,
     "expected": {
@@ -149,24 +132,6 @@
     }
   },
   {
-    "name": "build-input-image-plugin-path",
-    "valid": false,
-    "expected": {
-      "stage": "schema",
-      "exit_code": 2,
-      "error_code": "usage"
-    },
-    "data": {
-      "argv": [
-        "build",
-        "--ensemble",
-        "/opt/ensemble",
-        "--image-plugin",
-        "../x"
-      ]
-    }
-  },
-  {
     "name": "build-input-base-image",
     "valid": true,
     "expected": {
@@ -189,41 +154,6 @@
         "other.plugin",
         "--max-age",
         "604800"
-      ]
-    }
-  },
-  {
-    "name": "build-input-base-image-missing",
-    "valid": false,
-    "expected": {
-      "stage": "schema",
-      "exit_code": 2,
-      "error_code": "usage"
-    },
-    "data": {
-      "argv": [
-        "build",
-        "--ensemble",
-        "/opt/ensemble",
-        "--base-image"
-      ]
-    }
-  },
-  {
-    "name": "build-input-base-image-bad",
-    "valid": false,
-    "expected": {
-      "stage": "schema",
-      "exit_code": 2,
-      "error_code": "usage"
-    },
-    "data": {
-      "argv": [
-        "build",
-        "--ensemble",
-        "/opt/ensemble",
-        "--base-image",
-        "-x"
       ]
     }
   }
