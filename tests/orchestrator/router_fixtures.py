@@ -617,6 +617,10 @@ class TickBase(Base):
     def before(self):
         return self.unmap("".join(f"{line}\n" for line in self.lines))
 
+    def unchanged(self, fake):
+        """The tick changed nothing: no Linear write, no launch, runs.jsonl as written."""
+        self.assertEqual((fake.mutations, self.start.launches, self.state), ([], [], self.before()))
+
     def last_run(self):
         """runs.jsonl's last row, a start or resume row."""
         entry = json.loads(self.state.splitlines()[-1])

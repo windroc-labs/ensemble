@@ -4,7 +4,6 @@ import io
 import json
 import os
 import plistlib
-import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
@@ -28,8 +27,7 @@ from tests.orchestrator.case import REPO, Case
 from tests.orchestrator.linear_run_case import SID, ReadyDelegate, RunCase
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import HARNESS_IDENTITY
-from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
-from tests.orchestrator.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
+from tests.orchestrator.unit.keychain_fixtures import app_transport, token_http_error
 from tests.orchestrator.unit.run_fixtures import logged, show
 from tests.orchestrator.unit.streams import Stderr
 from tests.utils.cli_help import check_examples, help_text, parse_only
@@ -95,18 +93,8 @@ class Wirings(run_fixtures.Base):
 
     def renewal(self, days, answer):
         """A harness call over a fake Keychain and token endpoint: its stderr."""
-        keychain = Keychain(
-            {
-                HARNESS_IDENTITY.token_service: record(days=days),
-                HARNESS_IDENTITY.secret_service: APP_SECRET,
-            }
-        )
         err = io.StringIO()
-        with (
-            mock.patch("subprocess.run", keychain),
-            mock.patch.object(urllib.request, "urlopen", side_effect=Endpoint(answer)),
-            redirect_stderr(err),
-        ):
+        with app_transport(HARNESS_IDENTITY, days, answer), redirect_stderr(err):
             client.linear_gql("query { viewer { id } }", identity=HARNESS_IDENTITY)
         return err.getvalue()
 
@@ -769,18 +757,7 @@ class WritebackUsage(RunCase):
             stdin="{\n",
         )
         self.assertEqual(result, 2)
-        keychain = Keychain(
-            {
-                HARNESS_IDENTITY.token_service: record(days=3),
-                HARNESS_IDENTITY.secret_service: APP_SECRET,
-            }
-        )
-        with (
-            mock.patch("subprocess.run", keychain),
-            mock.patch.object(
-                urllib.request, "urlopen", side_effect=Endpoint(token_http_error(401))
-            ),
-        ):
+        with app_transport(HARNESS_IDENTITY, 3, token_http_error(401)):
             client.linear_gql("query { viewer { id } }", identity=HARNESS_IDENTITY)
         self.assertIn(
             ("writeback", "token-error"), [(e["src"], e["kind"]) for e in logged(self.cfg.logs_dir)]

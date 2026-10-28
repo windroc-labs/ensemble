@@ -5,7 +5,6 @@ import io
 import json
 import os
 import time
-import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -34,13 +33,10 @@ from tests.orchestrator.unit.board_ids import role as role_table
 from tests.orchestrator.unit.keychain_fixtures import (
     NEW,
     OLD,
-    Endpoint,
-    Keychain,
-    record,
+    app_transport,
     renewed,
     token_http_error,
 )
-from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
 from tests.orchestrator.unit.outage import FAILURES, FIELDS, failing
 from tests.orchestrator.unit.promote_fixtures import (
     AGENT,
@@ -722,19 +718,8 @@ class HarnessToken(Base):
         self.ready("DR-1")
 
     def promote(self, days, answer=None, *argv):
-        self.keychain = Keychain(
-            {
-                HARNESS_IDENTITY.token_service: record(days=days),
-                HARNESS_IDENTITY.secret_service: APP_SECRET,
-            }
-        )
-        self.endpoint = Endpoint(
-            answer, data=lambda q, v: self.fake(q, identity=HARNESS_IDENTITY, **v)
-        )
-        with (
-            mock.patch("subprocess.run", self.keychain),
-            mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint),
-        ):
+        transport = app_transport(HARNESS_IDENTITY, days, answer, self.fake)
+        with transport as (self.keychain, self.endpoint):
             return self.run_main(*argv, gql=client.linear_gql)
 
     def stored(self):

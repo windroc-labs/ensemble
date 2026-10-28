@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import time
-import urllib.request
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import timedelta
@@ -38,8 +37,7 @@ from tests.orchestrator.prune_fixtures import (
 )
 from tests.orchestrator.unit import promote_fixtures as tp
 from tests.orchestrator.unit.board_ids import FINISHED, HARNESS_IDENTITY, role_id
-from tests.orchestrator.unit.keychain_fixtures import SECRET as APP_SECRET
-from tests.orchestrator.unit.keychain_fixtures import Endpoint, Keychain, record, token_http_error
+from tests.orchestrator.unit.keychain_fixtures import app_transport, token_http_error
 from tests.orchestrator.unit.run_fixtures import CORE_LOCAL, logged, show
 from tests.utils.process_fixtures import CompletedProcess
 
@@ -1204,19 +1202,8 @@ class PruneCommand(PruneScenario):
             stack.enter_context(redirect_stdout(out))
             stack.enter_context(redirect_stderr(err))
             if token is not None:
-                self.keychain = Keychain(
-                    {
-                        HARNESS_IDENTITY.token_service: record(days=token[0]),
-                        HARNESS_IDENTITY.secret_service: APP_SECRET,
-                    }
-                )
-                self.endpoint = Endpoint(
-                    token[1], data=lambda q, v: gql(q, identity=HARNESS_IDENTITY, **v)
-                )
-                stack.enter_context(mock.patch("subprocess.run", self.keychain))
-                stack.enter_context(
-                    mock.patch.object(urllib.request, "urlopen", side_effect=self.endpoint)
-                )
+                transport = app_transport(HARNESS_IDENTITY, *token, gql)
+                self.keychain, self.endpoint = stack.enter_context(transport)
             code = prune.main(
                 list(argv),
                 trackers=cli.TRACKERS,
