@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -17,9 +18,10 @@ const envValue = "FAKE-ENV-VALUE"
 
 // fakeEnv is the environment secrets: ready fails Ready; failOn fails Inject of that item; calls records each call.
 type fakeEnv struct {
-	ready  error
-	failOn map[string]error
-	calls  []string
+	prepared [][]byte
+	ready    error
+	failOn   map[string]error
+	calls    []string
 }
 
 func (e *fakeEnv) Ready(items []string) error {
@@ -27,12 +29,14 @@ func (e *fakeEnv) Ready(items []string) error {
 	return e.ready
 }
 
-func (e *fakeEnv) Inject(s Secret, exec func([]string, []byte) error) error {
+func (e *fakeEnv) Inject(s Secret) (credential.Command, error) {
 	e.calls = append(e.calls, "inject "+s.Item+" "+s.File)
 	if err := e.failOn[s.Item]; err != nil {
-		return err
+		return credential.Command{}, err
 	}
-	return exec([]string{"inject-env", s.File}, []byte(envValue+"-"+s.Item))
+	data := []byte(envValue + "-" + s.Item)
+	e.prepared = append(e.prepared, data)
+	return credential.Command{Argv: []string{"inject-env", s.File}, Stdin: data}, nil
 }
 
 var dummySecrets = []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/ssh", "id_ed25519")}
@@ -93,28 +97,12 @@ func TestStartEnvSecrets(t *testing.T) {
 	if want := []string{"ready ensemble-broker-env/dummy,ensemble-broker-env/ssh", "inject ensemble-broker-env/dummy dummy.txt", "inject ensemble-broker-env/ssh id_ed25519"}; !slices.Equal(env.calls, want) {
 		t.Fatalf("%q", env.calls)
 	}
-	created, claude, injected := -1, -1, []int{}
-	for i, c := range d.calls {
-		if c[0] == "run" && c[1] == "--detach" {
-			created = i
-		}
-		if slices.Contains(c, "inject") {
-			claude = i
-		}
-		if slices.Contains(c, "inject-env") {
-			injected = append(injected, i)
-			if !slices.Equal(c[:5], []string{"exec", "--interactive", "--user", "agent", container}) {
-				t.Fatalf("%q", c)
-			}
-		}
-		for _, arg := range c {
-			if strings.Contains(arg, envValue) {
-				t.Fatalf("value in docker argument %q", c)
-			}
-		}
+	commands := startCommands(t, d)
+	if len(commands) != 3 || commands[0].Argv[0] != "inject" || commands[1].Argv[0] != "inject-env" || commands[2].Argv[1] != "id_ed25519" {
+		t.Fatalf("credential order: %+v", commands)
 	}
-	if len(injected) != 2 || created < 0 || claude < created || injected[0] < claude || !slices.Equal(creds.calls, []string{"ready default", "inject default"}) {
-		t.Fatalf("order: create %d, claude %d, env %v: %q", created, claude, injected, d.calls)
+	if string(commands[1].Stdin) != envValue+"-ensemble-broker-env/dummy" || !slices.Equal(creds.calls, []string{"ready default", "inject default"}) {
+		t.Fatal("credential bytes or provider calls changed")
 	}
 	if run := detached(d); !slices.Contains(run, "ensemble.secrets=ensemble-broker-env/dummy,ensemble-broker-env/ssh") {
 		t.Fatalf("no secrets label: %q", run)
@@ -183,12 +171,12 @@ func TestStartEnvInjectFails(t *testing.T) {
 		want     []string
 	}{
 		"protocol": {w: &world{labels: goodLabels()}, injectEr: protocol.New(protocol.StartFailed, "Writing ensemble-broker-env/ssh into the container failed."),
-			code: protocol.StartFailed, cleanup: protocol.Removed, want: []string{"ensemble-broker-env/dummy issued", "ensemble-broker-env/dummy withdrawn"}},
+			code: protocol.StartFailed, cleanup: protocol.Removed, want: nil},
 		"opaque": {w: &world{labels: goodLabels()}, injectEr: errors.New("exec failed"),
-			code: protocol.StartFailed, cleanup: protocol.Removed, want: []string{"ensemble-broker-env/dummy issued", "ensemble-broker-env/dummy withdrawn"}},
+			code: protocol.StartFailed, cleanup: protocol.Removed, want: nil},
 		"rollback fails": {w: &world{labels: goodLabels(), rmErr: &docker.CommandError{Exit: 1, Stderr: "busy"}},
 			injectEr: protocol.New(protocol.KeychainFailed, "Keychain access to ensemble-broker-env/ssh failed."),
-			code:     protocol.KeychainFailed, cleanup: protocol.Failed, want: []string{"ensemble-broker-env/dummy issued"}},
+			code:     protocol.KeychainFailed, cleanup: protocol.Failed, want: nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := &fakeEnv{failOn: map[string]error{"ensemble-broker-env/ssh": tc.injectEr}}

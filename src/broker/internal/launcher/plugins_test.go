@@ -21,7 +21,7 @@ func TestBuildStagesPluginSourcesWithoutHostRecord(t *testing.T) {
 	}
 	inner := e.fake.respond
 	seen := false
-	e.fake.respond = func(args []string) ([]byte, error) {
+	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" {
 			if !slices.Contains(args, "--no-cache") {
 				t.Fatal("client/plugin refresh used Docker cache")
@@ -41,7 +41,7 @@ func TestBuildStagesPluginSourcesWithoutHostRecord(t *testing.T) {
 				}
 			}
 		}
-		return inner(args)
+		return inner(args, stdin)
 	}
 	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{Plugins: []string{"beta@owner/market#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "updraft@vendor/plugin#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::vendor/catalogue#cccccccccccccccccccccccccccccccccccccccc"}}, -1); err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestDefaultBuildContextUnchanged(t *testing.T) {
 	e := newBuildEnv(t)
 	inner := e.fake.respond
 	var root []string
-	e.fake.respond = func(args []string) ([]byte, error) {
+	e.fake.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" && slices.Contains(args, "--build-arg") {
 			entries, err := os.ReadDir(filepath.Dir(args[len(args)-1]))
 			if err != nil {
@@ -242,7 +242,7 @@ func TestDefaultBuildContextUnchanged(t *testing.T) {
 				t.Fatal("image plugins staged in the package context")
 			}
 		}
-		return inner(args)
+		return inner(args, stdin)
 	}
 	if _, err := e.host().Build(context.Background(), e.pkg, BuildSpec{}, -1); err != nil {
 		t.Fatal(err)

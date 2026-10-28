@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/github"
 	"ensemble/broker/internal/protocol"
@@ -455,26 +456,29 @@ func TestBotUserID(t *testing.T) {
 }
 
 // AC1: one token per installation, each in its own file, issued and audited, and the Keychain untouched.
-func TestIssueWritesEachInstallationAndNoKeychain(t *testing.T) {
+func TestIssuePreparesEachInstallationAndNoKeychain(t *testing.T) {
 	r := newRig(t, "acme", "Other-Org")
-	revoke, got, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+	commands, revoke, got, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
 	if err != nil || revoke == nil {
 		t.Fatalf("revoke %v err %v", revoke == nil, err)
+	}
+	for _, command := range commands {
+		defer command.Erase()
 	}
 	want := []protocol.Expiry{{Account: "Other-Org", ExpiresAt: "2026-10-17T13:00:00Z"}, {Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("expiries %v", got)
 	}
-	if len(r.exec.argv) != 2 {
-		t.Fatalf("execs %v", r.exec.argv)
+	if len(commands) != 2 {
+		t.Fatalf("execs %v", commands)
 	}
 	for i, account := range []string{"acme", "Other-Org"} {
-		argv := r.exec.argv[i]
+		argv := commands[i].Argv
 		if !slices.Equal(argv, []string{"/bin/sh", "-c", writeScript, "sh", account}) {
 			t.Fatalf("argv %q", argv)
 		}
-		if string(r.exec.stdin[i]) != tok(i+1, i+1) {
-			t.Fatalf("stdin %q", r.exec.stdin[i])
+		if string(commands[i].Stdin) != tok(i+1, i+1) {
+			t.Fatalf("stdin %q", commands[i].Stdin)
 		}
 	}
 	for _, part := range []string{"umask 0377", "mkdir -p -m 0700 " + docker.SecretsDir + "/github", `mv -f `} {
@@ -496,9 +500,9 @@ func TestIssueWritesEachInstallationAndNoKeychain(t *testing.T) {
 
 func TestIssueNoInstallations(t *testing.T) {
 	r := newRig(t)
-	revoke, got, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
-	if err != nil || got == nil || len(got) != 0 || len(r.exec.argv) != 0 || revoke == nil {
-		t.Fatalf("%v %v %v", got, err, r.exec.argv)
+	commands, revoke, got, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
+	if err != nil || got == nil || len(got) != 0 || len(commands) != 0 || revoke == nil {
+		t.Fatalf("%v %v %v", got, err, commands)
 	}
 	revoke()
 	if len(r.api.revoked) != 0 {
@@ -514,8 +518,6 @@ func TestIssueFailureRevokesIssued(t *testing.T) {
 		want  []string
 	}{
 		"second issue": {func(r *rig, _ func()) { r.api.issueFail = map[int]int{2: 500} }, protocol.GitHubFailed, []string{tok(1, 1)}},
-		"first write":  {func(r *rig, _ func()) { r.exec.err = errors.New("exec") }, "", []string{tok(1, 1)}},
-		"second write": {func(r *rig, _ func()) { r.exec.failAt = 2 }, "", []string{tok(1, 1), tok(2, 2)}},
 		"cancelled": {func(r *rig, cancel func()) {
 			r.api.issueFail = map[int]int{2: 500}
 			r.api.onIssue = func(n int) {
@@ -530,8 +532,8 @@ func TestIssueFailureRevokesIssued(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			tc.setup(r, cancel)
-			revoke, _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr, r.exec.run)
-			if err == nil || revoke != nil {
+			commands, revoke, _, err := r.g.Issue(ctx, "ensemble-bot", "", perms, ctr)
+			if err == nil || revoke != nil || len(commands) != 0 {
 				t.Fatalf("err %v revoke %v", err, revoke != nil)
 			}
 			if tc.code != "" {
@@ -548,25 +550,11 @@ func TestIssueFailureRevokesIssued(t *testing.T) {
 	}
 }
 
-func TestIssueWriteErrors(t *testing.T) {
-	r := newRig(t, "acme")
-	r.exec.err = fmt.Errorf("x: %w", docker.ErrUnreachable)
-	_, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
-	if !errors.Is(err, docker.ErrUnreachable) {
-		t.Fatalf("%v", err)
-	}
-	r.exec.err = &docker.CommandError{Exit: 1, Stderr: "fatal: " + tok(1, 2)}
-	_, _, err = r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
-	if err == nil || err.Error() != "writing a GitHub token into the container failed" {
-		t.Fatalf("%v", err)
-	}
-}
-
 // An installation account that could not be a file name gets no token at all, nor does any other.
 func TestIssueRefusesBadAccount(t *testing.T) {
 	for _, account := range []string{"../claude", ".hidden", "a b"} {
 		r := newRig(t, "acme", account)
-		_, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+		_, _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
 		wantCode(t, err, protocol.GitHubFailed)
 		if r.api.issued != 0 || len(r.api.revoked) != 0 || len(r.exec.argv) != 0 {
 			t.Fatalf("%q: issued %d revoked %q writes %q", account, r.api.issued, r.api.revoked, r.exec.argv)
@@ -577,10 +565,10 @@ func TestIssueRefusesBadAccount(t *testing.T) {
 func TestIssueKeyProblems(t *testing.T) {
 	r := newRig(t, "acme")
 	r.g.Apps = keys{account: "1234567", key: []byte("garbage")}
-	_, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+	_, _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
 	wantCode(t, err, protocol.GitHubFailed)
 	r.g.Apps = keys{err: ErrNotFound}
-	_, _, err = r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
+	_, _, _, err = r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
 	wantCode(t, err, protocol.LoginRequired)
 	_, err = r.g.Refresh(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run)
 	wantCode(t, err, protocol.LoginRequired)
@@ -589,11 +577,18 @@ func TestIssueKeyProblems(t *testing.T) {
 	}
 }
 
-func issued(t *testing.T, r *rig) {
+func issued(t *testing.T, r *rig) []credential.Command {
 	t.Helper()
-	if _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr, r.exec.run); err != nil {
+	commands, _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "", perms, ctr)
+	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		for _, command := range commands {
+			command.Erase()
+		}
+	})
+	return commands
 }
 
 // AC2: a maintain with no record anywhere lists the App's installations now, one token each, over each file.
@@ -696,11 +691,14 @@ func repoRig(t *testing.T, installed bool) (*rig, audited) {
 	return r, audited{rec, sink}
 }
 
-func TestIssueRepoWritesOneFile(t *testing.T) {
+func TestIssueRepoPreparesOneFile(t *testing.T) {
 	r, a := repoRig(t, true)
-	revoke, got, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run)
+	commands, revoke, got, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr)
 	if err != nil || !slices.Equal(got, []protocol.Expiry{{Account: "acme", ExpiresAt: "2026-10-17T13:00:00Z"}}) {
 		t.Fatalf("%v %v", got, err)
+	}
+	for _, command := range commands {
+		defer command.Erase()
 	}
 	if len(r.api.repoPaths) != 1 || !strings.HasPrefix(r.api.repoPaths[0], "/repos/acme/app/installation Bearer ey") {
 		t.Fatalf("repo requests %q", r.api.repoPaths)
@@ -708,8 +706,8 @@ func TestIssueRepoWritesOneFile(t *testing.T) {
 	if !slices.Equal(r.api.bodies, []string{repoBody}) {
 		t.Fatalf("token requests %q", r.api.bodies)
 	}
-	if len(r.exec.argv) != 1 || !slices.Equal(r.exec.argv[0], []string{"/bin/sh", "-c", writeScript, "sh", "acme"}) || string(r.exec.stdin[0]) != tok(2, 1) {
-		t.Fatalf("writes %q", r.exec.argv)
+	if len(commands) != 1 || !slices.Equal(commands[0].Argv, []string{"/bin/sh", "-c", writeScript, "sh", "acme"}) || string(commands[0].Stdin) != tok(2, 1) {
+		t.Fatalf("writes %q", commands)
 	}
 	r.noKeychain(t)
 	revoke()
@@ -728,7 +726,7 @@ func TestIssueRepoWritesOneFile(t *testing.T) {
 
 func TestIssueRepoNotInstalled(t *testing.T) {
 	r, _ := repoRig(t, false)
-	_, _, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run)
+	_, _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr)
 	wantCode(t, err, protocol.GitHubFailed)
 	if msg := err.(*protocol.Error).Message; msg != "GitHub App ensemble-broker-bot is not installed on acme/app; install it there." {
 		t.Fatalf("message %q", msg)
@@ -741,7 +739,7 @@ func TestIssueRepoNotInstalled(t *testing.T) {
 // A renewal of a repo grant takes the repo and set the manifest passes again: no record keeps them.
 func TestRefreshRepoKeepsTheRepo(t *testing.T) {
 	r, _ := repoRig(t, true)
-	if _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr, r.exec.run); err != nil {
+	if _, _, _, err := r.g.Issue(context.Background(), "ensemble-bot", "acme/app", perms, ctr); err != nil {
 		t.Fatal(err)
 	}
 	r.exec.argv, r.exec.stdin = nil, nil

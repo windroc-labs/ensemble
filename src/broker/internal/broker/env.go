@@ -112,20 +112,12 @@ func (e EnvKeys) Ready(refs []string) error {
 	return nil
 }
 
-// Inject writes s's value into the container's secrets tmpfs through exec's stdin, never showing a keychain dialog.
-// Errors are envError's, wrap docker.ErrUnreachable or name s.Item: no Docker stderr, no keychain detail.
-func (e EnvKeys) Inject(s launcher.Secret, exec func(argv []string, stdin []byte) error) error {
+// Inject prepares s's write; the caller owns and erases the command.
+func (e EnvKeys) Inject(s launcher.Secret) (credential.Command, error) {
 	value, err := e.read(s.Item)
+	defer erase(value)
 	if err != nil {
-		return err
+		return credential.Command{}, err
 	}
-	err = credential.Deliver(exec, credential.File{Dir: envDir, Name: s.File}, value)
-	erase(value)
-	if errors.Is(err, docker.ErrUnreachable) {
-		return fmt.Errorf("environment secret injection: %w", docker.ErrUnreachable)
-	}
-	if err != nil {
-		return protocol.New(protocol.StartFailed, "Writing "+s.Item+" into the container failed.")
-	}
-	return nil
+	return credential.Prepare(credential.File{Dir: envDir, Name: s.File}, value)
 }

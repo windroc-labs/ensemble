@@ -41,6 +41,7 @@ from ensemble.session.engine.types import (
     SessionError,
     SessionRow,
     StatusState,
+    TuiSettings,
     Unanswered,
 )
 from ensemble.session.harness import guard
@@ -424,6 +425,9 @@ class DockerHost(Host):
         self.run = run
         self.broker = Broker() if broker is None else broker
         self._workers: dict[str, DockerWorker] = {}
+
+    def tui_settings(self) -> TuiSettings:
+        return replace(super().tui_settings(), status_line=True)
 
     def _ps(self, *, required: bool = False) -> list[list[str]]:
         """Admission requires an answer; others list none without a daemon/CLI."""

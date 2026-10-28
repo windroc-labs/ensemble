@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -132,14 +133,16 @@ func (k *fakeKeys) Ready(providers []string) error {
 	return k.ready
 }
 
-func (k *fakeKeys) Inject(providers []string, exec func([]string, []byte) error) error {
+func (k *fakeKeys) Inject(providers []string) ([]credential.Command, error) {
 	k.calls = append(k.calls, "inject "+strings.Join(providers, ","))
-	for _, p := range providers {
-		if err := exec([]string{"inject-opencode", p}, []byte(fakeToken)); err != nil {
-			return err
-		}
+	if k.injectErr != nil {
+		return nil, k.injectErr
 	}
-	return k.injectErr
+	var commands []credential.Command
+	for _, p := range providers {
+		commands = append(commands, credential.Command{Argv: []string{"inject-opencode", p}, Stdin: []byte(fakeToken)})
+	}
+	return commands, nil
 }
 
 func TestStartOpencodeProviders(t *testing.T) {
@@ -152,20 +155,9 @@ func TestStartOpencodeProviders(t *testing.T) {
 	if !slices.Equal(keys.calls, []string{"ready strata,lab", "inject strata,lab"}) {
 		t.Fatalf("%q", keys.calls)
 	}
-	created, injected := -1, -1
-	for i, c := range d.calls {
-		if c[0] == "run" && created < 0 {
-			created = i
-		}
-		if slices.Contains(c, "inject-opencode") && injected < 0 {
-			injected = i
-			if !slices.Equal(c, []string{"exec", "--interactive", "--user", "agent", container, "inject-opencode", "strata"}) {
-				t.Fatalf("%q", c)
-			}
-		}
-	}
-	if created < 0 || injected < created {
-		t.Fatalf("injected before create: %q", d.calls)
+	commands := startCommands(t, d)
+	if len(commands) != 2 || !slices.Equal(commands[0].Argv, []string{"inject-opencode", "strata"}) || commands[1].Argv[1] != "lab" {
+		t.Fatalf("provider commands: %+v", commands)
 	}
 	for _, edit := range []func(map[string]any){nil, withProviders()} {
 		h, _, _ := opencodeHost(&world{labels: goodLabels()}, &fakeTokens{})
@@ -283,7 +275,7 @@ func TestStartOpencode(t *testing.T) {
 			if slices.Contains(c, "inject") || slices.Contains(c, "inject-codex") {
 				t.Fatalf("client credential injected: %q", c)
 			}
-			hooked = hooked || slices.Contains(c, "hook")
+			hooked = hooked || slices.Contains(c, "/usr/local/bin/ensemble-session")
 		}
 		if !hooked {
 			t.Fatal("hook stub not installed")
@@ -291,37 +283,20 @@ func TestStartOpencode(t *testing.T) {
 	}
 }
 
-func TestStartProbesOpencode(t *testing.T) {
-	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
-	if _, err := h.Start(context.Background(), validManifest(t)); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.ContainsFunc(d.calls, func(c []string) bool {
-		return slices.Equal(c, []string{"exec", "--user", "agent", container, "/opt/ensemble/clients/bin/opencode", "--version"})
-	}) {
-		t.Fatalf("no opencode probe: %q", d.calls)
-	}
-	h, d = startHost(&world{labels: goodLabels(), versions: []string{"2.1.0\n", "codex-cli 0.163.0\n", ""}}, &fakeCreds{})
-	_, err := h.Start(context.Background(), validManifest(t))
-	if e := protoErr(t, err); e.Code != protocol.StartFailed || e.Message != "Cannot run the image's clients." || e.Cleanup != protocol.Removed {
-		t.Fatalf("%+v", e)
-	}
-	if slices.ContainsFunc(d.calls, func(c []string) bool { return slices.Contains(c, "inject") }) {
-		t.Fatal("injected after a failed probe")
-	}
-}
-
 func TestOpencodeImageBelowMinimum(t *testing.T) {
-	for _, version := range []string{"1.19.2\n", "1.19\n", "v1.19.3\n", "opencode 1.19.3\n"} {
+	for _, tc := range []struct{ version, message string }{
+		{"1.19.2", "Image OpenCode version is invalid or below the minimum; rebuild the worker image with OpenCode 1.19.3 or newer."},
+		{"1.19", "Image client version labels are missing or invalid; rebuild the worker image with ensemble-broker build."},
+	} {
+		version := tc.version
 		t.Run(strings.TrimSpace(version), func(t *testing.T) {
 			tokens := &fakeTokens{}
-			h, d, _ := opencodeHost(&world{labels: goodLabels(), versions: []string{"2.1.0\n", "codex-cli 0.163.0\n", version}}, tokens)
+			h, d, _ := opencodeHost(&world{labels: labelsWithVersion("opencode", strings.TrimSpace(version))}, tokens)
 			rec, path := audited(t, &h, "start", "")
 			_, err := h.Start(context.Background(), opencodeManifest(t, withGitHub))
 			rec.Flush(err)
 			e := protoErr(t, err)
-			want := "Image OpenCode version is invalid or below the minimum; rebuild the worker image with OpenCode 1.19.3 or newer."
-			if e.Code != protocol.StartFailed || e.Message != want || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
+			if e.Code != protocol.StartFailed || e.Message != tc.message || e.Cleanup != protocol.Removed || !hasCall(d, "rm") {
 				t.Fatalf("%+v", e)
 			}
 			if slices.ContainsFunc(tokens.calls, func(c string) bool { return strings.HasPrefix(c, "issue") }) {
@@ -332,7 +307,7 @@ func TestOpencodeImageBelowMinimum(t *testing.T) {
 			}
 		})
 	}
-	h, _ := startHost(&world{labels: goodLabels(), versions: []string{"2.1.0\n", "codex-cli 0.163.0\n", "1.0.0\n"}}, &fakeCreds{})
+	h, _ := startHost(&world{labels: labelsWithVersion("opencode", "1.0.0")}, &fakeCreds{})
 	got, err := h.Start(context.Background(), validManifest(t))
 	if err != nil || got.Clients.Opencode != "1.0.0" {
 		t.Fatalf("a Claude start checked the OpenCode minimum: %+v %v", got, err)

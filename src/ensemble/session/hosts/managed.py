@@ -265,7 +265,8 @@ class ManagedProcess(InteractiveProcess):
         with self.condition:
             self.closing = True
             self.condition.notify_all()
-        self._join(self.releaser)
+            releaser = self.releaser
+        self._join(releaser)
 
     def send_frame(self, kind: bytes, data: bytes) -> None:
         self.checked()
