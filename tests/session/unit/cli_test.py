@@ -25,7 +25,7 @@ from ensemble.utils import ACCOUNT_ENV, Record
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
 from tests.session.hosted_support import SID, HostedTuiBase
-from tests.utils.cli_help import examples, parse_only
+from tests.utils.cli_help import check_examples, help_text, parse_only
 
 
 class CliHost(ScreenHost):
@@ -672,23 +672,16 @@ class HelpTest(Case):
                 self.assertLessEqual(len(line), 80, line)
 
     def test_published_operation_examples_use_real_parser_before_dispatch(self):
-        for name in [None, *COMMANDS]:
-            published = list(examples(self.help(([name] if name else []) + ["--help"])))
-            if name not in {"tile", "hook", "client-resume"}:
-                self.assertTrue(published, name)
-            for command in published:
-                with (
-                    self.subTest(name=name, command=command),
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    parse_only(cli.main, command[1:])
+        check_examples(
+            self,
+            lambda name: self.help(([name] if name else []) + ["--help"]),
+            [None, *COMMANDS],
+            check=lambda command: parse_only(cli.main, command[1:]),
+            optional={"tile", "hook", "client-resume"},
+        )
 
     def help(self, argv):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as caught:
-            cli.main(argv)
-        self.assertEqual(caught.exception.code, 0)
-        return out.getvalue()
+        return help_text(self, cli.main, argv)
 
     def test_every_surface_is_safe_with_unavailable_configuration(self):
         for command in (None, *COMMANDS):

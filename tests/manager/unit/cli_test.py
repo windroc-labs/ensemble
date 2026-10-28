@@ -22,7 +22,7 @@ from tests.manager.case import Case
 from tests.manager.cli_case import CliCase
 from tests.manager.roster_case import mark
 from tests.manager.starters import answered, finished
-from tests.utils.cli_help import examples, parse_only
+from tests.utils.cli_help import check_examples, help_text, parse_only
 from tests.utils.fakes import ctl
 
 
@@ -1335,12 +1335,7 @@ class InsideAnAgentSession(CliCase):
 
     def test_help_and_control_commands_still_run(self):
         with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
-            with (
-                self.assertRaises(SystemExit) as raised,
-                contextlib.redirect_stdout(io.StringIO()),
-            ):
-                main(["--help"])
-            self.assertEqual(raised.exception.code, 0)
+            help_text(self, main, ["--help"])
             self.assertNotIn("refused", self.invoke("status", "--manager", "mgr")[2])
 
 
@@ -1376,23 +1371,15 @@ class HelpContracts(Case):
             self.assertIn("no holder lease", text)
 
     def test_published_operation_examples_use_real_parser_before_dispatch(self):
-        for name in [None, *HELP_COMMANDS]:
-            published = list(examples(self.help(name)))
-            self.assertTrue(published, name)
-            for command in published:
-                with (
-                    self.subTest(name=name, command=command),
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    parse_only(cli.main, command[1:])
+        check_examples(
+            self,
+            self.help,
+            [None, *HELP_COMMANDS],
+            check=lambda command: parse_only(cli.main, command[1:]),
+        )
 
     def help(self, command=None, flag="--help"):
-        out = io.StringIO()
-        argv = ([] if command is None else [command]) + [flag]
-        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as raised:
-            cli.main(argv)
-        self.assertEqual(raised.exception.code, 0)
-        return out.getvalue()
+        return help_text(self, cli.main, ([] if command is None else [command]) + [flag])
 
     def test_every_surface_has_purpose_and_safe_help_under_invalid_runtime_context(self):
         before = sorted(Path(self.home).rglob("*"))

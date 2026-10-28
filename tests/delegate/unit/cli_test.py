@@ -44,7 +44,7 @@ from tests.delegate.unit.runs import DONE, no_child
 from tests.session import fake_client
 from tests.session.modules import client_loader
 from tests.utils.case import local_section
-from tests.utils.cli_help import examples, parse_only
+from tests.utils.cli_help import check_examples, help_text, parse_only
 
 
 class Detaching:
@@ -1644,24 +1644,15 @@ HELP_COMMANDS = [
 
 class HelpContracts(Case):
     def test_published_operation_examples_use_real_parser_before_dispatch(self):
-        for name in [None, *HELP_COMMANDS]:
-            published = list(examples(self.help(name)))
-            self.assertTrue(published, name)
-            for command in published:
-                with (
-                    self.subTest(name=name, command=command),
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    args = parse_only(cli.main, command[1:])
-                    if args is not None and args.command == "run" and not args.list:
-                        cli._check(args)
+        def check(command):
+            args = parse_only(cli.main, command[1:])
+            if args is not None and args.command == "run" and not args.list:
+                cli._check(args)
+
+        check_examples(self, self.help, [None, *HELP_COMMANDS], check=check)
 
     def help(self, command=None, flag="--help"):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as raised:
-            cli.main(([] if command is None else [command]) + [flag])
-        self.assertEqual(raised.exception.code, 0)
-        return out.getvalue()
+        return help_text(self, cli.main, ([] if command is None else [command]) + [flag])
 
     def test_all_help_ignores_stdin_guards_configuration_and_services(self):
         before = sorted(Path(self.home).rglob("*"))
