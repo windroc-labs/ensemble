@@ -150,7 +150,7 @@ class Manage(Case):
         update = rule("bumps the ensemble plugin version")
         self.assertIn("`claude plugin update ensemble@windroc`", update)
         self.assertIn("`codex plugin marketplace upgrade windroc`", update)
-        wait = "once Release `v<version>` has its broker asset and sha256 file (`AGENTS.md` › Releasing)"
+        wait = "once Release `v<version>` has its broker asset and sha256 file"
         self.assertLess(update.index(wait), update.index("update the installed plugin"))
 
     def test_a_shared_flakes_owner_fixes_its_root_cause_by_the_method(self):

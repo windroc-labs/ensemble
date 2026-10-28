@@ -4,7 +4,7 @@ when: live-checking that a Docker worker's container ends with its guard (WDRC-3
 
 # Docker worker container ends with its guard
 
-Rules, waiting and answering: mini-op's rules (the `mini-op` skill loads them). Gotchas for this environment: `gotchas.md` beside this runbook. Design: `docs/architecture.md` › Harness-owned workers and Guard protocol.
+Rules, waiting and answering: mini-op's rules (the `mini-op` skill loads them). Gotchas for this environment: `gotchas.md` beside this runbook. Design: [Session Host contract](../../src/ensemble/session/hosts/base.py).
 
 ## Setup
 
