@@ -2766,9 +2766,9 @@
       "definition": "manifest",
       "valid": true,
       "expected": {
-        "stage": "manifest",
-        "exit_code": 3,
-        "error_code": "manifest_rejected"
+        "stage": "schema",
+        "exit_code": 0,
+        "error_code": null
       }
     },
     {
