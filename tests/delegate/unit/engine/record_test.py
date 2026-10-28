@@ -7,7 +7,7 @@ import os
 from contextlib import redirect_stderr
 from dataclasses import replace
 
-from ensemble.delegate import ConfigError, CredentialRequest, Outcome
+from ensemble.delegate import ConfigError, Outcome
 from ensemble.delegate.engine.record import HANDLER, RunRecord, worker
 from ensemble.delegate.engine.types import Layout, Limit, Result
 from ensemble.session import EnvironmentSpec, HookCallback
@@ -55,64 +55,43 @@ class RunRecordTest(HarnessCase):
         self.assertEqual(self.metadata()["plan"]["session"]["environment"], environment.persisted())
         self.assertEqual(record.read(), full)
 
-    def test_credential_requests_round_trip_on_both_specs(self):
+    def test_opaque_values_round_trip_on_both_specs(self):
         self.make()
         record = self.record()
         state = record.read()
-        run = CredentialRequest(
-            github=(
-                {"permissions": {"contents": "write", "pull_requests": "write"}, "repo": "o/a"},
-                {"permissions": {"contents": "read"}, "repo": "o/b"},
-            ),
-            linear={"role": "engineer"},
-        )
-        composed = CredentialRequest(
-            github=run.github,
-            linear=run.linear,
-            env=({"item": "ensemble-broker-env/mini-password", "file": "mini-password"},),
-        )
-        session = replace(state.plan.session, environment=None, credentials=composed)
-        carried = replace(
-            state,
-            plan=replace(
-                state.plan, spec=replace(state.plan.spec, credentials=run), session=session
-            ),
-        )
-        record.save(carried)
-        data = self.metadata()
-        self.assertEqual(data["spec"]["credentials"], run.persisted())
-        self.assertEqual(data["plan"]["session"]["credentials"], composed.persisted())
-        found = record.read()
-        self.assertEqual(found, carried)
-        self.assertEqual(
-            (found.plan.spec.credentials, found.plan.session.credentials), (run, composed)
-        )
+        for value in (None, "", "not JSON", ' { "fixture_test": {"file": "test"} } '):
+            environment = '{"fixture_test": {"file": "environment"}}'
+            carried = replace(
+                state,
+                plan=replace(
+                    state.plan,
+                    spec=replace(
+                        state.plan.spec, credentials=value, environment_credentials=environment
+                    ),
+                    session=replace(
+                        state.plan.session, credentials=value, environment_credentials=environment
+                    ),
+                ),
+            )
+            record.save(carried)
+            self.assertEqual(record.read(), carried)
+            data = self.metadata()
+            for spec in (data["spec"], data["plan"]["session"]):
+                self.assertEqual(spec["credentials"], value)
+                self.assertEqual(spec["environment_credentials"], environment)
 
     def test_a_record_without_credentials_reads_none(self):
         self.make()
         data = self.metadata()
-        data["spec"].pop("credentials", None)
-        data["plan"]["session"].pop("credentials", None)
+        for spec in (data["spec"], data["plan"]["session"]):
+            spec.pop("credentials", None)
+            spec.pop("environment_credentials", None)
         with open(self.state_record(), "w", encoding="utf-8") as file:
             json.dump(data, file)
         found = self.record().read()
-        self.assertIsNone(found.plan.spec.credentials)
-        self.assertIsNone(found.plan.session.credentials)
-        self.record().save(found)
-        data = self.metadata()
-        self.assertIsNone(data["spec"]["credentials"])
-        self.assertIsNone(data["plan"]["session"]["credentials"])
-
-    def test_a_record_naming_env_on_the_run_spec_is_an_invalid_record(self):
-        self.make()
-        data = self.metadata()
-        data["spec"]["credentials"] = {
-            "env": [{"item": "ensemble-broker-env/mini-password", "file": "mini-password"}]
-        }
-        with open(self.state_record(), "w", encoding="utf-8") as file:
-            json.dump(data, file)
-        with self.assertRaisesRegex(ConfigError, r"\Ainvalid .*: credentials env"):
-            self.record().read()
+        for spec in (found.plan.spec, found.plan.session):
+            self.assertIsNone(spec.credentials)
+            self.assertIsNone(spec.environment_credentials)
 
     def test_a_bad_record_is_a_config_error(self):
         self.make()

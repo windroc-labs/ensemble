@@ -178,6 +178,8 @@ def plan(
         env=env,
         reply_tags=(PROGRESS, OUTCOME),
         environment=environment_spec,
+        credentials=spec.credentials,
+        environment_credentials=spec.environment_credentials,
     )
     _check_team_dirs(
         composition, intent.writes, client=client, spec=session, layout=layout, driver=driver

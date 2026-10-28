@@ -17,29 +17,13 @@ class SpecTest(Case):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             delegate.Spec("x", "/w").sid = "s"
 
-    def test_credentials_take_the_runs_request_never_env(self):
-        request = delegate.CredentialRequest(
-            github=({"permissions": {"contents": "write"}, "repo": "o/n"},),
-            linear={"role": "engineer"},
-        )
-        self.assertIs(delegate.Spec("x", "/w", credentials=request).credentials, request)
-        self.assertIsNone(delegate.Spec("x", "/w").credentials)
-        for value in ({"linear": {"role": "engineer"}}, "linear", ()):
-            with (
-                self.subTest(value=value),
-                self.assertRaisesRegex(
-                    delegate.ConfigError, r"^credentials must be None or a CredentialRequest$"
-                ),
-            ):
-                delegate.Spec("x", "/w", credentials=value)
-        env = delegate.CredentialRequest(
-            env=({"item": "ensemble-broker-env/mini-password", "file": "mini-password"},)
-        )
-        with self.assertRaisesRegex(
-            delegate.ConfigError,
-            r"^credentials env: the environment's secrets, never the run's request$",
-        ):
-            delegate.Spec("x", "/w", credentials=env)
+    def test_two_opaque_values_are_not_interpreted(self):
+        for value in (None, "", "not JSON", ' { "fixture_test": {"file": "test"} } '):
+            spec = delegate.Spec("x", "/w", credentials=value, environment_credentials=value)
+            self.assertEqual((spec.credentials, spec.environment_credentials), (value, value))
+
+    def test_no_typed_credential_request_is_exported(self):
+        self.assertFalse(hasattr(delegate, "CredentialRequest"))
 
 
 class LayoutTest(Case):
@@ -74,6 +58,13 @@ class ResultTest(Case):
 
 
 class PlanTest(Base):
+    def test_credentials_pass_to_session_without_merging(self):
+        caller = ' {"fixture_test": {"file": "caller"}} '
+        environment = '{ "fixture_test": {"file": "environment"} }'
+        planned, _ = self.planned(credentials=caller, environment_credentials=environment)
+        self.assertEqual(planned.session.credentials, caller)
+        self.assertEqual(planned.session.environment_credentials, environment)
+
     def test_a_resolved_plan_has_a_session_id(self):
         planned, _ = self.planned()
         self.assertEqual(planned.sid, planned.spec.sid)

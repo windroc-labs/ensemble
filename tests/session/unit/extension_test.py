@@ -33,7 +33,6 @@ TYPES = {
             "Mode",
             "Effort",
             "EnvironmentSpec",
-            "CredentialRequest",
             "Launch",
             "HookKind",
             "HookCallback",

@@ -10,7 +10,7 @@ from typing import TypedDict
 from ensemble.delegate.composer import ConfigError, RunConfig, RunParams, Team
 from ensemble.delegate.composer.types import DELIVERABLE, TMP
 from ensemble.delegate.event.types import Outcome
-from ensemble.session import CredentialRequest, EnvironmentSpec
+from ensemble.session import EnvironmentSpec
 from ensemble.session import Spec as SessionSpec
 from ensemble.utils import Display
 from ensemble.utils import Stopped as Stopped
@@ -41,7 +41,7 @@ class Outer(TypedDict, total=False):
 
 @dataclass(frozen=True)
 class Layout:
-    """`agent`: the agent's cwd and only write grant; `run`: the harness's state."""
+    """A run workdir: agent writes, run state."""
 
     workdir: str
 
@@ -62,7 +62,7 @@ class Layout:
 
     @property
     def scratch(self) -> tuple[str, ...]:
-        """`publish`: the report repo's clone."""
+        """`agent`'s checkouts (`src`, the report repo's clone `publish`) and temp files."""
         return (os.path.join(self.agent, "src"), os.path.join(self.agent, "publish"), self.tmp)
 
     @property
@@ -71,9 +71,11 @@ class Layout:
 
     @property
     def out(self) -> str:
+        """A session run's default `out`."""
         return os.path.join(self.run, "out.md")
 
     def in_place(self) -> bool:
+        """Whether `agent` is a real directory where it belongs, reached through no symlink."""
         real = os.path.join(
             os.path.realpath(os.path.dirname(self.workdir)),
             os.path.relpath(self.agent, os.path.dirname(self.workdir)),
@@ -85,7 +87,7 @@ class Layout:
         )
 
     def checkouts(self) -> tuple[str, ...] | None:
-        """Delegate.checkouts."""
+        """Delegate.checkouts: the dirs at `agent`/src/<owner>/<name> that are their own real path."""
         if not os.path.lexists(self.agent):
             return None
         if not self.in_place():
@@ -101,11 +103,7 @@ class Layout:
 
 @dataclass(frozen=True)
 class Spec:
-    """None: client, the role's; out, `<run>/out.md` for a session run, else unsaved.
-
-    name, events: tui only for plan(), every mode for HarnessDelegate. credentials: set only by
-    the orchestrator (docs/architecture.md › Credentials).
-    """
+    """Opaque credential JSON is copied unchanged."""
 
     input: str
     workdir: str
@@ -120,15 +118,8 @@ class Spec:
     repo: str | None = None
     cwd: str | None = None
     team: Team | None = None
-    credentials: CredentialRequest | None = None
-
-    def __post_init__(self):
-        if self.credentials is None:
-            return
-        if not isinstance(self.credentials, CredentialRequest):
-            raise ConfigError("credentials must be None or a CredentialRequest")
-        if self.credentials.env:
-            raise ConfigError("credentials env: the environment's secrets, never the run's request")
+    credentials: str | None = None
+    environment_credentials: str | None = None
 
 
 @dataclass(frozen=True)
@@ -139,7 +130,7 @@ class DriverSpec:
 
 @dataclass(frozen=True)
 class Plan:
-    """`spec` resolved; `repo`: a docker run's Reference repo."""
+    """Resolved run and its session."""
 
     spec: Spec
     session: SessionSpec
@@ -182,7 +173,7 @@ class Plan:
 
 @dataclass(frozen=True)
 class Preview:
-    """agent None: unnamed."""
+    """A construction's plan and placement; agent None: unnamed."""
 
     plan: Plan
     agent: str | None
@@ -192,7 +183,7 @@ class Preview:
 
 @dataclass(frozen=True)
 class Limit:
-    """resets_at: epoch seconds."""
+    """resets_at: epoch seconds or None."""
 
     resets_at: float | None
 
@@ -231,7 +222,7 @@ Event = Begun | Progress | Finished
 
 
 class GateStatus(StrEnum):
-    """drafted: a failed or needs_input run's PR put back in draft."""
+    """The ready gate's act; drafted: a failed or needs_input run's PR put back in draft."""
 
     SKIPPED = "skipped"
     PASSED = "passed"
@@ -249,15 +240,15 @@ class Gated:
 
 @dataclass(frozen=True)
 class Resolved:
+    """A run's environment from the config layers (engine/environment.py)."""
+
     spec: EnvironmentSpec
     prefetch: bool
 
 
 @dataclass(frozen=True)
 class DelegateState:
-    """delegate.json (engine/record.py); previous: attempt - 1's Result; bound: an owned
-    attempt's worker took it; closing: a close stopped its worker; drive: a ProcessControl path.
-    """
+    """delegate.json run state."""
 
     role: str
     plan: Plan

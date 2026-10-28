@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from datetime import datetime
 
-from ensemble.session.engine.types import ConfigError, CredentialRequest, SessionError
+from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
@@ -525,16 +525,6 @@ def notice_key(root: str) -> re.Pattern:
         raise ConfigError(f"{SCHEMA}: no notice_key pattern") from None
 
 
-def manifest_credentials(request: CredentialRequest, app: str) -> dict:
-    """$defs.credentials: each grant names app."""
-    found = request.persisted()
-    if "github" in found:
-        if not app:
-            raise ConfigError("credentials github: needs [hosts.docker.github] app")
-        found["github"] = [{"app": app, **grant} for grant in found["github"]]
-    return found
-
-
 def write_manifest(
     path: str,
     *,
@@ -555,19 +545,9 @@ def write_manifest(
     lock_owner: str | None = None,
     prefetch: Mapping[str, str] | None = None,
     repo: str = "",
-    credentials: CredentialRequest | None = None,
+    credentials: str | None = None,
+    environment_credentials: str | None = None,
 ) -> None:
-    """github: the App's; null when credentials names github. One source per kind."""
-    request = credentials or CredentialRequest()
-    if request.github and (permissions is not None or repo):
-        raise ConfigError("credentials github: the request's grants, not permissions or repo")
-    if request.env and secrets:
-        raise ConfigError("credentials env: the request's secrets, not the environment's")
-    if prefetch and any("repo" not in grant for grant in request.github):
-        raise ConfigError("credentials github: a prefetch's grants each name a repo")
-    found = (
-        {} if credentials is None else {"credentials": manifest_credentials(credentials, github)}
-    )
     field, home_path = home
     client = field.removesuffix("_dir")
     manifest = {
@@ -584,7 +564,7 @@ def write_manifest(
             "permissions": dict(permissions or {}),
             **({"repo": repo} if repo else {}),
         }
-        if github and not request.github
+        if github
         else None,
         "labels": {},
         **({f"{client}_providers": list(providers)} if providers else {}),
@@ -593,6 +573,11 @@ def write_manifest(
         **({"secrets": [dict(secret) for secret in secrets]} if secrets else {}),
         **({"lock": lock, "lock_owner": lock_owner} if lock else {}),
         **({"prefetch": dict(prefetch)} if prefetch else {}),
-        **found,
+        **({"credentials": credentials} if credentials is not None else {}),
+        **(
+            {"environment_credentials": environment_credentials}
+            if environment_credentials is not None
+            else {}
+        ),
     }
     save(path, json.dumps(manifest), durable=True)
