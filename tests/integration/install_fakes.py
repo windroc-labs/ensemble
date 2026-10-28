@@ -761,8 +761,8 @@ def shasum(args):
 
 LEGACY_REFUSAL = (
     'old-name broker items found (8: "ensemble-bot 123456", "ensemble-claude default",'
-    ' "ensemble-codex auth"): run the maintainer\'s one-time rename step (docs/upgrading.md),'
-    " then rerun"
+    ' "ensemble-codex auth"): run the maintainer\'s one-time rename step,'
+    " which renames them to ensemble-broker-*, then rerun"
 )
 
 

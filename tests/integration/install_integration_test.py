@@ -125,8 +125,7 @@ SHARED = (
 )
 LOADED = "com.windroc.ensemble.router com.windroc.ensemble.promote"
 UNLOAD = (
-    "; unload them as docs/architecture.md#board-setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>,"
-    " then remove its plist)"
+    "; unload them (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
 )
 REJECTED = (
     "install.sh: Codex: the saved login was rejected (401 Unauthorized): run codex login,"
@@ -975,7 +974,7 @@ class InstallTest(Case):
         self.assertEqual(
             self.config().read_text(),
             "# Written by install.sh. Keys and defaults: each layer's packaged config.toml "
-            "(its `# local:` lines);\n# the Linear board: docs/architecture.md#board-setup.\n"
+            "(its `# local:` lines);\n# the Linear board: rerun install.sh --board linear.\n"
             '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n',
         )
         cases = (
@@ -1226,7 +1225,8 @@ class InstallTest(Case):
         )
         self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
         self.assertIn(
-            "skip: no GitHub App key: create the App by docs/architecture.md#create-the-github-app",
+            "skip: no GitHub App key: create its private key (the App's settings › Generate a private key),"
+            " then rerun",
             result.stderr,
         )
         state = self.state()
@@ -1805,8 +1805,8 @@ class InstallTest(Case):
         result = self.refused("--ref", "wdrc-c9", rerun=True)
         self.assertIn(
             "install.sh: ensemble wdrc-c9's broker speaks protocol 29, below the installed broker's"
-            " protocol 30: it cannot read the broker keychain items renamed for protocol 30"
-            " (docs/upgrading.md#broker-protocol-30-keychain-rename)",
+            " protocol 30: it cannot read the broker keychain items renamed for protocol 30;"
+            " use a ref whose broker speaks protocol 30 or later",
             result.stderr,
         )
         self.assertNotIn("rerun the same command", result.stderr)
@@ -2156,7 +2156,8 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertNotRegex(result.tty, PEM_Q)
         self.assertIn(
-            "skip: no GitHub App key: create the App by docs/architecture.md#create-the-github-app",
+            "skip: no GitHub App key: create its private key (the App's settings › Generate a private key),"
+            " then rerun",
             result.stderr,
         )
         (self.fakes / "keychain").mkdir(exist_ok=True)
@@ -2445,7 +2446,7 @@ class InstallTest(Case):
         self.assertEqual(result.code, 1, result.stderr)
         self.assertIn(
             "install.sh: old-name broker keychain items remain: run the maintainer's one-time rename"
-            " step (docs/upgrading.md#broker-protocol-30-keychain-rename), then rerun install.sh\n",
+            " step, which renames them to ensemble-broker-*, then rerun install.sh\n",
             result.stderr,
         )
         self.assertNotRegex(result.stderr, r"or run .*retrust")
@@ -4953,7 +4954,9 @@ exec /bin/rm "$@"
         self.linear(teams=[{**team, "states": states}])
         result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
-            result, "Linear team ENG lacks states: Handoff (docs/upgrading.md#linear-presets)"
+            result,
+            "Linear team ENG lacks states: Handoff (the board needs Backlog, Todo, In Progress,"
+            " In Review, Handoff, Done, Canceled); add them, then rerun",
         )
 
     def test_board_without_tasks_group_stops(self):
@@ -4961,7 +4964,7 @@ exec /bin/rm "$@"
         result = self.fresh("--board", "linear", "--launchd", then=self.secrets(*SLOTS))
         self.assert_board_stopped(
             result,
-            "Linear team ENG has no Tasks label group (docs/upgrading.md#linear-presets)",
+            "Linear team ENG has no Tasks label group: add a label group named Tasks, then rerun",
         )
 
     def test_board_same_app_stops(self):

@@ -21,7 +21,8 @@ ref=
 # The broker's release (v<plugin version>) and whether install.sh downloads it or builds it: broker_plan.
 release_tag=
 broker_mode=
-# Label contract v1; update only after checking the pinned repo's docs/label-contract.md.
+# Label contract v1: egress_ready checks windroc.egress.contract=1 and the workers network labels; pin only a
+# commit whose proxy sets them.
 egress_commit=122d7454d738db4a9b7e0c4a89d2cfa5ff564339
 clients_flag=
 clients=
@@ -95,7 +96,7 @@ usage: $synopsis
   --no-docker                 run workers on the local tmux Host; no Docker
   --board <local|linear>      set up a local or Linear board
   --no-board                 skip board setup (first-run default)
-  --launchd, --no-launchd     choose router/promote jobs (docs/architecture.md#board-setup)
+  --launchd, --no-launchd     choose the router/promote launchd jobs (needs a board)
   --opencode-provider <name>  the OpenAI-compatible provider OpenCode runs on, e.g. a LAN model server
   --opencode-url <url>        its base URL, ending /v1; a provider other than the saved one needs it
   --opencode-model <model>    its model
@@ -910,7 +911,7 @@ def line_key(line):
 lines = text.splitlines(keepends=True)
 if fresh:
     lines = ["# Written by install.sh. Keys and defaults: each layer\x27s packaged config.toml (its `# local:` lines);\n",
-             "# the Linear board: docs/architecture.md#board-setup.\n"]
+             "# the Linear board: rerun install.sh --board linear.\n"]
 if lines and not lines[-1].endswith("\n"):
     lines[-1] += "\n"
 added = set()
@@ -1243,9 +1244,8 @@ go_protocol_of() { sed -n 's/^const Version = "\([0-9][0-9]*\)"$/\1/p' | sed -n 
 version_of() { sed -n 's/.*"version":[[:space:]]*"\([0-9][0-9]*\(\.[0-9][0-9]*\)*\)".*/\1/p' | sed -n 1p; }
 spoken_protocol_of() { sed -n 's/.*"protocol_version": *"\([0-9][0-9]*\)".*/\1/p' | sed -n 1p; }
 
-# Broker protocol 30 renamed the broker's keychain items: a broker below it cannot read them (rename_doc).
+# Broker protocol 30 renamed the broker's keychain items: a broker below it cannot read them.
 renamed_protocol=30
-rename_doc=docs/upgrading.md#broker-protocol-30-keychain-rename
 
 # Stops before a broker of protocol $1 (from $2) replaces an installed broker at or above renamed_protocol it is
 # below: it could not read the renamed items.
@@ -1255,7 +1255,7 @@ broker_downgrade_check() {
   if [ -x "$broker" ]; then installed=$("$broker" version </dev/null 2>/dev/null | spoken_protocol_of) || installed=; fi
   [ -n "$installed" ] && [ "$installed" -ge "$renamed_protocol" ] || return 0
   current=
-  die "$2's broker speaks protocol $1, below the installed broker's protocol $installed: it cannot read the broker keychain items renamed for protocol $renamed_protocol ($rename_doc); use a ref whose broker speaks protocol $renamed_protocol or later"
+  die "$2's broker speaks protocol $1, below the installed broker's protocol $installed: it cannot read the broker keychain items renamed for protocol $renamed_protocol; use a ref whose broker speaks protocol $renamed_protocol or later"
 }
 
 # The ensemble plugin Claude Code ($1 claude) or Codex (codex) has installed, else empty;
@@ -1547,7 +1547,7 @@ opencode_install() {
   fi
   case $(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.urlsplit(sys.argv[1]).hostname or "")' "$url") in
     localhost | 127.0.0.1) ;;
-    *) case $url in http://*) say "$url: http:// sends the API key in plaintext over the network (docs/architecture.md › Docker host › Docker risks)" ;; esac ;;
+    *) case $url in http://*) say "$url: http:// sends the API key in plaintext over the network; use https:// or a localhost URL" ;; esac ;;
   esac
 }
 
@@ -2194,7 +2194,7 @@ broker_install() {
 # user skips it.
 store_app_key() {
   [ "$(state_get github_app_key)" != skipped ] || return 1
-  ask "Path to your GitHub App's private key (.pem; docs/architecture.md#create-the-github-app), empty to skip:"
+  ask "Path to your GitHub App's private key (.pem; the App's settings › Generate a private key), empty to skip:"
   if [ -z "$answer" ]; then
     state_set github_app_key skipped
     return 1
@@ -2297,7 +2297,7 @@ broker_logins() {
       case $refusal in
         *"old-name broker items found"*)
           current=
-          die "old-name broker keychain items remain: run the maintainer's one-time rename step ($rename_doc), then rerun install.sh"
+          die "old-name broker keychain items remain: run the maintainer's one-time rename step, which renames them to ensemble-broker-*, then rerun install.sh"
           ;;
       esac
       die "broker re-trust failed; rerun install.sh, or run $broker retrust"
@@ -2326,7 +2326,7 @@ broker_logins() {
   if [ "$(state_get login_github)" = "$sha" ] && [ -n "$(state_get github_app)" ]; then
     skip "done for this broker"
   elif ! security find-generic-password -s ensemble-broker-bot </dev/null >/dev/null 2>&1 && ! store_app_key; then
-    skip "no GitHub App key: create the App by docs/architecture.md#create-the-github-app, then rerun"
+    skip "no GitHub App key: create its private key (the App's settings › Generate a private key), then rerun"
   else
     record_item ensemble-broker-github-users ensemble-broker-bot
     if [ -n "$app_id" ]; then
@@ -2534,7 +2534,7 @@ config, roles = sys.argv[1], [line.split("\t")[0] for line in sys.argv[2].splitl
 # engine/config.py LINEAR_KEYS; tests/unit/install_board_test.py keeps them equal
 KNOWN = {"team", "states", "human_members", "assignee_id", "harness", "manager", "task_label_group",
          "task_labels", "agent_label_group", "agent_labels", "roles", "project_repos"}
-UPGRADE = "; see docs/upgrading.md#linear-apps"
+UPGRADE = "; remove them, then rerun install.sh --board linear"
 linear = {}
 if os.path.exists(config):
     with open(config, "rb") as f:
@@ -2738,7 +2738,7 @@ else:
         ident = uid(found.get("id"), "team id")
         teams.append((ident, name(found.get("key"), "team key", ident)))
     if not teams:
-        stop("the harness app sees no Linear team (docs/upgrading.md#linear-presets)")
+        stop("the harness app sees no Linear team: add it to the team for the board, then rerun")
     team = teams[0][0]
     if len(teams) > 1:
         keys = {key: ident for ident, key in teams}
@@ -2757,8 +2757,8 @@ for found in nodes(detail, "states"):
 STATES = {"backlog": "Backlog", "todo": "Todo", "in_progress": "In Progress", "in_review": "In Review",
           "handoff": "Handoff", "done": "Done", "canceled": "Canceled"}
 if missing := [title for title in STATES.values() if title not in states]:
-    listed = ", ".join(missing)
-    stop(f"Linear team {team_key} lacks states: {listed} (docs/upgrading.md#linear-presets)")
+    listed, needed = ", ".join(missing), ", ".join(STATES.values())
+    stop(f"Linear team {team_key} lacks states: {listed} (the board needs {needed}); add them, then rerun")
 labels = []
 for found in nodes(fetch("harness", "query($id: ID) { issueLabels(first: 250, filter: { or: [{ team: { id: { eq: $id } } }, "
                          "{ team: { null: true } }] }) { nodes { id name isGroup parent { id } } } }", {"id": team}),
@@ -2773,7 +2773,7 @@ def children(parent):
     return {label: ident for ident, label, _, of in labels if of == parent}
 tasks = linear_config.get("task_label_group") or group("Tasks")
 if not tasks:
-    stop(f"Linear team {team_key} has no Tasks label group (docs/upgrading.md#linear-presets)")
+    stop(f"Linear team {team_key} has no Tasks label group: add a label group named Tasks, then rerun")
 humans = []
 for found in nodes(detail, "members"):
     if found.get("active") is True:
@@ -2950,7 +2950,7 @@ board_jobs_loaded() {
     fi
   done
   [ -n "$loaded" ] || return 0
-  say "    still loaded:$loaded; unload them as docs/architecture.md#board-setup says (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
+  say "    still loaded:$loaded; unload them (launchctl bootout gui/<uid>/com.windroc.ensemble.<job>, then remove its plist)"
 }
 
 board_jobs() {

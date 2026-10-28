@@ -64,7 +64,7 @@ class BoardContract(Case):
             (
                 [],
                 "install.sh: config.local.toml: unknown keys in [linear]: other, typo; "
-                "see docs/upgrading.md#linear-apps",
+                "remove them, then rerun install.sh --board linear",
             ),
         )
 
@@ -83,7 +83,7 @@ class BoardContract(Case):
                 self.assertEqual(
                     stop,
                     f"install.sh: config.local.toml: unknown keys in [{table}]: {names}"
-                    "; see docs/upgrading.md#linear-apps",
+                    "; remove them, then rerun install.sh --board linear",
                 )
 
     def test_slots_refuse_a_linear_setting_that_is_no_table(self):
