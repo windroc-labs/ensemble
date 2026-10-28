@@ -159,11 +159,11 @@ func TestPrefetchOrder(t *testing.T) {
 	lw := newLockWorld()
 	w := &world{labels: goodLabels()}
 	h, base, _ := prefetchHost(t, w)
-	d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		if out, err, handled := lw.respond(args); handled {
 			return out, err
 		}
-		return base.respond(args)
+		return base.respond(args, stdin)
 	}}
 	h.Docker = d
 	h.Now = func() time.Time { return time.Unix(1000, 0) }
@@ -269,7 +269,7 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 			lw := newLockWorld()
 			w := &world{labels: goodLabels()}
 			h, base, _ := prefetchHost(t, w)
-			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+			d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 				out, err, handled := lw.respond(args)
 				if handled {
 					if lw.after != nil {
@@ -277,7 +277,7 @@ func TestPrefetchBusyRemovesWorkspace(t *testing.T) {
 					}
 					return out, err
 				}
-				return base.respond(args)
+				return base.respond(args, stdin)
 			}}
 			h.Docker = d
 			h.Now = func() time.Time { return time.Unix(1000, 0) }
@@ -393,7 +393,7 @@ func TestDefaultImageNewest(t *testing.T) {
 	}
 	// A newer variant on a base image never counts.
 	putFile(t, filepath.Join(h.Home, ".ensemble/docker/images", strings.Repeat("e", 64)+".json"), `{"package":"/p","base_image":"x:y"}`)
-	h.Docker = &fakeDocker{respond: func(args []string) ([]byte, error) {
+	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		key := strings.TrimPrefix(ref, "ensemble-worker:")
 		labels := goodLabels()

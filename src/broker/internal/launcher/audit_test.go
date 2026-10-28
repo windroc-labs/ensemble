@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"ensemble/broker/internal/audit"
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -146,9 +147,9 @@ type reportingTokens struct {
 	rec *audit.Recorder
 }
 
-func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) (func(), []protocol.Expiry, error) {
+func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
 	r.rec.Add(c, audit.Credential{Kind: audit.GitHubToken, Result: audit.Issued, Account: "acme"})
-	return r.fakeTokens.Issue(ctx, app, repo, permissions, c, exec)
+	return r.fakeTokens.Issue(ctx, app, repo, permissions, c)
 }
 
 func TestStartLineHoldsItsOwnTokens(t *testing.T) {
@@ -260,7 +261,7 @@ func TestCloseLine(t *testing.T) {
 			[]string{"env-secret withdrawn ensemble-broker-env/dummy"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+			d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 				if args[0] == "container" {
 					if !slices.Equal(args, []string{"container", "inspect", "--format", `{"env":{{json .Config.Env}},"labels":{{json .Config.Labels}}}`, container}) {
 						t.Errorf("%q", args)

@@ -279,7 +279,7 @@ func (h Host) withdraw(c string, m Manifest, held holding, e *protocol.Error) {
 // create runs every step after the absence check; any error makes Start roll back. held: the credentials in the
 // container so far.
 func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, route egress, facts *audit.StartFacts,
-	lap func(phase string)) (_ StartResult, held holding, _ error) {
+	lap func(phase string)) (_ StartResult, held holding, retErr error) {
 	labels := info.Config.Labels
 	// Stdin open for the harness's docker attach; no log driver, so no channel data lands in docker logs.
 	args := append([]string{"run", "--detach", "--interactive", "--log-driver", "none", "--name", c, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "agent"},
@@ -360,7 +360,6 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	var batch startDelivery
 	defer batch.erase()
-	exec := batch.queue
 	// Read again just before the Keychain reads, the closest to the versions injected.
 	var record *injectedRecord
 	if refs := staticRefs(m); h.Static != nil && len(refs) > 0 {
@@ -372,30 +371,37 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 		record = &r
 	}
 	var codexExpiry *string
+	var commands []credential.Command
+	var message string
 	switch m.Client {
 	case "codex":
-		expiry, err := h.Codex.Inject(ctx, exec)
-		if err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting Codex credentials failed.")
+		message = "Injecting Codex credentials failed."
+		var login CodexInjection
+		login, err = h.Codex.Inject(ctx)
+		if err == nil {
+			commands, codexExpiry = []credential.Command{login.Command}, &login.Expiry
+			defer func() {
+				if endErr := login.Finish(); endErr != nil && retErr == nil {
+					retErr = injected(endErr, protocol.StartFailed, message)
+				}
+			}()
 		}
-		codexExpiry = &expiry
 	case "claude":
-		if err := h.Creds.Inject(m.ClaudeAccount, exec); err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the Claude token failed.")
-		}
+		message = "Injecting the Claude token failed."
+		var command credential.Command
+		command, err = h.Creds.Inject(m.ClaudeAccount)
+		commands = []credential.Command{command}
 	case "opencode":
+		message = "Injecting the OpenCode provider API keys failed."
 		if len(m.OpencodeProviders) > 0 {
-			if err := h.Opencode.Inject(m.OpencodeProviders, exec); err != nil {
-				return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the OpenCode provider API keys failed.")
-			}
+			commands, err = h.Opencode.Inject(m.OpencodeProviders)
 		}
 	}
-	clientMessage := map[string]string{
-		"codex":    "Injecting Codex credentials failed.",
-		"claude":   "Injecting the Claude token failed.",
-		"opencode": "Injecting the OpenCode provider API keys failed.",
-	}[m.Client]
-	batch.step(clientMessage, func() {
+	if err != nil {
+		return StartResult{}, held, injected(err, protocol.StartFailed, message)
+	}
+	batch.commands = append(batch.commands, commands...)
+	batch.step(message, func() {
 		if kind := clientKind(m.Client); kind != "" {
 			held.client = true
 			h.Audit.Add(c, audit.Credential{Kind: kind, Result: audit.Issued, ExpiresAt: codexExpiry})
@@ -403,9 +409,11 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	})
 	for _, s := range m.Secrets {
 		message := "Writing " + s.Item + " into the container failed."
-		if err := h.Env.Inject(s, exec); err != nil {
+		command, err := h.Env.Inject(s)
+		if err != nil {
 			return StartResult{}, held, injected(err, protocol.StartFailed, message)
 		}
+		batch.commands = append(batch.commands, command)
 		batch.step(message, func() {
 			held.secrets = append(held.secrets, s.Item)
 			h.Audit.Add(c, audit.Credential{Kind: audit.EnvSecret, Item: s.Item, Result: audit.Issued})
@@ -413,10 +421,12 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	expiries := []protocol.Expiry{}
 	if m.GitHubApp != "" {
-		if held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c, exec); err != nil {
-			return StartResult{}, held, injected(err, protocol.StartFailed, "Injecting the GitHub tokens failed.")
+		message := "Injecting the GitHub tokens failed."
+		if commands, held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c); err != nil {
+			return StartResult{}, held, injected(err, protocol.StartFailed, message)
 		}
-		batch.step("Injecting the GitHub tokens failed.", nil)
+		batch.commands = append(batch.commands, commands...)
+		batch.step(message, nil)
 		lap("github")
 	}
 	if err := h.deliverStart(ctx, c, &batch); err != nil {

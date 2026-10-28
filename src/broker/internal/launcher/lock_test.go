@@ -25,7 +25,7 @@ func lockInspect(id, name, state string, labels map[string]string) []byte {
 func TestLockQuery(t *testing.T) {
 	for _, state := range []string{"running", "paused", "restarting", "created", "exited", "dead", "removing"} {
 		t.Run(state, func(t *testing.T) {
-			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+			d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 				if args[0] == "ps" {
 					if !slices.Contains(args, "label=windroc.lock=dummy") || !slices.Contains(args, "--all") {
 						t.Fatalf("query flags: %q", args)
@@ -69,7 +69,7 @@ func TestLockQueryEmptyAndFailures(t *testing.T) {
 		"different lock":      {list: []byte(lockID), inspect: lockInspect(lockID, container, "running", map[string]string{"windroc.lock": "other"})},
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := &fakeDocker{respond: func(args []string) ([]byte, error) {
+			d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 				if args[0] == "ps" {
 					return tc.list, nil
 				}
@@ -81,11 +81,11 @@ func TestLockQueryEmptyAndFailures(t *testing.T) {
 			}
 		})
 	}
-	d := &fakeDocker{respond: func([]string) ([]byte, error) { return nil, docker.ErrUnreachable }}
+	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, docker.ErrUnreachable }}
 	if _, err := (Host{Docker: d}).LockQuery(context.Background(), "dummy"); code(t, err) != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}
-	d = &fakeDocker{respond: func([]string) ([]byte, error) { t.Fatal("invalid name reached Docker"); return nil, nil }}
+	d = &fakeDocker{respond: func([]string, []byte) ([]byte, error) { t.Fatal("invalid name reached Docker"); return nil, nil }}
 	if _, err := (Host{Docker: d}).LockQuery(context.Background(), "A B"); code(t, err) != protocol.ManifestRejected {
 		t.Fatal(err)
 	}

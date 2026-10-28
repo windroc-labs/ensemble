@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -132,14 +133,16 @@ func (k *fakeKeys) Ready(providers []string) error {
 	return k.ready
 }
 
-func (k *fakeKeys) Inject(providers []string, exec func([]string, []byte) error) error {
+func (k *fakeKeys) Inject(providers []string) ([]credential.Command, error) {
 	k.calls = append(k.calls, "inject "+strings.Join(providers, ","))
-	for _, p := range providers {
-		if err := exec([]string{"inject-opencode", p}, []byte(fakeToken)); err != nil {
-			return err
-		}
+	if k.injectErr != nil {
+		return nil, k.injectErr
 	}
-	return k.injectErr
+	var commands []credential.Command
+	for _, p := range providers {
+		commands = append(commands, credential.Command{Argv: []string{"inject-opencode", p}, Stdin: []byte(fakeToken)})
+	}
+	return commands, nil
 }
 
 func TestStartOpencodeProviders(t *testing.T) {

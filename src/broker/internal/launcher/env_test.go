@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -27,12 +28,12 @@ func (e *fakeEnv) Ready(items []string) error {
 	return e.ready
 }
 
-func (e *fakeEnv) Inject(s Secret, exec func([]string, []byte) error) error {
+func (e *fakeEnv) Inject(s Secret) (credential.Command, error) {
 	e.calls = append(e.calls, "inject "+s.Item+" "+s.File)
 	if err := e.failOn[s.Item]; err != nil {
-		return err
+		return credential.Command{}, err
 	}
-	return exec([]string{"inject-env", s.File}, []byte(envValue+"-"+s.Item))
+	return credential.Command{Argv: []string{"inject-env", s.File}, Stdin: []byte(envValue + "-" + s.Item)}, nil
 }
 
 var dummySecrets = []any{secret("ensemble-broker-env/dummy", "dummy.txt"), secret("ensemble-broker-env/ssh", "id_ed25519")}

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/fixtures"
 	"ensemble/broker/internal/protocol"
@@ -37,12 +38,9 @@ func (c *fakeCreds) Ready(account string) error {
 	c.calls = append(c.calls, "ready "+account)
 	return c.ready
 }
-func (c *fakeCreds) Inject(account string, exec func(argv []string, stdin []byte) error) error {
+func (c *fakeCreds) Inject(account string) (credential.Command, error) {
 	c.calls = append(c.calls, "inject "+account)
-	if err := exec([]string{"inject"}, []byte(fakeToken)); err != nil {
-		return err
-	}
-	return c.injectErr
+	return credential.Command{Argv: []string{"inject"}, Stdin: []byte(fakeToken)}, c.injectErr
 }
 
 func goodLabels() map[string]string {
@@ -51,6 +49,7 @@ func goodLabels() map[string]string {
 
 // world is a scripted Docker Desktop: each field steers one kind of call.
 type world struct {
+	batchReply      *string
 	labels          map[string]string
 	imageMissing    bool
 	volume          string // "" absent, "matching", "mismatched" or "unlabeled"
@@ -76,7 +75,8 @@ type world struct {
 }
 
 func (w *world) docker() *fakeDocker {
-	return &fakeDocker{respond: func(args []string) ([]byte, error) {
+	d := &fakeDocker{}
+	d.respond = func(args []string, stdin []byte) ([]byte, error) {
 		if w.unreachable {
 			return nil, docker.ErrUnreachable
 		}
@@ -165,10 +165,21 @@ func (w *world) docker() *fakeDocker {
 				}
 			}
 
+			if slices.Contains(args, credentialBatch) {
+				if w.batchReply != nil {
+					return []byte(*w.batchReply), nil
+				}
+				var commands []credential.Command
+				if err := json.Unmarshal(stdin, &commands); err != nil {
+					return nil, err
+				}
+				return json.Marshal(map[string]int{"completed": len(commands)})
+			}
 			return nil, nil
 		}
 		return nil, errors.New("unexpected " + strings.Join(args, " "))
-	}}
+	}
+	return d
 }
 
 const (

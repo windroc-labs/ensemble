@@ -7,13 +7,15 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
 )
 
 type fakeCodexCreds struct {
-	err, injectErr  error
-	ready, injected int
-	log             *[]string // every call, when set
+	locked                    bool
+	err, injectErr, finishErr error
+	ready, injected           int
+	log                       *[]string // every call, when set
 }
 
 func (c *fakeCodexCreds) note(call string) {
@@ -23,13 +25,56 @@ func (c *fakeCodexCreds) note(call string) {
 }
 
 func (c *fakeCodexCreds) Ready(context.Context) error { c.note("codex ready"); c.ready++; return c.err }
-func (c *fakeCodexCreds) Inject(_ context.Context, exec func([]string, []byte) error) (string, error) {
+func (c *fakeCodexCreds) Inject(_ context.Context) (CodexInjection, error) {
 	c.note("codex inject")
 	c.injected++
 	if c.injectErr != nil {
-		return "", c.injectErr
+		return CodexInjection{}, c.injectErr
 	}
-	return "2026-10-18T12:00:00Z", exec([]string{"inject-codex"}, []byte("fake-access-only"))
+	c.locked = true
+	return CodexInjection{
+		Command: credential.Command{Argv: []string{"inject-codex"}, Stdin: []byte("fake-access-only")},
+		Expiry:  "2026-10-18T12:00:00Z",
+		Finish:  func() error { c.locked = false; return c.finishErr },
+	}, nil
+}
+
+func TestStartKeepsCodexLockThroughDelivery(t *testing.T) {
+	for _, stage := range []string{"success", "prepare env", "prepare github", "deliver", "finish"} {
+		t.Run(stage, func(t *testing.T) {
+			creds := &fakeCodexCreds{}
+			env := &fakeEnv{}
+			tokens := &fakeTokens{}
+			boom := errors.New("opaque")
+			w := &world{labels: goodLabels()}
+			switch stage {
+			case "prepare env":
+				env.failOn = map[string]error{"ensemble-broker-env/dummy": boom}
+			case "prepare github":
+				tokens.issue = boom
+			case "deliver":
+				w.execErr = failOn(credentialBatch, boom)
+			case "finish":
+				creds.finishErr = boom
+			}
+			h, d := startHost(w, &fakeCreds{})
+			h.Codex, h.Versions, h.Env, h.GitHub = creds, &fakeVersions{}, env, tokens
+			respond := d.respond
+			d.respond = func(args []string, stdin []byte) ([]byte, error) {
+				if slices.Contains(args, credentialBatch) && !creds.locked {
+					t.Fatal("Codex account unlocked before actual delivery")
+				}
+				return respond(args, stdin)
+			}
+			_, err := h.Start(context.Background(), codexManifest(t, withSecrets(dummySecrets), withGitHub))
+			if (err == nil) != (stage == "success") || creds.locked {
+				t.Fatalf("error=%v locked=%v", err, creds.locked)
+			}
+			if stage == "finish" && protoErr(t, err).Message != "Injecting Codex credentials failed." {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func (c *fakeCodexCreds) Refresh(ctx context.Context, exec func([]string, []byte) error, publish func(string) error) (string, error) {
@@ -37,11 +82,15 @@ func (c *fakeCodexCreds) Refresh(ctx context.Context, exec func([]string, []byte
 	if c.err != nil {
 		return "", c.err
 	}
-	expiry, err := c.Inject(ctx, exec)
+	login, err := c.Inject(ctx)
 	if err != nil {
 		return "", err
 	}
-	return expiry, publish(expiry)
+	defer login.Finish()
+	if err := exec(login.Command.Argv, login.Command.Stdin); err != nil {
+		return "", err
+	}
+	return login.Expiry, publish(login.Expiry)
 }
 
 func codexManifest(t *testing.T, edits ...func(map[string]any)) string {

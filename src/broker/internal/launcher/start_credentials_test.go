@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"ensemble/broker/internal/credential"
@@ -15,11 +15,11 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-func startCommands(t *testing.T, d *fakeDocker) []startCommand {
+func startCommands(t *testing.T, d *fakeDocker) []credential.Command {
 	t.Helper()
 	for i, args := range d.calls {
 		if slices.Contains(args, credentialBatch) {
-			var commands []startCommand
+			var commands []credential.Command
 			if err := json.Unmarshal(d.stdin[i], &commands); err != nil {
 				t.Fatal(err)
 			}
@@ -57,71 +57,63 @@ func TestStartExecBudget(t *testing.T) {
 	}
 }
 
-func TestStartDeliveryCopiesAndErases(t *testing.T) {
-	var batch startDelivery
-	argv, data := []string{"write", "owner"}, []byte("secret")
-	if err := batch.queue(argv, data); err != nil {
-		t.Fatal(err)
-	}
-	argv[0] = "changed"
-	clear(data)
-	if batch.commands[0].Argv[0] != "write" || string(batch.commands[0].Stdin) != "secret" {
-		t.Fatal("provider can erase or reuse its buffers after queueing")
-	}
-	batch.erase()
-	if slices.ContainsFunc(batch.commands[0].Stdin, func(b byte) bool { return b != 0 }) {
-		t.Fatal("queued credential not erased")
-	}
-}
-
-func TestStartDeliveryConfirmsOnlySuccessfulSteps(t *testing.T) {
-	for _, completed := range []int{0, 1, 2, 3} {
-		var batch startDelivery
-		confirmed := []int{}
-		for i := range 3 {
-			_ = batch.queue([]string{"write"}, []byte("secret"))
-			batch.step([]string{"client", "env", "github"}[i], func() { confirmed = append(confirmed, i) })
-		}
-		d := &fakeDocker{respond: func([]string) ([]byte, error) {
-			return json.Marshal(map[string]int{"completed": completed})
-		}}
-		err := (Host{Docker: d}).deliverStart(context.Background(), container, &batch)
-		if len(confirmed) != completed || (err == nil) != (completed == 3) {
-			t.Fatalf("completed %d, confirmed %v, error %v", completed, confirmed, err)
-		}
-		if err != nil && protoErr(t, err).Message != []string{"client", "env", "github"}[completed] {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestStartDeliveryRejectsUnknownCompletion(t *testing.T) {
-	for _, response := range []string{"", "{}", "null", `{"completed":-1}`, `{"completed":2}`, `{"completed":"secret"}`} {
-		var batch startDelivery
-		_ = batch.queue([]string{"write"}, []byte("secret"))
-		batch.step("client", func() { t.Fatal("unconfirmed delivery") })
-		d := &fakeDocker{respond: func([]string) ([]byte, error) { return []byte(response), nil }}
-		err := (Host{Docker: d}).deliverStart(context.Background(), container, &batch)
-		if err == nil || strings.Contains(err.Error(), "secret") {
-			t.Fatalf("response %q: %v", response, err)
-		}
-	}
-	for _, failure := range []error{errors.New("secret"), docker.ErrUnreachable} {
-		var batch startDelivery
-		_ = batch.queue([]string{"write"}, []byte("secret"))
-		d := &fakeDocker{respond: func([]string) ([]byte, error) { return nil, failure }}
-		if err := (Host{Docker: d}).deliverStart(context.Background(), container, &batch); err == nil || strings.Contains(err.Error(), "secret") {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestStartCredentialBatchFailureRevokesGitHub(t *testing.T) {
-	tokens := &fakeTokens{owners: []string{"first", "second"}}
-	h, _ := githubHost(&world{labels: goodLabels(), execErr: failOn("write", errors.New("secret"))}, tokens)
-	_, err := h.Start(context.Background(), githubManifest(t))
-	if err == nil || protoErr(t, err).Message != "Injecting the GitHub tokens failed." || !slices.Contains(tokens.calls, "revoke "+container) {
-		t.Fatalf("%v, calls %v", err, tokens.calls)
+func TestStartCredentialDelivery(t *testing.T) {
+	for _, tc := range []struct {
+		response string
+		runErr   error
+		message  string
+		issued   int
+	}{
+		{response: `{"completed":0}`, message: "Injecting the Claude token failed."},
+		{response: `{"completed":1}`, message: "Writing ensemble-broker-env/dummy into the container failed.", issued: 1},
+		{response: `{"completed":2}`, message: "Writing ensemble-broker-env/ssh into the container failed.", issued: 2},
+		{response: `{"completed":3}`, message: "Injecting the GitHub tokens failed.", issued: 3},
+		{response: `{"completed":4}`, message: "Injecting the GitHub tokens failed.", issued: 3},
+		{response: `{"completed":5}`, issued: 3},
+		{response: ""},
+		{response: "{}"},
+		{response: "null"},
+		{response: `{"completed":-1}`},
+		{response: `{"completed":6}`},
+		{response: `{"completed":"secret"}`},
+		{runErr: errors.New("secret")},
+		{runErr: docker.ErrUnreachable},
+	} {
+		t.Run(tc.response+fmt.Sprint(tc.runErr), func(t *testing.T) {
+			tokens := &fakeTokens{owners: []string{"first", "second"}}
+			h, _ := githubHost(&world{labels: goodLabels(), batchReply: &tc.response, execErr: failOn(credentialBatch, tc.runErr)}, tokens)
+			h.Env = &fakeEnv{}
+			rec, path := audited(t, &h, "start", "")
+			_, err := h.Start(context.Background(), fixtureManifest(t, "manifest-github-app.json", withSecrets(dummySecrets)))
+			rec.Flush(err)
+			success := tc.response == `{"completed":5}` && tc.runErr == nil
+			if (err == nil) != success {
+				t.Fatal(err)
+			}
+			if !success {
+				want := tc.message
+				if want == "" {
+					want = "Writing startup credentials failed."
+				}
+				wantCode := protocol.StartFailed
+				if errors.Is(tc.runErr, docker.ErrUnreachable) {
+					wantCode = protocol.DockerUnreachable
+					want = "Cannot reach Docker Desktop; start it and retry."
+				}
+				e := protoErr(t, err)
+				if e.Message != want || e.Code != wantCode || e.Cleanup != protocol.Removed || !slices.Contains(tokens.calls, "revoke "+container) {
+					t.Fatalf("error=%+v tokens=%v", e, tokens.calls)
+				}
+			}
+			credentials := readLines(t, path)[0].Credentials
+			want := tc.issued
+			if !success {
+				want *= 2
+			}
+			if len(credentials) != want {
+				t.Fatalf("credentials=%+v want %d", credentials, want)
+			}
+		})
 	}
 }
 
@@ -136,7 +128,7 @@ func TestStartPreparationDoesNotDeliverCredentials(t *testing.T) {
 func TestStartPartialDeliveryAuditAndPersistence(t *testing.T) {
 	for _, rollbackFails := range []bool{false, true} {
 		t.Run(map[bool]string{false: "removed", true: "retained"}[rollbackFails], func(t *testing.T) {
-			w := &world{labels: goodLabels(), execErr: failOn("id_ed25519", errors.New("secret write failed"))}
+			w := &world{labels: goodLabels(), batchReply: ptr(`{"completed":2}`)}
 			if rollbackFails {
 				w.rmErr = errors.New("container busy")
 			}

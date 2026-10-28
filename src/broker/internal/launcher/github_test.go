@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/docker"
 	"ensemble/broker/internal/protocol"
 )
@@ -43,21 +44,20 @@ func (f *fakeTokens) BotUserID(app string) (int64, error) {
 	}
 	return botID, nil
 }
-func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) (func(), []protocol.Expiry, error) {
+func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
 	f.calls, f.permissions, f.repos = append(f.calls, "issue "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
 	if f.issue != nil {
-		return nil, nil, f.issue
+		return nil, nil, nil, f.issue
 	}
 	owners := f.owners
 	if len(owners) == 0 {
 		owners = []string{"acme"}
 	}
+	var commands []credential.Command
 	for _, owner := range owners {
-		if err := exec([]string{"write", owner}, []byte("ghs_token")); err != nil {
-			return nil, nil, err
-		}
+		commands = append(commands, credential.Command{Argv: []string{"write", owner}, Stdin: []byte("ghs_token")})
 	}
-	return func() {
+	return commands, func() {
 		f.calls = append(f.calls, "revoke "+c)
 		if f.onRevoke != nil {
 			f.onRevoke()

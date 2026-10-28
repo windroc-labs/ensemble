@@ -3,17 +3,12 @@ package launcher
 import (
 	"context"
 	"encoding/json"
-	"slices"
 
+	"ensemble/broker/internal/credential"
 	"ensemble/broker/internal/protocol"
 )
 
 const credentialBatch = "/opt/ensemble/lib/credential-batch.py"
-
-type startCommand struct {
-	Argv  []string `json:"argv"`
-	Stdin []byte   `json:"stdin"`
-}
 
 type deliveryStep struct {
 	end     int
@@ -21,15 +16,10 @@ type deliveryStep struct {
 	confirm func()
 }
 
-// startDelivery stages provider writes without changing the synchronous transport used by refresh.
+// startDelivery owns prepared writes and confirms only completed steps.
 type startDelivery struct {
-	commands []startCommand
+	commands []credential.Command
 	steps    []deliveryStep
-}
-
-func (b *startDelivery) queue(argv []string, stdin []byte) error {
-	b.commands = append(b.commands, startCommand{Argv: slices.Clone(argv), Stdin: slices.Clone(stdin)})
-	return nil
 }
 
 func (b *startDelivery) step(message string, confirm func()) {
@@ -38,7 +28,7 @@ func (b *startDelivery) step(message string, confirm func()) {
 
 func (b *startDelivery) erase() {
 	for _, command := range b.commands {
-		clear(command.Stdin)
+		command.Erase()
 	}
 }
 

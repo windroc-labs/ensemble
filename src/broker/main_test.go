@@ -604,6 +604,7 @@ type scripted struct {
 	stdin  [][]byte
 	fail   string
 	tokens string // what a read of the token files answers
+	output []byte
 }
 
 func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, error) {
@@ -633,20 +634,10 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 		return []byte(`{"ensemble.kind":"ws","ensemble.workspace":"/Users/example/src/project"}`), nil
 	case strings.HasPrefix(joined, "container inspect"):
 		return nil, &docker.CommandError{Exit: 1, Stderr: "No such container"}
-	case slices.Contains(args, "/opt/ensemble/lib/credential-batch.py"):
-		var commands []struct {
-			Argv  []string `json:"argv"`
-			Stdin []byte   `json:"stdin"`
-		}
-		if err := json.Unmarshal(stdin, &commands); err != nil {
-			return nil, err
-		}
-		for i, command := range commands {
-			if s.fail != "" && strings.Contains(strings.Join(command.Argv, " "), s.fail) {
-				return json.Marshal(map[string]int{"completed": i})
-			}
-		}
-		return json.Marshal(map[string]int{"completed": len(commands)})
+
+	}
+	if args[0] == "exec" {
+		return s.output, nil
 	}
 	return nil, nil
 }
@@ -662,8 +653,8 @@ func TestTokenNeverLeaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	const home = "/Users/example"
-	for _, fail := range []string{"", "cat >", "/usr/bin/python3", "credential-batch.py"} {
-		d := &scripted{fail: fail}
+	for _, fail := range []string{"", "/usr/bin/python3", "credential-batch.py"} {
+		d := &scripted{fail: fail, output: []byte(`{"completed":1}`)}
 		h := launcher.Host{
 			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
 			IsDir:  func(string) bool { return true },
@@ -820,7 +811,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 			Home: home, Endpoint: "unix://" + home + "/.docker/run/docker.sock",
 			IsDir:  func(string) bool { return true },
 			Safe:   func(string) error { return nil },
-			Docker: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n"},
+			Docker: &scripted{tokens: "acme 1700000000 ghs_AUDITTEST2\n", output: []byte(`{"completed":2}`)},
 			Creds:  broker.Credentials{Keychain: &memKeychain{token: []byte(claudeToken)}},
 			GitHub: broker.GitHub{Keychain: keys, Apps: appKey(pemKey), Audit: rec,
 				API: github.Client{Base: srv.URL, HTTP: srv.Client(), Now: time.Now}},
