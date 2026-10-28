@@ -1,5 +1,6 @@
 """LinearRun owns exact plans and forwards views to the saved Delegate."""
 
+import json
 from dataclasses import replace
 from unittest import mock
 
@@ -48,6 +49,49 @@ class CheckedDelegate(FakeDelegate):
 
 
 class Runs(RunCase):
+    def test_new_run_receives_resolved_credentials_and_resume_omits_them(self):
+        role = self.cfg.roles["researcher"]
+        self.cfg = replace(
+            self.cfg,
+            roles={
+                **self.cfg.roles,
+                "researcher": replace(
+                    role,
+                    credentials={"future": {"ref": "role"}, "another": ["kept"]},
+                    task_credentials={"light-research": {"future": {"ref": "task"}}},
+                ),
+            },
+        )
+        owner, _ = self.start(delegate_cls=CapturedDelegate)
+        self.assertEqual(
+            json.loads(owner.delegate.accepted[1].credentials),
+            {"future": {"ref": "task"}, "another": ["kept"]},
+        )
+        changed = replace(self.cfg, roles={**self.cfg.roles, "researcher": role})
+        owner = LinearRun(
+            "TASK-1",
+            "Answer with credentials: linear",
+            self.cfg.issue_workdir("TASK-1"),
+            cfg=changed,
+            role="researcher",
+            sid=SID,
+            resume=True,
+            delegate_cls=CapturedDelegate,
+        )
+        self.assertIsNone(owner.delegate.accepted[1].credentials)
+
+    def test_issue_input_cannot_supply_credentials_and_absence_is_an_empty_spec(self):
+        owner = LinearRun(
+            "TASK-1",
+            'credentials: {"linear": "role"}',
+            self.cfg.issue_workdir("TASK-1"),
+            cfg=self.cfg,
+            role="engineer",
+            sid=SID,
+            delegate_cls=CapturedDelegate,
+        )
+        self.assertEqual(json.loads(owner.delegate.accepted[1].credentials), {})
+
     def test_document_host_is_canonicalized_in_delegate_output_overlay(self):
         for host in ("GHE.EXAMPLE.COM", "GitHub.com"):
             with self.subTest(host=host):

@@ -4,6 +4,7 @@ harness calls `ensemble-orchestrator writeback --issue ID --workdir <workdir>` o
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import replace
 
@@ -70,6 +71,11 @@ class LinearRun:
                 name=config.tui_name(role, issue, sid),
                 events=events,
                 out=cfg.docs.local_out(role, issue, sid),
+                credentials=(
+                    json.dumps(config.credentials(cfg, role, task))
+                    if stage and not resume
+                    else None
+                ),
             ),
             display=display,
             callback=["ensemble-orchestrator", "writeback", "--issue", issue, "--workdir", workdir],

@@ -1,5 +1,6 @@
 """Packaged orchestrator settings, registered Delegates and resolved role runs."""
 
+import json
 import os
 import re
 import subprocess
@@ -61,7 +62,7 @@ LINEAR_KEYS = {
     "roles",
     "project_repos",
 }
-ROLE_KEYS = {"max_runs"}
+ROLE_KEYS = {"max_runs", "credentials", "tasks"}
 
 
 class AppKey(StrEnum):
@@ -696,8 +697,9 @@ def _runnable(cfg, work, delegate_cls, index):
     if isinstance(overlay, dict) and isinstance(roles := overlay.get("roles", {}), dict):
         tables.update({f"overlay.roles.{role}": table for role, table in roles.items()})
     for where, table in tables.items():
-        if isinstance(table, dict) and "gate" in table:
-            raise ConfigError(f"core: run overlay: unknown key 'gate' in [{where}]")
+        for key in ("gate", "credentials"):
+            if isinstance(table, dict) and key in table:
+                raise ConfigError(f"core: run overlay: unknown key {key!r} in [{where}]")
     try:
         trusted = delegate_cls.trusted_dirs()
     except (OSError, ValueError, delegate.ConfigError) as e:
@@ -724,8 +726,72 @@ def _resolve_roles(cfg, overlay, delegate_cls, index):
                     raise utils.Invalid(host)
             except utils.Invalid:
                 raise ConfigError(f"core: [roles.{name}.output] invalid host: {host!r}") from None
-        out[name] = Role(tasks, p.get("max_runs", 1), run)
+        where = f"roles.{name}"
+        task_tables = p.get("tasks", {})
+        if not isinstance(task_tables, dict):
+            raise ConfigError(f"orchestrator/config.toml: [{where}.tasks] must be a table")
+        task_credentials = {}
+        for task, table in task_tables.items():
+            at = f"{where}.tasks.{task}"
+            if task not in tasks:
+                raise ConfigError(
+                    f"orchestrator/config.toml: [{at}] is not in {name}'s Tasks index"
+                )
+            if not isinstance(table, dict):
+                raise ConfigError(f"orchestrator/config.toml: [{at}] must be a table")
+            if extra := sorted(set(table) - {"credentials"}):
+                raise ConfigError(
+                    f"orchestrator/config.toml: [{at}] has unknown keys: {', '.join(extra)}"
+                )
+            task_credentials[task] = _credential_table(
+                cfg, name, table.get("credentials", {}), f"{at}.credentials"
+            )
+        out[name] = Role(
+            tasks,
+            p.get("max_runs", 1),
+            run,
+            utils.freeze(
+                _credential_table(cfg, name, p.get("credentials", {}), f"{where}.credentials")
+            ),
+            utils.freeze(task_credentials),
+        )
     return out
+
+
+def _credential_table(cfg, role, table, where):
+    if not isinstance(table, dict):
+        raise ConfigError(f"orchestrator/config.toml: [{where}] must be a table")
+    out = dict(table)
+    if isinstance(out.get("linear"), str):
+        if out["linear"] != "role":
+            raise ConfigError(
+                f'orchestrator/config.toml: [{where}] linear shorthand must be "role"'
+            )
+        if cfg["tracker"] is not TrackerKind.LINEAR:
+            raise ConfigError(
+                f'orchestrator/config.toml: [{where}] linear = "role" needs tracker = "linear"'
+            )
+        linear = cfg["linear"]
+        out["linear"] = {
+            "app": {"role": role, **{k.value: linear["roles"][role][k] for k in AppKey}},
+            "board": {
+                **{k: linear[k] for k in ("team", "states", "project_repos", "human_members")},
+                "labels": {k: linear[k] for k in ("task_labels", "agent_labels")},
+            },
+        }
+    try:
+        json.dumps(out, allow_nan=False)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"orchestrator/config.toml: [{where}] references must have a JSON-compatible shape"
+        ) from None
+    return out
+
+
+def credentials(cfg: Config, role, task: str | None) -> dict:
+    """A fresh spec: task values replace whole same-kind role values."""
+    settings = cfg.roles[role]
+    return utils.thaw({**settings.credentials, **settings.task_credentials.get(task or "", {})})
 
 
 def _runnable_inputs(cfg, roles):
