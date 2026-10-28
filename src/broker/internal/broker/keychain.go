@@ -79,10 +79,7 @@ var KeychainServices = []string{
 	"ensemble-broker-claude",
 	"ensemble-broker-bot",
 	"ensemble-broker-github-users",
-	"ensemble-broker-tokens",
-	"ensemble-broker-revocations",
 	"ensemble-broker-codex",
-	"ensemble-broker-codex-grants",
 	"ensemble-broker-opencode",
 	"ensemble-broker-env/", // prefix item: every ensemble-broker-env/<name>
 	"ensemble-broker-linear",

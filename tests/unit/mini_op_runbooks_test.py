@@ -24,6 +24,7 @@ NAMES = {
     "install-ensemble",
     "clean-ensemble",
     "manager-on-mini",
+    "short-lived-credentials",
     "test-accounts",
     "gotchas",
     "docker-guard-main-process",

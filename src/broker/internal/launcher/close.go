@@ -53,34 +53,24 @@ func (h Host) held(ctx context.Context, c string) (kind string, secrets []string
 	return "", secrets
 }
 
-// Close revokes the container's GitHub tokens, then deletes it and its tmpfs, then withdraws its Codex grant, so a
-// maintain racing the close finds no container to grant; an absent container is success. A revocation or withdrawal
-// failure is reported after the deletion, so it never keeps a container alive.
+// Close revokes the GitHub tokens it reads back from the container's token files (no copy is kept elsewhere), then
+// deletes the container and its tmpfs whatever the read or the revocations did; an absent container is success, its
+// tokens expire.
 func (h Host) Close(ctx context.Context, container string) (CloseResult, error) {
 	h.Audit.Begin(container, nil)
 	kind, secrets := h.held(ctx, container)
-	revoked := h.GitHub.Release(ctx, container)
+	h.GitHub.Revoke(ctx, container, h.agentRead(container))
 	removed, err := h.remove(ctx, container)
 	if removed {
 		if kind != "" {
-			h.Audit.Add(container, audit.Credential{Kind: kind, Result: audit.Withdrawn}, "")
+			h.Audit.Add(container, audit.Credential{Kind: kind, Result: audit.Withdrawn})
 		}
 		for _, item := range secrets {
-			h.Audit.Add(container, audit.Credential{Kind: audit.EnvSecret, Item: item, Result: audit.Withdrawn}, "")
+			h.Audit.Add(container, audit.Credential{Kind: audit.EnvSecret, Item: item, Result: audit.Withdrawn})
 		}
 	}
 	if err != nil {
 		return CloseResult{}, failure(err, protocol.CloseFailed, "Deleting container "+container+" failed.")
-	}
-	var withdrawn error
-	if h.Codex != nil {
-		withdrawn = h.Codex.Release(ctx, container)
-	}
-	if revoked != nil {
-		return CloseResult{}, injected(revoked, protocol.KeychainFailed, "Revoking the GitHub tokens of "+container+" failed.")
-	}
-	if withdrawn != nil {
-		return CloseResult{}, injected(withdrawn, protocol.KeychainFailed, "Withdrawing the Codex grant of "+container+" failed.")
 	}
 	return CloseResult{Container: container, Removed: removed}, nil
 }

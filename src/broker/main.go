@@ -27,7 +27,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status [--cleanup] | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
 
 // replaced answers a supervisor started before protocol 29, which still calls refresh and notices.
 const replaced = "Broker protocol 29 replaced refresh and notices with maintain; restart this session (close and resume it) to renew its credentials."
@@ -50,7 +50,7 @@ type app struct {
 	build         func(ctx context.Context, k keys, pkg string, spec launcher.BuildSpec, maxAge time.Duration, progress io.Writer) (any, error)
 	start, close  step
 	maintain      func(ctx context.Context, k keys, container, manifest string, delivered []string, renew bool) (any, error)
-	status        func(ctx context.Context, k keys, cleanup bool) (any, error)
+	status        func(ctx context.Context, k keys) (any, error)
 	lockQuery     func(ctx context.Context, k keys, name string) (any, error)
 	probeOpencode func(ctx context.Context, k keys, provider, base string) (any, error)
 	workspaceRm   func(ctx context.Context, k keys, volume string, force bool) (any, error)
@@ -276,9 +276,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s, arg = func(ctx context.Context, k keys, container string, _ io.Writer) (any, error) {
 			return a.maintain(ctx, k, container, manifest, o.delivered, o.renew)
 		}, args[2]
-	case command == "status" && (len(args) == 1 || len(args) == 2 && args[1] == "--cleanup"):
+	case command == "status" && len(args) == 1:
 		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
-			return a.status(ctx, k, len(args) == 2)
+			return a.status(ctx, k)
 		}
 	case command == "lock-query" && len(args) == 3 && args[1] == "--lock" && launcher.ValidLock(args[2]):
 		s, arg = func(ctx context.Context, k keys, lock string, _ io.Writer) (any, error) {
@@ -425,8 +425,7 @@ func withHost(command, container string, k keys, progress io.Writer, f func(laun
 
 // tokens is the broker's GitHub App token store in k, the account's login keychain, reporting to rec (nil: none).
 func tokens(k keys, rec *audit.Recorder) broker.GitHub {
-	return broker.GitHub{Keychain: k, Apps: k, API: github.New(), Lock: broker.FileLock(filepath.Join(k.Home, ".ensemble/docker/tokens.lock")),
-		Audit: rec}
+	return broker.GitHub{Keychain: k, Apps: k, API: github.New(), Audit: rec}
 }
 
 func system() app {
@@ -460,31 +459,14 @@ func system() app {
 		start: func(ctx context.Context, k keys, manifest string, progress io.Writer) (any, error) {
 			return withHost("start", "", k, progress, func(h launcher.Host) (any, error) { return h.Start(ctx, manifest) })
 		},
-		status: func(ctx context.Context, k keys, cleanup bool) (_ any, err error) {
-			home := k.Home
-			var rec *audit.Recorder
-			if cleanup {
-				rec = recorder(home, "status", "")
+		status: func(ctx context.Context, k keys) (any, error) {
+			codexStatus := broker.NewCodex(k.Home, k, nil).Status(ctx)
+			usable := (broker.Credentials{Keychain: k}).Usable("default")
+			static, err := launcher.Host{Static: staticStore(k.Home)}.StaticStatus(map[string]bool{credential.StaticRef(credential.Claude, "default"): usable})
+			if err != nil {
+				return nil, err
 			}
-			return withAudit(rec, func() (any, error) {
-				h := launcher.Host{GitHub: tokens(k, rec), Static: staticStore(home), Audit: rec}
-				query := h.Status
-				if cleanup {
-					query = h.Cleanup
-				}
-				status, err := query(ctx)
-				if err != nil {
-					return nil, err
-				}
-				codexStatus := broker.NewCodex(home, k, nil).Status(ctx)
-				status.Codex = &codexStatus
-				usable := (broker.Credentials{Keychain: k}).Usable("default")
-				status.Claude = map[string]bool{"default": usable}
-				if status.Static, err = h.StaticStatus(cleanup, map[string]bool{credential.StaticRef(credential.Claude, "default"): usable}); err != nil {
-					return nil, err
-				}
-				return status, nil
-			})
+			return launcher.StatusResult{Codex: &codexStatus, Claude: map[string]bool{"default": usable}, Static: static}, nil
 		},
 		maintain: func(ctx context.Context, k keys, container, manifest string, delivered []string, renew bool) (any, error) {
 			return withHost("maintain", container, k, nil, func(h launcher.Host) (any, error) {

@@ -1590,6 +1590,16 @@ class Queries(Case):
             self.query("resume", "a", a=View("a")), (0, record("a").to_line() + "\n", "")
         )
 
+    def test_a_busy_resume_exits_75_any_other_refusal_1(self):
+        busy = str(SessionBusy("w", "previous worker generation (live or unknown)"))
+        for error, code in ((SessionError(busy), 75), (SessionError("no such run"), 1)):
+            view = View("a")
+            view.resume = mock.Mock(side_effect=error)
+            with self.subTest(error=str(error)):
+                self.assertEqual(
+                    self.query("resume", "a", a=view), (code, "", f"delegate: a: {error}\n")
+                )
+
 
 class AdhocWorkdir(Base):
     def test_dry_run_derives_workdir_from_date_role_task_and_final_sid(self):

@@ -50,7 +50,7 @@ func TestPrefetchResolvesRef(t *testing.T) {
 			if !slices.Equal(argv, []string{"/bin/sh", "-c", cloneScript, "sh", "acme/app", want, "/w/project"}) {
 				t.Fatalf("argv %q", argv)
 			}
-			if string(r.exec.stdin[0]) != "ghs_2_1" || !slices.Equal(r.api.bodies, []string{prefetchBody}) {
+			if string(r.exec.stdin[0]) != tok(2, 1) || !slices.Equal(r.api.bodies, []string{prefetchBody}) {
 				t.Fatalf("stdin %q bodies %q", r.exec.stdin[0], r.api.bodies)
 			}
 			for _, a := range argv {
@@ -59,7 +59,7 @@ func TestPrefetchResolvesRef(t *testing.T) {
 				}
 			}
 			for _, p := range r.api.repoPaths {
-				if strings.HasSuffix(p, "/installation Bearer ghs_2_1") || strings.Contains(p, "/git/ref/") && !strings.HasSuffix(p, "Bearer ghs_2_1") {
+				if strings.HasSuffix(p, "/installation Bearer "+tok(2, 1)) || strings.Contains(p, "/git/ref/") && !strings.HasSuffix(p, "Bearer "+tok(2, 1)) {
 					t.Fatalf("auth of %q", p)
 				}
 			}
@@ -80,71 +80,58 @@ func TestCloneScript(t *testing.T) {
 	}
 }
 
-func TestPrefetchRevokes(t *testing.T) {
-	r, rec := prefetchRig(t, installed())
-	var during []string
-	run := func(argv []string, stdin []byte) error {
-		if got, ok := r.record(t); ok {
-			for _, e := range got.Tokens {
-				during = append(during, e.Token)
+// AC4: the prefetch token is issued, audited, and revoked exactly once when the helper returns, or when the prefetch
+// fails before it runs; it never reaches the Keychain.
+func TestPrefetchRevokesOnceOnSuccessAndFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ref    string
+		runErr error
+		repo   func(*fakeRepo)
+		code   protocol.Code
+		runs   int
+	}{
+		"success":            {"main", nil, nil, "", 1},
+		"helper fails":       {"main", errors.New("exit status 128: fatal: could not read Password for " + tok(2, 1)), nil, protocol.StartFailed, 1},
+		"docker unreachable": {"main", docker.ErrUnreachable, nil, protocol.DockerUnreachable, 1},
+		"ref check fails":    {"gone", nil, nil, protocol.ManifestRejected, 0},
+		"ref lookup fails":   {"main", nil, func(f *fakeRepo) { f.refStatus = 502 }, protocol.GitHubFailed, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := installed()
+			if tc.repo != nil {
+				tc.repo(repo)
 			}
-		}
-		return r.exec.run(argv, stdin)
-	}
-	if err := r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, run); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(during, []string{"ghs_2_1"}) {
-		t.Fatalf("recorded while cloning: %q", during)
-	}
-	if !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) || len(r.backlog(t)) != 0 {
-		t.Fatalf("revoked %q backlog %v", r.api.revoked, r.backlog(t))
-	}
-	if _, ok := r.record(t); ok {
-		t.Fatal("record kept")
-	}
-	line := startLine(t, rec)
-	if !strings.Contains(line, `"result":"issued"`) || !strings.Contains(line, `"result":"revoked"`) ||
-		!strings.Contains(line, `"kind":"github-installation-token"`) || strings.Contains(line, "ghs_") {
-		t.Fatalf("audit %s", line)
-	}
-}
-
-func TestPrefetchRevokesAfterFailedClone(t *testing.T) {
-	r, _ := prefetchRig(t, installed())
-	r.exec.err = errors.New("exit status 128: fatal: could not read Password for ghs_2_1")
-	err := r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, r.exec.run)
-	wantCode(t, err, protocol.StartFailed)
-	var e *protocol.Error
-	errors.As(err, &e)
-	if !strings.Contains(e.Message, "Prefetching acme/app at main failed.") || strings.Contains(e.Cause, "ghs_") || e.Cause == "" {
-		t.Fatalf("%+v", e)
-	}
-	if !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) {
-		t.Fatalf("revoked %q", r.api.revoked)
-	}
-}
-
-func TestPrefetchDockerUnreachable(t *testing.T) {
-	r, _ := prefetchRig(t, installed())
-	r.exec.err = docker.ErrUnreachable
-	wantCode(t, r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, r.exec.run), protocol.DockerUnreachable)
-	if !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) {
-		t.Fatalf("revoked %q", r.api.revoked)
-	}
-}
-
-func TestPrefetchRevokeFailureQueues(t *testing.T) {
-	r, rec := prefetchRig(t, installed())
-	r.api.revokeErr = func(string) int { return 500 }
-	if err := r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, r.exec.run); err != nil {
-		t.Fatalf("a failed revocation failed the prefetch: %v", err)
-	}
-	if b := r.backlog(t); len(b) != 1 || b[0].Token != "ghs_2_1" || b[0].Container != ctr {
-		t.Fatalf("backlog %+v", b)
-	}
-	if line := startLine(t, rec); !strings.Contains(line, `"result":"pending"`) {
-		t.Fatalf("audit %s", line)
+			r, a := prefetchRig(t, repo)
+			r.exec.err = tc.runErr
+			var during []string
+			run := func(argv []string, stdin []byte) error {
+				during = r.api.revokedTokens()
+				return r.exec.run(argv, stdin)
+			}
+			err := r.g.Prefetch(context.Background(), "acme/app", tc.ref, "/w", ctr, run)
+			if tc.code == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.code != "" {
+				wantCode(t, err, tc.code)
+				var e *protocol.Error
+				if errors.As(err, &e) && strings.Contains(e.Message+e.Cause, "ghs_") {
+					t.Fatalf("%+v", e)
+				}
+			}
+			if len(r.exec.argv) != tc.runs || len(during) != 0 {
+				t.Fatalf("runs %d, revoked while running %q", len(r.exec.argv), during)
+			}
+			if !slices.Equal(r.api.revoked, []string{tok(2, 1)}) {
+				t.Fatalf("revoked %q", r.api.revoked)
+			}
+			r.noKeychain(t)
+			line := startLine(t, a)
+			if !strings.Contains(line, `"result":"issued"`) || !strings.Contains(line, `"result":"revoked"`) ||
+				!strings.Contains(line, `"kind":"github-installation-token"`) || !strings.Contains(line, `"repositories":["acme/app"]`) {
+				t.Fatalf("audit %s", line)
+			}
+		})
 	}
 }
 
@@ -164,7 +151,7 @@ func TestPrefetchUnknownRef(t *testing.T) {
 	if !strings.Contains(err.Error(), "prefetch ref gone is no branch or tag of acme/app") || len(r.exec.argv) != 0 {
 		t.Fatalf("%v runs=%d", err, len(r.exec.argv))
 	}
-	if !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) {
+	if !slices.Equal(r.api.revoked, []string{tok(2, 1)}) {
 		t.Fatalf("revoked %q", r.api.revoked)
 	}
 }
@@ -174,7 +161,7 @@ func TestPrefetchRefLookupFails(t *testing.T) {
 	repo.refStatus = 502
 	r, _ := prefetchRig(t, repo)
 	wantCode(t, r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, r.exec.run), protocol.GitHubFailed)
-	if len(r.exec.argv) != 0 || !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) {
+	if len(r.exec.argv) != 0 || !slices.Equal(r.api.revoked, []string{tok(2, 1)}) {
 		t.Fatalf("runs=%d revoked %q", len(r.exec.argv), r.api.revoked)
 	}
 }
@@ -195,15 +182,6 @@ func TestPrefetchNoLogin(t *testing.T) {
 	wantCode(t, r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, r.exec.run), protocol.LoginRequired)
 	if r.api.issued != 0 {
 		t.Fatal("issued without a login")
-	}
-}
-
-func TestPrefetchUnrecordedTokenRevoked(t *testing.T) {
-	r, _ := prefetchRig(t, installed())
-	r.keys.putErr = errors.New("keychain full")
-	wantCode(t, r.g.Prefetch(context.Background(), "acme/app", "main", "/w", ctr, r.exec.run), protocol.KeychainFailed)
-	if len(r.exec.argv) != 0 || !slices.Equal(r.api.revoked, []string{"ghs_2_1"}) {
-		t.Fatalf("runs=%d revoked %q", len(r.exec.argv), r.api.revoked)
 	}
 }
 

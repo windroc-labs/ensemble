@@ -1,4 +1,4 @@
-"""HarnessDelegate owns an accepted plan, its Composer, sessions and durable recovery identity."""
+"""HarnessDelegate: an accepted plan, its Composer, sessions and durable recovery identity."""
 
 from __future__ import annotations
 
@@ -130,15 +130,14 @@ def _unknown(error: Unanswered) -> Unanswered:
     return Unanswered(f"delegate agent session liveness unknown: {error}")
 
 
-TUI_START_TIMEOUT = 30  # seconds: a tui run's agent session to go live, off Docker
+TUI_START_TIMEOUT = 30  # s for a tui run's agent session to go live, off Docker
 DOCKER_START_TIMEOUT = 120  # seconds, container start included
 TUI_POLL = 0.1  # seconds
-DRAIN_WAIT = (
-    35  # seconds a worker is gone before its drive ends the attempt: past the harness's drain
-)
+DRAIN_WAIT = 35  # s a gone worker waits before its drive ends the attempt; past the harness's drain
 GONE_EVERY = 1.0  # seconds between the drive's worker checks
 WIND_DOWN_WAIT = 30.0  # seconds
 DRIVE_STOP_WAIT = 5.0  # seconds after SIGTERM, then SIGKILL
+ENDING = "previous worker generation (live or unknown)"
 
 
 class HarnessDelegate(Delegate):
@@ -163,7 +162,7 @@ class HarnessDelegate(Delegate):
 
     @classmethod
     def preview(cls, role: str, spec: Spec, **placement) -> Preview:
-        """What the constructor would accept, without the session preflight; writes nothing."""
+        """What the constructor accepts, minus the session preflight; writes nothing."""
         view = cls.__new__(cls)
         view._accept(role, spec, **placement)
         state = view._state
@@ -271,9 +270,9 @@ class HarnessDelegate(Delegate):
         self._harness_launch(self._state)
 
     def _persist_new(self) -> None:
-        """Every refusal precedes every write: a fresh workdir's session preflight runs before its
-        run dir is made; otherwise it follows the replaced run's refusal and cleanup, under the
-        mutex. The agent dir is made last, just before the run record.
+        """Refusals precede writes: a fresh workdir's session preflight before its run dir, else
+        the replaced run's refusal and cleanup first, under the mutex; the agent dir last, then the
+        run record.
         """
         fresh = not os.path.lexists(self.layout.run)
         if not fresh:
@@ -321,8 +320,8 @@ class HarnessDelegate(Delegate):
 
     def _replacing(self, payload: bytes) -> int:
         """The attempt replacing the run `payload` records (its session's next, else 1; a corrupt
-        record's readable attempt + 1), refused while that run is live; the agent session it left
-        open (a tui run's, once it ended) is closed.
+        record's readable attempt + 1), refused while that run lives; closes the agent session it
+        left (a tui run's, once ended).
         """
         if self._live(payload):
             raise ConfigError(f"{self.workdir}: delegate is still alive")
@@ -343,8 +342,8 @@ class HarnessDelegate(Delegate):
         return previous.attempt + 1 if previous.plan.sid == self._state.plan.sid else 1
 
     def _settle(self) -> None:
-        """A gone owned worker retired outside the mutex, after its handler drained. Only under
-        the run lock, which every start takes, and only the attempt it checked there.
+        """A gone owned worker retired outside the mutex once its handler drained; only under the
+        run lock every start takes, for the attempt checked there.
         """
         try:
             state = self._read()
@@ -382,8 +381,8 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _live(self, payload: bytes | None) -> bool:
-        """Whether the run `payload` records is live: a readable record's per _alive; else while
-        its run lock is held or a corrupt one's drive runs.
+        """Whether the run `payload` records is live: per _alive if readable; else while its run
+        lock is held or a corrupt one's drive runs.
         """
         if payload is None:
             return self.store.running()
@@ -471,7 +470,7 @@ class HarnessDelegate(Delegate):
 
     @classmethod
     def _bare(cls, layout: Layout) -> HarnessDelegate:
-        """A view of layout's run with no state loaded: enough for _live."""
+        """A view of layout's run, no state loaded: enough for _live."""
         view = cls.__new__(cls)
         view.layout, view.workdir, view.store = layout, layout.workdir, RunState(layout)
         view.session_cls, view._viewer = Session, None
@@ -813,8 +812,8 @@ class HarnessDelegate(Delegate):
         raise SessionError(f"close {state.harness_name}: did not exit")
 
     def _stop_owned(self, *, closed: bool) -> None:
-        """Once an owned run's worker is closed or gone: delegate.json `closing`, and its still
-        active attempt ended once as CLOSED, with one Finished; closed: a lock's release claimed."""
+        """Once an owned run's worker is closed or gone: delegate.json `closing`, its active
+        attempt ended once (CLOSED, one Finished); closed: its lock's release claimed."""
         try:
             state = self._read()
             if not owned(state.plan):
@@ -834,8 +833,8 @@ class HarnessDelegate(Delegate):
             )
 
     def session_status(self) -> SessionStatus:
-        """Its own live agent session's status, else the plan's: an attached one lacks its env;
-        never recorded (its launch failed): not resumable.
+        """Its own live agent session's, else the plan's (an attached one lacks its env); never
+        recorded (its launch failed): not resumable.
         """
         state = self._read()
         agent = None if state.completed else self._own(state)
@@ -847,11 +846,10 @@ class HarnessDelegate(Delegate):
             return SessionStatus(Resumable.NO, None, "")
 
     def run(self, on_event: Callable[[Event], None] | None = None) -> Result:
-        """Each event goes to the callback, then `on_event`; a Finished is stored first, a failed
-        store printed and the Finished still sent. A run that raises before its Finished stores and
-        calls back a stopped one (not to `on_event`), then re-raises; a crash (an Exception or
-        SystemExit, not a signal's Stopped or an interrupt) is also a run.jsonl run_error row with
-        its traceback.
+        """Each event to the callback, then `on_event`; a Finished stored first (a failed store
+        printed, still sent). Raising before its Finished: a stopped one stored and called back
+        (not to `on_event`), then re-raised; a crash (Exception or SystemExit) also a run.jsonl
+        run_error row, with traceback.
         """
         state = self._state
         if state.events is not None and not state.detached and state.plan.spec.mode != Mode.TUI:
@@ -1038,7 +1036,7 @@ class HarnessDelegate(Delegate):
         callback: EventCallback | None,
         on_event: Callable[[Event], None] | None,
     ) -> Result:
-        """Attempt n's Result (a follow-up's `previous`); ends it itself only while opening past
+        """Attempt n's Result (a follow-up's `previous`); ends it only while opening past
         run.idle_timeout or once its worker was gone DRAIN_WAIT s (AC18).
         """
         p, n = self._state.plan, self._state.attempt
@@ -1083,8 +1081,8 @@ class HarnessDelegate(Delegate):
         return Result(1, None, f"stopped: {state.start_failure}")
 
     def _clear_tmp(self) -> None:
-        """agent/tmp at the run's end, never followed, keeping a deliverable file `out` directly in
-        it; kept whole while its agent session is open; an error printed.
+        """agent/tmp at the run's end, never followed, keeping a deliverable `out` directly in it;
+        whole while its agent session is open; errors printed.
         """
         tmp, out = self.layout.tmp, os.path.abspath(self._state.plan.driver_spec.out)
         try:
@@ -1131,8 +1129,8 @@ class HarnessDelegate(Delegate):
         return state
 
     def _harness_launch(self, state: DelegateState) -> Launch:
-        """The harness imports from the delegate, session and utils roots, then from its session
-        class's and the classes that session loads by name for the run's client.
+        """The harness imports from the delegate, session and utils roots, then its session
+        class's and those it loads by name for the client.
         """
         try:
             roots = (
@@ -1207,9 +1205,9 @@ class HarnessDelegate(Delegate):
         return record
 
     def _started(self, state: DelegateState) -> None:
-        """Tui: waits, outside the mutex, until this run's agent session has its client running;
-        else SessionError naming why, its drive and agent closed; a Host failure or the start
-        limit is first saved as start_failure, unless the drive ended.
+        """Tui: waits outside the mutex for its agent's client to run; else SessionError naming
+        why, drive and agent closed; a Host failure or the start limit first saved as
+        start_failure unless the drive ended.
         """
         if state.plan.spec.mode != Mode.TUI:
             return
@@ -1256,7 +1254,7 @@ class HarnessDelegate(Delegate):
         raise SessionError(message)
 
     def _publish_record(self, state: DelegateState) -> None:
-        """Its Record in its agent session's worker dir, through that session's view."""
+        """Its Record in its agent session's worker dir, through that view."""
         try:
             agent = self.session_cls.attach(state.agent_name, sid=state.plan.sid, host=state.host)
             if not isinstance(agent, _Publishes):
@@ -1325,8 +1323,22 @@ class HarnessDelegate(Delegate):
             return None
         return SessionBusy(found[1], found[2])
 
+    def _ownerless(self, state: DelegateState) -> SessionBusy | None:
+        try:
+            rows = self.session_cls.host(state.host).rows()
+        except (SessionError, SessionConfigError):
+            return None
+        if any(
+            row.name == state.agent_name
+            and row.sid in (None, state.plan.sid)
+            and row.state in (StatusState.UNKNOWN, StatusState.DEAD)
+            for row in rows
+        ):
+            return SessionBusy(state.agent_name, ENDING)
+        return None
+
     def resume(self, *, mode: str | None = None, input: str | None = None) -> Record:
-        """Continues in `mode` (headless or tui), else the recorded one; the new mode is recorded."""
+        """Continues in `mode` (headless or tui), else the recorded one, recording the mode."""
         if mode not in (None, Mode.HEADLESS, Mode.TUI):
             raise ConfigError(f"resume: mode must be headless or tui, got {mode!r}")
         self._settle()
@@ -1344,6 +1356,8 @@ class HarnessDelegate(Delegate):
                 )
             previous = self._state = state
             alive = self._alive(state)
+            if alive and (ending := self._ownerless(state)):
+                raise SessionError(str(ending))
             if input is not None:
                 if alive:
                     raise ConfigError(f"{self.workdir}: delegate is still alive")
@@ -1402,7 +1416,7 @@ class HarnessDelegate(Delegate):
             agent = self._known_agent(state)
             probe = accepted.session
             if agent is not None and probe.name == state.agent_name:
-                # the tui preflight refuses a live same-named session: the one this closes
+                # tui preflight refuses a live same-named session: this one, closed below
                 probe = replace(probe, name=f"{probe.name}-preflight")
             accepted = self._probed(accepted, state.attempt + 1, probe)
             if agent is not None:
@@ -1434,9 +1448,7 @@ def _why(error: OSError) -> str:
 
 
 def _remove(path: str) -> None:
-    """`path`, never followed: a directory's tree (remove_tree resists a symlink swap), else the
-    entry itself.
-    """
+    """`path`, never followed: a dir's tree (remove_tree resists a symlink swap), else itself."""
     try:
         found = os.lstat(path)
     except FileNotFoundError:
