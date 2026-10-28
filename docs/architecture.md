@@ -393,7 +393,8 @@ a container, by reference, never a value: `github` (grants of `permissions` and 
 `repo`: every repository of every installation, then alone), `linear` (`{"role"}`: that role's Linear app token) and
 `env` (`{"item", "file"}` environment secrets). The task decides the kinds and levels, the role the Linear identity,
 the environment its own secrets, the run the repos. The orchestrator resolves the run's `github` and `linear` onto the
-delegate `Spec.credentials` (`ensemble.delegate.CredentialRequest`), never `env`; the delegate adds the environment's
+delegate `Spec.credentials` (`ensemble.delegate.CredentialRequest`), never `env`, and only that run path sets it, never
+a CLI option, overlay or run input (FR-33); the delegate adds the environment's
 `env` for the session `Spec`; the Docker Host writes it as the start manifest's `credentials` (each grant with the
 App), one source per kind beside the legacy `github` and `secrets`. Each kind lands in `/run/ensemble/secrets/<kind>/`
 (`src/broker/protocol/docker-broker/fixtures/credential-dirs.json`). Nothing sends a request yet, and protocol 34's
