@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import signal
+import sys
 import threading
 import unittest
 import uuid
@@ -211,7 +212,10 @@ class Drive(HarnessCase):
         )
         launch = FakeControl.attach(control).data()["launch"]
         self.assertEqual(launch["blocked_signals"], list(SIGNALS))
-        self.assertEqual(launch["argv"][-2:], ["ensemble.delegate.engine.harness", self.work])
+        self.assertEqual(
+            launch["argv"],
+            [sys.executable, "-P", "-s", "-m", "ensemble.delegate.engine.harness", self.work],
+        )
         self.assertEqual(seen["env"], launch["env"])
         self.assertEqual(RecordingHost.launches, [])
         self.assertEqual(record.sessions, ())
@@ -807,7 +811,17 @@ class RunDirTest(HarnessCase):
         self.assertEqual(self.stored()["attempt"], 1)
 
     def test_a_corrupt_run_record_keeps_a_readable_attempt(self):
-        for text, attempt in (("not json", 1), ('{"attempt": 4}', 5)):
+        for text, attempt in (
+            ("not json", 1),
+            ('{"attempt": 4}', 5),
+            ("[1]", 1),
+            ('{"version": 2, "attempt": 4}', 5),
+            ('{"version": 1, "attempt": 6}', 7),
+            ('{"attempt": true}', 1),
+            ('{"attempt": 0}', 1),
+            ('{"version": 1, "attempt": 2, "spec": null}', 3),
+            ('{"version": 1, "attempt": 3, "spec": "x"}', 4),
+        ):
             with self.subTest(text=text):
                 self.corrupt(text)
                 self.make()
@@ -2084,12 +2098,14 @@ class CrashTest(HarnessCase):
         self.settings(trusted_dirs=(project,))
         _view, name = self.crashed(cwd=project)
         self.settings()
-        left, launches = HarnessSession.live[name], len(harness_launches())
+        left = HarnessSession.live[name]
+        launches = (len(harness_launches()), len(HarnessSession.started))
         view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
-        with self.assertRaisesRegex(ConfigError, "no longer in trusted_dirs"):
+        with self.assertRaises(ConfigError) as caught:
             view.resume()
+        self.assertEqual(str(caught.exception), f"cwd {project} is no longer in trusted_dirs")
         self.assertEqual(left.alive(), True)
-        self.assertEqual(len(harness_launches()), launches)
+        self.assertEqual((len(harness_launches()), len(HarnessSession.started)), launches)
 
     def test_a_resume_its_preflight_refuses_leaves_the_agent_session_live(self):
         _view, name = self.crashed()
@@ -2351,6 +2367,7 @@ class StartedTest(HarnessCase):
         self.assertEqual(message, f"tui session {AGENT} did not start in 30 s")
         self.assertEqual(self.now, 30)
         self.assertFalse(self.drive().running())
+        self.assertEqual(self.drive().data()["signals"], ["terminate"])
 
     def test_a_harness_ended_first_fails_at_once_naming_its_recorded_end(self):
         self.ends(lambda: self.end_with(Result(1, None, "stopped: SessionError: no relay")))

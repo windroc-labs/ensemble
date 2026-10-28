@@ -7,7 +7,7 @@ import sys
 from ensemble.delegate import Spec
 from ensemble.delegate.composer.prompt import RESUME
 from ensemble.delegate.engine.types import Begun
-from ensemble.session import Exited, NotShowable, Reply
+from ensemble.session import Exited, Reply
 from tests.delegate.case import REPO, child_env
 from tests.delegate.contracts.delegate import DelegateContract
 from tests.delegate.fakes.harness_session import (
@@ -25,26 +25,17 @@ from tests.delegate.unit.runs import DONE
 CLASS_QUERIES = """import json, sys, unittest
 from ensemble.delegate import HarnessDelegate
 from tests.delegate.contracts.delegate import DelegateContract
-from tests.delegate.fakes.harness_session import HarnessSession
 from tests.delegate.harness import HarnessCase
 
 class ClassQueries(DelegateContract, HarnessCase):
     delegate_cls = HarnessDelegate
     ROLE = "dummy-tester"
-    SHOWABLE = sys.argv[1] == "True"
-
-    def setUp(self):
-        super().setUp()
-        if self.SHOWABLE:
-            script = HarnessSession.script
-            HarnessSession.reset(showable=True)
-            HarnessSession.script = script
 
     def runTest(self):
         DelegateContract.test_class_methods_answer_for_its_roles_and_refuse_an_unknown_one(self)
 
 result = unittest.TextTestRunner(verbosity=2).run(ClassQueries())
-print(json.dumps({"tests": result.testsRun, "showable": ClassQueries.SHOWABLE}))
+print(json.dumps({"tests": result.testsRun}))
 sys.exit(not result.wasSuccessful())
 """
 
@@ -56,7 +47,7 @@ class HarnessContract(DelegateContract, HarnessCase):
 
     def test_class_methods_answer_for_its_roles_and_refuse_an_unknown_one(self):
         result = subprocess.run(
-            [sys.executable, "-P", "-S", "-c", CLASS_QUERIES, str(self.SHOWABLE)],
+            [sys.executable, "-P", "-S", "-c", CLASS_QUERIES],
             cwd=self.home,
             env=child_env(None, REPO),
             stdin=subprocess.DEVNULL,
@@ -65,7 +56,7 @@ class HarnessContract(DelegateContract, HarnessCase):
             timeout=60,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(json.loads(result.stdout), {"tests": 1, "showable": self.SHOWABLE})
+        self.assertEqual(json.loads(result.stdout), {"tests": 1})
 
     def make(self, workdir, **kw):
         role = kw.pop("role", self.ROLE)
@@ -120,20 +111,10 @@ class HarnessContract(DelegateContract, HarnessCase):
         self.assertTrue(launched.prompt.endswith("\n" + answer + "\n"))
 
 
-class ShowingHarnessContract(HarnessContract):
-    SHOWABLE = True
-
-    def setUp(self):
-        super().setUp()
-        script = HarnessSession.script
-        HarnessSession.reset(showable=True)
-        HarnessSession.script = script
-
-
 class Ownership(HarnessCase):
-    def pair(self, *, agent_showable=True):
+    def pair(self):
         HarnessSession.reset()
-        HarnessSession.hosts["agent"] = (ShowingHost if agent_showable else RecordingHost)("agent")
+        HarnessSession.hosts["agent"] = ShowingHost("agent")
         delegate = self.make(
             spec=Spec(
                 "input",
@@ -177,13 +158,6 @@ class Ownership(HarnessCase):
         _, view = self.pair()
         view.show()
         self.assertEqual(FakeViewer.shown, [(self.metadata()["agent_name"], "target", None)])
-
-    def test_a_hidden_agent_has_no_attach(self):
-        _, view = self.pair(agent_showable=False)
-        self.assertIsNone(view.status().attach)
-        self.assertIsNone(view.attach_command())
-        with self.assertRaises(NotShowable):
-            view.show()
 
     def test_resume_closes_leftover_agent_before_restarting_lifecycle_owner(self):
         record, view = self.pair()

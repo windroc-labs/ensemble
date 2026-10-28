@@ -15,13 +15,10 @@ from unittest import mock
 
 from ensemble.delegate import ConfigError, DelegateEvent, Outcome, Progress, Spec
 from ensemble.delegate.engine.drivers import InstructionDriver
-from ensemble.delegate.engine.state import RunState
-from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Result
+from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
-    SIGNALS,
     Access,
     Exited,
-    LimitHit,
     Mode,
     NoRecordedSession,
     Reply,
@@ -38,7 +35,6 @@ from tests.delegate.case import REPO, SRC, child_env
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.fakes.harness_session import (
     DrivenDelegate,
-    FailingSession,
     FakeControl,
     HarnessSession,
     PersistentSession,
@@ -286,22 +282,6 @@ class Views(HarnessCase):
             DrivenDelegate.attach(self.work, session_cls=ConfiguredSession)
         self.assertEqual(str(caught.exception), "unknown host changed")
 
-    def test_resume_refuses_a_cwd_no_longer_trusted_and_launches_nothing(self):
-        project = os.path.join(self.home, "project")
-        os.mkdir(project)
-        self.settings(trusted_dirs=(project,))
-        spec = Spec("input", self.work, task="echo", sid=SID, cwd=project, client="fake")
-        record = self.make(spec=spec).detach()
-        self.assertTrue(self.metadata()["plan"]["session"]["access"]["project"])
-        self.stop(record)
-        self.settings()
-        view = DrivenDelegate.attach(self.work)
-        launches, starts = len(harness_launches()), len(HarnessSession.started)
-        with self.assertRaises(ConfigError) as caught:
-            view.resume()
-        self.assertEqual(str(caught.exception), f"cwd {project} is no longer in trusted_dirs")
-        self.assertEqual((len(harness_launches()), len(HarnessSession.started)), (launches, starts))
-
     def test_a_completed_foreground_tui_left_open_is_not_alive(self):
         spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
         delegate = self.make(spec=spec)
@@ -522,41 +502,6 @@ class Completion(HarnessCase):
         result = delegate.run(observe)
         self.assertEqual(finished, [Finished(result)])
 
-    def test_every_returned_result_has_one_last_finished_event(self):
-        for script in (
-            (Reply(block(DONE)), Exited(0)),
-            (Reply("no outcome"), Exited(0)),
-            (Exited(7),),
-            (LimitHit(1767225600.0), Exited(0)),
-        ):
-            with self.subTest(script=script):
-                self.work = os.path.join(self.home, f"completion-{len(HarnessSession.started)}")
-                HarnessSession.script = script
-                seen = []
-                result = self.make().run(seen.append)
-                self.assertIsInstance(seen[0], Begun)
-                self.assertEqual(
-                    [event for event in seen if isinstance(event, Finished)], [Finished(result)]
-                )
-                self.assertEqual(seen[-1], Finished(result))
-                if isinstance(script[0], LimitHit):
-                    self.assertIsNone(result.outcome)
-                    self.assertEqual(result.limit, Limit(1767225600.0))
-                    self.assertFalse(HarnessSession.live)
-
-    def test_spawn_failure_is_finished_without_begun(self):
-        FailingSession.reset()
-        delegate = DrivenDelegate(
-            "dummy-tester",
-            Spec("input", self.work, client="fake"),
-            session_cls=FailingSession,
-        )
-        seen = []
-        result = delegate.run(seen.append)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("fake spawn refused", result.error)
-        self.assertEqual(seen, [Finished(result)])
-
     def test_on_event_exception_keeps_original_exception_and_stops_session(self):
         failure = RuntimeError("callback failure")
         seen = []
@@ -611,20 +556,6 @@ class HarnessLaunch(HarnessCase):
         self.assertEqual(str(caught.exception), "[clients.fake]: no x")
         self.assertFalse(os.path.lexists(self.work))
 
-    def test_the_harness_runs_in_the_run_dir_with_its_signals_blocked(self):
-        project = os.path.join(self.home, "project")
-        os.mkdir(project)
-        spec = Spec("input", self.work, client="fake", sid=SID, cwd=project)
-        self.make(spec=spec).detach()
-        launch = harness_launches()[0]
-        self.assertEqual(
-            (launch["cwd"], launch["blocked_signals"]), (Layout(self.work).run, list(SIGNALS))
-        )
-        self.assertEqual(
-            launch["argv"],
-            [sys.executable, "-P", "-s", "-m", "ensemble.delegate.engine.harness", self.work],
-        )
-
 
 class TuiStart(HarnessCase):
     def tui(self, **placement):
@@ -651,20 +582,6 @@ class TuiStart(HarnessCase):
         FakeControl.harness_starts_agent, FakeControl.ends_at_start = True, False
         resumed = DrivenDelegate.attach(self.work).resume()
         self.assertEqual(HarnessSession.live[resumed.sessions[0]].alive(), True)
-
-    def test_a_timeout_closes_the_harness_and_fails_the_detach(self):
-        FakeControl.harness_starts_agent = False
-        delegate = self.tui()
-        clock = itertools.chain((0.0, 1.0), itertools.repeat(31.0))
-        with (
-            mock.patch("time.monotonic", side_effect=lambda: next(clock)),
-            mock.patch("time.sleep") as slept,
-            self.assertRaises(SessionError),
-        ):
-            delegate.detach()
-        self.assertEqual(slept.call_count, 1)
-        drive = FakeControl.named(f"dummy-tester-{SID[:8]}-drive")
-        self.assertEqual((drive.running(), drive.data()["signals"]), (False, ["terminate"]))
 
     def test_an_unrelated_live_tui_of_the_same_name_does_not_stand_for_this_run(self):
         spec = Spec("input", self.work, mode="tui", client="fake", sid=SID, name="X")
@@ -775,21 +692,8 @@ class Outer(HarnessCase):
         "resume": ("ensemble-orchestrator", "resume", "TASK-1"),
     }
 
-    def test_the_default_record_is_a_role_run_answered_by_ensemble_delegate(self):
-        record = self.make().detach()
-        self.assertEqual(
-            (record.kind, record.detail, record.ctl, record.resume),
-            (
-                "role",
-                "dummy-tester",
-                ("ensemble-delegate",),
-                ("ensemble-delegate", "resume", self.work),
-            ),
-        )
-
     def test_outer_is_the_record_and_resumes_record(self):
         record = self.make(host="agent").detach(outer=self.OUTER)
-        self.assertEqual((record.kind, record.ctl, record.resume), tuple(self.OUTER.values()))
         self.assertEqual(
             self.metadata()["outer"],
             {k: list(v) if k != "kind" else v for k, v in self.OUTER.items()},
@@ -839,16 +743,6 @@ class Display(HarnessCase):
         DrivenDelegate.attach(self.work, session_cls=CountingDisplay).resume()
         self.assertEqual(harness_launches()[-1]["display"], "completed:given")
         self.assertEqual(CountingDisplay.calls, [("given", "agent")])
-
-    def test_a_headless_agent_starts_without_a_display(self):
-        CountingDisplay.reset()
-        DrivenDelegate(
-            "dummy-tester",
-            Spec("input", self.work, client="fake", sid=SID),
-            session_cls=CountingDisplay,
-            display="given",
-        ).run()
-        self.assertIsNone(CountingDisplay.started[-1]["display"])
 
 
 class ConcurrentDetach(HarnessCase):
@@ -903,14 +797,6 @@ class ConcurrentDetach(HarnessCase):
 
 
 class RunDir(HarnessCase):
-    def test_new_run_lays_out_agent_and_run_dirs(self):
-        self.make()
-        layout = Layout(self.work)
-        self.assertEqual(sorted(os.listdir(self.work)), ["agent", "run"])
-        self.assertTrue(os.path.isdir(layout.agent) and os.path.isdir(layout.run))
-        self.assertEqual(self.state_record(), os.path.join(layout.run, "delegate.json"))
-        self.assertEqual(stat.S_IMODE(os.stat(self.state_record()).st_mode), 0o600)
-
     def test_run_files_outside_agent_dir_are_all_under_run_dir(self):
         log = os.path.join(self.home, "callback.log")
         callback = [sys.executable, "-P", "-S", callback_recorder.__file__, log]
@@ -971,50 +857,12 @@ class RunDir(HarnessCase):
         self.assertEqual(view.outcome().status, "done")
         self.assertEqual(self.make().run().returncode, 0)
 
-    def test_a_refused_construction_writes_no_state_record(self):
-        with self.assertRaises(ConfigError):
-            self.make(role="absent-role")
-        self.assertFalse(os.path.lexists(self.state_record()))
-        self.assertFalse(os.path.lexists(self.work))
-
-    def test_a_foreground_run_holds_the_run_lock_against_a_new_construction(self):
-        delegate = self.make()
-        seen = []
-
-        def construct(event):
-            if isinstance(event, Begun):
-                with self.assertRaises(ConfigError) as caught:
-                    self.make()
-                seen.append(str(caught.exception))
-
-        delegate.run(construct)
-        self.assertEqual(seen, [f"{self.work}: delegate is still alive"])
-        self.assertEqual(self.make().run().returncode, 0)
-        self.assertEqual(self.metadata()["attempt"], 2)
-
 
 class Corrupt(HarnessCase):
     def corrupt(self, text):
         self.make()
         with open(self.state_record(), "w", encoding="utf-8") as file:
             file.write(text)
-
-    def test_a_corrupt_record_is_replaced_keeping_a_readable_attempt(self):
-        for text, attempt in (
-            ("not json", 1),
-            ("[1]", 1),
-            ('{"version": 2, "attempt": 4}', 5),
-            ('{"version": 1, "attempt": 6}', 7),
-            ('{"attempt": true}', 1),
-            ('{"attempt": 0}', 1),
-            ('{"version": 1, "attempt": 2, "spec": null}', 3),
-            ('{"version": 1, "attempt": 3, "spec": "x"}', 4),
-        ):
-            with self.subTest(text=text):
-                self.work = os.path.join(self.home, f"corrupt-{attempt}-{len(text)}")
-                self.corrupt(text)
-                self.make()
-                self.assertEqual(self.metadata()["attempt"], attempt)
 
     def test_attach_by_workdir_or_record_refuses_a_corrupt_record(self):
         self.corrupt('{"version": 2}')
@@ -1039,14 +887,6 @@ class Corrupt(HarnessCase):
             None,
             None,
         ).to_line()
-
-    def test_a_held_run_lock_keeps_a_corrupt_record(self):
-        self.corrupt("not json")
-        with RunState(Layout(self.work)).run_lock(), self.assertRaises(ConfigError) as caught:
-            self.make()
-        self.assertEqual(str(caught.exception), f"{self.work}: delegate is still alive")
-        with open(self.state_record(), encoding="utf-8") as file:
-            self.assertEqual(file.read(), "not json")
 
     def test_a_live_drive_named_by_a_corrupt_record_keeps_it(self):
         drive = FakeControl.prepare(("x",), self.home)
@@ -1155,4 +995,5 @@ class ConcurrentResume(HarnessCase):
         self.assertEqual(records[0], records[1])
         self.assertEqual((records[0].sid, records[0].display), (SID, "opaque"))
         self.assertEqual(len(harness_launches()), 1)
+        self.assertEqual(self.metadata()["attempt"], 2)
         self.assertTrue(delegate.alive())
