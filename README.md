@@ -10,7 +10,7 @@ or let a board route work across roles. Claude Code, Codex and OpenCode share th
 
 ![Three entry points: a plain worker, a role and task, or a board workflow](docs/images/levels.svg)
 
-Choose the scope you need. A worker is a client conversation; a role adds a charter, task and checked outcome;
+Choose the scope you need. A worker is a client conversation; a role adds a charter, task and outcome;
 a board schedules role runs and writes their results back to issues. The board can be Linear or local Markdown.
 
 <a id="why"></a>

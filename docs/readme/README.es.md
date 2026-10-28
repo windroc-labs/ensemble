@@ -10,7 +10,7 @@ o deja que un tablero distribuya el trabajo entre roles. Claude Code, Codex y Op
 
 ![Tres puntos de entrada: un trabajador sin rol, un rol con una tarea o un flujo de trabajo con tablero](../images/levels.svg)
 
-Elige el alcance que necesitas. Un trabajador es una conversación con un cliente; un rol añade un mandato, una tarea y un resultado verificado;
+Elige el alcance que necesitas. Un trabajador es una conversación con un cliente; un rol añade un mandato, una tarea y un resultado;
 un tablero programa ejecuciones de roles y registra sus resultados en las incidencias. El tablero puede ser Linear o Markdown local.
 
 <a id="why"></a>

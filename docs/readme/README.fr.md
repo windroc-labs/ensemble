@@ -10,7 +10,7 @@ ou laissez un tableau répartir le travail entre les rôles. Claude Code, Codex 
 
 ![Trois points d’entrée : un agent exécutant seul, un rôle avec une tâche ou un flux de travail sur tableau](../images/levels.svg)
 
-Choisissez le périmètre dont vous avez besoin. Un agent exécutant correspond à une conversation avec un client ; un rôle y ajoute une charte, une tâche et un résultat vérifié ;
+Choisissez le périmètre dont vous avez besoin. Un agent exécutant correspond à une conversation avec un client ; un rôle y ajoute une charte, une tâche et un résultat ;
 un tableau planifie les exécutions des rôles et reporte leurs résultats dans les tickets. Le tableau peut être Linear ou du Markdown local.
 
 <a id="why"></a>

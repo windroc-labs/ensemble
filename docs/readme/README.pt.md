@@ -10,7 +10,7 @@ ou deixe um quadro distribuir o trabalho entre os papéis. Claude Code, Codex e 
 
 ![Três pontos de entrada: um trabalhador sem papel, um papel com uma tarefa ou um fluxo de trabalho com quadro](../images/levels.svg)
 
-Escolha o escopo de que precisa. Um trabalhador é uma conversa com um cliente; um papel acrescenta uma definição de responsabilidades, uma tarefa e um resultado verificado;
+Escolha o escopo de que precisa. Um trabalhador é uma conversa com um cliente; um papel acrescenta uma definição de responsabilidades, uma tarefa e um resultado;
 um quadro agenda execuções de papéis e registra seus resultados nas issues. O quadro pode ser Linear ou Markdown local.
 
 <a id="why"></a>
