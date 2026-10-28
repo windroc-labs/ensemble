@@ -1690,11 +1690,33 @@ class RouterLocking(TickBase):
 
     def test_another_router_leaves_the_issue_alone(self):
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
-        with other_router(self.runs):
+        clock = mock.Mock(**{"monotonic.side_effect": [0, 0, router.WAIT]})
+        with other_router(self.runs), mock.patch.object(router, "time", clock):
             self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 2)
-        self.assertEqual(self.err, "router.py: another router is running; try again\n")
+        clock.sleep.assert_called_once_with(router.POLL)
+        self.assertEqual(
+            self.err,
+            "router.py: another router is running; waiting up to 600 s\n"
+            "router.py: another router is running; try again\n",
+        )
         self.assertEqual(self.said(), ["skip TASK-1 reason=another router is running"])
         self.assertEqual((fake.queries, self.api.order, self.state), ([], [], ""))
+
+    def test_an_issue_run_waits_for_the_router_lock(self):
+        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
+        with contextlib.ExitStack() as other:
+            other.enter_context(other_router(self.runs))
+            clock = mock.Mock(
+                **{"monotonic.return_value": 0, "sleep.side_effect": lambda _: other.close()}
+            )
+            with mock.patch.object(router, "time", clock):
+                self.assertEqual(self.tick(fake, "--issue", "TASK-1"), 0)
+        self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
+        self.assertEqual(
+            self.err.count("router.py: another router is running; waiting up to 600 s\n"), 1
+        )
+        self.assertNotIn("try again", self.err)
+        self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
 
     def test_a_dry_run_and_the_brake_take_no_lock(self):
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])

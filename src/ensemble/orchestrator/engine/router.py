@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import textwrap
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -118,8 +119,8 @@ Exit conditions:
   Tick: 2 on configuration or host usage probe failure, 1 when Linear is unavailable (each logged
   once a day), otherwise 0.
   --issue: 2 on configuration failure, 1 when Linear is unavailable or on
-  unknown run inventory; 2 when busy,
-  already live or unclaimable; 0 if an ended outcome was written back. Otherwise
+  unknown run inventory; 2 when busy (another router held the lock for 600 s;
+  it waits meanwhile), already live or unclaimable; 0 if an ended outcome was written back. Otherwise
   launch result: 0 detached/bounced, 1 launch failure, 2 issue config error,
   3 transient error. --dry-run: 0 for the plan; setup failures still apply.
   A nonzero --issue (not --dry-run) also prints its orchestrator.jsonl lines about
@@ -157,6 +158,8 @@ SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
 INTERRUPTED = "The previous agent run was interrupted. Moving this issue back to the {state} queue."
 BUSY = "another router is running"
+WAIT = 600  # s an --issue run waits for the router lock: its claim takes seconds, a tick's start minutes
+POLL = 0.2
 USAGE = (
     "usage: ensemble-orchestrator router [--dry-run] [--issue ID] "
     "[--tui [--display D] [--events FILE]] | --brake ROLE"
@@ -934,20 +937,39 @@ def announce(ident, linear_run, detached):
         )
 
 
+def _take(f, op, wait, waiting):
+    """Whether f's flock op was taken, retried every POLL s for up to wait s; waiting() runs once,
+    before the first retry.
+    """
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(f, op | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+        else:
+            return True
+        if waiting is not None:
+            waiting()
+            waiting = None
+        time.sleep(POLL)
+
+
 @contextlib.contextmanager
-def lock(runs, dry):
+def _flock(path, op, *, wait=0, waiting=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:  # not inherited by children (PEP 446)
+        yield _take(f, op, wait, waiting)
+
+
+@contextlib.contextmanager
+def lock(runs, dry, *, wait=0, waiting=None):
     if dry:
         yield True
         return
-    os.makedirs(os.path.dirname(runs), exist_ok=True)
-    with open(
-        os.path.join(os.path.dirname(runs), "router.lock"), "a"
-    ) as f:  # not inherited by children (PEP 446)
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            free = True
-        except BlockingIOError:
-            free = False
+    path = os.path.join(os.path.dirname(runs), "router.lock")
+    with _flock(path, fcntl.LOCK_EX, wait=wait, waiting=waiting) as free:
         yield free
 
 
@@ -1096,7 +1118,10 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
     now = clock().astimezone(UTC)
     ident, dry, runs = opts["issue"], opts["dry"], cfg.runs_log
     stop = 0 if dry else 2
-    with lock(runs, dry) as free:
+    waiting = functools.partial(
+        print, f"router.py: {BUSY}; waiting up to {WAIT} s", file=sys.stderr, flush=True
+    )
+    with lock(runs, dry, wait=WAIT, waiting=waiting) as free:
         if not free:
             log("router", "skip", ident, reason=BUSY, told=True)
             print(f"router.py: {BUSY}; try again", file=sys.stderr)

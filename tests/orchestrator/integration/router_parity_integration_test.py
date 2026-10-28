@@ -7,7 +7,7 @@ import time
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from ensemble.orchestrator.engine.router import BUSY, LIVE
+from ensemble.orchestrator.engine.router import BUSY, LIVE, WAIT
 from tests.delegate.replies import block, mark, option
 from tests.delegate.workdir import session_cwd
 from tests.orchestrator.integration.flow_fixtures import (
@@ -104,15 +104,22 @@ class Lock(Parity):
         self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
         self.assert_skipped(first, f"router skip reason={BUSY}")
 
-    def test_an_issue_run_while_another_router_holds_the_lock_logs_one_skip(self):
-        """v1 CLAUDE.md › Architecture: `--issue` takes the router lock too; held → one `skip`."""
+    def test_an_issue_run_while_another_router_holds_the_lock_waits_then_starts(self):
+        """`--issue` takes the router lock too; held → it waits (up to WAIT s), then starts."""
+        self.seed(OTHER, "ENG: Session index")
         first = self.hold()
-        res = self.router("--issue", ID)
+        res = self.router("--issue", OTHER)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn(f"router.py: {BUSY}; waiting up to {WAIT} s\n", res.stderr)
+        self.assertNotIn(f"reason={BUSY}", "\n".join(self.said()))
+        out, err = first.communicate(timeout=TIMEOUT)
+        self.assertEqual((first.returncode, out, err), (0, "", ""))
+        rows = {row["issue"]: row for row in self.runs()}
         self.assertEqual(
-            (res.returncode, res.stdout, res.stderr),
-            (2, "", f"router.py: {BUSY}; try again\n"),
+            sorted((r["kind"], i) for i, r in rows.items()), [("start", ID), ("start", OTHER)]
         )
-        self.assert_skipped(first, f"router skip {ID} reason={BUSY}")
+        for ident, row in rows.items():
+            self.wait_end(row["sid"], ident)
 
 
 class MaxRuns(Parity):
