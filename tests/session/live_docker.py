@@ -113,7 +113,6 @@ def _credentials(lines: list[dict], *events: str) -> list[dict]:
 
 
 def _tokens(credentials: list[dict]) -> dict[tuple, dict]:
-    """Each installation's last GitHub token."""
     return {
         (c.get("installation"), c.get("account")): c for c in credentials if c.get("kind") == GITHUB
     }
@@ -165,7 +164,7 @@ def _host_path(source: str) -> str:
 
 
 def egress_proxy(docker: str) -> tuple[dict, str]:
-    """The egress proxy's inspect and workers network, by its label contract (src/broker/internal/launcher/egress.go)."""
+    """By its label contract (src/broker/internal/launcher/egress.go)."""
     ids = call(
         [docker, "ps", "--all", "--filter", f"label={EGRESS}contract", "--format", "{{.ID}}"]
     )[0]
@@ -275,7 +274,6 @@ def listener(host: str):
 
 
 def loopback_only(lsof: str, port: int) -> list[str]:
-    """Problems with `lsof -nP -iTCP:<port> -sTCP:LISTEN`'s listeners: any but 127.0.0.1, or none."""
     found = [
         m[1] for line in lsof.splitlines() if (m := LISTENER.search(line)) and m[2] == str(port)
     ]
@@ -285,9 +283,7 @@ def loopback_only(lsof: str, port: int) -> list[str]:
 
 
 def held_secrets(listing: str, providers: list[str]) -> list[str]:
-    """Problems with `find SECRETS -mindepth 1 -maxdepth 2`'s paths: anything but GitHub's dir and
-    its files, and an opencode dir holding exactly each listed provider's key file.
-    """
+    """Problems with `find SECRETS -mindepth 1 -maxdepth 2`'s paths."""
     found = {path.removeprefix(f"{SECRETS}/") for path in listing.split()}
     keys = {f"opencode/{name}.key" for name in providers}
     allowed = {"github", *(("opencode", *keys) if providers else ())}
@@ -313,7 +309,7 @@ def session_ids(hooks: str, since: str) -> list[str]:
 
 
 def one_session(ids: list[str], before: str | None) -> tuple[str, list[str]]:
-    """The generation's one session id and its problems; `before`: the id it must continue."""
+    """`before`: the id it must continue."""
     if not ids:
         return "", ["no OpenCode session id in the hook journal"]
     if len(ids) > 1:
@@ -510,7 +506,6 @@ def generations(name: str) -> set[str]:
 
 
 def docker_host() -> tuple[str, tuple[str, ...]]:
-    """The default Host's docker CLI and plugins, read as ensemble-session reads them."""
     hosts = Host.parse_hosts(read_config().get("hosts"))
     table = hosts.tables.get(hosts.default, {})
     if table.get("implementation") != DOCKER_HOST:
@@ -584,7 +579,6 @@ class Worker:
         print(f"PASS {step}: an event after a prompt", flush=True)
 
     def shut(self, *, final: bool) -> None:
-        """Close the session; the final close also drops it from the manager's roster."""
         if final:
             run("ensemble-crew", "close", "--manager", self.manager, self.name)
             self.listed = False
@@ -593,7 +587,6 @@ class Worker:
         self.open = False
 
     def cleanup(self) -> None:
-        """After a failure: the crew close, else the session close, then any container left."""
         for final in (True, False):
             if self.listed if final else self.open:
                 self._quietly(lambda final=final: self.shut(final=final))
@@ -707,8 +700,6 @@ class Worker:
 
 
 class Checks:
-    """A client's extra worker checks: none."""
-
     def __init__(self, worker: Worker) -> None:
         self.worker = worker
 
