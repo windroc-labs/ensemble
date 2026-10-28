@@ -40,6 +40,43 @@ The mini's own gotchas (its keychain, OpenCLI, the Terminal, screenshots, key ch
 - **Broker checks over ssh always fail.** `router --brake`, `router --dry-run` and `ensemble-broker probe-provider` read the provider key from the login keychain, which is locked in an ssh session: over ssh they say `usage unknown` / `login_required`. Run them in the mini's Terminal (`printf '%s\n' '<cmd> > /tmp/x 2>&1' | mini run`, then read the file over ssh), or in tmux session `apmtest` when the user wants to watch (`tmux send-keys -t apmtest:0.0 '<cmd>' Enter`, read with `tmux capture-pane -p -t apmtest:0.0`). The same holds for router runs: start them from the mini's Terminal (mini-op uses tmux session `b1`).
 - **A Python local-network prompt.** On 2026-10-21 an ensemble Python command reaching the LAN raised "Allow “Python” to find devices on local networks?" (UserNotificationCenter; which command was not pinned down): Allow, since the usage probe needs Strata.
 
+### macOS password prompts during installs and logins
+
+**Expected password prompts** below belong to the verifier run. Answer them with the mini account's password through mini-op, never by asking the user to type it. Apply this only to the named step currently running. For the no-UI check, follow [broker-keychain.md step 3](broker-keychain.md) instead. Other runbooks' explicit prompt-failure criteria still apply.
+
+| Step | Expected prompt | Route below |
+| --- | --- | --- |
+| Install, cleanup or broker rebuild at `sudo` | Terminal `Password:` (or sudo's account-qualified password prompt) | Terminal |
+| `ensemble-broker login github …`, `login claude`, `login codex`, `login opencode …`, `login env …` or `retrust` | Terminal `Login keychain password, to make … (hidden):` | Terminal |
+| Install's Linear apps step, `ensemble-broker login linear …` | Terminal `Login keychain password, to make this Linear client secret trust only the broker (hidden):` | Terminal |
+| Those broker login or re-trust steps, when macOS asks to use a Keychain item or change its access | SecurityAgent / Keychain password dialog, sometimes repeated | Dialog |
+
+Commands below run inside the mini-op image, whose runtime is `/opt/windroc/mini-op`. For another checkout, use the runtime root verified by the mini-op skill. Sources are mini-op's [runtime discovery](https://github.com/windroc/mini-op/blob/2d434e576d7ebae904405ae0841d52df6e9b98c4/skills/mini-op/SKILL.md#runtime-prerequisite), [password helpers](https://github.com/windroc/mini-op/blob/2d434e576d7ebae904405ae0841d52df6e9b98c4/README.md#scripts), [waiting and answering](https://github.com/windroc/mini-op/blob/2d434e576d7ebae904405ae0841d52df6e9b98c4/README.md#waiting-and-answering) and [focus and screenshot gotchas](https://github.com/windroc/mini-op/blob/2d434e576d7ebae904405ae0841d52df6e9b98c4/README.md#gotchas).
+
+```mermaid
+flowchart TD
+  A[Inspect current input event] --> B{Expected in this step?}
+  B -->|no| C[Report unexpected prompt]
+  B -->|yes| D{Surface}
+  D -->|Terminal| E[Confirm no echo]
+  E --> F[Password helper]
+  D -->|Dialog| G[Real click secure field]
+  G --> H[Helper verifies focus and types]
+  F --> I[Wait on same command id]
+  H --> I
+  I -->|next input| A
+  I -->|completion marker| J[Read exit status]
+```
+The expected-step scope comes from the table; the input event alone does not authorize an answer.
+
+**Terminal.** Start the public interactive install/login with mini-op's `run … --until-input`. Inspect its `termwait: input:` event and confirm a fresh no-echo password prompt from the expected program. Then run `/opt/windroc/mini-op/ctl/mini pw`. The helper reads `/run/ensemble/secrets/env/mini-password` into SSH stdin and types it with `keys.js --front Terminal --secret --enter`. The mini password is not a Linear client secret, provider API key or browser password; those keep their own protected input routes.
+
+**Dialog.** Inspect `ssh mini '~/apm/bin/dialogs'` and match the request to the current broker step. Real-click its secure password field with `ssh mini 'osascript -l JavaScript ~/apm/js/click.js 512 422'`, mini-op's documented field position; use the field's current coordinates if it moved. Then run `/opt/windroc/mini-op/ctl/mini pw --sa`. Its [secure-field guard](https://github.com/windroc/mini-op/blob/2d434e576d7ebae904405ae0841d52df6e9b98c4/mini/ts/keys.ts) confirms SecurityAgent is frontmost and its single `AXSecureTextField` is focused **before typing**, verifies the characters reached it, then clicks Allow. A `field not focused; typed nothing` refusal means real-click the field and retry this route; it is the run's recovery to perform. The helper answers one immediate focused repeat and reports `answered 1` or `answered 2`; inspect any later dialog as a new event. Do not choose Always Allow. If no dialog appears, continue on command completion without waiting for one.
+
+After either route, wait on the original command id with `ssh mini '~/apm/bin/termwait 120 --after <id> --until-input'`. Keep that id through input events and timeouts; only its completion marker proves success or failure. Never restart the install merely because a password prompt's text stays unchanged.
+
+Keep the password only on the helpers' protected stdin path. Never print, log, echo, put it in argv or an environment variable, or send it as a new `run`/`exec` command. Do not screenshot a Terminal containing tokens; use mini-op's documented field position without a screenshot, and clear secret-bearing scrollback before any permitted screenshot. A missing password file is a credential setup failure to report, not a request for the user to answer the mini's prompt.
+
 ## sbx
 
 - **`sbx` over ssh needs the keychain unlocked.** Without it: "SBX could not read Docker credentials because macOS Keychain denied access". Unlock in the same ssh session first, or run `sbx` in a mini tmux pane.
