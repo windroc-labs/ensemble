@@ -830,7 +830,7 @@ func TestStartKeepsSecretsOutOfArgvAndEnv(t *testing.T) {
 	}
 }
 
-// Protocol 33 parses a credential request but serves no kind yet: a start naming one fails before any docker call.
+// Protocol 34 parses a credential request but serves no kind yet: a start naming one fails before any docker call.
 func TestStartRefusesCredentialRequest(t *testing.T) {
 	grant := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}, "repo": "acme/x"}
 	linear := map[string]any{"role": "engineer"}

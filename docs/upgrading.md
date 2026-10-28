@@ -24,9 +24,9 @@ older release started, so before upgrading:
 Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
 listed, and the next Docker start removes its container as debris.
 
-## Broker protocol 33: credential request field
+## Broker protocol 34: credential request field
 
-Broker protocol 33 adds the start manifest's optional `credentials`, a run's credential request (`github`, `linear`
+Broker protocol 34 adds the start manifest's optional `credentials`, a run's credential request (`github`, `linear`
 and `env` credentials, by reference only). No run sends one yet, and this broker refuses a start naming any kind in it.
 Close every running Docker session, then run `scripts/install.sh --docker` to install the new broker; the Docker Host
 refuses an older protocol's broker. Nothing else changes.

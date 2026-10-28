@@ -20,7 +20,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "33"
+PROTOCOL = "34"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = "install or upgrade it: see docs/architecture.md#docker-install"
 TIMEOUT = 1800
@@ -561,6 +561,8 @@ def write_manifest(
         raise ConfigError("credentials github: the request's grants, not permissions or repo")
     if request.env and secrets:
         raise ConfigError("credentials env: the request's secrets, not the environment's")
+    if prefetch and any("repo" not in grant for grant in request.github):
+        raise ConfigError("credentials github: a prefetch's grants each name a repo")
     found = (
         {} if credentials is None else {"credentials": manifest_credentials(credentials, github)}
     )

@@ -684,7 +684,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "33"
+          "const": "34"
         }
       },
       "required": [

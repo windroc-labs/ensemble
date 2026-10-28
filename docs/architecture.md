@@ -394,7 +394,7 @@ the environment its own secrets, the run the repos. The orchestrator resolves th
 delegate `Spec.credentials` (`ensemble.delegate.CredentialRequest`), never `env`; the delegate adds the environment's
 `env` for the session `Spec`; the Docker Host writes it as the start manifest's `credentials` (each grant with the
 App), one source per kind beside the legacy `github` and `secrets`. Each kind lands in `/run/ensemble/secrets/<kind>/`
-(`src/broker/protocol/docker-broker/fixtures/credential-dirs.json`). Nothing sends a request yet, and protocol 33's
+(`src/broker/protocol/docker-broker/fixtures/credential-dirs.json`). Nothing sends a request yet, and protocol 34's
 broker refuses a start naming any kind.
 
 | Credential | Host | Purpose | Stored at | Readers | Lifetime | Revoke |

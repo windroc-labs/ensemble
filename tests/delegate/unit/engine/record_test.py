@@ -92,6 +92,17 @@ class RunRecordTest(HarnessCase):
         self.assertIsNone(data["spec"]["credentials"])
         self.assertIsNone(data["plan"]["session"]["credentials"])
 
+    def test_a_record_naming_env_on_the_run_spec_is_an_invalid_record(self):
+        self.make()
+        data = self.metadata()
+        data["spec"]["credentials"] = {
+            "env": [{"item": "ensemble-broker-env/mini-password", "file": "mini-password"}]
+        }
+        with open(self.state_record(), "w", encoding="utf-8") as file:
+            json.dump(data, file)
+        with self.assertRaisesRegex(ConfigError, r"\Ainvalid .*: credentials env"):
+            self.record().read()
+
     def test_a_bad_record_is_a_config_error(self):
         self.make()
         data = self.metadata()

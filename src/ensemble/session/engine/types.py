@@ -663,14 +663,15 @@ class Spec(ProcessOptions):
         if self.environment is not None and not isinstance(self.environment, EnvironmentSpec):
             raise ConfigError("environment must be None or an EnvironmentSpec")
         if self.credentials is not None:
-            self._check_credentials(self.credentials)
+            self._check_credentials()
         if not isinstance(self.handlers, tuple) or not all(
             isinstance(handler, HookCallback) for handler in self.handlers
         ):
             raise ConfigError("handlers must be a tuple of HookCallback")
 
-    def _check_credentials(self, credentials) -> None:
+    def _check_credentials(self) -> None:
         """A CredentialRequest, one source per kind beside the environment (as the manifest)."""
+        credentials = self.credentials
         if not isinstance(credentials, CredentialRequest):
             raise ConfigError("credentials must be None or a CredentialRequest")
         environment = self.environment

@@ -799,6 +799,7 @@ class ManifestCredentialsTest(Case):
             {"credentials": github, "permissions": {}},
             {"credentials": github, "repo": "o/r"},
             {"credentials": env, "secrets": (secret,)},
+            {"credentials": github, "prefetch": {"repo": "o/r"}},
         ):
             with self.subTest(kw), self.assertRaises(ConfigError):
                 self.written(**kw)
