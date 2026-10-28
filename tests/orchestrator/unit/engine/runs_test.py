@@ -349,44 +349,6 @@ class DelegateOf(case.Case):
             runs.delegate_of(entries, "s")
 
 
-class StartedTask(Case):
-    def test_the_sids_start_row_task_else_none(self):
-        start = json.loads(row("start", "TASK-1", "s"))
-        self.write(
-            [
-                row("resume", "TASK-1", "s"),
-                json.dumps({**start, "sid": "other", "task": "build"}),
-                json.dumps({**start, "task": "light-build"}),
-                json.dumps({**start, "issue": "TASK-2"}),
-                json.dumps({**start, "issue": "TASK-3", "task": None}),
-                json.dumps({**start, "issue": "TASK-4", "task": 3}),
-                "{not json",
-            ]
-        )
-        for issue, sid, want in (
-            ("TASK-1", "s", "light-build"),
-            ("TASK-1", "other", "build"),
-            ("TASK-1", "missing", None),
-            ("TASK-2", "s", None),
-            ("TASK-3", "s", None),
-            ("TASK-4", "s", None),
-        ):
-            with self.subTest(issue=issue, sid=sid):
-                self.assertEqual(runs.started_task(self.log, issue, sid), want)
-
-    def test_a_missing_log_has_none(self):
-        self.assertIsNone(runs.started_task(self.log, "TASK-1", "s"))
-
-    def test_started_task_ignores_choice_fields_of_old_start_rows(self):
-        # model selection's start rows also held tier and effort
-        plain = {**json.loads(start(SID_A)), "task": "light-build"}
-        self.write([json.dumps(plain)])
-        want = runs.claim(self.log, "TASK-1", SID_A), runs.parse_log(self.log)
-        self.write([json.dumps({**plain, "tier": 2, "effort": "high"})])
-        self.assertEqual(runs.started_task(self.log, "TASK-1", SID_A), "light-build")
-        self.assertEqual((runs.claim(self.log, "TASK-1", SID_A), runs.parse_log(self.log)), want)
-
-
 SID_B = "9c1d2e3f-4a5b-4c6d-8e7f-a0b1c2d3e4f5"
 
 UUID = "11111111-2222-4333-8444-555555555555"
@@ -405,17 +367,16 @@ def start(sid, **fields):
             "uuid": UUID,
             "project": "p1",
             "target": "acme/ensemble",
+            "task": None,
         }
         | fields
     )
 
 
 class ClaimOf(Case):
-    def test_claim_keeps_the_original_task_and_accepts_older_rows_without_it(self):
+    def test_claim_keeps_the_original_task(self):
         for task in (None, "decompose"):
-            row = json.loads(start(SID_A))
-            if task:
-                row["task"] = task
+            row = json.loads(start(SID_A, task=task))
             self.write([json.dumps(row), json.dumps({**row, "kind": "resume", "task": "build"})])
             self.assertEqual(runs.claim(self.log, "TASK-1", SID_A).task, task)
 
@@ -490,12 +451,14 @@ class ClaimOf(Case):
             ("target", "not a slug"),
             ("client", ""),
             ("delegate_kind", None),
+            ("task", ""),
+            ("task", 3),
         ):
             with self.subTest(field=field, value=value):
                 self.write([start(SID_A, **{field: value})])
                 with self.assertRaisesRegex(ValueError, f"start row {field}"):
                     runs.claim(self.log, "TASK-1", SID_A)
-        for field in ("role", "uuid", "project", "target", "client", "delegate_kind"):
+        for field in ("role", "uuid", "project", "target", "client", "delegate_kind", "task"):
             with self.subTest(missing=field):
                 row = json.loads(start(SID_A))
                 del row[field]

@@ -35,6 +35,7 @@ from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import linear_error, log
 from ensemble.orchestrator.engine.runs import (
+    claim,
     client_of,
     delegate_of,
     failures,
@@ -42,7 +43,6 @@ from ensemble.orchestrator.engine.runs import (
     note,
     parse_log,
     role_of,
-    started_task,
     trim,
 )
 from ensemble.orchestrator.engine.types import (
@@ -503,7 +503,7 @@ class Board:
             return
         spec, sid = run[1:]
         if spec.mode == "resume":
-            tier = self.cfg.task_tier(started_task(self.cfg.runs_log, spec.issue, sid))
+            tier = self.cfg.task_tier(claim(self.cfg.runs_log, spec.issue, sid).task)
             self.say("plan", spec.issue, mode="resume", sid=sid, tier=tier, live=live)
             return
         tier = self.cfg.task_tier(spec.task)
@@ -796,7 +796,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
             why = one_line(e)
         if why:
             return fail(a.issue, "transient", f"session {a.sid} not resumable ({why})", 3)
-    task = started_task(cfg.runs_log, a.issue, a.sid) if a.mode == "resume" else a.task
+    task = claim(cfg.runs_log, a.issue, a.sid).task if a.mode == "resume" else a.task
     stage = workflow.for_task(config.TASKS, role, task)
     build = stage.input == "build"
     reader = wiring.reader(gql, cfg)
@@ -887,9 +887,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                 resume=a.mode == "resume",
                 delegate_kind=kind,
                 # a resume's task is its start row's: the Delegate gets none, the tier stays
-                tier=cfg.task_tier(
-                    a.task if a.mode == "new" else started_task(cfg.runs_log, a.issue, a.sid)
-                ),
+                tier=cfg.task_tier(task),
                 **(
                     {"mode": "tui", "display": attended.display, "events": attended.events}
                     if attended

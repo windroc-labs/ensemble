@@ -141,7 +141,7 @@ def for_run(cfg, role, spec: Spec, writers: Writers):
         resume=spec.mode == "resume",
         project=spec.project,
         target=None,
-        task=runs.started_task(cfg.runs_log, spec.issue, spec.sid)
+        task=runs.claim(cfg.runs_log, spec.issue, spec.sid).task
         if spec.mode == "resume"
         else spec.task,
     )

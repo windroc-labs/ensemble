@@ -87,5 +87,9 @@ class RunCase(ConfigFile, Case):
             role="researcher",
             client="fake",
             delegate_kind="fake",
+            uuid=issue,
+            project=None,
+            target=None,
+            task="light-research",
         )
         return owner, owner.detach()

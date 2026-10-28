@@ -1164,7 +1164,7 @@ class CommittedConfiguration(Case):
             ("[[stage]\n", "Expected ']]'"),
             (
                 '[[stage]]\nrole = "pm"\ninput = "x"\n',
-                "stage pm: input: want one of research, design, build, decompose: 'x'",
+                "stage pm: input: want one of research, design, build: 'x'",
             ),
         ):
             flow.write_text(text, encoding="utf-8")

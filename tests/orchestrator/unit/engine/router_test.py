@@ -2383,6 +2383,7 @@ class LocalBoard(TickBase):
             uuid="LOC-1",
             project=None,
             target=None,
+            task=None,
         )
         self.api.records[sid] = {"cwd": cfg.issue_workdir("LOC-1")}
         self.api.statuses[sid] = SessionStatus(
@@ -3170,6 +3171,7 @@ class ScheduledTaskSelection(TickBase):
             )
         )
         self.moved("TASK-1", 61)
+        self.add(kind="start", ident="TASK-1", sid="a", minutes_ago=61, task="light-research")
         self.add(kind="resume", ident="TASK-1", sid="a", minutes_ago=60)
         self.touch("a", 40)
         self.tick(fake)
@@ -3281,6 +3283,10 @@ class RunLaunching(OuterBase):
             client="a",
             delegate_kind="harness",
             key="pre-app-key",
+            uuid=UUID,
+            project=PROJECT,
+            target=None,
+            task=None,
         )
         self.assertEqual(self.outer(mode="resume", role="pm"), 0)
         self.assertEqual(self.detached(), self.expected(resume=True))
@@ -3431,6 +3437,9 @@ class RunLaunching(OuterBase):
             task="light-build",
             tier=1,
             effort="high",
+            uuid=UUID,
+            project=PROJECT,
+            target=None,
         )
         self.assertEqual(self.outer(mode="resume"), 0)
         self.assertEqual(self.detached(tier=3), self.expected(resume=True))

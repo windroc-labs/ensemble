@@ -47,7 +47,7 @@ class LinearRun:
         self.delegate_kind = delegate_kind or cfg.delegate_kind
         provider = delegate_cls or self.kind_cls(cfg, self.delegate_kind)
         overlays = (cfg.core,)
-        effective_task = runs.started_task(cfg.runs_log, issue, sid) if resume else task
+        effective_task = runs.claim(cfg.runs_log, issue, sid).task if resume else task
         stage = (
             workflow.for_task(config.TASKS, role, effective_task) if role in config.TASKS else None
         )

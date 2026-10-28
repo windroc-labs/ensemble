@@ -97,7 +97,7 @@ token_service = "linear-app-analyst-token"
 user_id = "<analyst app user UUID>"
 ```
 
-A stage needs only `role` and `input` (`research`, `design`, `build` or `decompose`: its input layout):
+A stage needs only `role` and `input` (`research`, `design` or `build`: its input layout):
 
 ```toml
 [[stage]]

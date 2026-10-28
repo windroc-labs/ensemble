@@ -912,10 +912,16 @@ class WritebackContext(run_fixtures.Base):
 
     def test_a_run_writes_with_the_writers_it_is_given(self):
         cfg = config.load()
+        runs.note(
+            cfg.runs_log,
+            "start",
+            **vars(replace(CLAIM, issue=ID, sid=SID, target=None, task="decompose")),
+        )
         spec = SimpleNamespace(issue=ID, uuid=UUID, sid=SID, mode="resume", project=PROJECT)
         ctx = writeback.for_run(cfg, "engineer", spec, WRITERS)
         self.assertIs(ctx.tracker, WRITERS.tracker)
         self.assertIs(ctx.harness, WRITERS.harness)
+        self.assertEqual(ctx.task, "decompose")
         self.assertEqual(
             (ctx.ident, ctx.issue_id, ctx.sid, ctx.resume, ctx.project, ctx.target),
             (ID, UUID, SID, True, PROJECT, None),
@@ -1996,7 +2002,7 @@ class Events(RunCase):
         self.addCleanup(info.stop)
         self.now = iter((STARTED, RESTARTED, LATER, LATEST))
 
-    def claim(self, sid=RUN_SID, role="engineer", **fields):
+    def claim(self, sid=RUN_SID, role="engineer", task=None, **fields):
         runs.note(
             self.cfg.runs_log,
             "start",
@@ -2009,6 +2015,7 @@ class Events(RunCase):
             uuid=UUID,
             project="p1",
             target="acme/ensemble",
+            task=task,
             **fields,
         )
 

@@ -75,6 +75,7 @@ CLAIMED = {
     "target": lambda v: v is None or repo_slug(v) is not None,
     "client": _text,
     "delegate_kind": _text,
+    "task": lambda v: v is None or _text(v),
 }
 
 
@@ -102,27 +103,9 @@ def claim(path, issue, sid) -> Claim:
                 d["target"] and repo_slug(d["target"]),
                 d["client"],
                 d["delegate_kind"],
-                d["task"] if _text(d.get("task")) else None,
+                d["task"],
             )
     raise ValueError(f"{issue}: no start row for session {sid}")
-
-
-def started_task(path, issue, sid) -> str | None:
-    """The (issue, sid) start row's task; None when it has none (no label, or a row written before
-    start rows recorded it) or there is no such row.
-    """
-    for line in _lines(path):
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(d, dict) and (d.get("kind"), d.get("issue"), d.get("sid")) == (
-            "start",
-            issue,
-            sid,
-        ):
-            return d["task"] if _text(d.get("task")) else None
-    return None
 
 
 def _failure(line):

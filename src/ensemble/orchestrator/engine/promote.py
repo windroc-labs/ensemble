@@ -16,6 +16,7 @@ from ensemble.orchestrator.engine.types import (
     ConfigError,
     LinearError,
     TrackerFileError,
+    TrackerKind,
     Unavailable,
 )
 from ensemble.utils import one_line, parse_time
@@ -184,7 +185,7 @@ class Promoter:
 
     def promote(self, handoff: Promotion):
         src, detail, role, nxt = handoff.source, handoff.detail, handoff.role, handoff.next
-        decompose = self.cfg.tracker == "linear" and role == "pm" and nxt == "engineer"
+        decompose = self.cfg.tracker == TrackerKind.LINEAR and role == "pm" and nxt == "engineer"
         comments = self.instructions(detail, handoff.cutoff)
         if not comments and self.tasks[role].require_instructions:
             if self.comment_and_move(
@@ -213,7 +214,7 @@ class Promoter:
                     src.title,
                 ),
                 description=self.description(src, comments, detail),
-                **({"task": "decompose"} if decompose else {}),
+                task="decompose" if decompose else None,
             )
         if child.key not in detail.related and not self.dry:
             self.tracker.relate(src.key, child.key)

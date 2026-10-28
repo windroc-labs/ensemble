@@ -305,7 +305,7 @@ class Refusals(Parity):
         self.assertTrue(bounce.endswith(f"{REPO}: no push permission"), bounce)
         self.assertIn(f"router launch {ID} exit=0", self.routed())
 
-    def test_a_legacy_promoted_build_with_bad_target_returns_to_its_source(self):
+    def test_a_promoted_build_with_bad_target_returns_to_its_source(self):
         now, pm = datetime.now(UTC), role_id("pm")
         self.fake.issue(
             "PRD: Session registry",
