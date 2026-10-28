@@ -13,7 +13,7 @@ from dataclasses import replace
 from unittest import mock
 
 from ensemble.delegate import ConfigError, Spec
-from ensemble.delegate.composer import Composer, RunConfig, RunParams, teams
+from ensemble.delegate.composer import Composer, RunParams, teams
 from ensemble.delegate.composer.base import TEAM
 from ensemble.delegate.composer.prompt import RESUME
 from ensemble.delegate.engine.drivers import AgentDriver, InstructionDriver
@@ -24,6 +24,7 @@ from ensemble.session import Access, EnvironmentSpec, RunLog
 from tests.delegate.case import REPO, SID, SRC, packaged
 from tests.delegate.plans import TASKS, Base, write_team
 from tests.delegate.repo import fail, ok
+from tests.delegate.unit.composer.teams import run_config
 from tests.delegate.unit.engine.instruction import CLIENTS, GITHUB, ROLES, InstructionCase
 from tests.delegate.verifier import VERIFIER
 from tests.session.unit.clients.codex.support import UNIFIED, committed_headless
@@ -285,15 +286,7 @@ class Layouts(Base):
 class Refusals(Base):
     def test_each_refusal_names_its_cause_and_nothing_is_written(self):
         tasks = ", ".join(Composer().index("researcher"))
-        nobody = RunConfig(
-            role="nope",
-            tier=2,
-            effort="high",
-            client="fake",
-            output={"type": "local"},
-            idle_timeout=60,
-            show="",
-        )
+        nobody = run_config(role="nope", client="fake")
         for kw, want in (
             ({"mode": "x"}, "mode must be one of headless, tui, in_process, got 'x'"),
             ({"name": "n"}, "name: tui mode only"),
