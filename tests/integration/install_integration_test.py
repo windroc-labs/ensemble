@@ -2820,7 +2820,7 @@ class InstallTest(Case):
 
     def test_a_plugin_without_its_launcher_fails_the_install(self):
         (self.pkg_src / LAUNCHER).unlink()
-        result = self.opencode_only()
+        result = self.opencode_only(path_answer=None)
         self.assertEqual(result.code, 1, result.stderr)
         launcher = self.opencode_package() / LAUNCHER
         self.assertIn(
@@ -2938,7 +2938,7 @@ class InstallTest(Case):
                     self.assertEqual(selection.read_text(), text)
 
     def command_package(self):
-        """A plugin's bin/ commands, which the installer's launchers run whatever ref it is."""
+        """A plugin's bin/ commands, which the installed launchers run from the selected plugin."""
         commands = (
             "ensemble-crew",
             "ensemble-session",
