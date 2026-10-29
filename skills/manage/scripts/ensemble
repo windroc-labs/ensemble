@@ -15,24 +15,31 @@ if [ "$1" = --install ]; then
   exit
 fi
 crew=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)/bin/ensemble-crew
+# start NAME DIR COMMAND...: a detached session NAME in DIR running COMMAND.
+start() {
+  local s=$1 dir=$2
+  shift 2
+  # Start from ~ so the tmux server never sits in a directory that later gets deleted.
+  (cd ~ && tmux start-server \; set -g mouse on \; set -g history-limit 50000 \
+    \; set -s extended-keys on \; set -s 'terminal-features[99]' 'xterm*:extkeys' \
+    \; new -d -s "$s" -c "$dir" "$@")
+}
+attach() {
+  if [ -n "$TMUX" ]; then
+    exec tmux switch-client -t "=$1"
+  elif [ "$TERM_PROGRAM" = iTerm.app ] || [ "$LC_TERMINAL" = iTerm2 ]; then # LC_TERMINAL survives ssh
+    exec tmux -CC attach -t "=$1"
+  fi
+  exec tmux attach -t "=$1"
+}
 if [ "$1" = list ]; then
   [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
   shift
   exec "$crew" list "$@"
 fi
 s=${1:?usage: ensemble <session-name> | ensemble list | ensemble --install}
-dir=$PWD
 tmux has -t "=$s" 2>/dev/null || {
   [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
-  # Start from ~ so the tmux server never sits in a directory that later gets deleted.
-  (cd ~ && tmux start-server \; set -g mouse on \; set -g history-limit 50000 \
-    \; set -s extended-keys on \; set -s 'terminal-features[99]' 'xterm*:extkeys' \
-    \; new -d -s "$s" -c "$dir" "$crew" hold "--manager=$s" "--session=$s" \
-    -- "${SHELL:-/bin/sh}" -l)
+  start "$s" "$PWD" "$crew" hold "--manager=$s" "--session=$s" -- "${SHELL:-/bin/sh}" -l
 }
-if [ -n "$TMUX" ]; then
-  exec tmux switch-client -t "=$s"
-elif [ "$TERM_PROGRAM" = iTerm.app ] || [ "$LC_TERMINAL" = iTerm2 ]; then # LC_TERMINAL survives ssh
-  exec tmux -CC attach -t "=$s"
-fi
-exec tmux attach -t "=$s"
+attach "$s"
