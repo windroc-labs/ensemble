@@ -19,6 +19,19 @@ terminal it then asks which manager to open, and attaches to its session or resu
 hold. A manager named `list` can no longer be opened with `ensemble list`: attach to its session with
 `tmux attach -t =list`, or start it under another name.
 
+## Codex manager sessions
+
+After updating the plugin, rerun `scripts/install.sh` or the updated plugin's
+`skills/manage/scripts/ensemble --install`. This installs `~/.ensemble/bin/codex` alongside the Ensemble commands.
+Use that `codex` entry on PATH inside a manager's hold. It binds each native session to its TUI before the first turn,
+including when two managers share a daemon or a resume reuses a daemon left by an exited TUI.
+It does not edit Codex configuration. Outside a manager and in workers it runs the existing Codex executable directly.
+
+Restart existing manager TUIs through this entry after upgrading; the shared daemon can stay running.
+If an older record names another manager's conversation, select the correct conversation once with `codex resume`.
+Absolute paths to a different Codex executable bypass the entry. Explicit `--remote` is refused inside a manager;
+`--no-daemon` retains the direct-client hook path.
+
 ## ctmux is now ensemble
 
 The command that opens a manager's tmux session is now `ensemble <name>`. After updating the plugin, rerun
