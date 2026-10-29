@@ -471,6 +471,18 @@ class RosterTest(RosterCase):
             self.assertEqual(self.roster.lease_state(), (1, 0, "owner"))
         self.assertEqual(self.roster.lease_state(), (1, 0, None))
 
+    def test_a_lease_check_creates_no_holder_lock(self):
+        self.live()
+        self.roster.check_lease()
+        self.assertEqual(self.roster.lease_state(), (0, 0, None))
+        self.assertFalse(Path(self.directory, "holder.lock").exists())
+
+    def test_a_holder_lock_directory_fails_the_lease_state(self):
+        self.live()
+        os.mkdir(os.path.join(self.directory, "holder.lock"))
+        with self.assertRaisesRegex(RosterError, "not a regular holder lock"):
+            self.roster.lease_state()
+
     def test_no_owner_retains_unleased_operations_only_when_holder_lock_free(self):
         self.live()
         self.roster.check_lease()
@@ -518,7 +530,7 @@ class RosterTest(RosterCase):
         self.assertEqual(Path(self.roster.path).read_bytes(), before)
         self.assertEqual(
             sorted(os.listdir(self.directory)),
-            ["events.lock", "holder.lock", "roster.json", "roster.lock"],
+            ["events.lock", "roster.json", "roster.lock"],
         )
 
     def test_invalid_json_schema_and_size_are_refused(self):

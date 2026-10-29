@@ -66,6 +66,19 @@ def _label(holder: dict | None) -> str:
     return holder["session"] or holder["id"] if holder is not None else "another holder"
 
 
+def _flock(fd: int, mode: int, lock: str) -> None:
+    deadline = time.monotonic() + LOCK_TIMEOUT
+    while True:
+        try:
+            fcntl.flock(fd, mode | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise RosterError(f"{lock}: busy") from None
+            time.sleep(POLL)
+        else:
+            return
+
+
 def _uuid4(value) -> bool:
     if not isinstance(value, str):
         return False
@@ -152,15 +165,7 @@ class Roster:
             try:
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     raise RosterError(f"{lock}: not a regular file")
-                deadline = time.monotonic() + LOCK_TIMEOUT
-                while True:
-                    try:
-                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() >= deadline:
-                            raise RosterError(f"{lock}: busy") from None
-                        time.sleep(POLL)
+                _flock(fd, fcntl.LOCK_EX, lock)
                 data = self._read()
                 with file_lock(self._events.path):
                     self._events.recover(data["gen"])
@@ -269,12 +274,17 @@ class Roster:
         return fd
 
     def _active_holder(self) -> bool:
-        if not os.path.lexists(self.directory):
-            return False
-        fd = self._open_holder()
+        """Whether a holder keeps holder.lock; callers hold roster.lock, so no probe races hold."""
+        path = os.path.join(self.directory, "holder.lock")
         try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return False
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise RosterError(f"{path}: not a regular holder lock")
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
                 return True
             return False
