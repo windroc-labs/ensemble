@@ -51,6 +51,34 @@ def guard_dir(generation, state, name="worker"):
 
 
 class ManagedTest(Case):
+    def test_terminal_start_persists_only_guard_inventory_fields(self):
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with spawned():
+            channel = host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                display="manager",
+                metadata={
+                    "generation": "a" * 32,
+                    "sid": "sid",
+                    "client": "claude",
+                    "prompt": "secret",
+                },
+            )
+            channel.close()
+        self.assertEqual(
+            managed.load_json(managed.location("tmux", "worker") + "/current.json"),
+            {
+                "host": "tmux",
+                "name": "worker",
+                "generation": "a" * 32,
+                "sid": "sid",
+                "client": "claude",
+                "display": "manager",
+            },
+        )
+
     def test_attacker_owned_or_symlinked_user_root_is_never_absent(self):
         directory = managed.location("tmux", "worker")
         root = os.path.dirname(directory)

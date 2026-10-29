@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
+    SESSION_NAME,
     ConfigError,
     Launch,
     Liveness,
@@ -26,7 +27,7 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, GUARD_WAIT
+from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, GUARD_WAIT, WorkerState
 from ensemble.session.hosts.managed import ManagedProcess
 
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -231,7 +232,7 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
         if not GENERATION.fullmatch(generation):
             return Liveness.UNKNOWN
         current = load_json(os.path.join(directory, "current.json"))
-        if current != {"generation": generation}:
+        if current.get("generation") != generation:
             return Liveness.UNKNOWN
         run = os.path.join(directory, generation)
         check_directory(run)
@@ -251,6 +252,49 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
             os.close(descriptor)
     except (OSError, ValueError):
         return Liveness.UNKNOWN
+
+
+def records(host: str) -> dict[str, WorkerState]:
+    root = control_root()
+    if not os.path.lexists(root):
+        return {}
+    found = {}
+    try:
+        check_directory(root)
+        for entry in sorted(os.listdir(root)):
+            if not re.fullmatch(r"[0-9a-f]{16}", entry):
+                continue
+            directory = os.path.join(root, entry)
+            check_directory(directory)
+            record = load_json(os.path.join(directory, "current.json"))
+            if set(record) == {"generation"}:  # old records still gate starts by their lease
+                continue
+            if record.get("host") != host:
+                continue
+            name, generation = record.get("name"), record.get("generation")
+            if (
+                not isinstance(name, str)
+                or not SESSION_NAME.fullmatch(name)
+                or directory != location(host, name)
+                or not isinstance(generation, str)
+                or not GENERATION.fullmatch(generation)
+                or any(
+                    record.get(key) is not None and not isinstance(record[key], str)
+                    for key in ("sid", "client", "display")
+                )
+            ):
+                raise ValueError("invalid worker identity")
+            found[name] = WorkerState(
+                record.get("sid"),
+                generation,
+                record.get("client"),
+                record.get("display"),
+                None,
+                host,
+            )
+    except (OSError, ValueError) as error:
+        raise Unanswered(f"host {host}: guard inventory: {error}") from error
+    return found
 
 
 def start(
@@ -285,7 +329,17 @@ def start(
                 raise SessionBusy(name, "previous worker generation (live or unknown)")
         run = os.path.join(directory, generation)
         os.mkdir(run, 0o700)
-        save_json(os.path.join(directory, "current.json"), {"generation": generation})
+        save_json(
+            os.path.join(directory, "current.json"),
+            {
+                "host": host.name,
+                "name": name,
+                "generation": generation,
+                "sid": (metadata or {}).get("sid"),
+                "client": (metadata or {}).get("client"),
+                "display": display,
+            },
+        )
         return _spawn(
             host,
             name,

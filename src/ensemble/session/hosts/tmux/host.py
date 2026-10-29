@@ -27,17 +27,13 @@ from ensemble.session.engine.types import (
 from ensemble.session.hosts.base import (
     Host,
     InteractiveProcess,
-    worker_names,
     worker_row,
-    worker_state,
 )
 from ensemble.session.hosts.base import activity as worker_activity
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.utils import (
-    CONFIG_NAME,
     Display,
-    sid_error,
 )
 
 
@@ -45,13 +41,6 @@ def _session(name) -> str:
     if not isinstance(name, str) or not NAME.fullmatch(name):
         raise SessionError(f"no tmux session {name!r:.80}")
     return name
-
-
-def _marked(row: dict) -> str | None:
-    found = worker_state(row["name"])
-    if found is not None and found.generation is not None and found.sid == row["sid"]:
-        return worker_activity(row["name"], found.generation)
-    return row["state"]
 
 
 class TmuxHost(Host):
@@ -110,66 +99,22 @@ class TmuxHost(Host):
         return replace(super().tui_settings(), status_line=line)
 
     def list(self) -> list[str]:
-        """Its tmux sessions, and its live (or unknown) workers whose display is gone."""
-        names = {row["name"] for row in self._listing()}
-        return sorted(names | {row.name for row in self._display_less(names)})
-
-    def _listing(self) -> list[dict]:
-        try:
-            return self.tmux.listing()
-        except TuiError as error:
-            raise SessionError(f"tmux sessions unknown: {error}") from error
-
-    def _display_less(self, displayed: set[str]) -> list[SessionRow]:
-        """A row per worker of its own with no tmux session of its name, state from its activity
-        (unknown liveness: unknown), unless ABSENT: a dead one's dir is the tui sweep's to expire.
-        """
-        rows = []
-        for name in worker_names():
-            state = worker_state(name)
-            if name in displayed or state is None or state.host != self.name:
-                continue
-            if state.generation is None:
-                continue
-            live = self.worker_liveness(name, state.generation)
-            if live == Liveness.UNKNOWN:
-                rows.append(worker_row(name, state, StatusState.UNKNOWN))
-            elif live == Liveness.LIVE:
-                word = worker_activity(name, state.generation) or StatusState.WORKING
-                rows.append(worker_row(name, state, word))
-        return rows
+        return [row.name for row in self.rows()]
 
     def rows(self) -> list[SessionRow]:
-        """A tui worker's state from its harness's mark, any other session's from its @state; then
-        its workers whose display is gone.
-        """
-        found = self._listing()
-        displayed = [
-            SessionRow(
-                name=row["name"],
-                sid=None if sid_error(row["sid"]) else row["sid"],
-                client=row["client"]
-                if isinstance(row["client"], str) and CONFIG_NAME.fullmatch(row["client"])
-                else None,
-                state=StatusState.DEAD
-                if row["dead"]
-                else StatusState(word)
-                if (word := _marked(row)) in (StatusState.DONE, StatusState.BLOCKED)
-                else StatusState.WORKING,
-                display=row["display"],
-                shown=None,
-                last_lines=row["last_lines"],
-                own=False,
+        rows = []
+        for name, state in managed.records(self.name).items():
+            assert state.generation is not None
+            live = self.worker_liveness(name, state.generation)
+            if live == Liveness.ABSENT:
+                continue
+            word = (
+                StatusState.UNKNOWN
+                if live == Liveness.UNKNOWN
+                else worker_activity(name, state.generation) or StatusState.WORKING
             )
-            for row in found
-        ]
-        return displayed + self._display_less({row["name"] for row in found})
+            rows.append(worker_row(name, state, word))
+        return rows
 
     def _capacity_namespace(self) -> str:
-        try:
-            socket = self.tmux.checked(["display-message", "-p", "#{socket_path}"]).stdout.strip()
-        except TuiError as error:
-            raise SessionError(f"host {self.name}: inventory namespace: {error}") from error
-        if not socket or not socket.isprintable() or not os.path.isabs(socket):
-            raise SessionError(f"host {self.name}: inventory namespace unavailable")
-        return f"tmux:{os.path.realpath(socket)}"
+        return f"guard:{os.path.realpath(managed.control_root())}:{self.name}"

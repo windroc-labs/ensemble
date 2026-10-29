@@ -6,7 +6,6 @@ workers: managed_test.py).
 import json
 import os
 import time
-from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session import Host, SessionError
@@ -21,7 +20,7 @@ from ensemble.session.engine.types import (
     StatusState,
 )
 from ensemble.session.hosts.base import ACTIVITY, TUI_DIR, TUI_STATE
-from ensemble.session.hosts.tmux import TmuxHost
+from ensemble.session.hosts.tmux import TmuxHost, managed
 from ensemble.session.hosts.types import SessionView
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import STALE_AGE, load_class
@@ -33,29 +32,84 @@ NO_PANE = "no anchor pane: not in tmux"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 
 
-class ClassTest(Case):
-    def test_capacity_namespace_uses_the_actual_server_socket_not_the_alias_settings(self):
-        tmux = mock.create_autospec(TmuxCli, instance=True)
-        tmux.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
-        first = TmuxHost("first", {"status_line": False}, tmux=tmux)
-        alias = TmuxHost("alias", {"status_line": True}, tmux=tmux)
-        self.assertEqual(first._capacity_namespace(), alias._capacity_namespace())
-        self.assertEqual(first._capacity_namespace(), "tmux:/fake/server.sock")
-        tmux.checked.assert_called_with(["display-message", "-p", "#{socket_path}"])
-        tmux.checked.return_value = SimpleNamespace(stdout="/fake/other.sock\n")
-        self.assertNotEqual(first._capacity_namespace(), "tmux:/fake/server.sock")
+class GuardInventoryTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.tmux = mock.create_autospec(TmuxCli, instance=True)
+        self.tmux.listing.side_effect = AssertionError("inventory reached display server")
+        self.host = TmuxHost("tmux", tmux=self.tmux)
 
-    def test_unknown_capacity_namespace_fails_closed(self):
+    def worker(self, name, *, host="tmux", state="running", live=True):
+        generation = "a" * 32
+        directory = managed.location(host, name)
+        run = os.path.join(directory, generation)
+        managed.private_directory(run)
+        managed.save_json(
+            os.path.join(directory, "current.json"),
+            {
+                "host": host,
+                "name": name,
+                "generation": generation,
+                "sid": OTHER,
+                "client": "claude",
+                "display": "manager",
+            },
+        )
+        managed.save_json(
+            os.path.join(run, "state.json"), {"generation": generation, "state": state}
+        )
+        lease = managed.lease_file(os.path.join(run, "lease"))
+        self.addCleanup(os.close, lease)
+        if live:
+            managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+        return directory
+
+    def test_guard_workers_are_listed_without_a_display_or_harness_record(self):
+        self.worker("live")
+        self.worker("unknown", live=False)
+        self.worker("ended", state="exited", live=False)
+        self.worker("theirs", host="other")
+        self.assertEqual(self.host.list(), ["live", "unknown"])
+        rows = self.host.rows()
+        self.assertEqual([row.name for row in rows], ["live", "unknown"])
+        self.assertEqual([row.state for row in rows], [StatusState.WORKING, StatusState.UNKNOWN])
+        self.assertEqual(
+            [(row.sid, row.client, row.display) for row in rows],
+            [(OTHER, "claude", "manager")] * 2,
+        )
+        self.assertEqual(self.tmux.mock_calls, [])
+
+    def test_an_empty_guard_inventory_never_lists_a_display_session(self):
+        self.assertEqual(self.host.list(), [])
+        self.assertEqual(self.host.rows(), [])
+        self.assertEqual(self.tmux.mock_calls, [])
+
+    def test_guard_inventory_rejects_an_untrusted_root(self):
+        root = managed.control_root()
+        os.symlink(self.home, root)
+        with self.assertRaises(SessionError):
+            self.host.list()
+
+    def test_guard_record_cannot_claim_another_workers_directory(self):
+        directory = self.worker("worker")
+        record = managed.load_json(os.path.join(directory, "current.json"))
+        managed.save_json(os.path.join(directory, "current.json"), {**record, "name": "forged"})
+        with self.assertRaises(SessionError):
+            self.host.list()
+
+
+class ClassTest(Case):
+    def test_capacity_namespace_tracks_guard_location_and_host_not_display_settings(self):
         tmux = mock.create_autospec(TmuxCli, instance=True)
-        host = TmuxHost("first", tmux=tmux)
-        tmux.checked.side_effect = TuiError("offline")
-        with self.assertRaisesRegex(SessionError, "inventory.*offline"):
-            host._capacity_namespace()
-        tmux.checked.side_effect = None
-        for value in ("", "\n", "invalid\npath"):
-            tmux.checked.return_value = SimpleNamespace(stdout=value)
-            with self.subTest(value=value), self.assertRaises(SessionError):
-                host._capacity_namespace()
+        first = TmuxHost("first", {"status_line": False}, tmux=tmux)
+        same = TmuxHost("first", {"status_line": True}, tmux=tmux)
+        other = TmuxHost("other", tmux=tmux)
+        self.assertEqual(first._capacity_namespace(), same._capacity_namespace())
+        self.assertNotEqual(first._capacity_namespace(), other._capacity_namespace())
+        namespace = first._capacity_namespace()
+        with mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": self.home + "/elsewhere"}):
+            self.assertNotEqual(first._capacity_namespace(), namespace)
+        self.assertEqual(tmux.mock_calls, [])
 
     def test_an_attachable_host_loaded_by_its_config_name(self):
         cls = load_class("ensemble.session.hosts.tmux:TmuxHost", Host)
@@ -133,53 +187,6 @@ class ListTest(Base):
             with open(os.path.join(folder, ACTIVITY), "w", encoding="utf-8") as file:
                 file.write(f"{generation} {mark}\n")
 
-    def test_a_display_less_worker_is_listed_from_its_worker_dir(self):
-        """A5: a live worker whose tmux session was killed is still listed, its state from its
-        activity; an ABSENT one, another host's or a displayed one's dir adds no row.
-        """
-        self.worker("live", mark="done")
-        self.worker("busy")
-        self.worker("lost")
-        self.worker("dead")
-        self.worker("theirs", host="docker")
-        self.worker("shown")
-        self.tmux.listing.return_value = [
-            {
-                "name": "shown",
-                "sid": "sid-shown",
-                "client": "claude",
-                "dead": False,
-                "state": None,
-                "display": "mgr",
-                "last_lines": None,
-            }
-        ]
-        found = {
-            "live": Liveness.LIVE,
-            "busy": Liveness.LIVE,
-            "lost": Liveness.UNKNOWN,
-            "dead": Liveness.ABSENT,
-        }
-        with mock.patch.object(
-            self.host, "worker_liveness", side_effect=lambda name, _generation: found[name]
-        ):
-            self.assertEqual(self.host.list(), ["busy", "live", "lost", "shown"])
-            rows = {row.name: row for row in self.host.rows()}
-        self.assertEqual(sorted(rows), ["busy", "live", "lost", "shown"])
-        self.assertEqual(
-            [
-                (rows[n].state, rows[n].sid, rows[n].client, rows[n].display)
-                for n in found
-                if n in rows
-            ],
-            [
-                (StatusState.DONE, "sid-live", "claude", "mgr"),
-                (StatusState.WORKING, "sid-busy", "claude", "mgr"),
-                (StatusState.UNKNOWN, "sid-lost", "claude", "mgr"),
-            ],
-        )
-        self.assertEqual((rows["live"].shown, rows["live"].last_lines), (None, None))
-
     def test_the_sweep_still_expires_a_dead_display_less_worker_dir(self):
         self.worker("dead")
         folder = os.path.join(os.path.expanduser(TUI_DIR), "dead")
@@ -189,15 +196,3 @@ class ListTest(Base):
         with mock.patch.object(self.host, "worker_liveness", return_value=Liveness.ABSENT):
             TuiStore.attach("dead", host=self.host).expire(set(self.host.list()))
         self.assertFalse(os.path.exists(folder))
-
-    def test_a_failed_listing_names_why_in_list_and_rows(self):
-        self.tmux.listing.side_effect = TuiError("tmux list-sessions exited 1: lost server")
-        for verb in (self.host.list, self.host.rows):
-            with (
-                self.subTest(verb=verb.__name__),
-                self.assertRaisesRegex(
-                    SessionError,
-                    r"\Atmux sessions unknown: tmux list-sessions exited 1: lost server\Z",
-                ),
-            ):
-                verb()
