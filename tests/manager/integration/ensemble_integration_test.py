@@ -27,7 +27,7 @@ COMMANDS = (
     "ensemble-delegate",
     "ensemble-orchestrator",
 )
-USAGE = "usage: ensemble <session-name> | ensemble --install"
+USAGE = "usage: ensemble <session-name> | ensemble list | ensemble --install"
 FAKE = """#!{python} -I
 import json, os, sys
 with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
@@ -238,6 +238,24 @@ class FakeTmux(Case):
             text = f.read().lower()
         self.assertNotIn(b"claude", text)
         self.assertNotIn(b"codex", text)
+
+    def test_list_prints_without_tmux(self):
+        os.makedirs(os.path.join(self.ensemble, "managers", "demo"))
+        process = subprocess.run(
+            (ENSEMBLE, "list"),
+            cwd=self.cwd,
+            env=self.env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(
+            (process.returncode, process.stdout, process.stderr),
+            (0, "demo\tnot-held\t-\t-\n  -\n", ""),
+        )
+        self.assertFalse(os.path.exists(self.log))
 
     def install(self, script=ENSEMBLE):
         process, out, err, calls = self.run_ensemble("--install", script=script)
