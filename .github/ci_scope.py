@@ -189,7 +189,12 @@ def selected(root: Path, directories: list[str]) -> list[str]:
         raise ValueError("TEST_PROJECTS must contain nonempty unique contract project names")
     if set(scope) == set(projects):
         return directories
-    return [directory for directory in directories if _owner(directory) in scope]
+    # Root tests (tests/unit, .github) read every layer's source: no project scope drops them.
+    return [
+        directory
+        for directory in directories
+        if _owner(directory) in scope or _owner(directory) not in projects
+    ]
 
 
 def gate(needs: dict, event: str) -> list[str]:
@@ -225,7 +230,7 @@ def gate(needs: dict, event: str) -> list[str]:
     expected = {
         "changes": "success",
         "lint": "success",
-        "repository": "skipped" if full == "false" else "success",
+        "repository": "skipped" if "true" in (docs, version) else "success",
         "unit": "skipped" if "true" in (docs, version) else "success",
         "coverage": "success" if event != "push" and "true" not in (docs, version) else "skipped",
         "integration": "skipped" if "true" in (docs, version) else "success",
