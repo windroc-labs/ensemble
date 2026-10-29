@@ -1,0 +1,178 @@
+"""Every manager's holder state, session record and entries, read without a lease."""
+
+import json
+import os
+import subprocess
+from pathlib import Path
+
+import jsonschema
+
+from ensemble.manager.engine.managers import alive, managers, read, read_record
+from ensemble.manager.engine.roster import Roster
+from ensemble.manager.engine.types import (
+    HolderState,
+    Manager,
+    SessionRecord,
+    Unread,
+    Unreadable,
+)
+from tests.manager import session_records
+from tests.manager.roster_case import RosterCase
+
+
+def _dead_pid() -> int:
+    child = subprocess.Popen(["true"])
+    child.wait()
+    return child.pid
+
+
+class RecordTest(RosterCase):
+    def setUp(self):
+        super().setUp()
+        Path(self.directory).mkdir(parents=True, mode=0o700)
+        self.path = os.path.join(self.directory, "session.json")
+
+    def test_an_absent_record_is_none(self):
+        self.assertIsNone(read_record(self.path))
+
+    def test_valid_records_parse(self):
+        for client, record in session_records.VALID.items():
+            with self.subTest(client=client):
+                Path(self.path).write_text(json.dumps(record) + "\n")
+                self.assertEqual(read_record(self.path), SessionRecord(**record))
+
+    def test_invalid_records_are_errors(self):
+        for case, text in session_records.INVALID.items():
+            with self.subTest(case=case):
+                Path(self.path).write_text(text)
+                with self.assertRaisesRegex(ValueError, f"^{self.path}: "):
+                    read_record(self.path)
+
+    def test_a_directory_or_oversized_record_is_an_error(self):
+        Path(self.path).write_text(" " * (1 << 16) + json.dumps(session_records.VALID["claude"]))
+        with self.assertRaisesRegex(ValueError, "not a readable regular file"):
+            read_record(self.path)
+        os.unlink(self.path)
+        os.mkdir(self.path)
+        with self.assertRaisesRegex(ValueError, "not a readable regular file"):
+            read_record(self.path)
+
+    def test_verdicts_match_the_schema(self):
+        with open(session_records.SCHEMA, encoding="utf-8") as f:
+            validator = jsonschema.Draft202012Validator(json.load(f))
+        texts = [json.dumps(r) for r in session_records.VALID.values()]
+        for text in [*texts, *session_records.INVALID.values()]:
+            with self.subTest(text=text):
+                try:
+                    schema_ok = validator.is_valid(json.loads(text))
+                except json.JSONDecodeError:
+                    schema_ok = False
+                Path(self.path).write_text(text)
+                try:
+                    read_record(self.path)
+                except ValueError:
+                    reader_ok = False
+                else:
+                    reader_ok = True
+                self.assertEqual(reader_ok, schema_ok)
+
+
+class ReadTest(RosterCase):
+    def setUp(self):
+        super().setUp()
+        self.live()
+
+    def write_record(self, pid: int) -> SessionRecord:
+        record = {**session_records.VALID["claude"], "pid": pid}
+        Path(self.directory, "session.json").write_text(json.dumps(record))
+        return SessionRecord(**record)
+
+    def test_alive(self):
+        self.assertTrue(alive(os.getpid()))
+        self.assertFalse(alive(_dead_pid()))
+
+    def test_unlocked_is_not_held_even_with_a_live_record(self):
+        record = self.write_record(os.getpid())
+        self.assertEqual(
+            read(self.directory),
+            Manager("manager", HolderState.NOT_HELD, None, record, self.roster.entries()),
+        )
+
+    def test_locked_with_a_live_pid_is_client_running(self):
+        record = self.write_record(os.getpid())
+        with Roster(self.directory).hold("owner"):
+            manager = read(self.directory)
+        self.assertEqual(
+            manager,
+            Manager("manager", HolderState.CLIENT_RUNNING, "owner", record, self.roster.entries()),
+        )
+
+    def test_locked_with_a_dead_pid_or_no_record_is_hold_only(self):
+        with Roster(self.directory).hold("owner"):
+            self.assertEqual(read(self.directory).state, HolderState.HOLD_ONLY)
+            self.write_record(_dead_pid())
+            self.assertEqual(read(self.directory).state, HolderState.HOLD_ONLY)
+
+    def test_an_invalid_record_is_never_client_running(self):
+        Path(self.directory, "session.json").write_text(session_records.INVALID["extra field"])
+        self.assertEqual(read(self.directory).state, HolderState.NOT_HELD)
+        with Roster(self.directory).hold("owner"):
+            manager = read(self.directory)
+        self.assertEqual(manager.state, HolderState.HOLD_ONLY)
+        self.assertIsInstance(manager.record, Unread)
+        self.assertEqual(manager.entries, self.roster.entries())
+
+    def test_a_held_manager_with_a_corrupt_roster_keeps_its_holder_state(self):
+        self.write_record(os.getpid())
+        with Roster(self.directory).hold("owner"):
+            valid = Path(self.roster.path).read_text()
+            Path(self.roster.path).write_text("{")
+            manager = read(self.directory)
+            Path(self.roster.path).write_text(valid)
+        self.assertEqual(
+            (manager.state, manager.holder), (HolderState.CLIENT_RUNNING, "another holder")
+        )
+        self.assertIsInstance(manager.entries, Unread)
+
+    def test_a_failed_probe_is_unreadable(self):
+        for name in ("holder.lock", "roster.lock"):
+            with self.subTest(name=name):
+                path = Path(self.directory, name)
+                path.unlink(missing_ok=True)
+                path.mkdir()
+                manager = read(self.directory)
+                self.assertIsInstance(manager, Unreadable)
+                self.assertEqual(manager.name, "manager")
+                self.assertIn("not a regular", manager.error)
+                path.rmdir()
+                path.touch(mode=0o600)
+
+    def test_a_held_manager_is_read_without_changing_it(self):
+        self.write_record(os.getpid())
+        with Roster(self.directory).hold("owner") as lease:
+            before = {p: Path(self.directory, p).read_bytes() for p in os.listdir(self.directory)}
+            self.assertEqual(read(self.directory).holder, "owner")
+            after = {p: Path(self.directory, p).read_bytes() for p in os.listdir(self.directory)}
+            self.assertEqual(after, before)
+            other = Roster(self.directory)
+            other.bind(lease)
+            other.check_lease()
+
+    def test_a_holder_label_comes_exactly_with_a_held_state(self):
+        with self.assertRaises(ValueError):
+            Manager("m", HolderState.CLIENT_RUNNING, None, None, {})
+        with self.assertRaises(ValueError):
+            Manager("m", HolderState.NOT_HELD, "owner", None, {})
+
+
+class ManagersTest(RosterCase):
+    def test_an_absent_root_has_no_managers(self):
+        self.assertEqual(managers(os.path.join(self.home, "absent")), [])
+
+    def test_managers_are_named_directories_sorted_by_name(self):
+        root = os.path.join(self.ensemble, "managers")
+        for name in ("b", "a", "bad name", ".hidden"):
+            os.makedirs(os.path.join(root, name))
+        Path(root, "file").touch()
+        os.symlink(os.path.join(root, "a"), os.path.join(root, "link"))
+        self.assertEqual([m.name for m in managers(root)], ["a", "b"])

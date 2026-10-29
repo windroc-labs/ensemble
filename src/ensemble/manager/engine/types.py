@@ -1,4 +1,4 @@
-"""Crew launch intent, roster entries, states and errors."""
+"""Crew launch intent, roster entries, states, managers as listed and errors."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -46,6 +46,45 @@ class Liveness(NamedTuple):
 class Unread:
     """A file that could not be read, and why."""
 
+    error: str
+
+
+class HolderState(StrEnum):
+    CLIENT_RUNNING = "client-running"
+    HOLD_ONLY = "hold-only"
+    NOT_HELD = "not-held"
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    """A manager's session.json: the client that last started, resumed, cleared or compacted."""
+
+    client: str
+    sid: str
+    pid: int
+    cwd: str
+
+
+@dataclass(frozen=True)
+class Manager:
+    """One manager read without a lease; holder: its active holder's label, None when NOT_HELD."""
+
+    name: str
+    state: HolderState
+    holder: str | None
+    record: SessionRecord | Unread | None
+    entries: dict[str, Entry] | Unread
+
+    def __post_init__(self):
+        if (self.state == HolderState.NOT_HELD) != (self.holder is None):
+            raise ValueError("holder: want a label exactly when held")
+
+
+@dataclass(frozen=True)
+class Unreadable:
+    """A manager whose holder probe could not run, so nothing about it is known."""
+
+    name: str
     error: str
 
 

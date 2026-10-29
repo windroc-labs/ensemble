@@ -51,7 +51,7 @@ allow_indirect_imports = true
 name = "Manager units own commands, bookkeeping and events"
 type = "units"
 container = "ensemble.manager"
-units = ["ensemble.manager.engine.crew", "ensemble.manager.engine.holder", "ensemble.manager.engine.roster", "ensemble.manager.engine.events", "ensemble.manager.engine.pr", "ensemble.manager.engine.types"]
+units = ["ensemble.manager.engine.crew", "ensemble.manager.engine.holder", "ensemble.manager.engine.roster", "ensemble.manager.engine.events", "ensemble.manager.engine.pr", "ensemble.manager.engine.types", "ensemble.manager.engine.managers"]
 dependencies = [
     "ensemble.manager.engine.crew -> ensemble.manager.engine.pr ensemble.manager.engine.roster ensemble.manager.engine.types ensemble.utils",
     "ensemble.manager.engine.holder -> ensemble.manager.engine.roster ensemble.manager.engine.types ensemble.utils",
@@ -59,7 +59,8 @@ dependencies = [
     "ensemble.manager.engine.events -> ensemble.manager.engine.types ensemble.utils",
     "ensemble.manager.engine.pr -> ensemble.utils",
     "ensemble.manager.engine.types -> ensemble.utils",
-    "outside -> ensemble.manager.engine.crew ensemble.manager.engine.holder ensemble.manager.engine.types ensemble.utils",
+    "ensemble.manager.engine.managers -> ensemble.manager.engine.roster ensemble.manager.engine.types ensemble.utils",
+    "outside -> ensemble.manager.engine.crew ensemble.manager.engine.holder ensemble.manager.engine.managers ensemble.manager.engine.types ensemble.utils",
 ]
 
 [[tool.importlinter.contracts]]
