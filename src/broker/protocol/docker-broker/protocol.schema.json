@@ -445,7 +445,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "36"
+          "const": "37"
         }
       },
       "required": [
@@ -1031,7 +1031,6 @@
                 "workspace-rm",
                 "unknown",
                 "probe-provider",
-                "lock-query",
                 "check-clients"
               ]
             },
@@ -1190,7 +1189,6 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "lock-query",
                     "check-clients"
                   ]
                 }
@@ -1292,8 +1290,7 @@
                     "build",
                     "start",
                     "close",
-                    "workspace-rm",
-                    "lock-query"
+                    "workspace-rm"
                   ]
                 }
               }
@@ -1332,8 +1329,7 @@
                 },
                 "command": {
                   "enum": [
-                    "start",
-                    "lock-query"
+                    "start"
                   ]
                 }
               }
@@ -1497,7 +1493,6 @@
                     "workspace-rm",
                     "unknown",
                     "probe-provider",
-                    "lock-query",
                     "check-clients"
                   ]
                 }
@@ -1761,50 +1756,6 @@
       "required": [
         "container",
         "owner"
-      ],
-      "additionalProperties": false
-    },
-    "lock_query_input": {
-      "type": "object",
-      "properties": {
-        "argv": {
-          "type": "array",
-          "prefixItems": [
-            {
-              "const": "lock-query"
-            },
-            {
-              "const": "--lock"
-            },
-            {
-              "$ref": "#/$defs/lock_name"
-            }
-          ],
-          "minItems": 3,
-          "maxItems": 3
-        }
-      },
-      "required": [
-        "argv"
-      ],
-      "additionalProperties": false
-    },
-    "lock_query_output": {
-      "type": "object",
-      "properties": {
-        "holder": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/holder"
-            }
-          ]
-        }
-      },
-      "required": [
-        "holder"
       ],
       "additionalProperties": false
     },

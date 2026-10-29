@@ -19,6 +19,11 @@ The command that opens a manager's tmux session is now `ensemble <name>`. After 
 Neither removes the old launcher, which no longer runs: delete it with `rm ~/.ensemble/bin/ctmux`. Sessions it
 opened keep running; `ensemble <name>` attaches to them.
 
+## Broker protocol 37: unused broker commands removed
+
+Protocol 37 removes `ensemble-broker lock-query`, which nothing called, and the `refresh` and `notices` stubs left by
+protocol 29; each now fails as an unknown command. Upgrade the broker with the plugin: `scripts/install.sh --docker`.
+
 ## Broker protocol 36: GitHub grants without repo
 
 Close running Docker workers before upgrading, then run `scripts/install.sh --docker`; the Docker Host refuses a
@@ -251,7 +256,7 @@ that sha256. Nothing to do: install or upgrade the broker as before (`gh` still 
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
 credentials renew ([Docker maintenance](../src/ensemble/session/hosts/docker/maintenance.py)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
-renewals fail, each asking for that restart, its GitHub tokens lapse within the hour and a Codex session closes at its
+renewals fail, its GitHub tokens lapse within the hour and a Codex session closes at its
 old deadline. The events `client_refresh_failed`, `github_refresh_failed` and `credential_notice_failed` become
 `credential_refresh_failed` and `credential_maintenance_failed`. To go back to protocol 28, install its plugin and
 broker, then close and resume every Docker session started under 29: a protocol 28 supervisor cannot read their
@@ -510,7 +515,7 @@ After a client plugin update removes the selected directory, the next command se
 installed ensemble copy, records its path and reports it on stderr; no installer rerun is needed. It never selects
 another client's copy, nor an OpenCode copy of another ref (its package's `#<ref>`, none meaning `main`). If no such
 copy is left, the command keeps the selected-plugin error and the selection: rerun the installer.
-Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
+Equal versions use sorted paths to break ties. A ref older than v0.5.0 installs its own launcher, which ignores the selection.
 After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
 credentials and requesting any missing logins ([broker command usage](../src/broker/main.go)).
