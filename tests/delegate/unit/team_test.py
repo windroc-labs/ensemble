@@ -91,6 +91,8 @@ class Acceptance(Packaged):
             "run the **scope check** ([Engineer › Input processing](#input-processing))", decompose
         )
         self.assertIn("Rerun the scope check on the reread descriptions.", decompose)
+        self.assertEqual(decompose.count("fresh subagent"), 1)
+        self.assertIn("This review runs one round per run", decompose)
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
