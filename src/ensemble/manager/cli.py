@@ -122,18 +122,21 @@ def _add_recovery(error: StaleHolder, args, reader: tuple[int, int] | None = Non
         error.add_note(note)
 
 
-def _crew(args) -> Crew:
+def _lease() -> Lease | None:
     holder = os.environ.get("ENSEMBLE_HOLDER_ID")
     generation = os.environ.get("ENSEMBLE_HOLDER_GENERATION")
-    lease = None
-    if holder is not None or generation is not None:
-        if not holder or generation is None or not re.fullmatch(r"[1-9][0-9]*", generation):
-            raise ValueError("ENSEMBLE_HOLDER_ID and ENSEMBLE_HOLDER_GENERATION must go together")
-        identity = uuid.UUID(holder)
-        if identity.version != 4 or str(identity) != holder:
-            raise ValueError("ENSEMBLE_HOLDER_ID must be a canonical UUID4")
-        lease = Lease(holder, int(generation))
-    return Crew(_roster(args), lease=lease)
+    if holder is None and generation is None:
+        return None
+    if not holder or generation is None or not re.fullmatch(r"[1-9][0-9]*", generation):
+        raise ValueError("ENSEMBLE_HOLDER_ID and ENSEMBLE_HOLDER_GENERATION must go together")
+    identity = uuid.UUID(holder)
+    if identity.version != 4 or str(identity) != holder:
+        raise ValueError("ENSEMBLE_HOLDER_ID must be a canonical UUID4")
+    return Lease(holder, int(generation))
+
+
+def _crew(args) -> Crew:
+    return Crew(_roster(args), lease=_lease())
 
 
 def _row(*fields: str) -> str:
@@ -171,6 +174,17 @@ def _list(_args) -> int:
 
 def _hold(args) -> int:
     return Holder(_roster(args)).run(args.command, session=args.session, force=args.force)
+
+
+def _resume_commander(args) -> int:
+    roster, lease = _roster(args), _lease()
+    if lease is None:
+        raise ValueError("run resume-commander under the manager's hold: ensemble list")
+    roster.bind(lease)
+    roster.check_lease()
+    cwd, argv = managers.resume_target(roster.directory)
+    os.chdir(cwd)
+    os.execvp(argv[0], argv)
 
 
 def _run(args) -> int:
@@ -345,8 +359,8 @@ Prerequisites and effects:
   SessionStart re-arm prompt goes only to a client in its process tree.
   Keep the pair together. An active holder fences ownership-sensitive roster
   updates; run those from its commander environment.
-  ENSEMBLE_AGENT_SESSION blocks hold/run/worker/reopen/issue/role/resume; use a
-  user-started commander. Help still works. State: ~/.ensemble/managers/NAME/.
+  ENSEMBLE_AGENT_SESSION blocks hold/run/worker/reopen/issue/role/resume and
+  resume-commander; use a user-started commander. Help still works. State: ~/.ensemble/managers/NAME/.
   run/worker/reopen/issue/role give starters empty stdin; supply literal input.
   hold instead inherits the caller's input for its foreground command.
   Exit 0: success; 2: usage/invalid value; 1: operational/lease failure;
@@ -861,6 +875,25 @@ Examples:
         manager=False,
     )
     listing.set_defaults(func=_list)
+    page(
+        "resume-commander",
+        "Resume the manager's recorded client session under this holder",
+        """Requires this environment's holder pair for the manager's live holder: run it
+in the shell its hold keeps (ensemble list types or runs it there). Reads
+~/.ensemble/managers/NAME/session.json, refuses while its client still runs
+or when its cwd is gone, gets the client's resume command from
+ensemble-session resume-argv, then replaces itself with that client in the
+recorded cwd. Exit 2 without a holder pair; 1 when it cannot resume.
+
+Examples:
+  In tmux session demo's held shell:
+  ensemble-crew resume-commander
+
+Recovery and next help:
+  Not held here: ensemble list, then select the manager.
+  Client resume commands: ensemble-session resume-argv --help
+""",
+    ).set_defaults(func=_resume_commander)
     return parser
 
 
@@ -883,7 +916,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"{args.verb} takes entry names or --all")
     if args.func is _resume and args.input is not None and len(args.names) != 1:
         parser.error("resume --input requires exactly one name")
-    if args.func in {_run, _hold, _resume, _launch} and (refused := nested_start()):
+    if args.func in {_run, _hold, _resume, _launch, _resume_commander} and (
+        refused := nested_start()
+    ):
         print(f"crew: {refused}", file=sys.stderr)
         return 2
     try:

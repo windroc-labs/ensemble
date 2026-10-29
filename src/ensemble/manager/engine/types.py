@@ -63,8 +63,6 @@ class SessionRecord:
 
 @dataclass(frozen=True)
 class ActiveHolder:
-    """An active holder: its lease id and the display session its hold recorded."""
-
     id: str
     session: str | None
 
@@ -75,9 +73,7 @@ class ActiveHolder:
 
 @dataclass(frozen=True)
 class Manager:
-    """holder: the active holder (Unread: roster.json names none readably), None exactly when
-    NOT_HELD.
-    """
+    """holder: Unread when roster.json names none readably; None exactly when NOT_HELD."""
 
     name: str
     state: HolderState
@@ -99,8 +95,6 @@ class Unreadable:
 
 
 class Verb(StrEnum):
-    """What the launcher does for a selected manager."""
-
     ATTACH = "attach"
     RESUME_HELD = "resume-held"
     RESUME_NEW = "resume-new"
@@ -115,8 +109,6 @@ class Plan:
 
 @dataclass(frozen=True)
 class Refused:
-    """Selecting the manager opens nothing, for `reason`."""
-
     reason: str
 
 

@@ -2,13 +2,21 @@
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from unittest import mock
 
 import jsonschema
 
 from ensemble.manager import rearm
-from ensemble.manager.engine.managers import alive, managers, plan, read, read_record
+from ensemble.manager.engine.managers import (
+    alive,
+    managers,
+    plan,
+    read,
+    read_record,
+    resume_target,
+)
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
     ActiveHolder,
@@ -16,6 +24,7 @@ from ensemble.manager.engine.types import (
     Manager,
     Plan,
     Refused,
+    RosterError,
     SessionRecord,
     Unread,
     Unreadable,
@@ -273,3 +282,66 @@ class PlanTest(RosterCase):
             plan(_manager(NOT_HELD, None, RECORD), live=True),
             Refused(f"its client {LIVE} runs without a holder; exit it first"),
         )
+
+
+class ResumeTargetTest(RosterCase):
+    def setUp(self):
+        super().setUp()
+        self.live()
+        self.cwd = os.path.join(self.home, "pro'ject \x15 $x")
+        os.mkdir(self.cwd)
+        self.enterContext(mock.patch("os.kill", side_effect=_kill))
+        self.run = self.enterContext(mock.patch("subprocess.run"))
+        self.answer('["kind-a", "--resume", "s-1"]')
+
+    def answer(self, stdout, returncode=0, stderr=""):
+        self.run.return_value = subprocess.CompletedProcess((), returncode, stdout, stderr)
+
+    def write(self, **fields):
+        record = {"client": "kind-a", "sid": "s-1", "pid": DEAD, "cwd": self.cwd, **fields}
+        Path(self.directory, "session.json").write_text(json.dumps(record))
+
+    def refused(self, pattern):
+        with self.assertRaisesRegex(RosterError, pattern):
+            resume_target(self.directory)
+
+    def test_the_recorded_client_resumes_in_its_cwd(self):
+        self.write()
+        self.assertEqual(resume_target(self.directory), (self.cwd, ("kind-a", "--resume", "s-1")))
+        self.assertEqual(
+            self.run.call_args.args[0], ("ensemble-session", "resume-argv", "kind-a", "--", "s-1")
+        )
+        self.assertEqual(self.run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_no_or_an_unreadable_record_is_refused(self):
+        self.refused("no session record")
+        Path(self.directory, "session.json").write_text("{")
+        self.refused("session.json: not JSON")
+        self.run.assert_not_called()
+
+    def test_a_live_recorded_client_is_refused(self):
+        self.write(pid=LIVE)
+        self.refused(f"its client {LIVE} still runs")
+        self.run.assert_not_called()
+
+    def test_a_cwd_that_is_no_directory_is_refused_printably(self):
+        self.write(cwd="/absent/\x1b[2Jdir")
+        self.refused(r"recorded cwd '/absent/\\x1b\[2Jdir' is not a directory")
+        self.run.assert_not_called()
+
+    def test_a_failed_resume_argv_is_refused_with_its_reason(self):
+        self.write()
+        for answer, pattern in (
+            (("", 2, "ensemble-session: config: no client kind-a\n"), "no client kind-a"),
+            (("not json", 0, ""), "want a JSON array"),
+            (('{"a": 1}', 0, ""), "want a JSON array"),
+            (('["kind-a", ""]', 0, ""), "want a JSON array"),
+            (("[]", 0, ""), "want a JSON array"),
+        ):
+            with self.subTest(answer=answer):
+                self.answer(*answer)
+                self.refused(f"cannot resume its kind-a session: .*{pattern}")
+        for error in (subprocess.TimeoutExpired((), 30), OSError("no ensemble-session")):
+            with self.subTest(error=error):
+                self.run.side_effect = error
+                self.refused("cannot resume its kind-a session")

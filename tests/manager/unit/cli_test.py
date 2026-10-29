@@ -1588,6 +1588,62 @@ class ListTest(CliCase):
         )
 
 
+class ResumeCommanderTest(CliCase):
+    def setUp(self):
+        super().setUp()
+        os.makedirs(self.directory, mode=0o700)
+        self.cwd = os.path.join(self.home, "a b'c\x15d")
+        os.mkdir(self.cwd)
+        record = {"client": "kind-a", "sid": "s-1", "pid": 1 << 40, "cwd": self.cwd}
+        Path(self.directory, "session.json").write_text(json.dumps(record))
+        argv = '["kind-a", "--resume", "s-1"]'
+        self.run = self.enterContext(
+            mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=argv))
+        )
+        self.chdir = self.enterContext(mock.patch("os.chdir"))
+        self.execvp = self.enterContext(mock.patch("os.execvp"))
+
+    def under(self, lease):
+        return mock.patch.dict(
+            os.environ,
+            {
+                "ENSEMBLE_MANAGER": "mgr",
+                "ENSEMBLE_HOLDER_ID": lease.id,
+                "ENSEMBLE_HOLDER_GENERATION": str(lease.generation),
+            },
+        )
+
+    def test_under_its_hold_it_execs_the_recorded_client_in_its_cwd(self):
+        with self.roster.hold("mgr") as lease, self.under(lease):
+            self.invoke("resume-commander")
+        self.chdir.assert_called_once_with(self.cwd)
+        self.execvp.assert_called_once_with("kind-a", ("kind-a", "--resume", "s-1"))
+
+    def test_without_a_holder_pair_it_is_a_usage_error(self):
+        result, stdout, stderr = self.invoke("resume-commander", "--manager", "mgr")
+        self.assertEqual((result, stdout), (2, ""))
+        self.assertIn("run resume-commander under the manager's hold: ensemble list", stderr)
+        self.execvp.assert_not_called()
+
+    def test_an_ended_holder_is_refused(self):
+        with self.roster.hold("mgr") as lease:
+            pass
+        with self.under(lease):
+            result, _, stderr = self.invoke("resume-commander")
+        self.assertEqual(result, 1)
+        self.assertIn("holder", stderr)
+        self.execvp.assert_not_called()
+
+    def test_a_refused_target_execs_nothing(self):
+        Path(self.directory, "session.json").unlink()
+        with self.roster.hold("mgr") as lease, self.under(lease):
+            result, _, stderr = self.invoke("resume-commander")
+        self.assertEqual(result, 1)
+        self.assertIn("no session record", stderr)
+        self.chdir.assert_not_called()
+        self.execvp.assert_not_called()
+
+
 class InsideAnAgentSession(CliCase):
     def test_run_hold_and_resume_exit_2_and_write_nothing(self):
         for argv in (
@@ -1598,6 +1654,7 @@ class InsideAnAgentSession(CliCase):
             ("reopen", "--manager", "mgr", "TASK-12"),
             ("issue", "--manager", "mgr", "TASK-12"),
             ("role", "--manager", "mgr", "pm", "--input", "x"),
+            ("resume-commander", "--manager", "mgr"),
         ):
             with (
                 self.subTest(argv=argv),
@@ -1636,6 +1693,7 @@ HELP_COMMANDS = [
     "ack",
     "next-event",
     "list",
+    "resume-commander",
 ]
 
 
