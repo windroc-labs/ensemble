@@ -337,9 +337,14 @@ class Worker:
             self._put_back(before)
             raise
         unshown = self._show(session, hidden=hidden) if session.showable else None
-        self._watch(session)
-        if unshown is not None:  # moot if its client exited at once
-            self.say(unshown)
+        exited = None
+        try:
+            exited = self._watch(session)
+        finally:
+            if unshown is not None and exited is None:  # an early exit says why
+                self.say(unshown)
+        if exited is not None:
+            raise SessionError(self._died(session, exited))
         record = self.state.record()
         self._store(record)
         return record
@@ -513,11 +518,12 @@ class Worker:
             return f"session {name}: not {'hidden' if hidden else 'shown'}: {error}"
         return None
 
-    def _watch(self, session: Session) -> None:
+    def _watch(self, session: Session) -> int | None:
+        """An early exit's code, else None."""
         began = self.clock()
         for event in session.events():
             if isinstance(event, Exited):
-                raise SessionError(self._died(session, event.returncode))
+                return event.returncode
             if isinstance(event, Blocked):
                 self._waits(session, event.reason)
                 return
