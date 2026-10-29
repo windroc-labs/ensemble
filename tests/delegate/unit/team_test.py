@@ -80,6 +80,10 @@ class Acceptance(Packaged):
         self.assertIn(
             "Its **scope check**: `python3 -P <team>/tools/scope_check.py --base ", engineer
         )
+        # the decompose input's section that holds the PRD's requirement tables
+        self.assertIn(
+            "the input's **PRD and linked documents** saved as `<Workdir>/tmp/prd.md`", engineer
+        )
         decompose = task_text("decompose")
         self.assertIn(
             "**Scope check** ([Engineer › Input processing](#input-processing)) on the drafts",

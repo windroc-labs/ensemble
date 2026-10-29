@@ -159,6 +159,10 @@ class ScopeCheck(Case):
             "* not a path\n"
         )
         self.assertEqual(self.check(saved), (0, "ok\n"))
+        for after in ("\n\n", "\n\n## Parent\n\n* `src/app/main.py`\n"):
+            with self.subTest(after=after):
+                head = saved.split("Scope:", 1)[0]
+                self.assertIn("t1.md: no Scope:", self.failures(head + "Scope:" + after))
 
     def test_usage_and_unreadable_files_exit_2(self):
         out = io.StringIO()
