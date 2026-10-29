@@ -19,7 +19,7 @@ class PluginManifests(Sample):
             OPENCODE: self.manifest(),
             "skills/a/SKILL.md": "",
             "skills/m/SKILL.md": "",
-            "skills/t/scripts/ctmux": "",
+            "skills/t/scripts/ensemble": "",
             **dict(files),
         }
         return self.tree({rel: text for rel, text in files.items() if text is not None})

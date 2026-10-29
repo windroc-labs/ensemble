@@ -1464,8 +1464,8 @@ codex_plugins() {
   ensemble_plugin_check codex "Codex"
 }
 
-# The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, ctmux and jobs. Claude Code's
-# install first, else Codex's served version, else OpenCode's. ctmux --install selects this source for launchers.
+# The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, the ensemble command and jobs.
+# Claude Code's install first, else Codex's served version, else OpenCode's. The launchers in ~/.ensemble/bin run it.
 plugin_dir() {
   step "plugin directory"
   if ! has claude && ! has codex; then
@@ -1958,7 +1958,7 @@ import glob, json, os, sys, tempfile
 
 name = sys.argv[1]
 selection = os.path.expanduser("~/.ensemble/plugin-root")
-rel = "skills/manage/scripts/ctmux" if name == "ctmux" else "bin/" + name
+rel = "skills/manage/scripts/ensemble" if name == "ensemble" else "bin/" + name
 try:
     with open(selection, encoding="utf-8") as f:
         text = f.read().rstrip("\n")
@@ -1967,7 +1967,7 @@ try:
         raise ValueError("expected a selection object with root, client and source strings")
     root, client, source = data["root"], data["client"], data["source"]
 except (OSError, ValueError, TypeError, KeyError) as e:
-    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
+    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ensemble --install")
 path = os.path.join(root, rel)
 if os.path.isabs(root) and "\n" not in root and os.access(path, os.X_OK):
     print(path)
@@ -2022,18 +2022,18 @@ if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
             print(f"{name}: re-selected plugin {candidate}", file=sys.stderr)
             print(path)
             sys.exit()
-sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ctmux --install")
+sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ensemble --install")
 PY
 ) || exit
 exec "$target" "$@"
 EOF
 }
 
-ctmux_install() {
+launchers_install() {
   local name missing=
-  step "ctmux --install"
+  step "launchers"
   [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$(command_selection)" ] || missing=1
-  for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+  for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
     [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s <(command_launcher "$name") "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
@@ -2047,14 +2047,14 @@ ctmux_install() {
       fi
     fi
     if [ -d "$HOME/.ensemble/bin" ]; then
-      for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+      for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
         record_file "$HOME/.ensemble/bin/$name"
       done
     else
       record_dir "$HOME/.ensemble/bin"
+      mkdir -p "$HOME/.ensemble/bin"
     fi
-    "$pkg/skills/manage/scripts/ctmux" --install </dev/null >&2
-    for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+    for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
       command_launcher "$name" > "$state_dir/launcher.tmp"
       install -m 755 "$state_dir/launcher.tmp" "$HOME/.ensemble/bin/$name"
     done
@@ -3051,7 +3051,7 @@ celebrate() {
 
 EOF
   say "ensemble is installed (ref $ref, clients $clients, Docker $docker)."
-  say "Welcome onboard, and congrats: your crew is ready. Open a commander with ctmux <name>."
+  say "Welcome onboard, and congrats: your crew is ready. Open a commander with ensemble <name>."
 }
 
 main() {
@@ -3105,7 +3105,7 @@ main() {
   opencode_provider
   docker_steps
   opencode_key
-  ctmux_install
+  launchers_install
   board_config
   board_jobs "$board_stages"
   current=

@@ -53,7 +53,7 @@ To supply the `sudo` password from Keychain, download the script first; stdin ca
 | `--password-stdin` | The `sudo` password from stdin, before the provider key |
 
 The installer asks which clients to use, whether workers run locally or in Docker, and whether to set up a
-board. It installs the selected dependencies/plugins, requests the needed logins and sets up `ctmux`.
+board. It installs the selected dependencies/plugins, requests the needed logins and sets up the `ensemble` command.
 Rerun it to finish an interrupted install. For options, use `bash scripts/install.sh --help` in a checkout;
 for an existing installation, read [Upgrading](docs/upgrading.md) first.
 
@@ -93,7 +93,7 @@ For one task in your installed client's conversation:
 For a crew, open a commander shell and start your client:
 
 ```sh
-ctmux work
+ensemble work
 claude
 ```
 

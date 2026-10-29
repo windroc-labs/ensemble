@@ -90,7 +90,7 @@ class OpenCodePluginTest(Case):
                 expected = body.lstrip("\n").replace("${CLAUDE_SKILL_DIR}", skill_dir)
                 self.assertEqual(command["template"], expected)
         manage = config["command"]["ensemble:manage"]["template"]
-        self.assertIn(os.path.join(REPO, "skills/manage/scripts/ctmux"), manage)
+        self.assertIn(os.path.join(REPO, "skills/manage/scripts/ensemble"), manage)
         self.assertIn("$ARGUMENTS", config["command"]["ensemble:act-as"]["template"])
 
     def test_the_shell_finds_the_plugins_bin_first(self):

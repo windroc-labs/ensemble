@@ -53,7 +53,7 @@ Pour fournir le mot de passe `sudo` depuis Keychain, téléchargez d’abord le 
 | `--password-stdin` | Le mot de passe `sudo` depuis stdin, avant la clé du fournisseur |
 
 L’installateur demande quels clients utiliser, si les agents exécutants doivent fonctionner en local ou dans Docker, et s’il faut configurer un
-tableau. Il installe les dépendances et plugins sélectionnés, demande les connexions nécessaires et configure `ctmux`.
+tableau. Il installe les dépendances et plugins sélectionnés, demande les connexions nécessaires et configure la commande `ensemble`.
 Relancez-le pour terminer une installation interrompue. Pour les options, utilisez `bash scripts/install.sh --help` dans une copie du dépôt ;
 pour une installation existante, lisez d’abord [Mise à niveau](../upgrading.md).
 
@@ -93,7 +93,7 @@ Pour une seule tâche, dans une conversation de votre client installé :
 Pour une équipe, ouvrez un shell de commandant et démarrez votre client :
 
 ```sh
-ctmux work
+ensemble work
 claude
 ```
 
