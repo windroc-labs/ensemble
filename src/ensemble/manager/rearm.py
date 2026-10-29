@@ -2,7 +2,9 @@
 startup, resume, compact and clear sources, prints the re-arm prompt as
 additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
 replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
-that). Anything else prints nothing. Always exits 0.
+that). Codex runs hooks from its app-server daemon, a child of the TUI that started it: a codex
+PID that is such a daemon records the TUI above it, or nothing when none.
+Anything else prints nothing. Always exits 0.
 A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
 ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
 later tmux windows. Standalone: the standard library only.
@@ -16,7 +18,8 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
+from functools import cached_property
 
 SOURCES = frozenset({"startup", "resume", "compact", "clear"})
 MANAGER_NAME = re.compile(r"[A-Za-z0-9_-]+")  # ensemble-crew's own rule (cli.py _roster)
@@ -24,7 +27,17 @@ PID = re.compile(r"[1-9][0-9]*")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
 OPTIONS = frozenset({"--mode", "--client", "--client-pid"})
 MANAGERS = "~/.ensemble/managers"
-PS = ("ps", "-A", "-o", "pid=", "-o", "ppid=")  # one -o each: text after = is a header
+PS = (
+    "ps",
+    "-A",
+    "-o",
+    "pid=",
+    "-o",
+    "ppid=",
+    "-o",
+    "args=",
+)  # one -o each: text after = is a header
+APP_SERVER = re.compile(r"(?:^|/)codex app-server(?: |$)")
 
 PROMPT = """\
 ensemble: SessionStart `{source}` in manager `{name}`'s session (under \
@@ -69,44 +82,69 @@ repeat from step 1; without a notifying tool, keep Manual monitoring.
 """
 
 
-def _proc_parent(pid: int) -> int | None:
-    try:
-        with open(f"/proc/{pid}/stat", "rb") as f:
-            return int(f.read().rpartition(b")")[2].split()[1])
-    except (OSError, ValueError, IndexError):
-        return None
+class Processes:
+    """Each pid's parent and command line, by /proc where it exists (Linux), else one ps table."""
 
+    def __init__(self) -> None:
+        self.proc = os.path.isdir("/proc/self")
 
-def _ps_parents() -> dict[int, int]:
-    try:
-        done = subprocess.run(PS, capture_output=True, timeout=2, check=False)
-        if done.returncode != 0:
+    @cached_property
+    def table(self) -> dict[int, tuple[int, str]]:
+        try:
+            done = subprocess.run(PS, capture_output=True, timeout=2, check=False)
+            if done.returncode != 0:
+                return {}
+            rows = [line.split(None, 2) for line in done.stdout.decode().splitlines()]
+            return {int(row[0]): (int(row[1]), row[2] if len(row) > 2 else "") for row in rows}
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError):
             return {}
-        rows = [line.split() for line in done.stdout.decode().splitlines()]
-        return {int(pid): int(ppid) for pid, ppid in rows}
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return {}
+
+    def parent(self, pid: int) -> int | None:
+        if not self.proc:
+            return self.table[pid][0] if pid in self.table else None
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                return int(f.read().rpartition(b")")[2].split()[1])
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def command(self, pid: int) -> str | None:
+        if not self.proc:
+            return self.table[pid][1] if pid in self.table else None
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                return f.read().rstrip(b"\0").replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            return None
+
+    def ancestors(self, pid: int) -> set[int]:
+        """pid's ancestors above it."""
+        found: set[int] = set()
+        while (pid := self.parent(pid) or 0) > 1 and pid not in found:
+            found.add(pid)
+        return found
+
+    def client(self, kind: str, pid: int) -> int | None:
+        """The client behind a hook's parent pid: past Codex app-server daemons; None when a
+        daemon has no readable parent other than init.
+        """
+        seen: set[int] = set()
+        while kind == "codex" and APP_SERVER.search(self.command(pid) or ""):
+            seen.add(pid)
+            pid = self.parent(pid) or 0
+            if pid <= 1 or pid in seen or self.command(pid) is None:
+                return None
+        return pid
 
 
-def ancestors(pid: int) -> set[int]:
-    """pid's ancestors above it, by /proc where it exists (Linux), else one ps table."""
-    parent: Callable[[int], int | None] = (
-        _proc_parent if os.path.isdir("/proc/self") else _ps_parents().get
-    )
-    found: set[int] = set()
-    while (pid := parent(pid) or 0) > 1 and pid not in found:
-        found.add(pid)
-    return found
-
-
-def manager(environ: Mapping[str, str]) -> str | None:
+def manager(environ: Mapping[str, str], processes: Processes) -> str | None:
     name = environ.get("ENSEMBLE_MANAGER", "")
     hold = environ.get("ENSEMBLE_HOLDER_PID", "")
     if not MANAGER_NAME.fullmatch(name) or not environ.get("ENSEMBLE_HOLDER_ID"):
         return None
     if "ENSEMBLE_AGENT_SESSION" in environ or not PID.fullmatch(hold):
         return None
-    return name if int(hold) in ancestors(os.getpid()) else None
+    return name if int(hold) in processes.ancestors(os.getpid()) else None
 
 
 def prompt(name: str, source: str, *, manual: bool = False) -> str:
@@ -150,7 +188,8 @@ def main(argv: tuple[str, ...] = ()) -> int:
     found = options(argv)
     if found is None:
         return 0
-    name = manager(os.environ)
+    processes = Processes()
+    name = manager(os.environ, processes)
     if name is None:
         return 0
     # Raw fds: a closed or broken stdout then fails here, not in a flush at exit.
@@ -163,7 +202,9 @@ def main(argv: tuple[str, ...] = ()) -> int:
         if not isinstance(source, str) or source not in SOURCES:
             return 0
         if (entry := record(found, event)) is not None:
-            save(name, entry)
+            pid = processes.client(found["--client"], int(found["--client-pid"]))
+            if pid is not None:
+                save(name, {**entry, "pid": pid})
         context = {
             "hookEventName": "SessionStart",
             "additionalContext": prompt(name, source, manual="--mode" in found),
