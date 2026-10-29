@@ -196,7 +196,8 @@ class MainTest(Case):
         _run(MANAGER, _start("startup"), ps=ps)
         ps.assert_called_once()
         self.assertEqual(
-            ps.call_args.args[0], ("ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "args=")
+            ps.call_args.args[0],
+            ("ps", "-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "args="),
         )
         self.assertTrue(ps.call_args.kwargs["capture_output"])
         self.assertGreater(ps.call_args.kwargs["timeout"], 0)
@@ -225,13 +226,18 @@ class MainTest(Case):
         self.assertIn("compact", json.loads(out)["hookSpecificOutput"]["additionalContext"])
 
 
+def _with_pid(argv: tuple[str, ...], pid: int) -> tuple[str, ...]:
+    at = argv.index("--client-pid") + 1
+    return (*argv[:at], str(pid), *argv[at + 1 :])
+
+
 def _bare(argv: tuple[str, ...]) -> tuple[str, ...]:
     """argv without the record options."""
     pairs = zip(argv[::2], argv[1::2], strict=True)
     return tuple(
         word
         for pair in pairs
-        if pair[0] != "--client" and pair[0] != "--client-pid"
+        if pair[0] not in {"--client", "--client-pid", "--hook-daemon"}
         for word in pair
     )
 
@@ -333,12 +339,13 @@ TREE = {
     80: (1, DAEMON + b" --listen unix://"),
     81: (91, b"codex app-server"),
     82: (82, b"codex app-server"),
+    83: (69, TUI + b" exec app-server"),
 }
 
 
 class CodexDaemonTest(Case):
     """Codex runs SessionStart hooks from its app-server daemon, a child of the TUI that started
-    it: the hook's $PPID is the daemon, recorded as the TUI. This hook is pid 100, under sh 90.
+    it: the hook's $PPID is the daemon, and `--hook-daemon app-server` records the TUI instead.
     """
 
     def run_with(self, opened, client: str, pid: int) -> tuple[tuple[int, str, str], dict | None]:
@@ -346,7 +353,7 @@ class CodexDaemonTest(Case):
         None) or by /proc through the given open fake; its result and the record it wrote.
         """
         call = session_records.CALLS[client]
-        argv = (*call.argv[:-1], str(pid))
+        argv = _with_pid(call.argv, pid)
         directory = Path(self.ensemble, "managers", "mgr")
         directory.mkdir(parents=True, exist_ok=True)
         Path(directory, "session.json").unlink(missing_ok=True)
@@ -392,7 +399,7 @@ class CodexDaemonTest(Case):
 
     def test_a_codex_parent_that_is_no_daemon_is_recorded_as_given(self):
         for table in self.each_table():
-            for pid in (70, 69, 4999):  # 4999: no such process, so no daemon either
+            for pid in (70, 69, 83, 4999):  # 4999: no such process, so no daemon either
                 with self.subTest(pid):
                     self.assertEqual(
                         self.run_with(table, "codex", pid)[1], self.expected("codex", pid)
@@ -415,11 +422,22 @@ class CodexDaemonTest(Case):
                     result, saved = self.run_with(table, "codex", pid)
                     self.assertEqual((result, saved), (prompt, None))
 
+    def test_a_command_line_that_is_not_utf_8_keeps_the_ps_table(self):
+        rows = b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items())
+        call = session_records.CALLS["codex"]
+        event = json.dumps(call.stdin).encode()
+        directory = Path(self.ensemble, "managers", "mgr")
+        directory.mkdir(parents=True)
+        argv = _with_pid(call.argv, 60)
+        _run({**MANAGER, "HOME": self.home}, event, argv=argv, ps=_ps(rows + b"5 1 vim \xff\n"))
+        saved = json.loads(Path(directory, "session.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved, self.expected("codex", 70))
+
     def test_ps_is_read_once(self):
         ps = _ps(b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items()))
         call = session_records.CALLS["codex"]
         event = json.dumps(call.stdin).encode()
-        _run({**MANAGER, "HOME": self.home}, event, argv=(*call.argv[:-1], "61"), ps=ps)
+        _run({**MANAGER, "HOME": self.home}, event, argv=_with_pid(call.argv, 61), ps=ps)
         ps.assert_called_once()
 
 
@@ -580,7 +598,7 @@ class HooksJsonTest(Case):
         self.assertEqual(
             command["command"],
             'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual'
-            ' --client codex --client-pid "$PPID"',
+            ' --client codex --client-pid "$PPID" --hook-daemon app-server',
         )
         self.assertEqual(command["timeout"], 5)
 

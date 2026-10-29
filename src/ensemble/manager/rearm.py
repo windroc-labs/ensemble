@@ -2,8 +2,8 @@
 startup, resume, compact and clear sources, prints the re-arm prompt as
 additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
 replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
-that). Codex runs hooks from its app-server daemon, a child of the TUI that started it: a codex
-PID that is such a daemon records the TUI above it, or nothing when none.
+that). `--hook-daemon WORD`: a PID with first argument WORD runs hooks for its
+nearest other ancestor, recorded instead.
 Anything else prints nothing. Always exits 0.
 A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
 ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
@@ -25,11 +25,12 @@ SOURCES = frozenset({"startup", "resume", "compact", "clear"})
 MANAGER_NAME = re.compile(r"[A-Za-z0-9_-]+")  # ensemble-crew's own rule (cli.py _roster)
 PID = re.compile(r"[1-9][0-9]*")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
-OPTIONS = frozenset({"--mode", "--client", "--client-pid"})
+OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--hook-daemon"})
 MANAGERS = "~/.ensemble/managers"
 PS = (
     "ps",
     "-A",
+    "-ww",
     "-o",
     "pid=",
     "-o",
@@ -37,7 +38,6 @@ PS = (
     "-o",
     "args=",
 )  # one -o each: text after = is a header
-APP_SERVER = re.compile(r"(?:^|/)codex app-server(?: |$)")
 
 PROMPT = """\
 ensemble: SessionStart `{source}` in manager `{name}`'s session (under \
@@ -83,19 +83,19 @@ repeat from step 1; without a notifying tool, keep Manual monitoring.
 
 
 class Processes:
-    """Each pid's parent and command line, by /proc where it exists (Linux), else one ps table."""
+    """Parents and argvs: /proc where it exists, else one ps table."""
 
     def __init__(self) -> None:
         self.proc = os.path.isdir("/proc/self")
 
     @cached_property
-    def table(self) -> dict[int, tuple[int, str]]:
+    def table(self) -> dict[int, tuple[int, list[str]]]:
         try:
             done = subprocess.run(PS, capture_output=True, timeout=2, check=False)
             if done.returncode != 0:
                 return {}
-            rows = [line.split(None, 2) for line in done.stdout.decode().splitlines()]
-            return {int(row[0]): (int(row[1]), row[2] if len(row) > 2 else "") for row in rows}
+            rows = [line.split() for line in done.stdout.decode(errors="replace").splitlines()]
+            return {int(row[0]): (int(row[1]), row[2:]) for row in rows}
         except (OSError, subprocess.SubprocessError, ValueError, IndexError):
             return {}
 
@@ -108,31 +108,27 @@ class Processes:
         except (OSError, ValueError, IndexError):
             return None
 
-    def command(self, pid: int) -> str | None:
+    def argv(self, pid: int) -> list[str] | None:
         if not self.proc:
             return self.table[pid][1] if pid in self.table else None
         try:
             with open(f"/proc/{pid}/cmdline", "rb") as f:
-                return f.read().rstrip(b"\0").replace(b"\0", b" ").decode(errors="replace")
+                return f.read().decode(errors="replace").split("\0")[:-1]
         except OSError:
             return None
 
     def ancestors(self, pid: int) -> set[int]:
-        """pid's ancestors above it."""
         found: set[int] = set()
         while (pid := self.parent(pid) or 0) > 1 and pid not in found:
             found.add(pid)
         return found
 
-    def client(self, kind: str, pid: int) -> int | None:
-        """The client behind a hook's parent pid: past Codex app-server daemons; None when a
-        daemon has no readable parent other than init.
-        """
+    def client(self, pid: int, daemon: str | None) -> int | None:
         seen: set[int] = set()
-        while kind == "codex" and APP_SERVER.search(self.command(pid) or ""):
+        while daemon is not None and (self.argv(pid) or [])[1:2] == [daemon]:
             seen.add(pid)
             pid = self.parent(pid) or 0
-            if pid <= 1 or pid in seen or self.command(pid) is None:
+            if pid <= 1 or pid in seen or self.argv(pid) is None:
                 return None
         return pid
 
@@ -202,7 +198,7 @@ def main(argv: tuple[str, ...] = ()) -> int:
         if not isinstance(source, str) or source not in SOURCES:
             return 0
         if (entry := record(found, event)) is not None:
-            pid = processes.client(found["--client"], int(found["--client-pid"]))
+            pid = processes.client(int(found["--client-pid"]), found.get("--hook-daemon"))
             if pid is not None:
                 save(name, {**entry, "pid": pid})
         context = {
