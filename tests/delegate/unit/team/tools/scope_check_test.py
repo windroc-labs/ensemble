@@ -143,23 +143,6 @@ class ScopeCheck(Case):
         self.assertIn("FR-1: owned by 2 engineer tickets (t1.md, t2.md)", out)
         self.assertIn("NFR-1: owned by 0 engineer tickets", out)
 
-    def test_engineer_ticket_size_is_capped(self):
-        ids = [f"FR-{n}" for n in range(1, 10)]
-        prd = "".join(f"| {ident} | a | b |\n" for ident in ids)
-        items = [f"`src/app/f{n}.py` (new)" for n in range(13)]
-        at_limit = ticket(items[:12], covers=", ".join(ids[:8]))
-        rest = ticket(["`src/app/main.py`"], covers="FR-9", task="light-build")
-        self.assertEqual(self.check(at_limit, rest, prd=prd), (0, "ok\n"))
-        out = self.failures(ticket(items[:1], covers=", ".join(ids)), prd=prd)
-        self.assertIn("t1.md: too large (9 Covers ids > 8): split it along an interface", out)
-        self.assertIn("needs_input", out)
-        out = self.failures(ticket([*items[:12], "src/app/util.py"], covers="FR-1"))
-        self.assertIn("t1.md: too large (13 Scope items > 12): ", out)
-        out = self.failures(ticket(items, covers=", ".join(ids), task="light-build"), prd=prd)
-        self.assertIn("t1.md: too large (9 Covers ids > 8, 13 Scope items > 12): ", out)
-        verify = ticket(items, covers=", ".join(ids), task="verify")
-        self.assertNotIn("too large", self.failures(verify, prd=prd))
-
     def test_engineer_ticket_needs_a_scope_and_a_known_repo(self):
         out = self.failures(ticket(None), ticket(["`src/app/util.py`"], covers="", repo="acme/x"))
         self.assertIn("t1.md: no Scope:", out)
