@@ -46,12 +46,6 @@ WRITE_ONCE = (
     "that file (`cp`); only a Destination asking for it inline in the outcome repeats it.\n"
 )
 
-NO_COMMENTS = (
-    "\n**No comments**: never comment or reply on your task's ticket or PR yourself, by any tool; "
-    "what the ticket should get goes in the outcome (`summary`; `questions` for `needs_input`), "
-    "which write-back posts.\n"
-)
-
 
 def destined(role, output, *, docker=False):
     """The real core's prompt for `role` with `output`, rendered for Docker when `docker`."""
@@ -86,17 +80,31 @@ class Acceptance(Packaged):
         self.assertIn(
             "Its **scope check**: `python3 -P <team>/tools/scope_check.py --base ", engineer
         )
+        self.assertNotIn("saved as `<Workdir>/tmp/prd.md`", engineer)
         decompose = task_text("decompose")
+        read = re.search(r"^1\. \*\*Read\*\*.*$", decompose, re.M)[0]
+        # the decompose input's section that holds the PRD's requirement tables; a document
+        # over its inline budget is only a link there, which scope_check would pass as `ok`
         self.assertIn(
-            "run the **scope check** ([Engineer › Input processing](#input-processing))", decompose
+            "save the input's **PRD and linked documents** as `<Workdir>/tmp/prd.md`, "
+            "first fetching in full each document it did not inline",
+            read,
         )
-        self.assertIn("Rerun the scope check on the reread descriptions.", decompose)
-        self.assertEqual(decompose.count("fresh subagent"), 1)
-        self.assertIn("This review runs one round per run", decompose)
-        self.assertIn("stays in `Covers:` of the engineer slice implementing it", decompose)
-        self.assertIn("that need alone adds no blocked-by edge", decompose)
-        self.assertIn("the verifier ticket runs the end-to-end check, blocked by both.", decompose)
-        self.assertNotIn("goes to the verifier ticket", decompose)
+        self.assertIn(
+            "**Scope check** ([Engineer › Input processing](#input-processing)) on the drafts",
+            decompose,
+        )
+        # write-back's DECOMPOSED pattern reads this summary
+        self.assertIn("`summary`: `Created <identifiers>; reused none`", decompose)
+
+    def test_decompose_engineer_tickets_quote_acceptance_and_verifier_tickets_link_the_prd(self):
+        draft = re.search(r"^2\. \*\*Draft\*\*.*$", task_text("decompose"), re.M)[0]
+        # the gate and requirement-fidelity review judge an engineer ticket by its text alone
+        self.assertIn(
+            "acceptance quoting each covered requirement's PRD acceptance cell verbatim and in full",
+            draft,
+        )
+        self.assertIn("Verifier tickets list the requirement identifiers and link the PRD", draft)
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
@@ -214,16 +222,21 @@ class Acceptance(Packaged):
         self.assertIn("`<Workdir>/tmp/prd.md`", step)
         self.assertIn("copies that file", step)
 
-    def test_runs_post_no_comments_on_their_ticket_or_pr(self):
+    def test_prompts_leave_operation_permissions_to_the_token(self):
+        limits = (
+            "**No comments**",
+            "**Board boundary**",
+            "**Write scope**",
+            "authorize more board operations",
+            "never pushes a branch or opens a PR",
+            "commit and push nothing",
+            "otherwise touch any other branch",
+        )
         for role, task in runs():
             with self.subTest(role=role, task=task):
-                self.assertEqual(output_rules(composed(role, task)[0]).count(NO_COMMENTS), 1)
-        for output in ({"type": "local"}, *PUBLISHING):
-            for docker in (False, True):
-                with self.subTest(output=output["type"], docker=docker):
-                    self.assertIn(
-                        NO_COMMENTS, output_rules(destined("researcher", output, docker=docker))
-                    )
+                prompt = composed(role, task)[0]
+                for limit in limits:
+                    self.assertNotIn(limit, prompt)
 
     def test_each_task_file_has_one_start_mark_and_a_resume_section(self):
         for name in os.listdir(TASKS):
@@ -518,20 +531,6 @@ class Shipped(Packaged):
                 text,
                 where,
             )
-
-    def test_engineers_pr_title_description_and_draft_are_not_comments(self):
-        exception = (
-            "- Writing your PR's title and description ([Output › Destination](#destination)) and "
-            "`gh pr ready --undo` ([Engineer › Repo › Draft](#repo)) are not comments by "
-            "[Output](#output)'s **No comments**.\n"
-        )
-        for role, task in runs():
-            with self.subTest(role=role, task=task):
-                prompt = composed(role, task)[0]
-                if role == "engineer":
-                    self.assertIn(exception, section(prompt, "Rules"))
-                else:
-                    self.assertNotIn(exception, prompt)
 
     def test_research_tasks_prepare_before_their_start_mark(self):
         for task in ("research", "light-research"):
