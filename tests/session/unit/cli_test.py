@@ -786,7 +786,7 @@ class HelpTest(Case):
             "OPENER",
             "ANCHOR",
             "right or below",
-            "ITERM_SESSION_ID",
+            "attach command",
             "grid",
             "stack",
             "hidden",

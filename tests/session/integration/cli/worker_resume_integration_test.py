@@ -182,7 +182,7 @@ class ResumeTest(Base):
         self.assertNotIn("hi", again["argv"])
         self.assertEqual([entry["env"].get("K") for entry in logged(dump)], ["v", "v"])
         self.assertEqual(self.dir_record("w1"), record)
-        self.assertIn(self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:"))
+        self.assertEqual(self.server.pane_of("w1"), "")
         res = self.ok(self.session("ls", "--here", "--records"))
         self.assertEqual((res.stdout, res.stderr), (record.to_line() + "\n", ""))
 

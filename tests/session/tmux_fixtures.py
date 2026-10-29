@@ -17,30 +17,20 @@ from types import SimpleNamespace
 from ensemble.session.engine.tmux_cli import EXEC, TmuxCli
 from ensemble.session.engine.types import Launch
 from ensemble.session.viewer import grid as grids
-from ensemble.session.viewer import iterm, placement, types
 from ensemble.session.viewer import layout as layouts
+from ensemble.session.viewer import placement, types
 from tests.session.case import Case
 from tests.utils.process_fixtures import DEVNULL
-
-CLIENT = re.compile(r"claude|codex", re.I)
 
 FORMAT = "#{pane_dead} #{pane_dead_status} #{pane_dead_signal}"
 
 CLIENTS = "#{client_activity} #{client_tty} #{pane_id} #{client_control_mode} #{socket_path}"
 
-PGREP = ["pgrep", "-a", "-x", "iTerm2"]
-
-ITERM = {"ITERM_SESSION_ID": "w0t0p0:ABC", "TERM_PROGRAM": "iTerm.app"}
-
 TMUX_KW = {"capture_output": True, "text": True, "stdin": DEVNULL}
 
 SH_KW = {"stdin": DEVNULL, "timeout": 30}
 
-OSA_KW = {**TMUX_KW, "timeout": 30}
-
 TMUX = '/opt/a"b\\c/bin/tmux'  # the script text must never carry it
-
-ATTACH = "tui: session s: tmux attach -t '=s'\n"
 
 WATCH = "; watch it with tmux attach -t '=s'"
 
@@ -53,8 +43,6 @@ ABSENT = (
 
 FAILED = ("error connecting to /tmp/tmux-501/default (Permission denied)", "boom", "")
 
-SIGNALS = [int(signal.SIGHUP), int(signal.SIGTERM), int(signal.SIGINT)]
-
 DIED = "set-option @state dead"
 
 DIED_EVENTS = (
@@ -65,18 +53,7 @@ NEW_PROCESS = "4242 $3 %7 4343"
 
 NEW = ["-P", "-F", "#{pid} #{session_id} #{pane_id} #{pane_pid}"]
 
-EXITED = (
-    'run-shell \'echo "$(date +%H:%M:%S)" #{q:session_name} exited'
-    " #{?pane_dead_signal,-#{?#{m:*[!0-9]*,#{pane_dead_signal}},$(kill -l #{q:pane_dead_signal}),"
-    "#{pane_dead_signal}},#{pane_dead_status}} >> #{q:@events}'"
-)
-EXITED_HOOK = (
-    'run-shell \'echo "$(date +%H:%M:%S)" ##{q:session_name} exited'
-    " ##{?pane_dead_signal,-##{?##{m:*[!0-9]*,##{pane_dead_signal}},$(kill -l ##{q:pane_dead_signal}),"
-    "##{pane_dead_signal}},##{pane_dead_status}} >> ##{q:@events}' ; kill-pane -t #{pane_id}"
-)
-
-INSIDE = {"TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%3", "ITERM_SESSION_ID": "w0t0p0:ABC"}
+INSIDE = {"TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%3"}
 
 OWN = ["tmux", "display-message", "-p", "-t", "%3", "#{session_name}"]
 
@@ -128,7 +105,6 @@ def done(argv, rc=0, out="", err=""):
 
 
 def record(opener, pane):
-    """The set-options recording session s's opener (when known) and new pane."""
     return [
         *([["tmux", "set-option", "-t", "=s:", "@opener", opener]] if opener else []),
         ["tmux", "set-option", "-t", "=s:", "@pane", pane],
@@ -221,9 +197,7 @@ def environ(**values):
 
 
 def clock(test, on_sleep=lambda _n: None):
-    """time.monotonic and time.sleep patched for test, the clock at 1000 s: a sleep advances it,
-    then calls on_sleep(sleeps so far). Returns the slept seconds.
-    """
+    """Starts at 1000 s; each sleep advances time and calls on_sleep(count)."""
     now, slept = [1000.0], []
 
     def sleep(seconds):
@@ -237,9 +211,7 @@ def clock(test, on_sleep=lambda _n: None):
 
 
 def hold(test, path):
-    """Another holder of the flock on path till test ends (path created when missing). Returns its
-    release.
-    """
+    """Holds path flock until cleanup; returns an early release."""
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     test.addCleanup(os.close, fd)
     fcntl.flock(fd, fcntl.LOCK_EX)
@@ -276,10 +248,6 @@ def which(tmux=TMUX, session=COMMAND):
     return unittest.mock.patch("shutil.which", side_effect=found)
 
 
-def osa(split, kind, session, *anchors):
-    return ["osascript", "-e", iterm.APPLESCRIPT, split, kind, TMUX, session, *anchors]
-
-
 def decorations(session, events=None, status="off"):
     target = f"={session}:"
     return [
@@ -304,7 +272,6 @@ def chained(calls):
 
 
 def recorded(session):
-    """The creating call's last command: its new pane's identity (NEW's format) as @process."""
     return [";", "set-option", "-F", "-t", f"={session}:", "@process", NEW[2]]
 
 
@@ -324,14 +291,8 @@ def expected_panes(*rows):
 
 
 class FakeTmux:
-    """Plays tmux, and sh and osascript: records each call. `results` maps a tmux command (after any
-    -u) or another program to its (rc, stdout, stderr), an exception to raise, or a function of the
-    argv giving either. `pane` is what display-message prints (None: no server). On new-session it
-    reads the handover file named in its argv (after EXEC); unless `hand_over` is False it plays the
-    wrapper on the errpipe named next: opens it, unlinks the handover, then per `wrapper` closes it
-    ("exec"), writes that errno (bytes: as given) and closes it, or keeps it open ("hang", fd
-    `writer`).
-    """
+    """Records tmux/sh calls; results maps commands to outcomes, exceptions or argv functions.
+    wrapper: exec closes the errpipe, hang holds it, other values write errno."""
 
     def __init__(self, pane=None, fail=(), *, hand_over=True, results=None, wrapper="exec"):
         self.pane, self.fail, self.hand_over, self.results = pane, fail, hand_over, results or {}
@@ -388,8 +349,6 @@ class FakeTmux:
         return [c[1] if c[0] == "tmux" else c[0] for c in self.calls]
 
 
-MARK_KW = {**TMUX_KW, "timeout": 5}
-
 VIEWLESS = ["-f", "#{==:#{@view},}"]
 
 LISTING = [
@@ -422,7 +381,6 @@ HOST_PANES = [
 
 
 def tabbed(*rows, width=3):
-    """A tmux result printing each row's fields tab-separated, padded with empty ones to width."""
     return 0, "".join("\t".join((*row, *[""] * (width - len(row)))) + "\n" for row in rows)
 
 
@@ -455,12 +413,6 @@ def expected_row(name, **fields):
     }
 
 
-def seq(*results):
-    """A FakeTmux result giving each of results in turn."""
-    it = iter(results)
-    return lambda _argv: next(it)
-
-
 def slot(pane, *children):
     return types.Slot(pane, children)
 
@@ -470,12 +422,10 @@ def body(cell):
 
 
 def dump(text):
-    """A layout body as #{window_layout} prints it, with its checksum."""
     return f"{layouts._checksum(text)},{text}"
 
 
 def json_layout(cell):
-    """A cell tree as tmux 3.8 prints #{window_layout}: JSON, panes with index, active and id."""
     leaves = layouts.leaf_cells(cell)
 
     def node(c):
@@ -488,7 +438,6 @@ def json_layout(cell):
 
 
 def grid(cells, per_column=3, width=160, height=48, manager_width=79):
-    """The grid of manager %0 in a width x height window; cells: main cells, or n for %1..%n."""
     if isinstance(cells, int):
         cells = [slot(f"%{i}") for i in range(1, cells + 1)]
     return layouts.grid_layout(
@@ -546,9 +495,8 @@ class StartFixture(Case):
 
 
 def placed(fake) -> placement.Placement:
-    """A Placement whose TmuxCli, Grid and Iterm run fake."""
     tmux = TmuxCli(fake)
-    return placement.Placement(tmux=tmux, grid=grids.Grid(tmux), iterm=iterm.Iterm(fake))
+    return placement.Placement(tmux=tmux, grid=grids.Grid(tmux))
 
 
 class PaneFixture(Case):
@@ -566,10 +514,7 @@ class PaneFixture(Case):
 
 
 class TileFixture(Case):
-    """Window @3, 160x48: manager %0 (session mgr) left, 79 wide; w<i>'s @pane is %<i>. The server's
-    socket is in a temp dir, @3's lock file beside it; the clock (clock()) at 1000 s, i.e. 1000000
-    ms.
-    """
+    """Window @3, manager %0, workers %1..%n; clock starts at 1000000 ms."""
 
     SOCKET = ["tmux", "display-message", "-p", "-t", "@3", "#{socket_path}"]
 
@@ -713,7 +658,6 @@ class TileFixture(Case):
     def tile(
         self, layout, panes, rows=(), *, per_column=None, wait=True, if_panes_changed=False, **kw
     ):
-        """tile @3 given what tmux prints (fake's arguments). Returns the fake."""
         fake = self.fake(layout, panes, rows, **kw)
         grids.Grid(TmuxCli(fake)).tile(
             "@3", per_column=per_column, wait=wait, if_panes_changed=if_panes_changed
@@ -721,10 +665,7 @@ class TileFixture(Case):
         return fake
 
     def applied(self, send, times="1000000"):
-        """The two tmux calls of a re-tile sending `send` (a tmux call of swap-panes, then
-        select-layout): @grid-tiles set to times, @grid-panes to the last fake's pane set and
-        @grid-busy to @3 before it in one command, then @grid-busy unset.
-        """
+        """Mutes hooks and records time/panes with the layout change, then unmutes."""
         return [
             [
                 "tmux",

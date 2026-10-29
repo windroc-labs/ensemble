@@ -52,8 +52,6 @@ class Env(Live):
         leaks = {
             "TMUX": "/nonexistent/default,1,0",
             "TMUX_PANE": "%0",
-            "ITERM_SESSION_ID": "w0t0p0:X",
-            "TERM_PROGRAM": "iTerm.app",
         }
         with mock.patch.dict(os.environ, leaks):
             env = self.server.env(EXTRA="x")

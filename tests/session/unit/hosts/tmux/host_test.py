@@ -29,7 +29,7 @@ from tests.session.case import Case
 from tests.session.tmux_host_support import Base
 
 TuiError = tmux_cli.TuiError
-NO_PANE = "no anchor pane: not in tmux, no iTerm2 pane ($ITERM_SESSION_ID)"
+NO_PANE = "no anchor pane: not in tmux"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 
 

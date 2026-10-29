@@ -36,15 +36,6 @@ NAME = re.compile(r"[A-Za-z0-9_-]+")
 PANE = re.compile(r"%[0-9]+")
 
 
-ITERM_ID = re.compile(r"[A-Za-z0-9-]+")
-
-
-ITERM_OPENER = re.compile(rf"[A-Za-z0-9]+:{ITERM_ID.pattern}")  # w0t0p0:<unique id>
-
-
-OPENER = re.compile(rf"{NAME.pattern}|{ITERM_OPENER.pattern}")
-
-
 SESSION_ID = re.compile(r"\$[0-9]+")
 
 
@@ -522,8 +513,8 @@ class TmuxCli:
                     "sid": _printable(sid),
                     "client": _printable(client),
                     "state": _printable(state),
-                    "pane": pane if PANE.fullmatch(pane) or ITERM_ID.fullmatch(pane) else None,
-                    "opener": parent if OPENER.fullmatch(parent) else None,
+                    "pane": pane if PANE.fullmatch(pane) else None,
+                    "opener": parent if NAME.fullmatch(parent) else None,
                     "display": display if display and not display_error(display) else None,
                     "dead": {"1": True, "0": False}.get(dead),
                     "shown": None if name not in recent else host if NAME.fullmatch(host) else "",

@@ -29,7 +29,6 @@ from tests.session.tmux_fixtures import (
     FORMAT,
     HOST_PANES,
     INSIDE,
-    ITERM,
     LISTING,
     NEW,
     NEW_PROCESS,
@@ -437,7 +436,7 @@ class ListingTest(Case):
         got, fake = self.listing(
             listed(
                 ("w2", "0", "sid-2", "fake", "done", "%7", "mgr"),
-                ("w1", "1", "sid-1", "other", "dead", "ABC-1", "w0t0p0:ABC-1"),
+                ("w1", "1", "sid-1", "other", "dead"),
                 ("mgr", "0"),
             ),
             tabbed(
@@ -455,8 +454,8 @@ class ListingTest(Case):
                     sid="sid-1",
                     client="other",
                     state="dead",
-                    pane="ABC-1",
-                    opener="w0t0p0:ABC-1",
+                    pane=None,
+                    opener=None,
                     dead=True,
                     last_lines="a\nlast",
                 ),
@@ -501,17 +500,12 @@ class ListingTest(Case):
             ("state", "", None),
             ("state", "do\x08ne", None),
             ("pane", "%3", "%3"),
-            ("pane", "ABC-12", "ABC-12"),
             ("pane", "", None),
             ("pane", "%", None),
             ("pane", "%3;", None),
-            ("pane", "w0t0p0:ABC", None),
             ("opener", "mgr", "mgr"),
-            ("opener", "w0t0p0:ABC-1", "w0t0p0:ABC-1"),
             ("opener", "cmd", "cmd"),
             ("opener", "a_b-1", "a_b-1"),
-            ("opener", "w0t0p0:ABC", "w0t0p0:ABC"),
-            ("opener", "w0t1p0:6D7E-8F", "w0t1p0:6D7E-8F"),
             ("opener", "", None),
             ("opener", "a b", None),
             ("opener", "x:", None),
@@ -718,8 +712,8 @@ class StartTest(StartFixture):
     def test_start_runs_wrapper_decorates_dead_pane_without_opening_a_pane(
         self,
     ):
-        # in tmux or iTerm2 all the same: start never shows the session
-        for env in ({}, INSIDE, ITERM):
+        # start never shows the session
+        for env in ({}, INSIDE):
             with self.subTest(env=env), environ(**env), which():
                 fake = FakeTmux()
                 self.start(fake)

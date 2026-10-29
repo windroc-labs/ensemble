@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import time
 from collections.abc import Mapping
 
 from ensemble.session.engine import tmux_cli
-from ensemble.session.engine.tmux_cli import NAME, OPENER, VIEW, TmuxCli, TuiError, display_error
+from ensemble.session.engine.tmux_cli import NAME, VIEW, TmuxCli, TuiError, display_error
 from ensemble.session.engine.types import (
     NO_DISPLAY,
     ConfigError,
@@ -23,14 +24,13 @@ from ensemble.session.hosts.base import Host, worker_state
 from ensemble.session.hosts.types import CommandView, SessionView
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.session.viewer.grid import Grid
-from ensemble.session.viewer.iterm import Iterm
 from ensemble.session.viewer.placement import Placement
 from ensemble.session.viewer.types import Retile, Split
 from ensemble.utils import Display, thaw
 
 FORMAT = "<opener>[/<split>[/<split_from>[/hidden]]]"
 HIDDEN = "hidden"  # started hidden; only NO_DISPLAY sets it
-NO_PANE_HINT = ": run from tmux or iTerm2, or pass split_from"
+NO_PANE_HINT = ": run from tmux, or pass split_from"
 VIEW_TAG = "viewer"
 LOG = logging.getLogger("session")
 SHOW_TRIES = 3
@@ -41,10 +41,8 @@ Parts = tuple[str | None, str | None, str | None, bool]
 
 def fold(opener, split, split_from, *, hidden=False) -> Display:
     """FORMAT's one encoder; None when every part is. ConfigError for a bad part."""
-    if opener is not None and not (isinstance(opener, str) and OPENER.fullmatch(opener)):
-        raise ConfigError(
-            f"opener must be a tmux session name or $ITERM_SESSION_ID's value, got {opener!r:.80}"
-        )
+    if opener is not None and not (isinstance(opener, str) and NAME.fullmatch(opener)):
+        raise ConfigError(f"opener must be a tmux session name, got {opener!r:.80}")
     if split is not None and split not in tuple(Split):
         raise ConfigError(f"split must be {' or '.join(Split)}, got {split!r:.80}")
     if split_from is not None and not (isinstance(split_from, str) and NAME.fullmatch(split_from)):
@@ -54,9 +52,7 @@ def fold(opener, split, split_from, *, hidden=False) -> Display:
 
 
 def unfold(display) -> Parts | None:
-    """FORMAT's one decoder, re-validating a display read back: (opener, split, split_from,
-    hidden), an empty part None; NO_DISPLAY no opener, hidden; None when display is not in FORMAT.
-    """
+    """Decodes and validates FORMAT; empty parts become None, NO_DISPLAY becomes hidden."""
     if display is None:
         return None, None, None, False
     if display == NO_DISPLAY:
@@ -112,9 +108,7 @@ class Viewer:
         self._per_column, self._retile = per, retile
         self._tmux = TmuxCli() if tmux is None else tmux
         self._grid = Grid(self._tmux)
-        self._placement = Placement(
-            tmux=self._tmux, grid=self._grid, iterm=Iterm(self._tmux.runner)
-        )
+        self._placement = Placement(tmux=self._tmux, grid=self._grid)
 
     def show(
         self, name: str, host: Host, *, display: Display = None, command: str | None = None
@@ -123,6 +117,10 @@ class Viewer:
         command: a shell command run instead, `{{session}}` the session name.
         """
         target, display = self._viewed(name, host, display)
+        if command is None and not os.environ.get("TMUX"):
+            return printed(target)
+        if isinstance(target, CommandView):
+            self._view(name, target, host.tui_settings())
         try:
             if command is None:
                 opener, split, split_from, _ = parts(display)
@@ -154,7 +152,7 @@ class Viewer:
     def _viewed(
         self, name: str, host: Host, display: Display
     ) -> tuple[SessionView | CommandView, Display]:
-        """show's steps before placement, SHOW_TRIES times while Unanswered, as under load."""
+        """Retries preparation on Unanswered."""
         for _ in range(SHOW_TRIES - 1):
             with contextlib.suppress(Unanswered):
                 return self._prepared(name, host, display)
@@ -167,9 +165,7 @@ class Viewer:
         target = self._target(name, host)
         if display is None and (state := worker_state(name)) is not None:
             display = state.display
-        if isinstance(target, CommandView):
-            self._view(name, target, host.tui_settings())
-        elif self._tmux.status(target.session) is None:
+        if isinstance(target, SessionView) and self._tmux.status(target.session) is None:
             raise SessionError(f"no tmux session {name}")
         return target, display
 

@@ -24,7 +24,7 @@ from tests.session.tmux_fixtures import INSIDE, SOCK, environ
 from tests.session.tmux_host_support import PROCESS, Base
 
 TuiError = tmux_cli.TuiError
-NO_PANE = "no anchor pane: not in tmux, no iTerm2 pane ($ITERM_SESSION_ID)"
+NO_PANE = "no anchor pane: not in tmux"
 
 
 @contextlib.contextmanager
@@ -54,11 +54,11 @@ def worker(name: str, sid: str | None) -> None:
 
 class ShowTest(Base):
     def test_show_opens_a_pane_beside_split_from_on_the_displays_side(self):
-        self.enterContext(environ())
+        self.enterContext(environ(**INSIDE))
+        self.runner.pane = "mgr"
         self.runner.results.update(
             {
                 "list-clients": (0, f"5 /dev/ttys004 %9 0 {SOCK}\n"),
-                "pgrep": (1,),
                 "split-window": (0, "%10\n"),
             }
         )
@@ -71,12 +71,13 @@ class ShowTest(Base):
                 self.assertEqual(split[split.index("-t") + 1], "%9")
                 self.assertEqual(split[-3:], ["attach", "-t", "=w1"])
 
-    def test_show_without_a_pane_logs_why_and_returns_the_attach_command(self):
+    def test_show_outside_tmux_returns_the_attach_command(self):
         self.enterContext(environ())
-        why = f"{NO_PANE}; watch it with tmux attach -t '=w1'"
-        with self.assertLogs("session", logging.WARNING) as logs:
-            self.assertEqual(self.viewer.show("w1", self.host), "tmux attach -t '=w1'")
-        self.assertEqual(logs.output, [f"WARNING:session:show w1: {why}"])
+        for display in (None, "mgr", "mgr/below/m1"):
+            with self.subTest(display=display):
+                self.assertEqual(
+                    self.viewer.show("w1", self.host, display=display), "tmux attach -t '=w1'"
+                )
         self.assertEqual(self.runner.calls, [])
 
     def test_show_with_a_command_runs_it_instead_of_opening_a_pane(self):
@@ -101,6 +102,7 @@ class ShowTest(Base):
             self.viewer.show("w1", self.host)
         self.tmux.status.return_value = PaneStatus.RUNNING
         with self.assertRaisesRegex(ConfigError, r"^display 'elsewhere:1\.2': not <opener>"):
+            self.enterContext(environ(**INSIDE))
             self.viewer.show("w1", self.host, display="elsewhere:1.2")
         self.assertEqual(self.runner.calls, [])
 
@@ -148,7 +150,7 @@ class ShowTest(Base):
 
     def test_layout_without_a_pane_or_split_from_is_refused(self):
         self.enterContext(environ())
-        hint = ": run from tmux or iTerm2, or pass split_from"
+        hint = ": run from tmux, or pass split_from"
         with self.assertRaises(SessionError) as caught:
             displays.layout(self.viewer, self.host, None)
         self.assertEqual(str(caught.exception), f"no pane to show the TUI beside ({NO_PANE}){hint}")
@@ -202,8 +204,8 @@ class HideTest(Base):
         self.assertIsNone(self.viewer.show("w1", self.host, command="true"))
         self.assertFalse(hidden.read("w1", SID))
 
-    def test_hide_leaves_an_iterm2_or_closed_pane_and_still_marks_it_hidden(self):
-        for pane, process in (("w0t0p0:ABC", PROCESS), ("%9", None), (None, PROCESS)):
+    def test_hide_leaves_a_closed_or_unset_pane_and_still_marks_it_hidden(self):
+        for pane, process in (("%9", None), (None, PROCESS)):
             with self.subTest(pane=pane, process=process):
                 self.tmux.reset_mock()
                 hidden.write("w1", SID, hidden=False, live=None)
@@ -253,7 +255,6 @@ class HideTest(Base):
             ("%8", "@3", False),
             (None, "@2", False),
             ("%8", None, False),
-            ("w0t0p0:ABC", "@2", False),
         ):
             with self.subTest(pane=pane, window=window):
                 hidden.write("w1", SID, hidden=False, live=None)
@@ -334,14 +335,11 @@ class HideTest(Base):
         )
 
     def test_hide_forgets_the_tmux_pane_and_window_it_recorded(self):
-        for pane, forgotten in (("%9", True), ("w0t0p0:ABC", False)):
-            with self.subTest(pane=pane):
-                self.runner.calls.clear()
-                found = self.placed(pane=pane, window="@2", sid=SID)
-                self.viewer.hide("w1", self.host)
-                self.assertEqual(found["pane"], None if forgotten else pane)
-                self.assertEqual("if-shell" in [c[1] for c in self.runner.calls], forgotten)
-                self.assertTrue(hidden.read("w1", SID))
+        found = self.placed(pane="%9", window="@2", sid=SID)
+        self.viewer.hide("w1", self.host)
+        self.assertIsNone(found["pane"])
+        self.assertIsNone(found["window"])
+        self.assertTrue(hidden.read("w1", SID))
 
     def test_hide_if_closed_refuses_an_absent_session(self):
         self.tmux.status.return_value = None
@@ -374,7 +372,7 @@ class HideTest(Base):
         self.tmux.kill.assert_called_once_with("%9")
 
     def test_a_failed_show_clears_hidden_while_a_pane_it_opened_still_shows_it(self):
-        self.enterContext(environ(HOME=self.home))
+        self.enterContext(environ(HOME=self.home, **INSIDE))
         hidden.write("w1", SID, hidden=True, live=None)
         self.options(pane="%9", sid=SID)
         self.assertIsNotNone(self.viewer.show("w1", self.host))
@@ -411,7 +409,7 @@ class CommandViewTest(Base):
         self.docker.list.return_value = ["d1"]
         self.view = None
         self.tmux.option.side_effect = lambda _target, key: self.view if key == "@view" else None
-        self.enterContext(environ(HOME=self.home))
+        self.enterContext(environ(HOME=self.home, **INSIDE))
 
     def test_show_makes_a_tagged_view_session_at_its_hosts_size_and_status_line(self):
         self.tmux.status.return_value = None
@@ -438,6 +436,12 @@ class CommandViewTest(Base):
                         ),
                     ]
                 )
+
+    def test_show_outside_tmux_prints_attach_without_starting_a_view(self):
+        self.enterContext(environ(HOME=self.home))
+        self.assertEqual(self.viewer.show("d1", self.docker, display="mgr"), self.target.printed)
+        self.assertEqual(self.runner.calls, [])
+        self.tmux.checked.assert_not_called()
 
     def test_show_reuses_its_view_session_and_refuses_another_of_the_name(self):
         self.view = VIEW_TAG
