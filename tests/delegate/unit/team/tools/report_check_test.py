@@ -176,6 +176,10 @@ class ReportCheck(Case):
         self.assertIn("paragraph 81>80:", self.check(findings("x" * 81, tag="<details>"))[1])
         unclosed = findings("x" * limit).removesuffix("\n\n</details>")
         self.assertIn(f"findings {limit + len(label)}>{limit}", self.check(unclosed)[1])
+        for end in ("x</details>", "x"):
+            with self.subTest(end=end):
+                text = findings(end).removesuffix("\n\n</details>") + "\n\n## Next\n\n- " + "x" * 81
+                self.assertEqual(self.check(text), (1, "line 10: list 81>80: " + "x" * 60 + "\n"))
 
     def test_usage_read_errors_and_entrypoint(self):
         for args in ([], ["a", "b"], [os.path.join(self.home, "missing")], [self.home]):

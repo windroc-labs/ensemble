@@ -138,6 +138,9 @@ def check(text):
             continue
         if re.match(r"^#{1,6}\s", line):
             flush()
+            if budget and re.match(r"^#{1,2}\s", line):
+                close(*budget)
+                budget = None
             after_title = bool(re.match(r"^#\s", line))
             table = False
             continue

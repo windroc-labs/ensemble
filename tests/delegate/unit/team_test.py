@@ -521,9 +521,10 @@ class Shipped(Packaged):
                 text.index("**Prepare**"), text.index("[ensemble-progress:start]"), task
             )
 
-    def test_research_agents_return_each_findings_evidence(self):
-        step = task_text("research").split("4. **Research.**", 1)[1].split("\n5.", 1)[0]
-        self.assertIn("the claim, its evidence (what was measured, on what, how big)", step)
+    def test_research_notes_each_findings_evidence(self):
+        for task in ("research", "light-research"):
+            with self.subTest(task=task):
+                self.assertIn("the claim, its evidence, its sources", task_text(task))
 
     def test_light_research_is_one_pass(self):
         light = task_text("light-research")
