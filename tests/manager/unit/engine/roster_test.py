@@ -3,6 +3,7 @@
 import datetime
 import fcntl
 import io
+import itertools
 import json
 import os
 import stat
@@ -1356,7 +1357,7 @@ class SnapshotTest(RosterCase):
         try:
             fcntl.flock(lock, fcntl.LOCK_EX)
             with (
-                mock.patch("ensemble.manager.engine.roster.LOCK_TIMEOUT", 0),
+                mock.patch("time.monotonic", side_effect=itertools.count(0, 100)),
                 self.assertRaisesRegex(RosterError, "roster.lock: busy"),
             ):
                 self.roster.snapshot()
