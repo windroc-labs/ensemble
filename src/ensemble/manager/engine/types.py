@@ -43,6 +43,48 @@ class Liveness(NamedTuple):
 
 
 @dataclass(frozen=True)
+class Unread:
+    error: str
+
+
+class HolderState(StrEnum):
+    CLIENT_RUNNING = "client-running"
+    HOLD_ONLY = "hold-only"
+    NOT_HELD = "not-held"
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    client: str
+    sid: str
+    pid: int
+    cwd: str
+
+
+@dataclass(frozen=True)
+class Manager:
+    """holder: the active holder's label, None exactly when NOT_HELD."""
+
+    name: str
+    state: HolderState
+    holder: str | None
+    record: SessionRecord | Unread | None
+    entries: dict[str, Entry] | Unread
+
+    def __post_init__(self):
+        if (self.state == HolderState.NOT_HELD) != (self.holder is None):
+            raise ValueError("holder: want a label exactly when held")
+
+
+@dataclass(frozen=True)
+class Unreadable:
+    """Its locks could not be probed."""
+
+    name: str
+    error: str
+
+
+@dataclass(frozen=True)
 class Lease:
     id: str
     generation: int

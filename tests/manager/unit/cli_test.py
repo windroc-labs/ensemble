@@ -1441,6 +1441,153 @@ class View(CliCase):
         self.assertEqual(stderr, f"crew: a: {ctl.COMMAND} hide: exit 1\n")
 
 
+def _record(kind: str, name: str) -> Record:
+    return Record(
+        1,
+        kind,
+        name,
+        (),
+        str(uuid.uuid4()),
+        None,
+        ("ensemble-session",),
+        ("ensemble-session", "resume", name),
+        "opaque",
+        None,
+    )
+
+
+class ListTest(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.root = os.path.join(self.ensemble, "managers")
+
+    def manager(self, name: str, *entries: tuple[str, str, State]) -> Roster:
+        roster = Roster(os.path.join(self.root, name))
+        os.makedirs(roster.directory, mode=0o700, exist_ok=True)
+        for entry, kind, state in entries:
+            record = _record(kind, entry)
+            roster.begin(Spec(entry, ("fake-ctl", "start")), sid=record.sid)
+            roster.commit(entry, record)
+            if state != State.LIVE:
+                mark(roster, entry, state)
+        return roster
+
+    def session(self, name: str, **fields) -> None:
+        record = {"client": "kind-a", "sid": "s-1", "pid": 4101, "cwd": "/home/user/project"}
+        Path(self.root, name, "session.json").write_text(json.dumps({**record, **fields}))
+
+    def test_managers_without_records_print_dashes_sorted(self):
+        for name in ("updraft-manager", "ensemble-manager", "agent-usage-manager"):
+            self.manager(name)
+        self.assertEqual(
+            self.invoke("list"),
+            (
+                0,
+                "agent-usage-manager\tnot-held\t-\t-\n  -\n"
+                "ensemble-manager\tnot-held\t-\t-\n  -\n"
+                "updraft-manager\tnot-held\t-\t-\n  -\n",
+                "",
+            ),
+        )
+
+    def test_a_record_prints_its_client_and_cwd(self):
+        self.manager("demo")
+        self.session("demo", cwd="/home/user/other project")
+        self.assertEqual(
+            self.invoke("list"), (0, "demo\tnot-held\tkind-a\t/home/user/other project\n  -\n", "")
+        )
+
+    def test_entries_print_kind_and_state_under_their_manager(self):
+        self.manager("demo", ("w1", "worker", State.LIVE), ("r1", "role", State.GONE))
+        self.assertEqual(
+            self.invoke("list"),
+            (0, "demo\tnot-held\t-\t-\n  r1\trole\tgone\n  w1\tworker\tlive\n", ""),
+        )
+
+    def test_an_entry_without_a_record_has_no_kind(self):
+        roster = self.manager("demo")
+        roster.begin(Spec("s1", ("fake-ctl", "start")), sid=str(uuid.uuid4()))
+        self.assertEqual(self.invoke("list"), (0, "demo\tnot-held\t-\t-\n  s1\t-\tstarting\n", ""))
+
+    def test_no_entries_print_one_dash_row(self):
+        os.makedirs(os.path.join(self.root, "bare"))
+        self.manager("empty")
+        self.assertEqual(
+            self.invoke("list"),
+            (0, "bare\tnot-held\t-\t-\n  -\nempty\tnot-held\t-\t-\n  -\n", ""),
+        )
+
+    def test_a_held_manager_shows_its_state(self):
+        roster = self.manager("demo")
+        self.session("demo", pid=4101)
+        with roster.hold("owner"), mock.patch("os.kill"):
+            self.assertEqual(
+                self.invoke("list")[1].splitlines()[0],
+                "demo\tclient-running\tkind-a\t/home/user/project",
+            )
+
+    def test_a_corrupt_roster_shows_an_error_row_and_exits_1(self):
+        broken = self.manager("broken")
+        self.manager("ok", ("w1", "worker", State.LIVE))
+        Path(broken.path).write_text("{")
+        result, stdout, _ = self.invoke("list")
+        lines = stdout.splitlines()
+        self.assertEqual(result, 1)
+        self.assertTrue(lines[0].startswith(f"broken\tnot-held\t-\t-\terror\t{broken.path}: "))
+        self.assertEqual(lines[1:], ["ok\tnot-held\t-\t-", "  w1\tworker\tlive"])
+
+    def test_an_invalid_record_shows_an_error_row_and_exits_1(self):
+        self.manager("bad", ("w1", "worker", State.LIVE))
+        self.manager("ok")
+        Path(self.root, "bad", "session.json").write_text("[]")
+        path = os.path.join(self.root, "bad", "session.json")
+        self.assertEqual(
+            self.invoke("list"),
+            (
+                1,
+                f"bad\tnot-held\t-\t-\terror\t{path}: want exactly client, sid, pid and cwd\n"
+                "  w1\tworker\tlive\nok\tnot-held\t-\t-\n  -\n",
+                "",
+            ),
+        )
+
+    def test_an_unreadable_manager_prints_dashes_and_its_error(self):
+        self.manager("bad")
+        self.manager("ok")
+        lock = os.path.join(self.root, "bad", "roster.lock")
+        os.mkdir(lock)
+        self.assertEqual(
+            self.invoke("list"),
+            (1, f"bad\t-\t-\t-\terror\t{lock}: not a regular file\nok\tnot-held\t-\t-\n  -\n", ""),
+        )
+
+    def test_no_managers_prints_the_new_manager_usage(self):
+        usage = (0, "no managers yet; start one: ensemble <name>\n", "")
+        self.assertEqual(self.invoke("list"), usage)
+        os.makedirs(self.root)
+        Path(self.root, "file").touch()
+        self.assertEqual(self.invoke("list"), usage)
+
+    def test_list_takes_no_arguments_or_manager(self):
+        for argv in (("list", "extra"), ("list", "--manager", "demo")):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    main(argv)
+                self.assertEqual(caught.exception.code, 2)
+        self.manager("demo")
+        with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1", "ENSEMBLE_MANAGER": "x"}):
+            self.assertEqual(self.invoke("list"), (0, "demo\tnot-held\t-\t-\n  -\n", ""))
+
+    def test_fields_cannot_break_a_row(self):
+        roster = self.manager("demo")
+        self.session("demo", cwd="/a\tb\x1bc\nd")
+        roster.begin(Spec("s1", ("fake-ctl", "start")), sid=str(uuid.uuid4()))
+        self.assertEqual(
+            self.invoke("list"),
+            (0, "demo\tnot-held\tkind-a\t/a bcd\n  s1\t-\tstarting\n", ""),
+        )
+
+
 class InsideAnAgentSession(CliCase):
     def test_run_hold_and_resume_exit_2_and_write_nothing(self):
         for argv in (
@@ -1488,6 +1635,7 @@ HELP_COMMANDS = [
     "pending",
     "ack",
     "next-event",
+    "list",
 ]
 
 

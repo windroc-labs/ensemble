@@ -10,8 +10,17 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State
+from ensemble.manager.engine import managers
 from ensemble.manager.engine.holder import Holder
-from ensemble.manager.engine.types import Lease, StaleHolder, StartBusy, StatusError
+from ensemble.manager.engine.types import (
+    Lease,
+    SessionRecord,
+    StaleHolder,
+    StartBusy,
+    StatusError,
+    Unread,
+    Unreadable,
+)
 from ensemble.utils import EXIT_BUSY, STATE, LayerCommand, nested_start, printable
 
 LEASE_FREE = ("env", "-u", "ENSEMBLE_HOLDER_ID", "-u", "ENSEMBLE_HOLDER_GENERATION")
@@ -44,9 +53,9 @@ def _after(value: str) -> int | None:
 
 def _roster(args) -> Roster:
     manager = args.manager or os.environ.get("ENSEMBLE_MANAGER")
-    if not manager or not re.fullmatch(r"[A-Za-z0-9_-]+", manager):
+    if not manager or not managers.NAME.fullmatch(manager):
         raise ValueError("give --manager NAME or set ENSEMBLE_MANAGER to a manager name")
-    directory = Path(os.path.expanduser(STATE)) / "managers" / manager
+    directory = Path(os.path.expanduser(managers.ROOT)) / manager
     return Roster(str(directory))
 
 
@@ -125,6 +134,39 @@ def _crew(args) -> Crew:
             raise ValueError("ENSEMBLE_HOLDER_ID must be a canonical UUID4")
         lease = Lease(holder, int(generation))
     return Crew(_roster(args), lease=lease)
+
+
+def _row(*fields: str) -> str:
+    return "\t".join(printable(field).replace("\t", " ") for field in fields)
+
+
+def _list(_args) -> int:
+    found = managers.managers(os.path.expanduser(managers.ROOT))
+    if not found:
+        print("no managers yet; start one: ensemble <name>")
+        return 0
+    failed = False
+    for manager in found:
+        if isinstance(manager, Unreadable):
+            print(_row(manager.name, "-", "-", "-", "error", manager.error))
+            failed = True
+            continue
+        record = manager.record
+        fields = [manager.name, manager.state]
+        fields += [record.client, record.cwd] if isinstance(record, SessionRecord) else ["-", "-"]
+        errors = [part.error for part in (record, manager.entries) if isinstance(part, Unread)]
+        if errors:
+            fields += ["error", "; ".join(errors)]
+            failed = True
+        print(_row(*fields))
+        if isinstance(manager.entries, Unread):
+            continue
+        for name, entry in sorted(manager.entries.items()):
+            kind = "-" if entry.record is None else entry.record.kind
+            print("  " + _row(name, kind, entry.state))
+        if not manager.entries:
+            print("  -")
+    return 1 if failed else 0
 
 
 def _hold(args) -> int:
@@ -290,7 +332,8 @@ def _parser() -> argparse.ArgumentParser:
         prog="ensemble-crew",
         description="Launch workers and role/issue runs; manage their persistent roster.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""Manager: roster selected by --manager, else ENSEMBLE_MANAGER; required.
+        epilog="""Manager: roster selected by --manager, else ENSEMBLE_MANAGER; required,
+but by list, which reads every manager without a lease.
 Names use [A-Za-z0-9_-]+. An Entry is a name tracked in that roster.
 Crew consumes names, not Records on stdin. A Record is the serialized control
 and identity line returned by a launch: ensemble-session --help.
@@ -327,10 +370,10 @@ Next help:
     )
     subs = parser.add_subparsers(required=True)
 
-    def page(name, purpose, details, **options):
+    def page(name, purpose, details, *, manager=True, **options):
         return subs.add_parser(
             name,
-            parents=[common],
+            parents=[common] if manager else [],
             help=purpose,
             description=purpose + ".",
             epilog=details + "\nRoster, environment and exits: ensemble-crew --help\n",
@@ -801,6 +844,23 @@ Handling confirmation: ensemble-crew ack --help
         "--follow", action="store_true", help="keep printing events until stopped or failing"
     )
     next_event.set_defaults(func=_next_event)
+    listing = page(
+        "list",
+        "Print every manager, its holder state, session record and entries",
+        """Reads each ~/.ensemble/managers/NAME/ without a lease; changes nothing and
+works while a manager is held. Takes no --manager and ignores ENSEMBLE_MANAGER.
+One row per manager: NAME, holder state (client-running, hold-only or
+not-held), client and cwd from its session record (- without one). Under it,
+one indented row per entry: name, kind, roster state; - for none.
+Exit 1 when a manager's roster, session record or locks cannot be read: its row
+ends with error and the reason; the others still print.
+
+Examples:
+  ensemble-crew list
+""",
+        manager=False,
+    )
+    listing.set_defaults(func=_list)
     return parser
 
 
