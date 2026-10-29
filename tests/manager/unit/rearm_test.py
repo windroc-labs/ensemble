@@ -4,6 +4,7 @@ its parent 50, its grandparent the hold, 4242.
 """
 
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -371,6 +372,31 @@ class AncestorsTest(Case):
             self.assertEqual(rearm.Processes().ancestors(100), set())
         ps.assert_not_called()
 
+    def test_birth_uses_process_start_ticks_and_rejects_zombies(self):
+        for state, expected in ((b"S", "1234"), (b"Z", None)):
+            data = b"100 (tui) " + state + b" 50 " + b"0 " * 17 + b"1234\n"
+            with (
+                self.subTest(state=state),
+                self.stat({100: data}),
+                mock.patch("os.path.isdir", return_value=True),
+            ):
+                self.assertEqual(rearm.Processes().birth(100), expected)
+        with self.stat({}), mock.patch("os.path.isdir", return_value=True):
+            self.assertIsNone(rearm.Processes().birth(100))
+
+    def test_birth_uses_locale_stable_ps_and_handles_failure(self):
+        with (
+            mock.patch("os.path.isdir", return_value=False),
+            mock.patch("subprocess.run", _ps(b"Thu Oct 29 12:00:00 2026\n")) as ps,
+        ):
+            self.assertEqual(rearm.Processes().birth(70), "Thu Oct 29 12:00:00 2026")
+            self.assertEqual(ps.call_args.kwargs["env"]["LC_ALL"], "C")
+        with (
+            mock.patch("os.path.isdir", return_value=False),
+            mock.patch("subprocess.run", _ps(returncode=1)),
+        ):
+            self.assertIsNone(rearm.Processes().birth(70))
+
 
 class PromptTest(Case):
     def setUp(self):
@@ -606,6 +632,7 @@ class BindingTest(Case):
 
     def call(self, argv, event, environ):
         incoming, outgoing = io.BytesIO(json.dumps(event).encode()), bytearray()
+        real_isdir = os.path.isdir
 
         def ps(argv, **_options):
             if "-p" in argv:
@@ -620,13 +647,18 @@ class BindingTest(Case):
 
         def write(fd, data):
             self.assertEqual(fd, 1)
+            if probe := getattr(self, "emit_probe", None):
+                probe()
             outgoing.extend(data)
             return len(data)
 
         with (
             mock.patch.dict(os.environ, environ, clear=True),
             mock.patch("os.getpid", return_value=100),
-            mock.patch("os.path.isdir", return_value=False),
+            mock.patch(
+                "os.path.isdir",
+                side_effect=lambda path: False if path == "/proc/self" else real_isdir(path),
+            ),
             mock.patch("subprocess.run", side_effect=ps),
             mock.patch("os.read", side_effect=lambda _fd, size: incoming.read(size)),
             mock.patch("os.write", side_effect=write),
@@ -709,6 +741,13 @@ class BindingTest(Case):
         self.second.release()
         self.assertEqual(self.hook("sid"), (0, ""))
 
+    def test_boolean_holder_generation_is_not_a_live_binding(self):
+        self.bind("second", 80, "sid")
+        path = Path(self.second.directory, "live-client.json")
+        data = json.loads(path.read_text())
+        path.write_text(json.dumps({**data, "holder_generation": True}))
+        self.assertEqual(self.hook("sid"), (0, ""))
+
     def test_unknown_session_never_uses_daemon_environment(self):
         self.assertEqual(self.hook("unknown"), (0, ""))
 
@@ -719,6 +758,35 @@ class BindingTest(Case):
         data = json.loads(path.read_text())
         path.write_text(json.dumps({**data, "sid": "shared"}))
         self.assertEqual(self.hook("shared"), (0, ""))
+
+    def test_ambiguous_existing_binding_refuses_record_without_writes(self):
+        self.bind("first", 70, "shared")
+        self.bind("second", 80, "other")
+        path = Path(self.ensemble, "managers", "second", "live-client.json")
+        data = json.loads(path.read_text())
+        path.write_text(json.dumps({**data, "sid": "shared"}))
+        self.tree[100] = 70
+        before = self.record("first")
+        result = self.call(
+            ("--binding", "record", "--client", "codex", "--client-pid", "70"),
+            {"session_id": "shared", "cwd": "/changed"},
+            self.environ("first"),
+        )
+        self.assertEqual(result, (2, ""))
+        self.assertEqual(self.record("first"), before)
+
+    def test_rearm_emission_is_fenced_against_holder_takeover(self):
+        self.bind("second", 80, "sid")
+
+        def takeover():
+            with (
+                open(Path(self.second.directory, "roster.lock"), "rb") as lock,
+                self.assertRaises(BlockingIOError),
+            ):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        self.emit_probe = takeover
+        self.assertIn("in manager `second`", self.hook("sid")[1])
 
     def test_record_refuses_another_live_managers_session(self):
         self.bind("first", 70, "shared")
@@ -732,6 +800,17 @@ class BindingTest(Case):
         self.assertEqual(result, (2, ""))
         self.assertEqual(self.record("second")["sid"], "other")
 
+    def test_same_holder_cannot_assign_one_session_to_two_live_tuis(self):
+        self.bind("first", 70, "sid")
+        self.tree[71], self.births[71], self.tree[100] = 41, "another-tui", 71
+        result = self.call(
+            ("--binding", "record", "--client", "codex", "--client-pid", "71"),
+            {"session_id": "sid", "cwd": "/same/project"},
+            self.environ("first"),
+        )
+        self.assertEqual(result, (2, ""))
+        self.assertEqual(self.record("first")["pid"], 70)
+
     def test_malformed_binding_never_uses_the_daemon_environment(self):
         self.bind("second", 80, "sid")
         path = Path(self.ensemble, "managers", "second", "live-client.json")
@@ -739,3 +818,70 @@ class BindingTest(Case):
             with self.subTest(text=text):
                 path.write_text(text)
                 self.assertEqual(self.hook("sid"), (0, ""))
+
+    def test_context_returns_only_the_callers_live_hold(self):
+        self.tree[100] = 80
+        code, output = self.call(("--binding", "context"), {}, self.environ("second"))
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            json.loads(output),
+            {
+                "name": "second",
+                "holder_pid": 42,
+                "holder_id": self.leases["second"].id,
+                "holder_generation": self.leases["second"].generation,
+            },
+        )
+        self.assertEqual(
+            self.call(
+                ("--binding", "context"),
+                {},
+                {**self.environ("second"), "ENSEMBLE_HOLDER_GENERATION": "invalid"},
+            ),
+            (0, ""),
+        )
+        self.second.release()
+        self.assertEqual(self.call(("--binding", "context"), {}, self.environ("second")), (0, ""))
+
+    def test_record_rejects_invalid_or_dead_client_and_failed_publication(self):
+        self.bind("second", 80, "old")
+        self.tree[100] = 80
+        argv = ("--binding", "record", "--client", "codex", "--client-pid", "80")
+        self.assertEqual(self.call(argv, {}, self.environ("second")), (2, ""))
+        self.births.pop(80)
+        self.assertEqual(
+            self.call(argv, {"session_id": "new", "cwd": "/same"}, self.environ("second")), (2, "")
+        )
+        self.births[80] = "start-second"
+        with mock.patch("os.replace", side_effect=PermissionError("denied")):
+            self.assertEqual(
+                self.call(argv, {"session_id": "new", "cwd": "/same"}, self.environ("second")),
+                (2, ""),
+            )
+        self.assertEqual(self.record("second")["sid"], "old")
+        self.second.release()
+        self.assertEqual(
+            self.call(argv, {"session_id": "new", "cwd": "/same"}, self.environ("second")), (2, "")
+        )
+
+    def test_embedded_client_rearms_under_its_live_lease(self):
+        self.tree[90] = 80
+        argv = (
+            "--binding",
+            "lookup",
+            "--mode",
+            "manual",
+            "--client",
+            "codex",
+            "--client-pid",
+            "80",
+            "--hook-daemon",
+            "app-server",
+        )
+        event = {"session_id": "embedded", "cwd": "/same", "source": "startup"}
+        code, output = self.call(argv, event, self.environ("second"))
+        self.assertEqual(code, 0)
+        self.assertIn("in manager `second`", output)
+        self.assertEqual(self.record("second")["pid"], 80)
+        self.second.release()
+        self.assertEqual(self.call(argv, event, self.environ("second")), (0, ""))

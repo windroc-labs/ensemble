@@ -45,26 +45,26 @@ NONINTERACTIVE = frozenset(
 )
 VALUED = frozenset(
     {
-        "-c",
-        "--config",
-        "-m",
-        "--model",
-        "-C",
-        "--cd",
-        "-p",
-        "--profile",
-        "--enable",
-        "--disable",
-        "-i",
-        "--image",
         "--add-dir",
-        "-s",
-        "--sandbox",
-        "-a",
         "--ask-for-approval",
+        "--cd",
+        "--config",
+        "--disable",
+        "--enable",
+        "--image",
         "--local-provider",
+        "--model",
+        "--profile",
         "--remote",
         "--remote-auth-token-env",
+        "--sandbox",
+        "-C",
+        "-a",
+        "-c",
+        "-i",
+        "-m",
+        "-p",
+        "-s",
     }
 )
 MAX_MESSAGE = 128 << 20
@@ -101,9 +101,6 @@ class ThreadBridge:
         config = params["config"]
         policy = config.setdefault("shell_environment_policy", {})
         policy.setdefault("set", {}).update(self.environ)
-        excluded = policy.setdefault("exclude", [])
-        if "ENSEMBLE_AGENT_SESSION" not in excluded:
-            excluded.append("ENSEMBLE_AGENT_SESSION")
         self.pending.add(message["id"])
         return json.dumps(message).encode()
 
@@ -202,9 +199,21 @@ def relay(source: socket.socket, target: socket.socket, transform, *, masked: bo
                 raise ValueError("websocket message too large")
             if final:
                 data = b"".join(chunks)
-                target.sendall(
-                    frame(transform(data) if kind == 1 else data, masked=masked, opcode=kind)
-                )
+                transformed = transform(data) if kind == 1 else data
+                if transformed != data:
+                    limit = max(map(len, chunks)) or 1
+                    chunks = [
+                        transformed[at : at + limit] for at in range(0, len(transformed), limit)
+                    ]
+                for at, piece in enumerate(chunks):
+                    target.sendall(
+                        frame(
+                            piece,
+                            masked=masked,
+                            opcode=kind if at == 0 else 0,
+                            final=at == len(chunks) - 1,
+                        )
+                    )
                 chunks, size = [], 0
 
 
@@ -408,6 +417,8 @@ def main(root: str, argv: tuple[str, ...]) -> int:
                 shutil.rmtree(directory)
             os._exit(0)
         listener.close()
+        if not any(word in {"--cd", "-C"} or word.startswith(("--cd=", "-C")) for word in argv):
+            argv = ("--cd", os.getcwd(), *argv)
         os.execv(real, (real, "--remote", f"unix://{path}", *argv))
     except BaseException:
         listener.close()

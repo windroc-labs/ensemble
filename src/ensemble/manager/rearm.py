@@ -10,6 +10,7 @@ Hooks always exit 0. `--mode manual` selects turn-based monitoring.
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -204,17 +205,18 @@ def read_object(path: str) -> dict:
 
 
 @contextlib.contextmanager
-def lease_guard(name: str, binding: Mapping[str, object]):
+def lease_guard(name: str, binding: Mapping[str, object], *, exclusive: bool = False):
     directory = os.path.join(os.path.expanduser(MANAGERS), name)
     with contextlib.ExitStack() as stack:
         valid = False
         try:
             lock = stack.enter_context(open(os.path.join(directory, "roster.lock"), "rb"))
-            fcntl.flock(lock, fcntl.LOCK_SH)
+            fcntl.flock(lock, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
             data = read_object(os.path.join(directory, "roster.json"))
             holder = data.get("holder")
             if (
                 isinstance(holder, dict)
+                and type(binding.get("holder_generation")) is int
                 and holder.get("id") == binding.get("holder_id")
                 and data.get("lease_gen") == binding.get("holder_generation")
             ):
@@ -242,7 +244,7 @@ def live(binding: dict, processes: Processes) -> bool:
     )
 
 
-def lookup(client: str, sid: str, processes: Processes) -> tuple[str, dict] | None:
+def bindings(client: str, sid: str, processes: Processes) -> list[tuple[str, dict]]:
     matches = []
     try:
         with os.scandir(os.path.expanduser(MANAGERS)) as directories:
@@ -252,7 +254,7 @@ def lookup(client: str, sid: str, processes: Processes) -> tuple[str, dict] | No
                 if MANAGER_NAME.fullmatch(d.name) and d.is_dir(follow_symlinks=False)
             ]
     except OSError:
-        return None
+        return []
     for name in names:
         try:
             binding = read_object(os.path.join(os.path.expanduser(MANAGERS), name, BINDING))
@@ -267,7 +269,22 @@ def lookup(client: str, sid: str, processes: Processes) -> tuple[str, dict] | No
                     matches.append((name, binding))
         except (OSError, ValueError, RecursionError):
             continue
-    return matches[0] if len(matches) == 1 else None
+    return matches
+
+
+@contextlib.contextmanager
+def session_guard(client: str, sid: str):
+    directory = os.path.join(os.path.expanduser(MANAGERS), ".session-locks")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    key = hashlib.sha256((client + "\0" + sid).encode()).hexdigest()
+    fd = os.open(os.path.join(directory, key), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("not a regular session lock")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def identity(environ: Mapping[str, str]) -> dict:
@@ -321,46 +338,63 @@ def main(argv: tuple[str, ...] = ()) -> int:
             }
             if not live(binding, processes):
                 return 2
-            other = lookup(str(entry["client"]), str(entry["sid"]), processes)
-            if other is not None and other[0] != name:
-                return 2
-            with lease_guard(name, binding) as valid:
-                if not valid or not save(name, binding, BINDING) or not save(name, entry):
+            with session_guard(str(entry["client"]), str(entry["sid"])):
+                owners = bindings(str(entry["client"]), str(entry["sid"]), processes)
+                if len(owners) > 1 or any(
+                    owner != name
+                    or previous["pid"] != binding["pid"]
+                    or previous["birth"] != binding["birth"]
+                    for owner, previous in owners
+                ):
                     return 2
-            emit({"recorded": True})
+                with lease_guard(name, binding, exclusive=True) as valid:
+                    if not valid or not save(name, binding, BINDING) or not save(name, entry):
+                        return 2
+                    emit({"recorded": True})
             return 0
         source = event.get("source") if isinstance(event, dict) else None
         if not isinstance(source, str) or source not in SOURCES:
             return 0
+        guard: contextlib.AbstractContextManager[bool] = contextlib.nullcontext(enter_result=True)
+        bound = None
+        entry = record(found, event)
         if action == "lookup":
             sid = event.get("session_id")
-            match = (
-                lookup(found.get("--client", ""), sid, processes) if isinstance(sid, str) else None
+            owners = (
+                bindings(found.get("--client", ""), sid, processes) if isinstance(sid, str) else []
             )
-            if match is None:
+            if len(owners) > 1:
+                return 0
+            if not owners:
                 pid = found.get("--client-pid", "")
                 args = processes.argv(int(pid)) if PID.fullmatch(pid) else None
                 daemon = found.get("--hook-daemon")
-                if not args or not daemon or daemon in args[1:] or "--managed-daemon" in args:
+                if not args or not daemon or args[1:2] == [daemon] or "--managed-daemon" in args:
                     return 0
                 name = manager(os.environ, processes)
                 if name is None:
                     return 0
-                bound = found
+                guard = lease_guard(name, identity(os.environ), exclusive=True)
             else:
-                name, binding = match
-                bound = {**found, "--client-pid": str(binding["pid"])}
-            if (entry := record(bound, event)) is not None:
-                save(name, entry)
-        elif (entry := record(found, event)) is not None:
+                name, bound = owners[0]
+                guard = lease_guard(name, bound)
+                entry = None
+        with guard as valid:
+            if not valid:
+                return 0
             assert name is not None
-            save(name, entry)
-        assert name is not None
-        context = {
-            "hookEventName": "SessionStart",
-            "additionalContext": prompt(name, source, manual="--mode" in found),
-        }
-        emit({"hookSpecificOutput": context})
+            if (
+                bound is not None
+                and read_object(os.path.join(os.path.expanduser(MANAGERS), name, BINDING)) != bound
+            ):
+                return 0
+            if entry is not None:
+                save(name, entry)
+            context = {
+                "hookEventName": "SessionStart",
+                "additionalContext": prompt(name, source, manual="--mode" in found),
+            }
+            emit({"hookSpecificOutput": context})
     except (OSError, ValueError, RecursionError):
         pass
     return 0

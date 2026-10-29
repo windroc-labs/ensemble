@@ -258,11 +258,11 @@ class SharedCodexTest(Case):
             process.terminate()
         process.communicate(timeout=10)
 
-    def start(self, name, env):
+    def start(self, name, env, *, cwd=None):
         process = subprocess.Popen(
             (*PY, "-m", "ensemble.manager.cli", "hold", "--manager", name, "--", "/bin/sh"),
             env=env,
-            cwd=self.home,
+            cwd=cwd or self.home,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -285,7 +285,7 @@ class SharedCodexTest(Case):
     def saved(self, name):
         return json.loads(Path(self.ensemble, "managers", name, "session.json").read_text())
 
-    def test_two_holds_and_resume_share_the_same_detached_daemon(self):
+    def environment(self):
         fake = os.path.join(REPO, "tests", "manager", "shared_codex.py")
         binary = Path(self.home, "bin")
         binary.mkdir()
@@ -316,7 +316,10 @@ class SharedCodexTest(Case):
             ),
         }
         env.pop("ENSEMBLE_AGENT_SESSION", None)
-        first, second = self.start("first", env), self.start("second", env)
+        env.pop("ENSEMBLE_MANAGER", None)
+        return env
+
+    def daemon(self, env, first):
         roster = json.loads(Path(self.ensemble, "managers", "first", "roster.json").read_text())
         daemon_env = {
             **env,
@@ -326,7 +329,13 @@ class SharedCodexTest(Case):
             "ENSEMBLE_HOLDER_GENERATION": str(roster["lease_gen"]),
         }
         daemon = subprocess.Popen(
-            (sys.executable, "-I", fake, "--fake-daemon", path),
+            (
+                sys.executable,
+                "-I",
+                os.path.join(REPO, "tests", "manager", "shared_codex.py"),
+                "--fake-daemon",
+                env["FAKE_DAEMON_SOCKET"],
+            ),
             env=daemon_env,
             cwd=self.home,
             stdout=subprocess.PIPE,
@@ -334,12 +343,23 @@ class SharedCodexTest(Case):
         )
         self.addCleanup(self.close, daemon)
         self.assertEqual(self.line(daemon), b"ready\n")
+        return daemon
+
+    def shared(self, *, different_cwd=False):
+        env = self.environment()
+        other = Path(self.home, "other") if different_cwd else Path(self.home)
+        other.mkdir(exist_ok=True)
+        first, second = self.start("first", env), self.start("second", env, cwd=str(other))
+        daemon = self.daemon(env, first)
         clients = []
         for name, process in (("first", first), ("second", second)):
             self.send(process, "codex")
             client = json.loads(self.line(process))
             clients.append(client)
-            self.assertEqual(self.saved(name), {"client": "codex", **client, "cwd": self.home})
+            self.assertEqual(
+                self.saved(name),
+                {"client": "codex", **client, "cwd": self.home if name == "first" else str(other)},
+            )
             self.send(process, "turn")
             answer = json.loads(self.line(process))
             context = answer["hook"]["hookSpecificOutput"]["additionalContext"]
@@ -380,4 +400,54 @@ class SharedCodexTest(Case):
         self.assertEqual(answer["daemon"], daemon.pid)
         self.assertIn(
             "`resume` in manager `first`", answer["hook"]["hookSpecificOutput"]["additionalContext"]
+        )
+
+    def test_two_holds_and_resume_share_the_same_detached_daemon(self):
+        self.shared()
+
+    def test_another_cwd_is_preserved_on_the_shared_daemon(self):
+        self.shared(different_cwd=True)
+
+    def test_non_manager_and_worker_entry_preserve_arguments_status_and_settings(self):
+        env = self.environment()
+        settings = Path(self.home, ".codex", "config.toml")
+        settings.parent.mkdir(exist_ok=True)
+        settings.write_bytes(b"user_setting = true\n")
+        args = ("--model", "model with spaces", "a'b$c", "--", "tail")
+        for extra in ({}, {"ENSEMBLE_MANAGER": "unused", "ENSEMBLE_AGENT_SESSION": "1"}):
+            with self.subTest(extra=extra):
+                done = subprocess.run(
+                    (str(Path(self.home, "launchers", "codex")), *args),
+                    env={**env, **extra, "FAKE_PASSTHROUGH": "1"},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=10,
+                )
+                self.assertEqual((done.returncode, done.stderr), (23, ""))
+                self.assertEqual(json.loads(done.stdout), list(args))
+                self.assertEqual(settings.read_bytes(), b"user_setting = true\n")
+
+    def test_two_holds_cannot_claim_the_same_native_session(self):
+        env = self.environment()
+        first, second = self.start("first", env), self.start("second", env)
+        self.daemon(env, first)
+        sid = "00000000-0000-4000-8000-000000000001"
+        command = f"codex resume {sid}; printf 'client-exit:%s\\n' \"$?\""
+        self.send(first, command)
+        self.send(second, command)
+        answers = [self.line(process) for process in (first, second)]
+        winners = [index for index, answer in enumerate(answers) if answer.startswith(b"{")]
+        self.assertEqual(len(winners), 1, answers)
+        winner = winners[0]
+        self.assertRegex(answers[1 - winner].decode(), r"^client-exit:[1-9][0-9]*\n$")
+        name = ("first", "second")[winner]
+        other = ("second", "first")[winner]
+        self.assertEqual(self.saved(name)["sid"], sid)
+        self.assertFalse(Path(self.ensemble, "managers", other, "session.json").exists())
+        self.send((first, second)[winner], "turn")
+        answer = json.loads(self.line((first, second)[winner]))
+        self.assertIn(
+            f"`resume` in manager `{name}`",
+            answer["hook"]["hookSpecificOutput"]["additionalContext"],
         )

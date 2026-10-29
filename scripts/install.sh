@@ -1953,11 +1953,13 @@ command_selection() {
 
 # The plugin's launcher, copied under each command's name as its ensemble --install does.
 launchers_install() {
-  local name missing= launcher=$pkg/skills/manage/scripts/launcher
+  local name missing= launcher=$pkg/skills/manage/scripts/launcher launcher_names
   step "launchers"
   [ -x "$launcher" ] || die "no executable $launcher in the installed plugin"
+  # Older plugin launchers have no command inventory.
+  launcher_names=$("$launcher" --commands 2>/dev/null) || launcher_names='ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator'
   [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$(command_selection)" ] || missing=1
-  for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex; do
+  for name in $launcher_names; do
     [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$launcher" "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
@@ -1971,14 +1973,14 @@ launchers_install() {
       fi
     fi
     if [ -d "$HOME/.ensemble/bin" ]; then
-      for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex; do
+      for name in $launcher_names; do
         record_file "$HOME/.ensemble/bin/$name"
       done
     else
       record_dir "$HOME/.ensemble/bin"
       mkdir -p "$HOME/.ensemble/bin"
     fi
-    for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex; do
+    for name in $launcher_names; do
       install -m 755 "$launcher" "$HOME/.ensemble/bin/$name"
     done
     command_selection > "$state_dir/plugin-root.tmp"

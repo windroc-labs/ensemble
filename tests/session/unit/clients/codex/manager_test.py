@@ -2,14 +2,129 @@
 
 import io
 import json
+import os
 import struct
-import unittest
+import subprocess
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.clients.codex import manager
+from tests.session.case import REPO, Case
 
 
-class ProtocolTest(unittest.TestCase):
+class Executed(BaseException):
+    pass
+
+
+class ProtocolTest(Case):
+    def test_user_filters_survive_identity_overlay(self):
+        for policy in (
+            {"filters": {"SECRET*": "exclude", "PATH": "include"}},
+            {"exclude": ["SECRET*"], "include_only": ["PATH"]},
+            {},
+        ):
+            with self.subTest(policy=policy):
+                bridge = manager.ThreadBridge({"ENSEMBLE_MANAGER": "m"}, lambda _record: None)
+                payload = {
+                    "id": 1,
+                    "method": "thread/start",
+                    "params": {"config": {"shell_environment_policy": policy}},
+                }
+                result = json.loads(bridge.request(json.dumps(payload).encode()))
+                actual = result["params"]["config"]["shell_environment_policy"]
+                self.assertEqual({k: v for k, v in actual.items() if k != "set"}, policy)
+
+    def launch(self, argv, environ=None, *, context=None, server=None, expected=Executed):
+        make_directory = tempfile.mkdtemp
+        directory = Path(self.home, "native")
+        directory.mkdir(exist_ok=True)
+        native = directory / "codex"
+        native.write_text("#!/bin/sh\nexit 23\n")
+        native.chmod(0o755)
+        settings = Path(self.home, ".codex", "config.toml")
+        settings.parent.mkdir(exist_ok=True)
+        settings.write_bytes(b"user_setting = true\n")
+        env = {"HOME": self.home, "PATH": str(directory), **(environ or {})}
+        context = context or SimpleNamespace(returncode=0, stdout='{"holder_pid":41}')
+        started = server or SimpleNamespace(returncode=0, stdout='{"socketPath":"/shared"}')
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch("subprocess.run", side_effect=[context, started]) as run,
+            mock.patch("socket.socket"),
+            mock.patch(
+                "tempfile.mkdtemp",
+                side_effect=lambda **options: make_directory(
+                    prefix=options["prefix"], dir=self.home
+                ),
+            ),
+            mock.patch("os.chmod"),
+            mock.patch("os.fork", return_value=1),
+            mock.patch("os.execv", side_effect=Executed) as execute,
+            self.assertRaises(expected),
+        ):
+            manager.main(REPO, argv)
+        self.assertEqual(settings.read_bytes(), b"user_setting = true\n")
+        return native, execute.call_args.args if execute.called else None, run.call_count
+
+    def test_worker_and_non_manager_launches_keep_argv_without_a_proxy(self):
+        arguments = ("--model", "model with spaces", "a'b$c", "--", "tail")
+        for env in ({}, {"ENSEMBLE_MANAGER": "m", "ENSEMBLE_AGENT_SESSION": "1"}):
+            with self.subTest(env=env):
+                native, called, count = self.launch(arguments, env)
+                self.assertEqual(called, (str(native), (str(native), *arguments)))
+                self.assertEqual(count, 0)
+
+    def test_manager_launch_preserves_default_and_explicit_cwd(self):
+        _, called, count = self.launch(("hello",), {"ENSEMBLE_MANAGER": "m"})
+        self.assertEqual(count, 2)
+        args = called[1]
+        self.assertIn("--cd", args)
+        self.assertEqual(args[args.index("--cd") + 1], os.getcwd())
+        _, called, _ = self.launch(("--cd", "/chosen", "hello"), {"ENSEMBLE_MANAGER": "m"})
+        self.assertEqual(called[1].count("--cd"), 1)
+        self.assertEqual(called[1][-3:], ("--cd", "/chosen", "hello"))
+
+    def test_stale_holder_passes_through_and_unavailable_server_fails_closed(self):
+        native, called, count = self.launch(
+            ("hello",), {"ENSEMBLE_MANAGER": "m"}, context=SimpleNamespace(returncode=0, stdout="")
+        )
+        self.assertEqual(called, (str(native), (str(native), "hello")))
+        self.assertEqual(count, 1)
+        _, called, count = self.launch(
+            ("hello",),
+            {"ENSEMBLE_MANAGER": "m"},
+            server=SimpleNamespace(returncode=1, stdout=""),
+            expected=ValueError,
+        )
+        self.assertIsNone(called)
+        self.assertEqual(count, 2)
+        _, called, count = self.launch(
+            ("--remote", "unix:///elsewhere"), {"ENSEMBLE_MANAGER": "m"}, expected=ValueError
+        )
+        self.assertIsNone(called)
+        self.assertEqual(count, 1)
+
+    def test_executable_skips_ensemble_entries_and_fails_without_native(self):
+        installed = Path(self.home, ".ensemble", "bin")
+        installed.mkdir(parents=True, exist_ok=True)
+        (installed / "codex").write_text("#!/bin/sh\n")
+        (installed / "codex").chmod(0o755)
+        native = Path(self.home, "native")
+        native.mkdir()
+        (native / "codex").write_text("#!/bin/sh\n")
+        (native / "codex").chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": str(installed) + os.pathsep + str(native)}):
+            self.assertEqual(
+                manager.executable(REPO, str(installed / "codex")), str(native / "codex")
+            )
+        with (
+            mock.patch.dict(os.environ, {"PATH": str(installed)}),
+            self.assertRaisesRegex(ValueError, "no Codex executable"),
+        ):
+            manager.executable(REPO, None)
+
     def test_null_config_is_a_valid_native_default(self):
         bridge = manager.ThreadBridge({"ENSEMBLE_MANAGER": "m"}, lambda _record: None)
         value = bridge.request(b'{"id":1,"method":"thread/start","params":{"config":null}}')
@@ -30,8 +145,11 @@ class ProtocolTest(unittest.TestCase):
         }
         patched = json.loads(bridge.request(json.dumps(request).encode()))
         policy = patched["params"]["config"]["shell_environment_policy"]
-        self.assertEqual(policy["set"], {"KEEP": "yes", "ENSEMBLE_MANAGER": "second"})
-        self.assertIn("ENSEMBLE_AGENT_SESSION", policy["exclude"])
+        self.assertEqual(
+            policy["set"],
+            {"KEEP": "yes", "ENSEMBLE_MANAGER": "second"},
+        )
+        self.assertNotIn("exclude", policy)
         response = b'{"id":7,"result":{"thread":{"id":"native","cwd":"/same"}}}'
         self.assertEqual(bridge.response(response), response)
         self.assertEqual(records, [{"session_id": "native", "cwd": "/same"}])
@@ -93,6 +211,87 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(manager.read_frame(stream), (True, 9, b"ping"))
         self.assertEqual(manager.read_frame(stream), (True, 0, b"second"))
 
+    def test_relay_binds_fragmented_response_before_delivery(self):
+        events = []
+        received = []
+        bridge = manager.ThreadBridge(
+            {}, lambda record: events.append(("binding", record["session_id"]))
+        )
+        bridge.request(b'{"id":1,"method":"thread/start","params":{}}')
+        response = b'{"id":1,"result":{"thread":{"id":"native","cwd":"/same"}}}'
+        wire = manager.frame(response[:20], masked=False, final=False)
+        wire += manager.frame(b"ping", masked=False, opcode=9)
+        wire += manager.frame(response[20:], masked=False, opcode=0)
+        wire += manager.frame(b"", masked=False, opcode=8)
+        source, target = mock.Mock(), mock.Mock()
+        source.makefile.return_value = io.BytesIO(wire)
+
+        def sent(data):
+            _final, opcode, payload = manager.read_frame(io.BytesIO(data))
+            events.append(("wire", opcode))
+            if opcode in (0, 1):
+                received.append(payload)
+
+        target.sendall.side_effect = sent
+        manager.relay(source, target, bridge.response, masked=False)
+        self.assertEqual(
+            events, [("wire", 9), ("binding", "native"), ("wire", 1), ("wire", 0), ("wire", 8)]
+        )
+        self.assertEqual(b"".join(received), response)
+
+    def test_changed_request_keeps_the_native_frame_limit(self):
+        request = b'{"id":1,"method":"thread/start","params":{}}'
+        pieces = [request[at : at + 15] for at in range(0, len(request), 15)]
+        wire = b"".join(
+            manager.frame(
+                piece, masked=True, opcode=1 if at == 0 else 0, final=at == len(pieces) - 1
+            )
+            for at, piece in enumerate(pieces)
+        )
+        wire += manager.frame(b"", masked=True, opcode=8)
+        source, target = mock.Mock(), mock.Mock()
+        source.makefile.return_value = io.BytesIO(wire)
+        bridge = manager.ThreadBridge({"ENSEMBLE_MANAGER": "m"}, lambda _record: None)
+        manager.relay(source, target, bridge.request, masked=True)
+        fragments = [
+            manager.read_frame(io.BytesIO(call.args[0])) for call in target.sendall.call_args_list
+        ]
+        data = [payload for _final, opcode, payload in fragments if opcode in (0, 1)]
+        self.assertLessEqual(max(map(len, data)), 15)
+        value = json.loads(b"".join(data))
+        self.assertEqual(
+            value["params"]["config"]["shell_environment_policy"]["set"], {"ENSEMBLE_MANAGER": "m"}
+        )
+
+    def test_recorder_rejection_or_failure_never_delivers_success(self):
+        for result in (
+            SimpleNamespace(returncode=1, stdout=""),
+            SimpleNamespace(returncode=0, stdout="{}"),
+            SimpleNamespace(returncode=0, stdout=""),
+            subprocess.TimeoutExpired("record", 5),
+        ):
+            with self.subTest(result=result):
+
+                def record(event):
+                    manager.recording(("recorder",), 70, event)
+
+                bridge = manager.ThreadBridge({}, record)
+                bridge.request(b'{"id":1,"method":"thread/start","params":{}}')
+                response = b'{"id":1,"result":{"thread":{"id":"native","cwd":"/same"}}}'
+                source, target = mock.Mock(), mock.Mock()
+                source.makefile.return_value = io.BytesIO(manager.frame(response, masked=False))
+                options = (
+                    {"side_effect": result}
+                    if isinstance(result, Exception)
+                    else {"return_value": result}
+                )
+                with (
+                    mock.patch("subprocess.run", **options),
+                    self.assertRaises((ValueError, subprocess.TimeoutExpired)),
+                ):
+                    manager.relay(source, target, bridge.response, masked=False)
+                target.sendall.assert_not_called()
+
     def test_native_compression_offer_is_removed(self):
         request = (
             b"GET /rpc HTTP/1.1\r\nSec-WebSocket-Key: abc\r\n"
@@ -139,6 +338,82 @@ class ProtocolTest(unittest.TestCase):
         )
         with mock.patch("sys.platform", "darwin"):
             self.assertEqual(manager.peer(client), (700, 501))
+
+    def test_authenticated_server_connection_transports_and_binds(self):
+        listener, client, server = mock.Mock(), mock.MagicMock(), mock.MagicMock()
+        client.__enter__.return_value = client
+        server.__enter__.return_value = server
+        listener.accept.side_effect = (TimeoutError(), (client, None))
+        client.getsockopt.return_value = struct.pack("3i", 70, 1000, 1000)
+        request_header = (
+            b"GET /rpc HTTP/1.1\r\nx-codex-app-server-compression: zstd-stream-v1\r\n\r\n"
+        )
+        response_header = b"HTTP/1.1 101 Switching Protocols\r\n\r\n"
+        incoming = io.BytesIO(request_header)
+        outgoing = io.BytesIO(response_header)
+        client.recv.side_effect = incoming.read
+        server.recv.side_effect = outgoing.read
+        request = b'{"id":1,"method":"thread/start","params":{}}'
+        response = b'{"id":1,"result":{"thread":{"id":"native","cwd":"/same"}}}'
+        client.makefile.return_value = io.BytesIO(
+            manager.frame(request, masked=True) + manager.frame(b"", masked=True, opcode=8)
+        )
+        server.makefile.return_value = io.BytesIO(
+            manager.frame(response, masked=False) + manager.frame(b"", masked=False, opcode=8)
+        )
+        parents = {70: 50, 50: 41, 41: 1}
+
+        def proc(path, *_args, **_options):
+            pid = int(str(path).split("/")[2])
+            return io.BytesIO(f"{pid} (tui) S {parents[pid]} 1 1".encode())
+
+        class InlineThread:
+            def __init__(self, target):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+            def join(self):
+                pass
+
+        with (
+            mock.patch("sys.platform", "linux"),
+            mock.patch("os.getuid", return_value=1000),
+            mock.patch("os.kill"),
+            mock.patch("builtins.open", side_effect=proc),
+            mock.patch("socket.socket", return_value=server),
+            mock.patch("threading.Thread", InlineThread),
+            mock.patch(
+                "subprocess.run",
+                return_value=SimpleNamespace(returncode=0, stdout='{"recorded":true}'),
+            ) as record,
+        ):
+            manager.serve(listener, "/shared", 50, 41, ("recorder",))
+        server.connect.assert_called_once_with("/shared")
+        self.assertEqual(server.sendall.call_args_list[0].args[0], b"GET /rpc HTTP/1.1\r\n\r\n")
+        self.assertEqual(
+            json.loads(record.call_args.kwargs["input"]), {"session_id": "native", "cwd": "/same"}
+        )
+        delivered = client.sendall.call_args_list[1].args[0]
+        self.assertEqual(manager.read_frame(io.BytesIO(delivered)), (True, 1, response))
+
+    def test_protocol_limits_reject_truncated_or_oversized_input(self):
+        for raw in (
+            b"",
+            b"\x81",
+            b"\x81\x7f" + (manager.MAX_MESSAGE + 1).to_bytes(8, "big"),
+            b"\xc1\x00",
+        ):
+            with self.subTest(raw=raw), self.assertRaises((EOFError, ValueError)):
+                manager.read_frame(io.BytesIO(raw))
+        connection = mock.Mock()
+        connection.recv.return_value = b""
+        with self.assertRaises(EOFError):
+            manager.headers(connection)
+        connection.recv.return_value = b"x" * 65537
+        with self.assertRaisesRegex(ValueError, "too large"):
+            manager.headers(connection)
 
     def test_startup_classification_does_not_intercept_noninteractive_commands(self):
         for argv in (

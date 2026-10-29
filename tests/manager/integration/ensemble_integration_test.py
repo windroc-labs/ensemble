@@ -30,8 +30,8 @@ COMMANDS = (
     "ensemble-session",
     "ensemble-delegate",
     "ensemble-orchestrator",
-    "codex",
 )
+LAUNCHERS = (*COMMANDS, "codex")
 USAGE = "usage: ensemble <session-name> | ensemble list | ensemble --install"
 FAKE = """#!{python} -I
 import json, os, sys
@@ -173,6 +173,9 @@ def record(home: str, *roots: str | dict) -> None:
 
 
 def executable(path: str, text: str) -> str:
+    relative = os.path.relpath(os.path.realpath(path), os.path.realpath(REPO))
+    if relative.split(os.sep, 1)[0] in {"src", "skills", "bin"}:
+        raise AssertionError("fixture executable must not rewrite shipped source")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     os.chmod(path, 0o755)
@@ -508,7 +511,7 @@ class FakeTmux(Case):
 
     def install(self, script=ENSEMBLE):
         process, out, err, calls = self.run_ensemble("--install", script=script)
-        paths = [os.path.join(self.installed, name) for name in COMMANDS]
+        paths = [os.path.join(self.installed, name) for name in LAUNCHERS]
         self.assertEqual(
             (process.returncode, out, err, calls), (0, "".join(f"{p}\n" for p in paths), "", [])
         )
@@ -532,11 +535,7 @@ class FakeTmux(Case):
                     self.assertEqual((process.returncode, err), (0, ""))
                     self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
                 else:
-                    target = (
-                        os.path.join(selected, "skills", "manage", "scripts", name)
-                        if name == "codex"
-                        else os.path.join(selected, "bin", name)
-                    )
+                    target = os.path.join(selected, "bin", name)
                     executable(target, '#!/bin/sh\nprintf "%s\\n" "$0"\n')
                     process, out, err, _ = self.run_ensemble(
                         script=os.path.join(self.installed, name)
@@ -692,8 +691,8 @@ class FakeTmux(Case):
         with open(os.path.join(self.installed, "ensemble-crew"), "w", encoding="utf-8") as f:
             f.write("stale")
         self.install(script=self.dst)
-        self.assertEqual(sorted(os.listdir(self.installed)), sorted(COMMANDS))
-        for name in COMMANDS:
+        self.assertEqual(sorted(os.listdir(self.installed)), sorted(LAUNCHERS))
+        for name in LAUNCHERS:
             path = os.path.join(self.installed, name)
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o755, name)
             with open(path, "rb") as f:

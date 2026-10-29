@@ -150,7 +150,11 @@ def tui(argv):
                 return receive(stream)["result"]
 
             call("initialize", {"clientInfo": {"name": "fake-tui", "version": "0"}})
-            params = {"cwd": os.getcwd()}
+            params = {}
+            if "--cd" in argv:
+                params["cwd"] = argv[argv.index("--cd") + 1]
+            elif "-C" in argv:
+                params["cwd"] = argv[argv.index("-C") + 1]
             if resumed:
                 params["threadId"] = argv[argv.index("resume") + 1]
             result = call("thread/resume" if resumed else "thread/start", params)
@@ -161,7 +165,11 @@ def tui(argv):
                     return
                 if action == "clear":
                     result = call(
-                        "thread/start", {"cwd": os.getcwd(), "sessionStartSource": "clear"}
+                        "thread/start",
+                        {
+                            **{k: v for k, v in params.items() if k == "cwd"},
+                            "sessionStartSource": "clear",
+                        },
                     )
                     print(
                         json.dumps({"pid": os.getpid(), "sid": result["thread"]["id"]}), flush=True
@@ -175,5 +183,8 @@ if __name__ == "__main__":
         daemon(sys.argv[2])
     elif sys.argv[1:4] == ["app-server", "daemon", "start"]:
         print(json.dumps({"socketPath": os.environ["FAKE_DAEMON_SOCKET"]}))
+    elif os.environ.get("FAKE_PASSTHROUGH"):
+        print(json.dumps(sys.argv[1:]))
+        sys.exit(23)
     else:
         tui(sys.argv[1:])

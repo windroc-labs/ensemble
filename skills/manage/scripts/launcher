@@ -1,6 +1,10 @@
 #!/bin/sh
 # install.sh and ensemble --install copy this under each command's name into ~/.ensemble/bin: it runs that
 # command from the plugin selected by that install. Older installs without a selection use client discovery.
+if [ "${0##*/}" = launcher ] && [ "${1:-}" = --commands ]; then
+  printf '%s\n' ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex
+  exit 0
+fi
 target=$(python3 -I - "${0##*/}" "$@" <<'EOF'
 import glob, json, os, sys, tempfile
 
