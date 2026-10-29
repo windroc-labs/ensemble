@@ -98,6 +98,28 @@ class Unreadable:
     error: str
 
 
+class Verb(StrEnum):
+    """What the launcher does for a selected manager."""
+
+    ATTACH = "attach"
+    RESUME_HELD = "resume-held"
+    RESUME_NEW = "resume-new"
+    OPEN = "open"
+
+
+@dataclass(frozen=True)
+class Plan:
+    verb: Verb
+    name: str
+
+
+@dataclass(frozen=True)
+class Refused:
+    """Selecting the manager opens nothing, for `reason`."""
+
+    reason: str
+
+
 @dataclass(frozen=True)
 class Lease:
     id: str

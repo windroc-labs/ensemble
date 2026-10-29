@@ -8,15 +8,18 @@ from unittest import mock
 import jsonschema
 
 from ensemble.manager import rearm
-from ensemble.manager.engine.managers import alive, managers, read, read_record
+from ensemble.manager.engine.managers import alive, managers, plan, read, read_record
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
     ActiveHolder,
     HolderState,
     Manager,
+    Plan,
+    Refused,
     SessionRecord,
     Unread,
     Unreadable,
+    Verb,
 )
 from tests.manager import session_records
 from tests.manager.roster_case import RosterCase
@@ -201,3 +204,72 @@ class ManagersTest(RosterCase):
         Path(root, "file").touch()
         os.symlink(os.path.join(root, "a"), os.path.join(root, "link"))
         self.assertEqual([m.name for m in managers(root)], ["a", "b"])
+
+
+RECORD = SessionRecord("kind-a", "s-1", LIVE, "/home/user/project")
+OWN, OTHER, ANONYMOUS = (
+    ActiveHolder("id-1", "demo"),
+    ActiveHolder("id-2", "work"),
+    ActiveHolder("id-3", None),
+)
+RUNNING, HOLD_ONLY, NOT_HELD = (
+    HolderState.CLIENT_RUNNING,
+    HolderState.HOLD_ONLY,
+    HolderState.NOT_HELD,
+)
+
+
+def _manager(state, holder=None, record=None, entries=None):
+    return Manager("demo", state, holder, record, {} if entries is None else entries)
+
+
+class PlanTest(RosterCase):
+    def test_an_unreadable_manager_or_roster_is_refused_with_its_error(self):
+        self.assertEqual(plan(Unreadable("demo", "lock: busy"), live=False), Refused("lock: busy"))
+        broken = Unread("roster.json: not JSON")
+        for state, holder in ((NOT_HELD, None), (RUNNING, broken), (HOLD_ONLY, broken)):
+            with self.subTest(state=state):
+                manager = _manager(state, holder, RECORD, broken)
+                self.assertEqual(plan(manager, live=False), Refused("roster.json: not JSON"))
+
+    def test_a_held_lock_without_a_recorded_holder_is_refused(self):
+        manager = _manager(HOLD_ONLY, Unread("holder not recorded"), RECORD)
+        self.assertEqual(plan(manager, live=False), Refused("holder not recorded"))
+
+    def test_a_holder_outside_the_managers_own_session_is_refused_by_label(self):
+        for state in (RUNNING, HOLD_ONLY):
+            for holder, label in ((OTHER, "work"), (ANONYMOUS, "id-3")):
+                with self.subTest(state=state, holder=holder):
+                    self.assertEqual(
+                        plan(_manager(state, holder, RECORD), live=True),
+                        Refused(f"held by {label}"),
+                    )
+
+    def test_a_running_client_under_its_own_hold_is_attached(self):
+        self.assertEqual(plan(_manager(RUNNING, OWN, RECORD), live=True), Plan(Verb.ATTACH, "demo"))
+
+    def test_hold_only_resumes_its_record_under_the_hold_else_attaches(self):
+        self.assertEqual(
+            plan(_manager(HOLD_ONLY, OWN, RECORD), live=False), Plan(Verb.RESUME_HELD, "demo")
+        )
+        for record in (None, Unread("session.json: not JSON")):
+            with self.subTest(record=record):
+                self.assertEqual(
+                    plan(_manager(HOLD_ONLY, OWN, record), live=False), Plan(Verb.ATTACH, "demo")
+                )
+
+    def test_not_held_resumes_its_record_under_a_new_hold_else_opens(self):
+        self.assertEqual(
+            plan(_manager(NOT_HELD, None, RECORD), live=False), Plan(Verb.RESUME_NEW, "demo")
+        )
+        for record in (None, Unread("session.json: not JSON")):
+            with self.subTest(record=record):
+                self.assertEqual(
+                    plan(_manager(NOT_HELD, None, record), live=False), Plan(Verb.OPEN, "demo")
+                )
+
+    def test_a_live_client_without_a_holder_is_refused(self):
+        self.assertEqual(
+            plan(_manager(NOT_HELD, None, RECORD), live=True),
+            Refused(f"its client {LIVE} runs without a holder; exit it first"),
+        )

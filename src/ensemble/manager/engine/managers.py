@@ -1,5 +1,5 @@
 """Every manager under a root, with its holder state, session record and entries, read without
-a lease.
+a lease, and the plan for selecting one.
 """
 
 import json
@@ -10,10 +10,13 @@ from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
     HolderState,
     Manager,
+    Plan,
+    Refused,
     RosterError,
     SessionRecord,
     Unread,
     Unreadable,
+    Verb,
 )
 from ensemble.utils import STATE, read_regular
 
@@ -90,3 +93,26 @@ def managers(root: str) -> list[Manager | Unreadable]:
     except FileNotFoundError:
         return []
     return [read(os.path.join(root, name)) for name in names]
+
+
+def plan(manager: Manager | Unreadable, *, live: bool) -> Plan | Refused:
+    """live: whether its session record's client process runs."""
+    if isinstance(manager, Unreadable):
+        return Refused(manager.error)
+    if isinstance(manager.entries, Unread):
+        return Refused(manager.entries.error)
+    holder, record = manager.holder, manager.record
+    recorded = isinstance(record, SessionRecord)
+    if isinstance(holder, Unread):
+        return Refused(holder.error)
+    if holder is not None and holder.session != manager.name:
+        return Refused(f"held by {holder.label}")
+    if manager.state == HolderState.CLIENT_RUNNING:
+        verb = Verb.ATTACH
+    elif manager.state == HolderState.HOLD_ONLY:
+        verb = Verb.RESUME_HELD if recorded else Verb.ATTACH
+    elif isinstance(record, SessionRecord) and live:
+        return Refused(f"its client {record.pid} runs without a holder; exit it first")
+    else:
+        verb = Verb.RESUME_NEW if recorded else Verb.OPEN
+    return Plan(verb, manager.name)
