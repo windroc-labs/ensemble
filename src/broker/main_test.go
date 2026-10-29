@@ -47,9 +47,6 @@ func recording(calls *[]call) app {
 		return build(ctx, k, arg, p)
 	},
 		start: result("start"), close: result("close"),
-		lockQuery: func(ctx context.Context, k keys, name string) (any, error) {
-			return result("lock-query")(ctx, k, name, nil)
-		},
 		maintain: func(ctx context.Context, k keys, container, _ string, _ []string, _ bool) (any, error) {
 			return result("maintain")(ctx, k, container, nil)
 		},
@@ -90,31 +87,13 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-func TestLockQueryCommand(t *testing.T) {
-	calls := 0
-	a := app{lockQuery: func(_ context.Context, _ keys, name string) (any, error) {
-		calls++
-		if name != "dummy" {
-			t.Fatalf("query %q", name)
-		}
-		return launcher.LockResult{}, nil
-	}}
-	code, out, errOut := invoke(a, "lock-query", "--lock", "dummy")
-	if code != 0 || out != "{\"holder\":null}\n" || errOut != "" || calls != 1 {
-		t.Fatalf("%d %q %q calls=%d", code, out, errOut, calls)
-	}
-	for _, args := range [][]string{{"lock-query"}, {"lock-query", "--lock", "A B"}, {"lock-query", "--lock", ""}, {"lock-query", "--lock", "dummy", "extra"}} {
-		code, out, errOut = invoke(a, args...)
-		if code != 2 || out != "" || calls != 1 {
-			t.Fatalf("%q: %d %q %q", args, code, out, errOut)
-		}
-	}
-	a.start = func(context.Context, keys, string, io.Writer) (any, error) {
+func TestStartBusyCommand(t *testing.T) {
+	a := app{start: func(context.Context, keys, string, io.Writer) (any, error) {
 		e := protocol.New(protocol.Busy, "Lock held by container (worker_1).")
 		e.Holder = &protocol.Holder{Container: "container", Owner: "worker_1"}
 		return nil, e
-	}
-	code, out, errOut = invoke(a, "start", "--manifest", "/tmp/manifest.json")
+	}}
+	code, out, errOut := invoke(a, "start", "--manifest", "/tmp/manifest.json")
 	if code != 75 || out != "" || !strings.Contains(errOut, `"holder":{"container":"container","owner":"worker_1"}`) {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
@@ -207,7 +186,7 @@ func TestProbeOpencodeCommand(t *testing.T) {
 }
 
 func TestInputFixtures(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "lock_query_input", "check_clients_input") {
+	for _, c := range fixtures.Cases(t, "version_input", "build_input", "start_input", "maintain_input", "close_input", "status_input", "workspace_rm_input", "probe_provider_input", "check_clients_input") {
 		t.Run(c.Name, func(t *testing.T) {
 			var in struct{ Argv []string }
 			if err := json.Unmarshal(c.Data, &in); err != nil {
@@ -1170,6 +1149,7 @@ func TestRemovedCommandsAreUnknown(t *testing.T) {
 		{"refresh", "--container", c, "--manifest", "/tmp/m.json"},
 		{"notices", "--container", c, "--manifest", "/tmp/m.json", "--delivered", "ensemble-broker-env/db@2:7d"},
 		{"refresh"},
+		{"lock-query", "--lock", "dummy"},
 	} {
 		code, out, errOut := invoke(recording(&calls), args...)
 		assertError(t, errOut, out, "unknown", protocol.Usage)
@@ -1340,7 +1320,6 @@ func TestOnlyLoginsAndRetrustAreInteractive(t *testing.T) {
 		{[]string{"close", "--container", container}, []bool{false}},
 		{[]string{"status"}, []bool{false}},
 		{[]string{"build", "--ensemble", "/e"}, []bool{false}},
-		{[]string{"lock-query", "--lock", "dummy"}, []bool{false}},
 		{[]string{"probe-provider", "--provider", "strata", "--base-url", "https://strata.test/v1"}, []bool{false}},
 		{[]string{"workspace-rm", "--volume", "ensemble-ws-w"}, []bool{false}},
 		{[]string{"check-clients"}, []bool{false}},

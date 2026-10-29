@@ -27,7 +27,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -48,7 +48,6 @@ type app struct {
 	start, close  step
 	maintain      func(ctx context.Context, k keys, container, manifest string, delivered []string, renew bool) (any, error)
 	status        func(ctx context.Context, k keys) (any, error)
-	lockQuery     func(ctx context.Context, k keys, name string) (any, error)
 	probeOpencode func(ctx context.Context, k keys, provider, base string) (any, error)
 	workspaceRm   func(ctx context.Context, k keys, volume string, force bool) (any, error)
 	login         func(k keys, account string, out io.Writer) error                                // login claude [NAME]
@@ -196,7 +195,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				}
 				return emit(stdout, result)
 			}
-		case "version", "build", "start", "maintain", "close", "status", "workspace-rm", "probe-provider", "lock-query", "check-clients":
+		case "version", "build", "start", "maintain", "close", "status", "workspace-rm", "probe-provider", "check-clients":
 			command = args[0]
 		case "login", "retrust":
 			var login func(keys) error
@@ -277,10 +276,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
 			return a.status(ctx, k)
 		}
-	case command == "lock-query" && len(args) == 3 && args[1] == "--lock" && launcher.ValidLock(args[2]):
-		s, arg = func(ctx context.Context, k keys, lock string, _ io.Writer) (any, error) {
-			return a.lockQuery(ctx, k, lock)
-		}, args[2]
 	case command == "probe-provider" && len(args) == 5 && args[1] == "--provider" && launcher.ValidProvider(args[2]) && args[3] == "--base-url" && broker.ValidOpencodeURL(args[4]):
 		s = func(ctx context.Context, k keys, _ string, _ io.Writer) (any, error) {
 			return a.probeOpencode(ctx, k, args[2], args[4])
@@ -441,9 +436,6 @@ func system() app {
 		},
 		legacy: systemLegacy,
 		linear: linearSystem,
-		lockQuery: func(ctx context.Context, k keys, lock string) (any, error) {
-			return withHost("lock-query", "", k, nil, func(h launcher.Host) (any, error) { return h.LockQuery(ctx, lock) })
-		},
 		probeOpencode: func(ctx context.Context, k keys, provider, base string) (any, error) {
 			available, err := (broker.OpencodeKeys{Keychain: k}).Probe(ctx, provider, base, nil)
 			return map[string]bool{"available": available}, err

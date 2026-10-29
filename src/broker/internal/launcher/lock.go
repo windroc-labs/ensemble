@@ -22,10 +22,6 @@ const (
 
 var containerIDPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-type LockResult struct {
-	Holder *protocol.Holder `json:"holder"`
-}
-
 type lockContainer struct {
 	ID     string `json:"Id"`
 	Name   string
@@ -82,15 +78,6 @@ func (h Host) lockHolder(ctx context.Context, lock, exclude string) (*protocol.H
 		}
 	}
 	return nil, nil
-}
-
-// LockQuery is read-only; it does not take the start lock or check credentials.
-func (h Host) LockQuery(ctx context.Context, lock string) (LockResult, error) {
-	if !ValidLock(lock) {
-		return LockResult{}, protocol.New(protocol.ManifestRejected, "Invalid lock name.")
-	}
-	holder, err := h.lockHolder(ctx, lock, "")
-	return LockResult{Holder: holder}, err
 }
 
 // startLock takes lock's start lock without waiting, from before the holder check until the start returns; another
