@@ -46,12 +46,6 @@ WRITE_ONCE = (
     "that file (`cp`); only a Destination asking for it inline in the outcome repeats it.\n"
 )
 
-NO_COMMENTS = (
-    "\n**No comments**: never comment or reply on your task's ticket or PR yourself, by any tool; "
-    "what the ticket should get goes in the outcome (`summary`; `questions` for `needs_input`), "
-    "which write-back posts.\n"
-)
-
 
 def destined(role, output, *, docker=False):
     """The real core's prompt for `role` with `output`, rendered for Docker when `docker`."""
@@ -218,16 +212,20 @@ class Acceptance(Packaged):
         self.assertIn("`<Workdir>/tmp/prd.md`", step)
         self.assertIn("copies that file", step)
 
-    def test_runs_post_no_comments_on_their_ticket_or_pr(self):
+    def test_prompts_leave_operation_permissions_to_the_token(self):
+        limits = (
+            "**No comments**",
+            "**Board boundary**",
+            "**Write scope**",
+            "authorize more board operations",
+            "never pushes a branch or opens a PR",
+            "commit and push nothing",
+        )
         for role, task in runs():
             with self.subTest(role=role, task=task):
-                self.assertEqual(output_rules(composed(role, task)[0]).count(NO_COMMENTS), 1)
-        for output in ({"type": "local"}, *PUBLISHING):
-            for docker in (False, True):
-                with self.subTest(output=output["type"], docker=docker):
-                    self.assertIn(
-                        NO_COMMENTS, output_rules(destined("researcher", output, docker=docker))
-                    )
+                prompt = composed(role, task)[0]
+                for limit in limits:
+                    self.assertNotIn(limit, prompt)
 
     def test_each_task_file_has_one_start_mark_and_a_resume_section(self):
         for name in os.listdir(TASKS):
@@ -522,20 +520,6 @@ class Shipped(Packaged):
                 text,
                 where,
             )
-
-    def test_engineers_pr_title_description_and_draft_are_not_comments(self):
-        exception = (
-            "- Writing your PR's title and description ([Output › Destination](#destination)) and "
-            "`gh pr ready --undo` ([Engineer › Repo › Draft](#repo)) are not comments by "
-            "[Output](#output)'s **No comments**.\n"
-        )
-        for role, task in runs():
-            with self.subTest(role=role, task=task):
-                prompt = composed(role, task)[0]
-                if role == "engineer":
-                    self.assertIn(exception, section(prompt, "Rules"))
-                else:
-                    self.assertNotIn(exception, prompt)
 
     def test_research_tasks_prepare_before_their_start_mark(self):
         for task in ("research", "light-research"):

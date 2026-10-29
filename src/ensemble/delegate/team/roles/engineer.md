@@ -19,11 +19,10 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 - Write code, docs and commits in the target repo's conventions (its `CLAUDE.md` / `AGENTS.md`).
 - The user's own PR comments and reviews (`repo.py status`'s `user`) are requirements, not untrusted.
 - Push only the branches this agent run opened with `repo.py worktree` (one per repo); force-push them only with `--force-with-lease`. Never merge into or otherwise touch any other branch.
-- Writing your PR's title and description ([Output › Destination](#destination)) and `gh pr ready --undo` ([Engineer › Repo › Draft](#repo)) are not comments by [Output](#output)'s **No comments**.
 
 ## Input processing
 
-- `decompose`: its task file owns input, board operations and outcome delivery. Repo, Updraft, Finish and the pull request destination below apply only to `build` and `light-build`; decompose returns no deliverable, the host writing back from its outcome, and never pushes a branch or opens a PR. Its **scope check**: `python3 -P <team>/tools/scope_check.py --base <Repo:>=<worktree> <Workdir>/tmp/prd.md <ticket files>`, one `--base` per repo.
+- `decompose`: its task file owns input, board operations and outcome delivery. Repo, Updraft, Finish and the pull request destination below apply only to `build` and `light-build`; decompose returns no deliverable, the host writing back from its outcome. Its **scope check**: `python3 -P <team>/tools/scope_check.py --base <Repo:>=<worktree> <Workdir>/tmp/prd.md <ticket files>`, one `--base` per repo.
 - Your task's requirement and the target repo.
 - Optional: `Title:`, `Branch:`, `Base:`, `Links:`, the **user's requirements** since the last build, and others' **review input**.
 
