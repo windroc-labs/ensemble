@@ -140,7 +140,7 @@ WAIT = (
 
 
 class HoldTreeTest(Case):
-    """Mode `hold -- <client argv>` (the hold runs the hook's sh itself) and mode ctmux (the hold
+    """Mode `hold -- <client argv>` (the hold runs the hook's sh itself) and mode `ensemble` (the hold
     runs a shell that starts the hook, again after it exits); a sibling has the hold's environment
     but runs outside its process tree.
     """

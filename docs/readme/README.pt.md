@@ -53,7 +53,7 @@ Para fornecer a senha de `sudo` pelo Keychain, baixe o script primeiro; stdin n�
 | `--password-stdin` | A senha de `sudo` de stdin, antes da chave do provedor |
 
 O instalador pergunta quais clientes usar, se os trabalhadores serão executados localmente ou no Docker e se você quer configurar um
-quadro. Ele instala as dependências e os plugins selecionados, solicita os logins necessários e configura o `ctmux`.
+quadro. Ele instala as dependências e os plugins selecionados, solicita os logins necessários e configura o comando `ensemble`.
 Execute-o novamente para concluir uma instalação interrompida. Para ver as opções, use `bash scripts/install.sh --help` em um checkout do repositório;
 para uma instalação existente, leia [Atualização](../upgrading.md) primeiro.
 
@@ -93,7 +93,7 @@ Para uma única tarefa, na conversa do cliente instalado:
 Para uma equipe, abra um shell de comandante e inicie seu cliente:
 
 ```sh
-ctmux work
+ensemble work
 claude
 ```
 

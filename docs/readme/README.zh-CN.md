@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
 | `--password-stdin` | 从 stdin 读取 `sudo` 密码，位于提供商密钥之前 |
 
 安装程序会询问使用哪些客户端、工作者在本地还是 Docker 中运行，以及是否设置看板。
-它会安装所选依赖和插件、请求所需的登录，并设置 `ctmux`。
+它会安装所选依赖和插件、请求所需的登录，并设置 `ensemble` 命令。
 安装中断后，重新运行即可完成。要查看选项，请在仓库检出目录中运行 `bash scripts/install.sh --help`；
 已有安装的用户应先阅读[升级指南](../upgrading.md)。
 
@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
 要使用团队，请打开指挥官 shell 并启动客户端：
 
 ```sh
-ctmux work
+ensemble work
 claude
 ```
 

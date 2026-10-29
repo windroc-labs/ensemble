@@ -311,8 +311,8 @@ its current work can be interrupted. Until then, it retains its old local/LAN ne
 ## Unified source layout
 
 After updating the plugin to the `src/ensemble/` layout, refresh the launchers once:
-`<plugin dir>/skills/manage/scripts/ctmux --install`. Use the plugin path directly because an
-older installed `ctmux` launcher still looks for `manager/skills/manage/scripts/ctmux`.
+`<plugin dir>/skills/manage/scripts/ensemble --install`. Use the plugin path directly because an
+older installed launcher still looks for its script under `manager/skills/manage/scripts/`.
 Rerunning `scripts/install.sh` after the plugin update does this automatically, including when
 all five launchers already exist. Python imports and user configuration stay the same.
 
@@ -527,5 +527,5 @@ flowchart LR
 
 When the old selected directory is gone, the next installed command selects and records the newest installed ensemble
 copy from OpenCode and reports its path on stderr; no installer rerun is needed. To select a different ref while the
-old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs
+old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ensemble --install`; older refs
 require the installer ([With scripts/install.sh](#with-scriptsinstallsh)).

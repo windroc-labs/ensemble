@@ -30,7 +30,6 @@ RETIRED = (
     "router.py",
     "--runner",
     "attach --resume",
-    "ctmux's",
     "${CLAUDE_SKILL_DIR}/../../src/ensemble/manager",
     "src/ensemble/manager",
     "tmux ls",
@@ -115,12 +114,12 @@ class Commands(Case):
 
 
 class Names(Case):
-    def test_the_files_it_names_exist_and_ctmux_runs(self):
+    def test_the_files_it_names_exist_and_ensemble_runs(self):
         named = paths("manage")
-        self.assertIn(os.path.join(SKILLS, "manage", "scripts", "ctmux"), named)
+        self.assertIn(os.path.join(SKILLS, "manage", "scripts", "ensemble"), named)
         for path in named:
             self.assertTrue(os.path.isfile(path), path)
-        self.assertTrue(os.access(os.path.join(SKILLS, "manage", "scripts", "ctmux"), os.X_OK))
+        self.assertTrue(os.access(os.path.join(SKILLS, "manage", "scripts", "ensemble"), os.X_OK))
 
     def test_the_grid_keys_it_names_are_the_viewers(self):
         [config] = {p for p in paths("manage") if p.endswith("config.toml")}
@@ -170,7 +169,7 @@ class Flows(Case):
     def test_start_attaches_and_points_to_the_monitoring_contract(self):
         start = section("manage", "Start")
         for phrase in (
-            "`ctmux <name>`",
+            "`ensemble <name>`",
             "ensemble-crew hold --manager",
             "`ensemble-crew attach`",
             "lease",

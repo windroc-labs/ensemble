@@ -2793,7 +2793,7 @@ class InstallTest(Case):
     def test_plugin_layout_upgrade_refreshes_existing_executable_launchers_once(self):
         self.assert_ok(self.opencode_only())
         for name in (
-            "ctmux",
+            "ensemble",
             "ensemble-crew",
             "ensemble-session",
             "ensemble-delegate",
@@ -2898,7 +2898,7 @@ class InstallTest(Case):
         self.assert_command_sources(commands, self.opencode_package())
 
     def test_installer_adapters_reject_malformed_selection_records(self):
-        commands = ("ctmux", *self.command_package())
+        commands = ("ensemble", *self.command_package())
         self.assert_ok(self.opencode_only())
         selection = Path(self.ensemble, "plugin-root")
         valid = json.loads(selection.read_text())
@@ -2921,7 +2921,9 @@ class InstallTest(Case):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, "")
                     self.assertIn(f"{name}: cannot read {selection}:", result.stderr)
-                    self.assertIn("rerun install.sh or the plugin's ctmux --install", result.stderr)
+                    self.assertIn(
+                        "rerun install.sh or the plugin's ensemble --install", result.stderr
+                    )
                     self.assertNotIn("Traceback", result.stderr)
                     self.assertEqual(selection.read_text(), text)
 
@@ -2988,7 +2990,7 @@ class InstallTest(Case):
                 self.assertEqual(
                     result.stderr,
                     f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
-                    "rerun install.sh or the plugin's ctmux --install\n",
+                    "rerun install.sh or the plugin's ensemble --install\n",
                 )
                 self.assertEqual(Path(self.ensemble, "plugin-root").read_bytes(), record)
 
@@ -3016,7 +3018,7 @@ class InstallTest(Case):
                     self.assertEqual(
                         result.stderr,
                         f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
-                        "rerun install.sh or the plugin's ctmux --install\n",
+                        "rerun install.sh or the plugin's ensemble --install\n",
                     )
 
     def test_installer_codex_adapters_follow_an_update(self):

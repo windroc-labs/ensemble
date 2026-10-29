@@ -8,13 +8,13 @@ on:
       - launchd/**
       - scripts/install.sh
       - scripts/install-cleanup.sh
-      - skills/manage/scripts/ctmux
+      - skills/manage/scripts/ensemble
       - skills/manage/scripts/launcher
       - src/broker/internal/protocol/protocol.go
       - src/ensemble/session/hosts/docker/broker.py
       - tests/integration/install_fakes.py
       - tests/integration/install_integration_test.py
-      - tests/manager/integration/ctmux_integration_test.py
+      - tests/manager/integration/ensemble_integration_test.py
       - tests/unit/install_docs_test.py
 
 permissions:
@@ -41,7 +41,7 @@ jobs:
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Installer and command launcher tests with fake credentials
-        run: python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ctmux_integration_test.py --parallel 4 --shard 1/1
+        run: python3 .github/run_tests.py 'Installer macOS' tests/integration/install_integration_test.py tests/manager/integration/ensemble_integration_test.py --parallel 4 --shard 1/1
       # Its own run: a unit file in the run above would put that run's discovery under unit isolation.
       - name: Installer docs checks
         if: ${{ !cancelled() }}

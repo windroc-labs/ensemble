@@ -1,4 +1,4 @@
-"""ctmux (skills/manage/scripts/ctmux): its tmux calls through a fake tmux, its attach per
+"""ensemble (skills/manage/scripts/ensemble): its tmux calls through a fake tmux, its attach per
 terminal, its new session on a private tmux server with the shell under its plugin's ensemble-crew
 hold, and the launchers --install puts in ~/.ensemble/bin, run from a plain PATH before and after a
 plugin upgrade.
@@ -18,19 +18,19 @@ from tests.manager.case import REPO, Case
 from tests.session import live_tmux
 from tests.utils.jsonl import read_jsonl
 
-CTMUX = os.path.join(REPO, "skills", "manage", "scripts", "ctmux")
+ENSEMBLE = os.path.join(REPO, "skills", "manage", "scripts", "ensemble")
 LAUNCHER = os.path.join(REPO, "skills", "manage", "scripts", "launcher")
 COMMANDS = (
-    "ctmux",
+    "ensemble",
     "ensemble-crew",
     "ensemble-session",
     "ensemble-delegate",
     "ensemble-orchestrator",
 )
-USAGE = "usage: ctmux <session-name> | ctmux --install"
+USAGE = "usage: ensemble <session-name> | ensemble --install"
 FAKE = """#!{python} -I
 import json, os, sys
-with open(os.environ["CTMUX_LOG"], "a") as f:
+with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
     f.write(json.dumps([os.getcwd(), os.getpid(), *sys.argv[1:]]) + "\\n")
 rc = {{"has": "HAS_RC", "start-server": "START_RC"}}
 code = rc.get(sys.argv[1], "ATTACH_RC" if sys.argv[1] in ("-CC", "attach", "switch-client") else "")
@@ -125,7 +125,7 @@ class FakeTmux(Case):
         executable(os.path.join(self.bin, "tmux"), FAKE.format(python=sys.executable))
         os.symlink(sys.executable, os.path.join(self.bin, "python3"))
         self.installed = os.path.join(self.ensemble, "bin")
-        self.dst = os.path.join(self.installed, "ctmux")
+        self.dst = os.path.join(self.installed, "ensemble")
         self.codex = os.path.join(self.home, ".codex", "plugins", "cache", "windroc", "ensemble")
         self.opencode = os.path.join(self.home, ".cache", "opencode", "packages")
         self.env = {
@@ -134,10 +134,10 @@ class FakeTmux(Case):
             "SHELL": "/bin/zsh",
             "TERM_PROGRAM": "iTerm.app",
             "TMUX_TMPDIR": os.path.join(self.home, "tmux"),
-            "CTMUX_LOG": self.log,
+            "FAKE_TMUX_LOG": self.log,
         }
 
-    def ctmux(self, *args, script=CTMUX, has_rc=1, **codes):
+    def ensemble(self, *args, script=ENSEMBLE, has_rc=1, **codes):
         if os.path.exists(self.log):
             os.unlink(self.log)
         env = {**self.env, "HAS_RC": str(has_rc), **{k: str(v) for k, v in codes.items()}}
@@ -159,13 +159,13 @@ class FakeTmux(Case):
     def test_a_missing_or_empty_name_is_a_usage_error_without_tmux(self):
         for args in ((), ("",)):
             with self.subTest(args=args):
-                process, _, err, calls = self.ctmux(*args)
+                process, _, err, calls = self.ensemble(*args)
                 self.assertNotEqual(process.returncode, 0)
                 self.assertIn(USAGE, err)
                 self.assertEqual(calls, [])
 
     def test_an_existing_session_is_only_attached(self):
-        _, _, _, calls = self.ctmux("s1", has_rc=0)
+        _, _, _, calls = self.ensemble("s1", has_rc=0)
         self.assertEqual(
             [call[2:] for call in calls], [["has", "-t", "=s1"], ["-CC", "attach", "-t", "=s1"]]
         )
@@ -183,7 +183,7 @@ class FakeTmux(Case):
                 base = dict(self.env)
                 self.env.update(env)
                 try:
-                    process, _, _, calls = self.ctmux("s1", has_rc=0, ATTACH_RC=5)
+                    process, _, _, calls = self.ensemble("s1", has_rc=0, ATTACH_RC=5)
                 finally:
                     self.env = base
                 self.assertEqual(process.returncode, 5)
@@ -193,7 +193,7 @@ class FakeTmux(Case):
                 )
 
     def test_an_absent_session_starts_from_home_in_the_callers_directory_with_its_shell_held(self):
-        process, _, err, calls = self.ctmux("s1")
+        process, _, err, calls = self.ensemble("s1")
         self.assertEqual((process.returncode, err), (0, ""))
         self.assertEqual(
             [call[2:] for call in calls],
@@ -207,13 +207,13 @@ class FakeTmux(Case):
 
     def test_with_an_empty_shell_the_held_command_is_bin_sh(self):
         self.env["SHELL"] = ""
-        _, _, _, calls = self.ctmux("s1")
+        _, _, _, calls = self.ensemble("s1")
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/sh"))
 
     def test_only_the_first_argument_names_the_session_as_one_word(self):
         for args, name in ((("m a'n$x",), "m a'n$x"), (("s1", "extra", "--install"), "s1")):
             with self.subTest(args=args):
-                _, _, _, calls = self.ctmux(*args)
+                _, _, _, calls = self.ensemble(*args)
                 self.assertEqual(
                     [call[2:] for call in calls],
                     [
@@ -224,23 +224,23 @@ class FakeTmux(Case):
                 )
 
     def test_a_failed_create_still_attaches_and_the_attach_status_wins(self):
-        process, _, _, calls = self.ctmux("s1", START_RC=1, ATTACH_RC=7)
+        process, _, _, calls = self.ensemble("s1", START_RC=1, ATTACH_RC=7)
         self.assertEqual(process.returncode, 7)
         self.assertEqual([call[2] for call in calls], ["has", "start-server", "-CC"])
 
-    def test_the_attach_replaces_ctmux_and_its_status_is_ctmux_s(self):
-        process, _, _, calls = self.ctmux("s1", has_rc=0, ATTACH_RC=5)
+    def test_the_attach_replaces_ensemble_and_its_status_is_ensemble_s(self):
+        process, _, _, calls = self.ensemble("s1", has_rc=0, ATTACH_RC=5)
         self.assertEqual(process.returncode, 5)
         self.assertEqual(calls[-1][1], process.pid)
 
     def test_the_script_names_no_client(self):
-        with open(CTMUX, "rb") as f:
+        with open(ENSEMBLE, "rb") as f:
             text = f.read().lower()
         self.assertNotIn(b"claude", text)
         self.assertNotIn(b"codex", text)
 
-    def install(self, script=CTMUX):
-        process, out, err, calls = self.ctmux("--install", script=script)
+    def install(self, script=ENSEMBLE):
+        process, out, err, calls = self.ensemble("--install", script=script)
         paths = [os.path.join(self.installed, name) for name in COMMANDS]
         self.assertEqual(
             (process.returncode, out, err, calls), (0, "".join(f"{p}\n" for p in paths), "", [])
@@ -253,28 +253,28 @@ class FakeTmux(Case):
 
     def test_install_pins_the_source_despite_other_clients_and_equal_version_packages(self):
         selected = self.opencode_install("0.5.0", spec="selected ref with spaces")
-        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ctmux"))
+        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ensemble"))
         record(self.home, plugin(os.path.join(self.home, "cache", "9.0.0")))
         plugin(os.path.join(self.codex, "9.0.0"))
         self.opencode_install("9.0.0")
         self.opencode_install("0.5.0", spec="equal-version-leftover")
         for name in COMMANDS:
             with self.subTest(name=name):
-                if name == "ctmux":
-                    process, _, err, calls = self.ctmux("s1", script=self.dst)
+                if name == "ensemble":
+                    process, _, err, calls = self.ensemble("s1", script=self.dst)
                     self.assertEqual((process.returncode, err), (0, ""))
                     self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
                 else:
                     target = os.path.join(selected, "bin", name)
                     executable(target, '#!/bin/sh\nprintf "%s\\n" "$0"\n')
-                    process, out, err, _ = self.ctmux(script=os.path.join(self.installed, name))
+                    process, out, err, _ = self.ensemble(script=os.path.join(self.installed, name))
                     self.assertEqual((process.returncode, out, err), (0, target + "\n", ""))
 
     def test_reinstall_switches_source_even_when_launcher_bytes_match(self):
         self.install()
         selected = self.opencode_install("0.5.0")
-        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ctmux"))
-        process, _, err, calls = self.ctmux("s1", script=self.dst)
+        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ensemble"))
+        process, _, err, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual((process.returncode, err), (0, ""))
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
 
@@ -290,21 +290,23 @@ class FakeTmux(Case):
             with self.subTest(record=text):
                 with open(selection, "w", encoding="utf-8") as f:
                     f.write(text)
-                process, out, err, calls = self.ctmux("s1", script=self.dst)
+                process, out, err, calls = self.ensemble("s1", script=self.dst)
                 self.assertNotEqual(process.returncode, 0)
                 self.assertEqual((out, calls), ("", []))
-                self.assertIn(f"ctmux: cannot read {selection}:", err)
-                self.assertIn("rerun install.sh or the plugin's ctmux --install", err)
+                self.assertIn(f"ensemble: cannot read {selection}:", err)
+                self.assertIn("rerun install.sh or the plugin's ensemble --install", err)
                 self.assertNotIn("Traceback", err)
                 with open(selection, encoding="utf-8") as f:
                     self.assertEqual(f.read(), text)
 
     def test_a_missing_selected_command_fails_without_using_another_plugin(self):
         selected = self.opencode_install("0.5.0")
-        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ctmux"))
+        self.install(script=os.path.join(selected, "skills", "manage", "scripts", "ensemble"))
         record(self.home, REPO)
         os.unlink(os.path.join(selected, "bin", "ensemble-crew"))
-        process, out, err, calls = self.ctmux(script=os.path.join(self.installed, "ensemble-crew"))
+        process, out, err, calls = self.ensemble(
+            script=os.path.join(self.installed, "ensemble-crew")
+        )
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual((out, calls), ("", []))
         self.assertIn(selected, err)
@@ -325,16 +327,16 @@ class FakeTmux(Case):
                     # The same ref under another spec spelling: only that ref's copies stand in.
                     spec = "ensemble@git+ssh:/git@github.com/windroc-labs/ensemble.git#v0.5.0"
                     newer = self.opencode_install("0.10.0", spec=spec)
-                self.install(script=os.path.join(selected, "skills/manage/scripts/ctmux"))
+                self.install(script=os.path.join(selected, "skills/manage/scripts/ensemble"))
                 shutil.rmtree(selected)
                 if client == "claude":
                     record(self.home, newer)
                 for attempt in range(2):
-                    process, _, err, calls = self.ctmux("s1", script=self.dst)
+                    process, _, err, calls = self.ensemble("s1", script=self.dst)
                     self.assertEqual(process.returncode, 0, err)
                     self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", newer))
                     self.assertEqual(
-                        err, f"ctmux: re-selected plugin {newer}\n" if attempt == 0 else ""
+                        err, f"ensemble: re-selected plugin {newer}\n" if attempt == 0 else ""
                     )
                 with open(os.path.join(self.ensemble, "plugin-root"), encoding="utf-8") as f:
                     self.assertEqual(json.load(f)["root"], newer)
@@ -351,7 +353,7 @@ class FakeTmux(Case):
                         selected = plugin(os.path.join(self.codex, "0.5.0"))
                     else:
                         selected = self.opencode_install("0.5.0")
-                    self.install(script=os.path.join(selected, "skills/manage/scripts/ctmux"))
+                    self.install(script=os.path.join(selected, "skills/manage/scripts/ensemble"))
                     shutil.rmtree(selected)
                     leftover = None
                     if other:
@@ -360,13 +362,13 @@ class FakeTmux(Case):
                             if client != "opencode"
                             else plugin(os.path.join(self.codex, "99.0.0"))
                         )
-                    process, out, err, calls = self.ctmux("s1", script=self.dst)
+                    process, out, err, calls = self.ensemble("s1", script=self.dst)
                     self.assertNotEqual(process.returncode, 0)
                     self.assertEqual((out, calls), ("", []))
                     self.assertEqual(
                         err,
-                        f"ctmux: selected plugin {selected!r} has no executable skills/manage/scripts/ctmux; "
-                        "rerun install.sh or the plugin's ctmux --install\n",
+                        f"ensemble: selected plugin {selected!r} has no executable skills/manage/scripts/ensemble; "
+                        "rerun install.sh or the plugin's ensemble --install\n",
                     )
                     if leftover:
                         shutil.rmtree(leftover)
@@ -375,7 +377,7 @@ class FakeTmux(Case):
         selected = self.opencode_install(
             "0.5.0", spec="ensemble@git+https:/github.com/x/e.git#WDRC-241"
         )
-        self.install(script=os.path.join(selected, "skills/manage/scripts/ctmux"))
+        self.install(script=os.path.join(selected, "skills/manage/scripts/ensemble"))
         for spec in (
             "ensemble@git+https:/github.com/x/e.git#main",
             "ensemble@git+https:/github.com/x/e.git",
@@ -385,13 +387,13 @@ class FakeTmux(Case):
         selection = os.path.join(self.ensemble, "plugin-root")
         with open(selection, encoding="utf-8") as f:
             text = f.read()
-        process, out, err, calls = self.ctmux("s1", script=self.dst)
+        process, out, err, calls = self.ensemble("s1", script=self.dst)
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual((out, calls), ("", []))
         self.assertEqual(
             err,
-            f"ctmux: selected plugin {selected!r} has no executable skills/manage/scripts/ctmux; "
-            "rerun install.sh or the plugin's ctmux --install\n",
+            f"ensemble: selected plugin {selected!r} has no executable skills/manage/scripts/ensemble; "
+            "rerun install.sh or the plugin's ensemble --install\n",
         )
         with open(selection, encoding="utf-8") as f:
             self.assertEqual(f.read(), text)
@@ -401,7 +403,7 @@ class FakeTmux(Case):
         for spec in ("z-last", "a-first"):
             self.opencode_install("0.5.0", spec=spec)
         for _ in range(2):
-            process, _, err, calls = self.ctmux("s1", script=self.dst)
+            process, _, err, calls = self.ensemble("s1", script=self.dst)
             self.assertEqual((process.returncode, err), (0, ""))
             expected = os.path.join(self.opencode, "a-first", "node_modules", "ensemble")
             self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", expected))
@@ -424,13 +426,13 @@ class FakeTmux(Case):
             with open(path, "rb") as f:
                 self.assertEqual(f.read(), source, name)
 
-    def test_the_installed_ctmux_runs_the_recorded_plugins_and_follows_an_upgrade(self):
+    def test_the_installed_ensemble_runs_the_recorded_plugins_and_follows_an_upgrade(self):
         self.legacy_install()
         for version in ("0.5.0", "0.6.0"):
             with self.subTest(version=version):
                 root = plugin(os.path.join(self.home, "cache", version))
                 record(self.home, root)
-                process, _, err, calls = self.ctmux("s1", script=self.dst)
+                process, _, err, calls = self.ensemble("s1", script=self.dst)
                 self.assertEqual((process.returncode, err), (0, ""))
                 self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
@@ -439,7 +441,7 @@ class FakeTmux(Case):
         first = plugin(os.path.join(self.home, "cache", "0.5.0"))
         newer = plugin(os.path.join(self.home, "cache", "0.10.0"))
         record(self.home, first, newer)
-        process, _, err, calls = self.ctmux("s1", script=self.dst)
+        process, _, err, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual((process.returncode, err), (0, ""))
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", first))
 
@@ -447,7 +449,7 @@ class FakeTmux(Case):
         self.legacy_install()
         for version in ("0.9.0", "0.10.0"):
             plugin(os.path.join(self.codex, version))
-        _, _, err, calls = self.ctmux("s1", script=self.dst)
+        _, _, err, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual(err, "")
         self.assertEqual(
             calls[1][2:], created("s1", self.cwd, "/bin/zsh", os.path.join(self.codex, "0.10.0"))
@@ -457,7 +459,7 @@ class FakeTmux(Case):
         self.legacy_install()
         plugin(os.path.join(self.codex, "9.0.0"))
         record(self.home, root := plugin(os.path.join(self.home, "cache", "0.5.0")))
-        _, _, _, calls = self.ctmux("s1", script=self.dst)
+        _, _, _, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
     def opencode_install(self, version: str, spec: str = "") -> str:
@@ -475,7 +477,7 @@ class FakeTmux(Case):
         newest = os.path.join(
             self.opencode, "ensemble@git+https:/github.com/windroc-labs/ensemble.git#v0.10.0"
         )
-        _, _, err, calls = self.ctmux("s1", script=self.dst)
+        _, _, err, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual(err, "")
         self.assertEqual(
             calls[1][2:],
@@ -484,7 +486,7 @@ class FakeTmux(Case):
         cache = os.path.join(self.home, "xdg cache")
         self.opencode = os.path.join(cache, "opencode", "packages")
         root = self.opencode_install("0.1.0", spec="ensemble")
-        _, _, err, calls = self.ctmux("s1", script=self.dst, XDG_CACHE_HOME=cache)
+        _, _, err, calls = self.ensemble("s1", script=self.dst, XDG_CACHE_HOME=cache)
         self.assertEqual(err, "")
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
@@ -492,12 +494,12 @@ class FakeTmux(Case):
         self.legacy_install()
         self.opencode_install("9.0.0")
         plugin(os.path.join(self.codex, "0.5.0"))
-        _, _, _, calls = self.ctmux("s1", script=self.dst)
+        _, _, _, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual(
             calls[1][2:], created("s1", self.cwd, "/bin/zsh", os.path.join(self.codex, "0.5.0"))
         )
         record(self.home, root := plugin(os.path.join(self.home, "cache", "0.4.0")))
-        _, _, _, calls = self.ctmux("s1", script=self.dst)
+        _, _, _, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
     def test_a_launcher_passes_its_arguments_stdin_and_status(self):
@@ -526,22 +528,22 @@ class FakeTmux(Case):
         record(
             self.home, {"scope": "user"}, root := plugin(os.path.join(self.home, "cache", "0.5.0"))
         )
-        _, _, err, calls = self.ctmux("s1", script=self.dst)
+        _, _, err, calls = self.ensemble("s1", script=self.dst)
         self.assertEqual(err, "")
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", root))
 
-    def test_a_ctmux_away_from_its_plugin_fails_before_creating_a_session(self):
+    def test_an_ensemble_away_from_its_plugin_fails_before_creating_a_session(self):
         away = os.path.join(self.home, "away")
         os.mkdir(away)
-        copy = shutil.copy2(CTMUX, os.path.join(away, "ctmux"))
-        process, out, err, calls = self.ctmux("s1", script=copy)
+        copy = shutil.copy2(ENSEMBLE, os.path.join(away, "ensemble"))
+        process, out, err, calls = self.ensemble("s1", script=copy)
         self.assertEqual((process.returncode, out), (1, ""))
-        self.assertRegex(err, r"\Actmux: no /.*/bin/ensemble-crew\n\Z")
+        self.assertRegex(err, r"\Aensemble: no /.*/bin/ensemble-crew\n\Z")
         self.assertEqual([call[2] for call in calls], ["has"])
 
     def test_with_no_install_a_launcher_fails_naming_where_it_looked(self):
         self.legacy_install()
-        process, out, err, calls = self.ctmux("s1", script=self.dst)
+        process, out, err, calls = self.ensemble("s1", script=self.dst)
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual((out, calls), ("", []))
         self.assertIn(os.path.join(self.home, ".claude", "plugins", "installed_plugins.json"), err)
@@ -552,7 +554,7 @@ class FakeTmux(Case):
         os.rmdir(self.ensemble)
         with open(self.ensemble, "w", encoding="utf-8"):
             pass
-        process, out, _, calls = self.ctmux("--install")
+        process, out, _, calls = self.ensemble("--install")
         self.assertNotEqual(process.returncode, 0)
         self.assertEqual((out, calls), ("", []))
 
@@ -580,7 +582,7 @@ class PrivateServer(Case):
             "TMUX_TMPDIR": self.server.root,
         }
 
-    def ctmux(self, *args, script=CTMUX):
+    def ensemble(self, *args, script=ENSEMBLE):
         return subprocess.run(
             (script, *args),
             cwd=self.cwd,
@@ -613,7 +615,7 @@ class PrivateServer(Case):
         return sorted(sessions.stdout.splitlines()), options
 
     def test_a_new_session_holds_the_lease_for_its_shell_in_the_callers_directory(self):
-        done = self.ctmux("s1")
+        done = self.ensemble("s1")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
         self.assertEqual(self.attaches(), [["-CC", "attach", "-t", "=s1"]])
         self.assertEqual(
@@ -641,12 +643,12 @@ class PrivateServer(Case):
                 check=True,
             )
         before = self.state()
-        done = self.ctmux("s1")
+        done = self.ensemble("s1")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
         self.assertEqual(self.attaches(), [["-CC", "attach", "-t", "=s1"]])
         self.assertEqual(self.state(), before)
         self.assertFalse(os.path.exists(os.path.join(self.ensemble, "managers")))
-        done = self.ctmux("s1-")
+        done = self.ensemble("s1-")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
         self.assertEqual(self.attaches()[-1], ["-CC", "attach", "-t", "=s1-"])
         self.assertEqual(
@@ -658,26 +660,26 @@ class PrivateServer(Case):
     def test_installed_launchers_run_off_path_and_switch_source_on_reinstall(self):
         installed = os.path.join(self.ensemble, "bin")
         record(self.home, REPO)
-        done = self.ctmux("--install")
+        done = self.ensemble("--install")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
         upgraded = plugin(os.path.join(self.home, "cache", "0.6.0"))
         for name, root in (("s1", REPO), ("s2", upgraded)):
             with self.subTest(root=root):
                 record(self.home, root)
-                done = self.ctmux(
-                    "--install", script=os.path.join(root, "skills/manage/scripts/ctmux")
+                done = self.ensemble(
+                    "--install", script=os.path.join(root, "skills/manage/scripts/ensemble")
                 )
                 self.assertEqual((done.returncode, done.stderr), (0, ""))
                 if os.path.exists(self.shell + ".log"):
                     os.unlink(self.shell + ".log")
-                done = self.ctmux(name, script=os.path.join(installed, "ctmux"))
+                done = self.ensemble(name, script=os.path.join(installed, "ensemble"))
                 self.assertEqual((done.returncode, done.stderr), (0, ""))
                 self.assertEqual(self.attaches()[-1], ["-CC", "attach", "-t", f"={name}"])
                 report = live_tmux.wait(self.shell_report, what="the held shell's report")
                 self.assertEqual((report[2], report[5]), (name, os.path.join(root, "bin")))
                 with self.assertRaisesRegex(Held, f"held by {name}"), self.roster(name).hold(None):
                     pass
-                done = self.ctmux(
+                done = self.ensemble(
                     "status", "--manager", name, script=os.path.join(installed, "ensemble-crew")
                 )
                 self.assertEqual((done.returncode, done.stderr), (0, ""))

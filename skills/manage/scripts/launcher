@@ -1,11 +1,11 @@
 #!/bin/sh
-# ctmux --install copies this under each command's name into ~/.ensemble/bin: it runs that command
+# ensemble --install copies this under each command's name into ~/.ensemble/bin: it runs that command
 # from the plugin selected by that install. Older installs without a selection use client discovery.
 target=$(python3 -I - "${0##*/}" "$@" <<'EOF'
 import glob, json, os, sys, tempfile
 
 name = sys.argv[1]
-rel = os.path.join("skills", "manage", "scripts", name) if name == "ctmux" else os.path.join("bin", name)
+rel = os.path.join("skills", "manage", "scripts", name) if name == "ensemble" else os.path.join("bin", name)
 home = os.path.expanduser("~")
 record = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude"), "plugins", "installed_plugins.json")
 cache = os.path.join(os.environ.get("CODEX_HOME") or os.path.join(home, ".codex"), "plugins", "cache", "windroc", "ensemble")
@@ -84,14 +84,14 @@ try:
 except FileNotFoundError:
     pass
 except (OSError, UnicodeError) as e:
-    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
+    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ensemble --install")
 else:
     try:
         data = json.loads(text)
         if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in ("root", "client", "source")):
             raise ValueError("expected a selection object with root, client and source strings")
     except ValueError as e:
-        sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ctmux --install")
+        sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ensemble --install")
     root = data["root"]
     path = os.path.join(root, rel)
     if os.path.isabs(root) and "\n" not in root:
@@ -108,7 +108,7 @@ else:
                     print(f"{name}: re-selected plugin {candidate}", file=sys.stderr)
                     print(target)
                     sys.exit()
-    sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ctmux --install")
+    sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ensemble --install")
 
 roots = client_roots("claude", record, newest=False) + client_roots("codex", cache) + client_roots("opencode", packages)
 for root in roots:
