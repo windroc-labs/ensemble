@@ -78,6 +78,19 @@ class Acceptance(Packaged):
         self.assertIn(
             "python3 -P {{team}}/tools/report_check.py *", composed("researcher")[1].commands
         )
+        self.assertIn(
+            "python3 -P {{team}}/tools/scope_check.py *",
+            composed("engineer", "decompose")[1].commands,
+        )
+        engineer = composed("engineer", "decompose")[0]
+        self.assertIn(
+            "Its **scope check**: `python3 -P <team>/tools/scope_check.py --base ", engineer
+        )
+        decompose = task_text("decompose")
+        self.assertIn(
+            "run the **scope check** ([Engineer › Input processing](#input-processing))", decompose
+        )
+        self.assertIn("Rerun the scope check on the reread descriptions.", decompose)
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
