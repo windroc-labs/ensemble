@@ -800,7 +800,7 @@ class DialogTest(Base):
             if isinstance(event, Blocked):
                 blocks.append(event)
                 if len(blocks) == at + 1:
-                    start._watch(view)
+                    start._watch(view, launching=True)
             record(event)
 
         owned.pump, owned.record = pumped, recorded

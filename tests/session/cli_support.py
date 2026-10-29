@@ -39,7 +39,7 @@ class CliCase(live_tmux.Calls, Case):
         lines = result.stderr.splitlines()
         self.assertGreaterEqual(len(lines), 2, result.stderr)
         self.assertEqual(lines[0], f"session {name}: tmux attach -t '={name}'", result.stderr)
-        head = f"ensemble-session: {name}: claude exited {code} at once"
+        head = f"ensemble-session: {name}: claude exited {code} while starting"
         self.assertEqual(lines[1], head + ("; its last lines:" if lines[2:] else ""), result.stderr)
         return lines[2:]
 
@@ -169,15 +169,6 @@ class WorkerCase(CliCase):
                 f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@"\n'
             )
         return path
-
-    def dies_on_its_prompt(self) -> None:
-        """A `claude` exiting `exit` after SessionStart, its launch prompt unread."""
-        q = shlex.quote
-        with open(os.path.join(self.server.bin, "claude"), "w", encoding="utf-8") as f:
-            f.write(
-                '#!/bin/sh\nn=$#\nfor a; do [ "$n" -gt 1 ] && set -- "$@" "$a"; shift; n=$((n-1)); done\n'
-                f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@" "" </dev/null\n'
-            )
 
     def claude_argv(self, argv: list[str], sid: str, name: str, *tail: str) -> None:
         """A worker's argv on a non-isolated Host, then `tail`."""
