@@ -230,6 +230,7 @@ class Acceptance(Packaged):
             "authorize more board operations",
             "never pushes a branch or opens a PR",
             "commit and push nothing",
+            "otherwise touch any other branch",
         )
         for role, task in runs():
             with self.subTest(role=role, task=task):
