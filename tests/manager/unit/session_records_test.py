@@ -33,3 +33,27 @@ class SessionRecords(Case):
                 except json.JSONDecodeError:
                     continue
                 self.assertFalse(validator.is_valid(record))
+
+    def test_each_client_call_records_its_argv_and_stdin(self):
+        validator = _validator()
+        self.assertEqual(set(session_records.CALLS), set(session_records.VALID))
+        for client, call in session_records.CALLS.items():
+            with self.subTest(client=client):
+                manual = call.argv[:2] == ("--mode", "manual")
+                self.assertEqual(manual, client != "claude")
+                args = dict(zip(call.argv[::2], call.argv[1::2], strict=True))
+                expected = {
+                    "client": args["--client"],
+                    "sid": call.stdin["session_id"],
+                    "pid": int(args["--client-pid"]),
+                    "cwd": call.stdin["cwd"],
+                }
+                self.assertEqual(call.record, expected)
+                self.assertEqual(call.record, session_records.VALID[client])
+                validator.validate(call.record)
+
+    def test_rejected_calls_write_no_record(self):
+        self.assertTrue(session_records.REJECTED)
+        for case, call in session_records.REJECTED.items():
+            with self.subTest(case=case):
+                self.assertIsNone(call.record)
