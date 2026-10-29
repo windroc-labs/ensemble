@@ -5,11 +5,12 @@
 
 A ticket's `Repo:` picks its DIR, `Task:` build or light-build makes it an engineer ticket, and
 its `Covers:` line names its FR/NFR ids. Its `Scope:` line is followed by `- ` items:
-`path` [`[table] key`] [(new)]. A path is a file, a directory or a glob; it must exist on DIR
-unless (new). Items of one repo overlap when a path equals or contains the other's and their keys
-match or either has none. A PRD backtick literal is a path when it has no space, starts with
-none of `/~-$`, holds none of `:<>{}|` and exists on a DIR or holds `/` before a dotted last
-segment; it is a key in `[table] key` form. Each must equal one ticket's item path or key.
+`path` [`[table] key`] [(new)]; other backtick text is prose. A path is a file, a directory or
+a glob; it must exist on DIR unless (new). Items of one repo overlap when a path equals or contains
+the other's and their keys match or either has none. A PRD backtick literal is a path when it has
+no space, starts with none of `/~-$`, holds none of `:<>{}|` and exists on a DIR or holds `/`
+before a dotted last segment (a glob without `/` needs a dotted name); it is a key in `[table] key`
+form. Each must equal one ticket's item path or key.
 """
 
 import glob
@@ -20,7 +21,7 @@ import sys
 ENGINEER = {"build", "light-build"}
 _ID = re.compile(r"\bN?FR-\d+\b")
 _LITERAL = re.compile(r"`([^`\n]+)`")
-_KEY = re.compile(r"^\[[\w.-]+\](?: [\w.-]+)?$")
+_KEY = re.compile(r"^\[[A-Za-z][\w.-]*\](?: [\w.-]+)?$")
 _GLOB = re.compile(r"[*?[]")
 
 
@@ -36,27 +37,31 @@ def _field(text, name):
 def _scope(text):
     lines = text.splitlines()
     if "Scope:" not in (line.strip() for line in lines):
-        return None
+        return None, []
     start = [line.strip() for line in lines].index("Scope:") + 1
-    items = []
+    items, bad = [], []
     for line in lines[start:]:
         if not re.match(r"\s*[-*] ", line):
             break
         literals = _LITERAL.findall(line)
-        if literals:
-            key = literals[1] if len(literals) > 1 else None
-            items.append((literals[0].rstrip("/"), key, "(new)" in line))
-    return items
+        if not literals:
+            bad.append(line.strip())
+            continue
+        key = next((k for k in literals[1:] if _KEY.match(k)), None)
+        items.append((literals[0].rstrip("/"), key, "(new)" in line))
+    return items, bad
 
 
 def _ticket(path, text):
     covers = _field(text, "Covers")
+    scope, bad = _scope(text)
     return {
         "name": os.path.basename(path),
         "repo": _field(text, "Repo"),
         "task": _field(text, "Task"),
         "covers": set(_ID.findall(covers or "")),
-        "scope": _scope(text),
+        "scope": scope,
+        "bad": bad,
     }
 
 
@@ -73,7 +78,8 @@ def _within(a, b):
 
 
 def _paths(ticket, bases):
-    failures, owned = [], []
+    failures = [f"{ticket['name']}: Scope item `{line}` names no `path`" for line in ticket["bad"]]
+    owned = []
     for path, key, new in ticket["scope"] or ():
         found = _expand(bases[ticket["repo"]], path)
         if not found and not new:
@@ -105,6 +111,8 @@ def _prd_literals(prd, trees):
         ):
             continue
         last = bare.rsplit("/", 1)[-1]
+        if _GLOB.search(bare) and "/" not in bare and "." not in last.strip("."):
+            continue
         if any(_expand(tree, bare) for tree in trees) or ("/" in bare and "." in last.strip(".")):
             names.append(("path", bare))
     return names

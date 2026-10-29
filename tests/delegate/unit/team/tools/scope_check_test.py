@@ -81,6 +81,7 @@ class ScopeCheck(Case):
             ("`config.toml`", "`config.toml` `[a] x`"),
             ("`config.toml` `[a] x`", "`config.toml` `[a] x`"),
             ("`src/app/new/` (new)", "`src/app/new/a.py` (new)"),
+            ("`src/app/main.py` rename `foo`", "`src/app/main.py` add `bar`"),
         )
         for left, right in overlapping:
             with self.subTest(left=left, right=right):
@@ -126,6 +127,8 @@ class ScopeCheck(Case):
                 "acme/app",
                 "rearm.py --mode manual",
                 "os.listdir",
+                "*",
+                "[0-9]",
                 "",
             )
         )
@@ -144,6 +147,8 @@ class ScopeCheck(Case):
         out = self.failures(ticket(None), ticket(["`src/app/util.py`"], covers="", repo="acme/x"))
         self.assertIn("t1.md: no Scope:", out)
         self.assertIn("t1.md: no Scope:", self.failures(ticket([]), ticket(None, task="verify")))
+        bare = self.failures(ticket(["`src/app/main.py`", "src/app/util.py"]))
+        self.assertIn("t1.md: Scope item `- src/app/util.py` names no `path`", bare)
         self.assertIn("t2.md: Repo: acme/x has no --base", out)
 
     def test_usage_and_unreadable_files_exit_2(self):
