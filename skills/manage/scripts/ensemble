@@ -26,12 +26,13 @@ start() {
     \; set -s extended-keys on \; set -s 'terminal-features[99]' 'xterm*:extkeys' \
     \; new -d -s "$s" -c "${dir//\#/##}" "$@")
 }
-# hold_pane NAME: "ID<tab>COMMAND" of the one pane in session NAME whose command is NAME's own hold.
+# hold_pane NAME: "ID COMMAND START" of the one pane in session NAME whose command is NAME's own
+# hold (tmux prints a tab in a format as _, so fields are space-separated).
 hold_pane() {
   local panes
-  panes=$(tmux list-panes -s -t "=$1" -F $'#{pane_id}\t#{pane_current_command}\t#{pane_start_command}' \
+  panes=$(tmux list-panes -s -t "=$1" -F '#{pane_id} #{pane_current_command} #{pane_start_command}' \
     2>/dev/null | grep -F -- " hold --manager=$1 --session=$1 -- ") || return
-  [ "$(printf '%s\n' "$panes" | wc -l)" -eq 1 ] && printf '%s\n' "${panes%$'\t'*}"
+  [ "$(printf '%s\n' "$panes" | wc -l)" -eq 1 ] && printf '%s\n' "$panes"
 }
 attach() {
   if [ -n "$TMUX" ]; then
@@ -68,15 +69,16 @@ if [ "$1" = list ]; then
       echo "ensemble: manager $s is held by $s outside tmux session $s; nothing opened" >&2
       exit 1
     }
-    id=${pane%%$'\t'*} running=${pane#*$'\t'} shell=${SHELL:-/bin/sh}
-    if [ "$verb" = attach ]; then
-      attach "$s"
-    elif [ "$running" = "${shell##*/}" ]; then
-      tmux send-keys -t "$id" C-u \; send-keys -t "$id" -l 'ensemble-crew resume-commander' \; \
-        send-keys -t "$id" Enter
+    [ "$verb" = attach ] && attach "$s"
+    # A login shell may reset PATH, so the crew is typed by path; quoted for any shell, or not at all.
+    read -r id running _ <<<"$pane"
+    shell=${SHELL:-/bin/sh} resume="'$crew' resume-commander"
+    case $crew in *[\'\\]*) running="a shell that cannot take $crew" ;; esac
+    if [ "$running" = "${shell##*/}" ]; then
+      tmux send-keys -t "$id" C-u \; send-keys -t "$id" -l "$resume" \; send-keys -t "$id" Enter
     else
       echo "ensemble: $s's pane runs $(printf '%s' "$running" | tr -cd '[:print:]');" \
-        "resume there with: ensemble-crew resume-commander" >&2
+        "resume there with: $resume" >&2
     fi
     attach "$s"
     ;;

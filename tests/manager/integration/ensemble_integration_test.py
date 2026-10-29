@@ -22,6 +22,7 @@ from tests.session import live_tmux
 from tests.utils.jsonl import read_jsonl
 
 ENSEMBLE = os.path.join(REPO, "skills", "manage", "scripts", "ensemble")
+CREW = os.path.join(REPO, "bin", "ensemble-crew")
 LAUNCHER = os.path.join(REPO, "skills", "manage", "scripts", "launcher")
 COMMANDS = (
     "ensemble",
@@ -57,6 +58,9 @@ exec cat
 CLIENT = """#!/bin/sh
 printf '["%s", "%s", "%s", "%s"]\\n' "$(pwd -P)" "$*" "$ENSEMBLE_MANAGER" "$ENSEMBLE_HOLDER_ID" >> "$0.log"
 exec cat
+"""
+BASH = """#!/bin/sh
+exec /bin/bash --noprofile --norc
 """
 START = [
     "start-server",
@@ -116,7 +120,7 @@ def held(name: str) -> list[str]:
 def panes(command: str, name: str = "demo") -> str:
     """list-panes rows: the hold pane of session `name` running `command`, and a worker's pane."""
     hold = f'"{REPO}/bin/ensemble-crew" hold --manager={name} --session={name} -- /bin/zsh -l'
-    return f"%3\t{command}\t{hold}\n%4\ttmux\ttmux -S /tmp/s attach -t =w1\n"
+    return f"%3 {command} {hold}\n%4 tmux tmux -S /tmp/s attach -t =w1\n"
 
 
 LIST_PANES = [
@@ -125,7 +129,7 @@ LIST_PANES = [
     "-t",
     "=demo",
     "-F",
-    "#{pane_id}\t#{pane_current_command}\t#{pane_start_command}",
+    "#{pane_id} #{pane_current_command} #{pane_start_command}",
 ]
 
 
@@ -328,7 +332,10 @@ class FakeTmux(Case):
         """ensemble list with stdin and stdout on a terminal, answering its prompt."""
         if os.path.exists(self.log):
             os.unlink(self.log)
-        result, err = on_terminal(self.cwd, {**self.env, "HAS_RC": str(has_rc), **env}, answer)
+        values = {"HAS_RC": has_rc, **env}
+        result, err = on_terminal(
+            self.cwd, {**self.env, **{k: str(v) for k, v in values.items()}}, answer
+        )
         calls = []
         if os.path.exists(self.log):
             with open(self.log, encoding="utf-8") as f:
@@ -448,7 +455,7 @@ class FakeTmux(Case):
         self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
 
     def test_hold_only_types_the_resume_command_into_its_idle_shell(self):
-        roster = self.demo()
+        roster = self.demo(cwd="/home/user/project")
         with roster.hold("demo"):
             result, err, calls = self.select(PANES=panes("zsh"))
         self.assertEqual((result, err.endswith(": "), calls[0]), (0, True, LIST_PANES))
@@ -457,7 +464,7 @@ class FakeTmux(Case):
             [
                 [
                     *("send-keys", "-t", "%3", "C-u", ";"),
-                    *("send-keys", "-t", "%3", "-l", "ensemble-crew resume-commander", ";"),
+                    *("send-keys", "-t", "%3", "-l", f"'{CREW}' resume-commander", ";"),
                     *("send-keys", "-t", "%3", "Enter"),
                 ],
                 ["-CC", "attach", "-t", "=demo"],
@@ -465,12 +472,12 @@ class FakeTmux(Case):
         )
 
     def test_a_busy_hold_pane_is_attached_without_typing(self):
-        roster = self.demo()
+        roster = self.demo(cwd="/home/user/project")
         with roster.hold("demo"):
             result, err, calls = self.select(PANES=panes("vim"))
         self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
         self.assertIn(
-            "ensemble: demo's pane runs vim; resume there with: ensemble-crew resume-commander\n",
+            f"ensemble: demo's pane runs vim; resume there with: '{CREW}' resume-commander\n",
             err,
         )
 
@@ -956,7 +963,7 @@ class PrivateServer(Case):
         return work
 
     def starts(self):
-        return read_jsonl(os.path.join(self.home, "tools", "codex.log"))
+        return read_jsonl(os.path.join(self.home, "tools", "codex.log"), missing_ok=True)
 
     def test_the_hold_pane_is_matched_by_its_start_command(self):
         self.env["SHELL"] = "/bin/sh"
@@ -966,7 +973,10 @@ class PrivateServer(Case):
 
     def test_hold_only_resumes_the_recorded_client_under_the_same_hold(self):
         work = self.client()
-        self.env["SHELL"] = "/bin/bash"  # macOS runs /bin/sh as bash
+        # macOS runs /bin/sh as bash; a profile may reset PATH, losing the fake client. Off PATH, so
+        # it never stands in for env bash.
+        os.mkdir(os.path.join(self.home, "login"))
+        self.env["SHELL"] = executable(os.path.join(self.home, "login", "bash"), BASH)
         self.assertEqual(self.run_ensemble("demo").returncode, 0)
         command = ("display-message", "-p", "-t", "=demo:", "#{pane_current_command}")
         live_tmux.wait(
