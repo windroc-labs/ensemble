@@ -321,6 +321,15 @@ class Delivery(Case):
         (error,) = [row["error"] for row in self.errors()]
         self.assertIn("not a regular lock file", error)
 
+    def test_a_parent_lock_that_is_no_regular_file_spawns_nothing_and_frees_the_callback_lock(self):
+        os.mkfifo(self.store.callback_parent_lock)
+        self.assertIsNone(self.callback(Begun(SID)))
+        self.assertEqual(Child.calls, [])
+        (error,) = [row["error"] for row in self.errors()]
+        self.assertIn("not a regular lock file", error)
+        self.assertIn(self.store.callback_parent_lock, error)
+        self.assertFalse(self.store.held(self.store.callback_lock))
+
     def test_a_signal_while_naming_the_pid_kills_and_reaps_the_group_then_propagates(self):
         stopped = Stopped(143)
         with failing_first_write(stopped), self.assertRaises(Stopped) as raised:
