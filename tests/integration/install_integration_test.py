@@ -67,6 +67,7 @@ PASSWORD = "pw-SENTINEL-sudo"
 TOKEN = "sk-ant-oat01-SENTINEL-token"
 KEY = "sk-SENTINEL-opencode-key"
 OLD, NEW = "1" * 40, "2" * 40
+LAUNCHER = "skills/manage/scripts/launcher"
 CLIENT, GO = (
     "src/ensemble/session/hosts/docker/broker.py",
     "src/broker/internal/protocol/protocol.go",
@@ -380,6 +381,7 @@ class InstallTest(Case):
         (self.pkg_src / ".claude-plugin").mkdir()
         (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.7"}\n')
         shutil.copytree(Path(REPO, "launchd"), self.pkg_src / "launchd")
+        executable(self.pkg_src / LAUNCHER, Path(REPO, LAUNCHER).read_text())
         for source in (CLIENT, GO):
             (self.pkg_src / source).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(Path(REPO, source), self.pkg_src / source)
@@ -2806,9 +2808,7 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertNotIn(LAUNCHERS_SKIPPED, result.stderr)
         for path in Path(self.ensemble, "bin").iterdir():
-            self.assertTrue(
-                path.read_text().startswith('#!/bin/bash\ntarget=$(python3 -I - "${0##*/}" <<')
-            )
+            self.assertEqual(path.read_bytes(), Path(REPO, LAUNCHER).read_bytes(), path)
         self.assertTrue(
             json.loads(Path(self.ensemble, "plugin-root").read_text())["root"].endswith(
                 "/node_modules/ensemble"
@@ -2817,6 +2817,16 @@ class InstallTest(Case):
         result = self.opencode_rerun()
         self.assert_ok(result)
         self.assertIn(LAUNCHERS_SKIPPED, result.stderr)
+
+    def test_a_plugin_without_its_launcher_fails_the_install(self):
+        (self.pkg_src / LAUNCHER).unlink()
+        result = self.opencode_only()
+        self.assertEqual(result.code, 1, result.stderr)
+        launcher = self.opencode_package() / LAUNCHER
+        self.assertIn(
+            f"install.sh: no executable {launcher} in the installed plugin", result.stderr
+        )
+        self.assertEqual(list(Path(self.ensemble).glob("bin/ensemble*")), [])
 
     def test_switching_clients_updates_the_source_with_identical_launchers_and_cleanup_restores_it(
         self,

@@ -502,7 +502,7 @@ After a client plugin update removes the selected directory, the next command se
 installed ensemble copy, records its path and reports it on stderr; no installer rerun is needed. It never selects
 another client's copy, nor an OpenCode copy of another ref (its package's `#<ref>`, none meaning `main`). If no such
 copy is left, the command keeps the selected-plugin error and the selection: rerun the installer.
-Equal versions use sorted paths to break ties. The installer also handles older refs whose launchers predate selection support.
+Equal versions use sorted paths to break ties. A ref older than v0.5.0 installs its own launcher, which ignores the selection.
 After plugin refresh, when
 the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
 credentials and requesting any missing logins ([broker command usage](../src/broker/main.go)).
