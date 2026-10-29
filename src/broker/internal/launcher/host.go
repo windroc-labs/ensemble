@@ -57,8 +57,8 @@ type Tokens interface {
 	BotUserID(app string) (int64, error)
 	// Issue revokes all issued tokens on preparation failure. On success the caller owns
 	// commands and revoke, which revokes every issued token once if startup later fails.
-	Issue(ctx context.Context, app, repo string, permissions map[string]string, container string) ([]credential.Command, func(), []protocol.Expiry, error)
-	Refresh(ctx context.Context, app, repo string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
+	Issue(ctx context.Context, app string, permissions map[string]string, container string) ([]credential.Command, func(), []protocol.Expiry, error)
+	Refresh(ctx context.Context, app string, permissions map[string]string, container string, exec func(argv []string, stdin []byte) error) ([]protocol.Expiry, error)
 	Revoke(ctx context.Context, container string, read func(ctx context.Context, argv []string) ([]byte, error))
 	Prefetch(ctx context.Context, repo, ref, dir, container string, run func(argv []string, stdin []byte) error) error
 }

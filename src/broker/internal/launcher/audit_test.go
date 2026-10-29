@@ -147,9 +147,9 @@ type reportingTokens struct {
 	rec *audit.Recorder
 }
 
-func (r *reportingTokens) Issue(ctx context.Context, app, repo string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
+func (r *reportingTokens) Issue(ctx context.Context, app string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
 	r.rec.Add(c, audit.Credential{Kind: audit.GitHubToken, Result: audit.Issued, Account: "acme"})
-	return r.fakeTokens.Issue(ctx, app, repo, permissions, c)
+	return r.fakeTokens.Issue(ctx, app, permissions, c)
 }
 
 func TestStartLineHoldsItsOwnTokens(t *testing.T) {

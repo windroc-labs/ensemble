@@ -137,10 +137,19 @@ func TestManifestGitHub(t *testing.T) {
 	if err != nil || m.GitHubApp != "ensemble-broker-bot" || !maps.Equal(m.GitHubPermissions, fixtureSet) {
 		t.Fatalf("%+v %v", m, err)
 	}
-	for _, grant := range []any{nil, []any{}, "app", map[string]any{"app": "a"}, map[string]any{"app": "a", "permissions": nil}, map[string]any{"app": "a", "permissions": fixtureSet, "repo": "a/b/c"}} {
+	for _, grant := range []any{nil, []any{}, "app", map[string]any{"app": "a"}, map[string]any{"app": "a", "permissions": nil}} {
 		_, err := ParseManifest(fixtureBytes(t, "manifest-valid", func(f map[string]any) { withGitHubGrant(t, f, grant) }))
 		if code(t, err) != protocol.ManifestRejected || !strings.Contains(err.Error(), "github") {
 			t.Fatalf("accepted %v: %v", grant, err)
+		}
+	}
+	// The removed repo key is refused by name, whatever its value.
+	for _, repo := range []any{"acme/app", "a/b/c", nil} {
+		grant := map[string]any{"app": "a", "permissions": fixtureSet, "repo": repo}
+		_, err := ParseManifest(fixtureBytes(t, "manifest-valid", func(f map[string]any) { withGitHubGrant(t, f, grant) }))
+		want := `Manifest rejected: credentials: github has no "repo" key: a grant reaches every repository its App is installed on`
+		if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != want {
+			t.Fatalf("repo %v: %v", repo, err)
 		}
 	}
 }
@@ -367,16 +376,11 @@ func TestManifestPrefetch(t *testing.T) {
 	if code(t, err) != protocol.ManifestRejected {
 		t.Fatalf("prefetch with a Linear item: %v", err)
 	}
+	// An all-installation grant may sit beside prefetch: prefetch clones with its own one-repo token.
 	github := map[string]any{"app": "ensemble-broker-bot", "permissions": map[string]any{"contents": "write"}}
-	_, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "credentials": githubSpec(t, github)}))
-	if code(t, err) != protocol.ManifestRejected || err.(*protocol.Error).Message != "Manifest rejected: prefetch requires a github credential with repo or no github credential" {
-		t.Fatalf("prefetch with github: %v", err)
-	}
-	// A repo grant, one repository's token, may sit beside prefetch.
-	github["repo"] = "acme/out"
 	m, err = ParseManifest(withFields(t, map[string]any{"prefetch": map[string]any{"repo": "o/r"}, "credentials": githubSpec(t, github)}))
-	if err != nil || m.Prefetch == nil || m.GitHubApp != "ensemble-broker-bot" || m.GitHubRepo != "acme/out" {
-		t.Fatalf("prefetch with a repo grant: %+v %v", m, err)
+	if err != nil || m.Prefetch == nil || m.Prefetch.Repo != "o/r" || m.GitHubApp != "ensemble-broker-bot" {
+		t.Fatalf("prefetch with github: %+v %v", m, err)
 	}
 }
 
