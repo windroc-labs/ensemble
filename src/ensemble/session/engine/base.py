@@ -1,6 +1,4 @@
-"""Session, the ABC of an agent session on a Host. Its class methods on Session itself are
-HostedSession's (loaded when called); a subclass's are its own.
-"""
+"""Session's own class methods are HostedSession's."""
 
 from __future__ import annotations
 
@@ -31,8 +29,8 @@ HOSTED = "ensemble.session.engine.hosted_session:HostedSession"
 
 
 class Session(ABC):
-    """show, hide, attach_command, screen: NotShowable unless showable (its Host is
-    attachable). alive: False while its host cannot tell (status: unknown).
+    """show, hide, attach_command, screen: NotShowable unless its Host is attachable.
+    alive: False while unknown.
     """
 
     sid: str
@@ -42,14 +40,14 @@ class Session(ABC):
 
     @abstractmethod
     def events(self) -> Iterator[SessionEvent | Stderr | IdleTimeout]:
-        """FR-27 target: observes recorded events; iterator exit never ends supervision."""
+        """Leaving the iterator never ends supervision."""
 
     @abstractmethod
     def send(self, text: str) -> None: ...
 
     @abstractmethod
     def press(self, keys: Sequence[KeyPress]) -> None:
-        """SessionError without a terminal; ConfigError, nothing sent, if one is untranslatable."""
+        """SessionError: no terminal; ConfigError, nothing sent: an untranslatable key."""
 
     @abstractmethod
     def alive(self) -> bool: ...
@@ -62,7 +60,7 @@ class Session(ABC):
 
     @abstractmethod
     def stop(self) -> None:
-        """FR-27 target: request owner shutdown; return only after confirmed worker exit."""
+        """Returns after the worker's confirmed exit."""
 
     @abstractmethod
     def info(self) -> SessionInfo: ...
@@ -73,7 +71,7 @@ class Session(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """FR-27 target: idempotent owner shutdown, SessionError/Unanswered if unconfirmed."""
+        """Idempotent owner shutdown; SessionError/Unanswered if unconfirmed."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...
@@ -125,7 +123,7 @@ class Session(ABC):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> None:
-        """Validate a start without writing state or running the client."""
+        """Writes no state, runs no client."""
         cls._hosted("preflight")(spec, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
@@ -137,7 +135,7 @@ class Session(ABC):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
-        """FR-27 target: create the sole harness owner, restoring handlers on resume."""
+        """The sole harness owner; resume restores handlers."""
         return cls._hosted("start")(spec, display=display, host=host, idle_timeout=idle_timeout)
 
     @classmethod
@@ -149,19 +147,17 @@ class Session(ABC):
         host: str | None = None,
         idle_timeout: float | None = None,
     ) -> Session:
-        """FR-27 target: a control view of the existing owner, never a second owner."""
+        """A control view, never a second owner."""
         return cls._hosted("attach")(name, sid=sid, host=host, idle_timeout=idle_timeout)
 
     @classmethod
     def retire(cls, name: str, *, sid: str | None = None, host: str | None = None) -> None:
-        """FR-27 target: sid-bound owner close; unconfirmed exit raises, retaining its record."""
+        """Sid-bound; an unconfirmed exit raises, keeping its record."""
         cls._hosted("retire")(name, sid=sid, host=host)
 
     @classmethod
     def inspect(cls, spec: Spec) -> SessionStatus:
-        """Historical status using spec.workdir, client and sid, without starting or attaching.
-        A missing record raises SessionError.
-        """
+        """Recorded status of spec's workdir, client, sid; SessionError: no record."""
         return cls._hosted("inspect")(spec)
 
     @classmethod
@@ -198,9 +194,7 @@ class Session(ABC):
 
     @classmethod
     def class_roots(cls, client: str) -> tuple[str, ...]:
-        """The import roots of the classes a `client` session loads by name: its Client's, then
-        each configured Host's, without repeats.
-        """
+        """Its Client's, then each Host's import roots, once each."""
         return cls._hosted("class_roots")(client)
 
 

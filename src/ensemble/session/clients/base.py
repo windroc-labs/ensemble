@@ -50,7 +50,6 @@ class Client:
         return select(native, self.selection, uuid=self.selection_uuid, resume=resume)
 
     def resume_argv(self, native: str) -> tuple[str, ...]:
-        """The plain interactive command resuming conversation `native`: no configured flags."""
         if not NATIVE.fullmatch(native):
             raise ConfigError(f"session id {native!r:.80}: want {NATIVE.pattern}")
         executable, selection = self._executable(), self.select_session(native, resume=True)
