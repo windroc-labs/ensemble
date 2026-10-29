@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -I \"${PLUGIN_ROOT}/src/ensemble/manager/rearm.py\" --mode manual --client codex --client-pid \"$PPID\"",
+            "command": "python3 -I \"${PLUGIN_ROOT}/src/ensemble/manager/rearm.py\" --mode manual --client codex --client-pid \"$PPID\" --hook-daemon app-server",
             "timeout": 5
           }
         ]

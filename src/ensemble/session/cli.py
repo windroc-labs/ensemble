@@ -170,8 +170,8 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             "Start worker NAME, a plain text user interface session of CLIENT; everything after -- is "
             "its client's flags, verbatim. Its session id: --resume SID (resumes that "
             f"conversation), else ${SID_ENV}, else a new one; the two must agree. Prints its "
-            "Record once it has run 5 s without exiting (up to 15 s while its launch input is "
-            "pending).",
+            "Record once it has run 5 s without exiting, its launch input sent and its launch "
+            "turn ended, at most 15 s in.",
             width=77,
         ),
         epilog="Prerequisites and effects\n"

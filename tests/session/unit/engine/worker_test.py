@@ -32,8 +32,10 @@ from ensemble.session.engine.types import (
     Blocked,
     Exited,
     IdleTimeout,
+    LimitHit,
     Reply,
     SessionRow,
+    TurnEnd,
     TurnStarted,
 )
 from ensemble.session.engine.worker import Worker, WorkerState
@@ -259,7 +261,7 @@ class StartTest(Base):
         self.session.events.return_value = iter([Exited(7)])
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
-        self.assertEqual(str(caught.exception), "w1: claude exited 7 at once")
+        self.assertEqual(str(caught.exception), "w1: claude exited 7 while starting")
         self.assertIsNone(self.stored())
         self.session.close.assert_not_called()
         self.assertEqual(Worker.load("w1").state.sid, SID)
@@ -273,7 +275,10 @@ class StartTest(Base):
         self.assertEqual(
             str(caught.exception),
             "\n".join(
-                ["w1: claude exited 7 at once; its last lines:", *shown[-worker.REPORT_LINES :]]
+                [
+                    "w1: claude exited 7 while starting; its last lines:",
+                    *shown[-worker.REPORT_LINES :],
+                ]
             ),
         )
         self.session.screen.assert_called_once_with(worker.SCREEN_LINES)  # through its view
@@ -283,7 +288,7 @@ class StartTest(Base):
         self.session.screen.side_effect = NotShowable("session w1: its host cannot show")
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
-        self.assertEqual(str(caught.exception), "w1: claude exited 7 at once")
+        self.assertEqual(str(caught.exception), "w1: claude exited 7 while starting")
 
     def test_an_early_exit_its_harness_cannot_show_reports_its_host_rows_last_lines(self):
         self.session.events.return_value = iter([Exited(2)])
@@ -294,13 +299,13 @@ class StartTest(Base):
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
         self.assertEqual(
-            str(caught.exception), "w1: claude exited 2 at once; its last lines:\na\nb"
+            str(caught.exception), "w1: claude exited 2 while starting; its last lines:\na\nb"
         )
         self.host.rows.side_effect = SessionError("tmux sessions unknown")
         self.session.events.return_value = iter([Exited(2)])
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
-        self.assertEqual(str(caught.exception), "w1: claude exited 2 at once")
+        self.assertEqual(str(caught.exception), "w1: claude exited 2 while starting")
 
     def test_the_watch_ends_on_the_first_event_once_its_client_is_up(self):
         type(self.session).client_up = mock.PropertyMock(side_effect=[False, True, True])
@@ -314,7 +319,7 @@ class StartTest(Base):
         late = worker.COLOR_CAP * 2
         self.session.events.return_value = iter([*[IdleTimeout(worker.TICK)] * late, Exited(2)])
         ticks = itertools.count()
-        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 while starting"):
             Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
                 prompt="", resume=False
             )
@@ -425,7 +430,7 @@ class ViewTest(Base):
     def test_a_show_its_exited_client_refuses_leaves_only_the_early_exit(self):
         self.session.show.side_effect = SessionError("worker w1: exited")
         self.session.events.return_value = iter([Exited(2)])
-        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 while starting"):
             self.worker().start(prompt="", resume=False, hidden=False)
         self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
 
@@ -647,10 +652,10 @@ class StaleTest(Base):
 class ColorWatchTest(Base):
     UNSET = "session w1: color not set: {}; ensemble-session send w1 '/color'"
 
-    def watch(self, sent: float, events=None, text="/color", dialog=None) -> int:
-        """Starts w1 on a clock ticking 1 s per call, its opening `text` pending until tick
-        `sent`, `dialog` in its state; the ticks used. opening_pending's call count varies by
-        Python (3.11's isinstance calls it).
+    def watch(self, sent: float, events=None, text="/color", dialog=None, prompt="") -> int:
+        """Starts w1 with `prompt` on a clock ticking 1 s per call, its opening `text` pending
+        until tick `sent`, `dialog` in its state; the ticks used. opening_pending's call count
+        varies by Python (3.11's isinstance calls it).
         """
         ticks = itertools.count()
         now = [0]
@@ -666,9 +671,43 @@ class ColorWatchTest(Base):
         type(self.session).dialog = mock.PropertyMock(return_value=dialog)
         self.session.events.return_value = events or itertools.repeat(IdleTimeout(worker.TICK))
         Worker(state(), session_cls=self.session_cls, say=self.said.append, clock=tick).start(
-            prompt="", resume=False
+            prompt=prompt, resume=False
         )
         return next(ticks)
+
+    def test_an_exit_in_the_launch_turn_after_up_and_the_opening_fails_the_start(self):
+        idle = IdleTimeout(worker.TICK)
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 0 while starting"):
+            self.watch(6, events=iter([TurnStarted(), *[idle] * 7, Exited(0)]), prompt="hi")
+        self.assertEqual(self.said, [])
+        self.assertIsNone(self.stored())
+
+    def test_the_launch_turn_ending_or_hitting_a_limit_ends_the_watch(self):
+        for ending in (TurnEnd("hi"), LimitHit()):
+            with self.subTest(ending=ending):
+                with contextlib.suppress(FileNotFoundError):
+                    self.unstore()
+                idle = IdleTimeout(worker.TICK)
+                events = itertools.chain(
+                    [TurnStarted(), *[idle] * 7, ending], itertools.repeat(idle)
+                )
+                self.assertEqual(self.watch(6, events=events, prompt="hi"), 10)
+                self.assertEqual(self.said, [])
+                self.assertEqual(self.stored(), state().record())
+
+    def test_a_launch_turn_still_running_at_the_cap_starts_quietly(self):
+        idle = itertools.repeat(IdleTimeout(worker.TICK))
+        events = itertools.chain([TurnStarted()], idle)
+        self.assertEqual(self.watch(6, events=events, prompt="hi"), worker.COLOR_CAP + 1)
+        self.assertEqual(self.said, [])
+        self.assertEqual(self.stored(), state().record())
+
+    def test_a_dialog_ends_the_launch_watch_at_up(self):
+        events = itertools.chain([TurnStarted()], itertools.repeat(IdleTimeout(worker.TICK)))
+        self.assertEqual(
+            self.watch(0, events=events, dialog="Trust", prompt="hi"), worker.EARLY + 1
+        )
+        self.assertEqual(self.said, ["session w1: waits on a dialog: Trust"])
 
     def test_the_watch_returns_once_sent_by_the_early_deadline_else_at_the_cap(self):
         for sent, ticks, said in (
@@ -796,7 +835,7 @@ class ColorWatchTest(Base):
         late = worker.COLOR_CAP * 2
         plain = self.plain(*[IdleTimeout(worker.TICK)] * late, Exited(2), alive=False)
         ticks = itertools.count()
-        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 while starting"):
             Worker(state(), session_cls=self.session_cls, clock=lambda: next(ticks)).start(
                 prompt="", resume=False
             )

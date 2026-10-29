@@ -15,6 +15,7 @@ from ensemble.manager.engine.managers import (
     read,
     read_record,
     resume_target,
+    write_record,
 )
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
@@ -307,7 +308,10 @@ class ResumeTargetTest(RosterCase):
 
     def test_the_recorded_client_resumes_in_its_cwd(self):
         self.write()
-        self.assertEqual(resume_target(self.directory), (self.cwd, ("kind-a", "--resume", "s-1")))
+        self.assertEqual(
+            resume_target(self.directory),
+            (SessionRecord("kind-a", "s-1", DEAD, self.cwd), ("kind-a", "--resume", "s-1")),
+        )
         self.assertEqual(
             self.run.call_args.args[0], ("ensemble-session", "resume-argv", "kind-a", "--", "s-1")
         )
@@ -346,3 +350,19 @@ class ResumeTargetTest(RosterCase):
             with self.subTest(error=error):
                 self.run.side_effect = error
                 self.refused("cannot resume its kind-a session")
+
+
+class WriteRecordTest(RosterCase):
+    def test_replaces_the_record_with_one_read_record_reads_back(self):
+        with open(session_records.SCHEMA, encoding="utf-8") as f:
+            validator = jsonschema.Draft202012Validator(json.load(f))
+        os.makedirs(self.directory)
+        path = Path(self.directory, "session.json")
+        path.write_text("old\n", encoding="utf-8")
+        for client, fields in session_records.VALID.items():
+            with self.subTest(client):
+                record = SessionRecord(**fields)
+                write_record(self.directory, record)
+                self.assertEqual(read_record(str(path)), record)
+                validator.validate(json.loads(path.read_text(encoding="utf-8")))
+                self.assertEqual(os.listdir(self.directory), ["session.json"])

@@ -1740,6 +1740,27 @@ class ResumeCommanderTest(CliCase):
         self.chdir.assert_called_once_with(self.cwd)
         self.execvp.assert_called_once_with("kind-a", ("kind-a", "--resume", "s-1"))
 
+    def test_it_records_its_own_pid_before_it_execs(self):
+        path = Path(self.directory, "session.json")
+        seen = []
+        self.execvp.side_effect = lambda *_: seen.append(json.loads(path.read_text()))
+        with self.roster.hold("mgr") as lease, self.under(lease):
+            self.invoke("resume-commander")
+        self.assertEqual(
+            seen, [{"client": "kind-a", "sid": "s-1", "pid": os.getpid(), "cwd": self.cwd}]
+        )
+
+    def test_a_failed_record_write_still_execs(self):
+        before = Path(self.directory, "session.json").read_text()
+        with (
+            self.roster.hold("mgr") as lease,
+            self.under(lease),
+            mock.patch("os.replace", side_effect=PermissionError(13, "denied")),
+        ):
+            self.invoke("resume-commander")
+        self.execvp.assert_called_once_with("kind-a", ("kind-a", "--resume", "s-1"))
+        self.assertEqual(Path(self.directory, "session.json").read_text(), before)
+
     def test_without_a_holder_pair_it_is_a_usage_error(self):
         result, stdout, stderr = self.invoke("resume-commander", "--manager", "mgr")
         self.assertEqual((result, stdout), (2, ""))

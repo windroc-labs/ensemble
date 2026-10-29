@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import asdict
 
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
@@ -19,7 +20,7 @@ from ensemble.manager.engine.types import (
     Unreadable,
     Verb,
 )
-from ensemble.utils import STATE, LayerCommand, one_line, printable, read_regular
+from ensemble.utils import STATE, LayerCommand, one_line, printable, read_regular, save
 
 ROOT = f"{STATE}/managers"
 RECORD = "session.json"
@@ -52,6 +53,10 @@ def read_record(path: str) -> SessionRecord | None:
     if not isinstance(cwd, str) or not cwd.startswith("/"):
         raise ValueError(f"{path}: cwd: want an absolute path")
     return SessionRecord(client, sid, pid, cwd)
+
+
+def write_record(directory: str, record: SessionRecord) -> None:
+    save(os.path.join(directory, RECORD), json.dumps(asdict(record)) + "\n")
 
 
 def alive(pid: int) -> bool:
@@ -120,8 +125,8 @@ def plan(manager: Manager | Unreadable, *, live: bool) -> Plan | Refused:
     return Plan(verb, manager.name)
 
 
-def resume_target(directory: str) -> tuple[str, tuple[str, ...]]:
-    """The recorded cwd and the command resuming the recorded client session there."""
+def resume_target(directory: str) -> tuple[SessionRecord, tuple[str, ...]]:
+    """The session record and the command resuming its client session in its cwd."""
     try:
         record = read_record(os.path.join(directory, RECORD))
     except ValueError as error:
@@ -150,7 +155,7 @@ def resume_target(directory: str) -> tuple[str, tuple[str, ...]]:
         except ValueError:
             argv = None
         if isinstance(argv, list) and argv and all(isinstance(w, str) and w for w in argv):
-            return record.cwd, tuple(argv)
+            return record, tuple(argv)
         reason = (
             (one_line(done.stderr) or f"exit {done.returncode}")
             if done.returncode

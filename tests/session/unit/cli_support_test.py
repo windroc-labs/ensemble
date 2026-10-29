@@ -7,7 +7,7 @@ from tests.session.cli_support import CliCase
 class EarlyExitTest(Case):
     def result(self, tail="", **extra):
         attach = "session w1: tmux attach -t '=w1'\n"
-        head = "ensemble-session: w1: claude exited 0 at once"
+        head = "ensemble-session: w1: claude exited 0 while starting"
         return SimpleNamespace(
             **{"returncode": 1, "stdout": "", "stderr": attach + head + tail + "\n", **extra}
         )

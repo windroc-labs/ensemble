@@ -3,6 +3,7 @@ steps against skills/manage/SKILL.md. The process table is faked: this process i
 its parent 50, its grandparent the hold, 4242.
 """
 
+import contextlib
 import io
 import json
 import os
@@ -37,10 +38,11 @@ def _no_proc(path):
 
 
 def _run(
-    environ: dict[str, str], stdin: bytes, written=None, argv=(), ps=None
+    environ: dict[str, str], stdin: bytes, written=None, *, argv=(), ps=None, opened=None
 ) -> tuple[int, str, str]:
     """main() with fd 0 reading stdin, fd 1 into the returned text (or the given os.write fake),
-    no /proc and `ps` printing TABLE (or the given subprocess.run fake).
+    no /proc (or one read through the given open fake) and `ps` printing TABLE (or the given
+    subprocess.run fake).
     """
     source, out, err = io.BytesIO(stdin), bytearray(), io.StringIO()
 
@@ -59,7 +61,12 @@ def _run(
         mock.patch("os.write", side_effect=written or write),
         mock.patch("sys.stderr", err),
         mock.patch("os.getpid", return_value=100),
-        mock.patch("os.path.isdir", side_effect=_no_proc),
+        (
+            mock.patch("os.path.isdir", side_effect=_no_proc)
+            if opened is None
+            else mock.patch("os.path.isdir", return_value=True)
+        ),
+        mock.patch("builtins.open", side_effect=opened) if opened else contextlib.nullcontext(),
         mock.patch("subprocess.run", ps or _ps()),
     ):
         code = rearm.main(argv)
@@ -188,7 +195,10 @@ class MainTest(Case):
         ps = _ps()
         _run(MANAGER, _start("startup"), ps=ps)
         ps.assert_called_once()
-        self.assertEqual(ps.call_args.args[0], ("ps", "-A", "-o", "pid=", "-o", "ppid="))
+        self.assertEqual(
+            ps.call_args.args[0],
+            ("ps", "-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "args="),
+        )
         self.assertTrue(ps.call_args.kwargs["capture_output"])
         self.assertGreater(ps.call_args.kwargs["timeout"], 0)
 
@@ -199,7 +209,7 @@ class MainTest(Case):
             "nonzero exit": _ps(returncode=1),
             "garbage line": _ps(TABLE + b"pid ppid\n"),
             "one column": _ps(b"100\n50 4242\n"),
-            "three columns": _ps(b"100 50 9\n50 4242\n"),
+            "pid not a number": _ps(b"100 50 x\nx 4242 y\n"),
             "not UTF-8": _ps(b"100 50\xff\n50 4242\n"),
             "empty": _ps(b""),
             "cycle": _ps(b"100 50\n50 60\n60 50\n"),
@@ -216,13 +226,18 @@ class MainTest(Case):
         self.assertIn("compact", json.loads(out)["hookSpecificOutput"]["additionalContext"])
 
 
+def _with_pid(argv: tuple[str, ...], pid: int) -> tuple[str, ...]:
+    at = argv.index("--client-pid") + 1
+    return (*argv[:at], str(pid), *argv[at + 1 :])
+
+
 def _bare(argv: tuple[str, ...]) -> tuple[str, ...]:
     """argv without the record options."""
     pairs = zip(argv[::2], argv[1::2], strict=True)
     return tuple(
         word
         for pair in pairs
-        if pair[0] != "--client" and pair[0] != "--client-pid"
+        if pair[0] not in {"--client", "--client-pid", "--hook-daemon"}
         for word in pair
     )
 
@@ -309,6 +324,123 @@ class RecordTest(Case):
         self.assertEqual(os.listdir(directory), [])
 
 
+DAEMON = b"/home/u/.codex/packages/app-server-daemon/releases/0.165.0/bin/codex app-server"
+TUI = b"/usr/lib/node_modules/@openai/codex/vendor/bin/codex"
+
+# pid → (its parent, its command line): a hook (100) under sh (90) under a Codex daemon (60).
+TREE = {
+    100: (90, b"python3 -I rearm.py"),
+    90: (60, b"/bin/sh -c python3 -I rearm.py"),
+    60: (70, DAEMON + b" --managed-daemon"),
+    61: (60, DAEMON + b" daemon pid-update-loop"),
+    70: (69, TUI),
+    69: (4242, b"node /usr/local/bin/codex"),
+    4242: (1, b"python3 ensemble-crew hold --manager=mgr -- zsh -l"),
+    80: (1, DAEMON + b" --listen unix://"),
+    81: (91, b"codex app-server"),
+    82: (82, b"codex app-server"),
+    83: (69, TUI + b" exec app-server"),
+}
+
+
+class CodexDaemonTest(Case):
+    """Codex runs SessionStart hooks from its app-server daemon, a child of the TUI that started
+    it: the hook's $PPID is the daemon, and `--hook-daemon app-server` records the TUI instead.
+    """
+
+    def run_with(self, opened, client: str, pid: int) -> tuple[tuple[int, str, str], dict | None]:
+        """rearm.py's call for client with --client-pid pid, over TREE read by `ps` (opened
+        None) or by /proc through the given open fake; its result and the record it wrote.
+        """
+        call = session_records.CALLS[client]
+        argv = _with_pid(call.argv, pid)
+        directory = Path(self.ensemble, "managers", "mgr")
+        directory.mkdir(parents=True, exist_ok=True)
+        Path(directory, "session.json").unlink(missing_ok=True)
+        environ, event = {**MANAGER, "HOME": self.home}, json.dumps(call.stdin).encode()
+        if opened is None:
+            rows = b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items())
+            result = _run(environ, event, argv=argv, ps=_ps(rows))
+        else:
+            result = _run(
+                environ, event, argv=argv, ps=mock.Mock(side_effect=AssertionError), opened=opened
+            )
+        path = Path(directory, "session.json")
+        return result, json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def each_table(self):
+        for label, opened in (("ps", None), ("proc", self.proc)):
+            with self.subTest(label):
+                yield opened
+
+    def proc(self, path, mode="r"):
+        self.assertEqual(mode, "rb")
+        match = re.fullmatch(r"/proc/(\d+)/(stat|cmdline)", path)
+        assert match is not None, path
+        if int(match[1]) not in TREE:
+            raise FileNotFoundError(path)
+        ppid, args = TREE[int(match[1])]
+        if match[2] == "stat":
+            return io.BytesIO(b"%s (x) S %d 1 1" % (match[1].encode(), ppid))
+        return io.BytesIO(args.replace(b" ", b"\0") + b"\0")
+
+    def expected(self, client: str, pid: int) -> dict:
+        return {**session_records.VALID[client], "pid": pid}
+
+    def test_a_daemon_hook_records_the_tui(self):
+        for table in self.each_table():
+            result, saved = self.run_with(table, "codex", 60)
+            self.assertTrue(result[1])
+            self.assertEqual(saved, self.expected("codex", 70))
+
+    def test_a_daemon_under_a_daemon_records_the_tui(self):
+        for table in self.each_table():
+            self.assertEqual(self.run_with(table, "codex", 61)[1], self.expected("codex", 70))
+
+    def test_a_codex_parent_that_is_no_daemon_is_recorded_as_given(self):
+        for table in self.each_table():
+            for pid in (70, 69, 83, 4999):  # 4999: no such process, so no daemon either
+                with self.subTest(pid):
+                    self.assertEqual(
+                        self.run_with(table, "codex", pid)[1], self.expected("codex", pid)
+                    )
+
+    def test_other_clients_are_recorded_as_given(self):
+        for table in self.each_table():
+            for client in ("claude", "opencode"):
+                with self.subTest(client):
+                    self.assertEqual(self.run_with(table, client, 60)[1], self.expected(client, 60))
+
+    def test_a_daemon_without_a_tui_parent_writes_no_record_and_keeps_the_prompt(self):
+        call = session_records.CALLS["codex"]
+        prompt = _run(
+            {**MANAGER, "HOME": self.home}, json.dumps(call.stdin).encode(), argv=_bare(call.argv)
+        )
+        for table in self.each_table():
+            for label, pid in (("orphaned", 80), ("parent unreadable", 81), ("own parent", 82)):
+                with self.subTest(label):
+                    result, saved = self.run_with(table, "codex", pid)
+                    self.assertEqual((result, saved), (prompt, None))
+
+    def test_a_command_line_that_is_not_utf_8_keeps_the_ps_table(self):
+        rows = b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items())
+        call = session_records.CALLS["codex"]
+        event = json.dumps(call.stdin).encode()
+        directory = Path(self.ensemble, "managers", "mgr")
+        directory.mkdir(parents=True)
+        argv = _with_pid(call.argv, 60)
+        _run({**MANAGER, "HOME": self.home}, event, argv=argv, ps=_ps(rows + b"5 1 vim \xff\n"))
+        saved = json.loads(Path(directory, "session.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved, self.expected("codex", 70))
+
+    def test_ps_is_read_once(self):
+        ps = _ps(b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items()))
+        call = session_records.CALLS["codex"]
+        event = json.dumps(call.stdin).encode()
+        _run({**MANAGER, "HOME": self.home}, event, argv=_with_pid(call.argv, 61), ps=ps)
+        ps.assert_called_once()
+
+
 class AncestorsTest(Case):
     """/proc/<pid>/stat where /proc exists (Linux)."""
 
@@ -330,7 +462,7 @@ class AncestorsTest(Case):
             4242: b"4242 (python3) S 1 1 1",
         }
         with self.stat(stats), mock.patch("os.path.isdir", return_value=True):
-            self.assertEqual(rearm.ancestors(100), {50, 4242})
+            self.assertEqual(rearm.Processes().ancestors(100), {50, 4242})
 
     def test_stops_at_an_unreadable_parent_or_a_cycle(self):
         cases = {
@@ -345,7 +477,7 @@ class AncestorsTest(Case):
                 self.stat(stats),
                 mock.patch("os.path.isdir", return_value=True),
             ):
-                self.assertEqual(rearm.ancestors(100), expected)
+                self.assertEqual(rearm.Processes().ancestors(100), expected)
 
     def test_proc_lookup_runs_no_ps(self):
         with (
@@ -353,7 +485,7 @@ class AncestorsTest(Case):
             mock.patch("os.path.isdir", return_value=True),
             mock.patch("subprocess.run") as ps,
         ):
-            self.assertEqual(rearm.ancestors(100), set())
+            self.assertEqual(rearm.Processes().ancestors(100), set())
         ps.assert_not_called()
 
 
@@ -466,7 +598,7 @@ class HooksJsonTest(Case):
         self.assertEqual(
             command["command"],
             'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual'
-            ' --client codex --client-pid "$PPID"',
+            ' --client codex --client-pid "$PPID" --hook-daemon app-server',
         )
         self.assertEqual(command["timeout"], 5)
 

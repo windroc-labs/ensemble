@@ -219,7 +219,7 @@ class Harness:
                     return code
                 self._signal = None
             found, ended = worker.pump(self._poll)
-            self._pumped(worker, found)
+            self._pumped(worker, found, ended=ended)
             self._log(found)
             self._write_pending()
             if ended:
@@ -228,12 +228,12 @@ class Harness:
                     code = worker.confirm_end(self._close_wait)
                 return -signal.SIGHUP if code is None else code
 
-    def _pumped(self, worker: Worker, found: Sequence[Event]) -> None:
+    def _pumped(self, worker: Worker, found: Sequence[Event], *, ended: bool) -> None:
         """Opening, up and dialog written before the events are logged, so a view acting on either
-        finds the other.
+        finds the other; never up once ended, as its Exited is logged only after this.
         """
         status = dict(self._status, opening=worker.opening_pending)
-        if worker.up:
+        if worker.up and not ended:
             status["up"] = True
         found_dialog = self._status.get("dialog")
         for event in found:

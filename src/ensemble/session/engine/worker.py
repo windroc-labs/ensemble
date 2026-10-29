@@ -31,9 +31,11 @@ from ensemble.session.engine.types import (
     ConfigError,
     EnvironmentSpec,
     Exited,
+    LimitHit,
     Mode,
     SessionError,
     Spec,
+    TurnEnd,
 )
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
@@ -314,8 +316,8 @@ class Worker:
 
     def start(self, *, prompt: str, resume: bool, hidden: bool | None = None) -> Record:
         """hidden: True hides, False shows, None keeps its Host's. Watches until its client is up
-        (and its opening sent, up to COLOR_CAP s), then stores and returns its Record; its client
-        exiting first: SessionError with its last lines, no Record.
+        (its opening sent, its launch turn ended, up to COLOR_CAP s), then stores and returns its
+        Record; its client exiting first: SessionError with its last lines, no Record.
         """
         name = self.state.name
         self._drop_stale()
@@ -339,7 +341,7 @@ class Worker:
         unshown = self._show(session, hidden=hidden) if session.showable else None
         exited = None
         try:
-            exited = self._watch(session)
+            exited = self._watch(session, launching=bool(prompt))
         finally:
             if unshown is not None and exited is None:  # an early exit says why
                 self.say(unshown)
@@ -518,7 +520,7 @@ class Worker:
             return f"session {name}: not {'hidden' if hidden else 'shown'}: {error}"
         return None
 
-    def _watch(self, session: Session) -> int | None:
+    def _watch(self, session: Session, *, launching: bool) -> int | None:
         """An early exit's code, else None."""
         began = self.clock()
         for event in session.events():
@@ -527,12 +529,17 @@ class Worker:
             if isinstance(event, Blocked):
                 self._waits(session, event.reason)
                 return
+            if isinstance(event, (TurnEnd, LimitHit)):
+                launching = False
             elapsed = self.clock() - began
             if not _up(session, elapsed):
                 continue
-            if elapsed < COLOR_CAP and _pending(session) is not None:
+            dialog = _dialog(session)
+            if elapsed < COLOR_CAP and (
+                _pending(session) is not None or (launching and dialog is None)
+            ):
                 continue
-            if (dialog := _dialog(session)) is not None:
+            if dialog is not None:
                 self._waits(session, dialog)
             elif elapsed >= COLOR_CAP:
                 self._uncolored(session, f"not ready within {COLOR_CAP} s")
@@ -554,7 +561,7 @@ class Worker:
         """Its last screen lines, read through its view while its harness can still show them,
         else its Host row's (a harness refuses a screen once its worker exited).
         """
-        head = f"{self.state.name}: {self.state.client} exited {code} at once"
+        head = f"{self.state.name}: {self.state.client} exited {code} while starting"
         try:
             screen = session.screen(SCREEN_LINES)
         except SessionError:

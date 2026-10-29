@@ -800,7 +800,7 @@ class DialogTest(Base):
             if isinstance(event, Blocked):
                 blocks.append(event)
                 if len(blocks) == at + 1:
-                    start._watch(view)
+                    start._watch(view, launching=True)
             record(event)
 
         owned.pump, owned.record = pumped, recorded
@@ -819,6 +819,13 @@ class UpTest(Base):
         owned.ended = True
         thread.join(WAIT)
         self.assertEqual((self.code, self.channel.status().get("up")), (0, True))
+
+    def test_a_client_up_only_in_the_pump_that_saw_it_end_is_never_up(self):
+        owned = FakeOwned(([], True))
+        owned.up = True
+        self.run_in_thread(self.harness(owned)).join(WAIT)
+        self.assertEqual(self.code, 0)
+        self.assertNotIn("up", self.channel.status())
 
 
 class BatchTest(Base):

@@ -77,9 +77,9 @@ class HookCall:
     record: dict | None
 
 
-def _call(record: dict, mode: tuple[str, ...], **stdin) -> HookCall:
+def _call(record: dict, mode: tuple[str, ...], *extra: str, **stdin) -> HookCall:
     event = {"session_id": record["sid"], "cwd": record["cwd"], "source": "startup", **stdin}
-    argv = (*mode, "--client", record["client"], "--client-pid", str(record["pid"]))
+    argv = (*mode, "--client", record["client"], "--client-pid", str(record["pid"]), *extra)
     return HookCall(argv, event, record)
 
 
@@ -96,6 +96,8 @@ CALLS: dict[str, HookCall] = {
     "codex": _call(
         VALID["codex"],
         _MANUAL,
+        "--hook-daemon",
+        "app-server",
         transcript_path="/home/user/.codex/sessions/rollout-01a18587.jsonl",
         hook_event_name="SessionStart",
         model="gpt-5",
