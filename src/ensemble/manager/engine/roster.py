@@ -25,6 +25,7 @@ from ensemble.manager.engine.types import (
     Stale,
     StaleHolder,
     State,
+    Unread,
 )
 from ensemble.utils import (
     Record,
@@ -357,6 +358,36 @@ class Roster:
         with self._locked() as data:
             holder = _label(data["holder"]) if self._active_holder() else None
             return data["cursor"], data["gen"], holder
+
+    def snapshot(self) -> tuple[str | None, dict[str, Entry] | Unread]:
+        """The active holder's label (None: none) and the entries (Unread: roster.json unreadable),
+        read without a lease, creating and writing nothing.
+        """
+        lock = os.path.join(self.directory, "roster.lock")
+        try:
+            try:
+                fd = os.open(lock, os.O_RDONLY | os.O_NONBLOCK)
+            except FileNotFoundError:
+                # holder.lock is only made under roster.lock: none is active, and probing it could
+                # make a first hold, which just created both, see this probe as a holder.
+                return None, self._snapshot_entries()[1]
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise RosterError(f"{lock}: not a regular file")
+                _flock(fd, fcntl.LOCK_SH, lock)
+                holder, entries = self._snapshot_entries()
+                return (_label(holder) if self._active_holder() else None), entries
+            finally:
+                os.close(fd)
+        except OSError as error:
+            raise RosterError(str(error)) from error
+
+    def _snapshot_entries(self) -> tuple[dict | None, dict[str, Entry] | Unread]:
+        try:
+            data = self._read()
+        except RosterError as error:
+            return None, Unread(str(error))
+        return data["holder"], {name: _entry(value) for name, value in data["entries"].items()}
 
     def check_lease(self) -> None:
         with self._locked() as data:

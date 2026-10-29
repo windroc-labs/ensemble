@@ -22,6 +22,7 @@ from ensemble.manager.engine.types import (
     Stale,
     StaleHolder,
     State,
+    Unread,
 )
 from ensemble.utils import append_line
 from tests.manager.case import with_ctl
@@ -1271,3 +1272,93 @@ class RosterTest(RosterCase):
             self.fail("probe error became takeover")
         self.assertEqual(count, 2)
         self.assertIsNone(self.content()["holder"] if Path(self.roster.path).exists() else None)
+
+
+class SnapshotTest(RosterCase):
+    def files(self):
+        return {
+            name: Path(self.directory, name).read_bytes() for name in os.listdir(self.directory)
+        }
+
+    def test_snapshot_creates_no_file(self):
+        Path(self.directory).mkdir(parents=True, mode=0o700)
+        self.assertEqual(self.roster.snapshot(), (None, {}))
+        self.assertEqual(os.listdir(self.directory), [])
+
+    def test_snapshot_of_a_held_roster_changes_nothing(self):
+        self.live()
+        with Roster(self.directory).hold("owner"):
+            before = self.files()
+            holder, entries = self.roster.snapshot()
+            self.assertEqual(self.files(), before)
+            self.assertEqual((holder, entries), ("owner", self.roster.entries()))
+            with self.assertRaises(Held), Roster(self.directory).hold(None):
+                pass
+
+    def test_two_snapshots_while_held_both_see_the_holder(self):
+        self.live()
+        with Roster(self.directory).hold("owner"):
+            lock = os.open(os.path.join(self.directory, "roster.lock"), os.O_RDONLY)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH)
+                self.assertEqual(self.roster.snapshot()[0], "owner")
+                self.assertEqual(Roster(self.directory).snapshot()[0], "owner")
+            finally:
+                os.close(lock)
+
+    def test_hold_succeeds_after_a_snapshot(self):
+        self.live()
+        self.assertEqual(self.roster.snapshot(), (None, self.roster.entries()))
+        with Roster(self.directory).hold("owner"):
+            self.assertEqual(self.roster.snapshot()[0], "owner")
+        self.assertIsNone(self.roster.snapshot()[0])
+
+    def test_without_roster_lock_holder_lock_is_never_opened(self):
+        Path(self.directory).mkdir(parents=True, mode=0o700)
+        Path(self.directory, "holder.lock").touch(mode=0o600)
+        opened = []
+        real_open = os.open
+
+        def record(path, *args, **kwargs):
+            opened.append(os.path.basename(path))
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("os.open", side_effect=record):
+            self.assertEqual(self.roster.snapshot(), (None, {}))
+        self.assertNotIn("holder.lock", opened)
+
+    def test_a_corrupt_roster_is_unread_and_its_holder_still_known(self):
+        self.live()
+        with Roster(self.directory).hold("owner"):
+            valid = Path(self.roster.path).read_text()
+            Path(self.roster.path).write_text("{")
+            holder, entries = self.roster.snapshot()
+            Path(self.roster.path).write_text(valid)
+        self.assertEqual(holder, "another holder")
+        self.assertIsInstance(entries, Unread)
+        self.assertIn(self.roster.path, entries.error)
+
+    def test_a_lock_that_is_no_regular_file_fails_the_snapshot(self):
+        self.live()
+        for name in ("roster.lock", "holder.lock"):
+            with self.subTest(name=name):
+                path = Path(self.directory, name)
+                path.unlink(missing_ok=True)
+                path.mkdir()
+                with self.assertRaisesRegex(RosterError, "not a regular"):
+                    self.roster.snapshot()
+                path.rmdir()
+                path.touch(mode=0o600)
+
+    def test_a_busy_roster_lock_fails_the_snapshot(self):
+        self.live()
+        lock = os.open(os.path.join(self.directory, "roster.lock"), os.O_RDONLY)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with (
+                mock.patch("ensemble.manager.engine.roster.LOCK_TIMEOUT", 0),
+                self.assertRaisesRegex(RosterError, "roster.lock: busy"),
+            ):
+                self.roster.snapshot()
+        finally:
+            os.close(lock)

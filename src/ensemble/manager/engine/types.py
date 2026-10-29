@@ -43,6 +43,13 @@ class Liveness(NamedTuple):
 
 
 @dataclass(frozen=True)
+class Unread:
+    """A file that could not be read, and why."""
+
+    error: str
+
+
+@dataclass(frozen=True)
 class Lease:
     id: str
     generation: int
