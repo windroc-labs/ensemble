@@ -27,6 +27,7 @@ SURFACES = {
             "note",
             "release",
             "next-event",
+            "resume-commander",
         ],
     ),
     "session": (
@@ -150,7 +151,7 @@ class HelpSafety(Case):
             self.assertIn("ensemble-", out)
 
     def matrix(self, root):
-        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 60)
+        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 62)
         before = self.snapshot()
         package, commands = SURFACES[root]
         for leaf in [None, *commands]:

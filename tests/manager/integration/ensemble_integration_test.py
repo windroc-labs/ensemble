@@ -9,6 +9,7 @@ import json
 import os
 import pty
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -131,7 +132,7 @@ LIST_PANES = [
 def on_terminal(cwd: str, env: dict, answer: bytes) -> tuple[int, str]:
     """ensemble list with stdin and stdout on a terminal, answering its prompt: exit, stderr."""
     master, slave = pty.openpty()
-    with os.fdopen(master, "rb", buffering=0) as terminal:
+    with os.fdopen(master, "r+b", buffering=0) as terminal:
         process = subprocess.Popen(
             (ENSEMBLE, "list"),
             cwd=cwd,
@@ -340,6 +341,34 @@ class FakeTmux(Case):
         self.assertEqual((result, calls), (0, []))
         self.assertIn("1) demo\tnot-held\t-\t-\n", err)
 
+    def test_ctrl_c_at_the_prompt_cancels_with_exit_0(self):
+        self.demo()
+        master, slave = pty.openpty()
+        errors, error_end = os.pipe()
+        process = subprocess.Popen(
+            (ENSEMBLE, "list"),
+            cwd=self.cwd,
+            env=self.env,
+            stdin=slave,
+            stdout=slave,
+            stderr=error_end,
+            start_new_session=True,
+        )
+        os.close(slave)
+        os.close(error_end)
+        try:
+            err = b""
+            while not err.endswith(b"Enter cancels: "):
+                chunk = os.read(errors, 4096)
+                self.assertTrue(chunk, err)
+                err += chunk
+            os.killpg(process.pid, signal.SIGINT)  # what the terminal's Ctrl-C sends
+            self.assertEqual(process.wait(timeout=30), 0)
+        finally:
+            os.close(master)
+            os.close(errors)
+        self.assertFalse(os.path.exists(self.log))
+
     def test_list_with_stdout_piped_prints_without_a_prompt(self):
         self.demo()
         master, slave = pty.openpty()
@@ -426,9 +455,11 @@ class FakeTmux(Case):
         self.assertEqual(
             calls[1:],
             [
-                ["send-keys", "-t", "%3", "C-u"],
-                ["send-keys", "-t", "%3", "-l", "ensemble-crew resume-commander"],
-                ["send-keys", "-t", "%3", "Enter"],
+                [
+                    *("send-keys", "-t", "%3", "C-u", ";"),
+                    *("send-keys", "-t", "%3", "-l", "ensemble-crew resume-commander", ";"),
+                    *("send-keys", "-t", "%3", "Enter"),
+                ],
                 ["-CC", "attach", "-t", "=demo"],
             ],
         )
@@ -935,10 +966,12 @@ class PrivateServer(Case):
 
     def test_hold_only_resumes_the_recorded_client_under_the_same_hold(self):
         work = self.client()
-        self.env["SHELL"] = "/bin/sh"
+        self.env["SHELL"] = "/bin/bash"  # macOS runs /bin/sh as bash
         self.assertEqual(self.run_ensemble("demo").returncode, 0)
         command = ("display-message", "-p", "-t", "=demo:", "#{pane_current_command}")
-        live_tmux.wait(lambda: self.server.tmux(*command).stdout.strip() == "sh", what="idle sh")
+        live_tmux.wait(
+            lambda: self.server.tmux(*command).stdout.strip() == "bash", what="idle bash"
+        )
         result, err = on_terminal(self.cwd, self.env, b"1\n")
         self.assertEqual(result, 0, err)
         starts = live_tmux.wait(self.starts, what="the resumed client")

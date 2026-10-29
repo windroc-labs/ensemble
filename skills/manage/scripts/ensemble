@@ -45,7 +45,10 @@ if [ "$1" = list ]; then
   [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
   shift
   [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] || exec "$crew" list "$@"
+  # Ctrl-C at the prompt cancels: crew exits 0, and bash must not die of the SIGINT meanwhile.
+  trap : INT
   plan=$("$crew" list --select) || exit
+  trap - INT
   [ -n "$plan" ] || exit 0
   read -r verb s <<<"$plan"
   case $verb in
@@ -69,8 +72,8 @@ if [ "$1" = list ]; then
     if [ "$verb" = attach ]; then
       attach "$s"
     elif [ "$running" = "${shell##*/}" ]; then
-      tmux send-keys -t "$id" C-u && tmux send-keys -t "$id" -l 'ensemble-crew resume-commander' &&
-        tmux send-keys -t "$id" Enter
+      tmux send-keys -t "$id" C-u \; send-keys -t "$id" -l 'ensemble-crew resume-commander' \; \
+        send-keys -t "$id" Enter
     else
       echo "ensemble: $s's pane runs $(printf '%s' "$running" | tr -cd '[:print:]');" \
         "resume there with: ensemble-crew resume-commander" >&2

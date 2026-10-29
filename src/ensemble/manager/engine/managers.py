@@ -104,11 +104,11 @@ def plan(manager: Manager | Unreadable, *, live: bool) -> Plan | Refused:
     if isinstance(manager.entries, Unread):
         return Refused(manager.entries.error)
     holder, record = manager.holder, manager.record
-    recorded = isinstance(record, SessionRecord)
     if isinstance(holder, Unread):
         return Refused(holder.error)
     if holder is not None and holder.session != manager.name:
         return Refused(f"held by {holder.label}")
+    recorded = isinstance(record, SessionRecord)
     if manager.state == HolderState.CLIENT_RUNNING:
         verb = Verb.ATTACH
     elif manager.state == HolderState.HOLD_ONLY:
@@ -151,5 +151,9 @@ def resume_target(directory: str) -> tuple[str, tuple[str, ...]]:
             argv = None
         if isinstance(argv, list) and argv and all(isinstance(w, str) and w for w in argv):
             return record.cwd, tuple(argv)
-        reason = one_line(done.stderr) if done.returncode else "want a JSON array of words"
+        reason = (
+            (one_line(done.stderr) or f"exit {done.returncode}")
+            if done.returncode
+            else ("want a JSON array of words")
+        )
     raise RosterError(f"cannot resume its {record.client} session: {printable(reason)}")

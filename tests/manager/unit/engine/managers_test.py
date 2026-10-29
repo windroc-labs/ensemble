@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from unittest import mock
 
@@ -32,6 +31,7 @@ from ensemble.manager.engine.types import (
 )
 from tests.manager import session_records
 from tests.manager.roster_case import RosterCase
+from tests.utils.process_fixtures import DEVNULL, CompletedProcess, TimeoutExpired
 
 LIVE, DEAD = 4101, 4102
 
@@ -295,7 +295,7 @@ class ResumeTargetTest(RosterCase):
         self.answer('["kind-a", "--resume", "s-1"]')
 
     def answer(self, stdout, returncode=0, stderr=""):
-        self.run.return_value = subprocess.CompletedProcess((), returncode, stdout, stderr)
+        self.run.return_value = CompletedProcess((), returncode, stdout, stderr)
 
     def write(self, **fields):
         record = {"client": "kind-a", "sid": "s-1", "pid": DEAD, "cwd": self.cwd, **fields}
@@ -311,7 +311,7 @@ class ResumeTargetTest(RosterCase):
         self.assertEqual(
             self.run.call_args.args[0], ("ensemble-session", "resume-argv", "kind-a", "--", "s-1")
         )
-        self.assertEqual(self.run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(self.run.call_args.kwargs["stdin"], DEVNULL)
 
     def test_no_or_an_unreadable_record_is_refused(self):
         self.refused("no session record")
@@ -333,6 +333,7 @@ class ResumeTargetTest(RosterCase):
         self.write()
         for answer, pattern in (
             (("", 2, "ensemble-session: config: no client kind-a\n"), "no client kind-a"),
+            (("", 3, ""), "exit 3"),
             (("not json", 0, ""), "want a JSON array"),
             (('{"a": 1}', 0, ""), "want a JSON array"),
             (('["kind-a", ""]', 0, ""), "want a JSON array"),
@@ -341,7 +342,7 @@ class ResumeTargetTest(RosterCase):
             with self.subTest(answer=answer):
                 self.answer(*answer)
                 self.refused(f"cannot resume its kind-a session: .*{pattern}")
-        for error in (subprocess.TimeoutExpired((), 30), OSError("no ensemble-session")):
+        for error in (TimeoutExpired((), 30), OSError("no ensemble-session")):
             with self.subTest(error=error):
                 self.run.side_effect = error
                 self.refused("cannot resume its kind-a session")
