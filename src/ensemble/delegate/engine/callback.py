@@ -1,10 +1,8 @@
-"""Encode Delegate events, stamped with their run's sid and attempt, and deliver each line to the
-configured callback command: synchronously, in its own process group, from the run dir, its stdout
-discarded, its stderr relayed. A delivery that fails (exit ≠ 0, CALLBACK_TIMEOUT, OSError) is one
-`callback_error` row in run.jsonl, never retried, an exit's with its stderr's tail; an exception
-once the child exists kills and reaps the group, then propagates. The child inherits the held,
-emptied callback lock, then the lock gets `<child pid> <parent pid>`; the parent holds the parent
-lock while delivering. sweep kills the group a held lock names once its parent is gone.
+"""Deliver each Delegate event, stamped with its run's sid and attempt, as one stdin line to the
+callback command in its own process group. A failure (exit ≠ 0, CALLBACK_TIMEOUT, OSError) is one
+unretried `callback_error` row, an exit's with its stderr's tail; an exception once the child
+exists kills and reaps the group. The child inherits the held callback lock, which names
+`<child pid> <parent pid>`; the parent lock is held while delivering.
 """
 
 import contextlib
@@ -56,25 +54,33 @@ class EventCallback:
 
     def __call__(self, event: Event) -> None:
         line = self.encode(event).to_line() + "\n"
-        lock = self.store.callback_lock
+        lock, parent_lock = self.store.callback_lock, self.store.callback_parent_lock
         try:
-            descriptor = _hold(lock)
-        except BlockingIOError:
-            self._failed(f"callback lock {lock} held: an earlier callback still runs")
-            return
+            descriptor = _open(lock)
         except OSError as error:
             self._failed(str(error))
             return
+        # locked inside the try that closes it: a signal's Stopped leaves no lock held
         try:
-            parent = _hold(self.store.callback_parent_lock, wait=True)
-        except OSError as error:
-            os.close(descriptor)
-            self._failed(str(error))
-            return
-        try:
-            self._deliver(line, descriptor)
+            try:
+                _take(descriptor, lock)
+                parent = _open(parent_lock)
+            except BlockingIOError:
+                self._failed(f"callback lock {lock} held: an earlier callback still runs")
+                return
+            except OSError as error:
+                self._failed(str(error))
+                return
+            try:
+                try:
+                    _take(parent, parent_lock, wait=True)
+                except OSError as error:
+                    self._failed(str(error))
+                    return
+                self._deliver(line, descriptor)
+            finally:
+                os.close(parent)
         finally:
-            os.close(parent)
             os.close(descriptor)
 
     def _deliver(self, line: str, descriptor: int) -> None:
@@ -135,22 +141,20 @@ class EventCallback:
             log.note("callback_error", error=error, stderr=stderr, best_effort=True)
 
 
-def _hold(lock: str, *, wait: bool = False) -> int:
+def _open(lock: str) -> int:
+    return os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK, 0o600)
+
+
+def _take(descriptor: int, lock: str, *, wait: bool = False) -> None:
     """Held and emptied; BlockingIOError while held elsewhere (wait: until free)."""
-    descriptor = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NONBLOCK, 0o600)
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError(errno.EINVAL, "not a regular lock file", lock)
-        if wait:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-        # a killed group's members hold it until they exit
-        elif not _within(lambda: _locked(descriptor)):
-            raise BlockingIOError(errno.EWOULDBLOCK, "callback lock held", lock)
-        os.ftruncate(descriptor, 0)
-    except BaseException:
-        os.close(descriptor)
-        raise
-    return descriptor
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        raise OSError(errno.EINVAL, "not a regular lock file", lock)
+    if wait:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    # a killed group's members hold it until they exit
+    elif not _within(lambda: _locked(descriptor)):
+        raise BlockingIOError(errno.EWOULDBLOCK, "callback lock held", lock)
+    os.ftruncate(descriptor, 0)
 
 
 def sweep(store: RunState) -> None:

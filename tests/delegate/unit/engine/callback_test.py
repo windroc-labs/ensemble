@@ -7,6 +7,7 @@ callback lock names, then waits for that lock.
 import contextlib
 import fcntl
 import io
+import itertools
 import os
 import signal
 from unittest import mock
@@ -337,6 +338,46 @@ class Delivery(Case):
             [row["error"] for row in self.errors()],
             [f"callback lock {self.store.callback_lock}: [Errno 28] No space left on device"],
         )
+
+    def test_a_signal_after_any_lock_call_propagates_and_leaves_no_lock_held(self):
+        # the drive's SIGTERM raises Stopped right after whichever call it lands on
+        FakeClock().patch(self)
+        locks = (self.store.callback_lock, self.store.callback_parent_lock)
+        for name, real in (
+            ("os.open", os.open),
+            ("os.ftruncate", os.ftruncate),
+            ("fcntl.flock", fcntl.flock),
+            ("os.close", os.close),
+        ):
+            for n in itertools.count(1):
+                made = []
+
+                def signalled(*args, real=real, n=n, made=made):
+                    made.append(real(*args))
+                    if len(made) == n:
+                        raise Stopped(143)
+                    return made[-1]
+
+                raised = []
+                with mock.patch(name, side_effect=signalled):
+                    try:
+                        self.callback(Begun(SID))
+                    except Stopped as error:
+                        raised.append(error)
+                stopped = len(made) >= n
+                if stopped and name == "os.open":
+                    close(made[-1])  # opened, then lost to the signal
+                with self.subTest(call=name, n=n):
+                    self.assertEqual(len(raised), int(stopped))
+                    self.assertEqual([self.store.held(lock) for lock in locks], [False, False])
+                    Child.calls = []
+                    self.callback(Finished(Result(143, None, "stopped: Stopped: 143")))
+                    self.assertEqual(
+                        [call[0] for call in Child.calls], ["spawn", "communicate", "exit"]
+                    )
+                    self.assertEqual(self.errors(), [])
+                if not stopped:
+                    break
 
 
 class Sweep(Case):
