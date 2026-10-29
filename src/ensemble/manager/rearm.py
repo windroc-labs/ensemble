@@ -2,8 +2,8 @@
 startup, resume, compact and clear sources, prints the re-arm prompt as
 additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
 replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
-that). `--hook-daemon WORD`: a PID with first argument WORD runs hooks for its
-nearest other ancestor, recorded instead.
+that). `--hook-daemon WORD`: skips PID and each consecutive ancestor whose argv[1] is WORD;
+records the next.
 Anything else prints nothing. Always exits 0.
 A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
 ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
