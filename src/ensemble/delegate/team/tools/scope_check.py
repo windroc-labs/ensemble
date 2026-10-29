@@ -10,7 +10,8 @@ a glob; it must exist on DIR unless (new). Items of one repo overlap when a path
 the other's and their keys match or either has none. A PRD backtick literal is a path when it has
 no space, starts with none of `/~-$`, holds none of `:<>{}|` and exists on a DIR or holds `/`
 before a dotted last segment (a glob without `/` needs a dotted name); it is a key in `[table] key`
-form. Each must equal one ticket's item path or key.
+form. Each must equal one ticket's item path or key. An engineer ticket fails above MAX_COVERS
+ids or MAX_SCOPE `- ` items.
 """
 
 import glob
@@ -19,6 +20,8 @@ import re
 import sys
 
 ENGINEER = {"build", "light-build"}
+MAX_COVERS = 8
+MAX_SCOPE = 12
 _ID = re.compile(r"\bN?FR-\d+\b")
 _LITERAL = re.compile(r"`([^`\n]+)`")
 _KEY = re.compile(r"^\[[A-Za-z][\w.-]*\](?: [\w.-]+)?$")
@@ -118,6 +121,20 @@ def _prd_literals(prd, trees):
     return names
 
 
+def _size(ticket):
+    covers = len(ticket["covers"])
+    items = len(ticket["scope"] or ()) + len(ticket["bad"])
+    over = [f"{covers} Covers ids > {MAX_COVERS}"] if covers > MAX_COVERS else []
+    if items > MAX_SCOPE:
+        over.append(f"{items} Scope items > {MAX_SCOPE}")
+    if not over:
+        return None
+    return (
+        f"{ticket['name']}: too large ({', '.join(over)}): split it along an interface"
+        " (e.g. read-only vs write); if it cannot be split, end with needs_input saying why"
+    )
+
+
 def _owners(count, noun, names):
     listed = f" ({', '.join(names)})" if names else ""
     return f"owned by {count} {noun}{listed}"
@@ -126,8 +143,11 @@ def _owners(count, noun, names):
 def check(prd: str, tickets: list[dict], bases: dict[str, str]) -> list[str]:
     failures, owned = [], {}
     for ticket in tickets:
-        if ticket["task"] in ENGINEER and not ticket["scope"]:
-            failures.append(f"{ticket['name']}: no Scope:")
+        if ticket["task"] in ENGINEER:
+            if not ticket["scope"]:
+                failures.append(f"{ticket['name']}: no Scope:")
+            if size := _size(ticket):
+                failures.append(size)
         if ticket["repo"] not in bases:
             failures.append(f"{ticket['name']}: Repo: {ticket['repo']} has no --base")
             continue
