@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import itertools
 import os
 import re
 import shlex
@@ -13,9 +12,7 @@ import sys
 
 from ensemble.session.engine.tmux_cli import (
     CLIENTS,
-    ITERM_ID,
     NAME,
-    OPENER,
     PANE,
     PANES,
     SESSION_ID,
@@ -38,19 +35,14 @@ from ensemble.session.viewer.grid import (
     validate_per_column,
     validate_retile,
 )
-from ensemble.session.viewer.iterm import (
-    SHOW_TIMEOUT,
-    Iterm,
-)
 from ensemble.session.viewer.types import (
-    Anchor,
-    ItermAnchor,
     Retile,
     Split,
     TmuxAnchor,
 )
 
 PLACEHOLDERS = {"session"}
+SHOW_TIMEOUT = 30
 
 
 SLOT = re.compile(r"\{\{([^{}]*)\}\}")
@@ -58,7 +50,7 @@ TTY = re.compile(r"/dev/[A-Za-z0-9/]+")
 LISTED = "#{S:#{W:#{P: #{pane_id} }}}"
 
 
-NO_PANE = "no anchor pane: {}, no iTerm2 pane ($ITERM_SESSION_ID)"
+NO_PANE = "no anchor pane: {}"
 
 
 def _layout(split: str | None, split_from: str | None, opener: str | None = None) -> None:
@@ -66,22 +58,13 @@ def _layout(split: str | None, split_from: str | None, opener: str | None = None
         raise TuiError(f"split must be one of {', '.join(Split)}, not {split!r}")
     if split_from is not None:
         session_name(split_from)
-    if opener is not None and not OPENER.fullmatch(opener):
-        raise TuiError(
-            f"invalid opener {opener!r}: want a tmux session name or $ITERM_SESSION_ID's value"
-        )
-
-
-def _iterm_pane(why: str) -> Anchor:
-    unique = os.environ.get("ITERM_SESSION_ID", "").partition(":")[2]
-    if not unique or not (os.environ.get("TMUX") or os.environ.get("TERM_PROGRAM") == "iTerm.app"):
-        raise TuiError(NO_PANE.format(why))
-    return ItermAnchor(("id", [unique]))
+    if opener is not None and not NAME.fullmatch(opener):
+        raise TuiError(f"invalid opener {opener!r}: want a tmux session name")
 
 
 class Placement:
-    def __init__(self, *, tmux: TmuxCli, grid: Grid, iterm: Iterm) -> None:
-        self.tmux, self.grid, self.iterm = tmux, grid, iterm
+    def __init__(self, *, tmux: TmuxCli, grid: Grid) -> None:
+        self.tmux, self.grid = tmux, grid
 
     def open_pane(
         self,
@@ -94,8 +77,7 @@ class Placement:
         retile: str | None = None,
     ) -> str | None:
         """Opens a pane on the session, recording @opener and @pane; none while a pane that opener
-        opened still shows it (_open; checked when the sessions are listed: not for an iTerm2 opener
-        with split or split_from). Grid mode (_grid): splits the pane _grid picks and tiles the
+        opened still shows it (_open). Grid mode (_grid): splits the pane _grid picks and tiles the
         window per retile and per_column, ignoring split and split_from. Else below the newest open
         @pane of the opener's other sessions, else right of the opener's pane; or beside
         split_from's pane on side split. None or the failure.
@@ -115,11 +97,10 @@ class Placement:
                 except TuiError:
                     if split_from is None:
                         raise
-            in_tmux = opener is not None and ":" not in opener
-            sessions = self._sessions() if in_tmux or (split is None and split_from is None) else []
+            sessions = self._sessions() if opener is not None else []
             if opener is not None and self._open(session, opener, sessions):
                 return None
-            grid = self._grid(opener, sessions, own=own) if opener is not None and in_tmux else None
+            grid = self._grid(opener, sessions, own=own) if opener is not None else None
             if grid is not None:
                 window, manager, at, side = grid
                 if split is not None or split_from is not None:
@@ -168,26 +149,22 @@ class Placement:
         ]
 
     def _open(self, session: str, opener: str, sessions: list[list[str]]) -> bool:
-        """Whether a pane opener opened still shows session: its @opener and @pane, that tmux pane
-        alive, or an iTerm2 pane's client attached.
-        """
+        """Whether a pane opener opened still shows session: its @opener and live tmux @pane."""
         row = next((f for f in sessions if f[1] == session), None)
-        if row is None or row[2] != opener or not row[3]:
+        if row is None or row[2] != opener or not PANE.fullmatch(row[3]):
             return False
         try:
-            if PANE.fullmatch(row[3]):
-                panes = self.tmux.checked(["list-panes", "-a", "-F", "#{pane_id}"]).stdout.split()
-                return row[3] in panes
-            return bool(self._clients(session))
+            panes = self.tmux.checked(["list-panes", "-a", "-F", "#{pane_id}"]).stdout.split()
+            return row[3] in panes
         except TuiError:
             return False
 
     def _grid(
         self, opener: str, sessions: list[list[str]], *, own: bool | None
-    ) -> tuple[str, str, Anchor, str] | None:
+    ) -> tuple[str, str, TmuxAnchor, str] | None:
         """(grid window, manager, pane to split, side) when the opener is in a grid or a root a
-        client shows; None: iTerm2 mode. It splits the largest pane but the manager below, else the
-        manager right.
+        client shows; None when no grid is found. It splits the largest worker pane below, else
+        the manager right.
         """
         row = next((f for f in sessions if f[1] == opener), None)
         if row is None:
@@ -195,7 +172,7 @@ class Placement:
         try:
             found = self._window(row[3], None) if PANE.fullmatch(row[3]) else None
             if found is None:
-                clients = [] if OPENER.fullmatch(row[2]) else self._clients(opener)
+                clients = [] if NAME.fullmatch(row[2]) else self._clients(opener)
                 if not clients:
                     return None
                 if own is None:
@@ -244,42 +221,20 @@ class Placement:
         rows = [
             (int(f[0][1:]), f[3], f[4])
             for f in sessions
-            if f[1] != session
-            and f[2] == opener
-            and (PANE.fullmatch(f[3]) or ITERM_ID.fullmatch(f[3]))
+            if f[1] != session and f[2] == opener and PANE.fullmatch(f[3])
         ]
-        live = None
-        for is_tmux, group in itertools.groupby(
-            sorted(rows, reverse=True), key=lambda r: bool(PANE.fullmatch(r[1]))
-        ):
-            group = list(group)
-            if not is_tmux:  # open iff the AppleScript finds it: one try covers them, newest first
-                with contextlib.suppress(TuiError):
-                    return self._split(
-                        session, "below", ItermAnchor(("id", [r[1] for r in group])), tmux
-                    )
-                continue
-            if live is None:
-                res = self.tmux.run(["list-panes", "-a", "-F", "#{pane_id}"])
-                live = set(res.stdout.split("\n")) if res.returncode == 0 else set()
-            for _, pane, socket in group:
+        if rows:
+            res = self.tmux.run(["list-panes", "-a", "-F", "#{pane_id}"])
+            live = set(res.stdout.split("\n")) if res.returncode == 0 else set()
+            for _, pane, socket in sorted(rows, reverse=True):
                 if pane in live:
                     return self._split(session, "below", TmuxAnchor(pane, socket), tmux)
         return None
 
     def _split(
-        self, session: str, side: str, a: Anchor, tmux: str
+        self, session: str, side: str, a: TmuxAnchor, tmux: str
     ) -> tuple[str | None, str | None]:
-        """(new pane, None) or (None, tmux's failure), in iTerm2 when one shows a's pane; TuiError
-        with no pane.
-        """
-        if isinstance(a, ItermAnchor):
-            try:
-                return self.iterm.split_pane(session, side, tmux, a.iterm), None
-            except TuiError:
-                if a.tmux is None:
-                    raise
-                a = a.tmux
+        """(new pane, None) or (None, tmux's failure)."""
         command = [
             "/usr/bin/env",
             "-u",
@@ -314,7 +269,7 @@ class Placement:
 
     def _record(self, session: str, opener: str | None, pane: str) -> None:
         """For the next placement; a failure is only printed."""
-        if not (PANE.fullmatch(pane) or ITERM_ID.fullmatch(pane)):
+        if not PANE.fullmatch(pane):
             print(f"tui: show: @pane: not a pane id: {pane!r}", file=sys.stderr)
             return
         for key, value in (("@opener", opener), ("@pane", pane)):
@@ -425,41 +380,33 @@ class Placement:
         return name
 
     def opener(self) -> str:
-        """The caller's tmux session, else (iTerm.app) its full $ITERM_SESSION_ID; TuiError when
-        neither matches OPENER.
-        """
+        """The caller's tmux session; TuiError outside tmux."""
         own = self.own_session()
         if own is not None:
             return own
-        value = os.environ.get("ITERM_SESSION_ID", "")
-        if not value or os.environ.get("TERM_PROGRAM") != "iTerm.app":
-            raise TuiError(NO_PANE.format("not in tmux"))
-        if ":" not in value or not OPENER.fullmatch(value):
-            raise TuiError(f"bad $ITERM_SESSION_ID {value!r}: want {OPENER.pattern}")
-        return value
+        raise TuiError(NO_PANE.format("not in tmux"))
 
-    def anchor(self, split_from: str | None = None) -> Anchor:
-        """split_from's shown pane, else the caller's session's, else (iTerm.app only)
-        $ITERM_SESSION_ID's; TuiError when none.
-        """
+    def anchor(self, split_from: str | None = None) -> TmuxAnchor:
+        """split_from's shown pane, else the caller's session's; TuiError when none."""
         if split_from is not None:
             found = self._shown(split_from, own=False)
             if found is None:
                 raise TuiError(f"no terminal shows tmux session {split_from}")
             return found
         own = self.own_session()
-        return _iterm_pane("not in tmux") if own is None else self._opener_pane(own, own=True)
+        if own is None:
+            raise TuiError(NO_PANE.format("not in tmux"))
+        return self._opener_pane(own, own=True)
 
-    def _opener_pane(self, opener: str, *, own: bool | None) -> Anchor:
-        if ":" in opener:
-            return ItermAnchor(("id", [opener.partition(":")[2]]))
+    def _opener_pane(self, opener: str, *, own: bool | None) -> TmuxAnchor:
         if own is None:
             own = self.own_session() == opener
-        return self._shown(opener, own=own) or _iterm_pane(
-            f"no terminal shows tmux session {opener}"
-        )
+        found = self._shown(opener, own=own)
+        if found is None:
+            raise TuiError(NO_PANE.format(f"no terminal shows tmux session {opener}"))
+        return found
 
-    def _shown(self, session: str, *, own: bool) -> Anchor | None:
+    def _shown(self, session: str, *, own: bool) -> TmuxAnchor | None:
         """The pane the most recent client shows the session in: a nested client's host pane,
         $TMUX_PANE when own, else the client's; a control-mode client gets its tmux pane only.
         """
@@ -480,9 +427,7 @@ class Placement:
         }
         if PANE.fullmatch(hosts.get(tty, "")):
             return TmuxAnchor(hosts[tty], socket, session)
-        return ItermAnchor(
-            ("tty", [c[1] for c in clients if c[3] == "0"]), TmuxAnchor(pane, socket, session)
-        )
+        return TmuxAnchor(pane, socket, session)
 
     def _clients(self, session: str) -> list[list[str]]:
         out = self.tmux.checked(["list-clients", "-t", f"={session}", "-F", CLIENTS]).stdout

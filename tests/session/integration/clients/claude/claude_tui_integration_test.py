@@ -1,7 +1,7 @@
 """HostedSession's tui mode with client claude on a private tmux server: the real ClaudeClient runs
 fake_claude.py (on PATH as `claude`), its hooks from --settings. Turns, Blocked, idle timeouts,
 limits, deaths, resume, attach, show, close and the launch's /color, typed once no turn runs.
-CLAUDE_CONFIG_DIR is a temp dir; the iTerm2 path fails the test.
+CLAUDE_CONFIG_DIR is a temp dir.
 """
 
 import functools
@@ -39,7 +39,6 @@ from tests.session import live_tmux
 from tests.session import tui_support as tui_live
 from tests.session.case import PY
 from tests.session.integration.clients.claude import fake_claude
-from tests.session.processes import reject_command
 
 MANAGER, SID, IDLE, WAIT, Stream = (
     tui_live.MANAGER,
@@ -86,9 +85,6 @@ class Live(tui_live.Live):
             os.environ,
             {"CLAUDE_CONFIG_DIR": os.path.join(self.dir, "config"), fake_claude.ENV: self.scenario},
         )
-        patch.start()
-        self.addCleanup(patch.stop)
-        patch = reject_command("osascript")
         patch.start()
         self.addCleanup(patch.stop)
         self.configure()

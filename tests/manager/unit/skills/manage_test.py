@@ -81,7 +81,7 @@ class Manage(Case):
         self.assertNotIn("marks each printed event handled", body("manage"))
 
     def test_a_roster_entry_closes_through_crew(self):
-        close = rule("AppleScript")
+        close = rule("Close through Crew (Direct)")
         self.assertIn("Close through Crew (Direct)", close)
         self.assertRegex(close, r"tmux only for sessions outside the Roster")
 

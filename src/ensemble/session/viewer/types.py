@@ -23,14 +23,6 @@ class TmuxAnchor(NamedTuple):
     session: str | None = None
 
 
-class ItermAnchor(NamedTuple):
-    iterm: tuple[str, list[str]]
-    tmux: TmuxAnchor | None = None
-
-
-Anchor = TmuxAnchor | ItermAnchor
-
-
 class Cell(NamedTuple):
     """A layout cell: w x h at x, y; a LEAF shows pane, a container holds children."""
 

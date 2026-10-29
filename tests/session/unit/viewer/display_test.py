@@ -20,12 +20,12 @@ from tests.session.hosted_support import SID, listed
 from tests.session.tmux_fixtures import INSIDE, SESSIONS, FakeTmux, TileFixture, environ, hold
 from tests.session.tmux_host_support import Base
 
-NO_PANE = "no anchor pane: not in tmux, no iTerm2 pane ($ITERM_SESSION_ID)"
+NO_PANE = "no anchor pane: not in tmux"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 FOLDS = (
     (("mgr", None, None, False), "mgr"),
     (("mgr", "right", None, False), "mgr/right"),
-    (("w0t0p0:ABC-1", "below", "m1", False), "w0t0p0:ABC-1/below/m1"),
+    (("mgr", "below", "m1", False), "mgr/below/m1"),
     ((None, "below", None, False), "/below"),
     ((None, None, "m1", False), "//m1"),
     ((None, "right", "m1", False), "/right/m1"),
@@ -49,6 +49,11 @@ MARKED = "display {!r}: its hidden part comes only from none"
 
 
 class FoldTest(Case):
+    def test_opener_accepts_only_tmux_session_names(self):
+        for opener in ("w0t0p0:ABC-1", "a:b"):
+            with self.subTest(opener=opener), self.assertRaises(ConfigError):
+                fold(opener, None, None)
+
     def test_fold_and_unfold_round_trip(self):
         for parts, display in FOLDS:
             with self.subTest(parts=parts):
@@ -75,11 +80,11 @@ class FoldTest(Case):
         for parts, message in (
             (
                 ("x y", None, None),
-                "opener must be a tmux session name or $ITERM_SESSION_ID's value, got 'x y'",
+                "opener must be a tmux session name, got 'x y'",
             ),
             (
                 ("w0t0p0:a/b", None, None),
-                "opener must be a tmux session name or $ITERM_SESSION_ID's value, got 'w0t0p0:a/b'",
+                "opener must be a tmux session name, got 'w0t0p0:a/b'",
             ),
             ((None, "left", None), "split must be right or below, got 'left'"),
             ((None, None, "a b"), "split_from must match [A-Za-z0-9_-]+, got 'a b'"),

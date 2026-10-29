@@ -19,7 +19,7 @@ PROCESS = "4242 $3 %7 4343"
 
 
 def fake_tmux(runner: FakeTmux) -> mock.Mock:
-    """Recorded session verbs; run, checked and runner (Grid's, Placement's, Iterm's) play runner."""
+    """Recorded session verbs; run, checked and runner (Grid's, Placement's) play runner."""
     tmux = mock.create_autospec(TmuxCli, instance=True)
     tmux.PAUSE = TmuxCli.PAUSE
     tmux.runner = runner

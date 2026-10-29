@@ -19,7 +19,6 @@ from tests.session.tmux_fixtures import (
     HOSTS,
     INSIDE,
     OWN,
-    PGREP,
     RETILE_ERROR,
     SESSIONS,
     SOCK,
@@ -38,7 +37,6 @@ from tests.session.tmux_fixtures import (
     json_layout,
     mute,
     opening_commands,
-    osa,
     placed,
     record,
     slot,
@@ -52,7 +50,7 @@ from tests.session.tmux_fixtures import (
 class GridOpenTest(Case):
     """The caller is in root session mgr (no @opener), pane %3, shown by a client's pane %9;
     `windows` maps a pane to its window's list-panes rows (window, @grid-manager, pane, width,
-    height), a pane not in it is gone; list-panes -a prints nothing; iTerm2 runs; a split prints
+    height), a pane not in it is gone; list-panes -a prints nothing; a split prints
     %20.
     """
 
@@ -89,8 +87,6 @@ class GridOpenTest(Case):
                 "list-clients": (0, clients),
                 "list-panes": list_panes,
                 "split-window": (0, "%20\n"),
-                "pgrep": (0,),
-                "osascript": (0, "ok NEW\n"),
                 **results,
             }
         )
@@ -213,19 +209,10 @@ class GridOpenTest(Case):
 
     def test_todays_path_for_a_detached_root_or_a_member_outside_a_grid(self):
         fake = self.fake({"%3": self.NEW}, clients="")
-        self.assertIsNone(self.open(fake))
         self.assertEqual(
-            fake.calls,
-            [
-                OWN,
-                SESSIONS,
-                clients_of("mgr"),
-                clients_of("mgr"),
-                PGREP,
-                osa("right", "id", "s", "ABC"),
-                *record("mgr", "NEW"),
-            ],
+            self.open(fake), "no anchor pane: no terminal shows tmux session mgr" + WATCH
         )
+        self.assertEqual(fake.calls, [OWN, SESSIONS, clients_of("mgr"), clients_of("mgr")])
         rows = (self.MGR, ("$2", "w1", "x", "%10"))
         for windows in (
             {"%10": [("@1", "", "%10", "160", "48")]},
@@ -233,7 +220,7 @@ class GridOpenTest(Case):
             {},
         ):
             with self.subTest(windows=windows):
-                fake = self.fake(windows, rows, own="w1", pgrep=(1,))
+                fake = self.fake(windows, rows, own="w1")
                 self.assertIsNone(self.open(fake))
                 self.assertEqual(
                     fake.calls,
@@ -243,7 +230,6 @@ class GridOpenTest(Case):
                         grid_read("%10"),
                         clients_of("w1"),
                         HOSTS,
-                        PGREP,
                         split_window("-h", "%3"),
                         *record("w1", "%20"),
                     ],
@@ -266,7 +252,7 @@ class GridOpenTest(Case):
             ),
         ):
             with self.subTest(windows=windows):
-                fake = self.fake(windows, pgrep=(1,))
+                fake = self.fake(windows)
                 self.assertIsNone(self.open(fake))
                 self.assertEqual(
                     fake.calls,
@@ -277,7 +263,6 @@ class GridOpenTest(Case):
                         grid_read("%3"),
                         clients_of("mgr"),
                         HOSTS,
-                        PGREP,
                         split_window("-h", "%3"),
                         *record("mgr", "%20"),
                     ],
@@ -287,20 +272,9 @@ class GridOpenTest(Case):
         self.assertEqual(fake.calls, [OWN, SESSIONS, clients_of("mgr"), clients_of("mgr")])
 
     def test_split_honored_outside_the_grid(self):
-        fake = self.fake({"%3": self.NEW}, clients="")
+        fake = self.fake({})
         self.assertIsNone(self.open(fake, split="below"))
-        self.assertEqual(
-            fake.calls,
-            [
-                OWN,
-                SESSIONS,
-                clients_of("mgr"),
-                clients_of("mgr"),
-                PGREP,
-                osa("below", "id", "s", "ABC"),
-                *record("mgr", "NEW"),
-            ],
-        )
+        self.assertEqual(fake.calls[-3:], [split_window("-v", "%3"), *record("mgr", "%20")])
         self.assertEqual(self.stderr.getvalue(), "")
 
     def test_a_failed_split_changes_nothing_else(self):
@@ -351,7 +325,7 @@ class GridOpenTest(Case):
         )
 
     def test_retile_modes_and_split_ignored_in_the_grid(self):
-        # None: the default; in iTerm2 (INSIDE) a tmux split all the same
+        # None uses the default
         splits = ({"split": "below"}, {"split_from": "b"}, {"split": "right", "split_from": "b"})
         for retile, mode, kw, stderr in (
             (None, "open-close", {}, ""),

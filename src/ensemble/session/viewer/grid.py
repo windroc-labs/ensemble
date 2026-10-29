@@ -12,7 +12,6 @@ import time
 
 from ensemble.session.engine.tmux_cli import (
     NAME,
-    OPENER,
     PANE,
     SESSION_ID,
     SESSIONS,
@@ -358,7 +357,7 @@ class Grid:
                     (
                         int(f[0][1:]),
                         f[1],
-                        f[2] if OPENER.fullmatch(f[2]) else "",
+                        f[2] if NAME.fullmatch(f[2]) else "",
                         f[3] if PANE.fullmatch(f[3]) else "",
                     )
                 )

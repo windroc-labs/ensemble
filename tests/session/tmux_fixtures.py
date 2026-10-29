@@ -17,8 +17,8 @@ from types import SimpleNamespace
 from ensemble.session.engine.tmux_cli import EXEC, TmuxCli
 from ensemble.session.engine.types import Launch
 from ensemble.session.viewer import grid as grids
-from ensemble.session.viewer import iterm, placement, types
 from ensemble.session.viewer import layout as layouts
+from ensemble.session.viewer import placement, types
 from tests.session.case import Case
 from tests.utils.process_fixtures import DEVNULL
 
@@ -28,15 +28,9 @@ FORMAT = "#{pane_dead} #{pane_dead_status} #{pane_dead_signal}"
 
 CLIENTS = "#{client_activity} #{client_tty} #{pane_id} #{client_control_mode} #{socket_path}"
 
-PGREP = ["pgrep", "-a", "-x", "iTerm2"]
-
-ITERM = {"ITERM_SESSION_ID": "w0t0p0:ABC", "TERM_PROGRAM": "iTerm.app"}
-
 TMUX_KW = {"capture_output": True, "text": True, "stdin": DEVNULL}
 
 SH_KW = {"stdin": DEVNULL, "timeout": 30}
-
-OSA_KW = {**TMUX_KW, "timeout": 30}
 
 TMUX = '/opt/a"b\\c/bin/tmux'  # the script text must never carry it
 
@@ -76,7 +70,7 @@ EXITED_HOOK = (
     "##{pane_dead_signal}},##{pane_dead_status}} >> ##{q:@events}' ; kill-pane -t #{pane_id}"
 )
 
-INSIDE = {"TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%3", "ITERM_SESSION_ID": "w0t0p0:ABC"}
+INSIDE = {"TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%3"}
 
 OWN = ["tmux", "display-message", "-p", "-t", "%3", "#{session_name}"]
 
@@ -276,10 +270,6 @@ def which(tmux=TMUX, session=COMMAND):
     return unittest.mock.patch("shutil.which", side_effect=found)
 
 
-def osa(split, kind, session, *anchors):
-    return ["osascript", "-e", iterm.APPLESCRIPT, split, kind, TMUX, session, *anchors]
-
-
 def decorations(session, events=None, status="off"):
     target = f"={session}:"
     return [
@@ -324,7 +314,7 @@ def expected_panes(*rows):
 
 
 class FakeTmux:
-    """Plays tmux, and sh and osascript: records each call. `results` maps a tmux command (after any
+    """Plays tmux and sh: records each call. `results` maps a tmux command (after any
     -u) or another program to its (rc, stdout, stderr), an exception to raise, or a function of the
     argv giving either. `pane` is what display-message prints (None: no server). On new-session it
     reads the handover file named in its argv (after EXEC); unless `hand_over` is False it plays the
@@ -546,9 +536,9 @@ class StartFixture(Case):
 
 
 def placed(fake) -> placement.Placement:
-    """A Placement whose TmuxCli, Grid and Iterm run fake."""
+    """A Placement whose TmuxCli and Grid run fake."""
     tmux = TmuxCli(fake)
-    return placement.Placement(tmux=tmux, grid=grids.Grid(tmux), iterm=iterm.Iterm(fake))
+    return placement.Placement(tmux=tmux, grid=grids.Grid(tmux))
 
 
 class PaneFixture(Case):
