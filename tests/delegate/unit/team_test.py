@@ -78,6 +78,19 @@ class Acceptance(Packaged):
         self.assertIn(
             "python3 -P {{team}}/tools/report_check.py *", composed("researcher")[1].commands
         )
+        self.assertIn(
+            "python3 -P {{team}}/tools/scope_check.py *",
+            composed("engineer", "decompose")[1].commands,
+        )
+        engineer = composed("engineer", "decompose")[0]
+        self.assertIn(
+            "Its **scope check**: `python3 -P <team>/tools/scope_check.py --base ", engineer
+        )
+        decompose = task_text("decompose")
+        self.assertIn(
+            "run the **scope check** ([Engineer › Input processing](#input-processing))", decompose
+        )
+        self.assertIn("Rerun the scope check on the reread descriptions.", decompose)
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
@@ -122,6 +135,9 @@ class Acceptance(Packaged):
             "<summary>Sources (<count>)</summary>",
             "at most once per section",
             "bold answer",
+            "one **bold claim** line, then 1–3 sentences",
+            "## What it means for us",
+            "omit when the input asks no decision",
         ):
             self.assertIn(text, template)
         for task in ("research", "light-research"):
@@ -518,6 +534,11 @@ class Shipped(Packaged):
                 text.index("**Prepare**"), text.index("[ensemble-progress:start]"), task
             )
 
+    def test_research_notes_each_findings_evidence(self):
+        for task in ("research", "light-research"):
+            with self.subTest(task=task):
+                self.assertIn("the claim, its evidence, its sources", task_text(task))
+
     def test_light_research_is_one_pass(self):
         light = task_text("light-research")
         self.assertIn("in one pass: no subagents, no workflow", light)
@@ -622,8 +643,9 @@ class Real(RealConfig):
     def test_templates_put_the_summary_first_one_fact_per_item_and_point_to_the_diagram_rule(self):
         pm, light = composed("pm", "product-design")[0], composed("researcher", "research")[0]
         point = "[Principles › Writing › Diagrams and tables](#writing)"
+        self.assertIn("One fact per list item", pm)
+        self.assertIn("Outside Findings, one fact per list item", light)
         for text in (pm, light):
-            self.assertIn("One fact per list item", text)
             self.assertIn("never repeats `[Reference]`", text)
         self.assertIn("Opens with one sentence", section(pm, "Problem and goals"))
         self.assertIn(point, section(pm, "User flow"))

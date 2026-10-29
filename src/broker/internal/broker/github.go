@@ -180,19 +180,11 @@ func (g GitHub) revoke(ctx context.Context, container string, tokens []credentia
 	}
 }
 
-// targets signs the App JWT and lists what a grant covers: every installation, or with repo ("": none) the App's
-// installation on repo alone.
-func (g GitHub) targets(ctx context.Context, repo string) (jwt string, _ []github.Installation, _ error) {
+// targets signs the App JWT and lists what a grant covers: every installation.
+func (g GitHub) targets(ctx context.Context) (jwt string, _ []github.Installation, _ error) {
 	jwt, err := g.jwt(AppKeyService)
 	if err != nil {
 		return "", nil, err
-	}
-	if repo != "" {
-		in, err := g.API.RepoInstallation(ctx, jwt, repo)
-		if err != nil {
-			return "", nil, installError(repo, "", err)
-		}
-		return jwt, []github.Installation{in}, nil
 	}
 	installs, err := g.API.Installations(ctx, jwt)
 	if err != nil {
@@ -201,20 +193,13 @@ func (g GitHub) targets(ctx context.Context, repo string) (jwt string, _ []githu
 	return jwt, installs, nil
 }
 
-// issue issues in's token limited to permissions, for repo alone when set, and audits it as result with what it
-// reaches. An account that is not a GitHub login, so no file name, gets none.
-func (g GitHub) issue(ctx context.Context, jwt, repo string, in github.Installation, permissions map[string]string, container, result string) (credential.Material, error) {
+// issue issues in's token limited to permissions and audits it as result with what it reaches. An account that is
+// not a GitHub login, so no file name, gets none.
+func (g GitHub) issue(ctx context.Context, jwt string, in github.Installation, permissions map[string]string, container, result string) (credential.Material, error) {
 	if !github.Login.MatchString(in.Account) {
 		return credential.Material{}, protocol.New(protocol.GitHubFailed, "GitHub named an installation account that is not a GitHub login.")
 	}
-	var token string
-	var expires time.Time
-	var err error
-	if repo != "" {
-		token, expires, err = g.API.IssueRepo(ctx, jwt, in.ID, repo, permissions)
-	} else {
-		token, expires, err = g.API.Issue(ctx, jwt, in.ID, permissions)
-	}
+	token, expires, err := g.API.Issue(ctx, jwt, in.ID, permissions)
 	if err != nil {
 		return credential.Material{}, apiError(err)
 	}
@@ -254,8 +239,8 @@ func expiries(tokens []credential.Material) []protocol.Expiry {
 }
 
 // Issue prepares every installation token; the caller owns delivery and rollback after success.
-func (g GitHub) Issue(ctx context.Context, _, repo string, permissions map[string]string, container string) (commands []credential.Command, revoke func(), _ []protocol.Expiry, err error) {
-	jwt, targets, err := g.targets(ctx, repo)
+func (g GitHub) Issue(ctx context.Context, _ string, permissions map[string]string, container string) (commands []credential.Command, revoke func(), _ []protocol.Expiry, err error) {
+	jwt, targets, err := g.targets(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -273,7 +258,7 @@ func (g GitHub) Issue(ctx context.Context, _, repo string, permissions map[strin
 		}
 	}()
 	for _, in := range targets {
-		m, issueErr := g.issue(ctx, jwt, repo, in, permissions, container, audit.Issued)
+		m, issueErr := g.issue(ctx, jwt, in, permissions, container, audit.Issued)
 		if issueErr != nil {
 			return commands, nil, nil, issueErr
 		}
@@ -294,17 +279,16 @@ func (g GitHub) Issue(ctx context.Context, _, repo string, permissions map[strin
 	}, expiries(issued), nil
 }
 
-// Refresh writes container a new token per current installation of app (or repo's, as Issue), limited to
-// permissions, over each file. A replaced token is never revoked: it expires. A new one whose write failed never
+// Refresh writes container a new token per current installation of app, limited to permissions, over each file. A replaced token is never revoked: it expires. A new one whose write failed never
 // reached the container and is revoked.
-func (g GitHub) Refresh(ctx context.Context, _, repo string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	jwt, targets, err := g.targets(ctx, repo)
+func (g GitHub) Refresh(ctx context.Context, _ string, permissions map[string]string, container string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	jwt, targets, err := g.targets(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var renewed []credential.Material
 	for _, in := range targets {
-		m, err := g.issue(ctx, jwt, repo, in, permissions, container, audit.Renewed)
+		m, err := g.issue(ctx, jwt, in, permissions, container, audit.Renewed)
 		if err != nil {
 			return nil, redacted(err, append(tokens(renewed), jwt)...)
 		}
@@ -390,7 +374,7 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 	}
 	in, err := g.API.RepoInstallation(ctx, jwt, repo)
 	if err != nil {
-		return installError(repo, " or drop prefetch", err)
+		return installError(repo, err)
 	}
 	token, expires, err := g.API.IssueRepo(ctx, jwt, in.ID, repo, prefetchPermissions)
 	if err != nil {
@@ -432,12 +416,11 @@ func (g GitHub) Prefetch(ctx context.Context, repo, ref, dir, container string, 
 	return nil
 }
 
-// installError is the protocol's account of err, looking up the App's installation on repo; remedy follows the
-// not-installed message's own.
-func installError(repo, remedy string, err error) *protocol.Error {
+// installError is the protocol's account of err, looking up the App's installation on prefetch's repo.
+func installError(repo string, err error) *protocol.Error {
 	var se *github.StatusError
 	if errors.As(err, &se) && se.Status == http.StatusNotFound {
-		return protocol.New(protocol.GitHubFailed, "GitHub App "+AppKeyService+" is not installed on "+repo+"; install it there"+remedy+".")
+		return protocol.New(protocol.GitHubFailed, "GitHub App "+AppKeyService+" is not installed on "+repo+"; install it there or drop prefetch.")
 	}
 	return apiError(err)
 }

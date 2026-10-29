@@ -23,7 +23,6 @@ type Manifest struct {
 	Labels                                                                                      map[string]string
 	GitHubApp                                                                                   string            // the declared App; "": no github credential
 	GitHubPermissions                                                                           map[string]string // the declared repository permissions; nil without github
-	GitHubRepo                                                                                  string            // the one repository its tokens reach (owner/name); "": every repository of every installation
 	OpencodeProviders                                                                           []string          // the providers whose API keys an opencode container gets
 	ClaudeAccount                                                                               string            // the account whose setup-token a claude container gets; "" for other clients
 	Secrets                                                                                     []Secret          // the merged env request; nil without env
@@ -227,7 +226,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 	m.Linear = request.Linear
 	m.Secrets = request.Env
 	if request.GitHub != nil {
-		m.GitHubApp, m.GitHubPermissions, m.GitHubRepo = request.GitHub.App, request.GitHub.Permissions, request.GitHub.Repo
+		m.GitHubApp, m.GitHubPermissions = request.GitHub.App, request.GitHub.Permissions
 	}
 
 	if raw, ok := fields["prefetch"]; ok {
@@ -246,8 +245,6 @@ func ParseManifest(data []byte) (Manifest, error) {
 			return reject("invalid prefetch repo %q", repo)
 		case hasRef && !ValidRef(ref):
 			return reject("invalid prefetch ref %q", ref)
-		case m.GitHubApp != "" && m.GitHubRepo == "":
-			return reject("prefetch requires a github credential with repo or no github credential")
 		}
 		m.Prefetch = &Prefetch{Repo: repo, Ref: ref}
 	}

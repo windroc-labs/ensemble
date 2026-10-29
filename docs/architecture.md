@@ -70,14 +70,15 @@ without `env`, no environment secret is delivered. These static copies use the b
 checks, notices and audit. Session saves both declarations on the host for resume/reopen; later configuration
 changes affect new runs. The removed environment and manifest `secrets` fields have no compatibility path.
 
-GitHub container tokens use the same merged request, with a `github` declaration (`app`, `permissions`, optional
-`repo`). Without `github`, no GitHub token is delivered.
+GitHub container tokens use the same merged request, with a `github` declaration (`app`, `permissions`); its token
+reaches every repository of the App's installations. Without `github`, no GitHub token is delivered.
 The broker signs, renews and revokes the declared tokens and returns the App bot's commit/PR identity in its start
 response's generic `env` map; Session applies that map without interpreting credential kinds.
 
-Engineer access comes from its orchestrator role declaration, written by the installer; verifier output-repo access
-is separately declared and repo-scoped. Prefetch uses a temporary clone token and does not imply container access.
-Configuration and upgrade steps: [explicit GitHub credentials](upgrading.md#broker-protocol-35-explicit-github-credentials).
+Engineer access comes from its orchestrator role declaration, written by the installer; verifier access is
+separately declared. Prefetch uses a temporary clone token and does not imply container access.
+Configuration and upgrade steps: [explicit GitHub credentials](upgrading.md#broker-protocol-35-explicit-github-credentials)
+and [GitHub grants without repo](upgrading.md#broker-protocol-36-github-grants-without-repo).
 
 Docker networking goes through the external [egress proxy](https://github.com/windroc-labs/egress-proxy),
 whose [label contract](https://github.com/windroc-labs/egress-proxy/blob/122d7454d738db4a9b7e0c4a89d2cfa5ff564339/docs/label-contract.md)

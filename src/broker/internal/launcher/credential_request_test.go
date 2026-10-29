@@ -75,9 +75,9 @@ func TestCredentialRequestGitHubServed(t *testing.T) {
 	}
 	m, err = ParseManifest(withFields(t, map[string]any{
 		"credentials":             `{"github":{"app":"new","permissions":{"contents":"write"}}}`,
-		"environment_credentials": `{"github":{"app":"old","repo":"o/old","permissions":{"contents":"read"}},"env":[{"item":"ensemble-broker-env/old","file":"old"}]}`,
+		"environment_credentials": `{"github":{"app":"old","permissions":{"contents":"read"}},"env":[{"item":"ensemble-broker-env/old","file":"old"}]}`,
 	}))
-	if err != nil || m.GitHubApp != "new" || m.GitHubRepo != "" || m.GitHubPermissions["contents"] != "write" || len(m.Secrets) != 1 || m.Secrets[0].File != "old" {
+	if err != nil || m.GitHubApp != "new" || m.GitHubPermissions["contents"] != "write" || len(m.Secrets) != 1 || m.Secrets[0].File != "old" {
 		t.Fatalf("whole-kind override: %+v %v", m, err)
 	}
 	for _, old := range []any{nil, map[string]any{"app": "old", "permissions": map[string]string{"contents": "read"}}} {

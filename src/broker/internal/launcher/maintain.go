@@ -94,13 +94,13 @@ func renewCodex(ctx context.Context, h Host, m Manifest, container string, recor
 	return []string{expiry}, nil
 }
 
-// renewGitHub writes a new token per current installation of the manifest's App (or its repo grant's) over the
-// container's and records their expiries; the tokens replaced expire.
+// renewGitHub writes a new token per current installation of the manifest's App over the container's and records
+// their expiries; the tokens replaced expire.
 func renewGitHub(ctx context.Context, h Host, m Manifest, container string, record func([]string) error) ([]string, error) {
 	if err := h.GitHub.Ready(m.GitHubApp); err != nil {
 		return nil, injected(err, protocol.RefreshFailed, "GitHub renewal for "+container+" failed.")
 	}
-	expiries, err := h.GitHub.Refresh(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, container, h.agentExec(ctx, container))
+	expiries, err := h.GitHub.Refresh(ctx, m.GitHubApp, m.GitHubPermissions, container, h.agentExec(ctx, container))
 	if err != nil {
 		return nil, err
 	}
