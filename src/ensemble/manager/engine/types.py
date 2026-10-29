@@ -1,4 +1,4 @@
-"""Crew launch intent, roster entries, states, managers as listed and errors."""
+"""Crew launch intent, roster entries, states and errors."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -44,8 +44,6 @@ class Liveness(NamedTuple):
 
 @dataclass(frozen=True)
 class Unread:
-    """A file that could not be read, and why."""
-
     error: str
 
 
@@ -57,8 +55,6 @@ class HolderState(StrEnum):
 
 @dataclass(frozen=True)
 class SessionRecord:
-    """A manager's session.json: the client that last started, resumed, cleared or compacted."""
-
     client: str
     sid: str
     pid: int
@@ -67,7 +63,7 @@ class SessionRecord:
 
 @dataclass(frozen=True)
 class Manager:
-    """One manager read without a lease; holder: its active holder's label, None when NOT_HELD."""
+    """holder: the active holder's label, None exactly when NOT_HELD."""
 
     name: str
     state: HolderState
@@ -82,7 +78,7 @@ class Manager:
 
 @dataclass(frozen=True)
 class Unreadable:
-    """A manager whose holder probe could not run, so nothing about it is known."""
+    """Its holder probe failed."""
 
     name: str
     error: str
