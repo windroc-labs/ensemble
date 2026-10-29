@@ -146,17 +146,27 @@ class Screen:
         self.cells = [[" "] * columns for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
         self.row, self.column = 0, 0
+        self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = (0, 0)
         self.normal: tuple[list[list[str]], int, int] | None = None
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.escape = ""
 
     def newline(self) -> None:
-        self.row += 1
-        if self.row >= self.rows:
-            self.history.append("".join(self.cells.pop(0)).rstrip())
-            self.cells.append([" "] * self.columns)
-            self.row = self.rows - 1
+        if self.row == self.scroll_bottom:
+            self._scroll(self.scroll_top, self.scroll_bottom, 1, history=True)
+        else:
+            self.row = min(self.rows - 1, self.row + 1)
+
+    def _scroll(self, top: int, bottom: int, count: int, *, history=False) -> None:
+        amount = min(abs(count), bottom - top + 1)
+        blank = [[" "] * self.columns for _ in range(amount)]
+        if count > 0:
+            if history and top == 0 and self.normal is None:
+                self.history.extend("".join(line).rstrip() for line in self.cells[:amount])
+            self.cells[top : bottom + 1] = self.cells[top + amount : bottom + 1] + blank
+        else:
+            self.cells[top : bottom + 1] = blank + self.cells[top : bottom + 1 - amount]
 
     def csi(self, sequence: str) -> None:
         command, raw = sequence[-1], sequence[:-1]
@@ -202,6 +212,22 @@ class Screen:
             line[self.column :] = ([" "] * min(value, self.columns) + line[self.column :])[
                 : self.columns - self.column
             ]
+        elif command == "r" and not private:
+            top = value - 1
+            bottom = (values[1] or self.rows) - 1 if len(values) > 1 else self.rows - 1
+            if 0 <= top < bottom < self.rows or top == bottom == 0 and self.rows == 1:
+                self.scroll_top, self.scroll_bottom = top, bottom
+                self.row, self.column = 0, 0
+        elif command in "ST":
+            self._scroll(
+                self.scroll_top,
+                self.scroll_bottom,
+                value if command == "S" else -value,
+                history=True,
+            )
+        elif command in "LM" and self.scroll_top <= self.row <= self.scroll_bottom:
+            self._scroll(self.row, self.scroll_bottom, value if command == "M" else -value)
+            self.column = 0
         elif command == "s":
             self.saved = self.row, self.column
         elif command == "u":
@@ -238,6 +264,15 @@ class Screen:
                         self.saved = self.row, self.column
                     elif char == "8":
                         self.row, self.column = self.saved
+                    elif char in "DE":
+                        if char == "E":
+                            self.column = 0
+                        self.newline()
+                    elif char == "M":
+                        if self.row == self.scroll_top:
+                            self._scroll(self.scroll_top, self.scroll_bottom, -1)
+                        else:
+                            self.row = max(0, self.row - 1)
                     self.escape = ""
                 elif self.escape.startswith(("\x1b(", "\x1b)")) and len(self.escape) == 3:
                     self.escape = ""
@@ -283,6 +318,7 @@ class Screen:
             self.normal = cells, row, min(column, columns)
         self.cells, self.row = fit(self.cells, self.row, rows, columns)
         self.rows, self.columns, self.column = rows, columns, min(self.column, columns)
+        self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = min(self.saved[0], rows - 1), min(self.saved[1], columns - 1)
 
     def text(self, lines: int | None) -> str:

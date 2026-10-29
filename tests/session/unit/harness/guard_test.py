@@ -58,6 +58,80 @@ class Base(Case):
 
 
 class GuardTest(Base):
+    def test_scroll_region_linefeed_index_nextline_and_wrap_preserve_footer(self):
+        for ending in (b"\r\n", b"\r\x1bD", b"\x1bE", b"\x1b[4;12HX"):
+            with self.subTest(ending=ending):
+                screen = guard.Screen(rows=5, columns=12)
+                screen.append(b"top\r\na\r\nb\r\nc\r\nfooter")
+                screen.append(b"\x1b[2;4r\x1b[4;1H" + ending + b"new")
+                expected = (
+                    "top\nb\nc          X\nnew\nfooter"
+                    if ending.endswith(b"X")
+                    else "top\nb\nc\nnew\nfooter"
+                )
+                self.assertEqual(screen.text(None), expected)
+                self.assertEqual(screen.text(8), expected)
+
+    def test_reverse_index_scrolls_only_at_region_top_without_history(self):
+        screen = guard.Screen(rows=5, columns=8)
+        screen.append(b"top\r\na\r\nb\r\nc\r\nfooter\x1b[2;4r\x1b[2;1H\x1bMnew")
+        self.assertEqual(screen.text(8), "top\nnew\na\nb\nfooter")
+        screen.append(b"\x1b[5;1H\x1bMX")
+        self.assertEqual(screen.text(None), "top\nnew\na\nX\nfooter")
+
+    def test_codex_inline_reverse_index_then_linefeed_preserves_last_lines(self):
+        screen = guard.Screen(rows=4, columns=8)
+        screen.append(b"old\r\nrecent\r\nprompt\r\nfooter")
+        screen.append(b"\x1b[1;2r\x1b[1;1H\x1bM\rfirst\r\n\r\nsecond")
+        self.assertEqual(screen.text(None), "old\nsecond\nprompt\nfooter")
+        self.assertEqual(screen.text(6), "first\nold\nsecond\nprompt\nfooter")
+
+    def test_scroll_region_defaults_invalid_bounds_and_split_sequences(self):
+        screen = guard.Screen(rows=4, columns=8)
+        screen.append(b"a\r\nb\r\nc\r\nfooter\x1b[1;3r")
+        for invalid in (b"\x1b[3;2r", b"\x1b[0;9r", b"\x1b[2;2r", b"\x1b[?1;2r"):
+            screen.append(b"\x1b[2;2H" + invalid + b"X")
+            self.assertEqual(screen.text(None), "a\nbX\nc\nfooter")
+        for byte in b"\x1b[0;0r":
+            screen.append(bytes([byte]))
+        screen.append(b"Z\x1b[4;1H\r\nend")
+        self.assertEqual(screen.text(None), "bX\nc\nfooter\nend")
+        self.assertEqual(screen.text(5), "Z\nbX\nc\nfooter\nend")
+        for reset in (b"\x1b[r", b"\x1b[;r", b"\x1b[0r"):
+            screen.append(reset + b"Q")
+            self.assertTrue(screen.text(None).startswith("QX"))
+
+    def test_scroll_up_down_insert_delete_lines_clip_to_region(self):
+        cases = (
+            (b"\x1b[S", "top\nb\nc\n\nfooter"),
+            (b"\x1b[T", "top\n\na\nb\nfooter"),
+            (b"\x1b[3;1H\x1b[L", "top\na\n\nb\nfooter"),
+            (b"\x1b[3;1H\x1b[M", "top\na\nc\n\nfooter"),
+            (b"\x1b[99S", "top\n\n\n\nfooter"),
+            (b"\x1b[99T", "top\n\n\n\nfooter"),
+            (b"\x1b[3;1H\x1b[99L", "top\na\n\n\nfooter"),
+            (b"\x1b[3;1H\x1b[99M", "top\na\n\n\nfooter"),
+            (b"\x1b[5;1H\x1b[L\x1b[M\n", "top\na\nb\nc\nfooter"),
+        )
+        for wire, expected in cases:
+            with self.subTest(wire=wire):
+                screen = guard.Screen(rows=5, columns=8)
+                screen.append(b"top\r\na\r\nb\r\nc\r\nfooter\x1b[2;4r" + wire)
+                self.assertEqual(screen.text(8), expected)
+
+    def test_alternate_screen_scrolling_does_not_pollute_primary_history(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(b"old\r\nmain\r\nlast\x1b[?1049halt\r\none\r\ntwo\x1b[S")
+        screen.append(b"\x1b[?1049l")
+        self.assertEqual(screen.text(4), "old\nmain\nlast")
+
+    def test_resize_resets_scroll_region(self):
+        screen = guard.Screen(rows=4, columns=8)
+        screen.append(b"a\r\nb\r\nc\r\nd\x1b[1;2r")
+        screen.resize(5, 8)
+        screen.append(b"\x1b[5;1Hlast\r\nnext")
+        self.assertEqual(screen.text(6), "a\nb\nc\nd\nlast\nnext")
+
     def test_wide_character_at_right_margin_and_combining_mark_wrap_safely(self):
         screen = guard.Screen()
         screen.append(("a" * 79 + "中\u0301").encode())
