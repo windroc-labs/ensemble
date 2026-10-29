@@ -12,6 +12,13 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## ctmux is now ensemble
+
+The command that opens a manager's tmux session is now `ensemble <name>`. After updating the plugin, rerun
+`scripts/install.sh` or `<plugin dir>/skills/manage/scripts/ensemble --install` to install `~/.ensemble/bin/ensemble`.
+Neither removes the old launcher, which no longer runs: delete it with `rm ~/.ensemble/bin/ctmux`. Sessions it
+opened keep running; `ensemble <name>` attaches to them.
+
 ## Broker protocol 35: explicit GitHub credentials
 
 Close running Docker workers before upgrading, then run `scripts/install.sh --docker`. Protocol 35 removes the
