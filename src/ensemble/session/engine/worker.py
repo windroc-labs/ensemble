@@ -336,9 +336,10 @@ class Worker:
         except (SessionError, ConfigError):
             self._put_back(before)
             raise
-        if session.showable:
-            self._show(session, hidden=hidden)
+        unshown = self._show(session, hidden=hidden) if session.showable else None
         self._watch(session)
+        if unshown is not None:  # moot if its client exited at once
+            self.say(unshown)
         record = self.state.record()
         self._store(record)
         return record
@@ -389,8 +390,8 @@ class Worker:
             except SessionError as error:
                 self.say(f"session {name}: not shown: {error}")
             else:
-                if session.showable:
-                    self._show(session, hidden=None)
+                if session.showable and (unshown := self._show(session, hidden=None)):
+                    self.say(unshown)
         return record
 
     def _store(self, record: Record) -> None:
@@ -500,7 +501,7 @@ class Worker:
                 else:
                     save(path, data)
 
-    def _show(self, session: Session, *, hidden: bool | None) -> None:
+    def _show(self, session: Session, *, hidden: bool | None) -> str | None:
         name = self.state.name
         try:
             self.say(f"session {name}: {session.attach_command()}")
@@ -509,7 +510,8 @@ class Worker:
             elif hidden is False or not session.status().hidden:
                 session.show(display=self.state.display)
         except (SessionError, ConfigError) as error:
-            self.say(f"session {name}: not {'hidden' if hidden else 'shown'}: {error}")
+            return f"session {name}: not {'hidden' if hidden else 'shown'}: {error}"
+        return None
 
     def _watch(self, session: Session) -> None:
         began = self.clock()
