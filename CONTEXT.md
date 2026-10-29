@@ -130,6 +130,9 @@ A manager's command executor. It owns a Roster, starts opaque argv and uses each
 **Roster**:
 A manager's ledger of launch intents and Records, entry states, holder lease and events cursor: `~/.ensemble/managers/<name>/roster.json`. It alone writes the ledger and manages event rotation. In code: `src/ensemble/manager/engine/roster.py` and `events.py`.
 
+**Session record**:
+The client that last started, resumed, cleared or compacted as a manager: its kind, session id, process id and cwd, `~/.ensemble/managers/<name>/session.json`, replaced whole by the SessionStart hook. `ensemble list` reads it beside the Roster, without a lease. In code: `src/ensemble/manager/rearm.py` (writer), `src/ensemble/manager/engine/managers.py` (reader); schema: `src/ensemble/manager/engine/session.schema.json`.
+
 **Worker**:
 A Session-owned plain tui session, with its state in `~/.ensemble/workers/<sid>/worker.json` and its Record in `~/.ensemble/tui/<name>/record`; no role, no task. Started, restarted and resumed by `ensemble-session`, which prints its Record. In code: `src/ensemble/session/engine/worker.py`.
 _Avoid_: subagent

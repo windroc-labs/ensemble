@@ -12,6 +12,12 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## ensemble list
+
+`ensemble list` prints every manager in `~/.ensemble/managers/`, with its holder state, client, cwd and entries. A manager
+named `list` can no longer be opened with `ensemble list`: attach to its session with `tmux attach -t =list`, or start it
+under another name.
+
 ## ctmux is now ensemble
 
 The command that opens a manager's tmux session is now `ensemble <name>`. After updating the plugin, rerun
