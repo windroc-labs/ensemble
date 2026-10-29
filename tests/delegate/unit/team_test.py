@@ -80,11 +80,16 @@ class Acceptance(Packaged):
         self.assertIn(
             "Its **scope check**: `python3 -P <team>/tools/scope_check.py --base ", engineer
         )
-        # the decompose input's section that holds the PRD's requirement tables
-        self.assertIn(
-            "the input's **PRD and linked documents** saved as `<Workdir>/tmp/prd.md`", engineer
-        )
+        self.assertNotIn("saved as `<Workdir>/tmp/prd.md`", engineer)
         decompose = task_text("decompose")
+        read = re.search(r"^1\. \*\*Read\*\*.*$", decompose, re.M)[0]
+        # the decompose input's section that holds the PRD's requirement tables; a document
+        # over its inline budget is only a link there, which scope_check would pass as `ok`
+        self.assertIn(
+            "save the input's **PRD and linked documents** as `<Workdir>/tmp/prd.md`, "
+            "first fetching in full each document it did not inline",
+            read,
+        )
         self.assertIn(
             "**Scope check** ([Engineer › Input processing](#input-processing)) on the drafts",
             decompose,
