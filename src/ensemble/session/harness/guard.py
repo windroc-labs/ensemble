@@ -175,6 +175,14 @@ class Screen:
             values = [int(value or 0) for value in raw.lstrip("?").split(";")]
         except ValueError:
             return
+        if private:
+            if 1049 in values and command == "h" and self.normal is None:
+                self.normal = self.cells, self.row, self.column
+                self.cells = [[" "] * self.columns for _ in range(self.rows)]
+            elif 1049 in values and command == "l" and self.normal is not None:
+                self.cells, self.row, self.column = self.normal
+                self.normal = None
+            return
         value = values[0] or 1
         if command in "Hf":
             self.row = min(self.rows - 1, max(0, value - 1))
@@ -212,7 +220,7 @@ class Screen:
             line[self.column :] = ([" "] * min(value, self.columns) + line[self.column :])[
                 : self.columns - self.column
             ]
-        elif command == "r" and not private:
+        elif command == "r":
             top = value - 1
             bottom = (values[1] or self.rows) - 1 if len(values) > 1 else self.rows - 1
             if 0 <= top < bottom < self.rows or top == bottom == 0 and self.rows == 1:
@@ -232,14 +240,6 @@ class Screen:
             self.saved = self.row, self.column
         elif command == "u":
             self.row, self.column = self.saved
-        elif private and 1049 in values and command in "hl":
-            if command == "h" and self.normal is None:
-                self.normal = self.cells, self.row, self.column
-                self.cells = [[" "] * self.columns for _ in range(self.rows)]
-                self.row, self.column = 0, 0
-            elif command == "l" and self.normal is not None:
-                self.cells, self.row, self.column = self.normal
-                self.normal = None
 
     def erase_line(self, mode: int) -> None:
         column = min(self.column, self.columns - 1)

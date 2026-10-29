@@ -58,9 +58,31 @@ class Base(Case):
 
 
 class GuardTest(Base):
+    def test_private_csi_queries_do_not_execute_normal_screen_commands(self):
+        for query in (b"\x1b[?1;1;0S", b"\x1b[?1T", b"\x1b[?1L", b"\x1b[?1M", b"\x1b[?2J"):
+            with self.subTest(query=query):
+                screen = guard.Screen(rows=3, columns=8)
+                screen.append(b"a\r\nb\r\nc")
+                screen.append(query)
+                self.assertEqual(screen.text(None), "a\nb\nc")
+                self.assertEqual(screen.text(6), "a\nb\nc")
+
+    def test_scroll_up_from_top_region_retains_removed_lines_in_last_lines(self):
+        screen = guard.Screen(rows=5, columns=8)
+        screen.append(b"top\r\na\r\nb\r\nc\r\nfooter\x1b[1;3r\x1b[S")
+        self.assertEqual(screen.text(None), "a\nb\n\nc\nfooter")
+        self.assertEqual(screen.text(6), "top\na\nb\n\nc\nfooter")
+
+    def test_alternate_screen_entry_keeps_cursor_and_exit_restores_primary_cursor(self):
+        screen = guard.Screen(rows=3, columns=8)
+        screen.append(b"main\x1b[2;3H\x1b[?1049hX")
+        self.assertEqual(screen.text(None), "\n  X")
+        screen.append(b"\x1b[?1049lY")
+        self.assertEqual(screen.text(None), "main\n  Y")
+
     def test_snapshot_selects_active_buffer_and_restores_primary_on_alternate_exit(self):
         screen = guard.Screen(rows=3, columns=8)
-        screen.append(b"main\x1b[2;3H\x1b[?1049halt\x1b[2;1Hsecond")
+        screen.append(b"main\x1b[2;3H\x1b[?1049h\x1b[Halt\x1b[2;1Hsecond")
         shown = guard.Screen(rows=3, columns=8)
         shown.append(screen.snapshot())
         self.assertIn(b"\x1b[?1049h", screen.snapshot())

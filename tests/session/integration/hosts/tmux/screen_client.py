@@ -15,7 +15,7 @@ def main():
             if command in (b"inline", b"alt"):
                 wire = b"\x1b[?1049l\x1b[r\x1b[2J\x1b[H"
                 if command == b"alt":
-                    wire += b"main\x1b[2;3H\x1b[?1049h"
+                    wire += b"main\x1b[2;3H\x1b[?1049h\x1b[H"
                 wire += b"top\r\na\r\nb\r\nc\r\nfooter\x1b[2;4r\x1b[4;1H"
                 os.write(1, wire)
             elif command == b"scroll":

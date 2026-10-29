@@ -619,7 +619,8 @@ class TuiLaunchIntegrationTest(Live):
             "--add-dir",
             str(self.extra),
         ]
-        self.assertEqual(first["argv"][5 : 5 + len(expected)], expected)
+        start = first["argv"].index("-s")
+        self.assertEqual(first["argv"][start : start + len(expected)], expected)
         self.assertEqual(second["argv"], ["resume", native, *first["argv"]])
         self.assertEqual(self.bound().snapshot.flags[1], "workspace-write")
 
