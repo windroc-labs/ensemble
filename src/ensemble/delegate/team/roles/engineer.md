@@ -23,7 +23,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 
 ## Input processing
 
-- `decompose`: its task file owns input, board operations and outcome delivery. Repo, Updraft, Finish and the pull request destination below apply only to `build` and `light-build`; decompose returns no deliverable, the host writing back from its outcome, and never opens a branch or PR.
+- `decompose`: its task file owns input, board operations and outcome delivery. Repo, Updraft, Finish and the pull request destination below apply only to `build` and `light-build`; decompose returns no deliverable, the host writing back from its outcome, and never pushes a branch or opens a PR. Its **scope check**: `python3 -P <team>/tools/scope_check.py --base <Repo:>=<worktree> <Workdir>/tmp/prd.md <ticket files>`, one `--base` per repo.
 - Your task's requirement and the target repo.
 - Optional: `Title:`, `Branch:`, `Base:`, `Links:`, the **user's requirements** since the last build, and others' **review input**.
 
