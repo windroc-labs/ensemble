@@ -486,11 +486,18 @@ class TuiLaunchIntegrationTest(Live):
         live_tmux.wait(lambda: len(self.hooks()) == 8, WAIT, what="all hook results logged")
         (call,) = self.calls()
         self.assertEqual(
-            call["argv"][:5],
-            ["--no-daemon", "-C", str(self.cwd), "-c", 'tui.notification_method="bel"'],
+            call["argv"][:6],
+            [
+                "--no-daemon",
+                "--no-alt-screen",
+                "-C",
+                str(self.cwd),
+                "-c",
+                'tui.notification_method="bel"',
+            ],
         )
         self.assertEqual(
-            call["argv"][5:11],
+            call["argv"][6:12],
             [
                 "-s",
                 "danger-full-access",
