@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# A tmux session for the manager, attached as README's ctmux row says. Its shell runs under
+# A tmux session for the manager. Its shell runs under
 # this plugin's bin/ensemble-crew hold, which keeps the manager's lease while the shell lives; start
 # the client there.
-# --install (re)writes ~/.ensemble/bin's launchers, each running this command from the plugin
-# installed at the time.
+# --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
 if [ "$1" = --install ]; then
+  root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P) || exit
   bin=$HOME/.ensemble/bin
   mkdir -p "$bin" || exit
-  for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+  for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
     install -m 755 "$(dirname -- "$0")/launcher" "$bin/$name" && echo "$bin/$name" || exit
   done
+  "$(dirname -- "$0")/launcher" --select "$root" || exit
   exit
 fi
-s=${1:?usage: ctmux <session-name> | ctmux --install}
+s=${1:?usage: ensemble <session-name> | ensemble --install}
 dir=$PWD
 crew=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)/bin/ensemble-crew
 tmux has -t "=$s" 2>/dev/null || {
-  [ -x "$crew" ] || { echo "ctmux: no $crew" >&2; exit 1; }
+  [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
   # Start from ~ so the tmux server never sits in a directory that later gets deleted.
   (cd ~ && tmux start-server \; set -g mouse on \; set -g history-limit 50000 \
     \; set -s extended-keys on \; set -s 'terminal-features[99]' 'xterm*:extkeys' \

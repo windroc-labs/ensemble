@@ -412,6 +412,8 @@ def gh(args):
         xdg("XDG_STATE_HOME", ".local/state") / "gh",
     ):
         mark(path / "installer-cache", "fake gh cache")
+    uv = os.environ.get("UV_CACHE_DIR") or xdg("XDG_CACHE_HOME", ".cache") / "uv"
+    mark(Path(uv, "installer-cache"), "fake uv cache")
     logout = ["auth", "logout", "--hostname", "github.com"]
     return login("gh", args, ["auth", "status"], ["auth", "login", *args[2:]], logout)
 

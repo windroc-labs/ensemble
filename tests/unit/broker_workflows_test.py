@@ -53,7 +53,9 @@ class BrokerJob(Case):
                     if path.name == "installer-macos.yml":
                         self.assertNotIn("  broker:", text)
                         self.assertIn("tests/integration/install_integration_test.py", text)
-                        self.assertIn("tests/manager/integration/ctmux_integration_test.py", text)
+                        self.assertIn(
+                            "tests/manager/integration/ensemble_integration_test.py", text
+                        )
                     elif path.name == "broker-macos.yml":
                         self.assertNotIn("merge_group", text)
                         self.assertIn("  pull_request:\n    paths:", text)

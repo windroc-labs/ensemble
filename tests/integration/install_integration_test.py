@@ -158,17 +158,7 @@ sudo mkdir -p "$target"
 { cat "$FAKES/apps/ensemble-broker"; echo "# $(cksum < "$here/internal/codex/versions.go")"; } > "$target/ensemble-broker"
 chmod 755 "$target/ensemble-broker"
 """
-CTMUX = """#!/bin/sh
-echo "ctmux $*" >> "$LOG"
-mkdir -p "$HOME/.ensemble/bin"
-uv_cache=${UV_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/uv}
-mkdir -p "$uv_cache"
-printf 'fake uv cache' > "$uv_cache/installer-cache"
-for n in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-  cp "$(dirname "$0")/launcher" "$HOME/.ensemble/bin/$n"
-  chmod 755 "$HOME/.ensemble/bin/$n"
-done
-"""
+LAUNCHERS_SKIPPED = "    skip: launchers in ~/.ensemble/bin\n"
 ITERM_DIRS = (
     "Application Support/iTerm2",
     "Application Support/iTerm",
@@ -387,8 +377,6 @@ class InstallTest(Case):
         launcher = self.pkg_src / "src/broker/internal/launcher/versions.go"
         launcher.parent.mkdir(parents=True)
         launcher.write_text('package launcher\n\nconst opencodeMinVersion = "1.19.3"\n')
-        executable(self.pkg_src / "skills/manage/scripts/ctmux", CTMUX)
-        (self.pkg_src / "skills/manage/scripts/launcher").write_text("#!/bin/sh\nexit 0\n")
         (self.pkg_src / ".claude-plugin").mkdir()
         (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.7"}\n')
         shutil.copytree(Path(REPO, "launchd"), self.pkg_src / "launchd")
@@ -1028,7 +1016,9 @@ class InstallTest(Case):
             self.assertNotIn(absent, calls)
         pkg = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
         self.assertIn(f"    {pkg}", result.stderr)
-        self.assertIn("ctmux --install", self.calls())
+        self.assertEqual(
+            json.loads(Path(self.ensemble, "plugin-root").read_text())["root"], str(pkg)
+        )
         self.assertIn('[delegate]\nclient = "codex"\n', self.config().read_text())
         self.assertNotIn("api.github.com", calls)
 
@@ -2697,7 +2687,10 @@ class InstallTest(Case):
             calls,
         )
         self.assertFalse([c for c in calls if c.startswith(("claude", "codex"))])
-        self.assertIn("ctmux --install", calls)
+        self.assertEqual(
+            json.loads(Path(self.ensemble, "plugin-root").read_text())["root"],
+            str(self.opencode_package()),
+        )
         self.assertIn('[delegate]\nclient = "opencode"\n', self.config().read_text())
         conf = json.loads(Path(self.home, ".config/opencode/opencode.jsonc").read_text())
         self.assertEqual(conf["plugin"], [SPEC])
@@ -2800,7 +2793,7 @@ class InstallTest(Case):
     def test_plugin_layout_upgrade_refreshes_existing_executable_launchers_once(self):
         self.assert_ok(self.opencode_only())
         for name in (
-            "ctmux",
+            "ensemble",
             "ensemble-crew",
             "ensemble-session",
             "ensemble-delegate",
@@ -2809,8 +2802,9 @@ class InstallTest(Case):
             path = Path(self.ensemble, "bin", name)
             path.write_text("#!/bin/sh\n# old plugin layout\n")
             path.chmod(0o755)
-        self.assert_ok(self.opencode_rerun())
-        self.assertIn("ctmux --install", self.calls())
+        result = self.opencode_rerun()
+        self.assert_ok(result)
+        self.assertNotIn(LAUNCHERS_SKIPPED, result.stderr)
         for path in Path(self.ensemble, "bin").iterdir():
             self.assertTrue(
                 path.read_text().startswith('#!/bin/bash\ntarget=$(python3 -I - "${0##*/}" <<')
@@ -2820,8 +2814,9 @@ class InstallTest(Case):
                 "/node_modules/ensemble"
             )
         )
-        self.assert_ok(self.opencode_rerun())
-        self.assertNotIn("ctmux --install", self.calls())
+        result = self.opencode_rerun()
+        self.assert_ok(result)
+        self.assertIn(LAUNCHERS_SKIPPED, result.stderr)
 
     def test_switching_clients_updates_the_source_with_identical_launchers_and_cleanup_restores_it(
         self,
@@ -2835,10 +2830,8 @@ class InstallTest(Case):
         self.assert_ok(self.again("--clients", "codex", "--no-docker", answers=[(WRITE_Q, "y")]))
         codex = Path(self.home, ".codex/plugins/cache/windroc/ensemble/9.8.7")
         self.assertEqual(json.loads(selected.read_text())["root"], str(codex))
-        self.assertIn("ctmux --install", self.calls())
         self.assert_ok(self.again("--clients", "claude", "--no-docker", answers=[(WRITE_Q, "y")]))
         self.assertEqual(json.loads(selected.read_text())["root"], self.claude_ensemble())
-        self.assertIn("ctmux --install", self.calls())
         self.assertEqual(backup.read_text(), "previous selection\n")
         self.assertEqual(self.ledger().count("plugin-root"), 1)
         self.assert_ok(self.cleanup("--yes"))
@@ -2884,7 +2877,7 @@ class InstallTest(Case):
         self.assertEqual(selected.read_text(), "previous selection\n")
 
     def test_opencode_ref_commands_ignore_higher_and_equal_version_leftovers(self):
-        commands = self.legacy_command_package()
+        commands = self.command_package()
         # All candidates have runnable commands, including the preferred clients' stale copies.
         for relative in (
             ".codex/plugins/cache/windroc/ensemble/99.0.0",
@@ -2905,7 +2898,7 @@ class InstallTest(Case):
         self.assert_command_sources(commands, self.opencode_package())
 
     def test_installer_adapters_reject_malformed_selection_records(self):
-        commands = ("ctmux", *self.legacy_command_package())
+        commands = ("ensemble", *self.command_package())
         self.assert_ok(self.opencode_only())
         selection = Path(self.ensemble, "plugin-root")
         valid = json.loads(selection.read_text())
@@ -2928,16 +2921,14 @@ class InstallTest(Case):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertEqual(result.stdout, "")
                     self.assertIn(f"{name}: cannot read {selection}:", result.stderr)
-                    self.assertIn("rerun install.sh or the plugin's ctmux --install", result.stderr)
+                    self.assertIn(
+                        "rerun install.sh or the plugin's ensemble --install", result.stderr
+                    )
                     self.assertNotIn("Traceback", result.stderr)
                     self.assertEqual(selection.read_text(), text)
 
-    def legacy_command_package(self):
-        """A historical ref, unchanged: neither its ctmux nor launcher supports selection."""
-        for name in ("ctmux", "launcher"):
-            target = self.pkg_src / "skills/manage/scripts" / name
-            shutil.copyfile(Path(REPO, "tests/integration/fixtures", f"legacy-{name}"), target)
-            target.chmod(0o755)
+    def command_package(self):
+        """A plugin's bin/ commands, which the installer's launchers run whatever ref it is."""
         commands = (
             "ensemble-crew",
             "ensemble-session",
@@ -2952,14 +2943,14 @@ class InstallTest(Case):
         return commands
 
     def test_codex_command_wrappers_quote_the_selected_path(self):
-        commands = self.legacy_command_package()
+        commands = self.command_package()
         codex = Path(self.home, "codex a'b$c`d")
         self.env["CODEX_HOME"] = str(codex)
         self.assert_ok(self.fresh(clients="codex"))
         self.assert_command_sources(commands, codex / "plugins/cache/windroc/ensemble/9.8.7")
 
     def test_installer_adapters_follow_same_client_updates_of_historical_refs(self):
-        commands = self.legacy_command_package()
+        commands = self.command_package()
         self.assert_ok(self.opencode_only())
         selected = self.opencode_package()
         newer = Path(self.home, ".cache/opencode/packages/new/node_modules/ensemble")
@@ -2973,7 +2964,7 @@ class InstallTest(Case):
         )
 
     def test_x1_launcher_keeps_installed_ref(self):
-        commands = self.legacy_command_package()
+        commands = self.command_package()
         self.assert_ok(self.opencode_only(ref="WDRC-241"))
         packages = Path(self.home, ".cache/opencode/packages")
         selected = packages / "ensemble@git+https:/github.com/windroc-labs/ensemble.git#WDRC-241"
@@ -2999,12 +2990,12 @@ class InstallTest(Case):
                 self.assertEqual(
                     result.stderr,
                     f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
-                    "rerun install.sh or the plugin's ctmux --install\n",
+                    "rerun install.sh or the plugin's ensemble --install\n",
                 )
                 self.assertEqual(Path(self.ensemble, "plugin-root").read_bytes(), record)
 
     def test_installer_adapters_refuse_other_clients_after_the_selected_path_disappears(self):
-        commands = self.legacy_command_package()
+        commands = self.command_package()
         self.assert_ok(self.opencode_only())
         selected = self.opencode_package()
         shutil.rmtree(selected)
@@ -3027,11 +3018,11 @@ class InstallTest(Case):
                     self.assertEqual(
                         result.stderr,
                         f"{name}: selected plugin {str(selected)!r} has no executable bin/{name}; "
-                        "rerun install.sh or the plugin's ctmux --install\n",
+                        "rerun install.sh or the plugin's ensemble --install\n",
                     )
 
     def test_installer_codex_adapters_follow_an_update(self):
-        commands = self.legacy_command_package()
+        commands = self.command_package()
         self.assert_ok(self.opencode_only())
         self.assert_ok(self.again("--clients", "codex,opencode", "--no-docker"))
         self.assertEqual(
@@ -3045,7 +3036,7 @@ class InstallTest(Case):
         self.assert_command_sources(commands, newer)
 
     def test_installer_claude_adapters_follow_an_update(self):
-        commands = self.legacy_command_package()
+        commands = self.command_package()
         self.assert_ok(self.opencode_only())
         self.assert_ok(self.again("--clients", "claude,opencode", "--no-docker"))
         self.assertEqual(
@@ -3097,7 +3088,7 @@ class InstallTest(Case):
         calls = self.calls()
         self.assertIn(f"opencode plugin -g -f {SPEC}", calls)
         self.assertIn("broker-install ", calls)
-        self.assertNotIn("ctmux --install", calls)
+        self.assertIn(LAUNCHERS_SKIPPED, result.stderr)
         self.assertNotIn("opencode auth login", calls)
         self.assertEqual((self.opencode_package() / "COMMIT").read_text(), NEW)
 

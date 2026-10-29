@@ -12,6 +12,13 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## ctmux is now ensemble
+
+The command that opens a manager's tmux session is now `ensemble <name>`. After updating the plugin, rerun
+`scripts/install.sh` or `<plugin dir>/skills/manage/scripts/ensemble --install` to install `~/.ensemble/bin/ensemble`.
+Neither removes the old launcher, which no longer runs: delete it with `rm ~/.ensemble/bin/ctmux`. Sessions it
+opened keep running; `ensemble <name>` attaches to them.
+
 ## Broker protocol 35: explicit GitHub credentials
 
 Close running Docker workers before upgrading, then run `scripts/install.sh --docker`. Protocol 35 removes the
@@ -311,8 +318,8 @@ its current work can be interrupted. Until then, it retains its old local/LAN ne
 ## Unified source layout
 
 After updating the plugin to the `src/ensemble/` layout, refresh the launchers once:
-`<plugin dir>/skills/manage/scripts/ctmux --install`. Use the plugin path directly because an
-older installed `ctmux` launcher still looks for `manager/skills/manage/scripts/ctmux`.
+`<plugin dir>/skills/manage/scripts/ensemble --install`. Use the plugin path directly because an
+older installed launcher still looks for its script under `manager/skills/manage/scripts/`.
 Rerunning `scripts/install.sh` after the plugin update does this automatically, including when
 all five launchers already exist. Python imports and user configuration stay the same.
 
@@ -527,5 +534,5 @@ flowchart LR
 
 When the old selected directory is gone, the next installed command selects and records the newest installed ensemble
 copy from OpenCode and reports its path on stderr; no installer rerun is needed. To select a different ref while the
-old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ctmux --install`; older refs
+old directory remains, rerun the installer or the new plugin's `skills/manage/scripts/ensemble --install`; older refs
 require the installer ([With scripts/install.sh](#with-scriptsinstallsh)).

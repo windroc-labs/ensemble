@@ -53,7 +53,7 @@ Para proporcionar la contraseña de `sudo` desde Keychain, descarga primero el s
 | `--password-stdin` | La contraseña de `sudo` desde stdin, antes de la clave del proveedor |
 
 El instalador pregunta qué clientes usar, si los trabajadores se ejecutan localmente o en Docker y si quieres configurar un
-tablero. Instala las dependencias y los plugins seleccionados, solicita los inicios de sesión necesarios y configura `ctmux`.
+tablero. Instala las dependencias y los plugins seleccionados, solicita los inicios de sesión necesarios y configura el comando `ensemble`.
 Vuelve a ejecutarlo para completar una instalación interrumpida. Para ver las opciones, usa `bash scripts/install.sh --help` en una copia del repositorio;
 si ya tienes una instalación, lee primero [Actualización](../upgrading.md).
 
@@ -93,7 +93,7 @@ Para una sola tarea, en una conversación del cliente instalado:
 Para un equipo, abre un shell de comandante e inicia tu cliente:
 
 ```sh
-ctmux work
+ensemble work
 claude
 ```
 
