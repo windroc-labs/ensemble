@@ -22,7 +22,7 @@ func lockInspect(id, name, state string, labels map[string]string) []byte {
 	return data
 }
 
-func TestLockQuery(t *testing.T) {
+func TestLockHolder(t *testing.T) {
 	for _, state := range []string{"running", "paused", "restarting", "created", "exited", "dead", "removing"} {
 		t.Run(state, func(t *testing.T) {
 			d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
@@ -38,22 +38,22 @@ func TestLockQuery(t *testing.T) {
 				t.Fatalf("query mutated Docker: %q", args)
 				return nil, nil
 			}}
-			got, err := (Host{Docker: d}).LockQuery(context.Background(), "dummy")
+			got, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			active := state == "running" || state == "paused" || state == "restarting"
-			if (got.Holder != nil) != active {
+			if (got != nil) != active {
 				t.Fatalf("state %s: %+v", state, got)
 			}
-			if active && (got.Holder.Container != container || got.Holder.Owner != "worker_1") {
-				t.Fatalf("holder %+v", got.Holder)
+			if active && (got.Container != container || got.Owner != "worker_1") {
+				t.Fatalf("holder %+v", got)
 			}
 		})
 	}
 }
 
-func TestLockQueryEmptyAndFailures(t *testing.T) {
+func TestLockHolderEmptyAndFailures(t *testing.T) {
 	for name, tc := range map[string]struct {
 		list    []byte
 		inspect []byte
@@ -75,18 +75,14 @@ func TestLockQueryEmptyAndFailures(t *testing.T) {
 				}
 				return tc.inspect, tc.err
 			}}
-			got, err := (Host{Docker: d}).LockQuery(context.Background(), "dummy")
-			if code(t, err) != tc.want || got.Holder != nil {
+			got, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", "")
+			if code(t, err) != tc.want || got != nil {
 				t.Fatalf("%+v %v", got, err)
 			}
 		})
 	}
 	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, docker.ErrUnreachable }}
-	if _, err := (Host{Docker: d}).LockQuery(context.Background(), "dummy"); code(t, err) != protocol.DockerUnreachable {
-		t.Fatal(err)
-	}
-	d = &fakeDocker{respond: func([]string, []byte) ([]byte, error) { t.Fatal("invalid name reached Docker"); return nil, nil }}
-	if _, err := (Host{Docker: d}).LockQuery(context.Background(), "A B"); code(t, err) != protocol.ManifestRejected {
+	if _, err := (Host{Docker: d}).lockHolder(context.Background(), "dummy", ""); code(t, err) != protocol.DockerUnreachable {
 		t.Fatal(err)
 	}
 }

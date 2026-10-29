@@ -10,7 +10,7 @@ import (
 )
 
 func TestOutputFixturesRoundTrip(t *testing.T) {
-	for _, c := range fixtures.Cases(t, "build_output", "start_output", "close_output", "maintain_output", "status_output", "lock_query_output") {
+	for _, c := range fixtures.Cases(t, "build_output", "start_output", "close_output", "maintain_output", "status_output") {
 		if !c.Valid {
 			continue
 		}
@@ -25,8 +25,6 @@ func TestOutputFixturesRoundTrip(t *testing.T) {
 				v = &MaintainResult{}
 			case "status_output":
 				v = &StatusResult{}
-			case "lock_query_output":
-				v = &LockResult{}
 			default:
 				v = &CloseResult{}
 			}

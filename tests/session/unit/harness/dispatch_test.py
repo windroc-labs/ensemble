@@ -186,8 +186,12 @@ class DispatchTest(Base):
         found = self.start(stuck, other, sleep=lambda _seconds: gate.wait())
         found.put(Logged(1, "g:1", None, Reply("a")))
         found.put(Logged(2, "g:2", None, Reply("b")))
-        until(lambda: len(other.calls) == 2)
-        self.assertEqual(found.pending(), 2)
+        until(lambda: len(self.deliveries()) == 3 and found.pending() == 2)
+        self.assertEqual(
+            sorted((d["handler"], d["id"], d["state"]) for d in self.deliveries()),
+            [(0, "g:1", "failed"), (1, "g:1", "ok"), (1, "g:2", "ok")],
+        )
+        self.assertEqual([c.event_id for c in stuck.calls], ["g:1"])
 
     def test_a_hung_handler_blocks_nothing_else(self):
         gate = threading.Event()
@@ -195,7 +199,7 @@ class DispatchTest(Base):
         hung, other = Recorder(hang=gate), Recorder()
         found = self.start(hung, other)
         found.put(Logged(1, "g:1", None, Reply("a")))
-        until(lambda: len(other.calls) == 1)
+        until(lambda: found.pending() == 1)
         started = time.monotonic()
         self.assertEqual(found.drain(0.1), 1)
         self.assertLess(time.monotonic() - started, WAIT)

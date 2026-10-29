@@ -513,7 +513,7 @@
     "data": {
       "exit_code": 75,
       "error": {
-        "command": "lock-query",
+        "command": "status",
         "code": "busy",
         "message": "Lock held by ensemble-worker_1-0123456789abcdef0123456789abcdef (worker_1).",
         "cleanup": "not_needed",
