@@ -95,7 +95,7 @@ class Acceptance(Packaged):
         self.assertIn("This review runs one round per run", decompose)
         self.assertIn("stays in `Covers:` of the engineer slice implementing it", decompose)
         self.assertIn("that need alone adds no blocked-by edge", decompose)
-        self.assertIn("the verifier ticket runs the end-to-end check.", decompose)
+        self.assertIn("the verifier ticket runs the end-to-end check, blocked by both.", decompose)
         self.assertNotIn("goes to the verifier ticket", decompose)
 
     def test_report_delivery_and_figure_checks(self):
