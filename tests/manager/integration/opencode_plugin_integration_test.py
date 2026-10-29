@@ -47,16 +47,31 @@ class OpenCodePluginTest(Case):
 
     def play(self, steps, plugin=PLUGIN, **extra):
         env = {"PATH": self.path, "HOME": self.home, **extra}
-        done = subprocess.run(
+        with subprocess.Popen(
             (NODE, HOST, plugin),
-            input=json.dumps(steps).encode(),
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=env,
-            timeout=30,
-            check=False,
-        )
-        self.assertEqual((done.returncode, done.stderr), (0, b""))
-        return json.loads(done.stdout)
+            cwd=self.project,
+        ) as process:
+            self.node = process.pid
+            out, err = process.communicate(json.dumps(steps).encode(), timeout=30)
+        self.assertEqual((process.returncode, err), (0, b""))
+        return json.loads(out)
+
+    @property
+    def project(self) -> str:
+        project = os.path.join(self.home, "other project")
+        os.makedirs(project, exist_ok=True)
+        return project
+
+    def record(self):
+        path = os.path.join(self.ensemble, "managers", "mgr", "session.json")
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
 
     def manager(self, steps):
         return self.play(steps, **MANAGER, ENSEMBLE_HOLDER_PID=str(os.getpid()))
@@ -142,11 +157,27 @@ class OpenCodePluginTest(Case):
         self.assertIn("SessionStart `compact`", played[4][0])
         self.assertEqual(played[6], [])
 
+    def test_a_root_session_records_itself_and_a_new_one_replaces_it(self):
+        os.makedirs(os.path.join(self.ensemble, "managers", "mgr"))
+        expected = {"client": "opencode", "sid": "ses_1", "cwd": self.project}
+        played = self.manager([created("ses_1"), system("ses_1")])
+        self.assertIn("SessionStart `startup`", played[1][0])
+        self.assertEqual(self.record(), {**expected, "pid": self.node})
+        self.manager([system("ses_1"), event("session.compacted", "ses_1"), system("ses_1")])
+        self.assertEqual(self.record(), {**expected, "pid": self.node})
+        # OpenCode's /new: a new root session in the same process.
+        played = self.manager(
+            [created("ses_1"), system("ses_1"), created("ses_2"), system("ses_2")]
+        )
+        self.assertIn("SessionStart `startup`", played[3][0])
+        self.assertEqual(self.record(), {**expected, "sid": "ses_2", "pid": self.node})
+
     def test_an_idle_before_the_turn_got_it_keeps_the_rearm(self):
         played = self.manager([created("ses_1"), event("session.idle", "ses_1"), system("ses_1")])
         self.assertIn("SessionStart `startup`", played[2][0])
 
     def test_child_sessions_and_non_commanders_get_no_rearm(self):
+        os.makedirs(os.path.join(self.ensemble, "managers", "mgr"))
         child = [created("ses_1"), created("ses_c", parent="ses_1"), system("ses_c")]
         child.append(event("session.compacted", "ses_c"))
         child.append(system("ses_c"))
@@ -157,6 +188,10 @@ class OpenCodePluginTest(Case):
         resumed_child += [system("ses_c"), event("session.compacted", "ses_c"), system("ses_c")]
         played = self.manager(resumed_child)
         self.assertEqual((played[1], played[3]), ([], []))
+        self.assertIsNone(self.record())
         self.assertIn("SessionStart `resume`", self.manager([system("ses_root")])[0][0])
+        self.assertEqual(self.record()["sid"], "ses_root")
+        os.remove(os.path.join(self.ensemble, "managers", "mgr", "session.json"))
         held_elsewhere = {**MANAGER, "ENSEMBLE_HOLDER_PID": "1"}
         self.assertEqual(self.play([created("ses_1"), system("ses_1")], **held_elsewhere)[1], [])
+        self.assertIsNone(self.record())
