@@ -174,9 +174,9 @@ def _rows(found: list[Manager | Unreadable], out, *, numbered: bool) -> bool:
 
 def _choose(found: list[Manager | Unreadable]) -> Manager | Unreadable | None:
     names = [manager.name for manager in found]
+    prompt = f"select a manager [1-{len(found)}], Enter cancels: "
     while True:
         try:
-            prompt = f"select a manager [1-{len(found)}], Enter cancels: "
             print(prompt, end="", file=sys.stderr, flush=True)
             answer = sys.stdin.readline().strip()
         except KeyboardInterrupt:

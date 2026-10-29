@@ -59,8 +59,9 @@ CLIENT = """#!/bin/sh
 printf '["%s", "%s", "%s", "%s"]\\n' "$(pwd -P)" "$*" "$ENSEMBLE_MANAGER" "$ENSEMBLE_HOLDER_ID" >> "$0.log"
 exec cat
 """
+# HISTFILE empty: on hangup bash writes ~/.bash_history after the hold, which teardown waits for.
 BASH = """#!/bin/sh
-exec /bin/bash --noprofile --norc
+HISTFILE= exec /bin/bash --noprofile --norc
 """
 START = [
     "start-server",
