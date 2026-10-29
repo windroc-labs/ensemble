@@ -78,7 +78,7 @@ class Manager:
 
 @dataclass(frozen=True)
 class Unreadable:
-    """Its holder probe failed."""
+    """Its locks could not be probed."""
 
     name: str
     error: str

@@ -1519,8 +1519,8 @@ class ListTest(CliCase):
 
     def test_a_held_manager_shows_its_state(self):
         roster = self.manager("demo")
-        self.session("demo", pid=os.getpid())
-        with roster.hold("owner"):
+        self.session("demo", pid=4101)
+        with roster.hold("owner"), mock.patch("os.kill"):
             self.assertEqual(
                 self.invoke("list")[1].splitlines()[0],
                 "demo\tclient-running\tkind-a\t/home/user/project",

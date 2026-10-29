@@ -15,8 +15,9 @@ from ensemble.manager.engine.types import (
     Unread,
     Unreadable,
 )
-from ensemble.utils import read_regular
+from ensemble.utils import STATE, read_regular
 
+ROOT = f"{STATE}/managers"
 RECORD = "session.json"
 RECORD_MAX = 1 << 16
 NAME = re.compile(r"[A-Za-z0-9_-]+")
@@ -51,7 +52,7 @@ def read_record(path: str) -> SessionRecord | None:
 def alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):  # OverflowError: a pid no process can have
         return False
     except PermissionError:
         return True
@@ -62,11 +63,11 @@ def read(directory: str) -> Manager | Unreadable:
     name = os.path.basename(directory)
     try:
         holder, entries = Roster(directory).snapshot()
-    except (RosterError, OSError) as error:
+    except RosterError as error:
         return Unreadable(name, str(error))
     try:
         record = read_record(os.path.join(directory, RECORD))
-    except (ValueError, OSError) as error:
+    except ValueError as error:
         record = Unread(str(error))
     if holder is None:
         state = HolderState.NOT_HELD

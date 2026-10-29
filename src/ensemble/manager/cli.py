@@ -55,7 +55,7 @@ def _roster(args) -> Roster:
     manager = args.manager or os.environ.get("ENSEMBLE_MANAGER")
     if not manager or not managers.NAME.fullmatch(manager):
         raise ValueError("give --manager NAME or set ENSEMBLE_MANAGER to a manager name")
-    directory = Path(os.path.expanduser(STATE)) / "managers" / manager
+    directory = Path(os.path.expanduser(managers.ROOT)) / manager
     return Roster(str(directory))
 
 
@@ -141,7 +141,7 @@ def _row(*fields: str) -> str:
 
 
 def _list(_args) -> int:
-    found = managers.managers(str(Path(os.path.expanduser(STATE)) / "managers"))
+    found = managers.managers(os.path.expanduser(managers.ROOT))
     if not found:
         print("no managers yet; start one: ensemble <name>")
         return 0

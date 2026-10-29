@@ -2,11 +2,12 @@
 
 import json
 import os
-import subprocess
 from pathlib import Path
+from unittest import mock
 
 import jsonschema
 
+from ensemble.manager import rearm
 from ensemble.manager.engine.managers import alive, managers, read, read_record
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
@@ -19,11 +20,12 @@ from ensemble.manager.engine.types import (
 from tests.manager import session_records
 from tests.manager.roster_case import RosterCase
 
+LIVE, DEAD = 4101, 4102
 
-def _dead_pid() -> int:
-    child = subprocess.Popen(["true"])
-    child.wait()
-    return child.pid
+
+def _kill(pid: int, _signal: int) -> None:
+    if pid != LIVE:
+        raise ProcessLookupError(pid)
 
 
 class RecordTest(RosterCase):
@@ -57,6 +59,15 @@ class RecordTest(RosterCase):
         with self.assertRaisesRegex(ValueError, "not a readable regular file"):
             read_record(self.path)
 
+    def test_what_the_hook_writes_reads_back(self):
+        for client, call in session_records.CALLS.items():
+            with self.subTest(client=client):
+                found = rearm.options(call.argv)
+                self.assertIsNotNone(found)
+                written = rearm.record(found, call.stdin)
+                Path(self.path).write_text(json.dumps(written) + "\n")
+                self.assertEqual(read_record(self.path), SessionRecord(**call.record))
+
     def test_verdicts_match_the_schema(self):
         with open(session_records.SCHEMA, encoding="utf-8") as f:
             validator = jsonschema.Draft202012Validator(json.load(f))
@@ -81,6 +92,7 @@ class ReadTest(RosterCase):
     def setUp(self):
         super().setUp()
         self.live()
+        self.enterContext(mock.patch("os.kill", side_effect=_kill))
 
     def write_record(self, pid: int) -> SessionRecord:
         record = {**session_records.VALID["claude"], "pid": pid}
@@ -88,18 +100,30 @@ class ReadTest(RosterCase):
         return SessionRecord(**record)
 
     def test_alive(self):
-        self.assertTrue(alive(os.getpid()))
-        self.assertFalse(alive(_dead_pid()))
+        self.assertTrue(alive(LIVE))
+        self.assertFalse(alive(DEAD))
+        with mock.patch("os.kill", side_effect=PermissionError):
+            self.assertTrue(alive(1))
+        with mock.patch("os.kill", side_effect=OverflowError):
+            self.assertFalse(alive(1 << 31))
+
+    def test_a_pid_beyond_any_process_is_hold_only(self):
+        self.write_record(1 << 31)
+        with (
+            mock.patch("os.kill", side_effect=OverflowError),
+            Roster(self.directory).hold("owner"),
+        ):
+            self.assertEqual(read(self.directory).state, HolderState.HOLD_ONLY)
 
     def test_unlocked_is_not_held_even_with_a_live_record(self):
-        record = self.write_record(os.getpid())
+        record = self.write_record(LIVE)
         self.assertEqual(
             read(self.directory),
             Manager("manager", HolderState.NOT_HELD, None, record, self.roster.entries()),
         )
 
     def test_locked_with_a_live_pid_is_client_running(self):
-        record = self.write_record(os.getpid())
+        record = self.write_record(LIVE)
         with Roster(self.directory).hold("owner"):
             manager = read(self.directory)
         self.assertEqual(
@@ -110,7 +134,7 @@ class ReadTest(RosterCase):
     def test_locked_with_a_dead_pid_or_no_record_is_hold_only(self):
         with Roster(self.directory).hold("owner"):
             self.assertEqual(read(self.directory).state, HolderState.HOLD_ONLY)
-            self.write_record(_dead_pid())
+            self.write_record(DEAD)
             self.assertEqual(read(self.directory).state, HolderState.HOLD_ONLY)
 
     def test_an_invalid_record_is_never_client_running(self):
@@ -123,7 +147,7 @@ class ReadTest(RosterCase):
         self.assertEqual(manager.entries, self.roster.entries())
 
     def test_a_held_manager_with_a_corrupt_roster_keeps_its_holder_state(self):
-        self.write_record(os.getpid())
+        self.write_record(LIVE)
         with Roster(self.directory).hold("owner"):
             valid = Path(self.roster.path).read_text()
             Path(self.roster.path).write_text("{")
@@ -148,7 +172,7 @@ class ReadTest(RosterCase):
                 path.touch(mode=0o600)
 
     def test_a_held_manager_is_read_without_changing_it(self):
-        self.write_record(os.getpid())
+        self.write_record(LIVE)
         with Roster(self.directory).hold("owner") as lease:
             before = {p: Path(self.directory, p).read_bytes() for p in os.listdir(self.directory)}
             self.assertEqual(read(self.directory).holder, "owner")
