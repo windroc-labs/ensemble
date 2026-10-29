@@ -92,6 +92,15 @@ class Acceptance(Packaged):
         # write-back's DECOMPOSED pattern reads this summary
         self.assertIn("`summary`: `Created <identifiers>; reused none`", decompose)
 
+    def test_decompose_engineer_tickets_quote_acceptance_and_verifier_tickets_link_the_prd(self):
+        draft = re.search(r"^2\. \*\*Draft\*\*.*$", task_text("decompose"), re.M)[0]
+        # the gate and requirement-fidelity review judge an engineer ticket by its text alone
+        self.assertIn(
+            "acceptance quoting each covered requirement's PRD acceptance cell verbatim and in full",
+            draft,
+        )
+        self.assertIn("Verifier tickets list the requirement identifiers and link the PRD", draft)
+
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
         concise = item(section(prompt, "Standards"), "Concise")
