@@ -168,6 +168,15 @@ class ScopeCheck(Case):
         self.assertIn("t1.md: Scope item `- src/app/util.py` names no `path`", bare)
         self.assertIn("t2.md: Repo: acme/x has no --base", out)
 
+    def test_linear_saved_description_keeps_its_scope(self):
+        # Linear saves a blank line after `Scope:` and `* ` bullets
+        saved = (
+            f"Repo: {REPO}\nCovers: PRD-1 FR-1, NFR-1\nTask: build\n\nScope:\n\n"
+            "* `src/app/main.py`\n* `config.toml` `[a] x`（不改）\n\n## Parent\n\nPRD-1.\n\n"
+            "* not a path\n"
+        )
+        self.assertEqual(self.check(saved), (0, "ok\n"))
+
     def test_usage_and_unreadable_files_exit_2(self):
         out = io.StringIO()
         self.assertEqual(scope_check.main([], out=out), 2)
