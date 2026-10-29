@@ -14,7 +14,6 @@ on:
       - src/ensemble/session/hosts/docker/broker.py
       - tests/integration/install_fakes.py
       - tests/integration/install_integration_test.py
-      - tests/integration/fixtures/legacy-*
       - tests/manager/integration/ctmux_integration_test.py
       - tests/unit/install_docs_test.py
 

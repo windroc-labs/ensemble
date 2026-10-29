@@ -1465,7 +1465,7 @@ codex_plugins() {
 }
 
 # The installed plugin: the whole repo (at $ref for OpenCode), source of the broker, ctmux and jobs. Claude Code's
-# install first, else Codex's served version, else OpenCode's. ctmux --install selects this source for launchers.
+# install first, else Codex's served version, else OpenCode's. The launchers in ~/.ensemble/bin run this source.
 plugin_dir() {
   step "plugin directory"
   if ! has claude && ! has codex; then
@@ -2052,8 +2052,8 @@ ctmux_install() {
       done
     else
       record_dir "$HOME/.ensemble/bin"
+      mkdir -p "$HOME/.ensemble/bin"
     fi
-    "$pkg/skills/manage/scripts/ctmux" --install </dev/null >&2
     for name in ctmux ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
       command_launcher "$name" > "$state_dir/launcher.tmp"
       install -m 755 "$state_dir/launcher.tmp" "$HOME/.ensemble/bin/$name"
