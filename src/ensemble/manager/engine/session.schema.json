@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "A manager's session record, ~/.ensemble/managers/<name>/session.json: the client that last started, resumed, cleared or compacted as that manager. Replaced whole on each write.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["client", "sid", "pid", "cwd"],
+  "properties": {
+    "client": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+    "sid": {"type": "string", "minLength": 1},
+    "pid": {"type": "integer", "minimum": 1},
+    "cwd": {"type": "string", "pattern": "^/"}
+  }
+}
