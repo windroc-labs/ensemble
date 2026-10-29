@@ -243,7 +243,7 @@ that sha256. Nothing to do: install or upgrade the broker as before (`gh` still 
 Broker protocol 29 replaces `refresh` and `notices` with `maintain`: the broker now decides when each session's
 credentials renew ([Docker maintenance](../src/ensemble/session/hosts/docker/maintenance.py)). Upgrade the broker with the
 plugin, then restart (close and resume) every Docker session that was running: until then its old supervisor's
-renewals fail, each asking for that restart, its GitHub tokens lapse within the hour and a Codex session closes at its
+renewals fail, its GitHub tokens lapse within the hour and a Codex session closes at its
 old deadline. The events `client_refresh_failed`, `github_refresh_failed` and `credential_notice_failed` become
 `credential_refresh_failed` and `credential_maintenance_failed`. To go back to protocol 28, install its plugin and
 broker, then close and resume every Docker session started under 29: a protocol 28 supervisor cannot read their

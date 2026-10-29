@@ -29,9 +29,6 @@ import (
 
 const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | lock-query --lock NAME | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
 
-// replaced answers a supervisor started before protocol 29, which still calls refresh and notices.
-const replaced = "Broker protocol 29 replaced refresh and notices with maintain; restart this session (close and resume it) to renew its credentials."
-
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
@@ -300,8 +297,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 		s = func(ctx context.Context, k keys, _ string, progress io.Writer) (any, error) {
 			return a.checkClients(ctx, k, progress)
 		}
-	case len(args) > 0 && (args[0] == "refresh" || args[0] == "notices"):
-		return fail(stderr, command, protocol.New(protocol.Usage, replaced))
 	default:
 		return fail(stderr, command, protocol.New(protocol.Usage, usage))
 	}

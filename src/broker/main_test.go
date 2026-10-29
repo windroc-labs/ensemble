@@ -1163,7 +1163,7 @@ func TestStaticSentinelAbsent(t *testing.T) {
 	}
 }
 
-func TestRefreshAndNoticesAskForRestart(t *testing.T) {
+func TestRemovedCommandsAreUnknown(t *testing.T) {
 	const c = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
 	var calls []call
 	for _, args := range [][]string{
@@ -1174,12 +1174,9 @@ func TestRefreshAndNoticesAskForRestart(t *testing.T) {
 		code, out, errOut := invoke(recording(&calls), args...)
 		assertError(t, errOut, out, "unknown", protocol.Usage)
 		var got struct{ Error protocol.Error }
-		if code != 2 || json.Unmarshal([]byte(errOut), &got) != nil || got.Error.Message != replaced || len(calls) != 0 {
+		if code != 2 || json.Unmarshal([]byte(errOut), &got) != nil || got.Error.Message != usage || len(calls) != 0 {
 			t.Fatalf("%q: %d %q %v", args, code, errOut, calls)
 		}
-	}
-	if !strings.Contains(replaced, "restart this session") {
-		t.Fatal(replaced)
 	}
 }
 
