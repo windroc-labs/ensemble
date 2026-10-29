@@ -1594,6 +1594,13 @@ def _dead(pid, _signal):
     raise ProcessLookupError(pid)
 
 
+class _InterruptedFlush(io.StringIO):
+    """A terminal Ctrl-C lands while the prompt is being written."""
+
+    def flush(self):
+        raise KeyboardInterrupt
+
+
 class SelectTest(ListCase):
     PROMPT = "select a manager [1-{}], Enter cancels: "
 
@@ -1629,6 +1636,18 @@ class SelectTest(ListCase):
                 self.assertEqual(self.select(answers)[:2], (0, ""))
         with mock.patch("sys.stdin", mock.Mock(readline=mock.Mock(side_effect=KeyboardInterrupt))):
             self.assertEqual(self.invoke("list", "--select")[:2], (0, ""))
+
+    def test_an_interrupt_while_the_prompt_is_written_cancels(self):
+        self.manager("demo")
+        stdout, stderr = io.StringIO(), _InterruptedFlush()
+        with (
+            mock.patch("sys.stdin", io.StringIO("1\n")),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = main(("list", "--select"))
+        self.assertEqual((result, stdout.getvalue()), (0, ""))
+        self.assertTrue(stderr.getvalue().endswith(self.PROMPT.format(1) + "\n"), stderr.getvalue())
 
     def test_an_unknown_answer_prompts_again(self):
         self.manager("demo")
