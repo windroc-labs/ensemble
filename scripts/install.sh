@@ -1934,7 +1934,7 @@ opencode_key() {
   fi
 }
 
-# Installer-owned adapters also support refs whose launchers predate source selection.
+# The client cache the installed plugin came from, which the launcher reads to follow that client's updates.
 command_source() {
   if has claude; then
     printf 'claude\n%s/plugins/installed_plugins.json\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -1951,90 +1951,14 @@ command_selection() {
   python3 -I -c 'import json, sys; print(json.dumps(dict(root=sys.argv[1], client=sys.argv[2], source=sys.argv[3])))' "$pkg" "$client" "$source"
 }
 
-command_launcher() {
-  printf '#!/bin/bash\ntarget=$(python3 -I - "${0##*/}" <<\x27PY\x27\n'
-  cat <<'EOF'
-import glob, json, os, sys, tempfile
-
-name = sys.argv[1]
-selection = os.path.expanduser("~/.ensemble/plugin-root")
-rel = "skills/manage/scripts/ensemble" if name == "ensemble" else "bin/" + name
-try:
-    with open(selection, encoding="utf-8") as f:
-        text = f.read().rstrip("\n")
-    data = json.loads(text)
-    if not isinstance(data, dict) or any(not isinstance(data.get(key), str) for key in ("root", "client", "source")):
-        raise ValueError("expected a selection object with root, client and source strings")
-    root, client, source = data["root"], data["client"], data["source"]
-except (OSError, ValueError, TypeError, KeyError) as e:
-    sys.exit(f"{name}: cannot read {selection}: {e}; rerun install.sh or the plugin's ensemble --install")
-path = os.path.join(root, rel)
-if os.path.isabs(root) and "\n" not in root and os.access(path, os.X_OK):
-    print(path)
-    sys.exit()
-
-def version(text):
-    return [int(part) if part.isdigit() else -1 for part in text.split(".")]
-
-def package_version(path):
-    manifest = ".claude-plugin/plugin.json" if client == "claude" else "package.json"
-    try:
-        with open(os.path.join(path, manifest), encoding="utf-8") as f:
-            return version(str(json.load(f).get("version")))
-    except (OSError, ValueError, AttributeError):
-        return version(os.path.basename(path)) if client == "claude" else []
-
-def ref(path):
-    # An OpenCode copy's ref: its package spec's #fragment; a spec without one is the default branch.
-    return os.path.dirname(os.path.dirname(os.path.relpath(path, source))).partition("#")[2] or "main"
-
-roots = []
-if os.path.isabs(root) and "\n" not in root and not os.path.exists(root):
-    if client == "claude":
-        try:
-            with open(source, encoding="utf-8") as f:
-                entries = json.load(f)["plugins"]["ensemble@windroc"]
-            roots = [e.get("installPath") for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
-        except (OSError, ValueError, LookupError, TypeError):
-            pass
-    elif client == "codex":
-        roots = glob.glob(os.path.join(glob.escape(source), "*"))
-    elif client == "opencode":
-        for top, dirs, _ in os.walk(source):
-            if "node_modules" in dirs:
-                dirs.remove("node_modules")
-                roots.append(os.path.join(top, "node_modules", "ensemble"))
-    roots = sorted(p for p in roots if isinstance(p, str) and os.path.isabs(p) and "\n" not in p)
-    key = (lambda p: version(os.path.basename(p))) if client == "codex" else package_version
-    for candidate in sorted(roots, key=key, reverse=True):
-        if client == "opencode" and ref(candidate) != ref(root):
-            continue
-        if os.access(path := os.path.join(candidate, rel), os.X_OK):
-            fd, temp = tempfile.mkstemp(prefix=".plugin-root.", dir=os.path.dirname(selection))
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(dict(root=candidate, client=client, source=source), f)
-                    f.write("\n")
-                os.replace(temp, selection)
-            finally:
-                if os.path.exists(temp):
-                    os.unlink(temp)
-            print(f"{name}: re-selected plugin {candidate}", file=sys.stderr)
-            print(path)
-            sys.exit()
-sys.exit(f"{name}: selected plugin {root!r} has no executable {rel}; rerun install.sh or the plugin's ensemble --install")
-PY
-) || exit
-exec "$target" "$@"
-EOF
-}
-
+# The plugin's launcher, copied under each command's name as its ensemble --install does.
 launchers_install() {
-  local name missing=
+  local name missing= launcher=$pkg/skills/manage/scripts/launcher
   step "launchers"
+  [ -x "$launcher" ] || die "no executable $launcher in the installed plugin"
   [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$(command_selection)" ] || missing=1
   for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s <(command_launcher "$name") "$HOME/.ensemble/bin/$name" || missing=1
+    [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$launcher" "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
     if ! recorded file "$HOME/.ensemble/plugin-root" && ! recorded plugin-root; then
@@ -2055,10 +1979,8 @@ launchers_install() {
       mkdir -p "$HOME/.ensemble/bin"
     fi
     for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
-      command_launcher "$name" > "$state_dir/launcher.tmp"
-      install -m 755 "$state_dir/launcher.tmp" "$HOME/.ensemble/bin/$name"
+      install -m 755 "$launcher" "$HOME/.ensemble/bin/$name"
     done
-    rm -f "$state_dir/launcher.tmp"
     command_selection > "$state_dir/plugin-root.tmp"
     mv -f "$state_dir/plugin-root.tmp" "$HOME/.ensemble/plugin-root"
   else
