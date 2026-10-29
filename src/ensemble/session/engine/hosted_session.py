@@ -1093,6 +1093,10 @@ class HostedSession(Session):
         return cls._config().registry.client(client).resume_main(argv)
 
     @classmethod
+    def resume_argv(cls, client: str, native: str) -> tuple[str, ...]:
+        return cls._config().registry.client(client).resume_argv(native)
+
+    @classmethod
     def usage(cls, client: str) -> Usage | None:
         setup = cls._config()
         found = setup.registry.client(client)

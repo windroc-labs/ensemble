@@ -48,6 +48,7 @@ SURFACES = {
             "tile",
             "hook",
             "client-resume",
+            "resume-argv",
         ],
     ),
     "delegate": (

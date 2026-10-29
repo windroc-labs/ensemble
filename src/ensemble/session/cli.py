@@ -2,7 +2,8 @@
 
 start, restart and resume a worker (engine/worker.py) and print its Record; reply, send (text, or
 keys in KeyPress notation) and read a session; status, show, hide, close and attach-command for
-session names, or Records one per stdin line; ls; tile; hook, a tui client's hook call (tui_hook.run).
+session names, or Records one per stdin line; ls; tile; hook, a tui client's hook call (tui_hook.run);
+resume-argv, a client's plain interactive resume command.
 Every subcommand but hook reads the session config once: read_config, Host.parse_hosts,
 Session.configure. ENSEMBLE_SID, read once here, is a start's or resume's session id. Inside an
 agent session ensemble started (ENSEMBLE_AGENT_SESSION), start, restart, resume and client-resume
@@ -504,6 +505,26 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         nargs=argparse.REMAINDER,
         help="Client-specific resume arguments, verbatim after CLIENT",
     )
+    p = sub.add_parser(
+        "resume-argv",
+        help="specialist: print a client's plain resume command",
+        description="Specialist: print the command resuming a Client conversation interactively.",
+        epilog="Prerequisites and effects\n"
+        "  Requires configured CLIENT. Prints one JSON array: CLIENT's executable and\n"
+        "  its resume selection for SID, without its configured flags. Starts\n"
+        "  nothing; exit 2 when CLIENT has no interactive resume or refuses SID.\n\n"
+        "Examples: annotated invocation form\n"
+        "  ensemble-session resume-argv CLIENT SID\n"
+        "  CLIENT selects [session.clients.NAME]; SID is its conversation id.\n\n"
+        "Recovery and Next help\n"
+        "  Native arguments: CLIENT --help (replace CLIENT with its executable).\n"
+        "  Client configuration: ensemble-session --help",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("client", help="required configured Client name")
+    p.add_argument(
+        "sid", metavar="SID", help="required conversation id: [A-Za-z0-9][A-Za-z0-9._:-]*"
+    )
     return ap
 
 
@@ -833,6 +854,8 @@ def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls
             raise NotShowable(f"session {args.name}: host {host} cannot show") from None
     elif cmd == "client-resume":
         return Session.client_resume(args.client, args.arguments)
+    elif cmd == "resume-argv":
+        print(json.dumps(list(Session.resume_argv(args.client, args.sid))))
     else:
         host = Session.host()
         if not host.attachable:

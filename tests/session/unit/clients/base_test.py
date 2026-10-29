@@ -117,6 +117,33 @@ class ClientTest(Refusals):
             lambda: client.select_session("n", resume=True), "session ids are UUIDs, got 'n'"
         )
 
+    def test_resume_argv_is_its_executable_and_resume_selection_without_flags(self):
+        self.assertEqual(
+            ClaudeClient({"flags": ["--settings", "{}"]}).resume_argv(UUID),
+            ("claude", "--resume", UUID),
+        )
+        self.assertEqual(
+            CodexClient({"flags": ["-m", "x"]}).resume_argv("t-1"), ("codex", "resume", "t-1")
+        )
+        self.refused(lambda: ClaudeClient({}).resume_argv("n"), "session ids are UUIDs, got 'n'")
+
+    def test_resume_argv_refuses_a_client_without_an_interactive_resume(self):
+        client = StubClient({})
+        self.refused(lambda: client.resume_argv("n"), "this client has no interactive resume")
+        client.selection = ((), ("--pick",))
+        self.refused(lambda: client.resume_argv("n"), "this client has no interactive resume")
+
+    def test_resume_argv_refuses_a_session_id_that_is_not_one_word(self):
+        for native in ("", "-x", "--yolo", "a b", "a\nb", "a;b", "\u00e9"):
+            with self.subTest(native=native):
+                self.refused(
+                    lambda native=native: CodexClient({}).resume_argv(native),
+                    f"session id {native!r:.80}: want [A-Za-z0-9][A-Za-z0-9._:-]*",
+                )
+        self.assertEqual(
+            CodexClient({}).resume_argv("ses_1.a:b-C"), ("codex", "resume", "ses_1.a:b-C")
+        )
+
     def test_keeps_a_copy_of_its_config(self):
         config = {"model": "m", "flags": ["-x"]}
         client = StubClient(config)

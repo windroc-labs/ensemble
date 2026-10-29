@@ -177,6 +177,10 @@ class Session(ABC):
         return cls._hosted("client_resume")(client, argv)
 
     @classmethod
+    def resume_argv(cls, client: str, native: str) -> tuple[str, ...]:
+        return cls._hosted("resume_argv")(client, native)
+
+    @classmethod
     def layout(cls, *, display: Display = None) -> str | None:
         return cls._hosted("layout")(display=display)
 

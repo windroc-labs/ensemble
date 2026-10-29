@@ -4,6 +4,7 @@ its Mode's contract in modes/client_adapters/. Each mode reads what to run from 
 process.
 """
 
+import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import ClassVar
@@ -23,6 +24,8 @@ from ensemble.session.modes.client_adapters.headless import Headless
 from ensemble.session.modes.client_adapters.in_process import InProcess
 from ensemble.session.modes.client_adapters.tui import Tui
 from ensemble.utils import thaw
+
+NATIVE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 
 
 class Client:
@@ -45,6 +48,15 @@ class Client:
 
     def select_session(self, native: str, *, resume: bool) -> tuple[str, ...]:
         return select(native, self.selection, uuid=self.selection_uuid, resume=resume)
+
+    def resume_argv(self, native: str) -> tuple[str, ...]:
+        """The plain interactive command resuming conversation `native`: no configured flags."""
+        if not NATIVE.fullmatch(native):
+            raise ConfigError(f"session id {native!r:.80}: want {NATIVE.pattern}")
+        executable, selection = self._executable(), self.select_session(native, resume=True)
+        if not executable or not selection:
+            raise ConfigError("this client has no interactive resume")
+        return (executable, *selection)
 
     def headless(self) -> Headless | None:
         return None

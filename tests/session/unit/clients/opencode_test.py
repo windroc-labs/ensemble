@@ -15,6 +15,12 @@ class OpenCodeClientTest(Case):
         self.assertEqual(client.select_session("ses_a", resume=True), ("--session", "ses_a"))
         self.assertEqual(client.identity_env, ("OPENCODE", "OPENCODE_PID", "OPENCODE_TERMINAL"))
 
+    def test_resume_argv_runs_its_configured_executable(self):
+        table = {**packaged_table(), "executable": "/opt/bin/oc"}
+        self.assertEqual(
+            OpenCodeClient(table).resume_argv("ses_a"), ("/opt/bin/oc", "--session", "ses_a")
+        )
+
     def test_writable_dirs_are_the_cwd_and_access_dirs_never_reads(self):
         cwd, extra, read = (os.path.join(self.home, n) for n in ("cwd", "extra", "read"))
         for path in (cwd, extra, read):
