@@ -1,12 +1,14 @@
 """ensemble-crew: command-based launches and a manager's persistent roster."""
 
 import argparse
+import contextlib
 import os
 import re
 import shlex
 import sys
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State
@@ -233,8 +235,11 @@ def _resume_commander(args) -> int:
         raise ValueError("run resume-commander under the manager's hold: ensemble list")
     roster.bind(lease)
     roster.check_lease()
-    cwd, argv = managers.resume_target(roster.directory)
-    os.chdir(cwd)
+    record, argv = managers.resume_target(roster.directory)
+    os.chdir(record.cwd)
+    # exec keeps this pid: the record names the client from its start, not only from its first turn
+    with contextlib.suppress(OSError):
+        managers.write_record(roster.directory, replace(record, pid=os.getpid()))
     os.execvp(argv[0], argv)
 
 
@@ -943,8 +948,9 @@ Examples:
 in the shell its hold keeps (ensemble list types or runs it there). Reads
 ~/.ensemble/managers/NAME/session.json, refuses while its client still runs
 or when its cwd is gone, gets the client's resume command from
-ensemble-session resume-argv, then replaces itself with that client in the
-recorded cwd. Exit 2 without a holder pair; 1 when it cannot resume.
+ensemble-session resume-argv, records its own pid as the client's, then
+replaces itself with that client in the recorded cwd. Exit 2 without a holder
+pair; 1 when it cannot resume.
 
 Examples:
   In tmux session demo's held shell:
