@@ -62,18 +62,32 @@ class SessionRecord:
 
 
 @dataclass(frozen=True)
+class ActiveHolder:
+    """An active holder: its lease id and the display session its hold recorded."""
+
+    id: str
+    session: str | None
+
+    @property
+    def label(self) -> str:
+        return self.session or self.id
+
+
+@dataclass(frozen=True)
 class Manager:
-    """holder: the active holder's label, None exactly when NOT_HELD."""
+    """holder: the active holder (Unread: roster.json names none readably), None exactly when
+    NOT_HELD.
+    """
 
     name: str
     state: HolderState
-    holder: str | None
+    holder: ActiveHolder | Unread | None
     record: SessionRecord | Unread | None
     entries: dict[str, Entry] | Unread
 
     def __post_init__(self):
         if (self.state == HolderState.NOT_HELD) != (self.holder is None):
-            raise ValueError("holder: want a label exactly when held")
+            raise ValueError("holder: want one exactly when held")
 
 
 @dataclass(frozen=True)

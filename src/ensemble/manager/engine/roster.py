@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 
 from ensemble.manager.engine.events import Events
 from ensemble.manager.engine.types import (
+    ActiveHolder,
     Entry,
     Held,
     Lease,
@@ -63,8 +64,13 @@ def _note(note: str | None) -> None:
         raise RosterError(f"note: want null or printable text of at most {NOTE_MAX} characters")
 
 
+def _holder(holder: dict | None) -> ActiveHolder | None:
+    return None if holder is None else ActiveHolder(holder["id"], holder["session"])
+
+
 def _label(holder: dict | None) -> str:
-    return holder["session"] or holder["id"] if holder is not None else "another holder"
+    active = _holder(holder)
+    return active.label if active is not None else "another holder"
 
 
 def _flock(fd: int, mode: int, lock: str) -> None:
@@ -359,9 +365,10 @@ class Roster:
             holder = _label(data["holder"]) if self._active_holder() else None
             return data["cursor"], data["gen"], holder
 
-    def snapshot(self) -> tuple[str | None, dict[str, Entry] | Unread]:
-        """The active holder's label (None: none) and the entries (Unread: roster.json unreadable),
-        read without a lease, creating and writing nothing.
+    def snapshot(self) -> tuple[ActiveHolder | Unread | None, dict[str, Entry] | Unread]:
+        """The active holder (None: none; Unread: roster.json unreadable or naming none) and the
+        entries (Unread: roster.json unreadable), read without a lease, creating and writing
+        nothing.
         """
         lock = os.path.join(self.directory, "roster.lock")
         try:
@@ -376,7 +383,11 @@ class Roster:
                     raise RosterError(f"{lock}: not a regular file")
                 _flock(fd, fcntl.LOCK_SH, lock)
                 holder, entries = self._snapshot_entries()
-                return (_label(holder) if self._active_holder() else None), entries
+                if not self._active_holder():
+                    return None, entries
+                if isinstance(entries, Unread):
+                    return entries, entries
+                return _holder(holder) or Unread("holder not recorded"), entries
             finally:
                 os.close(fd)
         except OSError as error:

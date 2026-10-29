@@ -11,6 +11,7 @@ from ensemble.manager import rearm
 from ensemble.manager.engine.managers import alive, managers, read, read_record
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
+    ActiveHolder,
     HolderState,
     Manager,
     SessionRecord,
@@ -124,11 +125,12 @@ class ReadTest(RosterCase):
 
     def test_locked_with_a_live_pid_is_client_running(self):
         record = self.write_record(LIVE)
-        with Roster(self.directory).hold("owner"):
+        with Roster(self.directory).hold("owner") as lease:
             manager = read(self.directory)
+        holder = ActiveHolder(lease.id, "owner")
         self.assertEqual(
             manager,
-            Manager("manager", HolderState.CLIENT_RUNNING, "owner", record, self.roster.entries()),
+            Manager("manager", HolderState.CLIENT_RUNNING, holder, record, self.roster.entries()),
         )
 
     def test_locked_with_a_dead_pid_or_no_record_is_hold_only(self):
@@ -153,10 +155,9 @@ class ReadTest(RosterCase):
             Path(self.roster.path).write_text("{")
             manager = read(self.directory)
             Path(self.roster.path).write_text(valid)
-        self.assertEqual(
-            (manager.state, manager.holder), (HolderState.CLIENT_RUNNING, "another holder")
-        )
+        self.assertEqual(manager.state, HolderState.CLIENT_RUNNING)
         self.assertIsInstance(manager.entries, Unread)
+        self.assertEqual(manager.holder, manager.entries)
 
     def test_a_failed_probe_is_unreadable(self):
         for name in ("holder.lock", "roster.lock"):
@@ -175,18 +176,18 @@ class ReadTest(RosterCase):
         self.write_record(LIVE)
         with Roster(self.directory).hold("owner") as lease:
             before = {p: Path(self.directory, p).read_bytes() for p in os.listdir(self.directory)}
-            self.assertEqual(read(self.directory).holder, "owner")
+            self.assertEqual(read(self.directory).holder, ActiveHolder(lease.id, "owner"))
             after = {p: Path(self.directory, p).read_bytes() for p in os.listdir(self.directory)}
             self.assertEqual(after, before)
             other = Roster(self.directory)
             other.bind(lease)
             other.check_lease()
 
-    def test_a_holder_label_comes_exactly_with_a_held_state(self):
+    def test_a_holder_comes_exactly_with_a_held_state(self):
         with self.assertRaises(ValueError):
             Manager("m", HolderState.CLIENT_RUNNING, None, None, {})
         with self.assertRaises(ValueError):
-            Manager("m", HolderState.NOT_HELD, "owner", None, {})
+            Manager("m", HolderState.NOT_HELD, ActiveHolder("id", "owner"), None, {})
 
 
 class ManagersTest(RosterCase):
