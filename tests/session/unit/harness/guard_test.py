@@ -58,6 +58,56 @@ class Base(Case):
 
 
 class GuardTest(Base):
+    def test_snapshot_selects_active_buffer_and_restores_primary_on_alternate_exit(self):
+        screen = guard.Screen(rows=3, columns=8)
+        screen.append(b"main\x1b[2;3H\x1b[?1049halt\x1b[2;1Hsecond")
+        shown = guard.Screen(rows=3, columns=8)
+        shown.append(screen.snapshot())
+        self.assertIn(b"\x1b[?1049h", screen.snapshot())
+        self.assertEqual(shown.text(None), "alt\nsecond")
+        shown.append(b"!\x1b[?1049lX")
+        self.assertEqual(shown.text(None), "main\n  X")
+
+    def test_inline_snapshot_leaves_alternate_screen_and_preserves_region_on_more_output(self):
+        screen = guard.Screen(rows=5, columns=8)
+        screen.append(b"top\r\na\r\nb\r\nc\r\nfooter\x1b[2;4r\x1b[4;1H")
+        shown = guard.Screen(rows=5, columns=8)
+        shown.append(b"\x1b[?1049hwrong\x1b[1;2r")
+        shown.append(screen.snapshot())
+        self.assertIn(b"\x1b[?1049l", screen.snapshot())
+        self.assertEqual(shown.text(None), "top\na\nb\nc\nfooter")
+        shown.append(b"\r\nnew")
+        self.assertEqual(shown.text(None), "top\nb\nc\nnew\nfooter")
+        shown.append(b"\x1b[?1049hignored\x1b[?1049l")
+        self.assertEqual(shown.text(None), "top\nb\nc\nnew\nfooter")
+
+    def test_snapshot_preserves_pending_wrap_for_narrow_and_wide_text(self):
+        for text in ("abcd", "ab中", "abcé́"):
+            with self.subTest(text=text):
+                screen = guard.Screen(rows=3, columns=4)
+                screen.append(text.encode())
+                shown = guard.Screen(rows=3, columns=4)
+                shown.append(screen.snapshot())
+                shown.append(b"X")
+                self.assertEqual(shown.text(None), text + "\nX")
+
+    def test_snapshot_does_not_replay_scrollback_into_display_history(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(b"old\r\nmain\r\nlast")
+        shown = guard.Screen(rows=2, columns=8)
+        shown.append(screen.snapshot())
+        shown.append(screen.snapshot())
+        self.assertEqual(shown.text(4), "main\nlast")
+
+    def test_reconnecting_display_gets_the_active_alternate_mode(self):
+        runtime = self.runtime(terminal=True)
+        runtime.screen.append(b"\x1b[?1049halt")
+        server, peer = mock.Mock(), mock.Mock()
+        server.accept.return_value = peer, ""
+        peer.send.side_effect = len
+        runtime.take_display(server)
+        self.assertIn(b"\x1b[?1049h", peer.send.call_args.args[0])
+
     def test_scroll_region_linefeed_index_nextline_and_wrap_preserve_footer(self):
         for ending in (b"\r\n", b"\r\x1bD", b"\x1bE", b"\x1b[4;12HX"):
             with self.subTest(ending=ending):

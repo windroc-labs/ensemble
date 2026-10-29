@@ -328,8 +328,27 @@ class Screen:
         return "\n".join(rows if lines is None else [*self.history, *rows][-lines:])[-self.limit :]
 
     def snapshot(self) -> bytes:
-        text = self.text(None).replace("\n", "\r\n")
-        return f"\x1b[2J\x1b[H{text}\x1b[{self.row + 1};{min(self.column, self.columns - 1) + 1}H".encode()
+        def paint(cells):
+            return "\x1b[2J" + "".join(
+                f"\x1b[{row + 1};1H{text}"
+                for row, line in enumerate(cells)
+                if (text := "".join(line).rstrip())
+            )
+
+        def cursor(cells, row, column):
+            if column < self.columns:
+                return f"\x1b[{row + 1};{column + 1}H"
+            column = self.columns - 1
+            if cells[row][column] == "" and column:
+                column -= 1
+            return f"\x1b[{row + 1};{column + 1}H{cells[row][column]}"
+
+        primary = self.normal or (self.cells, self.row, self.column)
+        text = "\x1b[?1049l\x1b[r" + paint(primary[0])
+        if self.normal is not None:
+            text += cursor(*primary) + "\x1b[?1049h" + paint(self.cells)
+        text += f"\x1b[{self.scroll_top + 1};{self.scroll_bottom + 1}r"
+        return (text + cursor(self.cells, self.row, self.column)).encode()
 
 
 def fit(cells: list[list[str]], row: int, rows: int, columns: int) -> tuple[list[list[str]], int]:
