@@ -820,6 +820,13 @@ class UpTest(Base):
         thread.join(WAIT)
         self.assertEqual((self.code, self.channel.status().get("up")), (0, True))
 
+    def test_a_client_up_only_in_the_pump_that_saw_it_end_is_never_up(self):
+        owned = FakeOwned(([], True))
+        owned.up = True
+        self.run_in_thread(self.harness(owned)).join(WAIT)
+        self.assertEqual(self.code, 0)
+        self.assertNotIn("up", self.channel.status())
+
 
 class BatchTest(Base):
     def test_requests_taken_with_the_one_that_ends_the_worker_are_still_answered(self):
