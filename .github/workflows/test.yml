@@ -141,7 +141,7 @@ jobs:
   repository:
     name: Repository tests ${{ matrix.job }}
     needs: [changes]
-    if: ${{ needs.changes.outputs.full == 'true' }}
+    if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
