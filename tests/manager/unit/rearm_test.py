@@ -465,7 +465,8 @@ class HooksJsonTest(Case):
         self.assertEqual(command["type"], "command")
         self.assertEqual(
             command["command"],
-            'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual',
+            'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual'
+            ' --client codex --client-pid "$PPID"',
         )
         self.assertEqual(command["timeout"], 5)
 
@@ -477,9 +478,13 @@ class HooksJsonTest(Case):
         self.assertEqual(set(entry["matcher"].split("|")), rearm.SOURCES)
         (command,) = entry["hooks"]
         self.assertEqual(command["type"], "command")
-        script = re.fullmatch(r'python3 -I "\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', command["command"])
+        script = re.fullmatch(
+            r'python3 -I "\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)" --client claude --client-pid "\$PPID"',
+            command["command"],
+        )
         assert script is not None, command["command"]
         self.assertEqual(os.path.join(REPO, script[1]), os.path.abspath(rearm.__file__))
+        self.assertEqual(command["timeout"], 5)
         with open(os.path.join(REPO, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["hooks"], "./hooks/hooks.json")
 
