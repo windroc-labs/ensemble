@@ -370,7 +370,10 @@ class FakeTmux(Case):
                 self.assertTrue(chunk, err)
                 err += chunk
             os.killpg(process.pid, signal.SIGINT)  # what the terminal's Ctrl-C sends
-            self.assertEqual(process.wait(timeout=30), 0)
+            result = process.wait(timeout=30)
+            while chunk := os.read(errors, 4096):
+                err += chunk
+            self.assertEqual(result, 0, err.decode(errors="replace"))
         finally:
             os.close(master)
             os.close(errors)
