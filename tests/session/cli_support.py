@@ -170,6 +170,15 @@ class WorkerCase(CliCase):
             )
         return path
 
+    def dies_on_its_prompt(self) -> None:
+        """A `claude` exiting `exit` after SessionStart, its launch prompt unread."""
+        q = shlex.quote
+        with open(os.path.join(self.server.bin, "claude"), "w", encoding="utf-8") as f:
+            f.write(
+                '#!/bin/sh\nn=$#\nfor a; do [ "$n" -gt 1 ] && set -- "$@" "$a"; shift; n=$((n-1)); done\n'
+                f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@" "" </dev/null\n'
+            )
+
     def claude_argv(self, argv: list[str], sid: str, name: str, *tail: str) -> None:
         """A worker's argv on a non-isolated Host, then `tail`."""
         self.assertEqual(
