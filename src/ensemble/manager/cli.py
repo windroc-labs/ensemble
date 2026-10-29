@@ -14,6 +14,8 @@ from ensemble.manager.engine import managers
 from ensemble.manager.engine.holder import Holder
 from ensemble.manager.engine.types import (
     Lease,
+    Manager,
+    Refused,
     SessionRecord,
     StaleHolder,
     StartBusy,
@@ -122,33 +124,34 @@ def _add_recovery(error: StaleHolder, args, reader: tuple[int, int] | None = Non
         error.add_note(note)
 
 
-def _crew(args) -> Crew:
+def _lease() -> Lease | None:
     holder = os.environ.get("ENSEMBLE_HOLDER_ID")
     generation = os.environ.get("ENSEMBLE_HOLDER_GENERATION")
-    lease = None
-    if holder is not None or generation is not None:
-        if not holder or generation is None or not re.fullmatch(r"[1-9][0-9]*", generation):
-            raise ValueError("ENSEMBLE_HOLDER_ID and ENSEMBLE_HOLDER_GENERATION must go together")
-        identity = uuid.UUID(holder)
-        if identity.version != 4 or str(identity) != holder:
-            raise ValueError("ENSEMBLE_HOLDER_ID must be a canonical UUID4")
-        lease = Lease(holder, int(generation))
-    return Crew(_roster(args), lease=lease)
+    if holder is None and generation is None:
+        return None
+    if not holder or generation is None or not re.fullmatch(r"[1-9][0-9]*", generation):
+        raise ValueError("ENSEMBLE_HOLDER_ID and ENSEMBLE_HOLDER_GENERATION must go together")
+    identity = uuid.UUID(holder)
+    if identity.version != 4 or str(identity) != holder:
+        raise ValueError("ENSEMBLE_HOLDER_ID must be a canonical UUID4")
+    return Lease(holder, int(generation))
+
+
+def _crew(args) -> Crew:
+    return Crew(_roster(args), lease=_lease())
 
 
 def _row(*fields: str) -> str:
     return "\t".join(printable(field).replace("\t", " ") for field in fields)
 
 
-def _list(_args) -> int:
-    found = managers.managers(os.path.expanduser(managers.ROOT))
-    if not found:
-        print("no managers yet; start one: ensemble <name>")
-        return 0
+def _rows(found: list[Manager | Unreadable], out, *, numbered: bool) -> bool:
+    """Print each manager's rows to out; whether any could not be read."""
     failed = False
-    for manager in found:
+    for number, manager in enumerate(found, 1):
+        prefix = f"{number}) " if numbered else ""
         if isinstance(manager, Unreadable):
-            print(_row(manager.name, "-", "-", "-", "error", manager.error))
+            print(prefix + _row(manager.name, "-", "-", "-", "error", manager.error), file=out)
             failed = True
             continue
         record = manager.record
@@ -158,19 +161,81 @@ def _list(_args) -> int:
         if errors:
             fields += ["error", "; ".join(errors)]
             failed = True
-        print(_row(*fields))
+        print(prefix + _row(*fields), file=out)
         if isinstance(manager.entries, Unread):
             continue
         for name, entry in sorted(manager.entries.items()):
             kind = "-" if entry.record is None else entry.record.kind
-            print("  " + _row(name, kind, entry.state))
+            print("  " + _row(name, kind, entry.state), file=out)
         if not manager.entries:
-            print("  -")
-    return 1 if failed else 0
+            print("  -", file=out)
+    return failed
+
+
+def _choose(found: list[Manager | Unreadable]) -> Manager | Unreadable | None:
+    names = [manager.name for manager in found]
+    prompt = f"select a manager [1-{len(found)}], Enter cancels: "
+    while True:
+        try:
+            print(prompt, end="", file=sys.stderr, flush=True)
+            answer = sys.stdin.readline().strip()
+        except KeyboardInterrupt:
+            print(file=sys.stderr)
+            return None
+        if not answer:
+            return None
+        if answer.isdecimal() and 1 <= int(answer) <= len(found):
+            return found[int(answer) - 1]
+        if answer in names:
+            return found[names.index(answer)]
+        print(
+            f"crew: no manager {printable(answer)}; give 1-{len(found)} or a name", file=sys.stderr
+        )
+
+
+def _select(manager: Manager | Unreadable) -> int:
+    record = manager.record if isinstance(manager, Manager) else None
+    if isinstance(record, Unread):
+        print(
+            f"crew: manager {manager.name}: {record.error}; its session is not resumed",
+            file=sys.stderr,
+        )
+    live = isinstance(record, SessionRecord) and managers.alive(record.pid)
+    plan = managers.plan(manager, live=live)
+    if isinstance(plan, Refused):
+        print(
+            f"crew: manager {manager.name}: {printable(plan.reason)}; nothing opened",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{plan.verb} {plan.name}")
+    return 0
+
+
+def _list(args) -> int:
+    out = sys.stderr if args.select else sys.stdout
+    found = managers.managers(os.path.expanduser(managers.ROOT))
+    if not found:
+        print("no managers yet; start one: ensemble <name>", file=out)
+        return 0
+    failed = _rows(found, out, numbered=args.select)
+    chosen = _choose(found) if args.select else None
+    return _select(chosen) if chosen is not None else 1 if failed else 0
 
 
 def _hold(args) -> int:
     return Holder(_roster(args)).run(args.command, session=args.session, force=args.force)
+
+
+def _resume_commander(args) -> int:
+    roster, lease = _roster(args), _lease()
+    if lease is None:
+        raise ValueError("run resume-commander under the manager's hold: ensemble list")
+    roster.bind(lease)
+    roster.check_lease()
+    cwd, argv = managers.resume_target(roster.directory)
+    os.chdir(cwd)
+    os.execvp(argv[0], argv)
 
 
 def _run(args) -> int:
@@ -345,8 +410,8 @@ Prerequisites and effects:
   SessionStart re-arm prompt goes only to a client in its process tree.
   Keep the pair together. An active holder fences ownership-sensitive roster
   updates; run those from its commander environment.
-  ENSEMBLE_AGENT_SESSION blocks hold/run/worker/reopen/issue/role/resume; use a
-  user-started commander. Help still works. State: ~/.ensemble/managers/NAME/.
+  ENSEMBLE_AGENT_SESSION blocks hold/run/worker/reopen/issue/role/resume and
+  resume-commander; use a user-started commander. Help still works. State: ~/.ensemble/managers/NAME/.
   run/worker/reopen/issue/role give starters empty stdin; supply literal input.
   hold instead inherits the caller's input for its foreground command.
   Exit 0: success; 2: usage/invalid value; 1: operational/lease failure;
@@ -854,13 +919,42 @@ not-held), client and cwd from its session record (- without one). Under it,
 one indented row per entry: name, kind, roster state; - for none.
 Exit 1 when a manager's roster, session record or locks cannot be read: its row
 ends with error and the reason; the others still print.
+--select (ensemble list adds it on a terminal): the rows go to stderr, numbered,
+then a prompt reads a number or name from stdin; an empty line or EOF cancels.
+stdout gets the selection's plan, VERB NAME, VERB one of attach, resume-held,
+resume-new or open; a manager it must not open prints why and exits 1.
 
 Examples:
   ensemble-crew list
+  ensemble-crew list --select
 """,
         manager=False,
     )
+    listing.add_argument(
+        "--select",
+        action="store_true",
+        help="list on stderr, prompt on stdin, print the selection's plan: VERB NAME",
+    )
     listing.set_defaults(func=_list)
+    page(
+        "resume-commander",
+        "Resume the manager's recorded client session under this holder",
+        """Requires this environment's holder pair for the manager's live holder: run it
+in the shell its hold keeps (ensemble list types or runs it there). Reads
+~/.ensemble/managers/NAME/session.json, refuses while its client still runs
+or when its cwd is gone, gets the client's resume command from
+ensemble-session resume-argv, then replaces itself with that client in the
+recorded cwd. Exit 2 without a holder pair; 1 when it cannot resume.
+
+Examples:
+  In tmux session demo's held shell:
+  ensemble-crew resume-commander
+
+Recovery and next help:
+  Not held here: ensemble list, then select the manager.
+  Client resume commands: ensemble-session resume-argv --help
+""",
+    ).set_defaults(func=_resume_commander)
     return parser
 
 
@@ -883,7 +977,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"{args.verb} takes entry names or --all")
     if args.func is _resume and args.input is not None and len(args.names) != 1:
         parser.error("resume --input requires exactly one name")
-    if args.func in {_run, _hold, _resume, _launch} and (refused := nested_start()):
+    if args.func in {_run, _hold, _resume, _launch, _resume_commander} and (
+        refused := nested_start()
+    ):
         print(f"crew: {refused}", file=sys.stderr)
         return 2
     try:

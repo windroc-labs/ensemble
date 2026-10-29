@@ -336,9 +336,15 @@ class Worker:
         except (SessionError, ConfigError):
             self._put_back(before)
             raise
-        if session.showable:
-            self._show(session, hidden=hidden)
-        self._watch(session)
+        unshown = self._show(session, hidden=hidden) if session.showable else None
+        exited = None
+        try:
+            exited = self._watch(session)
+        finally:
+            if unshown is not None and exited is None:  # an early exit says why
+                self.say(unshown)
+        if exited is not None:
+            raise SessionError(self._died(session, exited))
         record = self.state.record()
         self._store(record)
         return record
@@ -389,8 +395,8 @@ class Worker:
             except SessionError as error:
                 self.say(f"session {name}: not shown: {error}")
             else:
-                if session.showable:
-                    self._show(session, hidden=None)
+                if session.showable and (unshown := self._show(session, hidden=None)):
+                    self.say(unshown)
         return record
 
     def _store(self, record: Record) -> None:
@@ -500,7 +506,7 @@ class Worker:
                 else:
                     save(path, data)
 
-    def _show(self, session: Session, *, hidden: bool | None) -> None:
+    def _show(self, session: Session, *, hidden: bool | None) -> str | None:
         name = self.state.name
         try:
             self.say(f"session {name}: {session.attach_command()}")
@@ -509,13 +515,15 @@ class Worker:
             elif hidden is False or not session.status().hidden:
                 session.show(display=self.state.display)
         except (SessionError, ConfigError) as error:
-            self.say(f"session {name}: not {'hidden' if hidden else 'shown'}: {error}")
+            return f"session {name}: not {'hidden' if hidden else 'shown'}: {error}"
+        return None
 
-    def _watch(self, session: Session) -> None:
+    def _watch(self, session: Session) -> int | None:
+        """An early exit's code, else None."""
         began = self.clock()
         for event in session.events():
             if isinstance(event, Exited):
-                raise SessionError(self._died(session, event.returncode))
+                return event.returncode
             if isinstance(event, Blocked):
                 self._waits(session, event.reason)
                 return

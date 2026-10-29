@@ -1456,7 +1456,7 @@ def _record(kind: str, name: str) -> Record:
     )
 
 
-class ListTest(CliCase):
+class ListCase(CliCase):
     def setUp(self):
         super().setUp()
         self.root = os.path.join(self.ensemble, "managers")
@@ -1476,6 +1476,8 @@ class ListTest(CliCase):
         record = {"client": "kind-a", "sid": "s-1", "pid": 4101, "cwd": "/home/user/project"}
         Path(self.root, name, "session.json").write_text(json.dumps({**record, **fields}))
 
+
+class ListTest(ListCase):
     def test_managers_without_records_print_dashes_sorted(self):
         for name in ("updraft-manager", "ensemble-manager", "agent-usage-manager"):
             self.manager(name)
@@ -1588,6 +1590,181 @@ class ListTest(CliCase):
         )
 
 
+def _dead(pid, _signal):
+    raise ProcessLookupError(pid)
+
+
+class _InterruptedFlush(io.StringIO):
+    """A terminal Ctrl-C lands while the prompt is being written."""
+
+    def flush(self):
+        raise KeyboardInterrupt
+
+
+class SelectTest(ListCase):
+    PROMPT = "select a manager [1-{}], Enter cancels: "
+
+    def select(self, answers, *, kill=_dead):
+        with (
+            mock.patch("sys.stdin", io.StringIO(answers)),
+            mock.patch("os.kill", side_effect=kill),
+        ):
+            return self.invoke("list", "--select")
+
+    def test_rows_are_numbered_on_stderr_and_a_number_selects(self):
+        self.manager("alpha", ("w1", "worker", State.LIVE))
+        self.manager("demo")
+        self.assertEqual(
+            self.select("2\n"),
+            (
+                0,
+                "open demo\n",
+                "1) alpha\tnot-held\t-\t-\n  w1\tworker\tlive\n2) demo\tnot-held\t-\t-\n  -\n"
+                + self.PROMPT.format(2),
+            ),
+        )
+
+    def test_a_listed_name_selects(self):
+        self.manager("alpha")
+        self.manager("demo")
+        self.assertEqual(self.select("demo\n")[:2], (0, "open demo\n"))
+
+    def test_an_empty_line_eof_or_interrupt_cancels(self):
+        self.manager("demo")
+        for answers in ("\n", "", "  \n"):
+            with self.subTest(answers=answers):
+                self.assertEqual(self.select(answers)[:2], (0, ""))
+        with mock.patch("sys.stdin", mock.Mock(readline=mock.Mock(side_effect=KeyboardInterrupt))):
+            self.assertEqual(self.invoke("list", "--select")[:2], (0, ""))
+
+    def test_an_interrupt_while_the_prompt_is_written_cancels(self):
+        self.manager("demo")
+        stdout, stderr = io.StringIO(), _InterruptedFlush()
+        with (
+            mock.patch("sys.stdin", io.StringIO("1\n")),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            result = main(("list", "--select"))
+        self.assertEqual((result, stdout.getvalue()), (0, ""))
+        self.assertTrue(stderr.getvalue().endswith(self.PROMPT.format(1) + "\n"), stderr.getvalue())
+
+    def test_an_unknown_answer_prompts_again(self):
+        self.manager("demo")
+        result, stdout, stderr = self.select("9\nno\x1bpe\n1\n")
+        self.assertEqual((result, stdout), (0, "open demo\n"))
+        self.assertIn("crew: no manager 9; give 1-1 or a name\n", stderr)
+        self.assertIn("crew: no manager nope; give 1-1 or a name\n", stderr)
+        self.assertEqual(stderr.count(self.PROMPT.format(1)), 3)
+
+    def test_cancel_after_a_listing_error_exits_1(self):
+        Path(self.manager("broken").path).write_text("{")
+        self.assertEqual(self.select("\n")[:2], (1, ""))
+
+    def test_no_managers_prints_the_usage_without_a_prompt(self):
+        self.assertEqual(
+            self.select("1\n"), (0, "", "no managers yet; start one: ensemble <name>\n")
+        )
+
+    def test_each_holder_state_and_record_gives_its_plan(self):
+        roster = self.manager("demo")
+        self.assertEqual(self.select("1\n")[1], "open demo\n")
+        self.session("demo")
+        self.assertEqual(self.select("1\n")[1], "resume-new demo\n")
+        with roster.hold("demo"):
+            self.assertEqual(self.select("1\n")[1], "resume-held demo\n")
+            self.assertEqual(self.select("1\n", kill=None)[1], "attach demo\n")
+
+    def test_refusals_open_nothing_and_exit_1(self):
+        roster = self.manager("demo")
+        self.session("demo")
+        refused = "crew: manager demo: {}; nothing opened\n"
+        result, stdout, stderr = self.select("1\n", kill=None)
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(
+            stderr.endswith(refused.format("its client 4101 runs without a holder; exit it first"))
+        )
+        with roster.hold("work"):
+            result, stdout, stderr = self.select("1\n")
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(stderr.endswith(refused.format("held by work")))
+        lock = os.path.join(self.root, "demo", "roster.lock")
+        os.unlink(lock)
+        os.mkdir(lock)
+        result, stdout, stderr = self.select("1\n")
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(stderr.endswith(refused.format(f"{lock}: not a regular file")))
+
+    def test_an_unreadable_record_warns_and_opens_without_resuming(self):
+        self.manager("demo")
+        Path(self.root, "demo", "session.json").write_text("[]")
+        path = os.path.join(self.root, "demo", "session.json")
+        result, stdout, stderr = self.select("1\n")
+        self.assertEqual((result, stdout), (0, "open demo\n"))
+        self.assertTrue(
+            stderr.endswith(
+                f"crew: manager demo: {path}: want exactly client, sid, pid and cwd;"
+                " its session is not resumed\n"
+            )
+        )
+
+
+class ResumeCommanderTest(CliCase):
+    def setUp(self):
+        super().setUp()
+        os.makedirs(self.directory, mode=0o700)
+        self.cwd = os.path.join(self.home, "a b'c\x15d")
+        os.mkdir(self.cwd)
+        record = {"client": "kind-a", "sid": "s-1", "pid": 1 << 40, "cwd": self.cwd}
+        Path(self.directory, "session.json").write_text(json.dumps(record))
+        argv = '["kind-a", "--resume", "s-1"]'
+        self.run = self.enterContext(
+            mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=argv))
+        )
+        self.chdir = self.enterContext(mock.patch("os.chdir"))
+        self.execvp = self.enterContext(mock.patch("os.execvp"))
+
+    def under(self, lease):
+        return mock.patch.dict(
+            os.environ,
+            {
+                "ENSEMBLE_MANAGER": "mgr",
+                "ENSEMBLE_HOLDER_ID": lease.id,
+                "ENSEMBLE_HOLDER_GENERATION": str(lease.generation),
+            },
+        )
+
+    def test_under_its_hold_it_execs_the_recorded_client_in_its_cwd(self):
+        with self.roster.hold("mgr") as lease, self.under(lease):
+            self.invoke("resume-commander")
+        self.chdir.assert_called_once_with(self.cwd)
+        self.execvp.assert_called_once_with("kind-a", ("kind-a", "--resume", "s-1"))
+
+    def test_without_a_holder_pair_it_is_a_usage_error(self):
+        result, stdout, stderr = self.invoke("resume-commander", "--manager", "mgr")
+        self.assertEqual((result, stdout), (2, ""))
+        self.assertIn("run resume-commander under the manager's hold: ensemble list", stderr)
+        self.execvp.assert_not_called()
+
+    def test_an_ended_holder_is_refused(self):
+        with self.roster.hold("mgr") as lease:
+            pass
+        with self.under(lease):
+            result, _, stderr = self.invoke("resume-commander")
+        self.assertEqual(result, 1)
+        self.assertIn("holder", stderr)
+        self.execvp.assert_not_called()
+
+    def test_a_refused_target_execs_nothing(self):
+        Path(self.directory, "session.json").unlink()
+        with self.roster.hold("mgr") as lease, self.under(lease):
+            result, _, stderr = self.invoke("resume-commander")
+        self.assertEqual(result, 1)
+        self.assertIn("no session record", stderr)
+        self.chdir.assert_not_called()
+        self.execvp.assert_not_called()
+
+
 class InsideAnAgentSession(CliCase):
     def test_run_hold_and_resume_exit_2_and_write_nothing(self):
         for argv in (
@@ -1598,6 +1775,7 @@ class InsideAnAgentSession(CliCase):
             ("reopen", "--manager", "mgr", "TASK-12"),
             ("issue", "--manager", "mgr", "TASK-12"),
             ("role", "--manager", "mgr", "pm", "--input", "x"),
+            ("resume-commander", "--manager", "mgr"),
         ):
             with (
                 self.subTest(argv=argv),
@@ -1636,6 +1814,7 @@ HELP_COMMANDS = [
     "ack",
     "next-event",
     "list",
+    "resume-commander",
 ]
 
 

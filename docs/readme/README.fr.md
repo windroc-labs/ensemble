@@ -104,6 +104,7 @@ Utilisez `codex` ou `opencode` à la place de `claude` si c’est votre client. 
 ```
 
 Décrivez le travail et le livrable souhaité. Le commandant coordonne les agents exécutants et les exécutions des rôles via Crew.
+Pour revenir à `work` plus tard, lancez `ensemble list` dans un terminal et choisissez-le : vous retrouvez sa session et sa conversation.
 Pour travailler avec un tableau, `/ensemble:board` agit sur les tickets ; la [personnalisation du flux de travail](../customizing-roles-and-tasks.md#on-the-board)
 explique comment choisir les étapes.
 

@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
+    ActiveHolder,
     Held,
     Lease,
     RosterError,
@@ -1288,31 +1289,54 @@ class SnapshotTest(RosterCase):
 
     def test_snapshot_of_a_held_roster_changes_nothing(self):
         self.live()
-        with Roster(self.directory).hold("owner"):
+        with Roster(self.directory).hold("owner") as lease:
             before = self.files()
             holder, entries = self.roster.snapshot()
             self.assertEqual(self.files(), before)
-            self.assertEqual((holder, entries), ("owner", self.roster.entries()))
+            self.assertEqual(
+                (holder, entries), (ActiveHolder(lease.id, "owner"), self.roster.entries())
+            )
             with self.assertRaises(Held), Roster(self.directory).hold(None):
                 pass
 
     def test_two_snapshots_while_held_both_see_the_holder(self):
         self.live()
-        with Roster(self.directory).hold("owner"):
+        with Roster(self.directory).hold("owner") as lease:
             lock = os.open(os.path.join(self.directory, "roster.lock"), os.O_RDONLY)
             try:
                 fcntl.flock(lock, fcntl.LOCK_SH)
-                self.assertEqual(self.roster.snapshot()[0], "owner")
-                self.assertEqual(Roster(self.directory).snapshot()[0], "owner")
+                self.assertEqual(self.roster.snapshot()[0], ActiveHolder(lease.id, "owner"))
+                self.assertEqual(
+                    Roster(self.directory).snapshot()[0], ActiveHolder(lease.id, "owner")
+                )
             finally:
                 os.close(lock)
 
     def test_hold_succeeds_after_a_snapshot(self):
         self.live()
         self.assertEqual(self.roster.snapshot(), (None, self.roster.entries()))
-        with Roster(self.directory).hold("owner"):
-            self.assertEqual(self.roster.snapshot()[0], "owner")
+        with Roster(self.directory).hold("owner") as lease:
+            self.assertEqual(self.roster.snapshot()[0], ActiveHolder(lease.id, "owner"))
         self.assertIsNone(self.roster.snapshot()[0])
+
+    def test_a_holder_without_a_session_is_known_by_its_id(self):
+        self.live()
+        with Roster(self.directory).hold(None) as lease:
+            holder = self.roster.snapshot()[0]
+        self.assertEqual(holder, ActiveHolder(lease.id, None))
+        self.assertEqual(holder.label, lease.id)
+        self.assertEqual(ActiveHolder(lease.id, "owner").label, "owner")
+
+    def test_a_held_lock_with_no_recorded_holder_is_unread(self):
+        self.live()
+        with Roster(self.directory).hold("owner"):
+            valid = Path(self.roster.path).read_text()
+            data = json.loads(valid)
+            Path(self.roster.path).write_text(json.dumps({**data, "holder": None}))
+            holder, entries = self.roster.snapshot()
+            Path(self.roster.path).write_text(valid)
+        self.assertEqual(holder, Unread("holder not recorded"))
+        self.assertEqual(entries, self.roster.entries())
 
     def test_without_roster_lock_holder_lock_is_never_opened(self):
         Path(self.directory).mkdir(parents=True, mode=0o700)
@@ -1335,7 +1359,7 @@ class SnapshotTest(RosterCase):
             Path(self.roster.path).write_text("{")
             holder, entries = self.roster.snapshot()
             Path(self.roster.path).write_text(valid)
-        self.assertEqual(holder, "another holder")
+        self.assertEqual(holder, entries)
         self.assertIsInstance(entries, Unread)
         self.assertIn(self.roster.path, entries.error)
 

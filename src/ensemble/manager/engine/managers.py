@@ -1,27 +1,32 @@
 """Every manager under a root, with its holder state, session record and entries, read without
-a lease.
+a lease, and the plan for selecting one.
 """
 
 import json
 import os
 import re
+import subprocess
 
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
     HolderState,
     Manager,
+    Plan,
+    Refused,
     RosterError,
     SessionRecord,
     Unread,
     Unreadable,
+    Verb,
 )
-from ensemble.utils import STATE, read_regular
+from ensemble.utils import STATE, LayerCommand, one_line, printable, read_regular
 
 ROOT = f"{STATE}/managers"
 RECORD = "session.json"
 RECORD_MAX = 1 << 16
 NAME = re.compile(r"[A-Za-z0-9_-]+")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
+RESUME_TIMEOUT = 30
 
 
 def read_record(path: str) -> SessionRecord | None:
@@ -90,3 +95,65 @@ def managers(root: str) -> list[Manager | Unreadable]:
     except FileNotFoundError:
         return []
     return [read(os.path.join(root, name)) for name in names]
+
+
+def plan(manager: Manager | Unreadable, *, live: bool) -> Plan | Refused:
+    """live: whether its session record's client process runs."""
+    if isinstance(manager, Unreadable):
+        return Refused(manager.error)
+    if isinstance(manager.entries, Unread):
+        return Refused(manager.entries.error)
+    holder, record = manager.holder, manager.record
+    if isinstance(holder, Unread):
+        return Refused(holder.error)
+    if holder is not None and holder.session != manager.name:
+        return Refused(f"held by {holder.label}")
+    recorded = isinstance(record, SessionRecord)
+    if manager.state == HolderState.CLIENT_RUNNING:
+        verb = Verb.ATTACH
+    elif manager.state == HolderState.HOLD_ONLY:
+        verb = Verb.RESUME_HELD if recorded else Verb.ATTACH
+    elif isinstance(record, SessionRecord) and live:
+        return Refused(f"its client {record.pid} runs without a holder; exit it first")
+    else:
+        verb = Verb.RESUME_NEW if recorded else Verb.OPEN
+    return Plan(verb, manager.name)
+
+
+def resume_target(directory: str) -> tuple[str, tuple[str, ...]]:
+    """The recorded cwd and the command resuming the recorded client session there."""
+    try:
+        record = read_record(os.path.join(directory, RECORD))
+    except ValueError as error:
+        raise RosterError(str(error)) from None
+    if record is None:
+        raise RosterError(f"{directory}: no session record to resume")
+    if alive(record.pid):
+        raise RosterError(f"its client {record.pid} still runs; exit it first")
+    if not os.path.isdir(record.cwd):
+        raise RosterError(f"recorded cwd {record.cwd!r} is not a directory")
+    command = (LayerCommand.SESSION, "resume-argv", record.client, "--", record.sid)
+    try:
+        done = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=RESUME_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        reason = one_line(error)
+    else:
+        try:
+            argv = json.loads(done.stdout) if done.returncode == 0 else None
+        except ValueError:
+            argv = None
+        if isinstance(argv, list) and argv and all(isinstance(w, str) and w for w in argv):
+            return record.cwd, tuple(argv)
+        reason = (
+            (one_line(done.stderr) or f"exit {done.returncode}")
+            if done.returncode
+            else ("want a JSON array of words")
+        )
+    raise RosterError(f"cannot resume its {record.client} session: {printable(reason)}")

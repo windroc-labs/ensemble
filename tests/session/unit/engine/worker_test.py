@@ -422,6 +422,24 @@ class ViewTest(Base):
         self.assertEqual(self.said[-1], "session w1: not hidden: boom")
         self.assertEqual(self.stored(), state().record())
 
+    def test_a_show_its_exited_client_refuses_leaves_only_the_early_exit(self):
+        self.session.show.side_effect = SessionError("worker w1: exited")
+        self.session.events.return_value = iter([Exited(2)])
+        with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 at once"):
+            self.worker().start(prompt="", resume=False, hidden=False)
+        self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
+
+    def test_a_failed_show_is_said_when_its_watch_fails(self):
+        self.session.show.side_effect = SessionError("worker w1: gone")
+        self.session.events.side_effect = SessionError("boom")
+        with self.assertRaisesRegex(SessionError, "^boom$"):
+            self.worker().start(prompt="", resume=False, hidden=False)
+        self.assertEqual(
+            self.said,
+            ["session w1: tmux attach -t '=w1'", "session w1: not shown: worker w1: gone"],
+        )
+        self.assertIsNone(self.stored())
+
     def test_restart_and_resume_keep_its_view(self):
         self.session.events.return_value = iter([IdleTimeout(worker.EARLY)])
         self.session.status.return_value = Status(

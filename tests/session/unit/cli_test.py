@@ -618,6 +618,41 @@ class Ls(HostedTuiBase):
         self.assertEqual(self.invoke("ls", "--records", "--match", "w[23]"), (0, "", ""))
 
 
+class ResumeArgv(Case):
+    def invoke(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = cli.main(list(argv))
+            except SystemExit as error:
+                code = error.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_prints_the_clients_resume_argv_as_one_json_array(self):
+        self.assertEqual(
+            self.invoke("resume-argv", "claude", SID),
+            (0, json.dumps(["claude", "--resume", SID]) + "\n", ""),
+        )
+        self.assertEqual(
+            self.invoke("resume-argv", "codex", "t-1"), (0, '["codex", "resume", "t-1"]\n', "")
+        )
+
+    def test_an_unknown_client_or_a_refused_id_is_a_config_error(self):
+        for argv in (
+            ("resume-argv", "nobody", SID),
+            ("resume-argv", "codex", "--", "-x"),
+            ("resume-argv", "codex", "-x"),
+        ):
+            with self.subTest(argv=argv):
+                code, out, err = self.invoke(*argv)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("ensemble-session", err)
+
+    def test_runs_inside_an_agent_session(self):
+        with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "w1"}):
+            self.assertEqual(self.invoke("resume-argv", "codex", "t-1")[0], 0)
+
+
 COMMANDS = (
     "start",
     "restart",
@@ -635,6 +670,7 @@ COMMANDS = (
     "tile",
     "hook",
     "client-resume",
+    "resume-argv",
 )
 
 
@@ -803,6 +839,7 @@ class HelpTest(Case):
             ["tile", "@1"],
             ["hook", "/absolute/session", "stop"],
             ["client-resume", "codex", "resume", "conversation-id"],
+            ["resume-argv", "codex", "conversation-id"],
         )
         for example in examples:
             with self.subTest(example=example):

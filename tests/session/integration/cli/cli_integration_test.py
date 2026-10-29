@@ -32,6 +32,7 @@ SUBCOMMANDS = [
     "tile",
     "hook",
     "client-resume",
+    "resume-argv",
 ]
 DISPLAY_HELP = "display (--display D), per configured Host:\n"
 PROG = "ensemble-session"

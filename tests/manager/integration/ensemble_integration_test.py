@@ -4,21 +4,25 @@ hold, and the launchers --install puts in ~/.ensemble/bin, run from a plain PATH
 plugin upgrade.
 """
 
+import concurrent.futures
 import json
 import os
+import pty
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import uuid
 
 from ensemble.manager.engine.roster import Roster
-from ensemble.manager.engine.types import Held
+from ensemble.manager.engine.types import ActiveHolder, Held
 from tests.manager.case import REPO, Case
 from tests.session import live_tmux
 from tests.utils.jsonl import read_jsonl
 
 ENSEMBLE = os.path.join(REPO, "skills", "manage", "scripts", "ensemble")
+CREW = os.path.join(REPO, "bin", "ensemble-crew")
 LAUNCHER = os.path.join(REPO, "skills", "manage", "scripts", "launcher")
 COMMANDS = (
     "ensemble",
@@ -32,6 +36,8 @@ FAKE = """#!{python} -I
 import json, os, sys
 with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
     f.write(json.dumps([os.getcwd(), os.getpid(), *sys.argv[1:]]) + "\\n")
+if sys.argv[1] == "list-panes":
+    sys.stdout.write(os.environ.get("PANES", ""))
 rc = {{"has": "HAS_RC", "start-server": "START_RC"}}
 code = rc.get(sys.argv[1], "ATTACH_RC" if sys.argv[1] in ("-CC", "attach", "switch-client") else "")
 sys.exit(int(os.environ.get(code, "0")))
@@ -48,6 +54,14 @@ SHELL = """#!/bin/sh
 printf '%s\\n' "$(pwd -P)" "$*" "$ENSEMBLE_MANAGER" "$ENSEMBLE_HOLDER_ID" \\
   "$ENSEMBLE_HOLDER_GENERATION" "${PATH%%:*}" > "$0.tmp" && mv "$0.tmp" "$0.log"
 exec cat
+"""
+CLIENT = """#!/bin/sh
+printf '["%s", "%s", "%s", "%s"]\\n' "$(pwd -P)" "$*" "$ENSEMBLE_MANAGER" "$ENSEMBLE_HOLDER_ID" >> "$0.log"
+exec cat
+"""
+# HISTFILE empty: on hangup bash writes ~/.bash_history after the hold, which teardown waits for.
+BASH = """#!/bin/sh
+HISTFILE= exec /bin/bash --noprofile --norc
 """
 START = [
     "start-server",
@@ -88,6 +102,55 @@ def created(name: str, cwd: str, shell: str, root: str = REPO) -> list[str]:
     crew = os.path.join(root, "bin", "ensemble-crew")
     hold = [crew, "hold", f"--manager={name}", f"--session={name}", "--", shell, "-l"]
     return [*START, name, "-c", cwd, *hold]
+
+
+def held(name: str) -> list[str]:
+    crew = os.path.join(REPO, "bin", "ensemble-crew")
+    resume = ["/bin/sh", "-c", '"$@"; exec "${SHELL:-/bin/sh}" -l', "ensemble", crew]
+    return [
+        crew,
+        "hold",
+        f"--manager={name}",
+        f"--session={name}",
+        "--",
+        *resume,
+        "resume-commander",
+    ]
+
+
+def panes(command: str, name: str = "demo") -> str:
+    """list-panes rows: the hold pane of session `name` running `command`, and a worker's pane."""
+    hold = f'"{REPO}/bin/ensemble-crew" hold --manager={name} --session={name} -- /bin/zsh -l'
+    return f"%3 {command} {hold}\n%4 tmux tmux -S /tmp/s attach -t =w1\n"
+
+
+LIST_PANES = [
+    "list-panes",
+    "-s",
+    "-t",
+    "=demo",
+    "-F",
+    "#{pane_id} #{pane_current_command} #{pane_start_command}",
+]
+
+
+def on_terminal(cwd: str, env: dict, answer: bytes) -> tuple[int, str]:
+    """ensemble list with stdin and stdout on a terminal, answering its prompt: exit, stderr."""
+    master, slave = pty.openpty()
+    with os.fdopen(master, "r+b", buffering=0) as terminal:
+        process = subprocess.Popen(
+            (ENSEMBLE, "list"),
+            cwd=cwd,
+            env=env,
+            stdin=slave,
+            stdout=slave,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        os.close(slave)
+        terminal.write(answer)
+        err = process.communicate(timeout=30)[1]
+    return process.returncode, err
 
 
 def plugin(root: str) -> str:
@@ -256,6 +319,191 @@ class FakeTmux(Case):
             (0, "demo\tnot-held\t-\t-\n  -\n", ""),
         )
         self.assertFalse(os.path.exists(self.log))
+
+    def demo(self, **record) -> Roster:
+        roster = Roster(os.path.join(self.ensemble, "managers", "demo"))
+        os.makedirs(roster.directory)
+        if record:
+            fields = {"client": "kind-a", "sid": "s-1", "pid": 1 << 40, "cwd": self.cwd, **record}
+            with open(os.path.join(roster.directory, "session.json"), "w", encoding="utf-8") as f:
+                json.dump(fields, f)
+        return roster
+
+    def select(self, answer=b"1\n", has_rc=1, **env):
+        """ensemble list with stdin and stdout on a terminal, answering its prompt."""
+        if os.path.exists(self.log):
+            os.unlink(self.log)
+        values = {"HAS_RC": has_rc, **env}
+        result, err = on_terminal(
+            self.cwd, {**self.env, **{k: str(v) for k, v in values.items()}}, answer
+        )
+        calls = []
+        if os.path.exists(self.log):
+            with open(self.log, encoding="utf-8") as f:
+                calls = [json.loads(line)[2:] for line in f]
+        return result, err, calls
+
+    def test_list_on_a_terminal_cancels_without_tmux(self):
+        self.demo()
+        result, err, calls = self.select(b"\n")
+        self.assertEqual((result, calls), (0, []))
+        self.assertIn("1) demo\tnot-held\t-\t-\n", err)
+
+    def test_ctrl_c_at_the_prompt_cancels_with_exit_0(self):
+        self.demo()
+        master, slave = pty.openpty()
+        errors, error_end = os.pipe()
+        process = subprocess.Popen(
+            (ENSEMBLE, "list"),
+            cwd=self.cwd,
+            env=self.env,
+            stdin=slave,
+            stdout=slave,
+            stderr=error_end,
+            start_new_session=True,
+        )
+        os.close(slave)
+        os.close(error_end)
+        try:
+            err = b""
+            while not err.endswith(b"Enter cancels: "):
+                chunk = os.read(errors, 4096)
+                self.assertTrue(chunk, err)
+                err += chunk
+            os.killpg(process.pid, signal.SIGINT)  # what the terminal's Ctrl-C sends
+            result = process.wait(timeout=30)
+            while chunk := os.read(errors, 4096):
+                err += chunk
+            self.assertEqual(result, 0, err.decode(errors="replace"))
+        finally:
+            os.close(master)
+            os.close(errors)
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_list_with_stdout_piped_prints_without_a_prompt(self):
+        self.demo()
+        master, slave = pty.openpty()
+        try:
+            done = subprocess.run(
+                (ENSEMBLE, "list"),
+                cwd=self.cwd,
+                env=self.env,
+                stdin=slave,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertEqual(
+            (done.returncode, done.stdout, done.stderr), (0, "demo\tnot-held\t-\t-\n  -\n", "")
+        )
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_an_unheld_manager_without_a_record_opens_like_ensemble_name(self):
+        self.demo()
+        result, _, calls = self.select()
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            calls,
+            [
+                ["has", "-t", "=demo"],
+                created("demo", self.cwd, "/bin/zsh"),
+                ["-CC", "attach", "-t", "=demo"],
+            ],
+        )
+
+    def test_an_unheld_record_resumes_under_a_new_hold(self):
+        self.demo(cwd="/home/user/project")
+        result, _, calls = self.select()
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            calls,
+            [
+                ["has", "-t", "=demo"],
+                [*START, "demo", "-c", self.cwd, *held("demo")],
+                ["-CC", "attach", "-t", "=demo"],
+            ],
+        )
+        result, _, calls = self.select(has_rc=0)
+        self.assertEqual(
+            calls,
+            [
+                ["has", "-t", "=demo"],
+                ["new-window", "-d", "-t", "=demo:", "-c", self.cwd, *held("demo")],
+                ["-CC", "attach", "-t", "=demo"],
+            ],
+        )
+
+    def test_a_lost_create_race_still_attaches(self):
+        self.demo(cwd="/home/user/project")
+        result, _, calls = self.select(START_RC=1, ATTACH_RC=7)
+        self.assertEqual(result, 7)
+        self.assertEqual([call[0] for call in calls], ["has", "start-server", "-CC"])
+
+    def test_a_hash_in_the_callers_directory_reaches_tmux_doubled(self):
+        self.cwd = os.path.join(self.cwd, "x#{l:t}")
+        os.mkdir(self.cwd)
+        doubled = self.cwd.replace("#", "##")
+        _, _, _, calls = self.run_ensemble("s1")
+        self.assertEqual(calls[1][2:], created("s1", doubled, "/bin/zsh"))
+        self.demo()
+        self.assertEqual(self.select()[2][1], created("demo", doubled, "/bin/zsh"))
+
+    def test_a_running_client_under_its_own_hold_is_attached(self):
+        roster = self.demo(pid=os.getpid())
+        with roster.hold("demo"):
+            result, _, calls = self.select(PANES=panes("node"))
+        self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
+
+    def test_hold_only_types_the_resume_command_into_its_idle_shell(self):
+        roster = self.demo(cwd="/home/user/project")
+        with roster.hold("demo"):
+            result, err, calls = self.select(PANES=panes("zsh"))
+        self.assertEqual((result, err.endswith(": "), calls[0]), (0, True, LIST_PANES))
+        self.assertEqual(
+            calls[1:],
+            [
+                [
+                    *("send-keys", "-t", "%3", "C-u", ";"),
+                    *("send-keys", "-t", "%3", "-l", f"'{CREW}' resume-commander", ";"),
+                    *("send-keys", "-t", "%3", "Enter"),
+                ],
+                ["-CC", "attach", "-t", "=demo"],
+            ],
+        )
+
+    def test_a_busy_hold_pane_is_attached_without_typing(self):
+        roster = self.demo(cwd="/home/user/project")
+        with roster.hold("demo"):
+            result, err, calls = self.select(PANES=panes("vim"))
+        self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
+        self.assertIn(
+            f"ensemble: demo's pane runs vim; resume there with: '{CREW}' resume-commander\n",
+            err,
+        )
+
+    def test_its_own_hold_outside_its_tmux_session_opens_nothing(self):
+        roster = self.demo()
+        for pane_rows in ("", panes("zsh", "other"), panes("zsh") * 2):
+            with self.subTest(pane_rows=pane_rows), roster.hold("demo"):
+                result, err, calls = self.select(PANES=pane_rows)
+                self.assertEqual((result, calls), (1, [LIST_PANES]))
+                self.assertTrue(
+                    err.endswith(
+                        "ensemble: manager demo is held by demo outside tmux session demo;"
+                        " nothing opened\n"
+                    )
+                )
+
+    def test_a_manager_held_elsewhere_opens_nothing(self):
+        roster = self.demo()
+        with roster.hold("work"):
+            result, err, calls = self.select()
+        self.assertEqual((result, calls), (1, []))
+        self.assertTrue(err.endswith("crew: manager demo: held by work; nothing opened\n"))
 
     def install(self, script=ENSEMBLE):
         process, out, err, calls = self.run_ensemble("--install", script=script)
@@ -705,6 +953,66 @@ class PrivateServer(Case):
                 self.assertEqual((done.returncode, done.stderr), (0, ""))
                 self.server.tmux("send-keys", "-t", f"={name}:", "C-d")
                 live_tmux.wait(lambda n=name: self.free(self.roster(n)), what="the lease to end")
+
+    def client(self):
+        """A fake client on PATH, under the recorded kind's executable name, logging each start."""
+        executable(os.path.join(self.home, "tools", "codex"), CLIENT)
+        work = os.path.realpath(os.path.join(self.home, "work dir"))
+        os.mkdir(work)
+        directory = self.roster("demo").directory
+        os.makedirs(directory, exist_ok=True)
+        record = {"client": "codex", "sid": "t-1", "pid": 1 << 40, "cwd": work}
+        with open(os.path.join(directory, "session.json"), "w", encoding="utf-8") as f:
+            json.dump(record, f)
+        return work
+
+    def starts(self):
+        return read_jsonl(os.path.join(self.home, "tools", "codex.log"), missing_ok=True)
+
+    def test_the_hold_pane_is_matched_by_its_start_command(self):
+        self.env["SHELL"] = "/bin/sh"
+        self.assertEqual(self.run_ensemble("demo").returncode, 0)
+        rows = self.server.tmux("list-panes", "-s", "-t", "=demo", "-F", "#{pane_start_command}")
+        self.assertIn(" hold --manager=demo --session=demo -- ", rows.stdout)
+
+    def test_hold_only_resumes_the_recorded_client_under_the_same_hold(self):
+        work = self.client()
+        # macOS runs /bin/sh as bash; a profile may reset PATH, losing the fake client. Off PATH, so
+        # it never stands in for env bash.
+        os.mkdir(os.path.join(self.home, "login"))
+        self.env["SHELL"] = executable(os.path.join(self.home, "login", "bash"), BASH)
+        self.assertEqual(self.run_ensemble("demo").returncode, 0)
+        command = ("display-message", "-p", "-t", "=demo:", "#{pane_current_command}")
+        live_tmux.wait(
+            lambda: self.server.tmux(*command).stdout.strip() == "bash", what="idle bash"
+        )
+        result, err = on_terminal(self.cwd, self.env, b"1\n")
+        self.assertEqual(result, 0, err)
+        starts = live_tmux.wait(self.starts, what="the resumed client")
+        self.assertEqual(starts[0][:3], [work, "resume t-1", "demo"])
+        self.assertEqual(self.roster("demo").snapshot()[0], ActiveHolder(starts[0][3], "demo"))
+        with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold(None):
+            pass
+        sessions = self.server.tmux("list-sessions", "-F", "#{session_name}").stdout.split()
+        self.assertEqual(sessions, ["demo"])
+
+    def test_concurrent_selections_of_an_unheld_manager_start_one_client(self):
+        work = self.client()
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+            done = list(pool.map(lambda _: on_terminal(self.cwd, self.env, b"1\n"), range(2)))
+        self.assertEqual([result for result, _ in done], [0, 0], done)
+        starts = live_tmux.wait(self.starts, what="the resumed client")
+        live_tmux.wait(
+            lambda: self.server.tmux("list-panes", "-s", "-t", "=demo").stdout.count("\n") == 1,
+            what="one pane",
+        )
+        self.assertEqual([start[:3] for start in self.starts()], [[work, "resume t-1", "demo"]])
+        self.assertEqual(len(starts), 1)
+        self.assertEqual(self.roster("demo").snapshot()[0], ActiveHolder(starts[0][3], "demo"))
+        sessions = self.server.tmux("list-sessions", "-F", "#{session_name}").stdout.split()
+        self.assertEqual(sessions, ["demo"])
+        with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold(None):
+            pass
 
     @staticmethod
     def free(roster):

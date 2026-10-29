@@ -103,6 +103,7 @@ claude
 ```
 
 描述工作内容和期望的交付物。指挥官通过 Crew 协调工作者和角色运行。
+之后要回到 `work` 时，在终端运行 `ensemble list` 并选中它：即可回到它的会话和对话。
 使用看板时，`/ensemble:board` 用于操作 issue；[自定义工作流](../customizing-roles-and-tasks.md#on-the-board)
 说明了如何选择阶段。
 

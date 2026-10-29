@@ -8,17 +8,30 @@ from unittest import mock
 import jsonschema
 
 from ensemble.manager import rearm
-from ensemble.manager.engine.managers import alive, managers, read, read_record
+from ensemble.manager.engine.managers import (
+    alive,
+    managers,
+    plan,
+    read,
+    read_record,
+    resume_target,
+)
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import (
+    ActiveHolder,
     HolderState,
     Manager,
+    Plan,
+    Refused,
+    RosterError,
     SessionRecord,
     Unread,
     Unreadable,
+    Verb,
 )
 from tests.manager import session_records
 from tests.manager.roster_case import RosterCase
+from tests.utils.process_fixtures import DEVNULL, CompletedProcess, TimeoutExpired
 
 LIVE, DEAD = 4101, 4102
 
@@ -124,11 +137,12 @@ class ReadTest(RosterCase):
 
     def test_locked_with_a_live_pid_is_client_running(self):
         record = self.write_record(LIVE)
-        with Roster(self.directory).hold("owner"):
+        with Roster(self.directory).hold("owner") as lease:
             manager = read(self.directory)
+        holder = ActiveHolder(lease.id, "owner")
         self.assertEqual(
             manager,
-            Manager("manager", HolderState.CLIENT_RUNNING, "owner", record, self.roster.entries()),
+            Manager("manager", HolderState.CLIENT_RUNNING, holder, record, self.roster.entries()),
         )
 
     def test_locked_with_a_dead_pid_or_no_record_is_hold_only(self):
@@ -153,10 +167,9 @@ class ReadTest(RosterCase):
             Path(self.roster.path).write_text("{")
             manager = read(self.directory)
             Path(self.roster.path).write_text(valid)
-        self.assertEqual(
-            (manager.state, manager.holder), (HolderState.CLIENT_RUNNING, "another holder")
-        )
+        self.assertEqual(manager.state, HolderState.CLIENT_RUNNING)
         self.assertIsInstance(manager.entries, Unread)
+        self.assertEqual(manager.holder, manager.entries)
 
     def test_a_failed_probe_is_unreadable(self):
         for name in ("holder.lock", "roster.lock"):
@@ -175,18 +188,18 @@ class ReadTest(RosterCase):
         self.write_record(LIVE)
         with Roster(self.directory).hold("owner") as lease:
             before = {p: Path(self.directory, p).read_bytes() for p in os.listdir(self.directory)}
-            self.assertEqual(read(self.directory).holder, "owner")
+            self.assertEqual(read(self.directory).holder, ActiveHolder(lease.id, "owner"))
             after = {p: Path(self.directory, p).read_bytes() for p in os.listdir(self.directory)}
             self.assertEqual(after, before)
             other = Roster(self.directory)
             other.bind(lease)
             other.check_lease()
 
-    def test_a_holder_label_comes_exactly_with_a_held_state(self):
+    def test_a_holder_comes_exactly_with_a_held_state(self):
         with self.assertRaises(ValueError):
             Manager("m", HolderState.CLIENT_RUNNING, None, None, {})
         with self.assertRaises(ValueError):
-            Manager("m", HolderState.NOT_HELD, "owner", None, {})
+            Manager("m", HolderState.NOT_HELD, ActiveHolder("id", "owner"), None, {})
 
 
 class ManagersTest(RosterCase):
@@ -200,3 +213,136 @@ class ManagersTest(RosterCase):
         Path(root, "file").touch()
         os.symlink(os.path.join(root, "a"), os.path.join(root, "link"))
         self.assertEqual([m.name for m in managers(root)], ["a", "b"])
+
+
+RECORD = SessionRecord("kind-a", "s-1", LIVE, "/home/user/project")
+OWN, OTHER, ANONYMOUS = (
+    ActiveHolder("id-1", "demo"),
+    ActiveHolder("id-2", "work"),
+    ActiveHolder("id-3", None),
+)
+RUNNING, HOLD_ONLY, NOT_HELD = (
+    HolderState.CLIENT_RUNNING,
+    HolderState.HOLD_ONLY,
+    HolderState.NOT_HELD,
+)
+
+
+def _manager(state, holder=None, record=None, entries=None):
+    return Manager("demo", state, holder, record, {} if entries is None else entries)
+
+
+class PlanTest(RosterCase):
+    def test_an_unreadable_manager_or_roster_is_refused_with_its_error(self):
+        self.assertEqual(plan(Unreadable("demo", "lock: busy"), live=False), Refused("lock: busy"))
+        broken = Unread("roster.json: not JSON")
+        for state, holder in ((NOT_HELD, None), (RUNNING, broken), (HOLD_ONLY, broken)):
+            with self.subTest(state=state):
+                manager = _manager(state, holder, RECORD, broken)
+                self.assertEqual(plan(manager, live=False), Refused("roster.json: not JSON"))
+
+    def test_a_held_lock_without_a_recorded_holder_is_refused(self):
+        manager = _manager(HOLD_ONLY, Unread("holder not recorded"), RECORD)
+        self.assertEqual(plan(manager, live=False), Refused("holder not recorded"))
+
+    def test_a_holder_outside_the_managers_own_session_is_refused_by_label(self):
+        for state in (RUNNING, HOLD_ONLY):
+            for holder, label in ((OTHER, "work"), (ANONYMOUS, "id-3")):
+                with self.subTest(state=state, holder=holder):
+                    self.assertEqual(
+                        plan(_manager(state, holder, RECORD), live=True),
+                        Refused(f"held by {label}"),
+                    )
+
+    def test_a_running_client_under_its_own_hold_is_attached(self):
+        self.assertEqual(plan(_manager(RUNNING, OWN, RECORD), live=True), Plan(Verb.ATTACH, "demo"))
+
+    def test_hold_only_resumes_its_record_under_the_hold_else_attaches(self):
+        self.assertEqual(
+            plan(_manager(HOLD_ONLY, OWN, RECORD), live=False), Plan(Verb.RESUME_HELD, "demo")
+        )
+        for record in (None, Unread("session.json: not JSON")):
+            with self.subTest(record=record):
+                self.assertEqual(
+                    plan(_manager(HOLD_ONLY, OWN, record), live=False), Plan(Verb.ATTACH, "demo")
+                )
+
+    def test_not_held_resumes_its_record_under_a_new_hold_else_opens(self):
+        self.assertEqual(
+            plan(_manager(NOT_HELD, None, RECORD), live=False), Plan(Verb.RESUME_NEW, "demo")
+        )
+        for record in (None, Unread("session.json: not JSON")):
+            with self.subTest(record=record):
+                self.assertEqual(
+                    plan(_manager(NOT_HELD, None, record), live=False), Plan(Verb.OPEN, "demo")
+                )
+
+    def test_a_live_client_without_a_holder_is_refused(self):
+        self.assertEqual(
+            plan(_manager(NOT_HELD, None, RECORD), live=True),
+            Refused(f"its client {LIVE} runs without a holder; exit it first"),
+        )
+
+
+class ResumeTargetTest(RosterCase):
+    def setUp(self):
+        super().setUp()
+        self.live()
+        self.cwd = os.path.join(self.home, "pro'ject \x15 $x")
+        os.mkdir(self.cwd)
+        self.enterContext(mock.patch("os.kill", side_effect=_kill))
+        self.run = self.enterContext(mock.patch("subprocess.run"))
+        self.answer('["kind-a", "--resume", "s-1"]')
+
+    def answer(self, stdout, returncode=0, stderr=""):
+        self.run.return_value = CompletedProcess((), returncode, stdout, stderr)
+
+    def write(self, **fields):
+        record = {"client": "kind-a", "sid": "s-1", "pid": DEAD, "cwd": self.cwd, **fields}
+        Path(self.directory, "session.json").write_text(json.dumps(record))
+
+    def refused(self, pattern):
+        with self.assertRaisesRegex(RosterError, pattern):
+            resume_target(self.directory)
+
+    def test_the_recorded_client_resumes_in_its_cwd(self):
+        self.write()
+        self.assertEqual(resume_target(self.directory), (self.cwd, ("kind-a", "--resume", "s-1")))
+        self.assertEqual(
+            self.run.call_args.args[0], ("ensemble-session", "resume-argv", "kind-a", "--", "s-1")
+        )
+        self.assertEqual(self.run.call_args.kwargs["stdin"], DEVNULL)
+
+    def test_no_or_an_unreadable_record_is_refused(self):
+        self.refused("no session record")
+        Path(self.directory, "session.json").write_text("{")
+        self.refused("session.json: not JSON")
+        self.run.assert_not_called()
+
+    def test_a_live_recorded_client_is_refused(self):
+        self.write(pid=LIVE)
+        self.refused(f"its client {LIVE} still runs")
+        self.run.assert_not_called()
+
+    def test_a_cwd_that_is_no_directory_is_refused_printably(self):
+        self.write(cwd="/absent/\x1b[2Jdir")
+        self.refused(r"recorded cwd '/absent/\\x1b\[2Jdir' is not a directory")
+        self.run.assert_not_called()
+
+    def test_a_failed_resume_argv_is_refused_with_its_reason(self):
+        self.write()
+        for answer, pattern in (
+            (("", 2, "ensemble-session: config: no client kind-a\n"), "no client kind-a"),
+            (("", 3, ""), "exit 3"),
+            (("not json", 0, ""), "want a JSON array"),
+            (('{"a": 1}', 0, ""), "want a JSON array"),
+            (('["kind-a", ""]', 0, ""), "want a JSON array"),
+            (("[]", 0, ""), "want a JSON array"),
+        ):
+            with self.subTest(answer=answer):
+                self.answer(*answer)
+                self.refused(f"cannot resume its kind-a session: .*{pattern}")
+        for error in (TimeoutExpired((), 30), OSError("no ensemble-session")):
+            with self.subTest(error=error):
+                self.run.side_effect = error
+                self.refused("cannot resume its kind-a session")

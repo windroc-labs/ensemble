@@ -68,7 +68,7 @@ class ClaudeClient(Client):
     def usage_probe(self):
         return self.common.probe()
 
-    def _usage_executable(self, *, container=False):
+    def _executable(self, *, container=False):
         return "claude"
 
     def _usage_probes(self):

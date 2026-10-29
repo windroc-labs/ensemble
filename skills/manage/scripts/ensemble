@@ -2,7 +2,9 @@
 # A tmux session for the manager. Its shell runs under
 # this plugin's bin/ensemble-crew hold, which keeps the manager's lease while the shell lives; start
 # the client there.
-# list prints every manager (ensemble-crew list), so no manager can be named list here.
+# list prints every manager (ensemble-crew list), so no manager can be named list here. On a
+# terminal it then opens the selected one: attach to its session, resume its recorded client under
+# its hold (typed into the hold's idle shell, or as a new hold's command), or ensemble <name>.
 # --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
 if [ "$1" = --install ]; then
   root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P) || exit
@@ -15,24 +17,80 @@ if [ "$1" = --install ]; then
   exit
 fi
 crew=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)/bin/ensemble-crew
-if [ "$1" = list ]; then
-  [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
-  shift
-  exec "$crew" list "$@"
-fi
-s=${1:?usage: ensemble <session-name> | ensemble list | ensemble --install}
-dir=$PWD
-tmux has -t "=$s" 2>/dev/null || {
-  [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
+# start NAME DIR COMMAND...: a detached session NAME in DIR running COMMAND.
+start() {
+  local s=$1 dir=$2
+  shift 2
   # Start from ~ so the tmux server never sits in a directory that later gets deleted.
   (cd ~ && tmux start-server \; set -g mouse on \; set -g history-limit 50000 \
     \; set -s extended-keys on \; set -s 'terminal-features[99]' 'xterm*:extkeys' \
-    \; new -d -s "$s" -c "$dir" "$crew" hold "--manager=$s" "--session=$s" \
-    -- "${SHELL:-/bin/sh}" -l)
+    \; new -d -s "$s" -c "${dir//\#/##}" "$@")
 }
-if [ -n "$TMUX" ]; then
-  exec tmux switch-client -t "=$s"
-elif [ "$TERM_PROGRAM" = iTerm.app ] || [ "$LC_TERMINAL" = iTerm2 ]; then # LC_TERMINAL survives ssh
-  exec tmux -CC attach -t "=$s"
+# hold_pane NAME: "ID COMMAND START" of the one pane in session NAME whose command is NAME's own
+# hold (tmux prints a tab in a format as _, so fields are space-separated).
+hold_pane() {
+  local panes
+  panes=$(tmux list-panes -s -t "=$1" -F '#{pane_id} #{pane_current_command} #{pane_start_command}' \
+    2>/dev/null | grep -F -- " hold --manager=$1 --session=$1 -- ") || return
+  [ "$(printf '%s\n' "$panes" | wc -l)" -eq 1 ] && printf '%s\n' "$panes"
+}
+attach() {
+  if [ -n "$TMUX" ]; then
+    exec tmux switch-client -t "=$1"
+  elif [ "$TERM_PROGRAM" = iTerm.app ] || [ "$LC_TERMINAL" = iTerm2 ]; then # LC_TERMINAL survives ssh
+    exec tmux -CC attach -t "=$1"
+  fi
+  exec tmux attach -t "=$1"
+}
+if [ "$1" = list ]; then
+  [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
+  shift
+  [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] || exec "$crew" list "$@"
+  # Ctrl-C at the prompt cancels: crew exits 0, and bash must not die of the SIGINT meanwhile.
+  trap : INT
+  plan=$("$crew" list --select) || exit
+  trap - INT
+  [ -n "$plan" ] || exit 0
+  read -r verb s <<<"$plan"
+  case $verb in
+  open) set -- "$s" ;;
+  resume-new)
+    held=("$crew" hold "--manager=$s" "--session=$s" -- /bin/sh -c '"$@"; exec "${SHELL:-/bin/sh}" -l'
+      ensemble "$crew" resume-commander)
+    if tmux has -t "=$s" 2>/dev/null; then
+      tmux new-window -d -t "=$s:" -c "${PWD//\#/##}" "${held[@]}"
+    else
+      start "$s" "$PWD" "${held[@]}"
+    fi
+    attach "$s"
+    ;;
+  attach | resume-held)
+    pane=$(hold_pane "$s") || {
+      echo "ensemble: manager $s is held by $s outside tmux session $s; nothing opened" >&2
+      exit 1
+    }
+    [ "$verb" = attach ] && attach "$s"
+    # A login shell may reset PATH, so the crew is typed by path; quoted for any shell, or not at all.
+    read -r id running _ <<<"$pane"
+    shell=${SHELL:-/bin/sh} resume="'$crew' resume-commander"
+    case $crew in *[\'\\]*) running="a shell that cannot take $crew" ;; esac
+    if [ "$running" = "${shell##*/}" ]; then
+      tmux send-keys -t "$id" C-u \; send-keys -t "$id" -l "$resume" \; send-keys -t "$id" Enter
+    else
+      echo "ensemble: $s's pane runs $(printf '%s' "$running" | tr -cd '[:print:]');" \
+        "resume there with: $resume" >&2
+    fi
+    attach "$s"
+    ;;
+  *)
+    echo "ensemble: unknown plan: $plan" >&2
+    exit 1
+    ;;
+  esac
 fi
-exec tmux attach -t "=$s"
+s=${1:?usage: ensemble <session-name> | ensemble list | ensemble --install}
+tmux has -t "=$s" 2>/dev/null || {
+  [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
+  start "$s" "$PWD" "$crew" hold "--manager=$s" "--session=$s" -- "${SHELL:-/bin/sh}" -l
+}
+attach "$s"
