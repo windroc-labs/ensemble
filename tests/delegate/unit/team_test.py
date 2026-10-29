@@ -82,19 +82,11 @@ class Acceptance(Packaged):
         )
         decompose = task_text("decompose")
         self.assertIn(
-            "run the scope check ([Engineer › Input processing](#input-processing)) until clean",
+            "**Scope check** ([Engineer › Input processing](#input-processing)) on the drafts",
             decompose,
         )
-        self.assertIn("rerun the scope check.", decompose)
-        self.assertEqual(decompose.count("fresh subagent"), 1)
-        self.assertIn("One round: fix, rerun the scope check", decompose)
-        self.assertIn("A requirement belongs to the engineer slice implementing it", decompose)
-        self.assertIn("needing another slice for its end-to-end check adds no edge", decompose)
-        self.assertIn("One verifier ticket runs the end-to-end and real-machine checks", decompose)
-        self.assertIn(
-            "a verifier ticket names requirement identifiers and links the PRD instead", decompose
-        )
-        self.assertNotIn("goes to the verifier ticket", decompose)
+        # write-back's DECOMPOSED pattern reads this summary
+        self.assertIn("`summary`: `Created <identifiers>; reused none`", decompose)
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
