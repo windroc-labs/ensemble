@@ -1,16 +1,5 @@
 # To Tickets Method
 
-Source: mattpocock-skills 1.3.1, `skills/engineering/to-tickets/SKILL.md`, https://github.com/mattpocock/skills/blob/v1.3.1/skills/engineering/to-tickets/SKILL.md .
-The copy below differs from upstream: board replaces the real-tracker example, keeping team text tracker-neutral; it drops “Quiz the user” and its approval loop, the `/setup-matt-pocock-skills` sentences, local-files publishing and its template, and the parent-issue ban (the token decides permissions); steps are renumbered. The calling task supplies its commands and fields.
-
----
-name: to-tickets
-description: Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the board.
-disable-model-invocation: true
----
-
-# To Tickets
-
 Break a plan, spec, or conversation into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
 ## Process
