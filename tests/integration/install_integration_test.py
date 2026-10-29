@@ -2602,12 +2602,20 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("1.19.3", (self.fakes / "opencode_version").read_text())
 
-    def opencode_only(self, provider_answer="y", *, provider="lan", path_answer="y", ref=""):
+    def opencode_only(
+        self, provider_answer="y", *, provider="lan", path_answer="y", ref="", launchers=True
+    ):
+        """A first OpenCode-only install; launchers=False when it stops before the launchers'
+        PATH lines."""
         flags = ("--ref", ref) if ref else ()
         flags += ("--clients", "opencode", "--no-docker", "--opencode-provider", provider)
         flags += ("--opencode-url", "http://localhost:8080/v1", "--opencode-model", "m")
         flags += ("--opencode-context", "65536", "--opencode-key-stdin")
         provider_answers = [(WRITE_Q, provider_answer)] if provider_answer is not None else []
+        path_answers = [
+            (WRITE_Q, "y"),
+            *([(WRITE_Q, path_answer)] if path_answer is not None else []),
+        ]
         return self.run_install(
             *flags,
             stdin=KEY + "\n",
@@ -2615,8 +2623,7 @@ class InstallTest(Case):
                 (SUDO_Q, PASSWORD),
                 *[(WRITE_Q, "y")] * 3,
                 *provider_answers,
-                (WRITE_Q, "y"),
-                *([(WRITE_Q, path_answer)] if path_answer is not None else []),
+                *(path_answers if launchers else []),
             ],
         )
 
@@ -2820,7 +2827,7 @@ class InstallTest(Case):
 
     def test_a_plugin_without_its_launcher_fails_the_install(self):
         (self.pkg_src / LAUNCHER).unlink()
-        result = self.opencode_only(path_answer=None)
+        result = self.opencode_only(launchers=False)
         self.assertEqual(result.code, 1, result.stderr)
         launcher = self.opencode_package() / LAUNCHER
         self.assertIn(
