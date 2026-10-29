@@ -306,6 +306,17 @@ class Repository(unittest.TestCase):
         with self.assertRaises(ValueError):
             scope.layer_map(self.root)
 
+    def test_an_upper_layer_config_change_keeps_the_root_tests_pinning_its_keys(self):
+        paths = [
+            "src/ensemble/orchestrator/config.toml",
+            "src/ensemble/orchestrator/engine/config.py",
+        ]
+        result = scope.classify(self.root, paths, "pull_request")
+        self.assertFalse(result["full"])
+        directories = ["tests/unit", ".github", "tests/orchestrator/unit", "tests/session/unit"]
+        with mock.patch.dict(os.environ, {"TEST_PROJECTS": json.dumps(result["projects"])}):
+            self.assertEqual(scope.selected(self.root, directories), directories[:3])
+
     def test_absent_or_empty_scope_keeps_directories(self):
         directories = ["tests/unit", ".github", "tests/manager/unit"]
         for value in (None, ""):
@@ -314,7 +325,7 @@ class Repository(unittest.TestCase):
                     os.environ["TEST_PROJECTS"] = value
                 self.assertEqual(scope.selected(self.root, directories), directories)
 
-    def test_partial_scope_filters_by_actual_owner_and_full_keeps_shared(self):
+    def test_partial_scope_filters_projects_by_actual_owner_and_keeps_root_tests(self):
         (self.root / "src/ensemble/manager").rename(self.root / "src/ensemble/renamed")
         self.contract(["ensemble.renamed", *MODULES[1:]])
         directories = [
@@ -323,10 +334,10 @@ class Repository(unittest.TestCase):
             "tests/renamed/unit",
             "tests/orchestrator/integration",
             "tests/delegate/unit",
-            "tests/renamed_other/unit",
+            "tests/utils/unit",
         ]
         with mock.patch.dict(os.environ, {"TEST_PROJECTS": '["renamed", "orchestrator"]'}):
-            self.assertEqual(scope.selected(self.root, directories), directories[2:4])
+            self.assertEqual(scope.selected(self.root, directories), directories[:4])
         with mock.patch.dict(os.environ, {"TEST_PROJECTS": json.dumps(["renamed", *PROJECTS[1:]])}):
             self.assertEqual(scope.selected(self.root, directories), directories)
 
@@ -481,7 +492,7 @@ class Aggregate(unittest.TestCase):
             "version": str(version).lower(),
             "broker": str(full).lower(),
         }
-        result["repository"]["result"] = "success" if full else "skipped"
+        result["repository"]["result"] = "skipped" if docs or version else "success"
         result["unit"]["result"] = "skipped" if docs or version else "success"
         coverage = event == "pull_request" and not (docs or version)
         result["coverage"]["result"] = "success" if coverage else "skipped"
@@ -522,7 +533,8 @@ class Aggregate(unittest.TestCase):
 
     def test_expected_skip_is_not_failure_or_cancel_and_unexpected_success_fails(self):
         for job, kwargs in (
-            ("repository", {"full": False}),
+            ("repository", {"full": False, "docs": True}),
+            ("repository", {"full": False, "version": True}),
             ("broker", {"full": False}),
             ("broker", {"full": False, "docs": True}),
             ("broker", {"full": False, "version": True}),
@@ -678,6 +690,12 @@ class Workflow(unittest.TestCase):
         for name in jobs - {"changes", "mini-op", "ci"}:
             with self.subTest(job=name):
                 self.assertRegex(job(name), r"(?m)^    needs: \[(.*, )?changes(, .*)?\]$")
+
+    def test_root_tests_run_in_every_code_scope(self):
+        condition = "if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}"
+        for name in ("repository", "unit", "integration"):
+            with self.subTest(job=name):
+                self.assertIn(f"    {condition}\n", job(name))
 
     def test_docs_keep_skill_checks_without_allocating_broker_runners(self):
         self.assertIn("    if: ${{ needs.changes.outputs.broker == 'true' }}", job("broker"))

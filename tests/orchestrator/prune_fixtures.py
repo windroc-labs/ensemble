@@ -312,6 +312,7 @@ class PruneScenario(Case):
         self.sessions = {}
         self.closed_runs = set()
         self.unknown = False
+        self.team = TEAM_OBJ
         linear = config.LinearSettings(
             team=TEAM,
             states=dict(IDS_BY_KEY),
@@ -423,8 +424,8 @@ class PruneScenario(Case):
         return (code, "\n".join(show(e) for e in logged(self.logs)[before:] + copies))
 
     def board(self, transport):
-        """Wiring.board's Linear tracker, from the fixtures' team and roles."""
-        return linear_tracker.LinearTracker.of_team(transport, self.cfg.linear, TEAM_OBJ, ROLES)
+        """Wiring.board's Linear tracker, from self.team and the fixtures' roles."""
+        return linear_tracker.LinearTracker.of_team(transport, self.cfg.linear, self.team, ROLES)
 
     def mkg(self, ident, owner="o", name="n"):
         path = checkout_path(self.cfg.issue_workdir(ident), owner, name, ident)

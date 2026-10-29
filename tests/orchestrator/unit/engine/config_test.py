@@ -166,7 +166,9 @@ class CatalogDelegate(FakeDelegate):
 HARNESS = LinearApp("harness", AppKind.HARNESS, "linear.harness", **HARNESS_APP)
 
 LINEAR_DEFAULTS = {
-    **dict.fromkeys(("team", "assignee_id", "task_label_group", "agent_label_group"), ""),
+    **dict.fromkeys(
+        ("team", "assignee_id", "task_label_group", "agent_label_group", "keep_label"), ""
+    ),
     "harness": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "manager": {**dict.fromkeys(config.AppKey, ""), "renewal": "transport"},
     "states": dict.fromkeys(State, ""),
@@ -811,6 +813,23 @@ class ConfigurationLoading(ConfigFile, Case):
                 )
                 with self.assertRaises(TypeError):
                     cfg.linear.agent_labels["new"] = LABEL1
+
+    def test_keep_label(self):
+        for top, want in (
+            ("", ""),
+            ('linear.keep_label = ""\n', ""),
+            (f'linear.keep_label = "{LABEL1}"\n', LABEL1),
+            ('linear.keep_label = "Keep"\n', "Keep"),
+        ):
+            with self.subTest(want=want):
+                self.assertEqual(self.load(top + PIPELINE).linear.keep_label, want)
+        for value, shown in (("5", "5"), ("false", "False"), ('" "', "' '"), ("[]", "[]")):
+            with self.subTest(value=value):
+                self.fails(
+                    "orchestrator/config.toml: linear.keep_label must be a Linear label id or "
+                    f"exact name, or empty: {shown}",
+                    f"linear.keep_label = {value}\n" + PIPELINE,
+                )
 
     def test_agent_labels_rejected(self):
         top = f'linear.agent_label_group = "{AGENT_GROUP}"\n'

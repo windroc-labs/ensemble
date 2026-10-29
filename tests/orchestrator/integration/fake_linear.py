@@ -724,10 +724,10 @@ class FakeLinear:
                     return False
                 continue
             if field == "labels":
-                if list(cond) != ["some"] or list(cond["some"]) != ["id"]:
+                if list(cond) != ["some"] or list(cond["some"]) not in (["id"], ["name"]):
                     raise Problem(f"fake: no label filter {cond}")
-                some = cond["some"]["id"].items()
-                if not any(all(COMPARATORS[c](i, a) for c, a in some) for i in rec["labels"]):
+                ((key, some),) = cond["some"].items()
+                if not any(self._label_is(i, key, some) for i in rec["labels"]):
                     return False
                 continue
             if field not in values:
@@ -807,6 +807,19 @@ class FakeLinear:
 
     def _teams(self, caller, v):
         return {"teams": {"nodes": [self._team()] if v.get("t") == TEAM else []}}
+
+    def _label_is(self, lid, key, cond):
+        return all(COMPARATORS[c](self.labels[lid][key], a) for c, a in cond.items())
+
+    def _team_keep(self, caller, v):
+        """Every fake label is the workspace's."""
+        ((key, cond),) = v["l"].items()
+        labels = [{"id": i, "team": None} for i in self.labels if self._label_is(i, key, cond)]
+        return {
+            **self._teams(caller, v),
+            "issueLabels": {"nodes": labels},
+            **self._list(caller, v["k"], ops.KEPT),
+        }
 
     def _label_group(self, caller, v):
         if v["i"] not in self.labels:
@@ -1036,6 +1049,7 @@ OPS = {
     "linear.M_SUBSCRIBE": FakeLinear._subscribe,
     "linear.Q_ISSUE_STATE": FakeLinear._issue,
     "linear.Q_TEAM": FakeLinear._teams,
+    "linear.Q_TEAM_KEEP": FakeLinear._team_keep,
     "linear.Q_TASK_GROUP": FakeLinear._label_group,
     "router.Q_RELATIONS": FakeLinear._issue,
     "router.Q_RECHECK": FakeLinear._issue,

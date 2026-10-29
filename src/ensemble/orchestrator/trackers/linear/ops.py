@@ -3,10 +3,11 @@
 import hashlib
 import subprocess
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TypeGuard
 
 from ensemble.orchestrator.engine.types import (
+    UUID_RE,
     FinishedType,
     LinearError,
     State,
@@ -21,6 +22,8 @@ class Team:
     name: str
     states: dict[str, str]
     finished: frozenset[str]
+    # identifiers of its issues carrying linear.keep_label, or why they are unknown
+    kept: frozenset[str] | LinearError = frozenset()
 
 
 M_COMMENT = "mutation($i: String!, $b: String!) { commentCreate(input: { issueId: $i, body: $b }) { success } }"
@@ -148,6 +151,13 @@ def role_ids(roles):
 TEAMS = """teams(filter: { id: { eq: $t } }) { nodes { id name
   states(first: 100) { nodes { id type } } } }"""
 Q_TEAM = "query($t: ID) { " + TEAMS + " }"
+KEPT = 250  # one page of the issues carrying linear.keep_label
+Q_TEAM_KEEP = (
+    "query($t: ID, $l: IssueLabelFilter, $k: IssueFilter) { "
+    + TEAMS
+    + " issueLabels(filter: $l, first: 50) { nodes { id team { id } } }"
+    + f" issues(filter: $k, first: {KEPT}) {{ nodes {{ identifier }} pageInfo {{ hasNextPage }} }} }}"
+)
 
 
 def team(gql, linear):
@@ -155,8 +165,28 @@ def team(gql, linear):
 
 
 def team_and_roles(gql, linear):
-    """Read the team as the harness; role ids come solely from configuration."""
-    return team(gql, linear), role_ids(linear.roles)
+    """Read the team, with the issues carrying linear.keep_label when set, as the harness; role
+    ids come solely from configuration. A keep_label error is kept for prune alone to raise."""
+    keep = linear.keep_label
+    if not keep:
+        return team(gql, linear), role_ids(linear.roles)
+    match = {"id" if UUID_RE.fullmatch(keep) else "name": {"eq": keep}}
+    flt = {"team": {"id": {"eq": linear.team}}, "labels": {"some": match}}
+    data = gql(Q_TEAM_KEEP, t=linear.team, l=match, k=flt)
+    found, issues = _team(data["teams"]["nodes"], linear), data["issues"]
+    if not any(n["team"] in (None, {"id": found.id}) for n in data["issueLabels"]["nodes"]):
+        kept = LinearError(
+            f"orchestrator/config.toml: linear.keep_label {keep!r} is no label of team "
+            f"{found.name!r} or the workspace"
+        )
+    elif issues["pageInfo"]["hasNextPage"]:
+        kept = LinearError(
+            f"orchestrator/config.toml: linear.keep_label {keep!r}: over {KEPT} issues carry it, "
+            "more than prune reads: remove it from some"
+        )
+    else:
+        kept = frozenset(n["identifier"] for n in issues["nodes"])
+    return replace(found, kept=kept), role_ids(linear.roles)
 
 
 def _team(nodes, linear):

@@ -61,6 +61,7 @@ LINEAR_KEYS = {
     "agent_labels",
     "roles",
     "project_repos",
+    "keep_label",
 }
 ROLE_KEYS = {"max_runs", "credentials", "tasks"}
 
@@ -314,6 +315,7 @@ def _linear_settings(linear):
         ),
         task_label_group=linear["task_label_group"],
         agent_label_group=linear["agent_label_group"],
+        keep_label=linear["keep_label"],
         roles=MappingProxyType(
             {
                 name: LinearApp(name, AppKind.ROLE, f"linear.roles.{name}", **p)
@@ -419,6 +421,7 @@ def _linear(cfg, local):
     _project_repos(linear)
     _task_labels(linear)
     _agent_labels(linear)
+    _keep_label(linear)
 
 
 def _app_table(linear, name):
@@ -623,6 +626,14 @@ def _task_labels(linear):
                 f"orchestrator/config.toml: linear.task_labels.{seen[v]} and linear.task_labels.{k} have the same label id {v}"
             )
         seen[v] = k
+
+
+def _keep_label(linear):
+    keep = linear.setdefault("keep_label", "")
+    if not isinstance(keep, str) or keep != keep.strip() or not keep.isprintable():
+        raise ConfigError(
+            f"orchestrator/config.toml: linear.keep_label must be a Linear label id or exact name, or empty: {keep!r}"
+        )
 
 
 def _task_tiers(cfg):

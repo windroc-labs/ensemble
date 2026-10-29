@@ -108,18 +108,22 @@ linear = "role"
 #                     issue to; "" → none
 #   task_label_group  local, required: Linear id of the `Tasks` label group; its labels pick an issue's task through
 #                     [linear.task_labels]
+#   keep_label        local: a Linear label id or exact name; prune skips the issues carrying it
+#                     (ensemble-orchestrator prune --help); "" → none
 [linear]
 team = ""
 human_members = []
 assignee_id = ""
 task_label_group = ""
 agent_label_group = ""
+keep_label = ""
 # local: [orchestrator.linear]
 # local: team = "00000000-0000-0000-0000-000000000000"
 # local: human_members = ["you@example.com"]
 # local: assignee_id = "00000000-0000-0000-0000-000000000000"
 # local: task_label_group = "00000000-0000-0000-0000-000000000000"
 # local: agent_label_group = "00000000-0000-4000-8000-000000000101"
+# local: keep_label = "Keep"
 
 # The harness's Linear OAuth app (router, promote, prune, a run's reads and session comments): its calls send a
 # client_credentials token, which every command renews when under 5 days are left; scopes are fixed (read,write).
