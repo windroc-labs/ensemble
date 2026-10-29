@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 
+from tests.manager import session_records
 from tests.manager.case import PY, REPO, Case, child_env
 
 MANAGER = {"ENSEMBLE_MANAGER": "mgr", "ENSEMBLE_HOLDER_ID": "holder-1"}
@@ -90,6 +91,25 @@ class RearmHookTest(Case):
             with self.subTest(label):
                 done = self.run_hook(MANAGER, _start("resume"), prefix)
                 self.assertEqual((done.returncode, done.stdout, done.stderr), (0, b"", b""))
+
+    def test_each_hook_command_writes_its_record(self):
+        roster = Path(self.ensemble, "managers", "mgr")
+        roster.mkdir(parents=True)
+        for client, manual in (("claude", False), ("codex", True)):
+            call = session_records.CALLS[client]
+            with self.subTest(client):
+                done = self.run_hook(MANAGER, json.dumps(call.stdin).encode(), manual=manual)
+                self.assertEqual((done.returncode, done.stderr), (0, b""))
+                context = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
+                self.assertIn("`startup` in manager `mgr`", context)
+                # sh -c's $PPID: this process, as the client is the hook shell's parent.
+                expected = {**session_records.VALID[client], "pid": os.getpid()}
+                self.assertEqual(json.loads((roster / "session.json").read_text()), expected)
+        cleared = {**session_records.CALLS["claude"].stdin, "source": "clear", "session_id": "s2"}
+        done = self.run_hook(MANAGER, json.dumps(cleared).encode())
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        self.assertEqual(json.loads((roster / "session.json").read_text())["sid"], "s2")
+        self.assertEqual(os.listdir(roster), ["session.json"])
 
     def test_broken_pipe(self):
         read, write = os.pipe()

@@ -7,10 +7,14 @@ import io
 import json
 import os
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import jsonschema
+
 from ensemble.manager import rearm
+from tests.manager import session_records
 from tests.manager.case import REPO, Case
 
 MANAGER = {
@@ -68,7 +72,15 @@ def _start(source: object) -> bytes:
 
 class MainTest(Case):
     def test_invalid_arguments_print_nothing(self):
-        for argv in (("--mode", "unknown"), ("--mode",), ("extra",)):
+        for argv in (
+            ("--mode", "unknown"),
+            ("--mode",),
+            ("extra",),
+            ("--client",),
+            ("--client", "claude", "--client", "codex"),
+            ("--mode", "manual", "--mode", "manual"),
+            ("--other", "x"),
+        ):
             with self.subTest(argv):
                 self.assertEqual(_run(MANAGER, _start("startup"), argv=argv), (0, "", ""))
 
@@ -202,6 +214,99 @@ class MainTest(Case):
             code, out, err = _run(MANAGER, _start("compact"))
         self.assertEqual((code, err), (0, ""))
         self.assertIn("compact", json.loads(out)["hookSpecificOutput"]["additionalContext"])
+
+
+def _bare(argv: tuple[str, ...]) -> tuple[str, ...]:
+    """argv without the record options."""
+    pairs = zip(argv[::2], argv[1::2], strict=True)
+    return tuple(
+        word
+        for pair in pairs
+        if pair[0] != "--client" and pair[0] != "--client-pid"
+        for word in pair
+    )
+
+
+class RecordTest(Case):
+    """The session record: ~/.ensemble/managers/mgr/session.json under the case's HOME."""
+
+    def run_call(self, call, environ=None, **stdin) -> tuple[int, str, str]:
+        event = json.dumps({**call.stdin, **stdin}).encode()
+        return _run(environ or {**MANAGER, "HOME": self.home}, event, argv=call.argv)
+
+    def directory(self) -> Path:
+        directory = Path(self.ensemble, "managers", "mgr")
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def prompt_only(self, call) -> tuple[int, str, str]:
+        event = json.dumps(call.stdin).encode()
+        return _run({**MANAGER, "HOME": self.home}, event, argv=_bare(call.argv))
+
+    def saved(self) -> dict:
+        return json.loads(Path(self.directory(), "session.json").read_text(encoding="utf-8"))
+
+    def test_each_client_call_writes_its_record(self):
+        with open(session_records.SCHEMA, encoding="utf-8") as f:
+            validator = jsonschema.Draft202012Validator(json.load(f))
+        for client, call in session_records.CALLS.items():
+            with self.subTest(client):
+                directory = self.directory()
+                Path(directory, "session.json").unlink(missing_ok=True)
+                code, out, err = self.run_call(call)
+                self.assertEqual((code, out, err), self.prompt_only(call))
+                self.assertTrue(out)
+                self.assertEqual(self.saved(), call.record)
+                validator.validate(self.saved())
+                self.assertEqual(os.listdir(directory), ["session.json"])
+
+    def test_clear_replaces_the_record(self):
+        call = session_records.CALLS["claude"]
+        self.directory()
+        self.run_call(call)
+        self.assertEqual(self.saved(), session_records.VALID["claude"])
+        new = "0f6c1d8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+        code, out, _ = self.run_call(call, source="clear", session_id=new)
+        self.assertEqual(code, 0)
+        self.assertIn("`clear`", out)
+        self.assertEqual(self.saved(), {**session_records.VALID["claude"], "sid": new})
+        self.assertEqual(os.listdir(self.directory()), ["session.json"])
+
+    def test_rejected_calls_write_nothing_and_keep_the_prompt(self):
+        directory = self.directory()
+        for case, call in session_records.REJECTED.items():
+            with self.subTest(case):
+                result = self.run_call(call)
+                self.assertEqual(result, self.prompt_only(call))
+                self.assertTrue(result[1])
+                self.assertEqual(os.listdir(directory), [])
+
+    def test_failed_write_keeps_output_and_leaves_no_temp(self):
+        call = session_records.CALLS["codex"]
+        expected = self.prompt_only(call)
+        self.assertEqual(self.run_call(call), expected)
+        self.assertEqual(os.listdir(self.ensemble), [])
+        directory = self.directory()
+        Path(directory, "session.json").write_text("old\n", encoding="utf-8")
+        with mock.patch("os.replace", side_effect=PermissionError(13, "denied")):
+            self.assertEqual(self.run_call(call), expected)
+        self.assertEqual(os.listdir(directory), ["session.json"])
+        self.assertEqual(Path(directory, "session.json").read_text(encoding="utf-8"), "old\n")
+
+    def test_no_record_outside_a_prompted_manager_event(self):
+        directory = self.directory()
+        call = session_records.CALLS["claude"]
+        for label, environ in {
+            "no manager": {"HOME": self.home},
+            "hold not an ancestor": {**MANAGER, "ENSEMBLE_HOLDER_PID": "777", "HOME": self.home},
+            "agent session": {**MANAGER, "ENSEMBLE_AGENT_SESSION": "1", "HOME": self.home},
+        }.items():
+            with self.subTest(label):
+                self.assertEqual(self.run_call(call, environ), (0, "", ""))
+        for source in ("fork", None, ["startup"]):
+            with self.subTest(source=source):
+                self.assertEqual(self.run_call(call, source=source), (0, "", ""))
+        self.assertEqual(os.listdir(directory), [])
 
 
 class AncestorsTest(Case):
@@ -360,7 +465,8 @@ class HooksJsonTest(Case):
         self.assertEqual(command["type"], "command")
         self.assertEqual(
             command["command"],
-            'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual',
+            'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual'
+            ' --client codex --client-pid "$PPID"',
         )
         self.assertEqual(command["timeout"], 5)
 
@@ -372,9 +478,13 @@ class HooksJsonTest(Case):
         self.assertEqual(set(entry["matcher"].split("|")), rearm.SOURCES)
         (command,) = entry["hooks"]
         self.assertEqual(command["type"], "command")
-        script = re.fullmatch(r'python3 -I "\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)"', command["command"])
+        script = re.fullmatch(
+            r'python3 -I "\$\{CLAUDE_PLUGIN_ROOT\}/([^"]+)" --client claude --client-pid "\$PPID"',
+            command["command"],
+        )
         assert script is not None, command["command"]
         self.assertEqual(os.path.join(REPO, script[1]), os.path.abspath(rearm.__file__))
+        self.assertEqual(command["timeout"], 5)
         with open(os.path.join(REPO, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["hooks"], "./hooks/hooks.json")
 

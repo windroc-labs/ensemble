@@ -1,13 +1,16 @@
 // Plays steps through .opencode-plugin/ensemble.js as OpenCode 1.19.3 calls a plugin: argv[2] the
 // plugin's path, stdin a JSON list of steps; prints a JSON list of one result per step. The client's
-// session.get answers from the saved sessions a `saved` step adds.
+// session.get answers from the saved sessions a `saved` step adds; the plugin's directory is the cwd.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const steps = JSON.parse(readFileSync(0, "utf8"));
 const saved = {};
 const client = { session: { get: async ({ path }) => ({ data: saved[path.id] ?? { id: path.id } }) } };
-const hooks = await (await import(pathToFileURL(process.argv[2]).href)).EnsembleCommander({ client });
+const hooks = await (await import(pathToFileURL(process.argv[2]).href)).EnsembleCommander({
+  client,
+  directory: process.cwd(),
+});
 const results = [];
 for (const step of steps) {
   if (step.saved) {

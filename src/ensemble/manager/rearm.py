@@ -1,23 +1,29 @@
-"""The plugin's SessionStart command hook (hooks/hooks.json): in a manager session under
-`ensemble-crew hold`, prints the event-monitor re-arm prompt as additionalContext for the
-startup, resume, compact and clear sources; anything else prints nothing. Always exits 0.
+"""SessionStart hook: in a manager session under `ensemble-crew hold`, for the
+startup, resume, compact and clear sources, prints the re-arm prompt as
+additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
+replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
+that). Anything else prints nothing. Always exits 0.
 A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
-ENSEMBLE_HOLDER_PID, the hold's pid, among this process's ancestors. The variables alone leak (a
-tmux server started under a hold gives them to every later window); the process tree does not.
-Standalone: the standard library only, run by path.
+ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
+later tmux windows. Standalone: the standard library only.
 `--mode manual` replaces the monitoring tail with turn-based reads and a notifying-tool fallback.
 """
 
+import contextlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping
 
 SOURCES = frozenset({"startup", "resume", "compact", "clear"})
 MANAGER_NAME = re.compile(r"[A-Za-z0-9_-]+")  # ensemble-crew's own rule (cli.py _roster)
-HOLDER_PID = re.compile(r"[1-9][0-9]*")
+PID = re.compile(r"[1-9][0-9]*")
+CLIENT = re.compile(r"[a-z][a-z0-9-]*")
+OPTIONS = frozenset({"--mode", "--client", "--client-pid"})
+MANAGERS = "~/.ensemble/managers"
 PS = ("ps", "-A", "-o", "pid=", "-o", "ppid=")  # one -o each: text after = is a header
 
 PROMPT = """\
@@ -98,7 +104,7 @@ def manager(environ: Mapping[str, str]) -> str | None:
     hold = environ.get("ENSEMBLE_HOLDER_PID", "")
     if not MANAGER_NAME.fullmatch(name) or not environ.get("ENSEMBLE_HOLDER_ID"):
         return None
-    if "ENSEMBLE_AGENT_SESSION" in environ or not HOLDER_PID.fullmatch(hold):
+    if "ENSEMBLE_AGENT_SESSION" in environ or not PID.fullmatch(hold):
         return None
     return name if int(hold) in ancestors(os.getpid()) else None
 
@@ -107,8 +113,42 @@ def prompt(name: str, source: str, *, manual: bool = False) -> str:
     return PROMPT.format(name=name, source=source, monitoring=MANUAL if manual else AUTOMATIC)
 
 
+def options(argv: tuple[str, ...]) -> dict[str, str] | None:
+    keys = argv[::2]
+    if len(argv) % 2 or len(set(keys)) != len(keys) or not OPTIONS.issuperset(keys):
+        return None
+    found = dict(zip(keys, argv[1::2], strict=True))
+    return found if found.get("--mode", "manual") == "manual" else None
+
+
+def record(found: Mapping[str, str], event: Mapping[str, object]) -> dict[str, object] | None:
+    client, pid = found.get("--client", ""), found.get("--client-pid", "")
+    sid, cwd = event.get("session_id"), event.get("cwd")
+    if not (CLIENT.fullmatch(client) and PID.fullmatch(pid)):
+        return None
+    if not (isinstance(sid, str) and sid and isinstance(cwd, str) and cwd.startswith("/")):
+        return None
+    return {"client": client, "sid": sid, "pid": int(pid), "cwd": cwd}
+
+
+def save(name: str, entry: Mapping[str, object]) -> None:
+    directory = os.path.join(os.path.expanduser(MANAGERS), name)
+    try:
+        fd, temp = tempfile.mkstemp(dir=directory, prefix=".session.", suffix=".tmp")
+    except OSError:
+        return
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+        os.replace(temp, os.path.join(directory, "session.json"))
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(temp)
+
+
 def main(argv: tuple[str, ...] = ()) -> int:
-    if argv not in ((), ("--mode", "manual")):
+    found = options(argv)
+    if found is None:
         return 0
     name = manager(os.environ)
     if name is None:
@@ -122,9 +162,11 @@ def main(argv: tuple[str, ...] = ()) -> int:
         source = event.get("source") if isinstance(event, dict) else None
         if not isinstance(source, str) or source not in SOURCES:
             return 0
+        if (entry := record(found, event)) is not None:
+            save(name, entry)
         context = {
             "hookEventName": "SessionStart",
-            "additionalContext": prompt(name, source, manual=bool(argv)),
+            "additionalContext": prompt(name, source, manual="--mode" in found),
         }
         data = (json.dumps({"hookSpecificOutput": context}) + "\n").encode()
         while data:

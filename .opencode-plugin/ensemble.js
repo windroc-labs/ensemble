@@ -1,8 +1,9 @@
 // ensemble's OpenCode plugin: each skill of package.json's
 // `skills` as the command /ensemble:<skill>, this plugin's bin/ on the shell's PATH, and a commander's
 // SessionStart re-arm prompt (src/ensemble/manager/rearm.py --mode manual) in the system prompt
-// of a root session's turn after a start, resume or compaction. A session ensemble starts
-// (ENSEMBLE_AGENT_SESSION) gets none of it. State lives here, not per plugin call: OpenCode calls a
+// of a root session's turn after a start, resume or compaction, that call also recording the root
+// session as the manager's (its id, OpenCode's pid, the instance's directory). A session ensemble
+// starts (ENSEMBLE_AGENT_SESSION) gets none of it. State lives here, not per plugin call: OpenCode calls a
 // plugin again whenever it rebuilds its instance.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -73,12 +74,13 @@ function commands() {
 }
 
 // rearm.py's additionalContext for a SessionStart of `source`; null when it prints none.
-function rearm(source) {
+function rearm(source, session, directory) {
   return new Promise((resolve) => {
     let child;
     let out = "";
     try {
-      child = spawn("python3", ["-I", REARM, "--mode", "manual"], { stdio: ["pipe", "pipe", "ignore"] });
+      const argv = ["-I", REARM, "--mode", "manual", "--client", "opencode", "--client-pid", String(process.pid)];
+      child = spawn("python3", argv, { stdio: ["pipe", "pipe", "ignore"] });
     } catch {
       resolve(null);
       return;
@@ -99,21 +101,22 @@ function rearm(source) {
       }
     });
     child.stdin.on("error", () => {});
-    child.stdin.end(JSON.stringify({ hook_event_name: "SessionStart", source }));
+    const event = { hook_event_name: "SessionStart", source, session_id: session, cwd: directory };
+    child.stdin.end(JSON.stringify(event));
   });
 }
 
-function arm(session, source) {
-  pending.set(session, rearm(source));
+function arm(session, source, directory) {
+  pending.set(session, rearm(source, session, directory));
   reached.delete(session);
 }
 
-function handle(event) {
+function handle(event, directory) {
   const p = event?.properties ?? {};
   if (event?.type === "session.created" && p.info?.id) {
     (p.info.parentID ? children : created).add(p.info.id);
   } else if (event?.type === "session.compacted" && p.sessionID && !children.has(p.sessionID)) {
-    arm(p.sessionID, "compact");
+    arm(p.sessionID, "compact", directory);
   } else if (event?.type === "session.idle" && reached.has(p.sessionID)) {
     pending.delete(p.sessionID);
     reached.delete(p.sessionID);
@@ -129,7 +132,7 @@ async function parent(session) {
   }
 }
 
-async function system(session, output) {
+async function system(session, output, directory) {
   if (!session || children.has(session)) return;
   if (!seen.has(session)) {
     seen.add(session);
@@ -138,7 +141,7 @@ async function system(session, output) {
       pending.delete(session);
       return;
     }
-    if (!pending.has(session)) arm(session, created.has(session) ? "startup" : "resume");
+    if (!pending.has(session)) arm(session, created.has(session) ? "startup" : "resume", directory);
   }
   const text = await pending.get(session);
   if (!pending.has(session)) return;
@@ -149,6 +152,7 @@ async function system(session, output) {
 export const EnsembleCommander = async (input) => {
   if (process.env.ENSEMBLE_AGENT_SESSION !== undefined) return {};
   client = input?.client ?? client;
+  const directory = input?.directory; // per instance: OpenCode builds one per project directory
   const found = commands();
   return {
     config: async (config) => {
@@ -158,7 +162,8 @@ export const EnsembleCommander = async (input) => {
       const rest = output.env.PATH ?? process.env.PATH;
       output.env.PATH = rest ? `${path.join(ROOT, "bin")}${path.delimiter}${rest}` : path.join(ROOT, "bin");
     },
-    event: async ({ event }) => handle(event),
-    "experimental.chat.system.transform": async (input, output) => system(input?.sessionID, output),
+    event: async ({ event }) => handle(event, directory),
+    "experimental.chat.system.transform": async (input, output) =>
+      system(input?.sessionID, output, directory),
   };
 };
