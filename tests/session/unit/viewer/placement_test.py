@@ -54,7 +54,7 @@ class PaneAnchorTest(PaneFixture):
                 )
                 self.assertEqual(
                     placed(fake).anchor(split_from),
-                    types.TmuxAnchor(pane, SOCK, "own" if split_from is None else "b"),
+                    types.TmuxAnchor(pane, SOCK),
                 )
         for env, split_from, message in (
             ({}, None, "no anchor pane: not in tmux"),
@@ -73,11 +73,8 @@ class PaneAnchorTest(PaneFixture):
         shown = self.clients((5, "/dev/ttys004", "%9"))
         live, dead = ("0", "/dev/ttys004", "%5"), ("1", "/dev/ttys004", "%6")
         for rows, want in (
-            ([live, dead], types.TmuxAnchor("%5", SOCK, "b")),
-            (
-                [dead],
-                types.TmuxAnchor("%9", SOCK, "b"),
-            ),
+            ([live, dead], types.TmuxAnchor("%5", SOCK)),
+            ([dead], types.TmuxAnchor("%9", SOCK)),
         ):
             with self.subTest(rows=rows), environ():
                 fake = FakeTmux(
@@ -315,12 +312,11 @@ class ShownOnceTest(PaneFixture):
         )
 
     def test_a_session_its_opener_already_shows_gets_no_second_pane(self):
-        for fake, check in ((self.fake("%5", live="%2\n%5\n"), LIVE),):
-            with self.subTest(check=check):
-                for _ in range(3):
-                    self.assertIsNone(self.open(fake, INSIDE))
-                    self.assertEqual(self.stderr.getvalue(), "")
-                self.assertEqual(fake.calls, [OWN, SESSIONS, check] * 3)
+        fake = self.fake("%5", live="%2\n%5\n")
+        for _ in range(3):
+            self.assertIsNone(self.open(fake, INSIDE))
+            self.assertEqual(self.stderr.getvalue(), "")
+        self.assertEqual(fake.calls, [OWN, SESSIONS, LIVE] * 3)
 
     def test_a_pane_opens_once_none_shows_the_session_or_for_another_opener(self):
         own = self.clients((5, "/dev/ttys004", "%9"))
@@ -733,21 +729,12 @@ class StackTest(Case):
         for opener in (
             "",
             "a b",
-            "w0t0p0:",
-            ":ABC",
-            "a:b:c",
             "a;b",
-            "w0t0p0:A_B",
             "=a",
             "%3",
             "a\n",
-            "a:b\n",
             "a:",
             ":b",
-            "a_b:c",
-            "a:b_c",
-            "a;",
-            "%1",
         ):
             with self.subTest(opener=opener):
                 fake = self.fake()

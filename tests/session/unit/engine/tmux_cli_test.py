@@ -436,7 +436,7 @@ class ListingTest(Case):
         got, fake = self.listing(
             listed(
                 ("w2", "0", "sid-2", "fake", "done", "%7", "mgr"),
-                ("w1", "1", "sid-1", "other", "dead", "ABC-1", "w0t0p0:ABC-1"),
+                ("w1", "1", "sid-1", "other", "dead"),
                 ("mgr", "0"),
             ),
             tabbed(
@@ -500,17 +500,12 @@ class ListingTest(Case):
             ("state", "", None),
             ("state", "do\x08ne", None),
             ("pane", "%3", "%3"),
-            ("pane", "ABC-12", None),
             ("pane", "", None),
             ("pane", "%", None),
             ("pane", "%3;", None),
-            ("pane", "w0t0p0:ABC", None),
             ("opener", "mgr", "mgr"),
-            ("opener", "w0t0p0:ABC-1", None),
             ("opener", "cmd", "cmd"),
             ("opener", "a_b-1", "a_b-1"),
-            ("opener", "w0t0p0:ABC", None),
-            ("opener", "w0t1p0:6D7E-8F", None),
             ("opener", "", None),
             ("opener", "a b", None),
             ("opener", "x:", None),

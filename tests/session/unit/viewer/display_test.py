@@ -49,11 +49,6 @@ MARKED = "display {!r}: its hidden part comes only from none"
 
 
 class FoldTest(Case):
-    def test_opener_accepts_only_tmux_session_names(self):
-        for opener in ("w0t0p0:ABC-1", "a:b"):
-            with self.subTest(opener=opener), self.assertRaises(ConfigError):
-                fold(opener, None, None)
-
     def test_fold_and_unfold_round_trip(self):
         for parts, display in FOLDS:
             with self.subTest(parts=parts):
@@ -81,10 +76,6 @@ class FoldTest(Case):
             (
                 ("x y", None, None),
                 "opener must be a tmux session name, got 'x y'",
-            ),
-            (
-                ("w0t0p0:a/b", None, None),
-                "opener must be a tmux session name, got 'w0t0p0:a/b'",
             ),
             ((None, "left", None), "split must be right or below, got 'left'"),
             ((None, None, "a b"), "split_from must match [A-Za-z0-9_-]+, got 'a b'"),

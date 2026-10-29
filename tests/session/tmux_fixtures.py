@@ -22,8 +22,6 @@ from ensemble.session.viewer import placement, types
 from tests.session.case import Case
 from tests.utils.process_fixtures import DEVNULL
 
-CLIENT = re.compile(r"claude|codex", re.I)
-
 FORMAT = "#{pane_dead} #{pane_dead_status} #{pane_dead_signal}"
 
 CLIENTS = "#{client_activity} #{client_tty} #{pane_id} #{client_control_mode} #{socket_path}"
@@ -33,8 +31,6 @@ TMUX_KW = {"capture_output": True, "text": True, "stdin": DEVNULL}
 SH_KW = {"stdin": DEVNULL, "timeout": 30}
 
 TMUX = '/opt/a"b\\c/bin/tmux'  # the script text must never carry it
-
-ATTACH = "tui: session s: tmux attach -t '=s'\n"
 
 WATCH = "; watch it with tmux attach -t '=s'"
 
@@ -47,8 +43,6 @@ ABSENT = (
 
 FAILED = ("error connecting to /tmp/tmux-501/default (Permission denied)", "boom", "")
 
-SIGNALS = [int(signal.SIGHUP), int(signal.SIGTERM), int(signal.SIGINT)]
-
 DIED = "set-option @state dead"
 
 DIED_EVENTS = (
@@ -58,17 +52,6 @@ DIED_EVENTS = (
 NEW_PROCESS = "4242 $3 %7 4343"
 
 NEW = ["-P", "-F", "#{pid} #{session_id} #{pane_id} #{pane_pid}"]
-
-EXITED = (
-    'run-shell \'echo "$(date +%H:%M:%S)" #{q:session_name} exited'
-    " #{?pane_dead_signal,-#{?#{m:*[!0-9]*,#{pane_dead_signal}},$(kill -l #{q:pane_dead_signal}),"
-    "#{pane_dead_signal}},#{pane_dead_status}} >> #{q:@events}'"
-)
-EXITED_HOOK = (
-    'run-shell \'echo "$(date +%H:%M:%S)" ##{q:session_name} exited'
-    " ##{?pane_dead_signal,-##{?##{m:*[!0-9]*,##{pane_dead_signal}},$(kill -l ##{q:pane_dead_signal}),"
-    "##{pane_dead_signal}},##{pane_dead_status}} >> ##{q:@events}' ; kill-pane -t #{pane_id}"
-)
 
 INSIDE = {"TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%3"}
 
@@ -366,8 +349,6 @@ class FakeTmux:
         return [c[1] if c[0] == "tmux" else c[0] for c in self.calls]
 
 
-MARK_KW = {**TMUX_KW, "timeout": 5}
-
 VIEWLESS = ["-f", "#{==:#{@view},}"]
 
 LISTING = [
@@ -430,11 +411,6 @@ def expected_row(name, **fields):
         "last_lines": None,
         **fields,
     }
-
-
-def seq(*results):
-    it = iter(results)
-    return lambda _argv: next(it)
 
 
 def slot(pane, *children):

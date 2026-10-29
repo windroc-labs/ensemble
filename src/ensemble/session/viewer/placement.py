@@ -402,7 +402,7 @@ class Placement:
         _, tty, pane, control, socket = clients[0]
         pane = os.environ["TMUX_PANE"] if own else pane
         if control == "1":
-            return TmuxAnchor(pane, socket, session)
+            return TmuxAnchor(pane, socket)
         hosts = {
             f[1]: f[2]
             for f in (
@@ -412,8 +412,8 @@ class Placement:
             if len(f) == 3 and f[0] != "1"
         }
         if PANE.fullmatch(hosts.get(tty, "")):
-            return TmuxAnchor(hosts[tty], socket, session)
-        return TmuxAnchor(pane, socket, session)
+            return TmuxAnchor(hosts[tty], socket)
+        return TmuxAnchor(pane, socket)
 
     def _clients(self, session: str) -> list[list[str]]:
         out = self.tmux.checked(["list-clients", "-t", f"={session}", "-F", CLIENTS]).stdout

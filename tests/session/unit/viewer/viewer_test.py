@@ -255,7 +255,6 @@ class HideTest(Base):
             ("%8", "@3", False),
             (None, "@2", False),
             ("%8", None, False),
-            ("w0t0p0:ABC", "@2", False),
         ):
             with self.subTest(pane=pane, window=window):
                 hidden.write("w1", SID, hidden=False, live=None)
@@ -336,14 +335,11 @@ class HideTest(Base):
         )
 
     def test_hide_forgets_the_tmux_pane_and_window_it_recorded(self):
-        for pane, forgotten in (("%9", True), ("w0t0p0:ABC", False)):
-            with self.subTest(pane=pane):
-                self.runner.calls.clear()
-                found = self.placed(pane=pane, window="@2", sid=SID)
-                self.viewer.hide("w1", self.host)
-                self.assertEqual(found["pane"], None if forgotten else pane)
-                self.assertEqual("if-shell" in [c[1] for c in self.runner.calls], forgotten)
-                self.assertTrue(hidden.read("w1", SID))
+        found = self.placed(pane="%9", window="@2", sid=SID)
+        self.viewer.hide("w1", self.host)
+        self.assertIsNone(found["pane"])
+        self.assertIsNone(found["window"])
+        self.assertTrue(hidden.read("w1", SID))
 
     def test_hide_if_closed_refuses_an_absent_session(self):
         self.tmux.status.return_value = None

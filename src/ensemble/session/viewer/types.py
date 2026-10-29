@@ -20,7 +20,6 @@ class Retile(StrEnum):
 class TmuxAnchor(NamedTuple):
     pane: str
     socket: str
-    session: str | None = None
 
 
 class Cell(NamedTuple):
