@@ -14,6 +14,8 @@ from ensemble.manager.engine import managers
 from ensemble.manager.engine.holder import Holder
 from ensemble.manager.engine.types import (
     Lease,
+    Manager,
+    Refused,
     SessionRecord,
     StaleHolder,
     StartBusy,
@@ -143,15 +145,13 @@ def _row(*fields: str) -> str:
     return "\t".join(printable(field).replace("\t", " ") for field in fields)
 
 
-def _list(_args) -> int:
-    found = managers.managers(os.path.expanduser(managers.ROOT))
-    if not found:
-        print("no managers yet; start one: ensemble <name>")
-        return 0
+def _rows(found: list[Manager | Unreadable], out, *, numbered: bool) -> bool:
+    """Print each manager's rows to out; whether any could not be read."""
     failed = False
-    for manager in found:
+    for number, manager in enumerate(found, 1):
+        prefix = f"{number}) " if numbered else ""
         if isinstance(manager, Unreadable):
-            print(_row(manager.name, "-", "-", "-", "error", manager.error))
+            print(prefix + _row(manager.name, "-", "-", "-", "error", manager.error), file=out)
             failed = True
             continue
         record = manager.record
@@ -161,15 +161,66 @@ def _list(_args) -> int:
         if errors:
             fields += ["error", "; ".join(errors)]
             failed = True
-        print(_row(*fields))
+        print(prefix + _row(*fields), file=out)
         if isinstance(manager.entries, Unread):
             continue
         for name, entry in sorted(manager.entries.items()):
             kind = "-" if entry.record is None else entry.record.kind
-            print("  " + _row(name, kind, entry.state))
+            print("  " + _row(name, kind, entry.state), file=out)
         if not manager.entries:
-            print("  -")
-    return 1 if failed else 0
+            print("  -", file=out)
+    return failed
+
+
+def _choose(found: list[Manager | Unreadable]) -> Manager | Unreadable | None:
+    names = [manager.name for manager in found]
+    while True:
+        print(f"select a manager [1-{len(found)}], Enter cancels: ", end="", file=sys.stderr)
+        sys.stderr.flush()
+        try:
+            answer = sys.stdin.readline().strip()
+        except KeyboardInterrupt:
+            print(file=sys.stderr)
+            return None
+        if not answer:
+            return None
+        if answer.isdecimal() and 1 <= int(answer) <= len(found):
+            return found[int(answer) - 1]
+        if answer in names:
+            return found[names.index(answer)]
+        print(
+            f"crew: no manager {printable(answer)}; give 1-{len(found)} or a name", file=sys.stderr
+        )
+
+
+def _select(manager: Manager | Unreadable) -> int:
+    record = manager.record if isinstance(manager, Manager) else None
+    if isinstance(record, Unread):
+        print(
+            f"crew: manager {manager.name}: {record.error}; its session is not resumed",
+            file=sys.stderr,
+        )
+    live = isinstance(record, SessionRecord) and managers.alive(record.pid)
+    plan = managers.plan(manager, live=live)
+    if isinstance(plan, Refused):
+        print(
+            f"crew: manager {manager.name}: {printable(plan.reason)}; nothing opened",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{plan.verb} {plan.name}")
+    return 0
+
+
+def _list(args) -> int:
+    out = sys.stderr if args.select else sys.stdout
+    found = managers.managers(os.path.expanduser(managers.ROOT))
+    if not found:
+        print("no managers yet; start one: ensemble <name>", file=out)
+        return 0
+    failed = _rows(found, out, numbered=args.select)
+    chosen = _choose(found) if args.select else None
+    return _select(chosen) if chosen is not None else 1 if failed else 0
 
 
 def _hold(args) -> int:
@@ -868,11 +919,21 @@ not-held), client and cwd from its session record (- without one). Under it,
 one indented row per entry: name, kind, roster state; - for none.
 Exit 1 when a manager's roster, session record or locks cannot be read: its row
 ends with error and the reason; the others still print.
+--select (ensemble list adds it on a terminal): the rows go to stderr, numbered,
+then a prompt reads a number or name from stdin; an empty line or EOF cancels.
+stdout gets the selection's plan, VERB NAME, VERB one of attach, resume-held,
+resume-new or open; a manager it must not open prints why and exits 1.
 
 Examples:
   ensemble-crew list
+  ensemble-crew list --select
 """,
         manager=False,
+    )
+    listing.add_argument(
+        "--select",
+        action="store_true",
+        help="list on stderr, prompt on stdin, print the selection's plan: VERB NAME",
     )
     listing.set_defaults(func=_list)
     page(

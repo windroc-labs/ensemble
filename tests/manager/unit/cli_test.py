@@ -1456,7 +1456,7 @@ def _record(kind: str, name: str) -> Record:
     )
 
 
-class ListTest(CliCase):
+class ListCase(CliCase):
     def setUp(self):
         super().setUp()
         self.root = os.path.join(self.ensemble, "managers")
@@ -1476,6 +1476,8 @@ class ListTest(CliCase):
         record = {"client": "kind-a", "sid": "s-1", "pid": 4101, "cwd": "/home/user/project"}
         Path(self.root, name, "session.json").write_text(json.dumps({**record, **fields}))
 
+
+class ListTest(ListCase):
     def test_managers_without_records_print_dashes_sorted(self):
         for name in ("updraft-manager", "ensemble-manager", "agent-usage-manager"):
             self.manager(name)
@@ -1585,6 +1587,106 @@ class ListTest(CliCase):
         self.assertEqual(
             self.invoke("list"),
             (0, "demo\tnot-held\tkind-a\t/a bcd\n  s1\t-\tstarting\n", ""),
+        )
+
+
+def _dead(pid, _signal):
+    raise ProcessLookupError(pid)
+
+
+class SelectTest(ListCase):
+    PROMPT = "select a manager [1-{}], Enter cancels: "
+
+    def select(self, answers, *, kill=_dead):
+        with (
+            mock.patch("sys.stdin", io.StringIO(answers)),
+            mock.patch("os.kill", side_effect=kill),
+        ):
+            return self.invoke("list", "--select")
+
+    def test_rows_are_numbered_on_stderr_and_a_number_selects(self):
+        self.manager("alpha", ("w1", "worker", State.LIVE))
+        self.manager("demo")
+        self.assertEqual(
+            self.select("2\n"),
+            (
+                0,
+                "open demo\n",
+                "1) alpha\tnot-held\t-\t-\n  w1\tworker\tlive\n2) demo\tnot-held\t-\t-\n  -\n"
+                + self.PROMPT.format(2),
+            ),
+        )
+
+    def test_a_listed_name_selects(self):
+        self.manager("alpha")
+        self.manager("demo")
+        self.assertEqual(self.select("demo\n")[:2], (0, "open demo\n"))
+
+    def test_an_empty_line_eof_or_interrupt_cancels(self):
+        self.manager("demo")
+        for answers in ("\n", "", "  \n"):
+            with self.subTest(answers=answers):
+                self.assertEqual(self.select(answers)[:2], (0, ""))
+        with mock.patch("sys.stdin", mock.Mock(readline=mock.Mock(side_effect=KeyboardInterrupt))):
+            self.assertEqual(self.invoke("list", "--select")[:2], (0, ""))
+
+    def test_an_unknown_answer_prompts_again(self):
+        self.manager("demo")
+        result, stdout, stderr = self.select("9\nno\x1bpe\n1\n")
+        self.assertEqual((result, stdout), (0, "open demo\n"))
+        self.assertIn("crew: no manager 9; give 1-1 or a name\n", stderr)
+        self.assertIn("crew: no manager nope; give 1-1 or a name\n", stderr)
+        self.assertEqual(stderr.count(self.PROMPT.format(1)), 3)
+
+    def test_cancel_after_a_listing_error_exits_1(self):
+        Path(self.manager("broken").path).write_text("{")
+        self.assertEqual(self.select("\n")[:2], (1, ""))
+
+    def test_no_managers_prints_the_usage_without_a_prompt(self):
+        self.assertEqual(
+            self.select("1\n"), (0, "", "no managers yet; start one: ensemble <name>\n")
+        )
+
+    def test_each_holder_state_and_record_gives_its_plan(self):
+        roster = self.manager("demo")
+        self.assertEqual(self.select("1\n")[1], "open demo\n")
+        self.session("demo")
+        self.assertEqual(self.select("1\n")[1], "resume-new demo\n")
+        with roster.hold("demo"):
+            self.assertEqual(self.select("1\n")[1], "resume-held demo\n")
+            self.assertEqual(self.select("1\n", kill=None)[1], "attach demo\n")
+
+    def test_refusals_open_nothing_and_exit_1(self):
+        roster = self.manager("demo")
+        self.session("demo")
+        refused = "crew: manager demo: {}; nothing opened\n"
+        result, stdout, stderr = self.select("1\n", kill=None)
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(
+            stderr.endswith(refused.format("its client 4101 runs without a holder; exit it first"))
+        )
+        with roster.hold("work"):
+            result, stdout, stderr = self.select("1\n")
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(stderr.endswith(refused.format("held by work")))
+        lock = os.path.join(self.root, "demo", "roster.lock")
+        os.unlink(lock)
+        os.mkdir(lock)
+        result, stdout, stderr = self.select("1\n")
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(stderr.endswith(refused.format(f"{lock}: not a regular file")))
+
+    def test_an_unreadable_record_warns_and_opens_without_resuming(self):
+        self.manager("demo")
+        Path(self.root, "demo", "session.json").write_text("[]")
+        path = os.path.join(self.root, "demo", "session.json")
+        result, stdout, stderr = self.select("1\n")
+        self.assertEqual((result, stdout), (0, "open demo\n"))
+        self.assertTrue(
+            stderr.endswith(
+                f"crew: manager demo: {path}: want exactly client, sid, pid and cwd;"
+                " its session is not resumed\n"
+            )
         )
 
 
