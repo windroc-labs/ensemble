@@ -103,6 +103,7 @@ claude
 ```
 
 할 일과 원하는 결과물을 설명하세요. 커맨더는 Crew를 통해 워커와 역할 실행을 조율합니다.
+나중에 `work`로 돌아오려면 터미널에서 `ensemble list`를 실행하고 고르세요. 그 세션과 대화로 돌아갑니다.
 보드 작업에서는 `/ensemble:board`가 이슈를 조작합니다. 단계 선택 방법은
 [워크플로 사용자 지정](../customizing-roles-and-tasks.md#on-the-board)에서 설명합니다.
 

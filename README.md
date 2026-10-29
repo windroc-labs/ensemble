@@ -104,6 +104,7 @@ Use `codex` or `opencode` instead of `claude` if that is your client. In that co
 ```
 
 Describe the work and desired deliverable. The commander coordinates workers and role runs through Crew.
+To come back to `work` later, run `ensemble list` in a terminal and pick it: you return to its session and conversation.
 For board work, `/ensemble:board` operates issues; [workflow customization](docs/customizing-roles-and-tasks.md#on-the-board)
 explains how to choose stages.
 

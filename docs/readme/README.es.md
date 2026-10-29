@@ -104,6 +104,7 @@ Usa `codex` u `opencode` en lugar de `claude` si ese es tu cliente. En esa conve
 ```
 
 Describe el trabajo y el entregable deseado. El comandante coordina los trabajadores y las ejecuciones de roles mediante Crew.
+Para volver a `work` más tarde, ejecuta `ensemble list` en una terminal y elígelo: vuelves a su sesión y su conversación.
 Para trabajar con un tablero, `/ensemble:board` opera sobre las incidencias; la [personalización del flujo de trabajo](../customizing-roles-and-tasks.md#on-the-board)
 explica cómo elegir las etapas.
 

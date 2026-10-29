@@ -20,7 +20,7 @@ class Manage(Case):
         for name in cited:
             self.assertIn(name, sections("manage"))
 
-    def test_stale_holder_recovery_restarts_under_hold_without_polling(self):
+    def test_stale_holder_recovery_resumes_with_ensemble_list_without_polling(self):
         lease_free = "env -u ENSEMBLE_HOLDER_ID -u ENSEMBLE_HOLDER_GENERATION"
         [item] = [
             line
@@ -33,14 +33,15 @@ class Manage(Case):
             "ack --through",
             f"`{lease_free}`",
             "those `attach` prints",
-            "`ensemble-crew hold --manager <manager> --session <manager> -- claude --continue`",
-            "`codex resume --last`",
+            "exit this client and run `ensemble list`",
             "never run `hold --force` yourself",
             "Manual",
             "polling loop",
         ):
             self.assertIn(phrase, item)
+        self.assertNotIn("--manager <manager>", item)
         self.assertIn("[Recover](#recover)", section("manage", "Start"))
+        self.assertIn("`ensemble list`", section("manage", "Start"))
         events = section("manage", "Events")
         self.assertIn("Unacknowledged events replay at every recovery", events)
         self.assertIn("`stale holder generation`", events)

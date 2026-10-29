@@ -14,9 +14,10 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 
 ## ensemble list
 
-`ensemble list` prints every manager in `~/.ensemble/managers/`, with its holder state, client, cwd and entries. A manager
-named `list` can no longer be opened with `ensemble list`: attach to its session with `tmux attach -t =list`, or start it
-under another name.
+`ensemble list` prints every manager in `~/.ensemble/managers/`, with its holder state, client, cwd and entries. On a
+terminal it then asks which manager to open, and attaches to its session or resumes its recorded conversation under its
+hold. A manager named `list` can no longer be opened with `ensemble list`: attach to its session with
+`tmux attach -t =list`, or start it under another name.
 
 ## ctmux is now ensemble
 
