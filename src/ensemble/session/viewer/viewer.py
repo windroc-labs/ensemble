@@ -52,9 +52,7 @@ def fold(opener, split, split_from, *, hidden=False) -> Display:
 
 
 def unfold(display) -> Parts | None:
-    """FORMAT's one decoder, re-validating a display read back: (opener, split, split_from,
-    hidden), an empty part None; NO_DISPLAY no opener, hidden; None when display is not in FORMAT.
-    """
+    """Decodes and validates FORMAT; empty parts become None, NO_DISPLAY becomes hidden."""
     if display is None:
         return None, None, None, False
     if display == NO_DISPLAY:
@@ -154,7 +152,7 @@ class Viewer:
     def _viewed(
         self, name: str, host: Host, display: Display
     ) -> tuple[SessionView | CommandView, Display]:
-        """show's steps before placement, SHOW_TRIES times while Unanswered, as under load."""
+        """Retries preparation on Unanswered."""
         for _ in range(SHOW_TRIES - 1):
             with contextlib.suppress(Unanswered):
                 return self._prepared(name, host, display)

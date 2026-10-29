@@ -60,7 +60,17 @@ class Tui(TmuxFlow):
             target=None,
             task=None,
         )
-        res = self.script(ENTRY, "tui", ID, SID, "pm", "claude", display, "Do it.\n")
+        res = self.script(
+            ENTRY,
+            "tui",
+            ID,
+            SID,
+            "pm",
+            "claude",
+            display,
+            "Do it.\n",
+            **self.server.inside(MANAGER),
+        )
         self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
         self.wait_end(SID, ID, role="pm")
         self.assertTrue(self.live(TUI))

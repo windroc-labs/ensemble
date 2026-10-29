@@ -503,21 +503,14 @@ class ShowTest(Live):
             [stream.next() for _ in range(2)],
             [TurnStarted(), TurnEnd("Hi.", 0)],
         )
-        for where, env, why in (
-            ("outside tmux", {}, "not in tmux"),
-            (
-                "in a pane no terminal shows",
-                self.server.inside(MANAGER),
-                f"no terminal shows tmux session {MANAGER}",
-            ),
+        with self.assertNoLogs("session", "WARNING"):
+            self.assertEqual(self.show("w1"), attach_command("w1"))
+        with (
+            mock.patch.dict(os.environ, self.server.inside(MANAGER)),
+            self.assertLogs("session", "WARNING") as logs,
         ):
-            with (
-                self.subTest(where),
-                mock.patch.dict(os.environ, env),
-                self.assertLogs("session", "WARNING") as logs,
-            ):
-                self.assertEqual(self.show("w1"), attach_command("w1"))
-            self.assertIn(why, logs.output[0])
+            self.assertEqual(self.show("w1"), attach_command("w1"))
+        self.assertIn(f"no terminal shows tmux session {MANAGER}", logs.output[0])
         self.assertEqual((self.panes(), self.server.pane_of("w1")), (1, ""))
         self.session_cls.retire("w1")
         self.assertEqual(stream.until_exited(), [Exited(-signal.SIGHUP)])

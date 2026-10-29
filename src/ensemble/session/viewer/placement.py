@@ -76,12 +76,7 @@ class Placement:
         per_column: int | None = None,
         retile: str | None = None,
     ) -> str | None:
-        """Opens a pane on the session, recording @opener and @pane; none while a pane that opener
-        opened still shows it (_open). Grid mode (_grid): splits the pane _grid picks and tiles the
-        window per retile and per_column, ignoring split and split_from. Else below the newest open
-        @pane of the opener's other sessions, else right of the opener's pane; or beside
-        split_from's pane on side split. None or the failure.
-        """
+        """Reuses a shown pane, else splits in its grid, stack or explicit anchor; returns failure."""
         _layout(split, split_from, opener)
         validate_per_column(per_column)
         validate_retile(retile)
@@ -162,10 +157,7 @@ class Placement:
     def _grid(
         self, opener: str, sessions: list[list[str]], *, own: bool | None
     ) -> tuple[str, str, TmuxAnchor, str] | None:
-        """(grid window, manager, pane to split, side) when the opener is in a grid or a root a
-        client shows; None when no grid is found. It splits the largest worker pane below, else
-        the manager right.
-        """
+        """Grid window, manager, anchor and side; None when no grid is found."""
         row = next((f for f in sessions if f[1] == opener), None)
         if row is None:
             return None
@@ -234,7 +226,6 @@ class Placement:
     def _split(
         self, session: str, side: str, a: TmuxAnchor, tmux: str
     ) -> tuple[str | None, str | None]:
-        """(new pane, None) or (None, tmux's failure)."""
         command = [
             "/usr/bin/env",
             "-u",
@@ -282,10 +273,8 @@ class Placement:
                 return
 
     def watch(self, session: str) -> None:
-        """@window, the window of the tmux pane show opened (@pane), and session's hooks: that
-        pane's client detaching runs `hide --if-closed`; any client arriving forgets that pane once
-        gone (a detach runs no hook, and frees its tty); a failure is only printed.
-        """
+        """Tracks @window and hooks: detach hides a closed view; arrivals forget a gone pane,
+        whose tty may be reused. Failures are printed."""
         command, problem = hook_command()
         target = f"={session}:"
         try:
@@ -333,10 +322,7 @@ class Placement:
         return pane if pane not in panes and window in windows else None
 
     def forget(self, session: str, pane: str | None = None) -> bool:
-        """Unsets @pane and @window while @pane is still the tmux pane `pane` (default: the one
-        recorded), in one tmux command, so a late hook finds nothing to judge closed; whether @pane
-        is now unset.
-        """
+        """Atomically unsets @pane and @window only if pane still matches; returns whether unset."""
         pane = self.tmux.option(session, "@pane") if pane is None else pane
         if not PANE.fullmatch(pane or ""):
             return False
