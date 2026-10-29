@@ -200,7 +200,7 @@ def _read_usage(
     if cwd is None:
         return None
     env = child_env(launch, cwd)
-    if executable := client._usage_executable(container=container):
+    if executable := client._executable(container=container):
         program = os.path.join(cwd, executable) if os.path.dirname(executable) else executable
         if shutil.which(program, path=env.get("PATH", os.defpath)) is None:
             raise ConfigError(

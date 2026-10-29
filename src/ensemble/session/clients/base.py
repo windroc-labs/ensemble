@@ -58,7 +58,7 @@ class Client:
     def usage_probe(self) -> Launch | None:
         return None
 
-    def _usage_executable(self, *, container: bool = False) -> str:
+    def _executable(self, *, container: bool = False) -> str:
         return ""
 
     def _provider_probe(self) -> ProviderProbe | None:
