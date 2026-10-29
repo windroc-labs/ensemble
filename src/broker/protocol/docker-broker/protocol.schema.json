@@ -449,7 +449,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "35"
+          "const": "36"
         }
       },
       "required": [

@@ -19,6 +19,11 @@ The command that opens a manager's tmux session is now `ensemble <name>`. After 
 Neither removes the old launcher, which no longer runs: delete it with `rm ~/.ensemble/bin/ctmux`. Sessions it
 opened keep running; `ensemble <name>` attaches to them.
 
+## Broker protocol 36: unused broker commands removed
+
+Protocol 36 removes `ensemble-broker lock-query`, which nothing called, and the `refresh` and `notices` stubs left by
+protocol 29; each now fails as an unknown command. Upgrade the broker with the plugin: `scripts/install.sh --docker`.
+
 ## Broker protocol 35: explicit GitHub credentials
 
 Close running Docker workers before upgrading, then run `scripts/install.sh --docker`. Protocol 35 removes the
