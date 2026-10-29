@@ -5,11 +5,14 @@ ensemble-crew hold.
 
 import json
 import os
+import select
+import shlex
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+from ensemble.manager import Roster
 from tests.manager import session_records
 from tests.manager.case import PY, REPO, Case, child_env
 
@@ -237,3 +240,144 @@ class HoldTreeTest(Case):
                         (sibling.returncode, sibling.stdout, sibling.stderr), (0, b"", b"")
                     )
         self.assertIsNone(process.poll())
+
+
+class SharedCodexTest(Case):
+    def line(self, process):
+        assert process.stdout is not None
+        self.assertTrue(select.select([process.stdout], [], [], 15)[0], "client response timed out")
+        line = process.stdout.readline()
+        self.assertTrue(line, "client exited before its response")
+        return line
+
+    def close(self, process):
+        if process.stdin is not None:
+            process.stdin.close()
+            process.stdin = None
+        if process.poll() is None:
+            process.terminate()
+        process.communicate(timeout=10)
+
+    def start(self, name, env):
+        process = subprocess.Popen(
+            (*PY, "-m", "ensemble.manager.cli", "hold", "--manager", name, "--", "/bin/sh"),
+            env=env,
+            cwd=self.home,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        self.addCleanup(self.close, process)
+        roster = Roster(str(Path(self.ensemble, "managers", name)))
+        deadline = time.monotonic() + 10
+        while roster.snapshot()[0] is None:
+            self.assertIsNone(process.poll())
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        return process
+
+    def send(self, process, line):
+        assert process.stdin is not None
+        process.stdin.write((line + "\n").encode())
+        process.stdin.flush()
+
+    def saved(self, name):
+        return json.loads(Path(self.ensemble, "managers", name, "session.json").read_text())
+
+    def test_two_holds_and_resume_share_the_same_detached_daemon(self):
+        fake = os.path.join(REPO, "tests", "manager", "shared_codex.py")
+        binary = Path(self.home, "bin")
+        binary.mkdir()
+        launchers = Path(self.home, "launchers")
+        launchers.mkdir()
+        entry = launchers / "codex"
+        script = os.path.join(REPO, "skills", "manage", "scripts", "codex")
+        entry.write_text(f'#!/bin/sh\nexec {shlex.quote(script)} --ensemble-launcher "$0" "$@"\n')
+        entry.chmod(0o755)
+        native = binary / "codex"
+        native.write_text(
+            f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -I {shlex.quote(fake)} "$@"\n'
+        )
+        native.chmod(0o755)
+        path = str(Path(self.home, "daemon.sock"))
+        env = {
+            **child_env(),
+            "PLUGIN_ROOT": REPO,
+            "FAKE_DAEMON_SOCKET": path,
+            "PATH": os.pathsep.join(
+                (
+                    str(launchers),
+                    os.path.join(REPO, "bin"),
+                    str(binary),
+                    os.path.dirname(sys.executable),
+                    os.defpath,
+                )
+            ),
+        }
+        env.pop("ENSEMBLE_AGENT_SESSION", None)
+        first, second = self.start("first", env), self.start("second", env)
+        roster = json.loads(Path(self.ensemble, "managers", "first", "roster.json").read_text())
+        daemon_env = {
+            **env,
+            "ENSEMBLE_MANAGER": "first",
+            "ENSEMBLE_HOLDER_PID": str(first.pid),
+            "ENSEMBLE_HOLDER_ID": roster["holder"]["id"],
+            "ENSEMBLE_HOLDER_GENERATION": str(roster["lease_gen"]),
+        }
+        daemon = subprocess.Popen(
+            (sys.executable, "-I", fake, "--fake-daemon", path),
+            env=daemon_env,
+            cwd=self.home,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.addCleanup(self.close, daemon)
+        self.assertEqual(self.line(daemon), b"ready\n")
+        clients = []
+        for name, process in (("first", first), ("second", second)):
+            self.send(process, "codex")
+            client = json.loads(self.line(process))
+            clients.append(client)
+            self.assertEqual(self.saved(name), {"client": "codex", **client, "cwd": self.home})
+            self.send(process, "turn")
+            answer = json.loads(self.line(process))
+            context = answer["hook"]["hookSpecificOutput"]["additionalContext"]
+            self.assertIn(f"`startup` in manager `{name}`", context)
+            self.assertEqual(answer["daemon"], daemon.pid)
+            self.assertEqual(answer["shell_env"]["ENSEMBLE_MANAGER"], name)
+        self.assertNotEqual(clients[0]["sid"], clients[1]["sid"])
+        self.send(first, "clear")
+        cleared = json.loads(self.line(first))
+        self.assertNotEqual(cleared["sid"], clients[0]["sid"])
+        self.assertEqual(self.saved("first")["sid"], cleared["sid"])
+        self.assertEqual(self.saved("second")["sid"], clients[1]["sid"])
+        self.send(first, "quit")
+        deadline = time.monotonic() + 10
+        while True:
+            listing = subprocess.run(
+                (os.path.join(REPO, "bin", "ensemble-crew"), "list"),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            if "first\thold-only" in listing.stdout:
+                break
+            self.assertLess(time.monotonic(), deadline, listing.stdout)
+            time.sleep(0.01)
+        self.assertIsNone(daemon.poll())
+        self.send(
+            first, shlex.quote(os.path.join(REPO, "bin", "ensemble-crew")) + " resume-commander"
+        )
+        resumed = json.loads(self.line(first))
+        self.assertEqual(resumed["sid"], cleared["sid"])
+        self.assertNotEqual(resumed["pid"], cleared["pid"])
+        self.assertEqual(self.saved("first")["pid"], resumed["pid"])
+        self.send(first, "turn")
+        answer = json.loads(self.line(first))
+        self.assertEqual(answer["daemon"], daemon.pid)
+        self.assertIn(
+            "`resume` in manager `first`", answer["hook"]["hookSpecificOutput"]["additionalContext"]
+        )

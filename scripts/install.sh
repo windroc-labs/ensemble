@@ -1957,7 +1957,7 @@ launchers_install() {
   step "launchers"
   [ -x "$launcher" ] || die "no executable $launcher in the installed plugin"
   [ "$(cat "$HOME/.ensemble/plugin-root" 2>/dev/null)" = "$(command_selection)" ] || missing=1
-  for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+  for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex; do
     [ -x "$HOME/.ensemble/bin/$name" ] && cmp -s "$launcher" "$HOME/.ensemble/bin/$name" || missing=1
   done
   if [ -n "$missing" ]; then
@@ -1971,14 +1971,14 @@ launchers_install() {
       fi
     fi
     if [ -d "$HOME/.ensemble/bin" ]; then
-      for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+      for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex; do
         record_file "$HOME/.ensemble/bin/$name"
       done
     else
       record_dir "$HOME/.ensemble/bin"
       mkdir -p "$HOME/.ensemble/bin"
     fi
-    for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+    for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex; do
       install -m 755 "$launcher" "$HOME/.ensemble/bin/$name"
     done
     command_selection > "$state_dir/plugin-root.tmp"

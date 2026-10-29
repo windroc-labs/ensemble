@@ -69,6 +69,7 @@ STANDALONE = frozenset(
     for path in (
         "harness/guard.py",
         "clients/codex/common/app_server.py",
+        "clients/codex/manager.py",
         "clients/opencode/launcher.py",
         "clients/opencode/probe.py",
         "clients/opencode/transcript.py",

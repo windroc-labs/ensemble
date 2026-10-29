@@ -14,7 +14,7 @@ from unittest import mock
 
 import jsonschema
 
-from ensemble.manager import rearm
+from ensemble.manager import Roster, rearm
 from tests.manager import session_records
 from tests.manager.case import REPO, Case
 
@@ -324,123 +324,6 @@ class RecordTest(Case):
         self.assertEqual(os.listdir(directory), [])
 
 
-DAEMON = b"/home/u/.codex/packages/app-server-daemon/releases/0.165.0/bin/codex app-server"
-TUI = b"/usr/lib/node_modules/@openai/codex/vendor/bin/codex"
-
-# pid → (its parent, its command line): a hook (100) under sh (90) under a Codex daemon (60).
-TREE = {
-    100: (90, b"python3 -I rearm.py"),
-    90: (60, b"/bin/sh -c python3 -I rearm.py"),
-    60: (70, DAEMON + b" --managed-daemon"),
-    61: (60, DAEMON + b" daemon pid-update-loop"),
-    70: (69, TUI),
-    69: (4242, b"node /usr/local/bin/codex"),
-    4242: (1, b"python3 ensemble-crew hold --manager=mgr -- zsh -l"),
-    80: (1, DAEMON + b" --listen unix://"),
-    81: (91, b"codex app-server"),
-    82: (82, b"codex app-server"),
-    83: (69, TUI + b" exec app-server"),
-}
-
-
-class CodexDaemonTest(Case):
-    """Codex runs SessionStart hooks from its app-server daemon, a child of the TUI that started
-    it: the hook's $PPID is the daemon, and `--hook-daemon app-server` records the TUI instead.
-    """
-
-    def run_with(self, opened, client: str, pid: int) -> tuple[tuple[int, str, str], dict | None]:
-        """rearm.py's call for client with --client-pid pid, over TREE read by `ps` (opened
-        None) or by /proc through the given open fake; its result and the record it wrote.
-        """
-        call = session_records.CALLS[client]
-        argv = _with_pid(call.argv, pid)
-        directory = Path(self.ensemble, "managers", "mgr")
-        directory.mkdir(parents=True, exist_ok=True)
-        Path(directory, "session.json").unlink(missing_ok=True)
-        environ, event = {**MANAGER, "HOME": self.home}, json.dumps(call.stdin).encode()
-        if opened is None:
-            rows = b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items())
-            result = _run(environ, event, argv=argv, ps=_ps(rows))
-        else:
-            result = _run(
-                environ, event, argv=argv, ps=mock.Mock(side_effect=AssertionError), opened=opened
-            )
-        path = Path(directory, "session.json")
-        return result, json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-
-    def each_table(self):
-        for label, opened in (("ps", None), ("proc", self.proc)):
-            with self.subTest(label):
-                yield opened
-
-    def proc(self, path, mode="r"):
-        self.assertEqual(mode, "rb")
-        match = re.fullmatch(r"/proc/(\d+)/(stat|cmdline)", path)
-        assert match is not None, path
-        if int(match[1]) not in TREE:
-            raise FileNotFoundError(path)
-        ppid, args = TREE[int(match[1])]
-        if match[2] == "stat":
-            return io.BytesIO(b"%s (x) S %d 1 1" % (match[1].encode(), ppid))
-        return io.BytesIO(args.replace(b" ", b"\0") + b"\0")
-
-    def expected(self, client: str, pid: int) -> dict:
-        return {**session_records.VALID[client], "pid": pid}
-
-    def test_a_daemon_hook_records_the_tui(self):
-        for table in self.each_table():
-            result, saved = self.run_with(table, "codex", 60)
-            self.assertTrue(result[1])
-            self.assertEqual(saved, self.expected("codex", 70))
-
-    def test_a_daemon_under_a_daemon_records_the_tui(self):
-        for table in self.each_table():
-            self.assertEqual(self.run_with(table, "codex", 61)[1], self.expected("codex", 70))
-
-    def test_a_codex_parent_that_is_no_daemon_is_recorded_as_given(self):
-        for table in self.each_table():
-            for pid in (70, 69, 83, 4999):  # 4999: no such process, so no daemon either
-                with self.subTest(pid):
-                    self.assertEqual(
-                        self.run_with(table, "codex", pid)[1], self.expected("codex", pid)
-                    )
-
-    def test_other_clients_are_recorded_as_given(self):
-        for table in self.each_table():
-            for client in ("claude", "opencode"):
-                with self.subTest(client):
-                    self.assertEqual(self.run_with(table, client, 60)[1], self.expected(client, 60))
-
-    def test_a_daemon_without_a_tui_parent_writes_no_record_and_keeps_the_prompt(self):
-        call = session_records.CALLS["codex"]
-        prompt = _run(
-            {**MANAGER, "HOME": self.home}, json.dumps(call.stdin).encode(), argv=_bare(call.argv)
-        )
-        for table in self.each_table():
-            for label, pid in (("orphaned", 80), ("parent unreadable", 81), ("own parent", 82)):
-                with self.subTest(label):
-                    result, saved = self.run_with(table, "codex", pid)
-                    self.assertEqual((result, saved), (prompt, None))
-
-    def test_a_command_line_that_is_not_utf_8_keeps_the_ps_table(self):
-        rows = b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items())
-        call = session_records.CALLS["codex"]
-        event = json.dumps(call.stdin).encode()
-        directory = Path(self.ensemble, "managers", "mgr")
-        directory.mkdir(parents=True)
-        argv = _with_pid(call.argv, 60)
-        _run({**MANAGER, "HOME": self.home}, event, argv=argv, ps=_ps(rows + b"5 1 vim \xff\n"))
-        saved = json.loads(Path(directory, "session.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved, self.expected("codex", 70))
-
-    def test_ps_is_read_once(self):
-        ps = _ps(b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items()))
-        call = session_records.CALLS["codex"]
-        event = json.dumps(call.stdin).encode()
-        _run({**MANAGER, "HOME": self.home}, event, argv=_with_pid(call.argv, 61), ps=ps)
-        ps.assert_called_once()
-
-
 class AncestorsTest(Case):
     """/proc/<pid>/stat where /proc exists (Linux)."""
 
@@ -598,7 +481,7 @@ class HooksJsonTest(Case):
         self.assertEqual(
             command["command"],
             'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual'
-            ' --client codex --client-pid "$PPID" --hook-daemon app-server',
+            ' --client codex --binding lookup --client-pid "$PPID" --hook-daemon app-server',
         )
         self.assertEqual(command["timeout"], 5)
 
@@ -697,3 +580,162 @@ class ManualPromptTest(PromptTest):
     def test_replay_2026_10_19(self):
         self.assertLess(self.text.index("ack --through"), self.text.index("attach` again"))
         self.assertLess(self.text.index("attach` again"), self.text.index("`next-event:` command"))
+
+
+class BindingTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.first = Roster(str(Path(self.ensemble, "managers", "first")))
+        self.second = Roster(str(Path(self.ensemble, "managers", "second")))
+        self.leases = {
+            "first": self.enterContext(self.first.hold("first")),
+            "second": self.enterContext(self.second.hold("second")),
+        }
+        self.tree = {100: 90, 90: 60, 60: 70, 70: 41, 41: 1, 80: 42, 42: 1}
+        self.births = {70: "start-first", 80: "start-second"}
+
+    def environ(self, name):
+        lease = self.leases[name]
+        return {
+            "HOME": self.home,
+            "ENSEMBLE_MANAGER": name,
+            "ENSEMBLE_HOLDER_ID": lease.id,
+            "ENSEMBLE_HOLDER_GENERATION": str(lease.generation),
+            "ENSEMBLE_HOLDER_PID": "41" if name == "first" else "42",
+        }
+
+    def call(self, argv, event, environ):
+        incoming, outgoing = io.BytesIO(json.dumps(event).encode()), bytearray()
+
+        def ps(argv, **_options):
+            if "-p" in argv:
+                birth = self.births.get(int(argv[argv.index("-p") + 1]), "")
+                return mock.Mock(returncode=0, stdout=birth.encode())
+            return mock.Mock(
+                returncode=0,
+                stdout="".join(
+                    f"{pid} {parent} command\n" for pid, parent in self.tree.items()
+                ).encode(),
+            )
+
+        def write(fd, data):
+            self.assertEqual(fd, 1)
+            outgoing.extend(data)
+            return len(data)
+
+        with (
+            mock.patch.dict(os.environ, environ, clear=True),
+            mock.patch("os.getpid", return_value=100),
+            mock.patch("os.path.isdir", return_value=False),
+            mock.patch("subprocess.run", side_effect=ps),
+            mock.patch("os.read", side_effect=lambda _fd, size: incoming.read(size)),
+            mock.patch("os.write", side_effect=write),
+        ):
+            result = rearm.main(tuple(argv))
+        return result, outgoing.decode()
+
+    def bind(self, name, pid, sid):
+        self.tree[100] = pid
+        result = self.call(
+            ("--binding", "record", "--client", "codex", "--client-pid", str(pid)),
+            {"session_id": sid, "cwd": "/same/project"},
+            self.environ(name),
+        )
+        self.tree[100] = 90
+        self.assertEqual(result[0], 0)
+        self.assertTrue(result[1], "binding command must acknowledge the recorded native session")
+        self.assertTrue(json.loads(result[1])["recorded"])
+
+    def hook(self, sid, source="startup"):
+        return self.call(
+            ("--binding", "lookup", "--mode", "manual", "--client", "codex"),
+            {"session_id": sid, "cwd": "/same/project", "source": source},
+            self.environ("first"),
+        )
+
+    def record(self, name):
+        return json.loads(Path(self.ensemble, "managers", name, "session.json").read_text())
+
+    def test_two_holds_share_one_daemon_and_cwd(self):
+        self.bind("first", 70, "sid-first")
+        self.bind("second", 80, "sid-second")
+        for name, sid, pid in (("first", "sid-first", 70), ("second", "sid-second", 80)):
+            with self.subTest(name):
+                result, output = self.hook(sid)
+                self.assertEqual(result, 0)
+                self.assertIn(
+                    f"in manager `{name}`",
+                    json.loads(output)["hookSpecificOutput"]["additionalContext"],
+                )
+                self.assertEqual(
+                    self.record(name),
+                    {
+                        "client": "codex",
+                        "sid": sid,
+                        "pid": pid,
+                        "cwd": "/same/project",
+                    },
+                )
+
+    def test_resume_reuses_orphan_daemon_and_records_before_first_turn(self):
+        self.bind("first", 70, "saved")
+        self.tree[60] = 1
+        del self.tree[70]
+        self.tree[71], self.births[71] = 41, "new-tui"
+        self.bind("first", 71, "saved")
+        self.assertEqual(self.record("first")["pid"], 71)
+        code, output = self.hook("saved", "resume")
+        self.assertEqual(code, 0)
+        self.assertIn("`resume` in manager `first`", output)
+
+    def test_clear_changes_binding_and_compact_keeps_it(self):
+        self.bind("second", 80, "before-clear")
+        self.bind("second", 80, "after-clear")
+        self.assertEqual(self.hook("before-clear"), (0, ""))
+        for source in ("clear", "compact"):
+            self.assertIn(f"`{source}` in manager `second`", self.hook("after-clear", source)[1])
+        self.assertEqual(self.record("second")["sid"], "after-clear")
+
+    def test_recycled_pid_or_tui_outside_hold_does_not_route(self):
+        self.bind("second", 80, "sid")
+        self.births[80] = "reused"
+        self.assertEqual(self.hook("sid"), (0, ""))
+        self.births[80] = "start-second"
+        self.tree[80] = 1
+        self.assertEqual(self.hook("sid"), (0, ""))
+
+    def test_ended_holder_does_not_route(self):
+        self.bind("second", 80, "sid")
+        self.second.release()
+        self.assertEqual(self.hook("sid"), (0, ""))
+
+    def test_unknown_session_never_uses_daemon_environment(self):
+        self.assertEqual(self.hook("unknown"), (0, ""))
+
+    def test_duplicate_live_binding_is_ambiguous(self):
+        self.bind("first", 70, "shared")
+        self.bind("second", 80, "other")
+        path = Path(self.ensemble, "managers", "second", "live-client.json")
+        data = json.loads(path.read_text())
+        path.write_text(json.dumps({**data, "sid": "shared"}))
+        self.assertEqual(self.hook("shared"), (0, ""))
+
+    def test_record_refuses_another_live_managers_session(self):
+        self.bind("first", 70, "shared")
+        self.bind("second", 80, "other")
+        self.tree[100] = 80
+        result = self.call(
+            ("--binding", "record", "--client", "codex", "--client-pid", "80"),
+            {"session_id": "shared", "cwd": "/same/project"},
+            self.environ("second"),
+        )
+        self.assertEqual(result, (2, ""))
+        self.assertEqual(self.record("second")["sid"], "other")
+
+    def test_malformed_binding_never_uses_the_daemon_environment(self):
+        self.bind("second", 80, "sid")
+        path = Path(self.ensemble, "managers", "second", "live-client.json")
+        for text in ("{", "[]", "{}", '{"sid":"sid","client":"codex","pid":true}'):
+            with self.subTest(text=text):
+                path.write_text(text)
+                self.assertEqual(self.hook("sid"), (0, ""))

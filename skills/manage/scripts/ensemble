@@ -10,7 +10,7 @@ if [ "$1" = --install ]; then
   root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P) || exit
   bin=$HOME/.ensemble/bin
   mkdir -p "$bin" || exit
-  for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator; do
+  for name in ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex; do
     install -m 755 "$(dirname -- "$0")/launcher" "$bin/$name" && echo "$bin/$name" || exit
   done
   "$(dirname -- "$0")/launcher" --select "$root" || exit

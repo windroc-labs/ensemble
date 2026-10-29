@@ -1,0 +1,3 @@
+#!/bin/sh
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+exec python3 -I "$root/src/ensemble/session/clients/codex/manager.py" "$root" "$@"
