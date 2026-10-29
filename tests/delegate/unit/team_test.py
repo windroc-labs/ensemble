@@ -88,14 +88,18 @@ class Acceptance(Packaged):
         )
         decompose = task_text("decompose")
         self.assertIn(
-            "run the **scope check** ([Engineer › Input processing](#input-processing))", decompose
+            "run the scope check ([Engineer › Input processing](#input-processing)) until clean",
+            decompose,
         )
-        self.assertIn("Rerun the scope check on the reread descriptions.", decompose)
+        self.assertIn("rerun the scope check.", decompose)
         self.assertEqual(decompose.count("fresh subagent"), 1)
-        self.assertIn("This review runs one round per run", decompose)
-        self.assertIn("stays in `Covers:` of the engineer slice implementing it", decompose)
-        self.assertIn("that need alone adds no blocked-by edge", decompose)
-        self.assertIn("the verifier ticket runs the end-to-end check, blocked by both.", decompose)
+        self.assertIn("One round: fix, rerun the scope check", decompose)
+        self.assertIn("A requirement belongs to the engineer slice implementing it", decompose)
+        self.assertIn("needing another slice for its end-to-end check adds no edge", decompose)
+        self.assertIn("One verifier ticket runs the end-to-end and real-machine checks", decompose)
+        self.assertIn(
+            "a verifier ticket names requirement identifiers and links the PRD instead", decompose
+        )
         self.assertNotIn("goes to the verifier ticket", decompose)
 
     def test_report_delivery_and_figure_checks(self):
