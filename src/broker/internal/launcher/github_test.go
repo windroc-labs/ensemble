@@ -29,7 +29,6 @@ type fakeTokens struct {
 	readOut                     []byte
 	readErr                     error
 	permissions                 []map[string]string // each Issue's and Refresh's set
-	repos                       []string            // each Issue's and Refresh's repo
 }
 
 // fixtureSet is fixture manifest-github-app's permissions.
@@ -45,8 +44,8 @@ func (f *fakeTokens) BotUserID(app string) (int64, error) {
 	}
 	return botID, nil
 }
-func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
-	f.calls, f.permissions, f.repos = append(f.calls, "issue "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
+func (f *fakeTokens) Issue(_ context.Context, app string, permissions map[string]string, c string) ([]credential.Command, func(), []protocol.Expiry, error) {
+	f.calls, f.permissions = append(f.calls, "issue "+app+" "+c), append(f.permissions, permissions)
 	if f.issue != nil {
 		return nil, nil, nil, f.issue
 	}
@@ -67,8 +66,8 @@ func (f *fakeTokens) Issue(_ context.Context, app, repo string, permissions map[
 		}
 	}, expiry, nil
 }
-func (f *fakeTokens) Refresh(_ context.Context, app, repo string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
-	f.calls, f.permissions, f.repos = append(f.calls, "refresh "+app+" "+c), append(f.permissions, permissions), append(f.repos, repo)
+func (f *fakeTokens) Refresh(_ context.Context, app string, permissions map[string]string, c string, exec func([]string, []byte) error) ([]protocol.Expiry, error) {
+	f.calls, f.permissions = append(f.calls, "refresh "+app+" "+c), append(f.permissions, permissions)
 	if f.refresh != nil {
 		return nil, f.refresh
 	}
@@ -168,22 +167,6 @@ func TestStartGitHubFailureRollsBack(t *testing.T) {
 				t.Fatalf("revoked a set Issue already rolled back: %q", tokens.calls)
 			}
 		})
-	}
-}
-
-// A repo grant's renewal names the manifest's repo, so the broker renews that repository's slot alone.
-func TestMaintainRepoGrant(t *testing.T) {
-	path := fixtureManifest(t, "manifest-github-app", func(f map[string]any) {
-		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": fixtureSet, "repo": "acme/out"})
-	})
-	tokens := &fakeTokens{}
-	h := mountHost()
-	h.Docker, h.GitHub = &fakeDocker{}, tokens
-	if _, err := h.Maintain(context.Background(), container, path, nil, false); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) || !slices.Equal(tokens.repos, []string{"acme/out"}) {
-		t.Fatalf("token calls %q repos %q", tokens.calls, tokens.repos)
 	}
 }
 

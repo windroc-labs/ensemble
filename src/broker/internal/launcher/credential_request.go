@@ -40,6 +40,9 @@ func parseCredentials(fields map[string]json.RawMessage) (credentialRequest, err
 			switch kind {
 			case "github":
 				merged.GitHub, err = parseGitHub(value)
+				if errors.Is(err, errGitHubRepo) {
+					return credentialRequest{}, protocol.New(protocol.ManifestRejected, "Manifest rejected: "+source+": "+err.Error())
+				}
 				if err != nil {
 					return reject(kind)
 				}
@@ -168,28 +171,28 @@ func parseEnv(raw json.RawMessage) ([]Secret, error) {
 type githubRequest struct {
 	App         string
 	Permissions map[string]string
-	Repo        string
 }
 
+// errGitHubRepo names the removed repo key: the App's installations alone decide which repositories a grant reaches.
+var errGitHubRepo = errors.New(`github has no "repo" key: a grant reaches every repository its App is installed on`)
+
 func parseGitHub(raw json.RawMessage) (*githubRequest, error) {
-	const shape = "github must be {\"app\": <name>, \"permissions\": {<permission>: <level>}, \"repo\"?: <owner/name>}"
+	const shape = "github must be {\"app\": <name>, \"permissions\": {<permission>: <level>}}"
 	var github map[string]json.RawMessage
 	if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &github) != nil {
 		return nil, errors.New(shape)
 	}
-	app, ok := manifestString(github["app"])
-	rawRepo, hasRepo := github["repo"]
-	repo, okRepo := manifestString(rawRepo)
-	var permissions map[string]string
-	if raw := github["permissions"]; !ok || len(github) != 2 && !(len(github) == 3 && hasRepo) || hasRepo && !okRepo ||
-		!appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &permissions) != nil {
-		return nil, errors.New(shape)
+	if _, ok := github["repo"]; ok {
+		return nil, errGitHubRepo
 	}
-	if hasRepo && !githubapi.ValidRepo(repo) {
-		return nil, fmt.Errorf("invalid github repo %q", repo)
+	app, ok := manifestString(github["app"])
+	var permissions map[string]string
+	if raw := github["permissions"]; !ok || len(github) != 2 || !appPattern.MatchString(app) || len(raw) == 0 || raw[0] != '{' ||
+		json.Unmarshal(raw, &permissions) != nil {
+		return nil, errors.New(shape)
 	}
 	if err := githubapi.CheckPermissions(permissions); err != nil {
 		return nil, err
 	}
-	return &githubRequest{App: app, Permissions: permissions, Repo: repo}, nil
+	return &githubRequest{App: app, Permissions: permissions}, nil
 }

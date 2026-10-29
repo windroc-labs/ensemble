@@ -387,23 +387,22 @@ func TestPrefetchNoGitHubTokens(t *testing.T) {
 	}
 }
 
-// A prefetch with a repo grant prefetches, then issues the grant for that repo alone; the run's mounts are those of
-// the same start without github.
-func TestPrefetchWithRepoGrant(t *testing.T) {
+// A prefetch beside a github grant prefetches, then issues the grant; the run's mounts are those of the same start
+// without github.
+func TestPrefetchWithGitHubGrant(t *testing.T) {
 	w := &world{labels: goodLabels()}
 	h, d, tokens := prefetchHost(t, w)
 	write := map[string]string{"contents": "write"}
 	path := prefetchManifest(t, h, func(f map[string]any) {
-		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": write, "repo": "acme/out"})
+		withGitHubGrant(t, f, map[string]any{"app": "ensemble-broker-bot", "permissions": write})
 	})
 	if _, err := h.Start(context.Background(), path); err != nil {
 		t.Fatal(err)
 	}
 	prefetch := slices.Index(tokens.calls, "prefetch acme/app main "+home+"/src/project "+container)
 	issue := slices.Index(tokens.calls, "issue ensemble-broker-bot "+container)
-	if prefetch < 0 || issue < prefetch || !slices.Equal(tokens.repos, []string{"acme/out"}) ||
-		len(tokens.permissions) != 1 || !maps.Equal(tokens.permissions[0], write) {
-		t.Fatalf("token calls %q repos %q permissions %v", tokens.calls, tokens.repos, tokens.permissions)
+	if prefetch < 0 || issue < prefetch || len(tokens.permissions) != 1 || !maps.Equal(tokens.permissions[0], write) {
+		t.Fatalf("token calls %q permissions %v", tokens.calls, tokens.permissions)
 	}
 	w2 := &world{labels: goodLabels()}
 	h2, d2, _ := prefetchHost(t, w2)

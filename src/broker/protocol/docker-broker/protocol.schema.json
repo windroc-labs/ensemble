@@ -145,10 +145,6 @@
               "const": "write"
             }
           }
-        },
-        "repo": {
-          "$comment": "A repo grant: its token reaches this repository alone; absent: every repository of every installation.",
-          "$ref": "#/$defs/github_repo"
         }
       },
       "required": [
@@ -449,7 +445,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "35"
+          "const": "36"
         }
       },
       "required": [

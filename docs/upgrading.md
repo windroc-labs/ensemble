@@ -19,6 +19,15 @@ The command that opens a manager's tmux session is now `ensemble <name>`. After 
 Neither removes the old launcher, which no longer runs: delete it with `rm ~/.ensemble/bin/ctmux`. Sessions it
 opened keep running; `ensemble <name>` attaches to them.
 
+## Broker protocol 36: GitHub grants without repo
+
+Close running Docker workers before upgrading, then run `scripts/install.sh --docker`; the Docker Host refuses a
+protocol 35 broker. A GitHub credential declaration is `app` and `permissions` only: its token reaches every
+repository of the App's installations, so where the App is installed decides what every role reaches. The broker
+rejects a declaration that still sets `repo` (`github has no "repo" key`). Delete `repo` from each `credentials.github`
+table in `~/.ensemble/config.local.toml` (role, task and environment) and from any `--credentials` value. The verifier
+keeps prefetch beside its declaration. `[delegate.roles.<role>.output] repo` is unchanged.
+
 ## Broker protocol 35: explicit GitHub credentials
 
 Close running Docker workers before upgrading, then run `scripts/install.sh --docker`. Protocol 35 removes the
@@ -30,7 +39,7 @@ There is no automatic configuration migration:
 | Old configuration | Required replacement in `~/.ensemble/config.local.toml` |
 |---|---|
 | `[session.hosts.docker.github]` | Delete the table; move its App slug and permissions to `[orchestrator.roles.engineer.credentials.github]`. Keeping it causes `unknown key 'github' in [hosts.docker]` |
-| Verifier output-derived GitHub grant | Keep `[delegate.roles.verifier.output] repo`, and explicitly declare the same repo under `[orchestrator.roles.verifier.credentials.github]` |
+| Verifier output-derived GitHub grant | Keep `[delegate.roles.verifier.output] repo`, and explicitly declare `[orchestrator.roles.verifier.credentials.github]` |
 
 The installer writes the engineer declaration after GitHub App enrollment, with the former default permissions;
 existing permission values are preserved. To move customized global permissions, copy them explicitly:
@@ -42,18 +51,17 @@ permissions = { contents = "write", pull_requests = "write", workflows = "write"
 
 [orchestrator.roles.verifier.credentials.github]
 app = "<App slug>"
-repo = "<owner>/<output-repo>"
 permissions = { contents = "write" }
 ```
 
-The verifier App must be installed on that output repo. Its token is limited to that repo even beside prefetch;
-delegate no longer derives credentials from `[output]`. Engineer declarations without `repo` retain access to all
-repositories of the App's installations. Commits and PRs still use the App's bot identity.
+The verifier App must be installed on that output repo; delegate no longer derives credentials from `[output]`.
+Each declaration reaches every repository of the App's installations. Commits and PRs still use the App's bot
+identity.
 
 Workers, `ensemble-delegate run` and `ensemble-session start` have no default GitHub grant. Direct starts must pass
 `--credentials '{"github":{"app":"<App slug>","permissions":{"contents":"write"}}}'` when needed; orchestrated
-roles and `ensemble-crew role` use their role/task declarations. To start a verifier directly, pass the repo-scoped
-declaration with `--credentials`. Saved declarations are reused on resume; changed declarations affect new runs.
+roles and `ensemble-crew role` use their role/task declarations. To start a verifier directly, pass its declaration
+with `--credentials`. Saved declarations are reused on resume; changed declarations affect new runs.
 
 Also migrate environment secrets using [environment credential declarations](#environment-credential-declarations)
 below. GitHub and environment files now use the same merged credential request; neither has a legacy grant path.
@@ -142,7 +150,7 @@ verifier run:
    ```
 
 3. Declare verifier credentials and upgrade as in [Broker protocol 35](#broker-protocol-35-explicit-github-credentials);
-   without the explicit repo-scoped declaration the verifier cannot push its report.
+   without the explicit verifier declaration the verifier cannot push its report.
 4. Remove `deliverable = true` from a local `verifier` stage: the outcome has no deliverable, so write-back reports
    it cannot post one.
 

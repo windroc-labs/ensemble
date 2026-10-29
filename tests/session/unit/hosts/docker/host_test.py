@@ -284,7 +284,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '35'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '36'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             f"gh logged in), then {BROKER} retrust; scripts/install.sh", str(caught.exception)
@@ -1532,8 +1532,8 @@ class EnvironmentTest(StartBase):
         self.assertNotIn("ENSEMBLE_PR_AUTHOR", env)
         self.assertFalse(set(GIT_IDENTITY) & set(env))
 
-    def test_prefetch_passes_the_declared_repo_grant_unchanged(self):
-        spec = '{"github":{"app":"ensemble-bot","repo":"o/out","permissions":{"contents":"write"}}}'
+    def test_prefetch_passes_the_declared_grant_unchanged(self):
+        spec = '{"github":{"app":"ensemble-bot","permissions":{"contents":"write"}}}'
         mounts = []
         for credentials in (None, spec):
             self.start(

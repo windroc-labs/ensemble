@@ -416,7 +416,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	expiries := []protocol.Expiry{}
 	if m.GitHubApp != "" {
 		message := "Injecting the GitHub tokens failed."
-		if commands, held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubRepo, m.GitHubPermissions, c); err != nil {
+		if commands, held.github, expiries, err = h.GitHub.Issue(ctx, m.GitHubApp, m.GitHubPermissions, c); err != nil {
 			return StartResult{}, held, injected(err, protocol.StartFailed, message)
 		}
 		batch.commands = append(batch.commands, commands...)
