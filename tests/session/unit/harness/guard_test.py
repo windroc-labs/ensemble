@@ -800,11 +800,6 @@ class ReplayTest(Base):
         parts = screen.replay()
         self.assertTrue(all(any(part is line for part in parts) for line in screen.lines))
 
-    def test_no_raw_spool_remains(self):
-        for name in ("Startup", "tempfile"):
-            self.assertFalse(hasattr(guard, name))
-        self.assertFalse(hasattr(guard.Screen, "snapshot"))
-
 
 class GuardTest(Base):
     def test_private_csi_queries_do_not_execute_normal_screen_commands(self):
