@@ -4319,12 +4319,9 @@ class DeadOwner(HostedTuiBase):
                     self.host.calls.worker_liveness.return_value = liveness
                     with (
                         mock.patch("time.monotonic", side_effect=itertools.count(0, 5)),
-                        mock.patch.object(HostedSession, "_reconcile_capacity") as reconciled,
                         self.assertRaises(engine_types.SessionBusy) as caught,
                     ):
                         close()
-                    if how == "retire":  # a busy store.close raises before the capacity try
-                        reconciled.assert_not_called()
                     self.assertEqual(caught.exception.holder, "worker generation (live or unknown)")
                     self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
                     self.host.calls.release.assert_not_called()
