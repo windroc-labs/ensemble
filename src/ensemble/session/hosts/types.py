@@ -13,7 +13,7 @@ class WorkerState:
 
 @dataclass(frozen=True)
 class CommandView:
-    """printed: the attach command shown; argv: what the view session runs."""
+    """printed: the attach command shown; argv: what the Viewer runs to show it."""
 
     printed: str
     argv: tuple[str, ...]

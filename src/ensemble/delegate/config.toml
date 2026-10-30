@@ -28,7 +28,9 @@
 #                   the display's grid or split); "none" → started hidden, as with --display none (the display the run
 #                   passes down, whatever --display says), until ensemble-delegate show or ensemble-session show
 #                   opens a pane; else a one-line shell command run instead, {{session}} the session name. A hidden
-#                   session is not shown at its start or on resume
+#                   session is not shown at its start or on resume. A worker has no tmux session, so
+#                   `tmux attach -t {{session}}` no longer works; run its status's attach command instead:
+#                   tmux split-window "$(ensemble-session status {{session}} | jq -r .attach)"
 #   users           local, global only: GitHub logins whose PR comments are the user's; [] → the gh login
 #                   (ENSEMBLE_USERS replaces it; with ENSEMBLE_PR_AUTHOR set, [] → no one: team/tools/repo.py)
 #   trusted_dirs    local, global only: dirs you trust (absolute or ~ path, matched by real path); [] → none. A cwd
