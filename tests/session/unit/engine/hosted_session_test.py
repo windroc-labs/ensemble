@@ -216,13 +216,13 @@ class ClientCapacityTest(HostedTuiBase):
                 release.wait(WAIT)
 
         self.host.calls.headless_worker.side_effect = launch
+        started = []
         first = threading.Thread(
-            target=self.start, kwargs={"name": "one", "sid": "s1"}, daemon=True
+            target=lambda: started.append(self.start(name="one", sid="s1")), daemon=True
         )
         first.start()
         self.addCleanup(first.join, WAIT)
         self.assertTrue(reached.wait(WAIT))
-        started = []
         second = threading.Thread(
             target=lambda: started.append(self.start(name="two", sid="s2")), daemon=True
         )
@@ -230,9 +230,10 @@ class ClientCapacityTest(HostedTuiBase):
         self.addCleanup(second.join, WAIT)
         second.join(5)
         self.assertTrue(started, "a start waited for another start of its client")
-        started[0].close()
         release.set()
         first.join(WAIT)
+        for session in started:
+            session.close()
         self.host.calls.headless_worker.side_effect = None
 
     def test_unconfirmed_failed_shutdown_keeps_the_durable_reservation(self):

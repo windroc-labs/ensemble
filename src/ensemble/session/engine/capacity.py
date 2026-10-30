@@ -79,6 +79,7 @@ def _retained(record: dict, known: dict) -> bool:
 
 
 def _holders(directory: str, known: dict, holders: dict) -> list[str]:
+    reserved = set()
     for entry in os.scandir(directory):
         if not entry.name.endswith(".run"):
             continue
@@ -97,8 +98,10 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
                 key: tuple = (entry.name,)
                 if (host := record.get("host")) is not None:
                     namespace = known[host][0] if host in known else ("configuration", host)
-                    holders.pop((namespace, record["name"], None), None)
-                    key = (namespace, record["name"], record["sid"])
+                    if (namespace, record["name"], record["sid"]) not in reserved:
+                        holders.pop((namespace, record["name"], None), None)
+                        key = (namespace, record["name"], record["sid"])
+                        reserved.add(key)
                 holders[key] = record["name"]
                 continue
             with contextlib.suppress(FileNotFoundError):
@@ -232,9 +235,24 @@ class Admission(AbstractContextManager):
         self.close()
 
     def _detach(self) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
-            self._fd = None
+        self._settle(keep=True)
+
+    def _settle(self, *, keep: bool) -> None:
+        """Ends this process's hold under the gate, so no count sees it half done."""
+
+        def settle():
+            if not keep:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(self.path)
+            if self._fd is not None:
+                os.close(self._fd)
+                self._fd = None
+
+        try:
+            with _locked(self.directory, self.client):
+                settle()
+        except OSError:
+            settle()
 
     def _watch(self, state: Callable[[], Liveness]) -> None:
         while not self.finished.wait(POLL):
@@ -251,7 +269,5 @@ class Admission(AbstractContextManager):
         with self._mutex:
             if self.finished.is_set():
                 return
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(self.path)
-            self._detach()
+            self._settle(keep=False)
             self.finished.set()

@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 from unittest import mock
 
+from ensemble.session.engine import capacity
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.types import Liveness, Mode, SessionError, SessionRow
 from tests.session.case import Case
@@ -102,6 +103,57 @@ class AdmissionTest(Case):
             self.host.create("first", metadata={"client": "fake", "sid": "s1"})
             self.assertIsNone(self.admitted(self.enter(limit=2, name="second", sid="s2")))
             first.started(lambda: Liveness.LIVE)
+
+    def test_a_tui_start_settling_during_a_count_is_still_counted(self):
+        first = self.enter(mode=Mode.TUI)
+        inventory, settling = capacity._inventory, []
+
+        def settle():
+            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            first.started(lambda: Liveness.LIVE)
+
+        def snapshot(*args, **kwargs):
+            found = inventory(*args, **kwargs)
+            if not settling:
+                settling.append(threading.Thread(target=settle, daemon=True))
+                settling[0].start()
+                self.addCleanup(settling[0].join, 5)
+                settling[0].join(0.5)
+            return found
+
+        with first:
+            with (
+                mock.patch.object(capacity, "_inventory", side_effect=snapshot),
+                self.assertRaisesRegex(SessionError, "held by: first"),
+                self.enter(name="second", sid="s2"),
+            ):
+                self.fail("admitted beside a live first")
+            settling[0].join(5)
+        self.assertTrue(os.path.exists(first.path))
+
+    def test_ended_reservations_leave_no_client_directory(self):
+        root = os.path.dirname(self.enter(limit=0).directory)
+        with self.assertRaisesRegex(ValueError, "failed"), self.enter():
+            raise ValueError("failed")
+        self.assertFalse(os.path.exists(root))
+        first = self.enter()
+        with first:
+            first.started(lambda: Liveness.LIVE)
+        with self.assertRaises(SessionError), self.enter(name="second", sid="s2"):
+            pass
+        first.close()
+        self.assertFalse(os.path.exists(root))
+
+    def test_held_runs_sharing_a_name_and_sid_count_separately(self):
+        for _ in range(2):
+            ticket = self.enter(limit=2, name=None, sid="same")
+            with ticket:
+                ticket.started(lambda: Liveness.LIVE)
+        with (
+            self.assertRaisesRegex(SessionError, "held by: same, same"),
+            self.enter(limit=2, name="third", sid="s3"),
+        ):
+            self.fail("two runs must fill two slots")
 
     def test_live_transient_reservation_counts_and_failure_rolls_back(self):
         live = mock.Mock(return_value=Liveness.LIVE)
@@ -343,6 +395,7 @@ class AdmissionTest(Case):
         directory = Path(first.directory)
         first.close()
         stale = directory / "old.run"
+        directory.mkdir(parents=True, exist_ok=True)
         stale.write_text('{"kind":"headless","name":"old","sid":"old"}')
         with self.enter():
             pass
