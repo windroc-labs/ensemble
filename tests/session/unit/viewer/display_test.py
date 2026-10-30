@@ -183,17 +183,21 @@ class DescendantsTest(Base):
         self.assertEqual(displays.names(self.viewer, self.host, "other", descendants=True), ["x"])
         self.assertEqual(displays.names(self.viewer, self.host, "", descendants=True), [])
 
-    def test_a_tmux_failure_is_a_driver_error(self):
+    def test_a_tmux_failure_keeps_descendants_from_guard_display_records(self):
         self.host = _plain_host([_row("a", "mgr")])
         self.host.attachable = True
         self.tmux.listing.side_effect = TuiError("tmux list-sessions exited 1: lost server")
-        with self.assertRaisesRegex(
-            SessionError, r"\Atmux sessions unknown: tmux list-sessions exited 1: lost server\Z"
-        ):
-            displays.names(self.viewer, self.host, "mgr", descendants=True)
+        self.assertEqual(displays.names(self.viewer, self.host, "mgr", descendants=True), ["a"])
 
 
 class RowsTest(Base):
+    def test_unavailable_display_server_keeps_worker_inventory(self):
+        workers = [_row("w1", "manager")]
+        self.host = _plain_host(workers)
+        self.host.attachable = True
+        self.tmux.listing.side_effect = TuiError("lost server")
+        self.assertEqual(displays.rows(self.viewer, self.host, None), workers)
+
     def test_only_worker_rows_get_display_placement_without_tmux_identity(self):
         self.enterContext(environ(**INSIDE))
         self.runner.pane = "manager"

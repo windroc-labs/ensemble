@@ -138,8 +138,8 @@ def _matching(host: Host, display: Display) -> list[SessionRow]:
 def _placed(viewer: Viewer) -> dict[str, dict]:
     try:
         found = viewer._tmux.listing()
-    except TuiError as error:
-        raise SessionError(f"tmux sessions unknown: {error}") from error
+    except TuiError:
+        return {}
     return {row["name"]: row for row in found}
 
 
@@ -151,8 +151,8 @@ def rows(viewer: Viewer, host: Host, display: Display) -> list[SessionRow]:
     placed = _placed(viewer)
     try:
         own = viewer._placement.own_session() if placed else None
-    except TuiError as error:
-        raise SessionError(f"tmux sessions unknown: {error}") from error
+    except TuiError:
+        own = None
     return [
         replace(
             row,
@@ -180,7 +180,7 @@ def names(viewer: Viewer, host: Host, display: Display, *, descendants: bool = F
 
 
 def _opener(row: SessionRow, live: dict | None) -> str | None:
-    """Its placed session's live @opener, else its display's opener part."""
+    """Live @opener, else its display's opener."""
     if live is not None and live["opener"] is not None:
         return live["opener"]
     found = unfold(row.display)

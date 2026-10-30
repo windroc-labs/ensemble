@@ -3279,6 +3279,15 @@ class ManagedStartTest(OwnedBase):
         self.assertEqual(mode.poll(0), ([], True))
         self.assertEqual(mode.returncode(0), 3)
 
+    def test_confirmed_guard_exit_marks_dead_once_without_a_display(self):
+        mode = self.owned_start()
+        self.handle.state.return_value = Liveness.ABSENT
+        self.handle.returncode.return_value = 7
+        self.assertEqual(mode.poll(0), ([], True))
+        self.assertEqual(mode.poll(0), ([], True))
+        with open(self.events, encoding="utf-8") as stream:
+            self.assertEqual([line.split(" ", 1)[1] for line in stream], [f"{NAME} dead\n"])
+
     def test_owned_poll_ends_a_removed_handle_without_a_code(self):
         """A handle gone without a confirmed code (a Docker worker removed after a failure)."""
         mode = self.owned_start()

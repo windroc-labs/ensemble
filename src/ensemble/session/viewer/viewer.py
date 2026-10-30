@@ -250,6 +250,7 @@ class Viewer:
                 [
                     *("new-session", "-d", "-s", name, *size, "--", *target.argv),
                     *(";", "set-option", "-t", f"={name}:", VIEW, VIEW_TAG),
+                    *(";", "set-option", "-w", "-t", f"={name}:", "remain-on-exit", "on"),
                     *(";", *tmux_cli.status(name, on=settings.status_line)),
                 ]
             )

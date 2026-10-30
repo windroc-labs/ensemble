@@ -235,8 +235,9 @@ class TuiStore:
         return (command, "hook", self.dir)
 
     def set_activity(self, generation: str, word: StatusState, events: str | None) -> None:
-        save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
-        if word in (StatusState.DONE, StatusState.BLOCKED) and events:
+        if word != StatusState.DEAD:
+            save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
+        if word in (StatusState.DONE, StatusState.BLOCKED, StatusState.DEAD) and events:
             SessionStatusLog(events).write(self.name, word)
 
     def store_record(self, generation: str, record: ControlRecord) -> None:
@@ -902,6 +903,7 @@ class TuiMode(BaseMode):
                             )
                         )
                         self._active_turn = False
+                    self._mark(StatusState.DEAD)
                     self._end()
                     return final, True
                 if self._terminal is not None:
