@@ -11,6 +11,7 @@ contains the other's and their keys match or either has none. A PRD backtick lit
 it has no space, starts with none of `/~-$`, holds none of `:<>{}|` and exists on a DIR or holds
 `/` before a dotted last segment (a glob without `/` needs a dotted name); it is a key in
 `[table] key` form. Each must equal one ticket's item path or key.
+Engineer tickets may cover at most MAX_COVERS distinct FR/NFR ids.
 """
 
 import glob
@@ -19,6 +20,7 @@ import re
 import sys
 
 ENGINEER = {"build", "light-build"}
+MAX_COVERS = 8
 _ID = re.compile(r"\bN?FR-\d+\b")
 _LITERAL = re.compile(r"`([^`\n]+)`")
 _KEY = re.compile(r"^\[[A-Za-z][\w.-]*\](?: [\w.-]+)?$")
@@ -128,8 +130,14 @@ def _owners(count, noun, names):
 def check(prd: str, tickets: list[dict], bases: dict[str, str]) -> list[str]:
     failures, owned = [], {}
     for ticket in tickets:
-        if ticket["task"] in ENGINEER and not ticket["scope"]:
-            failures.append(f"{ticket['name']}: no Scope:")
+        if ticket["task"] in ENGINEER:
+            if not ticket["scope"]:
+                failures.append(f"{ticket['name']}: no Scope:")
+            if len(ticket["covers"]) > MAX_COVERS:
+                failures.append(
+                    f"{ticket['name']}: too large ({len(ticket['covers'])} Covers ids > "
+                    f"{MAX_COVERS}): split it along an interface (e.g. read-only vs write)"
+                )
         if ticket["repo"] not in bases:
             failures.append(f"{ticket['name']}: Repo: {ticket['repo']} has no --base")
             continue
