@@ -51,7 +51,6 @@ def _query_help(command):
         "show": "Open each run's view at its saved display; work keeps running.",
         "hide": "Hide each run's view while its work continues.",
         "close": "Terminate each selected run; keep its files and recorded identity.",
-        "attach-command": "Print one command per live showable run for manual attachment.",
         "resume": "Restart exactly one interrupted recorded run; print its Record JSON line.",
         "content": "Print exactly one recorded run's current content to stdout.",
     }
@@ -59,16 +58,11 @@ def _query_help(command):
         "status": "Use status before deciding whether to show, resume or close a run.",
         "show": (
             "Uses the saved display; no new --display is accepted. If no view opens,\n"
-            "run ensemble-orchestrator attach-command TASK-1 and run the printed command.\n"
-            "Placement: ensemble-session --help"
+            "run the attach command of ensemble-orchestrator status TASK-1 or\n"
+            "ensemble-crew attach. Placement: ensemble-session --help"
         ),
         "hide": "To reopen its saved view: ensemble-orchestrator show TASK-1",
         "close": "To recover interrupted work: ensemble-orchestrator resume TASK-1",
-        "attach-command": (
-            "Run the printed command yourself; this command does not attach. A headless\n"
-            "or ended run may have no live showable session. Inspect it with\n"
-            "ensemble-orchestrator status TASK-1; recovery: ensemble-orchestrator resume --help"
-        ),
         "resume": (
             "Live or completed runs retain their identity; interrupted runs restart.\n"
             "A completed run starts nothing and says so on stderr: resume delivers no\n"
@@ -95,8 +89,9 @@ def _query_help(command):
         "  Explicit ISSUE arguments leave stdin unread; otherwise read one Record\n"
         "  JSON line per stdin line. Session names and workdirs are not issue keys.\n"
         f"  {count}\n"
-        "  A duplicate issue or malformed Record is a usage error. Status, content,\n"
-        "  resume and attach-command print to stdout; show/hide/close are silent.\n"
+        "  A duplicate issue or malformed Record is a usage error. Status, content\n"
+        "  and resume print to stdout; show prints an attach command when it opens\n"
+        "  no view; hide/close are silent.\n"
         "  Exit 0: success; 1: operation failed; 2: usage/configuration error.\n"
         "  Batch failures retain other valid results; errors go to stderr.\n\n"
         "Example (TASK-1 has a configured recorded run):\n"
@@ -176,7 +171,7 @@ def main(argv=None):
     )
     declaration.add_argument("--role", required=True, help="role whose declarations to resolve")
     declaration.add_argument("--task", help="optional task; omitted: role declarations only")
-    for command in ("status", "show", "hide", "close", "attach-command", "resume", "content"):
+    for command in ("status", "show", "hide", "close", "resume", "content"):
         purpose, guidance = _query_help(command)
         query = commands.add_parser(
             command,
@@ -290,12 +285,6 @@ def main(argv=None):
             )
         return record
 
-    def attach_command(view):
-        command = view.delegate.attach_command()
-        if command is None:
-            raise RuntimeError("run has no live showable session")
-        return command
-
     reply = {
         "status": lambda view: view.status().to_line(),
         "content": lambda view: view.content(),
@@ -303,7 +292,6 @@ def main(argv=None):
         "close": lambda view: view.delegate.close(),
         "show": lambda view: view.delegate.show(),
         "hide": lambda view: view.delegate.hide(),
-        "attach-command": attach_command,
     }[args.command]
     return answer_keys(
         args.keys,

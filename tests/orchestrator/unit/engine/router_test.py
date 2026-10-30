@@ -1370,8 +1370,7 @@ class AttendedEntry(OuterBase):
                 harness = f"ensemble-engineer-{ID}"
                 self.assertEqual(
                     self.err,
-                    f"router.py: {ID}: attach: attach {harness}\n"
-                    f"router.py: {ID}: {harness}: ensemble-session attach-command {harness}\n",
+                    f"router.py: {ID}: attach: attach {harness}\n",
                 )
 
     def test_a_resume_under_tui_is_attended_and_prints_its_record(self):

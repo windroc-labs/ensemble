@@ -143,7 +143,7 @@ Examples (configured Linear access, client and a claimable TASK-1):
 
 Recovery and next help:
   Busy or being started: retry later. Live run: ensemble-orchestrator status TASK-1
-  View recovery: ensemble-orchestrator attach-command TASK-1
+  View recovery: the attach command of ensemble-orchestrator status TASK-1
   Interrupted run: ensemble-orchestrator resume --help
   Termination: ensemble-orchestrator close --help
   Fix reported configuration/Keychain errors before retrying.
@@ -937,9 +937,7 @@ def _label_client_error(spec, ctx, error):
 
 
 def announce(ident, linear_run, detached):
-    """An attended run's Record line on stdout; on stderr its attach command (its TUI's) and, per
-    session, the command printing that session's.
-    """
+    """An attended run's Record line on stdout; on stderr its TUI's attach command."""
     print(detached.to_line(), flush=True)
     try:
         command = linear_run.delegate.attach_command()
@@ -947,10 +945,6 @@ def announce(ident, linear_run, detached):
         command = f"unknown ({one_line(e)})"
     if command:
         print(f"router.py: {ident}: attach: {command}", file=sys.stderr)
-    for name in detached.sessions:
-        print(
-            f"router.py: {ident}: {name}: ensemble-session attach-command {name}", file=sys.stderr
-        )
 
 
 def _take(f, op, wait: float | None, waiting):

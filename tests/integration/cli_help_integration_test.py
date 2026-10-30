@@ -77,7 +77,6 @@ SURFACES = {
             "show",
             "hide",
             "close",
-            "attach-command",
             "resume",
             "content",
             "writeback",
