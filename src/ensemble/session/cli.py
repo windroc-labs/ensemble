@@ -1,18 +1,18 @@
 """ensemble-session, the session layer's command (FR-31, FR-42; bin/ensemble-session runs it).
 
 start, restart and resume a worker (engine/worker.py) and print its Record; reply, send (text, or
-keys in KeyPress notation) and read a session; status, show, hide, close and attach-command for
-session names, or Records one per stdin line; ls; tile; hook, a tui client's hook call (tui_hook.run);
+keys in KeyPress notation) and read a session; status, show, hide and close for session names, or
+Records one per stdin line; ls; tile; hook, a tui client's hook call (tui_hook.run);
 resume-argv, a client's plain interactive resume command.
 Every subcommand but hook reads the session config once: read_config, Host.parse_hosts,
 Session.configure. ENSEMBLE_SID, read once here, is a start's or resume's session id. Inside an
 agent session ensemble started (ENSEMBLE_AGENT_SESSION), start, restart, resume and client-resume
 refuse.
 
-stdout holds only machine output: Records, Status lines, ls rows, read and reply text, attach
-commands. Exit 0 done, 2 a usage or config error, 75 busy on start, restart or resume (a held
-environment lock, or a worker generation live or unknown) and on a close every failed key of
-which was refused busy, 1 a failed key or other failure. A batch answers its keys in order; a
+stdout holds only machine output: Records, Status lines, ls rows, read and reply text. Exit 0
+done, 2 a usage or config error, 75 busy on start, restart or resume (a held environment lock, or
+a worker generation live or unknown) and on a close every failed key of which was refused busy, 1
+a failed key or other failure. A batch answers its keys in order; a
 failed key gets one stderr line and no stdout line, and the exit is 1.
 """
 
@@ -126,7 +126,7 @@ def _display_help(hosts: Hosts | None) -> str:
         "Host syntax and defaults. --display none starts hidden without an anchor.\n"
         "Visible placement needs usable caller context or a visible anchor in that\n"
         "Host's syntax. For an existing session whose view cannot open, run\n"
-        "ensemble-session attach-command NAME, then run the printed command."
+        "ensemble-session status NAME, then run the command in its attach field."
     )
 
 
@@ -157,8 +157,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             "Recovery and next help\n"
             "  Discover names: ensemble-session ls\n"
             "  Inspect launch options: ensemble-session start --help\n"
-            "  Recover a missing view: ensemble-session attach-command --help\n\n"
-            + _display_help(hosts)
+            "  Recover a missing view: ensemble-session status --help\n\n" + _display_help(hosts)
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -189,7 +188,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         "Recovery and Next help\n"
         "  Existing name: ensemble-session status helper, or choose another name.\n"
         "  Placement/defaults: ensemble-session --help\n"
-        "  Missing view: ensemble-session attach-command --help",
+        "  Missing view: ensemble-session status helper; run its attach command",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("name", type=_name, help="required new worker name; not none")
@@ -285,34 +284,36 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         ("show", "show each session where its display says"),
         ("hide", "close what show opened for each session; it runs on"),
         ("close", "close each session; absent is fine"),
-        ("attach-command", "print each session's attach command"),
     ):
         details = {
-            "status": "Prints one Status JSON line per key, including gone sessions.",
+            "status": "Prints one Status JSON line per key, including gone sessions;\n"
+            "  its attach field: the command attaching to a live session on a showable Host.",
             "content": "Exactly one key; prints content from its first carried session.",
             "show": "Uses saved display; no new --display option. Work already exists.",
             "hide": "Closes only the view while work continues; requires a showable Host.",
             "close": "Terminates sessions; absent or replaced Record targets are harmless. A "
             "crashed worker's record stays while its generation is live or unknown (busy).",
-            "attach-command": "Prints an attachment command for the first session of each key.",
         }
         p = sub.add_parser(
             cmd,
             help=text,
             description=textwrap.fill(f"{text}: names, else Records on stdin.", width=77),
             epilog="Prerequisites and effects\n"
-            "  Requires configured target Hosts; show/hide/attach-command need a\n"
-            "  showable Host. Names override stdin; otherwise read one Record per line.\n"
+            "  Requires configured target Hosts; show/hide need a showable Host.\n"
+            "  Names override stdin; otherwise read one Record per line.\n"
             "  Duplicate keys are rejected before effects. Batch commands continue\n"
             "  other valid keys after a failure; exit 2 for invalid input, 1 for\n"
             "  operational failures. Records carry session identity and display.\n"
             + f"  {details[cmd]}\n"
             + f"\nExamples (existing session helper)\n  ensemble-session {cmd} helper\n"
-            + ("  Run the printed command to attach.\n" if cmd == "attach-command" else "")
             + "\nRecovery and Next help\n"
             "  Discover sessions: ensemble-session ls\n"
             "  Record schema and placement: ensemble-session --help\n"
-            + ("  View failure: ensemble-session attach-command --help\n" if cmd == "show" else ""),
+            + (
+                "  View failure: ensemble-session status helper; run its attach command\n"
+                if cmd == "show"
+                else ""
+            ),
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
         p.add_argument(
@@ -646,11 +647,6 @@ def _hide(name: str, record: Record | None, hosts: Hosts, *, if_closed: bool = F
         hosted_viewer().hide(session, _shown(session, hosts), if_closed=if_closed)
 
 
-def _attach_command(name: str, record: Record | None, hosts: Hosts) -> str:
-    session = _carried(name, record)[0]
-    return hosted_viewer().attach_command(session, _shown(session, hosts))
-
-
 def _owned(session: str, sid: str | None) -> bool:
     """Its session.json names a session harness, and `sid` when given."""
     try:
@@ -690,7 +686,6 @@ BATCH = {
     "show": _show,
     "hide": _hide,
     "close": _close,
-    "attach-command": _attach_command,
 }
 
 

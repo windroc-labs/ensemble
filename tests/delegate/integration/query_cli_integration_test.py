@@ -66,7 +66,3 @@ class Queries(Integration):
             self.query("show", self.work),
             (1, "", f"delegate: {self.work}: delegate has no live showable agent session\n"),
         )
-        self.assertEqual(
-            self.query("attach-command", self.work),
-            (1, "", f"delegate: {self.work}: no showable session\n"),
-        )

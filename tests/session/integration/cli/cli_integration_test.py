@@ -25,7 +25,6 @@ SUBCOMMANDS = [
     "show",
     "hide",
     "close",
-    "attach-command",
     "ls",
     "send",
     "read",
