@@ -385,6 +385,26 @@ class LabelTest(LiveCase):
         self.assertEqual(self.tmux("show-options", "-g"), before)
         self.assertEqual(self.tmux("show-options", "-t", "=mgr:"), manager)
 
+    def test_hiding_the_last_labelled_pane_gives_the_window_its_own_borders_back(self):
+        """FR-14: mgr's own pane-border-status top, format unset, as they were after a hide."""
+        self.tmux("set-option", "-w", "-t", "=mgr:", "pane-border-status", "top")
+        options = (
+            *("pane-border-status", "pane-border-format"),
+            *("@worker-saved-pane-border-status", "@worker-saved-pane-border-format"),
+        )
+        mine = [self.tmux("show-options", "-wq", "-t", "=mgr:", option) for option in options]
+        self.assertEqual(mine, ["pane-border-status top", "", "", ""])
+        host = TmuxHost("tmux", {"status_line": True})
+        pane = self.show(host)
+        self.assertEqual(
+            self.display(pane, "#{T:pane-border-format}|#{pane-border-status}"), "[w1]|bottom"
+        )
+        with mock.patch.dict(os.environ, self.server.inside("mgr")):
+            Viewer().hide("w1", host)
+        self.assertNotIn(pane, self.server.panes("=mgr:"))
+        after = [self.tmux("show-options", "-wq", "-t", "=mgr:", option) for option in options]
+        self.assertEqual(after, mine)
+
     def test_tmux_host_pane_has_no_label_by_default(self):
         """AC12: status_line false (the default): no border status, no label."""
         pane = self.show(self.host)

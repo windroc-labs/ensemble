@@ -118,16 +118,20 @@ def record(
     args += [";", "set-option", "-p", "-t", pane, "@worker-attach", printed]
     if opener:
         args += [";", "set-option", "-p", "-t", pane, "@worker-opener", opener]
+    reads = []
     if label:
+        reads = [own(window, "pane-border-format"), own(window, "pane-border-status")]
         args += [
             *(";", "set-option", "-p", "-t", pane, "@worker-label", name),
+            *(";", "set-option", "-u", "-w", "-t", window, "@worker-saved-pane-border-status"),
+            *(";", "set-option", "-u", "-w", "-t", window, "@worker-saved-pane-border-format"),
             *(";", "set-option", "-w", "-t", window, "pane-border-status", "bottom"),
             *(";", "set-option", "-w", "-t", window, "pane-border-format", LABEL),
         ]
     hooks = ["tmux", "show-hooks", "-w", "-t", window, "after-kill-pane"]
     hooks += [";", "list-panes", "-a", "-F", "#{pane_id}"]
     if not hook:
-        return [hooks, args] if read else [args]
+        return [*reads, hooks, args] if read else [*reads, args]
     for stale in pruned:
         args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{stale}]"]
     index = pane[1:] if index is None else index
@@ -135,7 +139,15 @@ def record(
         *(";", "set-hook", "-w", "-t", window, f"after-kill-pane[{index}]"),
         close_hook(name, pane, window, sid=sid, generation=generation, index=index),
     ]
-    return [hooks, args]
+    return [*reads, hooks, args]
+
+
+def own(window, option):
+    """Placement's read of window's own value of option."""
+    return ["tmux", "show-options", "-w", "-q", "-v", "-t", window, option]
+
+
+LABELS = ["tmux", "list-panes", "-a", "-F", "#{window_id}\t#{@worker-label}\t#{pane-border-format}"]
 
 
 def split_window(flag, pane, argv=ARGV):

@@ -23,6 +23,7 @@ from tests.session.hosted_support import SID
 from tests.session.tmux_fixtures import (
     CLIENTS,
     INSIDE,
+    LABELS,
     WORKERS,
     clients,
     environ,
@@ -270,8 +271,15 @@ class HideTest(Base):
         self.runner.results["list-panes"] = worker_rows(*rows)
 
     def listings(self, *results):
-        results = iter(results)
-        self.runner.results["list-panes"] = lambda _argv: next(results)
+        later = iter(results)
+
+        def listed(argv):
+            if argv[1:3] != ["list-panes", "-a"] or WORKERS[-1] not in argv:
+                return 0, ""
+            found = next(later)
+            return found() if callable(found) else found
+
+        self.runner.results["list-panes"] = listed
 
     def kills(self):
         return [c for c in self.runner.calls if "kill-pane" in c]
@@ -323,6 +331,7 @@ class HideTest(Base):
         self.viewer.hide("w1", self.host, if_closed=True)
         self.assertTrue(hidden.read("w1", SID))
         self.assertEqual(self.kills(), [])
+        self.assertIn(LABELS, self.runner.calls)
 
     def test_hide_if_closed_rechecks_a_racing_show(self):
         """AC7: a show whose pane lands between the hook's check and its mark leaves w1 shown."""
@@ -333,8 +342,7 @@ class HideTest(Base):
             seen.append(hidden.read("w1", SID))  # the recheck runs after the hidden mark
             return worker_rows(("%10", "w1", "mgr"))
 
-        results = iter([lambda: worker_rows(), shown_meanwhile])
-        self.runner.results["list-panes"] = lambda _argv: next(results)()
+        self.listings(worker_rows(), shown_meanwhile)
         self.viewer.hide("w1", self.host, if_closed=True)
         self.assertEqual(seen, [True])
         self.assertFalse(hidden.read("w1", SID))
@@ -396,14 +404,8 @@ class HideTest(Base):
             self.assertEqual(self.viewer.show("w1", self.host, display="mgr"), "/fake/attach w1")
         self.assertEqual(logs.output, ["WARNING:session:show w1: tmux: boom"])
 
-    def worker_reads(self, *results):
-        later = iter(results)
-        self.runner.results["list-panes"] = lambda argv: (
-            next(later) if argv[1:3] == ["list-panes", "-a"] and WORKERS[-1] in argv else (0, "")
-        )
-
     def test_a_failed_show_clears_hidden_while_a_worker_pane_still_shows_it(self):
-        self.worker_reads(
+        self.listings(
             worker_rows(), worker_rows(("%9", "w1", "mgr", "@1", "mgr", "/fake/attach w1"))
         )
         self.failed_show()
@@ -416,7 +418,7 @@ class HideTest(Base):
             (1, "", "boom\n"),
         ):
             with self.subTest(rows=rows):
-                self.worker_reads(worker_rows(), rows)
+                self.listings(worker_rows(), rows)
                 self.failed_show()
                 self.assertTrue(hidden.read("w1", SID))
 

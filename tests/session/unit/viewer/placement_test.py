@@ -12,6 +12,8 @@ from tests.session.tmux_fixtures import (
     COMMAND,
     GENERATION,
     INSIDE,
+    LABEL,
+    LABELS,
     OWN,
     PRINTED,
     SH_KW,
@@ -28,6 +30,7 @@ from tests.session.tmux_fixtures import (
     grid_set,
     mute,
     opening_commands,
+    own,
     placed,
     record,
     shown_hook,
@@ -355,6 +358,138 @@ class RecordTest(Case):
             self.assertNotIn(option, plain)
 
 
+class BorderTest(Case):
+    """FR-14: a label border keeps the window's own border options to give back."""
+
+    def own(self, values):
+        """show-options -w -q -v of the window's own values (None: unset)."""
+        return lambda argv: (0, "" if values.get(argv[-1]) is None else values[argv[-1]] + "\n")
+
+    def label(self, values, **results):
+        fake = FakeTmux(results={"show-options": self.own(values), **results})
+        self.stderr = io.StringIO()
+        with which(), redirect_stderr(self.stderr):
+            placed(fake)._record(
+                "w1",
+                "mgr",
+                "%20",
+                "@1",
+                printed=PRINTED,
+                sid=SID,
+                generation=GENERATION,
+                label=True,
+            )
+        return fake.calls
+
+    def unlabel(self, rows, values):
+        fake = FakeTmux(
+            results={
+                "list-panes": (0, "".join("\t".join(r) + "\n" for r in rows)),
+                "show-options": self.own(values),
+            }
+        )
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).unlabel()
+        return fake.calls
+
+    def test_a_label_saves_the_windows_own_borders_once(self):
+        mine = {"pane-border-status": "top", "pane-border-format": "#{pane_index} ok"}
+        calls = self.label(mine)
+        self.assertEqual(
+            calls[:2], [own("@1", "pane-border-format"), own("@1", "pane-border-status")]
+        )
+        line = " ".join(calls[-1])
+        for set_ in (
+            "set-option -w -t @1 @worker-saved-pane-border-status top ;",
+            "set-option -w -t @1 @worker-saved-pane-border-format #{pane_index} ok ;",
+            "set-option -w -t @1 pane-border-status bottom ;",
+            f"set-option -w -t @1 pane-border-format {LABEL} ;",
+        ):
+            self.assertIn(set_, line)
+        self.assertEqual(self.label({}), record("mgr", "%20", name="w1", label=True))
+        calls = self.label({"pane-border-format": LABEL})
+        self.assertEqual(calls[0], own("@1", "pane-border-format"))
+        self.assertNotIn("@worker-saved-", " ".join(calls[-1]))
+
+    def test_an_unread_border_sets_no_border(self):
+        for result in ((1, "", "boom\n"), (0, "a\nb\n")):
+            with self.subTest(result=result):
+                calls = self.label({}, **{"show-options": result})
+                line = " ".join(calls[-1])
+                self.assertIn("@worker-label w1", line)
+                self.assertNotIn("pane-border", line)
+                self.assertRegex(self.stderr.getvalue(), r"^tui: show: label: tmux: ")
+        calls = self.label({"pane-border-format": "x;"})
+        self.assertNotIn("pane-border", " ".join(calls[-1]))
+        self.assertIn("tui: show: label: tmux would misread 'x;'", self.stderr.getvalue())
+
+    def test_the_last_labelled_pane_gone_gives_the_window_its_own_borders_back(self):
+        rows = [("@1", "", LABEL), ("@2", "", "x")]
+        saved = {
+            "@worker-saved-pane-border-format": "#{pane_index} ok",
+            "pane-border-format": LABEL,
+        }
+        calls = self.unlabel(rows, saved)
+        self.assertEqual(
+            calls,
+            [
+                LABELS,
+                own("@1", "pane-border-format"),
+                own("@1", "@worker-saved-pane-border-status"),
+                own("@1", "@worker-saved-pane-border-format"),
+                [
+                    *("tmux", "set-option", "-u", "-w", "-t", "@1", "pane-border-status"),
+                    *(
+                        ";",
+                        "set-option",
+                        "-u",
+                        "-w",
+                        "-t",
+                        "@1",
+                        "@worker-saved-pane-border-status",
+                    ),
+                    *(
+                        ";",
+                        "set-option",
+                        "-w",
+                        "-t",
+                        "@1",
+                        "pane-border-format",
+                        "#{pane_index} ok",
+                    ),
+                    *(
+                        ";",
+                        "set-option",
+                        "-u",
+                        "-w",
+                        "-t",
+                        "@1",
+                        "@worker-saved-pane-border-format",
+                    ),
+                ],
+            ],
+        )
+
+    def test_a_labelled_pane_left_or_an_unread_window_restores_nothing(self):
+        for rows, values in (
+            ([("@1", "", LABEL), ("@1", "w2", LABEL)], {"pane-border-format": LABEL}),
+            ([("@1", "", LABEL)], {}),  # its own border is not the label's
+        ):
+            with self.subTest(rows=rows):
+                calls = self.unlabel(rows, values)
+                self.assertNotIn("set-option", [c[1] for c in calls])
+        for rows in ([("1", "", LABEL)], [("@1", LABEL)]):
+            with self.subTest(rows=rows):
+                self.assertEqual(self.unlabel(rows, {}), [LABELS])
+                self.assertRegex(
+                    self.stderr.getvalue(), r"^tui: close: label: tmux: list-panes printed"
+                )
+        fake = FakeTmux(results={"list-panes": (1, "", "no server running on /x\n")})
+        placed(fake).unlabel()
+        self.assertEqual(fake.calls, [LABELS])
+
+
 class CloseTest(Case):
     PANE = types.WorkerPane("%20", "s", "mgr", "@1", "mgr")
 
@@ -384,14 +519,15 @@ class CloseTest(Case):
 
     def test_close_unsets_only_its_panes_close_hooks_then_kills_it_in_one_call(self):
         unset = ["set-hook", "-u", "-w", "-t", "@1", "after-kill-pane[3]", ";"]
-        self.assertEqual(self.close(), [self.READ, ["tmux", *unset, *self.KILL]])
+        self.assertEqual(self.close(), [self.READ, ["tmux", *unset, *self.KILL], LABELS])
         self.assertEqual(self.stderr.getvalue(), "")
 
     def test_an_unread_hook_list_unsets_nothing_and_still_kills(self):
         for result in ((1, "", "boom\n"), (0, "bad line\n")):
             with self.subTest(result=result):
                 self.assertEqual(
-                    self.close(**{"show-hooks": result}), [self.READ, ["tmux", *self.KILL]]
+                    self.close(**{"show-hooks": result}),
+                    [self.READ, ["tmux", *self.KILL], LABELS],
                 )
                 self.assertRegex(self.stderr.getvalue(), r"^tui: close: after-kill-pane: tmux: ")
 
@@ -401,7 +537,7 @@ class CloseTest(Case):
                 calls = self.close(
                     **{"show-hooks": (1, "", err + "\n"), "kill-pane": (1, "", err + "\n")}
                 )
-                self.assertEqual(calls, [self.READ, ["tmux", *self.KILL]])
+                self.assertEqual(calls, [self.READ, ["tmux", *self.KILL], LABELS])
                 self.assertEqual(self.stderr.getvalue(), "")
         with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
             self.close(**{"set-hook": (1, "", "boom\n")})

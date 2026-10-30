@@ -188,6 +188,8 @@ class Viewer:
                 self._placement.close(pane)
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
+        if not panes:
+            self._placement.unlabel()
         self._mark(name, host, hidden=True)
         try:
             # a show meanwhile may have written hidden=False before this mark
@@ -201,10 +203,13 @@ class Viewer:
         if not host.attachable:
             return
         try:
-            for pane in self._placement.panes(name):
+            panes = self._placement.panes(name)
+            for pane in panes:
                 self._placement.close(pane)
         except TuiError as error:
             raise SessionError(f"view {name}: {error}") from None
+        if not panes:
+            self._placement.unlabel()
 
     def attach_command(self, name: str, host: Host) -> str:
         return self._target(name, host).printed

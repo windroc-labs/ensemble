@@ -61,6 +61,9 @@ CLOSE_ENTRY = re.compile(  # _close_hook as show-hooks prints it
 )
 SPLIT = "#{pane_id}\t#{window_id}"
 LABEL = f"#{{?#{{{WORKER_LABEL}}},[#{{{WORKER_LABEL}}}],}}"
+BORDERS = {"pane-border-status": "bottom", "pane-border-format": LABEL}
+SAVED = "@worker-saved-"  # +option: its own value under a label border, unset if none
+LABELS = f"#{{window_id}}\t#{{{WORKER_LABEL}}}\t#{{pane-border-format}}"
 
 
 NO_PANE = "no anchor pane: {}"
@@ -200,9 +203,7 @@ class Placement:
         return [w for w in self.workers() if w.name == name]
 
     def close(self, worker: WorkerPane) -> None:
-        """Kills worker's pane, its close hooks unset first (none unread: one unsets itself once
-        its pane is gone); a gone pane is no error.
-        """
+        """Kills worker's pane, its close hooks unset first; a gone pane is no error."""
         args = []
         try:
             _, ours, _ = self._entries(worker.window)
@@ -216,6 +217,57 @@ class Placement:
         res = self.tmux.run([*args, "kill-pane", "-t", worker.pane])
         if res.returncode and not absent(res):
             raise TuiError(f"tmux: {error(res)}")
+        self.unlabel()
+
+    def unlabel(self) -> None:
+        """Gives windows left without a labelled pane their own borders back; failures print."""
+        try:
+            res = self.tmux.run(["list-panes", "-a", "-F", LABELS])
+            if res.returncode:
+                if absent(res):
+                    return
+                raise TuiError(f"tmux: {error(res)}")
+            rows = [line.split("\t", 2) for line in res.stdout.splitlines()]
+            if any(len(row) != 3 or not WINDOW.fullmatch(row[0]) for row in rows):
+                raise TuiError(f"tmux: list-panes printed {res.stdout!r:.80}")
+            labelled = {window for window, label, _ in rows if label}
+            for window in sorted({w for w, _, shown in rows if shown == LABEL} - labelled):
+                if self._own(window, "pane-border-format") == LABEL:
+                    args = []
+                    for option in BORDERS:
+                        args += self._set(window, option, self._own(window, SAVED + option))
+                        args += [";", "set-option", "-u", "-w", "-t", window, SAVED + option]
+                    self.tmux.checked(args[1:])
+        except TuiError as e:
+            print(f"tui: close: label: {e}", file=sys.stderr)
+
+    def _own(self, window: str, option: str) -> str | None:
+        """window's own value of option (None: unset)."""
+        out = self.tmux.checked(["show-options", "-w", "-q", "-v", "-t", window, option]).stdout
+        if not out:
+            return None
+        if out.count("\n") != 1 or not out.endswith("\n"):
+            raise TuiError(f"tmux: show-options printed {out!r:.80}")
+        return out[:-1]
+
+    def _set(self, window: str, option: str, value: str | None) -> list[str]:
+        if value is None:
+            return [";", "set-option", "-u", "-w", "-t", window, option]
+        if value.endswith(";"):
+            raise TuiError(f"tmux would misread {value!r:.80}")
+        return [";", "set-option", "-w", "-t", window, option, value]
+
+    def _label_args(self, window: str) -> list[str]:
+        """Calls setting window's label border, saving its own unless already labelled."""
+        args = []
+        own = self._own(window, "pane-border-format")
+        if own != LABEL:
+            for option in BORDERS:
+                value = own if option == "pane-border-format" else self._own(window, option)
+                args += self._set(window, SAVED + option, value)
+        for option, value in BORDERS.items():
+            args += self._set(window, option, value)
+        return args
 
     def _spot(
         self,
@@ -355,11 +407,11 @@ class Placement:
         if opener is not None:
             args += [";", "set-option", "-p", "-t", pane, WORKER_OPENER, opener]
         if label:
-            args += [
-                *(";", "set-option", "-p", "-t", pane, WORKER_LABEL, name),
-                *(";", "set-option", "-w", "-t", window, "pane-border-status", "bottom"),
-                *(";", "set-option", "-w", "-t", window, "pane-border-format", LABEL),
-            ]
+            args += [";", "set-option", "-p", "-t", pane, WORKER_LABEL, name]
+            try:
+                args += self._label_args(window)
+            except TuiError as e:
+                print(f"tui: show: label: {e}", file=sys.stderr)
         command, problem = hook_command()
         if problem is None:
             try:
@@ -401,9 +453,7 @@ class Placement:
         return [*args, ";", "set-hook", "-w", "-t", window, f"after-kill-pane[{index}]", hook]
 
     def _entries(self, window: str) -> tuple[set[int], list[CloseEntry], set[str]]:
-        """window's after-kill-pane indexes, its close hooks and the live panes; TuiError when
-        tmux fails or misprints.
-        """
+        """window's after-kill-pane indexes, its close hooks and the live panes."""
         res = self.tmux.run(
             [
                 *("show-hooks", "-w", "-t", window, "after-kill-pane"),
@@ -471,8 +521,8 @@ class Placement:
     def anchor(
         self, split_from: str | None = None, workers: Sequence[WorkerPane] | None = None
     ) -> str:
-        """split_from's newest worker pane (in workers, else read), else the pane its tmux session
-        shows, else the caller's session's; TuiError when none.
+        """split_from's newest worker pane, else the pane its tmux session shows, else the caller's
+        session's; TuiError when none.
         """
         if split_from is not None:
             workers = self.workers() if workers is None else workers
