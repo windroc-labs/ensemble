@@ -144,21 +144,38 @@ class ManagedIntegrationTest(Case):
         proc.wait(timeout=10)
         live_tmux.wait(lambda: not any(map(self.alive, pids)), what="adopted daemon reaped")
 
-    def test_guard_sigkill_keeps_unknown_and_refuses_new_owner(self):
+    def test_guard_sigkill_ends_the_generation_once_its_pty_client_hangs_up(self):
+        """The killed guard writes no exit; its recorded client's end is the generation's."""
         worker = self.worker(terminal=True)
         live_tmux.wait(lambda: Path(self.home, "client.pid").exists(), what="client started")
+        pid = int(Path(self.home, "client.pid").read_text())
         worker.proc.kill()
         worker.proc.wait(timeout=10)
         live_tmux.wait(lambda: worker.state() == Liveness.UNKNOWN, what="broken guard channel")
-        pid = int(Path(self.home, "client.pid").read_text())
         live_tmux.wait(lambda: not self.alive(pid), what="guard death hangs up PTY client")
+        self.assertEqual(self.host.worker_liveness(worker.name, worker.generation), Liveness.ABSENT)
+        self.assertEqual(self.host.rows(), [])
+        self.assertNotEqual(self.worker(terminal=True).generation, worker.generation)
+
+    def test_a_live_client_of_a_killed_guard_keeps_its_generation_unknown(self):
+        """Stopped, the client cannot read its stdin's end and outlives its guard."""
+        worker = self.worker()
+        live_tmux.wait(lambda: Path(self.home, "client.pid").exists(), what="client started")
+        pid = int(Path(self.home, "client.pid").read_text())
+        os.kill(pid, signal.SIGSTOP)
+        worker.proc.kill()
+        worker.proc.wait(timeout=10)
+        self.assertTrue(self.alive(pid))
         self.assertEqual(
             self.host.worker_liveness(worker.name, worker.generation), Liveness.UNKNOWN
         )
         with self.assertRaises(SessionBusy):
-            self.worker(terminal=True)
+            self.worker()
 
-    def test_both_sigkill_close_pty_but_unconfirmed_generation_stays_unknown(self):
+    def test_both_sigkill_end_the_generation_with_its_pty_client(self):
+        """A detached HUP-ignoring descendant outlives the guard and its client: no OS backstop
+        reaps it, and it holds no generation.
+        """
         proc, value, pids = self.crash_harness(terminal=True)
         os.kill(value["guard"], signal.SIGKILL)
         proc.kill()
@@ -166,13 +183,12 @@ class ManagedIntegrationTest(Case):
         live_tmux.wait(lambda: not self.alive(pids[0]), what="PTY client hung up")
         # its PTY's hangup can precede the release of its lease: the guard's own end frees it
         live_tmux.wait(lambda: not self.alive(value["guard"]), what="the guard's end")
+        self.assertTrue(self.alive(pids[1]))
         self.assertEqual(
-            self.host.worker_liveness("managed-worker", value["generation"]), Liveness.UNKNOWN
+            self.host.worker_liveness("managed-worker", value["generation"]), Liveness.ABSENT
         )
-        # Detached HUP-ignoring descendants intentionally demonstrate the absent OS backstop.
-        for pid in pids:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pids[1], signal.SIGKILL)
 
     def test_display_disconnect_does_not_end_worker(self):
         worker = self.worker(terminal=True)

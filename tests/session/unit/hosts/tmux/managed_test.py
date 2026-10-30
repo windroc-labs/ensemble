@@ -276,10 +276,7 @@ class ManagedTest(Case):
         self.assertEqual(managed.liveness("tmux", "worker", "b" * 32), Liveness.UNKNOWN)
 
     def test_a_free_lease_ends_a_run_whose_recorded_client_is_gone(self):
-        """A guard that ended without confirming its client's exit (killed, or failed) leaves its
-        client recorded: the run ended once that client is gone, reaped, a zombie, or its pid
-        another process's; while it runs, the run stays unknown.
-        """
+        """A killed or failed guard's run ends once its client is gone: reaped, a zombie, reused."""
         generation = "a" * 32
         live = [os.getpid(), guard.process_info(os.getpid())[1]]
         for state, client, expected in (
@@ -311,9 +308,6 @@ class ManagedTest(Case):
             os.close(lease)
 
     def test_a_run_ended_with_its_client_gone_is_unlisted_and_frees_its_name(self):
-        """The guard gone without writing exited, its client too: ls omits it, a start reuses the
-        name (a close takes the same liveness).
-        """
         generation = "a" * 32
         directory = guard_dir(generation, "running", client=reaped())
         free_lease(directory, generation)
