@@ -1713,11 +1713,27 @@ class AccountPoolTest(Base):
             self.assertEqual(self.usage().five_hour.used_percent, 100.0)
         self.assertEqual(self.usage(), Usage(Window(10, None), Window(10, None)))
 
-    def test_with_no_reading_known_a_start_selects_none(self):
+    def test_with_no_reading_known_a_start_reports_no_available_account(self):
         self.probe.side_effect = None
         self.probe.return_value = None
         self.assertIsNone(self.usage())
-        self.assertNotIn(ACCOUNT_ENV, self.started_env())
+        with self.assertRaisesRegex(
+            ConfigError, "no available account.*default: unknown.*work: unknown"
+        ):
+            self.started_env()
+
+    def test_all_exhausted_accounts_refuse_a_start_before_the_host(self):
+        self.outputs = {"/d": "100,10", "/w": "20,100"}
+        with self.assertRaisesRegex(ConfigError, "no available account"):
+            self.started_account()
+        self.assertEqual(self.session.host().headless, [])
+
+    def test_a_held_account_cannot_be_the_fallback_for_an_exhausted_pool(self):
+        self.outputs = {"/d": "0,0", "/w": "100,100"}
+        hosted_session.accounts.hold("pool", "default", time.time() + 3600)
+        with self.assertRaisesRegex(ConfigError, "no available account"):
+            self.started_env()
+        self.assertEqual(self.probed(), ["/w"])
 
     def run_on(self, **env):
         """An in_process run selecting `env`'s account, drained."""

@@ -237,8 +237,9 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
     if (pool := _pooled(setup, name, client, host)) is None:
         return spec
-    if (account := accounts.best(pool)) is None:
-        return spec
+    if (account := accounts.pick(pool)) is None:
+        detail = "; ".join(f"{account}: {summary(reading)}" for account, reading in pool.items())
+        raise ConfigError(f"{name}: no available account for automatic selection ({detail})")
     print(f"{name} account {account}: picked ({summary(pool[account])})", file=sys.stderr)
     return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
 

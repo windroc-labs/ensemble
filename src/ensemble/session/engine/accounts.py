@@ -87,11 +87,7 @@ def _readings(
         entry = cached.get(name)
         if name in holds:
             found[name] = _over(holds[name], now)
-        elif (
-            entry is not None
-            and entry[1] == identity
-            and 0 <= now - entry[0] < (UNKNOWN_TTL if entry[2] is None else TTL)
-        ):
+        elif entry is not None and entry[1] == identity and _fresh(entry[0], entry[2], now):
             found[name] = entry[2]
         else:
             stale.setdefault(identity, (launch, []))[1].append(name)
@@ -107,6 +103,18 @@ def _readings(
                 print(f"{client} usage: account {name}: {summary(found[name])}", file=sys.stderr)
         _store(path, {name: cached[name] for name in probes if name in cached})
     return {name: found[name] for name in probes}
+
+
+def _fresh(at: float, usage: Usage | None, now: float) -> bool:
+    windows = () if usage is None else tuple(filter(None, (usage.five_hour, usage.weekly)))
+    if any(w.resets_at is not None and at < w.resets_at <= now for w in windows):
+        return False
+    overdue = (
+        usage is not None
+        and exhausted(usage)
+        and any(w.resets_at is not None and w.resets_at <= now for w in windows)
+    )
+    return 0 <= now - at < (UNKNOWN_TTL if usage is None or overdue else TTL)
 
 
 def pick(found: Mapping[str, Usage | None]) -> str | None:
