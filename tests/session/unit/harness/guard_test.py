@@ -46,7 +46,7 @@ def spawned(*, terminal=True, sockets=None, proc=None):
 
 
 def replayed(screen) -> bytes:
-    return "".join(screen.replay()).encode()
+    return "".join(screen.replay()).encode("utf-8", "surrogateescape")
 
 
 def shown(screen, rows=None, columns=None):
@@ -234,6 +234,19 @@ class DisplayTest(Base):
         terminal.append(b"".join(sent["second"]))
         self.assertEqual(terminal.text(None), runtime.screen.text(None))
         self.assertIn("\x1b[0;31mline-1\x1b[0m\r\n", terminal.lines)
+
+    def test_a_display_sized_inside_a_split_character_shows_it_whole(self):
+        runtime, sent = self.runtime(terminal=True), []
+        runtime.streams[8] = b"t"
+        self.output(runtime, b"ab\xe4")
+        with mock.patch.object(guard.fcntl, "ioctl"):
+            peer = self.connect(runtime, lambda chunk: sent.append(bytes(chunk)) or len(chunk))
+        self.output(runtime, b"\xb8\xadc\r\nnext")
+        self.drain(runtime, peer)
+        terminal = guard.Screen(1 << 30, rows=24, columns=80)
+        terminal.append(b"".join(sent))
+        self.assertEqual(runtime.screen.text(None), "ab中c\nnext")
+        self.assertEqual(terminal.text(None), runtime.screen.text(None))
 
     def test_displays_share_history_strings_and_pin_at_most_their_bound(self):
         runtime = self.runtime(terminal=True)
@@ -793,6 +806,22 @@ class ReplayTest(Base):
                 replay = "".join(screen.replay())
                 self.assertTrue(replay.endswith(guard.sgr_code(screen.pen) + tail))
                 self.assertFalse(any("\x80" <= char <= "\x9f" for char in replay))
+
+    def test_a_split_character_reaches_the_display_whole(self):
+        character = "中".encode()
+        for held in (1, 2):
+            with self.subTest(held=held):
+                screen = guard.Screen(rows=3, columns=20)
+                screen.append(b"ab" + character[:held])
+                terminal = shown(screen)
+                rest = character[held:] + b"c\r\nnext"
+                screen.append(rest)
+                terminal.append(rest)
+                self.assertEqual(terminal.text(None), "ab中c\nnext")
+                self.assertEqual(terminal.text(None), screen.text(None))
+        screen = guard.Screen(rows=3, columns=20)
+        screen.append(b"ok\x1b]2;\xe4")
+        self.assertTrue(replayed(screen).endswith(b"\x1b]x\xe4"))
 
     def test_a_replay_shares_the_history_strings(self):
         screen = guard.Screen(rows=2, columns=8)

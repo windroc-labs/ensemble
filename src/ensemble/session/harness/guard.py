@@ -581,8 +581,8 @@ class Screen:
         return "\n".join(rows if lines is None else [*self.history, *rows][-lines:])[-self.limit :]
 
     def replay(self) -> deque[str]:
-        """What a new display of this size gets: history to wrap at its own width, then the screen
-        row for row, then the cursor, modes and pen; history parts are lines' own strings.
+        """A new display's replay: history to wrap at its width, the screen row for row, cursor,
+        modes, pen, a split character's bytes; history parts are lines' own; encode surrogateescape.
         """
 
         def screen(cells):
@@ -639,6 +639,7 @@ class Screen:
             + keys(self.keyboard)
             + sgr_code(self.pen)
             + unfinished(self.escape)
+            + self.decoder.getstate()[0].decode("utf-8", "surrogateescape")
         )
         return parts
 
@@ -938,7 +939,7 @@ class Guard:
         if display is None:
             return
         while len(display.head) < READ_SIZE and display.replay:
-            display.head += display.replay.popleft().encode()
+            display.head += display.replay.popleft().encode("utf-8", "surrogateescape")
         queue = display.head or display.pending
         data = bytes(queue[:READ_SIZE])
         if not data:
