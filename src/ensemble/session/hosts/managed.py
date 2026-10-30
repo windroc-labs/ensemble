@@ -337,9 +337,14 @@ class ManagedProcess(InteractiveProcess):
         with self.query:
             with self.condition:
                 self.condition.wait_for(
-                    lambda: not self.view_pending or self.failure is not None, GUARD_WAIT
+                    lambda: (
+                        not self.view_pending or self.failure is not None or self.code is not None
+                    ),
+                    GUARD_WAIT,
                 )
                 self.checked()
+                if self.code is not None:
+                    raise SessionError(f"worker {self.name}: exited")
                 if self.view_pending:
                     raise Unanswered(f"worker {self.name}: screen unanswered")
                 self.view = None
@@ -347,10 +352,15 @@ class ManagedProcess(InteractiveProcess):
             self.send_frame(b"q", request)
             with self.condition:
                 self.condition.wait_for(
-                    lambda: self.view is not None or self.failure is not None, GUARD_WAIT
+                    lambda: (
+                        self.view is not None or self.failure is not None or self.code is not None
+                    ),
+                    GUARD_WAIT,
                 )
                 self.checked()
                 if self.view is None:
+                    if self.code is not None:
+                        raise SessionError(f"worker {self.name}: exited")
                     raise Unanswered(f"worker {self.name}: screen unanswered")
                 return self.view
 

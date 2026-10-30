@@ -518,6 +518,69 @@ class Launch(CliCase):
                 self.assertTrue(line.startswith("crew: ensemble-"), line)
                 self.assertTrue(line.endswith(f": {reason}"), line)
 
+    def test_refused_issue_can_retry_when_receipt_disappears_after_stdout_read(self):
+        native_open = os.open
+        ready = False
+        removed = []
+        reason = "router.py: pick-none TASK-12 reason=not a Todo issue delegated to a role app"
+
+        def run(_argv, **_options):
+            nonlocal ready
+            ready = True
+            return SimpleNamespace(returncode=2, stderr=reason)
+
+        def open_file(path, flags, *args, **kwargs):
+            fd = native_open(path, flags, *args, **kwargs)
+            if ready and not removed and Path(path).name.startswith("receipt-"):
+                removed.append(path)
+                os.unlink(path)
+            return fd
+
+        with (
+            mock.patch("subprocess.Popen", side_effect=answered(run)),
+            mock.patch("os.open", side_effect=open_file),
+        ):
+            result, stdout, stderr = self.invoke("issue", "--manager", "mgr", "TASK-12")
+        self.assertEqual(len(removed), 1)
+        self.assertEqual((result, stdout), (2, ""), stderr)
+        self.assertIn(reason, stderr)
+        self.assertEqual(self.roster.entries(), {})
+        result, stdout, stderr = self.start("issue", "--manager", "mgr", "TASK-12")
+        self.assertEqual(result, 0, stderr)
+        self.assertEqual(self.roster.entries()["TASK-12"].record, Record.parse(stdout))
+
+    def test_failed_issue_is_lost_when_polling_finds_a_missing_receipt(self):
+        def run(_argv, **_options):
+            entry = self.roster.entries()["TASK-12"]
+            Path(self.directory, entry.receipt).unlink()
+            result, _, stderr = self.invoke("status", "--manager", "mgr", "TASK-12")
+            self.assertEqual(result, 0, stderr)
+            return SimpleNamespace(returncode=1, stderr="router failed")
+
+        with mock.patch("subprocess.Popen", side_effect=answered(run)):
+            result, stdout, stderr = self.invoke("issue", "--manager", "mgr", "TASK-12")
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertIn("router failed", stderr)
+        self.assertEqual(self.roster.entries()["TASK-12"].state, State.LOST)
+
+    def test_changed_launch_intent_is_preserved_and_cleanup_failure_is_reported(self):
+        for code, action in ((2, "remove"), (1, "mark lost")):
+            with self.subTest(code=code):
+                name = f"TASK-{code}"
+
+                def run(_argv, *, name=name, code=code, **_options):
+                    self.roster.note(name, "changed during launch")
+                    return SimpleNamespace(returncode=code, stderr="router failed")
+
+                with mock.patch("subprocess.Popen", side_effect=answered(run)):
+                    result, stdout, stderr = self.invoke("issue", "--manager", "mgr", name)
+                self.assertEqual((result, stdout), (code, ""))
+                self.assertIn("router failed", stderr)
+                self.assertIn(f"{name}: could not {action}", stderr)
+                self.assertIn("entry changed or disappeared", stderr)
+                self.assertEqual(self.roster.entries()[name].note, "changed during launch")
+                self.roster.remove(name)
+
     def test_a_busy_role_start_exits_75_and_leaves_no_entry(self):
         busy = "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
         result, stdout, stderr = self.start(

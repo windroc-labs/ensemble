@@ -11,7 +11,7 @@ from ensemble.session import Session
 from ensemble.session.engine.config import read_config
 from tests.delegate.workdir import run_log
 from tests.session import fake_client, harnesses
-from tests.session.case import configured
+from tests.session.case import configured, preserve_configuration
 from tests.session.modules import client_loader
 from tests.utils.case import REPO as REPO
 from tests.utils.case import ROOTS, RUN_WITH, SRC, TreeCase, foreign
@@ -41,6 +41,7 @@ class Case(TreeCase):
         return _foreign()
 
     def _case_enter(self, stack) -> None:
+        preserve_configuration(self)
         stack.enter_context(harnesses.joined())
         for key in CALLER_SESSION:
             os.environ.pop(key, None)

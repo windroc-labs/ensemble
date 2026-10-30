@@ -401,6 +401,52 @@ class ManagedProcessTest(Case):
         self.assertEqual(channel.state(), Liveness.LIVE)
         channel.proc.stdin.close.assert_not_called()
 
+    def test_screen_after_confirmed_exit_sends_no_query(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+        channel.accept(b"x", b'{"returncode":7}')
+        with (
+            writable() as written,
+            mock.patch.object(threading.Condition, "wait_for", side_effect=lambda p, _: p()),
+            self.assertRaises(SessionError) as caught,
+        ):
+            channel.screen()
+        self.assertNotIsInstance(caught.exception, Unanswered)
+        written.assert_not_called()
+        self.assertEqual(channel.read(0), [WorkerExit(7)])
+        self.assertEqual(channel.state(), Liveness.ABSENT)
+
+    def test_exit_wakes_a_screen_query_and_a_query_draining_a_previous_timeout(self):
+        for draining in (False, True):
+            with self.subTest(draining=draining):
+                channel = self.channel(terminal=True)
+                channel.accept(b"s", b'{"pid":123}')
+
+                def exited(predicate, _timeout, channel=channel):
+                    if not predicate():
+                        channel.accept(b"x", b'{"returncode":7}')
+                    self.assertTrue(predicate(), "confirmed exit must wake screen waiters")
+                    return True
+
+                with writable() as written:
+                    if draining:
+                        with (
+                            mock.patch.object(
+                                threading.Condition, "wait_for", side_effect=lambda p, _: p()
+                            ),
+                            self.assertRaises(Unanswered),
+                        ):
+                            channel.screen()
+                    with (
+                        mock.patch.object(threading.Condition, "wait_for", side_effect=exited),
+                        self.assertRaises(SessionError) as caught,
+                    ):
+                        channel.screen()
+                self.assertNotIsInstance(caught.exception, Unanswered)
+                self.assertEqual(written.call_count, 1)
+                self.assertEqual(channel.read(0), [WorkerExit(7)])
+                self.assertEqual(channel.state(), Liveness.ABSENT)
+
     def test_screen_repeated_timeouts_keep_one_outstanding_query(self):
         channel = self.channel(terminal=True)
         channel.accept(b"s", b'{"pid":123}')

@@ -1012,7 +1012,8 @@ class Guard:
             lines = request.get("lines")
             if lines is not None and (type(lines) is not int or lines < 1):
                 raise ValueError("invalid screen line count")
-            self.emit(json_frame(b"v", {"text": self.screen.text(lines)}))
+            if not self.exit_sent:
+                self.emit(json_frame(b"v", {"text": self.screen.text(lines)}))
         else:
             raise ValueError("invalid guard command")
 

@@ -23,10 +23,17 @@ def client(directory: str, *, daemon: bool) -> None:
     record = root / "transcript.json"
     if not record.exists():
         record.write_text(json.dumps({"sid": "same-conversation", "phrase": "violet compass"}))
-    subprocess.Popen(
+    descendant = subprocess.Popen(
         [sys.executable, "-I", __file__, "child", directory, *(["--daemon"] if daemon else [])],
         start_new_session=True,
+        stdout=subprocess.PIPE,
     )
+    assert descendant.stdout is not None
+    try:
+        if descendant.stdout.readline() != b"ready\n":
+            raise RuntimeError("child ended before ready")
+    finally:
+        descendant.stdout.close()
     _publish(root / "client.pid", str(os.getpid()))
     for line in sys.stdin:
         if line.strip() == "recall":
@@ -49,6 +56,7 @@ def child(directory: str, *, daemon: bool) -> None:
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     _publish(Path(directory, "child.pid"), str(os.getpid()))
+    print("ready", flush=True)
     while True:
         time.sleep(1)
 

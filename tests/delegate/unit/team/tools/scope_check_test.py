@@ -151,6 +151,36 @@ class ScopeCheck(Case):
         self.assertIn("t1.md: Scope item `- src/app/util.py` names no `path`", bare)
         self.assertIn("t2.md: Repo: acme/x has no --base", out)
 
+    def test_engineer_covers_are_capped_at_eight_distinct_ids(self):
+        eight = ", ".join([*(f"FR-{n}" for n in range(1, 8)), "NFR-1"])
+        for task in ("build", "light-build"):
+            with self.subTest(task=task):
+                self.assertEqual(
+                    self.check(ticket(["`src/app/main.py`"], covers=eight, task=task)),
+                    (0, "ok\n"),
+                )
+                self.assertEqual(
+                    self.check(ticket(["`src/app/main.py`"], covers=eight + ", FR-1", task=task)),
+                    (0, "ok\n"),
+                )
+                out = self.failures(
+                    ticket(["`src/app/main.py`"], covers=eight + ", NFR-2", task=task)
+                )
+                self.assertIn("t1.md:", out)
+                self.assertIn("9 Covers ids > 8", out)
+                self.assertIn("split it along an interface", out)
+        self.assertEqual(
+            self.check(
+                ticket(["`src/app/main.py`"]),
+                ticket(None, covers=eight + ", NFR-2", task="verify"),
+            ),
+            (0, "ok\n"),
+        )
+
+    def test_engineer_scope_item_count_is_not_capped(self):
+        scope = [f"`src/app/new{n}.py` (new)" for n in range(13)]
+        self.assertEqual(self.check(ticket(scope)), (0, "ok\n"))
+
     def test_linear_saved_description_keeps_its_scope(self):
         # Linear saves a blank line after `Scope:` and `* ` bullets
         saved = (
