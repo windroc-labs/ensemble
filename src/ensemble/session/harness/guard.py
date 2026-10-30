@@ -341,6 +341,17 @@ class Screen:
         while len(self.lines) > LINES or self.lines_size > LINES_SIZE:
             self.lines_size -= len(self.lines.popleft()[1].encode())
 
+    def _restore(self, count: int) -> list[Row]:
+        """The last count retired rows out of both histories."""
+        found = []
+        for _ in range(count):
+            row, text = self.lines.pop()
+            self.lines_size -= len(text.encode())
+            if self.history:
+                self.history.pop()
+            found.append(row)
+        return found[::-1]
+
     def mode(self, key: str, sequence: str) -> None:
         self.modes.pop(key, None)
         self.modes[key] = sequence
@@ -549,21 +560,22 @@ class Screen:
                 self.column += width
 
     def resize(self, rows: int, columns: int) -> None:
-        """As a terminal: a new width rewraps the main screen, its bottom rows kept shown."""
+        """As tmux: height (rows below the cursor go, history rows return), then width."""
         cells, row, column, keyboard = self.normal or (self.cells, self.row, self.column, [])
-        gone = 0
-        if columns != self.columns:
+        cells = cells[: max(row + 1, rows)]
+        back = min(max(0, rows - len(cells)), len(self.lines))
+        while back < len(self.lines) and self.lines[-back - 1][0].wrapped:
+            back += 1
+        restored = self._restore(back)
+        cells, row = restored + cells, row + back
+        if columns != self.columns or any(len(line) != columns for line in restored):
             cells, row, column = reflow(cells, row, column, columns)
-            gone = end = max(0, len(cells) - self.rows)
-            last = row if row >= gone else len(cells) - 1
-            while 0 < end < last and cells[end - 1].wrapped:
-                end += 1
-            if gone and not cells[end - 1].wrapped:  # one the cursor is not on retires whole
-                gone = end
-        row = max(0, row - gone)
-        above = max(0, row + 1 - rows)
-        self._retire(cells, gone + above)
-        cells, row = fit(cells[gone + above :], row - above, rows, columns)
+        cells += [blank(columns) for _ in range(rows - len(cells))]
+        gone = len(cells) - rows
+        self._retire(cells, gone)
+        cells, row = cells[gone:], row - gone
+        if row < 0:
+            row, column = 0, 0
         if self.normal is None:
             self.cells, self.row, self.column = cells, row, min(column, columns)
         else:
@@ -621,9 +633,14 @@ class Screen:
 
         parts = deque([RESET + "\x1b[0m\x1b[?1049l\x1b7\x1b[r\x1b8\r\x1b[J"])
         parts.extend(text for _, text in self.lines)
-        if self.lines and not self.lines[-1][1].endswith("\r\n"):
-            parts.append("\r\n")
         main = self.normal or (self.cells, self.row, self.column, self.keyboard)
+        if self.lines and not self.lines[-1][1].endswith("\r\n"):
+            last, text, first = *self.lines[-1], main[0][0]
+            # a line wrapping onto the screen continues there
+            if text != render(last, wrapped=True, margin=leads_wide(first)) or all(
+                cell == (" ", PLAIN) for cell in first
+            ):
+                parts.append("\r\n")
         parts.append(screen(main[0]))
         if self.normal is not None:
             parts.append(keys(main[3]) + cursor(*main[:3]) + "\x1b[?1049h")
