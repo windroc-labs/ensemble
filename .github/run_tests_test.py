@@ -2,6 +2,7 @@
 runs it.
 """
 
+import builtins
 import contextlib
 import importlib.util
 import io
@@ -95,15 +96,27 @@ class Coverage(unittest.TestCase):
         self.enterContext(warnings.catch_warnings())
         warnings.simplefilter("ignore")
 
+    def start(self):
+        if importlib.util.find_spec("coverage") is None:
+            self.skipTest("coverage.py is unavailable; CI's Unit job installs it")
+        return runner.start_coverage("Unit x", str(self.tmp), self.tmp)
+
     def test_collected_data_is_saved(self):
-        cov = runner.start_coverage("Unit x", str(self.tmp), self.tmp)
+        cov = self.start()
         self.assertIsNotNone(cov)
         runner.save_coverage("Unit x", cov)
         self.assertTrue((self.tmp / runner.COVERAGE_DATA).is_file())
         self.assertEqual(self.out.getvalue(), "")
 
     def test_missing_coverage_warns_and_collects_nothing(self):
-        with mock.patch.dict("sys.modules", {"coverage": None}):
+        real_import = builtins.__import__
+
+        def without_coverage(name, *args, **kwargs):
+            if name == "coverage":
+                raise ImportError("No module named 'coverage'")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", without_coverage):
             self.assertIsNone(runner.start_coverage("Unit x", str(self.tmp), self.tmp))
         self.assertRegex(
             self.out.getvalue(), r"^::warning title=Unit x::unit coverage not collected: .+\n$"
@@ -111,7 +124,7 @@ class Coverage(unittest.TestCase):
         runner.save_coverage("Unit x", None)
 
     def test_failed_save_warns_instead_of_raising(self):
-        cov = runner.start_coverage("Unit x", str(self.tmp), self.tmp)
+        cov = self.start()
         with mock.patch.object(cov, "save", side_effect=OSError("disk full")):
             runner.save_coverage("Unit x", cov)
         self.assertEqual(

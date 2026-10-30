@@ -32,7 +32,7 @@ Once every unit shard passes (none run when only docs or the version changed), t
 A unit shard that cannot collect coverage warns and keeps its tests' result.
 Pull requests and queue groups gate coverage: `Coverage` fails on a shard without data or low diff coverage.
 On pushes to `main` coverage is advisory: the unit jobs' coverage install and upload steps and the whole `Coverage` job may fail without failing `CI`, and diff coverage is not measured.
-Latest `main` coverage, from the newest of the last 20 push runs that has it (a run lacks it when its unit tests or a coverage step failed; its `Coverage` job shows which): `for run in $(gh run list --repo windroc-labs/ensemble --workflow CI --branch main --event push --limit 20 --json databaseId --jq '.[].databaseId'); do gh run download "$run" --repo windroc-labs/ensemble --pattern 'unit-coverage-merged-*' && break; done`.
+Latest `main` coverage, from the newest of the last 20 push runs that has it (a run lacks it when it changed only docs or the version, a unit test failed, or a coverage step failed; its Unit and `Coverage` jobs show which): `for run in $(gh run list --repo windroc-labs/ensemble --workflow CI --branch main --event push --limit 20 --json databaseId --jq '.[].databaseId'); do gh run download "$run" --repo windroc-labs/ensemble --pattern 'unit-coverage-merged-*' && break; done`.
 
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
 The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`
