@@ -1041,8 +1041,9 @@ class HostedSession(Session):
             clients = [store.read()["client"]]
         except SessionError:
             clients = setup.registry.configured()
+        removed = store.close(generation=generation)
         try:
-            if store.close(generation=generation):
+            if removed:
                 cls.viewer().close(name, on)
         finally:
             for client in clients:
