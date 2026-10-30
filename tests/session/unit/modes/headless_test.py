@@ -12,7 +12,6 @@ import sys
 import threading
 import time
 import unittest
-import uuid
 from unittest import mock
 
 from ensemble.session import SESSION_NAME_RULE
@@ -45,7 +44,14 @@ from ensemble.utils import ACCOUNT_ENV as ACCOUNT
 from tests.session.case import PLUGIN_BIN
 from tests.session.fakes.terminal import MemoryHost
 from tests.session.fakes.worker import ScriptedWorker
-from tests.session.headless_support import NOTHING, SID, HeadlessCase, StubClient, StubRun
+from tests.session.headless_support import (
+    GENERATION,
+    NOTHING,
+    SID,
+    HeadlessCase,
+    StubClient,
+    StubRun,
+)
 
 
 class NoHeadless(StubClient):
@@ -94,6 +100,25 @@ class Base(HeadlessCase):
 
         with mock.patch.object(MemoryHost, "headless_worker", autospec=True, side_effect=worker):
             yield calls
+
+
+class GenerationTest(Base):
+    def test_a_worker_with_another_generation_fails_the_start(self):
+        other = ScriptedWorker("w", "e" * 32, code=None)
+        with (
+            mock.patch.object(MemoryHost, "headless_worker", return_value=other),
+            self.assertRaisesRegex(
+                SessionError, f"host memory: worker w generation {'e' * 32}, want {'f' * 32}"
+            ),
+        ):
+            self.start()
+        self.assertEqual(other.closes, 1)
+
+    def test_the_admission_generation_names_the_worker_and_wins_over_host_metadata(self):
+        with self.faked():
+            self.start()
+        self.assertEqual(self.mode.generation, "f" * 32)
+        self.assertEqual(self.mode.worker.name, f"headless-{'f' * 32}")
 
 
 class TuiOnly(Base):
@@ -276,7 +301,7 @@ class Start(Base):
             with self.subTest(error=error):
                 self.recorded, client = [], StubClient(run=UnstreamedRun)
                 client.failure = error
-                worker = ScriptedWorker(code=None)
+                worker = ScriptedWorker(generation=GENERATION, code=None)
                 with (
                     mock.patch.object(MemoryHost, "headless_worker", return_value=worker),
                     self.assertRaises(SessionError) as caught,
@@ -402,7 +427,7 @@ class HomeHost(WorkerHost):
 
 
 class ThroughItsHost(Base):
-    def start_on(self, host, client_class=StubRun, owner=None, **fields):
+    def start_on(self, host, client_class=StubRun, owner=None, generation=GENERATION, **fields):
         spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub", **fields)
         self.mode = HeadlessMode.start(
             spec,
@@ -411,6 +436,7 @@ class ThroughItsHost(Base):
             record=self.recorded.append,
             host=host,
             owner=owner,
+            generation=generation,
         )
         self.addCleanup(self.stop_quietly, self.mode)
         return self.mode
@@ -460,14 +486,14 @@ class ThroughItsHost(Base):
         self.start_on(WorkerHost(worker))
         self.assertEqual(worker.writes, [b""])
 
-    def test_a_named_runs_generation_is_its_hosts_and_a_nameless_ones_its_own(self):
-        host = WorkerHost()
-        named = self.start_on(host, name="r1")
-        self.assertEqual(named.generation, host.starts[0][2]["generation"])
-        self.assertEqual(host.starts[0][0], "r1")
-        nameless = self.start_on(WorkerHost())
-        self.assertRegex(nameless.generation, "^[0-9a-f]{32}$")
-        self.assertNotEqual(nameless.generation, named.generation)
+    def test_a_runs_generation_is_the_one_it_is_given_named_or_not(self):
+        for name, generation in (("r1", "a" * 32), (None, "b" * 32)):
+            with self.subTest(name=name):
+                host = WorkerHost()
+                mode = self.start_on(host, name=name, generation=generation)
+                ((worker, _, metadata),) = host.starts
+                self.assertEqual((mode.generation, metadata["generation"]), (generation,) * 2)
+                self.assertEqual(worker, name or f"headless-{generation}")
 
     def test_a_nameless_run_on_a_named_headless_host_is_refused_before_any_state(self):
         class Committed(StubRun):
@@ -484,7 +510,11 @@ class ThroughItsHost(Base):
             mock.patch.object(host, "_client_env", side_effect=AssertionError("env")),
         ):
             for call in ("preflight", "start"):
-                more = {"record": self.recorded.append} if call == "start" else {}
+                more = (
+                    {"record": self.recorded.append, "generation": GENERATION}
+                    if call == "start"
+                    else {}
+                )
                 with self.subTest(call=call), self.assertRaisesRegex(ConfigError, message):
                     getattr(HeadlessMode, call)(
                         Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub"),
@@ -585,10 +615,7 @@ class ThroughItsHost(Base):
 
     def test_a_named_headless_spec_gets_the_hosts_client_env_and_metadata(self):
         host = HomeHost()
-        with (
-            mock.patch.object(uuid, "uuid4", return_value=uuid.UUID(int=7)),
-            mock.patch.dict(os.environ, {"HM_AMBIENT": "1"}),
-        ):
+        with mock.patch.dict(os.environ, {"HM_AMBIENT": "1"}):
             mode = self.start_on(host, name="w1", resume=True, client_class=HomedRun)
         ((name, launch, metadata),) = host.starts
         self.assertEqual((name, StubRun.specs[-1].env), ("w1", {"HOME_DIR": "/state/w1/d"}))
@@ -598,7 +625,7 @@ class ThroughItsHost(Base):
             {
                 "sid": SID,
                 "client": "stub",
-                "generation": uuid.UUID(int=7).hex,
+                "generation": GENERATION,
                 "home_field": "f",
                 "home_dir": "d",
                 "credential": "c",
@@ -623,7 +650,11 @@ class ThroughItsHost(Base):
                 )
                 client = AccountsClient(Launch(NOTHING), run=HomedRun)
                 for call in ("preflight", "start"):
-                    more = {"record": self.recorded.append} if call == "start" else {}
+                    more = (
+                        {"record": self.recorded.append, "generation": GENERATION}
+                        if call == "start"
+                        else {}
+                    )
                     getattr(HeadlessMode, call)(
                         spec,
                         client,

@@ -810,6 +810,7 @@ class HostedSession(Session):
                 display=display,
                 check_name=check_name,
                 owner=owner,
+                generation=capacity.generation,
             )
             try:
                 capacity.started(running.state)

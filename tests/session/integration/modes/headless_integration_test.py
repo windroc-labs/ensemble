@@ -289,6 +289,7 @@ class Start(Base):
                 registry=self.session_cls._config().registry,
                 record=self.recorded.append,
                 host=GuardHost(),
+                generation="f" * 32,
             )
         self.addCleanup(mode.stop)
         self.assertIsInstance(mode, HeadlessMode)

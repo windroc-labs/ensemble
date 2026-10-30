@@ -38,6 +38,10 @@ class MemoryTerminal(InteractiveProcess):
     def identity(self):
         return self._identity
 
+    @property
+    def generation(self):
+        return self._identity
+
     def _own(self):
         return self.host.processes.get(self.name) is self
 
@@ -131,7 +135,7 @@ class MemoryHost(Host):
 
     def create(self, name, sid=None, *, identity=None, receipt=None, metadata=None, display=None):
         self.serial += 1
-        generation = identity or f"generation-{self.serial}"
+        generation = identity or (metadata or {}).get("generation") or f"generation-{self.serial}"
         if metadata is None:
             metadata = {"sid": sid, "generation": generation}
         process = self.terminal_class(
@@ -156,7 +160,7 @@ class MemoryHost(Host):
         return self.create(name, metadata=metadata, display=display)
 
     def headless_worker(self, name, launch: Launch, metadata) -> InteractiveProcess:
-        return ScriptedWorker(name, (metadata or {}).get("generation") or "g" * 32)
+        return ScriptedWorker(name, metadata["generation"])
 
     def worker_liveness(self, name, generation):
         return self.calls.worker_liveness(name, generation)

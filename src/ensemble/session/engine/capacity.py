@@ -145,8 +145,9 @@ class Admission(AbstractContextManager):
         host: str | None = None,
     ):
         self.client, self.limit, self.hosts = client, limit, hosts
+        self.generation = uuid.uuid4().hex  # the run's identity: its reservation's and its worker's
         self.directory = os.path.join(os.path.expanduser(ROOT), client)
-        self.path = os.path.join(self.directory, f"{uuid.uuid4().hex}.run")
+        self.path = os.path.join(self.directory, f"{self.generation}.run")
         self.record = {"kind": mode, "name": name or sid, "sid": sid}
         if mode == Mode.TUI:
             self.record["host"] = host or next(iter(hosts))

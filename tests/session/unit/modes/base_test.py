@@ -202,7 +202,12 @@ class BaseModeTest(Case):
             self.assertRaises(ConfigError) as caught,
         ):
             headless.HeadlessMode.start(
-                spec, client, registry=registry(), record=recorded.append, host=MemoryHost()
+                spec,
+                client,
+                registry=registry(),
+                record=recorded.append,
+                host=MemoryHost(),
+                generation="f" * 32,
             )
         self.assertTrue(str(caught.exception).startswith("refused inside an agent session"))
         self.assertEqual((client.mode.asked, recorded), ([], []))
@@ -257,7 +262,7 @@ class AccountTest(Case):
             KINDS, ("start", "preflight"), ({ACCOUNT: "nope"}, {ACCOUNT: "Bad!"})
         ):
             host, recorded = mock.Mock(), []
-            more = {"record": recorded.append} if call == "start" else {}
+            more = {"record": recorded.append, "generation": "f" * 32} if call == "start" else {}
             with (
                 self.subTest(mode=mode.kind.value, call=call, env=env),
                 self.assertRaises(ConfigError) as caught,

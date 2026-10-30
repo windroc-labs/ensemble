@@ -325,7 +325,7 @@ class Host(ABC):
         events: str | None = None,
         metadata: Mapping[str, str] | None = None,
     ) -> InteractiveProcess:
-        """Managed worker `name` under the guard (WDRC-199 FR-13)."""
+        """Managed worker `name` of metadata's generation under the guard (WDRC-199 FR-13)."""
         raise SessionError(f"host {self.name} runs no managed worker")
 
     def worker_liveness(self, name: str, generation: str) -> Liveness:

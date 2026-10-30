@@ -171,7 +171,7 @@ class AdmissionTest(Case):
         first = self.enter(mode=Mode.TUI)
         with first:
             records = list(Path(first.directory).glob("*.run"))
-            self.assertEqual(len(records), 1)
+            self.assertEqual([record.name for record in records], [f"{first.generation}.run"])
             self.assertEqual(json.loads(records[0].read_text())["sid"], "s1")
             # Simulate a vanished launcher after spawn by retaining its pre-spawn reservation.
             first.started(lambda: Liveness.LIVE)

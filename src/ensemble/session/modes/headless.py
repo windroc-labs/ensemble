@@ -156,7 +156,7 @@ class HeadlessMode(BaseMode):
         display: Display = None,
     ) -> Prepared:
         prepared, _, metadata, _ = cls._prepare(
-            spec, client, registry=registry, host=host, display=display
+            spec, client, registry=registry, host=host, display=display, generation=uuid.uuid4().hex
         )
         if metadata is not None:
             host._preflight(prepared.spec.name or "", _launch(prepared), metadata)
@@ -171,6 +171,7 @@ class HeadlessMode(BaseMode):
         registry: Registry,
         host: Host,
         display: Display,
+        generation: str,
     ) -> tuple[Prepared, Headless, Mapping[str, str] | None, tuple[str, str] | None]:
         """metadata: a named run's, for its Host; None: a nameless run's. Last, the prompt file this
         mode writes.
@@ -185,7 +186,9 @@ class HeadlessMode(BaseMode):
         drop = identity_drop(registry)
         name, metadata = spec.name, None
         if name is not None:
-            spec, metadata = cls._hosted(spec, run._home(), host, checked_name(name), account)
+            spec, metadata = cls._hosted(
+                spec, run._home(), host, checked_name(name), account, generation=generation
+            )
         spec = cls._noted(spec, client)
         run._context = host._client_context()
         spec, prompt_file = cls._pointed(spec, run._context, spec.workdir)
@@ -209,29 +212,31 @@ class HeadlessMode(BaseMode):
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
         owner: str | None = None,
+        generation: str,
     ) -> Self:
         prepared, run, metadata, prompt_file = cls._prepare(
-            spec, client, registry=registry, host=host, display=display
+            spec, client, registry=registry, host=host, display=display, generation=generation
         )
         if prompt_file:
             cls._write_prompt(*prompt_file)
         run.commit()
         record(prepared.info)
-        metadata = {"generation": uuid.uuid4().hex, **(metadata or {})}
+        metadata = {**(metadata or {}), "generation": generation}
         if owner is not None and prepared.spec.name is not None:
             metadata["harness"] = owner
-        name = prepared.spec.name or f"headless-{metadata['generation']}"
+        name = prepared.spec.name or f"headless-{generation}"
         try:
             worker = host.worker(name, _launch(prepared), terminal=False, metadata=metadata)
         except (OSError, ValueError) as e:
             raise SessionError(f"cannot start {prepared.argv[0]}: {e}") from e
+        worker = cls._adopted(worker, host, generation)
         try:
             try:
                 worker.write(b"")
             except SessionError:
                 if worker.state() != Liveness.ABSENT:
                     raise
-            mode = cls(prepared, worker, worker.generation)
+            mode = cls(prepared, worker, generation)
             out, err = mode.feeds["stdout"], mode.feeds["stderr"]
             for feed, events, eof, done in (
                 (out, run.events(out), mode.eof[0], mode.done[0]),
@@ -303,7 +308,6 @@ class HeadlessMode(BaseMode):
 
     @property
     def generation(self) -> str:
-        """Its Host's for a named run, else its own."""
         return self._generation
 
     def poll(self, timeout: float) -> tuple[list[SessionEvent | Stderr | ClientBound], bool]:

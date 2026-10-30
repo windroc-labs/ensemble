@@ -12,7 +12,6 @@ import stat
 import subprocess
 import sys
 import time
-import uuid
 from collections.abc import Callable
 
 from ensemble.session.engine.tmux_cli import display_error
@@ -272,7 +271,9 @@ def start(
     if why := display_error(display):
         raise ConfigError(why)
     created_events(events)
-    generation = (metadata or {}).get("generation") or uuid.uuid4().hex
+    generation = (metadata or {}).get("generation")
+    if not generation:
+        raise ConfigError("worker generation: missing")
     if not GENERATION.fullmatch(generation):
         raise ConfigError("worker generation: invalid")
     record = {

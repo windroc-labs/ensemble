@@ -186,6 +186,7 @@ class TuiTest(Base):
                 registry=self.session_cls._config().registry,
                 record=lambda _: None,
                 host=host,
+                generation="f" * 32,
             )
         _, launch = host.calls.worker.call_args.args
         metadata = host.calls.worker.call_args.kwargs["metadata"]
@@ -680,6 +681,7 @@ class TuiTest(Base):
                 registry=self.session_cls._config().registry,
                 record=lambda _: None,
                 host=host,
+                generation="f" * 32,
             )
         terminal = host.processes["w1"]
         path = self.rollout()

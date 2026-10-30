@@ -68,6 +68,7 @@ from tests.session.tmux_host_support import Base as TmuxBase
 from tests.utils.sandbox import scratch
 
 NAME = "w1"
+GENERATION = "f" * 32
 
 TS = "2026-10-11T12:00:00.000+00:00"
 
@@ -224,6 +225,7 @@ class Base(Case):
             host=self.host,
             display=display,
             owner=self.owner(),
+            generation=GENERATION,
         )
         self.prepared = mode.prepared
         return mode
@@ -599,6 +601,28 @@ class StartTest(Base):
         self.assertNoSessionDir()
         self.assertEqual(self.recorded, [])
         self.host.calls.worker.assert_not_called()
+
+    def test_its_generation_is_the_admissions_in_session_json_and_the_hosts_worker(self):
+        mode = self.start()
+        self.assertEqual(mode.generation, GENERATION)
+        self.assertEqual(
+            self.host.calls.worker.call_args.kwargs["metadata"]["generation"], GENERATION
+        )
+        self.assertEqual(mode._terminal.generation, GENERATION)
+
+    def test_a_worker_with_another_generation_fails_the_start(self):
+        create = self.host.create
+        with (
+            mock.patch.object(
+                self.host, "create", lambda name, **kw: create(name, **kw, identity="e" * 32)
+            ),
+            self.assertRaisesRegex(
+                SessionError, f"host memory: worker {NAME} generation {'e' * 32}, want {GENERATION}"
+            ),
+        ):
+            self.start()
+        self.assertEqual(self.host.processes, {})
+        self.assertNoSessionDir()
 
     def test_without_ensemble_session_on_path_nothing_starts(self):
         with (
@@ -2811,6 +2835,7 @@ class TmuxErrorTest(TmuxBase):
                 record=lambda _info: None,
                 host=self.host,
                 owner=owner,
+                generation=GENERATION,
             )
         self.assertEqual(
             str(caught.exception),
@@ -3230,6 +3255,7 @@ class OwnedBase(Base):
         self.handle.state.return_value = Liveness.LIVE
         self.handle.returncode.return_value = None
         self.handle.read.return_value = []
+        self.handle.generation = GENERATION
         self.host.worker = mock.Mock(return_value=self.handle)
 
     def owned_start(self) -> tui.TuiMode:

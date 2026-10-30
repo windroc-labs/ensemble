@@ -1,8 +1,8 @@
 """Session modes own startup, polling and idempotent shutdown: prepare, record, then launch."""
 
+import contextlib
 import json
 import os
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import replace
@@ -28,7 +28,13 @@ from ensemble.session.engine.types import (
     Spec,
     Stderr,
 )
-from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, Host, host_resume
+from ensemble.session.hosts.base import (
+    GUARD_HOOK_SOCKET,
+    GUARD_LEASE_FD,
+    Host,
+    InteractiveProcess,
+    host_resume,
+)
 from ensemble.utils import (
     ACCOUNT_ENV,
     AGENT_SESSION_ENV,
@@ -152,10 +158,11 @@ class BaseMode(ABC):
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
         owner: str | None = None,
+        generation: str,
     ) -> Self:
         """The session started; spec.sid set; registry: tui settings and identity_drop; host: the
         selected execution Host; display: a tui session's, kept as given (other modes refuse one);
-        owner: its session harness's dir (tui, headless, in_process).
+        owner: its session harness's dir (tui, headless, in_process); generation: its admission's.
         """
 
     @property
@@ -221,7 +228,13 @@ class BaseMode(ABC):
 
     @staticmethod
     def _hosted(
-        spec: Spec, client_home: ClientHome | None, host: Host, name: str, account: str = ""
+        spec: Spec,
+        client_home: ClientHome | None,
+        host: Host,
+        name: str,
+        account: str = "",
+        *,
+        generation: str,
     ) -> tuple[Spec, Mapping[str, str]]:
         """spec with `host`'s client env for `name`, and the metadata its Host keeps."""
         home = host._client_env(name, spec.client or "", client_home, resume=spec.resume)
@@ -238,7 +251,7 @@ class BaseMode(ABC):
             ),
             "sid": spec.sid or "",
             "client": spec.client or "session",
-            "generation": uuid.uuid4().hex,
+            "generation": generation,
             **(
                 {
                     "home_field": client_home.field,
@@ -263,6 +276,16 @@ class BaseMode(ABC):
             ),
         }
         return replace(spec, env={**spec.env, **home}), metadata
+
+    @staticmethod
+    def _adopted(worker: InteractiveProcess, host: Host, generation: str) -> InteractiveProcess:
+        if worker.generation == generation:
+            return worker
+        with contextlib.suppress(SessionError):
+            worker.close()
+        raise SessionError(
+            f"host {host.name}: worker {worker.name} generation {worker.generation}, want {generation}"
+        )
 
     @staticmethod
     def _host_resume(prepared: Prepared, host: Host, name: str) -> Prepared:

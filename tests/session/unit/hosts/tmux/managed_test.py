@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -90,7 +91,10 @@ class ManagedTest(Case):
         managed.save_json(diagnostic, {"text": "old error"})
         with spawned():
             channel = TmuxHost("tmux").worker(
-                "worker", Launch((sys.executable,), cwd=self.home), terminal=True
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
             )
             channel.close()
         self.assertFalse(os.path.exists(diagnostic))
@@ -103,6 +107,7 @@ class ManagedTest(Case):
                 Launch((sys.executable,), cwd=self.home),
                 terminal=True,
                 display="x" * 65536,
+                metadata={"generation": uuid.uuid4().hex},
             )
         spawn.assert_not_called()
         self.assertFalse(os.path.lexists(managed.location("tmux", "worker")))
@@ -112,7 +117,11 @@ class ManagedTest(Case):
         display = "manager/" + "x" * 5000
         with spawned():
             channel = host.worker(
-                "worker", Launch((sys.executable,), cwd=self.home), terminal=True, display=display
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                display=display,
+                metadata={"generation": uuid.uuid4().hex},
             )
             channel.close()
         with mock.patch.object(host, "worker_liveness", return_value=Liveness.LIVE):
@@ -153,7 +162,10 @@ class ManagedTest(Case):
         self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.UNKNOWN)
         with mock.patch.object(managed.subprocess, "Popen") as spawn, self.assertRaises(OSError):
             TmuxHost("tmux", tmux=mock.Mock()).worker(
-                "worker", Launch((sys.executable,), cwd=self.home), terminal=False
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=False,
+                metadata={"generation": uuid.uuid4().hex},
             )
         spawn.assert_not_called()
         os.unlink(root)
@@ -167,7 +179,12 @@ class ManagedTest(Case):
             mock.patch.object(managed.subprocess, "Popen", side_effect=FileNotFoundError),
             self.assertRaises(managed.SessionError),
         ):
-            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
+            )
         current = managed.load_json(managed.location("tmux", "worker") + "/current.json")
         self.assertEqual(host.worker_liveness("worker", current["generation"]), Liveness.ABSENT)
 
@@ -178,7 +195,12 @@ class ManagedTest(Case):
             mock.patch.object(threading.Thread, "start", side_effect=RuntimeError("no threads")),
             self.assertRaisesRegex(RuntimeError, "no threads"),
         ):
-            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=False)
+            host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=False,
+                metadata={"generation": uuid.uuid4().hex},
+            )
         proc = spawn.return_value
         proc.stdin.close.assert_called_once()
         proc.stdout.close.assert_called_once()
@@ -196,8 +218,27 @@ class ManagedTest(Case):
         self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.UNKNOWN)
         with self.assertRaises(SessionBusy):
             TmuxHost("tmux", tmux=mock.Mock()).worker(
-                "worker", Launch((sys.executable,), cwd=self.home), terminal=True
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
             )
+
+    def test_start_requires_the_metadata_generation(self):
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        for metadata in (None, {}, {"sid": "s1"}):
+            with (
+                self.subTest(metadata=metadata),
+                mock.patch.object(managed.subprocess, "Popen") as spawn,
+                self.assertRaisesRegex(managed.ConfigError, "worker generation: missing"),
+            ):
+                host.worker(
+                    "worker",
+                    Launch((sys.executable,), cwd=self.home),
+                    terminal=False,
+                    metadata=metadata,
+                )
+            spawn.assert_not_called()
 
     def test_bad_generation_and_missing_record_refuse_before_spawn(self):
         host = TmuxHost("tmux", tmux=mock.Mock())
@@ -210,14 +251,22 @@ class ManagedTest(Case):
             )
         managed.private_directory(managed.location("tmux", "worker"))
         with mock.patch.object(managed.subprocess, "Popen") as spawn, self.assertRaises(Unanswered):
-            host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
+            )
         spawn.assert_not_called()
 
     def test_worker_start_inherits_only_lease_into_guard(self):
         host = TmuxHost("tmux", tmux=mock.Mock())
         with spawned() as spawn:
             channel = host.worker(
-                "worker", Launch((sys.executable,), cwd=self.home), terminal=False
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=False,
+                metadata={"generation": uuid.uuid4().hex},
             )
             channel.close()
         options = spawn.call_args.kwargs
@@ -231,7 +280,12 @@ class ManagedTest(Case):
         """Its guard keeps the display grace, so a first show still gets an early death's screen."""
         host = TmuxHost("tmux", tmux=mock.Mock())
         with spawned() as spawn:
-            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel = host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
+            )
             channel.close()
         argv = spawn.call_args.args[0]
         start = argv.index("--terminal")
@@ -243,7 +297,12 @@ class ManagedTest(Case):
     def test_terminal_worker_guard_and_display_take_the_hidden_size(self):
         host = TmuxHost("tmux", {"hidden_size": "100x30"}, tmux=mock.Mock())
         with spawned() as spawn:
-            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel = host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
+            )
             channel.close()
         argv = spawn.call_args.args[0]
         self.assertEqual(argv[argv.index("--size") + 1], "100x30")
@@ -327,7 +386,12 @@ class ManagedTest(Case):
         with clients():
             self.assertEqual(host.rows(), [])
         with clients(), spawned():
-            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel = host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
+            )
             channel.close()
         self.assertNotEqual(channel.generation, generation)
 
@@ -407,7 +471,9 @@ class ManagedTest(Case):
             mock.patch.dict(os.environ, environ),
             spawned() as spawn,
         ):
-            host.worker("worker", launch, terminal=False).close()
+            host.worker(
+                "worker", launch, terminal=False, metadata={"generation": uuid.uuid4().hex}
+            ).close()
         return spawn.call_args.kwargs["env"]
 
     def test_launch_env_verbatim_without_tmux(self):
@@ -448,7 +514,7 @@ class OneShotTest(Case):
                 name,
                 Launch((sys.executable,), cwd=self.home),
                 terminal=False,
-                metadata={"generation": generation} if generation else None,
+                metadata={"generation": generation or uuid.uuid4().hex},
             )
 
     def live_tui(self, name, generation):
@@ -617,12 +683,22 @@ class SocketPathTest(Case):
                     ):
                         if root == at:
                             with self.assertRaises(PermissionError):
-                                host.worker("worker", launch, terminal=terminal)
+                                host.worker(
+                                    "worker",
+                                    launch,
+                                    terminal=terminal,
+                                    metadata={"generation": uuid.uuid4().hex},
+                                )
                             self.assertEqual(mkdir.call_args.args[0], at)
                         else:
                             with self.assertRaisesRegex(
                                 ConfigError, "104 bytes, over the 103-byte"
                             ):
-                                host.worker("worker", launch, terminal=terminal)
+                                host.worker(
+                                    "worker",
+                                    launch,
+                                    terminal=terminal,
+                                    metadata={"generation": uuid.uuid4().hex},
+                                )
                             mkdir.assert_not_called()
                         spawn.assert_not_called()

@@ -107,6 +107,7 @@ class Base(Case):
             record=record or self.recorded.append,
             host=MemoryHost(),
             display=display,
+            generation="f" * 32,
         )
         return self.mode.prepared
 
@@ -384,6 +385,7 @@ class Start(Base):
             registry=self.session_cls._config().registry,
             record=self.recorded.append,
             host=MemoryHost(),
+            generation="f" * 32,
         )
         self.addCleanup(mode.stop)
         self.assertIsInstance(mode, InProcessMode)
@@ -393,7 +395,7 @@ class Start(Base):
         mode.stop()
         self.assertEqual((mode.state(), mode.returncode(0)), ("absent", -signal.SIGKILL))
 
-    def test_an_owned_start_runs_the_same_with_a_generation_of_its_own(self):
+    def test_an_owned_start_runs_the_same_with_the_generation_it_is_given(self):
         modes = [
             InProcessMode.start(
                 SPEC,
@@ -402,14 +404,13 @@ class Start(Base):
                 record=self.recorded.append,
                 host=MemoryHost(),
                 owner="/harness",
+                generation=generation,
             )
-            for _ in range(2)
+            for generation in ("a" * 32, "b" * 32)
         ]
         for mode in modes:
             self.addCleanup(mode.stop)
-        generations = {mode.generation for mode in modes}
-        self.assertEqual(len(generations), 2)
-        self.assertTrue(all(isinstance(g, str) and g for g in generations))
+        self.assertEqual([mode.generation for mode in modes], ["a" * 32, "b" * 32])
         self.assertEqual(modes[0].poll(WAIT), ([Reply("a")], False))
 
     def test_send_and_screen_raise_driver_error(self):
