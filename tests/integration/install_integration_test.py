@@ -1,3 +1,4 @@
+import contextlib
 import hashlib
 import json
 import os
@@ -484,8 +485,11 @@ class InstallTest(Case):
                     markers = interrupt if isinstance(interrupt, tuple) else (interrupt,)
                     threading.Thread(target=ctrl_c, args=(markers, proc, sig), daemon=True).start()
                 if stdin is not None:
-                    proc.stdin.write(stdin)
-                    proc.stdin.close()
+                    # A script may exit before it reads stdin, as Popen.communicate allows.
+                    with contextlib.suppress(BrokenPipeError):
+                        proc.stdin.write(stdin)
+                    with contextlib.suppress(BrokenPipeError):
+                        proc.stdin.close()
                 missed = terminal.answer(answers, proc) if terminal else None
                 try:
                     proc.wait(timeout=60)
@@ -3183,6 +3187,14 @@ class InstallTest(Case):
         self.assertEqual(result.code, 2)
         self.assertIn(f"install.sh: --ref: not a git ref: {ref}\n", result.stderr)
         self.assertTrue(victim.is_dir())
+        self.assertEqual(self.calls(), [])
+
+    def test_a_script_exiting_before_reading_stdin_still_returns_its_result(self):
+        # More than a pipe holds: the write meets the script's exit, never its read.
+        stdin = "x" * (1 << 22)
+        result = self.run_install("--ref", "../x", "--opencode-key-stdin", stdin=stdin)
+        self.assertEqual(result.code, 2)
+        self.assertIn("install.sh: --ref: not a git ref: ../x\n", result.stderr)
         self.assertEqual(self.calls(), [])
 
     def test_p7_refused_ref_keeps_saved_clients(self):
