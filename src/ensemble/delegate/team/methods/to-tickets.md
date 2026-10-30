@@ -8,9 +8,11 @@ Break a plan, spec, or conversation into a set of **tickets**: tracer-bullet ver
 
 Work from whatever is already in the conversation context. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
 
-### 2. Explore the codebase (optional)
+### 2. Explore the codebase
 
-If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
+Grep the target repo for every symbol, option, command and file the PRD changes or removes, plus their callers and tests. Every hit goes into one ticket's Scope or is ruled out in a line.
+
+Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
 
 Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
 
