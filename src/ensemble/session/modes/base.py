@@ -177,6 +177,9 @@ class BaseMode(ABC):
     def client_alive(self) -> bool:
         return self.state() == Liveness.LIVE
 
+    def exited(self) -> bool:
+        return False
+
     @abstractmethod
     def send(self, text: str) -> bool | None:
         """False: retry after pumping; None/True: submitted."""

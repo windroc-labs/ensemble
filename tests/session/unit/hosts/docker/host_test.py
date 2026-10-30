@@ -2527,6 +2527,10 @@ class Release(StartBase):
         self.host._release("w", GEN)
         self.assertEqual(self.broker.closed, [])
 
+    def test_no_lingering_guard_so_no_client_reads_as_exited(self):
+        self.listed("w")
+        self.assertFalse(self.host._client_exited("w", GEN))
+
 
 class HeadlessWorkerTest(StartBase):
     """A headless run's guarded worker: started directly, kind headless, never listed as a tui."""

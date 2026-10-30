@@ -195,7 +195,7 @@ class ManagedTest(Case):
         self.assertNotIn("--display-grace", spawn.call_args.args[0])
 
     def test_terminal_worker_guard_awaits_the_display_it_starts(self):
-        """tmux starts the guard's display at launch, so its guard keeps the display grace."""
+        """Its guard keeps the display grace, so a first show still gets an early death's screen."""
         host = TmuxHost("tmux", tmux=mock.Mock())
         with spawned() as spawn:
             channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
@@ -263,6 +263,35 @@ class ManagedTest(Case):
             self.assertFalse(managed.held(directory + "/" + generation + "/lease"))
         finally:
             os.close(lease)
+
+    def test_exited_reads_its_runs_exited_state_even_while_its_lease_is_held(self):
+        generation = "a" * 32
+        directory = guard_dir(generation, "exited")
+        lease = managed.lease_file(directory + "/" + generation + "/lease")
+        try:
+            managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.LIVE)
+            self.assertTrue(managed.exited("tmux", "worker", generation))
+            self.assertTrue(TmuxHost("tmux")._client_exited("worker", generation))
+        finally:
+            os.close(lease)
+
+    def test_exited_is_false_for_any_other_state_generation_or_a_missing_run(self):
+        generation = "a" * 32
+        self.assertFalse(managed.exited("tmux", "worker", generation))
+        for state in ("starting", "running"):
+            with self.subTest(state=state):
+                guard_dir(generation, state)
+                self.assertFalse(managed.exited("tmux", "worker", generation))
+        directory = guard_dir(generation, "exited")
+        for other in ("b" * 32, "../" + generation, ""):
+            with self.subTest(other=other):
+                self.assertFalse(managed.exited("tmux", "worker", other))
+        managed.save_json(
+            directory + "/" + generation + "/state.json",
+            {"generation": "b" * 32, "state": "exited"},
+        )
+        self.assertFalse(managed.exited("tmux", "worker", generation))
 
     def spawned_env(self, launch: Launch, **environ) -> dict:
         """The guard's environment for `launch`, the harness's environment holding `environ`."""

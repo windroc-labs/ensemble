@@ -211,6 +211,21 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
         return Liveness.UNKNOWN
 
 
+def exited(host: str, name: str, generation: str) -> bool:
+    """Whether run `generation`'s guard wrote its client exited, whatever its lease."""
+    if not GENERATION.fullmatch(generation):
+        return False
+    directory = location(host, name)
+    run = os.path.join(directory, generation)
+    try:
+        check_directory(directory)
+        check_directory(run)
+        value = load_json(os.path.join(run, "state.json"))
+    except (OSError, ValueError):
+        return False
+    return value == {"generation": generation, "state": "exited"}
+
+
 def records(host: str) -> dict[str, WorkerState]:
     root = control_root()
     if not os.path.lexists(root):

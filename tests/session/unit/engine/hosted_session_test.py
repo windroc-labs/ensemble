@@ -2028,6 +2028,17 @@ class TuiStartTest(HostedTuiBase):
         session.stop()
         self.assertEqual(session.status().state, "gone")
 
+    def test_a_tui_status_is_gone_once_its_client_exited_while_its_guard_lingers(self):
+        """A guard lingering for a first show's display holds its lease: liveness stays LIVE."""
+        session = self.tui(name="w1")
+        with mock.patch.object(self.host, "_client_exited", return_value=True) as exited:
+            found = session.status()
+            self.assertTrue(session.alive())
+        exited.assert_called_once_with("w1", session.generation)
+        self.assertEqual(
+            (found.alive, found.state, found.cwd, found.attach), (False, "gone", None, None)
+        )
+
     def test_send_and_screen_refuse_a_dead_pane(self):
         session = own(self, name="w1")
         terminal = self.host.processes["w1"]
