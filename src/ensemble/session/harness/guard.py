@@ -890,6 +890,7 @@ class Guard:
             self.spawned = time.monotonic()
             if (info := process_info(self.proc.pid)) is not None:
                 self.client = [self.proc.pid, info[1]]
+            self.state("running")
         finally:
             if slave is not None:
                 os.close(slave)
@@ -908,7 +909,6 @@ class Guard:
         for descriptor in (*self.streams, self.input_fd, 0, 1):
             os.set_blocking(descriptor, False)
         self.known = descendants(processes(), {}, os.getpid())
-        self.state("running")
         self.emit(json_frame(b"s", {"pid": self.proc.pid}))
 
     def emit(self, wire: bytes, ack: socket.socket | None = None, delivery: str = "") -> None:

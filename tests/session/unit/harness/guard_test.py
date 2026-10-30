@@ -1971,6 +1971,32 @@ class EndTest(Base):
             {"generation": os.path.basename(self.home), "state": "running", "client": [100, "777"]},
         )
 
+    def test_a_guard_killed_at_its_first_scan_leaves_its_client_recorded(self):
+        """A SIGKILL runs no handler: the record on disk at the guard's first process scan is its
+        last; with the lease free, its run ends once that client is gone.
+        """
+        generation = os.path.basename(self.home)
+        runtime, records = self.runtime(lease="9"), []
+        with self.world(lambda _: []):
+            listdir = os.listdir
+
+            def scan(path):
+                if path == "/proc" and not records:
+                    try:
+                        records.append(self.record())
+                    except FileNotFoundError:
+                        records.append(None)
+                return listdir(path)
+
+            with mock.patch.object(os, "listdir", side_effect=scan):
+                runtime.start()
+            self.assertEqual(
+                records, [{"generation": generation, "state": "running", "client": [100, "777"]}]
+            )
+            self.assertFalse(guard.ended(records[0], generation))
+        with mock.patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            self.assertTrue(guard.ended(records[0], generation))
+
     def test_an_unconfirmed_tree_exit_records_failed_with_its_client(self):
         """The harness hangs up; the client outlives every signal past the close deadline."""
         runtime = self.runtime(lease="9")
