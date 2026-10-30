@@ -9,6 +9,7 @@ import os
 import re
 import signal
 import struct
+import subprocess
 import sys
 import termios
 import tty
@@ -1979,11 +1980,28 @@ class ProbeTest(Case):
         self.write(json.dumps({"generation": "a" * 32, "state": "exited"}))
         self.assertEqual(self.probe(), "exited\n")
 
+    def test_free_lease_with_its_recorded_client_gone_is_exited(self):
+        proc = subprocess.Popen(["true"])
+        token = guard.process_info(proc.pid)[1]
+        proc.wait()
+        live = [os.getpid(), guard.process_info(os.getpid())[1]]
+        for value, word in (
+            ({"state": "running", "client": [proc.pid, token]}, "exited"),
+            ({"state": "failed", "client": None, "error": "OSError: x"}, "exited"),
+            ({"state": "exited", "error": "OSError: guard output undelivered"}, "exited"),
+            ({"state": "running", "client": live}, "dead"),
+            ({"state": "failed", "error": "OSError: x"}, "dead"),
+        ):
+            with self.subTest(value=value):
+                self.write(json.dumps({"generation": "a" * 32, **value}))
+                self.assertEqual(self.probe(), word + "\n")
+
     def test_anything_else_is_dead(self):
         for state, lease in (
             (json.dumps({"generation": "a" * 32, "state": "running"}), True),
             (json.dumps({"generation": "b" * 32, "state": "exited"}), True),
             ("{", True),
+            ("[]", True),
             (None, True),
             (json.dumps({"generation": "a" * 32, "state": "exited"}), False),
         ):

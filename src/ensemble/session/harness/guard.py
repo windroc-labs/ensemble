@@ -1359,8 +1359,33 @@ def hold_lease(path: str) -> int | None:
     return descriptor
 
 
+def exited(record: dict, generation: str) -> bool:
+    """Whether run `generation`'s state record has its guard confirming its client's exit."""
+    return record.get("generation") == generation and record.get("state") == "exited"
+
+
+def ended(record: dict, generation: str) -> bool:
+    """Whether run `generation`, its lease free, ended: its guard confirmed the exit, failed before
+    starting a client, or recorded a client that is gone (a reused pid has another start token).
+    """
+    if exited(record, generation):
+        return True
+    if record.get("generation") != generation or record.get("state") not in ("running", "failed"):
+        return False
+    match record.get("client", "unrecorded"):
+        case None:
+            return record["state"] == "failed"
+        case [int() as pid, str() as token] if type(pid) is int and pid > 0:
+            try:
+                info = process_info(pid)
+            except OSError:
+                return False
+            return info is None or info[1] != token or info[2]
+    return False
+
+
 def probe(directory: str) -> str:
-    """live: a guard holds DIR/lease; exited: free, its state.json confirming the exit; absent: no
+    """live: a guard holds DIR/lease; exited: free, its state.json recording its end; absent: no
     DIR; dead: anything else.
     """
     if not os.path.lexists(directory):
@@ -1379,8 +1404,11 @@ def probe(directory: str) -> str:
     except (OSError, ValueError):
         return "dead"
     else:
-        expected = {"generation": os.path.basename(directory), "state": "exited"}
-        return "exited" if value == expected else "dead"
+        return (
+            "exited"
+            if isinstance(value, dict) and ended(value, os.path.basename(directory))
+            else "dead"
+        )
     finally:
         os.close(descriptor)
 

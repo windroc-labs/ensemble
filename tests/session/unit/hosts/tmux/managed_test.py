@@ -2,6 +2,7 @@
 
 import contextlib
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -37,15 +38,39 @@ def spawned(read=EXITED):
         yield spawn
 
 
-def guard_dir(generation, state, name="worker"):
-    """`name`'s guard dir, `generation` current in `state`."""
+def guard_dir(generation, state, name="worker", **fields):
+    """`name`'s guard dir, `generation` current in `state` with `fields`."""
     directory = managed.location("tmux", name)
     managed.private_directory(directory + "/" + generation)
     managed.save_json(directory + "/current.json", {"generation": generation})
     managed.save_json(
-        directory + "/" + generation + "/state.json", {"generation": generation, "state": state}
+        directory + "/" + generation + "/state.json",
+        {"generation": generation, "state": state, **fields},
     )
     return directory
+
+
+def free_lease(directory, generation):
+    os.close(managed.lease_file(directory + "/" + generation + "/lease"))
+
+
+def reaped():
+    """A client record, [pid, start token], of a process that ended and was reaped."""
+    proc = subprocess.Popen(["true"])
+    token = guard.process_info(proc.pid)[1]  # unreaped until the wait: listed, a zombie at worst
+    proc.wait()
+    return [proc.pid, token]
+
+
+def zombie(case):
+    """A client record of an ended process its parent has not reaped."""
+    proc = subprocess.Popen(["true"])
+    case.addCleanup(proc.wait)
+    deadline = time.monotonic() + 10
+    while not guard.process_info(proc.pid)[2]:
+        case.assertLess(time.monotonic(), deadline, "no zombie")
+        time.sleep(0.01)
+    return [proc.pid, guard.process_info(proc.pid)[1]]
 
 
 class ManagedTest(Case):
@@ -249,6 +274,66 @@ class ManagedTest(Case):
         os.chmod(directory + "/" + generation + "/lease", 0o600)
         self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
         self.assertEqual(managed.liveness("tmux", "worker", "b" * 32), Liveness.UNKNOWN)
+
+    def test_a_free_lease_ends_a_run_whose_recorded_client_is_gone(self):
+        """A guard that ended without confirming its client's exit (killed, or failed) leaves its
+        client recorded: the run ended once that client is gone, reaped, a zombie, or its pid
+        another process's; while it runs, the run stays unknown.
+        """
+        generation = "a" * 32
+        live = [os.getpid(), guard.process_info(os.getpid())[1]]
+        for state, client, expected in (
+            ("running", reaped(), Liveness.ABSENT),
+            ("failed", zombie(self), Liveness.ABSENT),
+            ("running", [live[0], live[1] + "0"], Liveness.ABSENT),
+            ("running", live, Liveness.UNKNOWN),
+            ("failed", live, Liveness.UNKNOWN),
+            ("failed", None, Liveness.ABSENT),
+            ("running", None, Liveness.UNKNOWN),
+            ("starting", reaped(), Liveness.UNKNOWN),
+            ("running", [str(live[0]), live[1]], Liveness.UNKNOWN),
+            ("running", [True, live[1]], Liveness.UNKNOWN),
+        ):
+            with self.subTest(state=state, client=client):
+                directory = guard_dir(generation, state, client=client)
+                free_lease(directory, generation)
+                self.assertEqual(managed.liveness("tmux", "worker", generation), expected)
+        for state in ("running", "failed"):
+            with self.subTest(state=state, client="unrecorded"):
+                guard_dir(generation, state)
+                self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.UNKNOWN)
+        guard_dir(generation, "running", client=reaped())
+        lease = managed.lease_file(directory + "/" + generation + "/lease")
+        try:
+            managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.LIVE)
+        finally:
+            os.close(lease)
+
+    def test_a_run_ended_with_its_client_gone_is_unlisted_and_frees_its_name(self):
+        """The guard gone without writing exited, its client too: ls omits it, a start reuses the
+        name (a close takes the same liveness).
+        """
+        generation = "a" * 32
+        directory = guard_dir(generation, "running", client=reaped())
+        free_lease(directory, generation)
+        managed.save_json(
+            directory + "/current.json",
+            {"host": "tmux", "name": "worker", "generation": generation},
+        )
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        self.assertEqual(host.rows(), [])
+        with spawned():
+            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel.close()
+        self.assertNotEqual(channel.generation, generation)
+
+    def test_an_exit_recorded_with_a_later_guard_error_still_ended(self):
+        generation = "a" * 32
+        directory = guard_dir(generation, "exited", error="OSError: guard output undelivered")
+        free_lease(directory, generation)
+        self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
+        self.assertTrue(managed.exited("tmux", "worker", generation))
 
     def test_a_concurrent_probe_is_no_live_guard(self):
         """Probes take the lease shared: one probing (as ls or a tmux hook does) while another asks

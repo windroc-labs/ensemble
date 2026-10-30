@@ -200,11 +200,7 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
             except BlockingIOError:
                 return Liveness.LIVE
             value = load_json(os.path.join(run, "state.json"))
-            return (
-                Liveness.ABSENT
-                if value == {"generation": generation, "state": "exited"}
-                else Liveness.UNKNOWN
-            )
+            return Liveness.ABSENT if guard.ended(value, generation) else Liveness.UNKNOWN
         finally:
             os.close(descriptor)
     except (OSError, ValueError):
@@ -223,7 +219,7 @@ def exited(host: str, name: str, generation: str) -> bool:
         value = load_json(os.path.join(run, "state.json"))
     except (OSError, ValueError):
         return False
-    return value == {"generation": generation, "state": "exited"}
+    return guard.exited(value, generation)
 
 
 def records(host: str) -> dict[str, WorkerState]:
