@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import threading
 from pathlib import Path
 from unittest import mock
@@ -28,6 +29,26 @@ class EndingHost(MemoryHost):
         raise SessionError("no server running")
 
 
+class SettlingHost(MemoryHost):
+    """Runs `settle` on a thread once its rows are read, before the count's file scan."""
+
+    settle = None
+
+    def __init__(self, case):
+        super().__init__()
+        self.case = case
+
+    def _capacity_rows(self):
+        rows = super()._capacity_rows()
+        if self.settle is not None:
+            thread, self.settle = threading.Thread(target=self.settle, daemon=True), None
+            thread.start()
+            self.case.addCleanup(thread.join, 5)
+            thread.join(0.5)
+            self.settled = thread
+        return rows
+
+
 class AdmissionTest(Case):
     def setUp(self):
         self.host = MemoryHost()
@@ -45,6 +66,116 @@ class AdmissionTest(Case):
         )
         self.addCleanup(ticket.close)
         return ticket
+
+    def promptly(self, action):
+        """`action`'s SessionError, or None, once it returns on another thread within 2 s."""
+        outcome = []
+
+        def run():
+            try:
+                action()
+                outcome.append(None)
+            except SessionError as error:
+                outcome.append(error)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        thread.join(2)
+        self.assertTrue(outcome, "blocked behind another start of its client")
+        return outcome[0]
+
+    def admitted(self, ticket):
+        def admit():
+            with ticket:
+                pass
+
+        return self.promptly(admit)
+
+    def test_a_start_in_flight_does_not_hold_back_other_starts_of_its_client(self):
+        for limit in (0, 2):
+            with self.subTest(limit=limit):
+                first = self.enter(limit=limit, mode=Mode.TUI)
+                with first:
+                    self.assertIsNone(
+                        self.admitted(self.enter(limit=limit, name="second", sid="s2"))
+                    )
+                    self.assertIsNone(
+                        self.promptly(lambda: Admission.reconcile("fake", {"h": self.host}))
+                    )
+
+    def test_an_in_flight_tui_start_holds_its_slot_before_its_session_exists(self):
+        first = self.enter(mode=Mode.TUI)
+        with first:
+            error = self.admitted(self.enter(name="second", sid="s2"))
+            self.assertRegex(str(error), "limit 1; held by: first")
+            self.assertIsNone(self.promptly(lambda: Admission.reconcile("fake", {"h": self.host})))
+            self.assertTrue(os.path.exists(first.path))
+            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            first.started(lambda: Liveness.LIVE)
+        with self.assertRaisesRegex(SessionError, "held by: first"), self.enter(name="third"):
+            self.fail("admitted")
+
+    def test_an_in_flight_tui_start_and_its_session_count_once(self):
+        first = self.enter(limit=2, mode=Mode.TUI)
+        with first:
+            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            self.assertIsNone(self.admitted(self.enter(limit=2, name="second", sid="s2")))
+            first.started(lambda: Liveness.LIVE)
+
+    def test_a_tui_start_settling_during_a_count_is_still_counted(self):
+        self.host = SettlingHost(self)
+        first = self.enter(mode=Mode.TUI)
+
+        def settle():
+            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            first.started(lambda: Liveness.LIVE)
+
+        with first:
+            self.host.settle = settle
+            with (
+                self.assertRaisesRegex(SessionError, "held by: first"),
+                self.enter(name="second", sid="s2"),
+            ):
+                self.fail("admitted beside a live first")
+            self.host.settled.join(5)
+        self.assertTrue(os.path.exists(first.path))
+
+    def test_a_failed_start_leaves_no_client_directory(self):
+        root = os.path.dirname(self.enter(limit=0).directory)
+        with self.assertRaisesRegex(ValueError, "failed"), self.enter():
+            raise ValueError("failed")
+        self.assertFalse(os.path.exists(root))
+        first = self.enter()
+        with first:
+            first.started(lambda: Liveness.LIVE)
+        with self.assertRaises(SessionError), self.enter(name="second", sid="s2"):
+            pass
+        first.close()
+        self.assertTrue(os.path.exists(root), "a release from a watcher thread removes nothing")
+        Admission.reconcile("fake", {"h": self.host})
+        self.assertFalse(os.path.exists(root))
+
+    def test_a_release_after_its_state_is_removed_creates_none_meanwhile(self):
+        """A run's watcher may release after its home is being removed; it must not race that."""
+        seen, unlink = [], os.unlink
+
+        def observed(path, **kwargs):
+            seen.append(os.path.exists(self.ensemble))
+            unlink(path, **kwargs)
+
+        for mode in (Mode.HEADLESS, Mode.TUI):
+            with self.subTest(mode=mode):
+                ticket = self.enter(mode=mode)
+                with ticket:
+                    ticket.started(lambda: Liveness.LIVE)
+                shutil.rmtree(self.ensemble)
+                seen.clear()
+                with mock.patch.object(os, "unlink", observed):
+                    ticket.close()
+                self.assertTrue(seen, "the release removed no reservation")
+                self.assertFalse(any(seen), "the release recreated its state")
+                os.mkdir(self.ensemble)
 
     def test_live_transient_reservation_counts_and_failure_rolls_back(self):
         live = mock.Mock(return_value=Liveness.LIVE)
@@ -222,7 +353,7 @@ class AdmissionTest(Case):
         with self.assertRaisesRegex(SessionError, "no server running"), self.enter():
             pass
 
-    def test_concurrent_admissions_serialize_the_count_and_start(self):
+    def test_concurrent_admissions_serialize_the_count_and_reservation(self):
         barrier = threading.Barrier(2)
         admitted, refused, errors = [], [], []
         tickets = [self.enter(name=f"n{i}", sid=f"s{i}") for i in range(2)]
@@ -254,6 +385,7 @@ class AdmissionTest(Case):
         directory = Path(first.directory)
         first.close()
         stale = directory / "old.run"
+        directory.mkdir(parents=True, exist_ok=True)
         stale.write_text('{"kind":"headless","name":"old","sid":"old"}')
         with self.enter():
             pass

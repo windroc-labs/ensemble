@@ -221,6 +221,42 @@ class ClientCapacityTest(HostedTuiBase):
                 boundary.side_effect = None
                 self.start(mode=mode, name="one", sid="s2").close()
 
+    def test_a_start_in_flight_does_not_hold_back_another_start_of_its_client(self):
+        for limit in (0, 2):
+            with self.subTest(limit=limit):
+                self.configure(tui=True, max_runs=limit)
+                self._start_beside_a_held_start()
+
+    def _start_beside_a_held_start(self):
+        reached, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def launch(name, *_args, **_kwargs):
+            if name == "one":
+                reached.set()
+                release.wait(WAIT)
+
+        self.host.calls.headless_worker.side_effect = launch
+        started = []
+        first = threading.Thread(
+            target=lambda: started.append(self.start(name="one", sid="s1")), daemon=True
+        )
+        first.start()
+        self.addCleanup(first.join, WAIT)
+        self.assertTrue(reached.wait(WAIT))
+        second = threading.Thread(
+            target=lambda: started.append(self.start(name="two", sid="s2")), daemon=True
+        )
+        second.start()
+        self.addCleanup(second.join, WAIT)
+        second.join(5)
+        self.assertTrue(started, "a start waited for another start of its client")
+        release.set()
+        first.join(WAIT)
+        for session in started:
+            session.close()
+        self.host.calls.headless_worker.side_effect = None
+
     def test_unconfirmed_failed_shutdown_keeps_the_durable_reservation(self):
         for phase in ("publication", "handoff", "handoff-visible"):
             with self.subTest(phase=phase):
