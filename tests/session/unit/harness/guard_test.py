@@ -6,6 +6,7 @@ import errno
 import io
 import json
 import os
+import re
 import signal
 import struct
 import sys
@@ -44,6 +45,39 @@ def spawned(*, terminal=True, sockets=None, proc=None):
         )
 
 
+def replayed(screen) -> bytes:
+    return "".join(screen.replay()).encode()
+
+
+def shown(screen, rows=None, columns=None):
+    """A reference terminal of the display's size that got screen's replay."""
+    terminal = guard.Screen(1 << 30, rows=rows or screen.rows, columns=columns or screen.columns)
+    terminal.append(replayed(screen))
+    return terminal
+
+
+def effective(modes) -> dict[str, str]:
+    """modes over the defaults RESET sets, as a display holds them."""
+    defaults = guard.Screen(rows=1, columns=1)
+    defaults.append(guard.RESET.encode())
+    return {**defaults.modes, **modes}
+
+
+def logical(terminal) -> list[str]:
+    """terminal's history and visible rows as logical lines, without colors."""
+    found, current = [], ""
+    rows = [
+        (re.sub(r"\x1b\[[0-9;:]*m", "", line), line.endswith("\r\n")) for line in terminal.lines
+    ]
+    rows += [("".join(text for text, _ in row), not row.wrapped) for row in terminal.cells]
+    for text, ended in rows:
+        current += text.removesuffix("\r\n") if ended else text
+        if ended:
+            found.append(current.rstrip())
+            current = ""
+    return [*found, current.rstrip()] if current else found
+
+
 class Base(Case):
     def runtime(self, *, terminal=False, display_grace=False, size=guard.SIZE, **options):
         args = argparse.Namespace(
@@ -66,7 +100,7 @@ class DisplayTest(Base):
     def terminal(self, screen=b"current screen"):
         runtime = self.runtime(terminal=True)
         runtime.screen = mock.Mock()
-        runtime.screen.snapshot.return_value = screen
+        runtime.screen.replay.return_value = deque([screen.decode()])
         runtime.streams[8] = b"t"
         return runtime
 
@@ -136,7 +170,7 @@ class DisplayTest(Base):
     def drain_exit(self, data, *, progressing=False, stalled=False, close=None):
         runtime = self.runtime(terminal=True, display_grace=True)
         runtime.screen = mock.Mock()
-        runtime.screen.snapshot.return_value = data
+        runtime.screen.replay.return_value = deque([data.decode()])
         runtime.args.display_socket = self.home + "/display"
         hook_server, display_server, peer = mock.Mock(), mock.Mock(), mock.Mock()
         hook_server.accept.side_effect = BlockingIOError
@@ -473,6 +507,138 @@ class StateTest(Base):
         self.assertTrue(guard.RESET.endswith("\x1b[<99u"))
 
 
+class ReplayTest(Base):
+    def test_history_and_screen_keep_their_colors(self):
+        screen = guard.Screen(rows=6, columns=30)
+        screen.append(b"".join(b"\x1b[31mred-%d\x1b[0m\r\n" % i for i in range(10)))
+        screen.append(b"\x1b[42mgreen\x1b[0m\r\n\x1b[36m> \x1b[33m")
+        terminal = shown(screen)
+        self.assertEqual(terminal.lines[0], "\x1b[0;31mred-0\x1b[0m\r\n")
+        self.assertEqual(terminal.text(None), screen.text(None))
+        self.assertEqual(terminal.cells, screen.cells)
+        self.assertEqual(
+            (terminal.row, terminal.column, terminal.pen), (screen.row, screen.column, screen.pen)
+        )
+
+    def test_long_lines_rewrap_at_a_narrower_display_without_spinner_repeats(self):
+        long = ["a" * 200, "b" * 130, "中" * 70]
+        screen = guard.Screen(rows=10, columns=120)
+        screen.append("".join(line + "\r\n" for line in long).encode() + b"spin\r\n")
+        for frame in range(20):
+            screen.append(b"\x1b[1A\r\x1b[2Kspinner-%d\r\n" % frame)
+        screen.append(b"".join(b"filler-%d\r\n" % i for i in range(12)))
+        screen.resize(10, 50)
+        lines = logical(shown(screen, 10, 50))
+        self.assertEqual(lines[:4], [*long, "spinner-19"])
+        self.assertEqual(sum("spin" in line for line in lines), 1)
+
+    def test_lines_visible_at_a_narrower_attach_retire_whole(self):
+        line = "".join(chr(ord("a") + i % 26) for i in range(200))
+        screen = guard.Screen(rows=10, columns=120)
+        screen.append(line.encode() + "\r\n中文中文\r\n> ".encode())
+        screen.resize(10, 50)
+        first = shown(screen, 10, 50)
+        self.assertEqual(first.text(None).splitlines()[:2], [line[:50], line[120:170]])
+        screen.append(b"\r\n" * 12)
+        self.assertEqual(logical(shown(screen, 10, 50))[:2], [line, "中文中文"])
+        screen.resize(10, 120)
+        self.assertEqual(logical(shown(screen, 10, 120))[:2], [line, "中文中文"])
+
+    def test_cursor_pen_and_pending_wrap_after_replay(self):
+        for setup in (b"", b"\x1b[?6h\x1b[4h\x1b[?7l"):
+            with self.subTest(setup=setup):
+                screen = guard.Screen(rows=5, columns=20)
+                screen.append(b"out\r\n" * 8 + setup + b"\x1b[36m> \x1b[0m\x1b[33m")
+                terminal = shown(screen)
+                self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
+                self.assertEqual(terminal.pen, screen.pen)
+                self.assertEqual(effective(terminal.modes), effective(screen.modes))
+                wire = "".join(screen.replay())
+                self.assertTrue(wire.startswith(guard.RESET))
+                self.assertNotIn("\x1b[?6h", wire)
+                last_cup = max(m.end() for m in re.finditer(r"\x1b\[\d+;\d+H", wire))
+                for sequence in screen.modes.values():
+                    self.assertGreaterEqual(wire.rindex(sequence), last_cup)
+        for text in ("abcdefghij", "abcdefgh中", "abcdefghié́"):
+            with self.subTest(text=text):
+                screen = guard.Screen(rows=3, columns=10)
+                screen.append(b"x\r\n" * 5 + text.encode())
+                terminal = shown(screen)
+                for each in (screen, terminal):
+                    each.append(b"X")
+                self.assertEqual(terminal.text(None), screen.text(None))
+
+    def test_never_replayed_sequences_stay_out_of_the_replay(self):
+        for wire, absent in (
+            (b"\x1b[6n", "\x1b[6n"),
+            (b"\x1b[c", "\x1b[c"),
+            (b"\x1b[?2004$p", "$p"),
+            (b"\x1b[>q", "\x1b[>q"),
+            (b"\x1b[?u", "\x1b[?u"),
+            (b"\x1b]52;c;eA==\x07", "52;"),
+            (b"\x1b]9;hi\x07", "]9;"),
+            (b"\x07", "\x07"),
+            (b"\x1b[?2026h", "2026"),
+            (b"\x1b[?9999h", "9999"),
+            (b"\x1b[4:3$m", "4:3"),
+            ("\x9b6n".encode(), "\x9b"),
+            ("\x9d52;x\x07".encode(), "\x9d"),
+        ):
+            with self.subTest(wire=wire):
+                screen = guard.Screen(rows=3, columns=20)
+                screen.append(b"a\r\n" * 5 + wire + b"z")
+                self.assertNotIn(absent, "".join(screen.replay()))
+
+    def test_replayed_modes_and_keyboards_reach_the_display(self):
+        screen = guard.Screen(rows=3, columns=20)
+        screen.append(b"\x1b[?2004h\x1b[?25l\x1b[>1u\x1b[?1049h\x1b[>3u\x1b[5 q\x1b=alt")
+        terminal = shown(screen)
+        self.assertEqual(effective(terminal.modes), effective(screen.modes))
+        self.assertEqual(terminal.keyboard, [3])
+        terminal.append(b"\x1b[?1049l")
+        self.assertEqual(terminal.keyboard, [1])
+
+    def test_attach_mid_sequence_continues_the_parse(self):
+        for start, rest in (
+            (b"ok\x1bPtmux;", b"\x1b\x1b[6n\x1b\\done"),
+            (b"ok\x1b[?20", b"04hdone"),
+        ):
+            with self.subTest(start=start):
+                screen = guard.Screen(rows=3, columns=20)
+                screen.append(start)
+                terminal = shown(screen)
+                for each in (screen, terminal):
+                    each.append(rest)
+                self.assertEqual(terminal.text(None), screen.text(None))
+                self.assertEqual(effective(terminal.modes), effective(screen.modes))
+
+    def test_orphaned_wide_half_keeps_rows_aligned(self):
+        for wire in ("中\x1b[2Gx\r\nnext", "中文\x1b[1;2H\x1b[P\r\nnext", "ab中文\r\nnext"):
+            with self.subTest(wire=wire):
+                screen = guard.Screen(rows=4, columns=6)
+                screen.append(b"top\r\n" + wire.encode())
+                terminal = shown(screen)
+                self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
+                self.assertEqual(terminal.text(None).splitlines()[-1], "next")
+        screen = guard.Screen(rows=4, columns=11)
+        screen.append("abcdefghij中文\r\nnext".encode())
+        screen.resize(4, 10)
+        terminal = shown(screen)
+        self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
+        self.assertTrue(all(len(row) == 10 for row in terminal.cells))
+
+    def test_a_replay_shares_the_history_strings(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(b"a\r\nb\r\nc\r\n")
+        parts = screen.replay()
+        self.assertTrue(all(any(part is line for part in parts) for line in screen.lines))
+
+    def test_no_raw_spool_remains(self):
+        for name in ("Startup", "tempfile"):
+            self.assertFalse(hasattr(guard, name))
+        self.assertFalse(hasattr(guard.Screen, "snapshot"))
+
+
 class GuardTest(Base):
     def test_private_csi_queries_do_not_execute_normal_screen_commands(self):
         for query in (b"\x1b[?1;1;0S", b"\x1b[?1T", b"\x1b[?1L", b"\x1b[?1M", b"\x1b[?2J"):
@@ -496,46 +662,45 @@ class GuardTest(Base):
         screen.append(b"\x1b[?1049lY")
         self.assertEqual(screen.text(None), "main\n  Y")
 
-    def test_snapshot_selects_active_buffer_and_restores_primary_on_alternate_exit(self):
+    def test_replay_selects_active_buffer_and_restores_primary_on_alternate_exit(self):
         screen = guard.Screen(rows=3, columns=8)
         screen.append(b"main\x1b[2;3H\x1b[?1049h\x1b[Halt\x1b[2;1Hsecond")
         shown = guard.Screen(rows=3, columns=8)
-        shown.append(screen.snapshot())
-        self.assertIn(b"\x1b[?1049h", screen.snapshot())
+        shown.append(replayed(screen))
+        self.assertIn(b"\x1b[?1049h", replayed(screen))
         self.assertEqual(shown.text(None), "alt\nsecond")
         shown.append(b"!\x1b[?1049lX")
         self.assertEqual(shown.text(None), "main\n  X")
 
-    def test_inline_snapshot_leaves_alternate_screen_and_preserves_region_on_more_output(self):
+    def test_inline_replay_leaves_alternate_screen_and_preserves_region_on_more_output(self):
         screen = guard.Screen(rows=5, columns=8)
         screen.append(b"top\r\na\r\nb\r\nc\r\nfooter\x1b[2;4r\x1b[4;1H")
         shown = guard.Screen(rows=5, columns=8)
         shown.append(b"\x1b[?1049hwrong\x1b[1;2r")
-        shown.append(screen.snapshot())
-        self.assertIn(b"\x1b[?1049l", screen.snapshot())
+        shown.append(replayed(screen))
+        self.assertIn(b"\x1b[?1049l", replayed(screen))
         self.assertEqual(shown.text(None), "top\na\nb\nc\nfooter")
         shown.append(b"\r\nnew")
         self.assertEqual(shown.text(None), "top\nb\nc\nnew\nfooter")
         shown.append(b"\x1b[?1049hignored\x1b[?1049l")
         self.assertEqual(shown.text(None), "top\nb\nc\nnew\nfooter")
 
-    def test_snapshot_preserves_pending_wrap_for_narrow_and_wide_text(self):
+    def test_replay_preserves_pending_wrap_for_narrow_and_wide_text(self):
         for text in ("abcd", "ab中", "abcé́"):
             with self.subTest(text=text):
                 screen = guard.Screen(rows=3, columns=4)
                 screen.append(text.encode())
                 shown = guard.Screen(rows=3, columns=4)
-                shown.append(screen.snapshot())
+                shown.append(replayed(screen))
                 shown.append(b"X")
                 self.assertEqual(shown.text(None), text + "\nX")
 
-    def test_snapshot_does_not_replay_scrollback_into_display_history(self):
+    def test_replay_puts_history_above_the_screen(self):
         screen = guard.Screen(rows=2, columns=8)
         screen.append(b"old\r\nmain\r\nlast")
         shown = guard.Screen(rows=2, columns=8)
-        shown.append(screen.snapshot())
-        shown.append(screen.snapshot())
-        self.assertEqual(shown.text(4), "main\nlast")
+        shown.append(replayed(screen))
+        self.assertEqual(shown.text(4), "old\nmain\nlast")
 
     def test_reconnecting_display_gets_the_active_alternate_mode(self):
         runtime = self.runtime(terminal=True)
@@ -722,7 +887,7 @@ class GuardTest(Base):
         screen = guard.Screen(rows=3, columns=20)
         screen.append(b"permission question\x1b[2J\x1b[Haccepted")
         self.assertEqual(screen.text(None), "accepted")
-        self.assertNotIn("permission", screen.snapshot().decode())
+        self.assertNotIn("permission", replayed(screen).decode())
         screen.append(b"\r\x1b[2Kdone")
         self.assertEqual(screen.text(None), "done")
 

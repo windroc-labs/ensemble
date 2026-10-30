@@ -564,13 +564,19 @@ class Screen:
             rows.pop()
         return "\n".join(rows if lines is None else [*self.history, *rows][-lines:])[-self.limit :]
 
-    def snapshot(self) -> bytes:
-        def paint(cells):
-            return "\x1b[2J" + "".join(
-                f"\x1b[{row + 1};1H{text}"
-                for row, line in enumerate(cells)
-                if (text := line_text(line))
-            )
+    def replay(self) -> deque[str]:
+        """What a new display of this size gets: history to wrap at its own width, then the screen
+        row for row, then the cursor, modes and pen; history parts are lines' own strings.
+        """
+
+        def screen(cells):
+            out = []
+            for index, row in enumerate(cells):
+                wrapped = row.wrapped and row.full is None
+                after = cells[index + 1] if index + 1 < len(cells) else None
+                margin = after is not None and wide(after[0][0])
+                out.append(render(row, wrapped=wrapped, margin=margin))
+            return "".join(out).removesuffix("\r\n")
 
         def cursor(cells, row, column):
             if column < self.columns:
@@ -578,14 +584,34 @@ class Screen:
             column = self.columns - 1
             if cells[row][column][0] == "" and column:
                 column -= 1
-            return f"\x1b[{row + 1};{column + 1}H{cells[row][column][0]}"
+            text, pen = cells[row][column]
+            return f"\x1b[{row + 1};{column + 1}H{sgr_code(pen)}{text or ' '}"
 
-        primary = self.normal[:3] if self.normal else (self.cells, self.row, self.column)
-        text = "\x1b[?1049l\x1b[r" + paint(primary[0])
+        def keys(stack):
+            return "".join(f"\x1b[>{flags}u" for flags in stack)
+
+        parts = deque([RESET + "\x1b[0m\x1b[?1049l\x1b7\x1b[r\x1b8\r\x1b[J"])
+        parts.extend(self.lines)
+        if self.lines and not self.lines[-1].endswith("\r\n"):
+            parts.append("\r\n")
+        main = self.normal or (self.cells, self.row, self.column, self.keyboard)
+        parts.append(screen(main[0]))
         if self.normal is not None:
-            text += cursor(*primary) + "\x1b[?1049h" + paint(self.cells)
-        text += f"\x1b[{self.scroll_top + 1};{self.scroll_bottom + 1}r"
-        return (text + cursor(self.cells, self.row, self.column)).encode()
+            parts.append(keys(main[3]) + cursor(*main[:3]) + "\x1b[?1049h")
+            parts.extend(
+                f"\x1b[{row + 1};1H" + render(line, wrapped=False).removesuffix("\r\n")
+                for row, line in enumerate(self.cells)
+            )
+        parts.append(
+            f"\x1b[{self.scroll_top + 1};{self.scroll_bottom + 1}r"
+            + f"\x1b[{self.saved[0] + 1};{self.saved[1] + 1}H\x1b7"
+            + cursor(self.cells, self.row, self.column)
+            + "".join(self.modes.values())
+            + keys(self.keyboard)
+            + sgr_code(self.pen)
+            + self.escape
+        )
+        return parts
 
 
 def fit(cells: list[Row], row: int, rows: int, columns: int) -> tuple[list[Row], int]:
@@ -1194,7 +1220,7 @@ class Guard:
             return
         peer.settimeout(0)
         self.peers[peer] = ("display", Decoder())
-        self.display_buffers[peer] = bytearray(self.screen.snapshot())
+        self.display_buffers[peer] = bytearray("".join(self.screen.replay()).encode())
         self.displayed = True
         self.write_display(peer)
 
