@@ -569,8 +569,9 @@ class HistoryTest(Base):
         layout = [part for line in lines for part in (line[:62], line[62:])] + ["> "]
         screen.append(repainted(30, [line.encode() for line in layout[-30:]]))
         self.assertEqual(len(screen.lines), guard.LINES)
-        self.assertEqual(logical(screen)[:2], lines[1000:1002])  # tmux 3.3a's first line too
-        for found, kept in (("\n".join(logical(screen)), lines[1000:]), (screen.text(5000), lines)):
+        # 2000 rows held lines 978-2977; the reflow retires 17 rows at 62 columns past them
+        self.assertEqual(logical(screen)[:2], lines[994:996])
+        for found, kept in (("\n".join(logical(screen)), lines[994:]), (screen.text(5000), lines)):
             counted = Counter(re.findall(r"line \d{4}", found))
             self.assertEqual(counted, Counter(line[:9] for line in kept))
 
@@ -610,6 +611,70 @@ class HistoryTest(Base):
                     self.assertEqual((display.row, display.column), (height - 1, 6))
                     counted = Counter(names.findall("\n".join(expected)))
                     self.assertEqual(Counter(names.findall(screen.text(5000))), counted)
+
+    def test_a_resize_takes_back_scrolled_rows_and_resizes_a_saved_screen_once(self):
+        """tmux 3.3a measured: the visible rows and cursor after each case."""
+        lines = [b"line %04d" % n for n in range(1, 101)]
+        long = [line + b" " + b"x" * 60 for line in lines]
+        footer = b"> \r\n-----\r\nstatus\x1b[2A\r\x1b[2C"
+        cases = (  # (rows, columns), output, sizes, output after them, visible rows, cursor
+            (
+                (24, 80),
+                b"\r\n".join(lines) + b"\r\n\x1b[2J\x1b[Hprompt",
+                [(30, 80)],
+                b"",
+                [b"prompt"],
+                (0, 6),
+            ),
+            (
+                (24, 62),
+                b"\r\n".join(long) + b"\r\n> ",
+                [(24, 80)],
+                b"",
+                [*long[77:], b">"],
+                (23, 2),
+            ),
+            (
+                (24, 80),
+                b"\r\n".join(lines) + b"\r\n" + footer + b"\x1b[?1049h",
+                [(30, 80), (24, 80)],
+                b"\x1b[?1049l",
+                [*lines[79:], b">", b"-----", b"status"],
+                (21, 2),
+            ),
+        )
+        for size, output, sizes, after, visible, cursor in cases:
+            with self.subTest(sizes=sizes):
+                screen = guard.Screen(rows=size[0], columns=size[1])
+                screen.append(output)
+                for rows, columns in sizes:
+                    screen.resize(rows, columns)
+                screen.append(after)
+                found = [guard.line_text(row).encode() for row in screen.cells]
+                while found and not found[-1]:
+                    found.pop()
+                self.assertEqual((found, (screen.row, screen.column)), (visible, cursor))
+
+    def test_a_row_emptied_whole_ends_the_line_above_it_in_history_too(self):
+        """tmux 3.3a measured (capture-pane -J): only an erase of the whole row unwraps the one above."""
+        cut = ["top", "aaaaaaaaaa", "", "r"]
+        for tail, lines in (
+            (b"\x1b[H\x1b[2K", cut),
+            (b"\x1b[H\x1b[K", cut),
+            (b"\x1b[H\x1b[9C\x1b[1K", cut),
+            (b"\x1b[H\x1b[L", ["top", "aaaaaaaaaa", "", "BBBB", "r"]),
+            (b"\x1b[H\x1b[M", ["top", "aaaaaaaaaa", "r"]),
+            (b"\x1b[H\x1b[5C\x1b[K", ["top", "aaaaaaaaaaBBBB", "r"]),
+            (b"\x1b[H\x1b[1K", ["top", "aaaaaaaaaa BBB", "r"]),
+            (b"\x1b[2J\x1b[Hprompt", ["top", "aaaaaaaaaa", "prompt"]),  # a clear keeps no rows
+        ):
+            with self.subTest(tail=tail):
+                screen = guard.Screen(rows=3, columns=10)
+                screen.append(b"top\r\n" + b"a" * 10 + b"B" * 4 + b"\r\nr\r\n" + tail)
+                found = logical(shown(screen))
+                while found and not found[-1]:
+                    found.pop()
+                self.assertEqual(found, lines)
 
     def test_a_wrapped_history_row_joins_the_screen_only_where_it_continues(self):
         for output, first in (
