@@ -992,7 +992,7 @@ class PrivateServer(Case):
         result, err = on_terminal(self.cwd, self.env, b"1\n")
         self.assertEqual(result, 0, err)
         starts = live_tmux.wait(self.starts, what="the resumed client")
-        self.assertEqual(starts[0][:3], [work, "resume t-1", "demo"])
+        self.assertEqual(starts[0][:3], [work, "resume t-1 --no-daemon", "demo"])
         self.assertEqual(self.roster("demo").snapshot()[0], ActiveHolder(starts[0][3], "demo"))
         with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold(None):
             pass
@@ -1009,7 +1009,9 @@ class PrivateServer(Case):
             lambda: self.server.tmux("list-panes", "-s", "-t", "=demo").stdout.count("\n") == 1,
             what="one pane",
         )
-        self.assertEqual([start[:3] for start in self.starts()], [[work, "resume t-1", "demo"]])
+        self.assertEqual(
+            [start[:3] for start in self.starts()], [[work, "resume t-1 --no-daemon", "demo"]]
+        )
         self.assertEqual(len(starts), 1)
         self.assertEqual(self.roster("demo").snapshot()[0], ActiveHolder(starts[0][3], "demo"))
         sessions = self.server.tmux("list-sessions", "-F", "#{session_name}").stdout.split()

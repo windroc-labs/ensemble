@@ -28,6 +28,7 @@ from ensemble.session.harness.channel import Channel, encode
 from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, confirmed_end, dialog, fold
 from ensemble.utils import Record
+from ensemble.utils import Status as WorkerStatus
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
 from tests.session.harnesses import serve
@@ -271,6 +272,74 @@ class CloseTest(Base):
 
 
 class DelegationTest(Base):
+    def test_confirmed_exit_overrides_a_lingering_attach_without_consuming_events(self):
+        self.hold()
+        for mode, name, state in (
+            (Mode.TUI, "w1", StatusState.GONE),
+            (Mode.HEADLESS, "s1", StatusState.DEAD),
+        ):
+            with self.subTest(mode=mode):
+                view = self.view(mode=mode)
+                self.attached.alive.return_value = True
+                self.attached.status.return_value = WorkerStatus(
+                    name=name,
+                    alive=True,
+                    state=StatusState.WORKING,
+                    outcome=None,
+                    attach=None,
+                    hidden=False,
+                )
+                self.log(Exited(7))
+                self.assertFalse(view.alive())
+                self.assertEqual(
+                    view.status(),
+                    WorkerStatus(
+                        name=name, alive=False, state=state, outcome=None, attach=None, hidden=False
+                    ),
+                )
+                self.assertEqual(list(view.events()), [Exited(7)])
+                self.assertFalse(view.alive())
+                self.assertEqual(
+                    view.status(),
+                    WorkerStatus(
+                        name=name, alive=False, state=state, outcome=None, attach=None, hidden=False
+                    ),
+                )
+                self.assertEqual(self.attaches, 0)
+                os.unlink(self.channel.events)
+
+    def test_only_this_generations_confirmed_exit_changes_status(self):
+        view = self.view()
+        live = WorkerStatus(
+            name="w1",
+            alive=True,
+            state=StatusState.WORKING,
+            outcome=None,
+            attach=None,
+            hidden=False,
+        )
+        self.attached.alive.return_value = True
+        self.attached.status.return_value = live
+        self.log(TurnEnd("done", 0))
+        self.log(Exited(7), generation="other")
+        self.log(Exited(8), seq=1)
+        self.assertTrue(view.alive())
+        self.assertEqual(view.status(), live)
+        self.log(Exited(0), seq=3)
+        replay = self.view(replay=True)
+        self.assertFalse(replay.alive())
+        self.assertEqual(
+            replay.status(),
+            WorkerStatus(
+                name="w1",
+                alive=False,
+                state=StatusState.GONE,
+                outcome=None,
+                attach=None,
+                hidden=False,
+            ),
+        )
+
     def test_other_members_use_one_lazy_attach(self):
         view = self.view()
         self.assertEqual(self.attaches, 0)

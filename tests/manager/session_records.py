@@ -84,6 +84,10 @@ def _call(record: dict, mode: tuple[str, ...], *extra: str, **stdin) -> HookCall
 
 
 _MANUAL = ("--mode", "manual")
+CODEX_HINT = (
+    "this Codex runs on the shared daemon, so ensemble cannot tell which manager it belongs to; "
+    "/quit and restart with `codex --no-daemon`"
+)
 
 # Client → its SessionStart call: sh -c's "$PPID", or the in-client plugin's pid, is the client.
 CALLS: dict[str, HookCall] = {
@@ -96,8 +100,8 @@ CALLS: dict[str, HookCall] = {
     "codex": _call(
         VALID["codex"],
         _MANUAL,
-        "--hook-daemon",
-        "app-server",
+        "--require-terminal",
+        CODEX_HINT,
         transcript_path="/home/user/.codex/sessions/rollout-01a18587.jsonl",
         hook_event_name="SessionStart",
         model="gpt-5",

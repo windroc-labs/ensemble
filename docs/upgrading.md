@@ -12,6 +12,14 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## tmux Host workers listed from guard records
+
+The tmux Host now lists and shows its workers from their guard records, and the Viewer owns their displays.
+A tmux worker an older release started has no such record: it is not listed or shown, and its name stays busy until
+it exits. Before upgrading, list sessions with `ensemble-session ls`, then close each tmux crew worker with
+`ensemble-crew close [--manager <manager>] NAME` and every other tmux session with `ensemble-session close NAME`.
+Conversations stay: resume them after the upgrade.
+
 ## attach-command removed
 
 `ensemble-session attach-command`, `ensemble-delegate attach-command` and `ensemble-orchestrator attach-command` are

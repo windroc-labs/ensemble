@@ -1,6 +1,5 @@
-"""The SessionStart hook run as hooks/hooks.json runs it: real sh and python3, a temp HOME.
-RearmHookTest's hook runs under this test process, its stand-in hold; HoldTreeTest's under a real
-ensemble-crew hold.
+"""SessionStart through real sh and python3 on an isolated controlling terminal.
+RearmHookTest uses a stand-in hold; HoldTreeTest uses ensemble-crew hold.
 """
 
 import json
@@ -10,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from tests.manager import session_records
+from tests.manager import session_records, terminal
 from tests.manager.case import PY, REPO, Case, child_env
 
 MANAGER = {"ENSEMBLE_MANAGER": "mgr", "ENSEMBLE_HOLDER_ID": "holder-1"}
@@ -41,14 +40,17 @@ class RearmHookTest(Case):
             **extra,
         }
         started = time.monotonic()
-        done = subprocess.run(
+        with terminal.process(
             ("sh", "-c", prefix + _command(manual=manual)),
-            input=stdin,
-            capture_output=True,
+            holder="shell" if "ENSEMBLE_HOLDER_PID" in extra else "parent",
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=env,
-            timeout=10,
-            check=False,
-        )
+        ) as process:
+            out, err = process.communicate(stdin, timeout=10)
+            self.client_pid = process.pid
+            done = subprocess.CompletedProcess(process.args, process.returncode, out, err)
         self.assertLess(time.monotonic() - started, 1)
         return done
 
@@ -69,6 +71,13 @@ class RearmHookTest(Case):
             with self.subTest(extra=extra):
                 done = self.run_hook(extra, _start("startup"), manual=True)
                 self.assertEqual((done.returncode, done.stdout, done.stderr), (0, b"", b""))
+        # The hold is this process, off the hook's terminal: the hook's own restart hint only.
+        done = self.run_hook(
+            {**MANAGER, "ENSEMBLE_HOLDER_PID": str(os.getpid())}, _start("startup"), manual=True
+        )
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        context = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(context, session_records.CODEX_HINT)
 
     def test_hooks_json_command(self):
         silent = {
@@ -102,8 +111,7 @@ class RearmHookTest(Case):
                 self.assertEqual((done.returncode, done.stderr), (0, b""))
                 context = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
                 self.assertIn("`startup` in manager `mgr`", context)
-                # sh -c's $PPID: this process, as the client is the hook shell's parent.
-                expected = {**session_records.VALID[client], "pid": os.getpid()}
+                expected = {**session_records.VALID[client], "pid": self.client_pid}
                 self.assertEqual(json.loads((roster / "session.json").read_text()), expected)
         cleared = {**session_records.CALLS["claude"].stdin, "source": "clear", "session_id": "s2"}
         done = self.run_hook(MANAGER, json.dumps(cleared).encode())
@@ -168,12 +176,14 @@ class HoldTreeTest(Case):
     def hold(self, *argv: str, **options) -> subprocess.Popen:
         env = {**child_env(), "CLAUDE_PLUGIN_ROOT": REPO, "PLUGIN_ROOT": REPO}
         env.pop("ENSEMBLE_AGENT_SESSION", None)
-        return subprocess.Popen(
-            (*PY, "-m", "ensemble.manager.cli", "hold", "--manager", "mgr", "--", *argv),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            **options,
+        return self.enterContext(
+            terminal.process(
+                (*PY, "-m", "ensemble.manager.cli", "hold", "--manager", "mgr", "--", *argv),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                **options,
+            )
         )
 
     def contexts(self, out: bytes) -> list[str]:
@@ -225,15 +235,14 @@ class HoldTreeTest(Case):
         for manual in (False, True):
             for source in ("startup", "resume", "compact", "clear"):
                 with self.subTest(manual=manual, source=source):
-                    sibling = subprocess.run(
+                    with terminal.process(
                         ("sh", "-c", _command(manual=manual)),
-                        input=_start(source),
-                        capture_output=True,
+                        holder="shell",
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
                         env=held,
-                        timeout=10,
-                        check=False,
-                    )
-                    self.assertEqual(
-                        (sibling.returncode, sibling.stdout, sibling.stderr), (0, b"", b"")
-                    )
+                    ) as sibling:
+                        out, err = sibling.communicate(_start(source), timeout=10)
+                    self.assertEqual((sibling.returncode, out, err), (0, b"", b""))
         self.assertIsNone(process.poll())

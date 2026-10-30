@@ -1,4 +1,4 @@
-"""OwnedSession, the control view of an owned worker: never its owner."""
+"""Control views request their harness; attachments never own the worker."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def fold(
     blocked: bool,
     replayed: bool,
 ) -> tuple[str | None, bool]:
-    """reply: the latest Reply or non-empty TurnEnd text (replayed: even "")."""
+    """Replay keeps empty replies; Stderr and Reply preserve blocked."""
     if isinstance(event, ClientBound):
         return reply, blocked
     if isinstance(event, Reply):
@@ -55,6 +55,7 @@ def fold(
 
 
 def dialog(current: str | None, event: SessionEvent | Stderr | ClientBound) -> str | None:
+    """Keep the first blocked reason until unblocked."""
     if isinstance(event, Blocked):
         return event.reason if current is None else current
     return current if isinstance(event, Stderr | Reply | ClientBound) else None
@@ -91,7 +92,9 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """retire: its non-owner end of its generation; tie: a headless start's caller pipe."""
+    """attach and retire bind sid and generation. replay skips existing events.
+    tie keeps a headless worker alive until its caller leaves.
+    """
 
     def __init__(
         self,
@@ -176,7 +179,7 @@ class OwnedSession(Session):
         self._end(Op.CLOSE)
 
     def _end(self, op: Op) -> None:
-        """With no owner: retire, else end through the attach, confirmed."""
+        """Without an owner, retire this generation or confirm its attached close."""
         if self._channel.request(op):
             return
         if self._retire is not None:
@@ -209,7 +212,7 @@ class OwnedSession(Session):
                 self._attached = None
 
     def _call(self, call: Callable[[Session], T]) -> T:
-        """A held attach's SessionError retries on a new one; Unanswered may have acted: raised."""
+        """Refresh a failed held attach once; Unanswered may mean a partial send."""
         session, held = self._held()
         try:
             return call(session)
@@ -228,10 +231,12 @@ class OwnedSession(Session):
 
     @property
     def client_up(self) -> bool:
+        """Its guard reported the client up."""
         return self._channel.status().get("up") is True
 
     @property
     def dialog(self) -> str | None:
+        """The dialog from its harness's latest pump."""
         found = self._channel.status().get("dialog")
         return found if isinstance(found, str) else None
 
@@ -258,7 +263,10 @@ class OwnedSession(Session):
         self._ask(Op.PRESS, {"keys": [str(key) for key in keys]})
 
     def alive(self) -> bool:
-        """A held attach that says not alive is asked once more of a new one."""
+        """Without confirmed exit, refresh a dead held attach once."""
+        self._latest.read()
+        if self._latest.exited:
+            return False
         try:
             session, held = self._held()
             if session.alive():
@@ -271,6 +279,16 @@ class OwnedSession(Session):
             return False
 
     def status(self) -> Status:
+        self._latest.read()
+        if self._latest.exited:
+            return Status(
+                name=self.name or self.sid,
+                alive=False,
+                state=StatusState.GONE if self.mode == Mode.TUI else StatusState.DEAD,
+                outcome=None,
+                attach=None,
+                hidden=False,
+            )
         return self._call(lambda session: session.status())
 
     def content(self) -> str:
@@ -317,7 +335,7 @@ class OwnedSession(Session):
 
 
 def confirmed_end(host: Host, name: str, generation: str) -> Callable[[], None]:
-    """A named headless view's retire: releases its Host's leftovers once its worker is gone."""
+    """Release headless leftovers only after confirmed exit."""
 
     def end() -> None:
         if settled_liveness(host, name, generation) != Liveness.ABSENT:

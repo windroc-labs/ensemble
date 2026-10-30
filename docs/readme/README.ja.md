@@ -96,7 +96,7 @@ ensemble work
 claude
 ```
 
-使用するクライアントが `codex` または `opencode` の場合は、`claude` を置き換えてください。その会話で次を呼び出します。
+使用するクライアントが `codex --no-daemon` または `opencode` の場合は、`claude` を置き換えてください。その会話で次を呼び出します。
 
 ```text
 /ensemble:manage
