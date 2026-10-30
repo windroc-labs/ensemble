@@ -304,9 +304,14 @@ def _probe_text(text: str | None, env: Mapping[str, str]) -> str | None:
     if text is None:
         return None
     text = redact(text)
-    for key, value in {**os.environ, **env}.items():
-        if value and re.search(r"TOKEN|KEY|SECRET|PASSWORD|AUTH", key, re.I):
-            text = text.replace(value, "[REDACTED]")
+    secrets = {
+        value
+        for mapping in (os.environ, env)
+        for key, value in mapping.items()
+        if value and re.search(r"TOKEN|KEY|SECRET|PASSWORD|AUTH", key, re.I)
+    }
+    for value in sorted(secrets, key=len, reverse=True):
+        text = text.replace(value, "[REDACTED]")
     text = re.sub(r"\bsk-[A-Za-z0-9_-]+", "[REDACTED]", text)
     text = re.sub(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+", "[REDACTED]", text)
     return re.sub(
@@ -319,7 +324,7 @@ def _probe_text(text: str | None, env: Mapping[str, str]) -> str | None:
 
 def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, Usage | None] | None:
     probes = client._usage_probes()
-    if probes is None or len(probes) < 2 or host._client_context().container is None:
+    if not probes or host._client_context().container is None:
         return None
 
     def read(launch: Launch) -> Usage | None:
@@ -331,9 +336,9 @@ def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, U
 
 
 def _pool_account(spec: Spec, client: Client, host: Host) -> str | None:
-    """The account a start runs on, when its client has two or more on a container Host."""
+    """The account a start runs on, when its client has accounts on a container Host."""
     registered = client._accounts()
-    if registered is None or len(registered) < 2 or host._client_context().container is None:
+    if not registered or host._client_context().container is None:
         return None
     return spec.env.get(ACCOUNT_ENV) or DEFAULT_ACCOUNT
 

@@ -18,7 +18,6 @@ import shlex
 import shutil
 import signal
 import stat
-import subprocess
 import tempfile
 import threading
 import time
@@ -98,6 +97,7 @@ from tests.session.hosted_support import (
 from tests.session.threads import capture_errors
 from tests.utils.clock import FakeClock
 from tests.utils.jsonl import read_jsonl
+from tests.utils.process_fixtures import TimeoutExpired
 from tests.utils.sandbox import owned_directory, scratch
 
 UNCONFIGURED = "session not configured: call Session.configure first"
@@ -1592,7 +1592,7 @@ class UsageTest(Base):
         self.configure("probe", probe={"argv": ("probe-cmd",)})
         proc = mock.Mock(returncode=-9)
         proc.communicate.side_effect = [
-            subprocess.TimeoutExpired("probe-cmd", 120, output=b"42.5", stderr=b"partial error"),
+            TimeoutExpired("probe-cmd", 120, output=b"42.5", stderr=b"partial error"),
             AssertionError("an escaped descendant can keep the pipe open"),
         ]
         with mock.patch("subprocess.Popen", return_value=proc), mock.patch("os.killpg"):
@@ -1624,6 +1624,14 @@ class UsageTest(Base):
             found, _ = self.usage()
         self.assertEqual(found, Usage(Window(42.5, None), None))
         self.assertIn("usage probe: could not record", err.getvalue())
+
+    def test_overlapping_environment_secrets_are_redacted_in_full(self):
+        with mock.patch.dict(
+            os.environ, {"PRIMARY_TOKEN": "alpha", "SECONDARY_TOKEN": "alpha-private-value"}
+        ):
+            self.usage("opaque credential: alpha-private-value")
+        (record,) = self.recorded_probes()
+        self.assertEqual(record["output"], "opaque credential: [REDACTED]")
 
     def test_a_reading_without_windows_is_a_usage(self):
         with mock.patch.object(ProbeClient, "usage", return_value=engine_types.Usage(None, None)):
@@ -1873,24 +1881,37 @@ class AccountPoolTest(Base):
 
     def test_a_run_off_the_pool_holds_nothing(self):
         self.steps({"out": {"type": "limit", "resets_at": time.time() + 3600}})
-        self.pool({"default": "/d"})
-        self.run_on()
         self.pool({"default": "/d", "work": "/w"}, container=False)
         self.run_on()
         self.assertFalse(os.path.exists(os.path.join(self.ensemble, "usage", "pool-holds.json")))
 
-    def test_one_account_or_no_container_is_todays_single_probe(self):
-        for accounts, container in (
-            ({"default": "/d"}, True),
-            ({"default": "/d", "work": "/w"}, False),
-        ):
-            with self.subTest(accounts=accounts, container=container):
-                self.pool(accounts, container=container)
-                self.probe.reset_mock()
-                self.assertEqual(self.usage(), Usage(Window(-1, None), Window(-1, None)))
-                self.assertEqual(self.probed(), ["/x"])
-                self.assertNotIn(ACCOUNT_ENV, self.started_env())
-                self.assertFalse(os.path.exists(self.cache))
+    def test_no_container_is_todays_single_probe(self):
+        self.pool({"default": "/d", "work": "/w"}, container=False)
+        self.assertEqual(self.usage(), Usage(Window(-1, None), Window(-1, None)))
+        self.assertEqual(self.probed(), ["/x"])
+        self.assertNotIn(ACCOUNT_ENV, self.started_env())
+        self.assertFalse(os.path.exists(self.cache))
+
+    def test_one_registered_account_is_probed_and_selected(self):
+        self.pool({"default": "/d"})
+        self.assertEqual(self.usage(), Usage(Window(70, None), Window(10, None)))
+        self.assertEqual(self.probed(), ["/d"])
+        self.assertEqual(self.started_env()[ACCOUNT_ENV], "default")
+
+    def test_one_registered_held_account_refuses_an_automatic_start(self):
+        self.pool({"default": "/d"})
+        hosted_session.accounts.hold("pool", "default", time.time() + 3600)
+        with self.assertRaisesRegex(ConfigError, "no available account"):
+            self.started_env()
+        self.probe.assert_not_called()
+
+    def test_a_single_account_usage_limit_is_held_for_later_starts(self):
+        self.pool({"default": "/d"})
+        self.steps({"out": {"type": "limit", "resets_at": time.time() + 3600}})
+        self.run_on()
+        self.assertTrue(os.path.exists(os.path.join(self.ensemble, "usage", "pool-holds.json")))
+        with self.assertRaisesRegex(ConfigError, "no available account"):
+            self.started_env()
 
 
 class WritableDirsTest(Base):

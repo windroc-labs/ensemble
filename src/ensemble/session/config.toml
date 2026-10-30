@@ -28,7 +28,7 @@
 #                    rules; empty → none
 #   env              variables added to every command's environment, over the client's defaults; empty → none
 #   account          the account (default or a [clients.claude.accounts.<name>]) every start that selects none runs
-#                    on; empty → with multiple accounts, pick the eligible one with the most usage left;
+#                    on; empty → pick the eligible account with the most usage left;
 #                    none eligible → an error before launch. Only --account overrides it
 # [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog skipped
 # [clients.claude.tiers]    tier "1".."4" → its --model

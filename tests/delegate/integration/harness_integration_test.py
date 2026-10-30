@@ -58,7 +58,7 @@ sentinel = Usage(Window(12.5, 1767225600.0), Window(37.0, None))
 probes = []
 for expected in (sentinel, None):
     UsageClient.usage_result = expected
-    process = mock.Mock(stdout=io.StringIO("quota"))
+    process = mock.Mock(stdout=io.StringIO("quota"), stderr=io.StringIO(""), returncode=0)
     process.communicate.return_value = ("quota", "")
     with mock.patch("subprocess.Popen", return_value=process) as probe:
         case.assertIs(HarnessDelegate.usage("dummy-tester"), expected)
