@@ -35,22 +35,25 @@ def change(gql, op, ident, old=None, new=None):
     node, team_id = data["issue"], data["issue"]["team"]["id"]
     carried = carried_labels(gql, ident, node)
     gone = None if old is None else _old(gql, team_id, carried, old, leaving)["id"]
-    added = None if new is None else issue_refs.label(gql, team_id, new, option=joining)
+    added = {} if new is None else issue_refs.label(gql, team_id, new, option=joining)
+    joined, group = added.get("id"), (added.get("parent") or {}).get("id")
     ids = {n["id"] for n in carried}
-    if op == "swap" and gone not in ids and added["id"] not in ids:
+    if op == "swap" and gone not in ids and joined not in ids:
         raise LabelRefused(
             f"{what} {ident} refused, nothing written: it carries neither --from {old!r} nor "
             f"--to {new!r}; its labels: ensemble-orchestrator issue read {ident}"
         )
-    joins = added is not None and added["id"] not in ids
-    leaves = gone in ids and gone != (added or {}).get("id")
+    joins = joined is not None and joined not in ids
+    leaves = gone in ids and gone != joined
     if not (joins or leaves):
         return issue_write.receipt(node, what, "unchanged", data["viewer"])
-    group = (added["parent"] or {}).get("id") if joins else None
     clash = [
         n
         for n in carried
-        if group and (n["parent"] or {}).get("id") == group and n["id"] not in (gone, added["id"])
+        if joins
+        and group
+        and (n["parent"] or {}).get("id") == group
+        and n["id"] not in (gone, joined)
     ]
     if clash:
         raise LabelRefused(
@@ -59,7 +62,7 @@ def change(gql, op, ident, old=None, new=None):
             + ", ".join(issue_refs.show(n) for n in clash)
             + " of; swap that one instead"
         )
-    variables = {"a": [added["id"]] if joins else [], "r": [gone] if leaves else []}
+    variables = {"a": [joined] if joins else [], "r": [gone] if leaves else []}
     issue_write.write(gql, what, ident, M_SWAP, "issueUpdate", i=node["id"], **variables)
     return issue_write.receipt(node, what, "changed", data["viewer"])
 
