@@ -79,7 +79,11 @@ def _retained(record: dict, known: dict) -> bool:
 
 
 def _holders(directory: str, known: dict, holders: dict) -> list[str]:
-    reserved = set()
+    """Each counted reservation file claims one host row of its run, else counts alone."""
+    rows: dict[tuple, list[tuple]] = {}
+    for namespace, name, sid in holders:
+        identity = (namespace, "sid", sid) if sid else (namespace, "name", name)
+        rows.setdefault(identity, []).append((namespace, name, sid))
     for entry in os.scandir(directory):
         if not entry.name.endswith(".run"):
             continue
@@ -95,14 +99,18 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
             except BlockingIOError:
                 held = True
             if held or record["kind"] == Mode.TUI and _retained(record, known):
-                key: tuple = (entry.name,)
+                claimable: list[tuple] = []
                 if (host := record.get("host")) is not None:
                     namespace = known[host][0] if host in known else ("configuration", host)
-                    if (namespace, record["name"], record["sid"]) not in reserved:
-                        holders.pop((namespace, record["name"], None), None)
-                        key = (namespace, record["name"], record["sid"])
-                        reserved.add(key)
-                holders[key] = record["name"]
+                    claimable = (
+                        rows.get((namespace, "sid", record["sid"]))
+                        or rows.get((namespace, "name", record["name"]))
+                        or []
+                    )
+                if claimable:
+                    claimable.pop()
+                else:
+                    holders[(entry.name,)] = record["name"]
                 continue
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(entry.path)

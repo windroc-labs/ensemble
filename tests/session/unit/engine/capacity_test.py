@@ -249,6 +249,31 @@ class AdmissionTest(Case):
         ):
             self.fail("two runs must fill two slots")
 
+    def test_an_unnamed_headless_run_and_its_held_reservation_count_once(self):
+        first = self.enter(limit=2, name=None)
+        with first:
+            self.host.create("headless-g1", metadata={"client": "fake", "sid": "s1"})
+            first.started(lambda: Liveness.LIVE)
+        second = self.enter(limit=2, name="second", sid="s2")
+        with second:
+            second.started(lambda: Liveness.LIVE)
+        with (
+            self.assertRaisesRegex(SessionError, "held by: headless-g1, second$"),
+            self.enter(limit=2, name="third", sid="s3"),
+        ):
+            self.fail("two runs must fill two slots")
+
+    def test_a_row_without_a_sid_is_not_another_runs_reservation(self):
+        self.host.create("other", metadata={"client": "fake", "sid": ""})
+        first = self.enter(limit=2, name=None)
+        with first:
+            first.started(lambda: Liveness.LIVE)
+        with (
+            self.assertRaisesRegex(SessionError, "held by: other, s1$"),
+            self.enter(limit=2, name="third", sid="s3"),
+        ):
+            self.fail("two runs must fill two slots")
+
     def test_a_held_reservation_without_a_host_counts_until_released(self):
         ticket = self.enter(limit=0)
         with ticket:
