@@ -27,11 +27,12 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness import guard
 from ensemble.session.hosts.docker import stub
 from ensemble.session.hosts.docker.hooks import HookWorker
-from ensemble.session.hosts.docker.worker import DockerWorker
+from ensemble.session.hosts.docker.worker import DockerWorker, diagnostic_file
 from ensemble.session.modes.headless import HeadlessMode
 from tests.session import docker_attach_fixture, guard_fixture, live_tmux
 from tests.session.case import Case, child_env
 from tests.session.client_adapters_support import DetailedTui
+from tests.session.fake_client import client as fake_client
 from tests.session.fakes.terminal import MemoryHost
 from tests.session.headless_support import SID, StubClient
 from tests.session.tui_hook_support import COMMAND, state, write_state
@@ -145,16 +146,33 @@ class GuardedDockerTest(Case):
         time.sleep(guard.HEARTBEAT + 2)
         self.assertTrue(self.alive(client) and self.alive(value["guard"]))
 
-    def worker(self, remove=lambda: None) -> DockerWorker:
-        """A started DockerWorker over a fake container and attach, its guard running self.client()."""
+    def worker(self, remove=lambda: None, *, client=None, terminal=False) -> DockerWorker:
+        """A started DockerWorker over a fake container and attach, its guard running `client`
+        (default self.client()).
+        """
         with mock.patch.dict(os.environ, self.env):
             container, _ = docker_attach_fixture.start_container()
             self.addCleanup(self.end, container)
             proc = docker_attach_fixture.attach()
             self.addCleanup(self.end, proc)
-            worker = docker_attach_fixture.worker(self.home, proc, self.client(), remove=remove)
+            worker = docker_attach_fixture.worker(
+                self.home, proc, client or self.client(), remove=remove, terminal=terminal
+            )
         self.addCleanup(worker.close)
         return worker
+
+    def test_a_terminal_client_that_fails_at_once_leaves_its_error_past_its_container(self):
+        """Its stderr, on its terminal, is on the host before the container's removal."""
+        path = diagnostic_file(self.home, docker_attach_fixture.GEN)
+        kept = []
+        worker = self.worker(
+            lambda: kept.append(Path(path).read_text()),
+            client=[sys.executable, "-I", fake_client.__file__, "--bogus"],
+            terminal=True,
+        )
+        live_tmux.wait(lambda: worker.returncode() is not None, what="worker removed")
+        self.assertEqual(worker.returncode(), 2)
+        self.assertIn("client.py: error:", json.loads(kept[0])["text"])
 
     def test_a_headless_worker_whose_removal_fails_is_removed_by_the_next_close(self):
         removals = []

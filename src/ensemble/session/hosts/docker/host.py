@@ -83,7 +83,7 @@ from ensemble.session.hosts.docker.mounts import (
     workspace_volume,
 )
 from ensemble.session.hosts.docker.types import GEN, Started
-from ensemble.session.hosts.docker.worker import GUARD, DockerWorker
+from ensemble.session.hosts.docker.worker import GUARD, DockerWorker, diagnostic_file
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     DOCKER_STATE,
@@ -94,6 +94,7 @@ from ensemble.utils import (
     kill_group,
     module_roots,
     read_beneath,
+    read_regular,
     remove_tree,
     save,
     source_path,
@@ -1170,6 +1171,19 @@ class DockerHost(Host):
             capacity_row(self._row(row, probe=True), row.generation)
             for _, row in sorted(containers.items())
         ]
+
+    def _last_lines(self, name: str, sid: str, generation: str) -> str:
+        found = _record(name)
+        if (found.get("sid"), found.get("generation")) != (sid, generation):
+            return ""
+        try:
+            text = json.loads(
+                read_regular(diagnostic_file(state_dir(name), generation), limit=STATE_MAX)
+                or b"null"
+            )["text"]
+        except (ValueError, TypeError, KeyError):
+            return ""
+        return text if isinstance(text, str) else ""
 
     def rows(self) -> list[SessionRow]:
         """[] when docker fails, so other Hosts' rows list; list() raises: callers act on absence."""

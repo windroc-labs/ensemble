@@ -461,6 +461,34 @@ class EndTest(Base):
         self.assertTrue(self.ended(channel))
         self.assertEqual((channel.state(), channel.returncode()), (Liveness.ABSENT, 5))
 
+    def test_an_exit_keeps_its_last_lines_on_the_host_before_its_container_goes(self):
+        path = worker.diagnostic_file(self.state, GEN)
+        seen = []
+        original = self.remove
+
+        def remove():
+            with open(path, encoding="utf-8") as f:
+                seen.append(json.load(f))
+            original()
+
+        self.remove = remove
+        channel = self.make()
+        channel.accept(b"x", b'{"returncode":2,"text":"error: bad flag"}')
+        self.assertTrue(self.ended(channel))
+        self.assertEqual(seen, [{"text": "error: bad flag"}])
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_an_exit_without_last_lines_keeps_no_file(self):
+        for frames in ([(b"x", b'{"returncode":2}')], []):
+            with self.subTest(frames=frames):
+                channel = self.make()
+                for kind, payload in frames:
+                    channel.accept(kind, payload)
+                if not frames:
+                    channel.fail("broken")
+                self.assertTrue(self.ended(channel))
+                self.assertFalse(os.path.exists(worker.diagnostic_file(self.state, GEN)))
+
     def test_a_report_after_removal_is_dropped(self):
         channel = self.make()
         channel.fail("broken")

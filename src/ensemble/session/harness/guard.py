@@ -994,7 +994,6 @@ class Guard:
         self._save("state.json", value)
 
     def last_lines(self) -> str:
-        """Its terminal's last lines, its client's own error among them."""
         return self.screen.text(20)[-DIAGNOSTIC_CHARS:]
 
     def _save(self, name: str, value: dict) -> None:
