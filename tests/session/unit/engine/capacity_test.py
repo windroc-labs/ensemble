@@ -141,15 +141,18 @@ class AdmissionTest(Case):
             self.host.settled.join(5)
         self.assertTrue(os.path.exists(first.path))
 
-    def test_the_next_gate_holder_removes_an_ended_starts_client_directory(self):
+    def test_a_failed_start_leaves_no_client_directory(self):
         root = os.path.dirname(self.enter(limit=0).directory)
         with self.assertRaisesRegex(ValueError, "failed"), self.enter():
             raise ValueError("failed")
+        self.assertFalse(os.path.exists(root))
         first = self.enter()
         with first:
             first.started(lambda: Liveness.LIVE)
+        with self.assertRaises(SessionError), self.enter(name="second", sid="s2"):
+            pass
         first.close()
-        self.assertTrue(os.path.exists(root))
+        self.assertTrue(os.path.exists(root), "a release from a watcher thread removes nothing")
         Admission.reconcile("fake", {"h": self.host})
         self.assertFalse(os.path.exists(root))
 

@@ -157,10 +157,22 @@ class Admission(AbstractContextManager):
 
     def __enter__(self) -> Admission:
         self._context = self._admit()
-        return self._context.__enter__()
+        try:
+            return self._context.__enter__()
+        except BaseException:
+            self._tidy()
+            raise
 
     def __exit__(self, *args):
-        return self._context.__exit__(*args)
+        try:
+            return self._context.__exit__(*args)
+        finally:
+            self._tidy()
+
+    def _tidy(self) -> None:
+        """The gate's exit removes a client directory this start left empty."""
+        with contextlib.suppress(OSError), _locked(self.directory, self.client):
+            pass
 
     @contextlib.contextmanager
     def _admit(self) -> Iterator[Admission]:
