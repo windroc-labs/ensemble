@@ -247,7 +247,7 @@ class Viewer:
 
     def _unclaimed(self, name: str, host: Host, *, unview: bool = False) -> None:
         """SessionError when an attachable Host's worker `name` is a host tmux session's name
-        (unview: old view session removed first)."""
+        (unview: old view session removed)."""
         if not host.attachable:
             return
         try:
