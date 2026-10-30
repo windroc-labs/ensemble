@@ -25,9 +25,9 @@ def readings(
     probes: Mapping[str, tuple[str, Launch]],
     read: Callable[[Launch], Usage | None],
 ) -> dict[str, Usage | None]:
-    """Each account's reading: over while held; else its cached one when it reads the same
-    identity and is under TTL (UNKNOWN_TTL when unknown) old, else `read` of its launch, once per
-    identity, all concurrently, then cached; one process at a time.
+    """Each account's reading: over while held; else cached for the same identity until TTL or
+    a crossed reset (UNKNOWN_TTL when unknown or still exhausted after reset), else `read` of
+    its launch, once per identity, all concurrently, then cached; one process at a time.
     """
     holds_path = _path(client, "holds")
     with _lock(holds_path):
