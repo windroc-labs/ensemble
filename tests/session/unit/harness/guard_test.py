@@ -57,26 +57,18 @@ class Base(Case):
         return guard.Guard(args, **options)
 
 
-class StartupDisplayTest(Base):
+class DisplayTest(Base):
     def output(self, runtime, data):
         for start in range(0, len(data), guard.READ_SIZE):
             with mock.patch.object(os, "read", return_value=data[start : start + guard.READ_SIZE]):
                 runtime.read_stream(8)
 
-    def terminal(self, data):
+    def terminal(self, screen=b"current screen"):
         runtime = self.runtime(terminal=True)
         runtime.screen = mock.Mock()
-        runtime.screen.snapshot.return_value = b"current screen"
+        runtime.screen.snapshot.return_value = screen
         runtime.streams[8] = b"t"
-        self.addCleanup(self.cleanup, runtime)
-        self.output(runtime, data)
         return runtime
-
-    @staticmethod
-    def cleanup(runtime):
-        startup = getattr(runtime, "startup", None)
-        if startup is not None:
-            startup.stream.close()
 
     @staticmethod
     def connect(runtime, send):
@@ -86,21 +78,10 @@ class StartupDisplayTest(Base):
         runtime.take_display(server)
         return peer
 
-    def test_complete_colored_startup_exceeding_memory_limit_is_replayed(self):
-        unit = "\x1b[31m启动\x1b[0m\r\n".encode()
-        data = unit * (guard.BUFFER_MAX // len(unit) + 1)
-        runtime = self.terminal(data)
-        sent = []
-        peer = self.connect(runtime, lambda chunk: sent.append(bytes(chunk)) or len(chunk))
-        for _ in range(len(data) // guard.READ_SIZE + 4):
-            runtime.write_display(peer)
-        self.assertEqual(b"".join(sent), data)
-        self.assertIsNone(runtime.startup)
-
-    def test_short_writes_and_eagain_keep_startup_before_live_bytes(self):
-        startup = "\x1b[31m早\x1b[0m\r\n".encode()
+    def test_short_writes_and_eagain_keep_the_screen_before_live_bytes(self):
+        screen = "\x1b[31m早\x1b[0m\r\n".encode()
         live = b"\x1b[32mlive\x1b[0m\r\n"
-        runtime = self.terminal(startup)
+        runtime = self.terminal(screen)
         sent, attempts = [], []
 
         def send(chunk):
@@ -113,37 +94,22 @@ class StartupDisplayTest(Base):
         peer = self.connect(runtime, send)
         self.assertIn(peer, runtime.peers)
         self.output(runtime, live)
-        for _ in range(len(startup) + len(live)):
+        for _ in range(len(screen) + len(live)):
             runtime.write_display(peer)
-        self.assertEqual(b"".join(sent), startup + live)
-        self.assertIsNone(runtime.startup)
+        self.assertEqual(b"".join(sent), screen + live)
 
-    def test_slow_first_display_releases_spool_without_closing_worker(self):
-        runtime = self.terminal(b"startup")
-        stream = runtime.startup.stream
+    def test_slow_display_is_dropped_without_closing_worker(self):
+        runtime = self.terminal()
         peer = self.connect(runtime, mock.Mock(side_effect=BlockingIOError))
         self.output(runtime, b"x" * (guard.BUFFER_MAX + 1))
         self.assertNotIn(peer, runtime.peers)
-        self.assertTrue(stream.closed)
-        self.assertIsNone(runtime.startup)
         self.assertIsNone(runtime.closing)
         self.assertFalse(runtime.output)
 
-    def test_disconnect_releases_startup_and_next_display_gets_current_screen(self):
-        runtime = self.terminal(b"startup")
-        stream = runtime.startup.stream
-        peer = self.connect(runtime, mock.Mock(side_effect=BlockingIOError))
-        runtime.drop(peer)
-        self.assertTrue(stream.closed)
-        sent = []
-        self.connect(runtime, lambda chunk: sent.append(bytes(chunk)) or len(chunk))
-        self.assertEqual(b"".join(sent), b"current screen")
-
-    def test_display_send_failure_closes_only_that_display_and_the_spool(self):
+    def test_display_send_failure_closes_only_that_display(self):
         for result in (BrokenPipeError(), 0):
             with self.subTest(result=result):
-                runtime = self.terminal(b"startup")
-                stream = runtime.startup.stream
+                runtime = self.terminal()
                 send = mock.Mock()
                 if isinstance(result, BaseException):
                     send.side_effect = result
@@ -151,40 +117,32 @@ class StartupDisplayTest(Base):
                     send.return_value = result
                 peer = self.connect(runtime, send)
                 self.assertNotIn(peer, runtime.peers)
-                self.assertTrue(stream.closed)
                 self.assertIsNone(runtime.closing)
 
-    def test_exit_grace_drains_the_replay_before_returning(self):
+    def test_exit_grace_drains_the_screen_before_returning(self):
         self.drain_exit(b"\x1b[31m" + b"x" * (guard.READ_SIZE + 17))
 
-    def test_large_exit_replay_keeps_draining_while_the_display_progresses(self):
+    def test_large_exit_screen_keeps_draining_while_the_display_progresses(self):
         self.drain_exit(b"x" * (16 << 20), progressing=True)
 
     def test_stalled_exit_display_is_released_after_inactivity(self):
-        self.drain_exit(b"startup", stalled=True)
+        self.drain_exit(b"screen", stalled=True)
 
-    def test_explicit_close_reclaims_a_guard_during_large_progressing_replay(self):
+    def test_explicit_close_reclaims_a_guard_during_a_large_progressing_drain(self):
         for close in ("command", "eof"):
             with self.subTest(close=close):
                 self.drain_exit(b"x" * (16 << 20), progressing=True, close=close)
 
     def drain_exit(self, data, *, progressing=False, stalled=False, close=None):
         runtime = self.runtime(terminal=True, display_grace=True)
-        self.addCleanup(self.cleanup, runtime)
         runtime.screen = mock.Mock()
-        runtime.screen.snapshot.return_value = b"current screen"
+        runtime.screen.snapshot.return_value = data
         runtime.args.display_socket = self.home + "/display"
         hook_server, display_server, peer = mock.Mock(), mock.Mock(), mock.Mock()
         hook_server.accept.side_effect = BlockingIOError
         display_server.accept.side_effect = [(peer, ""), *([BlockingIOError] * 5000)]
         proc = mock.Mock(pid=100, returncode=None)
-        chunks = iter(
-            [
-                data[start : start + guard.READ_SIZE]
-                for start in range(0, len(data), guard.READ_SIZE)
-            ]
-            + [b""]
-        )
+        chunks = iter([b"output", b""])
         now, sent, requested = [100.0], [], []
 
         def read(_fd, _size):
@@ -235,7 +193,6 @@ class StartupDisplayTest(Base):
             self.assertLess(len(b"".join(sent)), len(data))
         else:
             self.assertEqual(b"".join(sent), b"" if stalled else data)
-        self.assertIsNone(runtime.startup)
 
 
 class GuardTest(Base):
