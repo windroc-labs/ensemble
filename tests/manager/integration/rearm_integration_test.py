@@ -119,11 +119,22 @@ class RearmHookTest(Case):
                 # sh -c's $PPID: this process, as the client is the hook shell's parent.
                 expected = {**session_records.VALID[client], "pid": os.getpid()}
                 self.assertEqual(json.loads((roster / "session.json").read_text()), expected)
+                if manual:
+                    binding = json.loads((roster / "live-client.json").read_text())
+                    self.assertEqual({key: binding[key] for key in expected}, expected)
+                    self.assertEqual(binding["holder_id"], self.manager["ENSEMBLE_HOLDER_ID"])
+                    self.assertEqual(
+                        binding["holder_generation"],
+                        int(self.manager["ENSEMBLE_HOLDER_GENERATION"]),
+                    )
+                    self.assertEqual(binding["phase"], "bound")
         cleared = {**session_records.CALLS["claude"].stdin, "source": "clear", "session_id": "s2"}
         done = self.run_hook(self.manager, json.dumps(cleared).encode())
         self.assertEqual((done.returncode, done.stderr), (0, b""))
         self.assertEqual(json.loads((roster / "session.json").read_text())["sid"], "s2")
-        self.assertEqual(set(roster.iterdir()), before | {roster / "session.json"})
+        self.assertEqual(
+            set(roster.iterdir()), before | {roster / "session.json", roster / "live-client.json"}
+        )
 
     def test_broken_pipe(self):
         read, write = os.pipe()
