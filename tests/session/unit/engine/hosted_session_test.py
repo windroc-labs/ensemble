@@ -96,7 +96,6 @@ from tests.session.hosted_support import (
 from tests.session.threads import capture_errors
 from tests.utils.clock import FakeClock
 from tests.utils.jsonl import read_jsonl
-from tests.utils.process_fixtures import TimeoutExpired
 from tests.utils.sandbox import owned_directory, scratch
 
 UNCONFIGURED = "session not configured: call Session.configure first"
@@ -1543,108 +1542,6 @@ class UsageTest(Base):
         self.assertIsNone(found)
         self.assertEqual(probe.call_args.kwargs["timeout"], 120)
 
-    def recorded_probes(self):
-        folder = os.path.join(self.ensemble, "usage", "probes")
-        records = []
-        for name in os.listdir(folder):
-            with open(os.path.join(folder, name), encoding="utf-8") as stream:
-                records.append(json.load(stream))
-        return records
-
-    def test_unknown_and_failed_probes_are_recorded(self):
-        for output in ("garbage", "", None):
-            self.usage(output)
-        self.assertCountEqual([r["output"] for r in self.recorded_probes()], ["garbage", "", None])
-
-    def test_recorded_output_masks_credentials_but_the_parser_gets_the_original(self):
-        output = (
-            "Current session: 10% used\nAuthorization: Bearer private-bearer\n"
-            "ANTHROPIC_API_KEY=sk-ant-api03-private\n"
-            '{"access_token":"private-access", "refresh_token": "private-refresh"}\n'
-            "PASSWORD=private-password\nhttps://user:password@service.test\nopaque-env-secret"
-            "\nAuthorization: Basic dXNlcjpwYXNz\nPASSWORD=my private password"
-            '\nPASSWORD=one; comma,secret-tail\n{"refresh_token":\n"newline-private"}'
-        )
-        with (
-            mock.patch.dict(os.environ, {"OTHER_SECRET": "opaque-env-secret"}),
-            mock.patch.object(ProbeClient, "usage", return_value=None) as parser,
-        ):
-            self.usage(output)
-        parser.assert_called_once_with(output)
-        (record,) = self.recorded_probes()
-        self.assertIn("Current session: 10% used", record["output"])
-        for secret in (
-            "private-bearer",
-            "sk-ant-api03-private",
-            "private-access",
-            "private-refresh",
-            "private-password",
-            "user:password",
-            "opaque-env-secret",
-            "dXNlcjpwYXNz",
-            "private password",
-            "secret-tail",
-            "newline-private",
-        ):
-            self.assertNotIn(secret, json.dumps(record))
-
-    def test_default_probe_keeps_stderr_and_nonzero_exit_without_parsing_it(self):
-        self.configure("probe", probe={"argv": ("probe-cmd",)})
-        proc = mock.Mock(returncode=1)
-        proc.communicate.return_value = ("", "authentication_error: Bearer private-bearer")
-        with mock.patch("subprocess.Popen", return_value=proc):
-            self.assertIsNone(self.session.usage("probe"))
-        (record,) = self.recorded_probes()
-        self.assertEqual(record["returncode"], 1)
-        self.assertIn("authentication_error", record["stderr"])
-        self.assertNotIn("private-bearer", record["stderr"])
-        proc.stderr.close.assert_called_once()
-
-    def test_timeout_preserves_partial_streams_but_is_not_a_reading(self):
-        self.configure("probe", probe={"argv": ("probe-cmd",)})
-        proc = mock.Mock(returncode=-9)
-        proc.communicate.side_effect = [
-            TimeoutExpired("probe-cmd", 120, output=b"42.5", stderr=b"partial error"),
-            AssertionError("an escaped descendant can keep the pipe open"),
-        ]
-        with mock.patch("subprocess.Popen", return_value=proc), mock.patch("os.killpg"):
-            self.assertIsNone(self.session.usage("probe"))
-        (record,) = self.recorded_probes()
-        self.assertEqual(
-            (record["output"], record["stderr"], record["returncode"]),
-            ("42.5", "partial error", 124),
-        )
-        proc.stdout.close.assert_called_once()
-        proc.stderr.close.assert_called_once()
-
-    def test_default_successful_probe_parses_stdout_and_keeps_stderr(self):
-        self.configure("probe", probe={"argv": ("probe-cmd",)})
-        proc = mock.Mock(returncode=0)
-        proc.communicate.return_value = ("42.5", "warning")
-        with mock.patch("subprocess.Popen", return_value=proc):
-            self.assertEqual(self.session.usage("probe"), Usage(Window(42.5, None), None))
-        (record,) = self.recorded_probes()
-        self.assertEqual(
-            (record["output"], record["stderr"], record["returncode"]), ("42.5", "warning", 0)
-        )
-
-    def test_a_probe_record_write_failure_is_visible_without_losing_the_reading(self):
-        with (
-            mock.patch("os.replace", side_effect=OSError("read only")),
-            contextlib.redirect_stderr(io.StringIO()) as err,
-        ):
-            found, _ = self.usage()
-        self.assertEqual(found, Usage(Window(42.5, None), None))
-        self.assertIn("usage probe: could not record", err.getvalue())
-
-    def test_overlapping_environment_secrets_are_redacted_in_full(self):
-        with mock.patch.dict(
-            os.environ, {"PRIMARY_TOKEN": "alpha", "SECONDARY_TOKEN": "alpha-private-value"}
-        ):
-            self.usage("opaque credential: alpha-private-value")
-        (record,) = self.recorded_probes()
-        self.assertEqual(record["output"], "opaque credential: [REDACTED]")
-
     def test_a_reading_without_windows_is_a_usage(self):
         with mock.patch.object(ProbeClient, "usage", return_value=engine_types.Usage(None, None)):
             found, probe = self.usage()
@@ -1773,33 +1670,6 @@ class AccountPoolTest(Base):
         self.assertEqual(self.started_account(**{ACCOUNT_ENV: "default"}), "default")
         self.probe.assert_not_called()
 
-    def test_structural_preflight_does_not_select_an_account(self):
-        spec = self.spec(client="pool", mode=Mode.HEADLESS, name="w1")
-        self.session.preflight(spec)
-        self.probe.assert_not_called()
-        self.assertFalse(os.path.exists(self.cache))
-
-    def test_an_invalid_launch_is_refused_before_account_selection(self):
-        self.pool({"default": "/d"})
-        for mode in (Mode.HEADLESS, Mode.TUI):
-            with self.subTest(mode=mode), self.assertRaises(ConfigError):
-                own(self, client="pool", mode=mode, name="bad name")
-            self.probe.assert_not_called()
-        self.assertFalse(os.path.exists(self.cache))
-
-    def test_capacity_refusal_does_not_probe_accounts(self):
-        self.configure(
-            "pool", {"implementation": CONTAINER_HOST}, accounts={"default": "/d"}, max_runs=1
-        )
-        row = SessionRow("busy", "other", "pool", StatusState.WORKING, None, None, None, own=False)
-        with (
-            mock.patch.object(self.session.host(), "_capacity_rows", return_value=[row]),
-            self.assertRaisesRegex(SessionError, "max_runs"),
-        ):
-            own(self, client="pool", mode=Mode.HEADLESS, name="next")
-        self.probe.assert_not_called()
-        self.assertFalse(os.path.exists(self.cache))
-
     def usage(self):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             found = self.session.usage("pool")
@@ -1823,25 +1693,6 @@ class AccountPoolTest(Base):
         self.assertEqual(self.usage(), Usage(Window(20, None), Window(30, None)))
         self.assertEqual(self.probed(), ["/d", "/w"])
         self.assertTrue(os.path.isfile(self.cache))
-
-    def test_each_actual_probe_records_its_account_identity_and_raw_output(self):
-        with mock.patch("time.time", return_value=1_000_000.0):
-            self.usage()
-        folder = os.path.join(self.ensemble, "usage", "probes")
-        records = []
-        for name in os.listdir(folder):
-            with open(os.path.join(folder, name), encoding="utf-8") as stream:
-                records.append(json.load(stream))
-            self.assertEqual(stat.S_IMODE(os.stat(os.path.join(folder, name)).st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(os.stat(folder).st_mode), 0o700)
-        self.assertEqual(len(records), 2)
-        self.assertEqual(
-            sorted((r["accounts"], r["identity"], r["output"], r["at"]) for r in records),
-            [(["default"], "/d", "70,10", 1_000_000.0), (["work"], "/w", "20,30", 1_000_000.0)],
-        )
-        with mock.patch("time.time", return_value=1_000_001.0):
-            self.usage()
-        self.assertEqual(len(os.listdir(folder)), 2)
 
     def test_a_second_reading_within_the_ttl_probes_nothing(self):
         first = self.usage()
@@ -1874,27 +1725,11 @@ class AccountPoolTest(Base):
             self.assertEqual(self.usage().five_hour.used_percent, 100.0)
         self.assertEqual(self.usage(), Usage(Window(10, None), Window(10, None)))
 
-    def test_with_no_reading_known_a_start_reports_no_available_account(self):
+    def test_with_no_reading_known_a_start_selects_none(self):
         self.probe.side_effect = None
         self.probe.return_value = None
         self.assertIsNone(self.usage())
-        with self.assertRaisesRegex(
-            ConfigError, "no available account.*default: unknown.*work: unknown"
-        ):
-            self.started_env()
-
-    def test_all_exhausted_accounts_refuse_a_start_before_the_host(self):
-        self.outputs = {"/d": "100,10", "/w": "20,100"}
-        with self.assertRaisesRegex(ConfigError, "no available account"):
-            self.started_account()
-        self.assertEqual(self.session.host().headless, [])
-
-    def test_a_held_account_cannot_be_the_fallback_for_an_exhausted_pool(self):
-        self.outputs = {"/d": "0,0", "/w": "100,100"}
-        hosted_session.accounts.hold("pool", "default", time.time() + 3600)
-        with self.assertRaisesRegex(ConfigError, "no available account"):
-            self.started_env()
-        self.assertEqual(self.probed(), ["/w"])
+        self.assertNotIn(ACCOUNT_ENV, self.started_env())
 
     def run_on(self, **env):
         """An in_process run selecting `env`'s account, drained."""
@@ -1920,37 +1755,24 @@ class AccountPoolTest(Base):
 
     def test_a_run_off_the_pool_holds_nothing(self):
         self.steps({"out": {"type": "limit", "resets_at": time.time() + 3600}})
+        self.pool({"default": "/d"})
+        self.run_on()
         self.pool({"default": "/d", "work": "/w"}, container=False)
         self.run_on()
         self.assertFalse(os.path.exists(os.path.join(self.ensemble, "usage", "pool-holds.json")))
 
-    def test_no_container_is_todays_single_probe(self):
-        self.pool({"default": "/d", "work": "/w"}, container=False)
-        self.assertEqual(self.usage(), Usage(Window(-1, None), Window(-1, None)))
-        self.assertEqual(self.probed(), ["/x"])
-        self.assertNotIn(ACCOUNT_ENV, self.started_env())
-        self.assertFalse(os.path.exists(self.cache))
-
-    def test_one_registered_account_is_probed_and_selected(self):
-        self.pool({"default": "/d"})
-        self.assertEqual(self.usage(), Usage(Window(70, None), Window(10, None)))
-        self.assertEqual(self.probed(), ["/d"])
-        self.assertEqual(self.started_env()[ACCOUNT_ENV], "default")
-
-    def test_one_registered_held_account_refuses_an_automatic_start(self):
-        self.pool({"default": "/d"})
-        hosted_session.accounts.hold("pool", "default", time.time() + 3600)
-        with self.assertRaisesRegex(ConfigError, "no available account"):
-            self.started_env()
-        self.probe.assert_not_called()
-
-    def test_a_single_account_usage_limit_is_held_for_later_starts(self):
-        self.pool({"default": "/d"})
-        self.steps({"out": {"type": "limit", "resets_at": time.time() + 3600}})
-        self.run_on()
-        self.assertTrue(os.path.exists(os.path.join(self.ensemble, "usage", "pool-holds.json")))
-        with self.assertRaisesRegex(ConfigError, "no available account"):
-            self.started_env()
+    def test_one_account_or_no_container_is_todays_single_probe(self):
+        for accounts, container in (
+            ({"default": "/d"}, True),
+            ({"default": "/d", "work": "/w"}, False),
+        ):
+            with self.subTest(accounts=accounts, container=container):
+                self.pool(accounts, container=container)
+                self.probe.reset_mock()
+                self.assertEqual(self.usage(), Usage(Window(-1, None), Window(-1, None)))
+                self.assertEqual(self.probed(), ["/x"])
+                self.assertNotIn(ACCOUNT_ENV, self.started_env())
+                self.assertFalse(os.path.exists(self.cache))
 
 
 class WritableDirsTest(Base):

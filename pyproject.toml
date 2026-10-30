@@ -21,7 +21,7 @@ typeCheckingMode = "basic"
 reportUnnecessaryComparison = "error"
 reportUnnecessaryCast = "error"
 pythonVersion = "3.11"
-include = ["src/ensemble", ".github/worker_codex.py", ".github/worker_codex", "tests/delegate/usage_query.py"]
+include = ["src/ensemble", ".github/worker_codex.py", ".github/worker_codex"]
 extraPaths = ["src"]
 
 [tool.vulture]

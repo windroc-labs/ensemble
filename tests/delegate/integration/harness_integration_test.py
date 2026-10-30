@@ -47,6 +47,30 @@ from tests.delegate.integration.cli import TEAMS, owned_team
 from tests.delegate.replies import block, mark
 from tests.delegate.unit.runs import DONE
 
+USAGE_QUERY = """import io, json, unittest
+from unittest import mock
+from ensemble.delegate import HarnessDelegate
+from ensemble.session import Usage, Window
+from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
+from tests.delegate.fakes.usage import UsageClient
+case = unittest.TestCase()
+sentinel = Usage(Window(12.5, 1767225600.0), Window(37.0, None))
+probes = []
+for expected in (sentinel, None):
+    UsageClient.usage_result = expected
+    process = mock.Mock(stdout=io.StringIO("quota"))
+    process.communicate.return_value = ("quota", "")
+    with mock.patch("subprocess.Popen", return_value=process) as probe:
+        case.assertIs(HarnessDelegate.usage("dummy-tester"), expected)
+    case.assertEqual(probe.call_count, 1)
+    probes.append(probe.call_count)
+case.assertEqual(UsageClient.queried, ["role_usage", "role_usage"])
+case.assertEqual((UsageClient.starts, HarnessSession.started, RecordingHost.launches), ([], [], []))
+print(json.dumps({"queried": UsageClient.queried, "probes": probes,
+                  "starts": UsageClient.starts, "session_starts": HarnessSession.started,
+                  "launches": RecordingHost.launches}))
+"""
+
 
 class ConfiguredSession(HarnessSession):
     """Its Hosts are the configured [hosts], as HostedSession's are."""
@@ -375,7 +399,7 @@ class UsageQueries(HarnessCase):
                 f"cwd = {json.dumps(self.home)}\n"
             )
         result = subprocess.run(
-            [sys.executable, "-P", "-S", os.path.join(REPO, "tests/delegate/usage_query.py")],
+            [sys.executable, "-P", "-S", "-c", USAGE_QUERY],
             cwd=self.home,
             env=child_env(None, REPO),
             stdin=subprocess.DEVNULL,

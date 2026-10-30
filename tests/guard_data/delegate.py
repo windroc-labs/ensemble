@@ -60,6 +60,10 @@ PYTHON_CODE_ALLOWED = {
     ): "The contract's class-method test calls HarnessDelegate.usage without session_cls, which configures the process-global Session from config; tests may not patch HostedSession._setup, so only a fresh interpreter keeps that out of the test process.",
     (
         "tests/delegate/integration/harness_integration_test.py",
+        "18f10c6337d4fdd297ccadc7943384323e8832b3ecc0552fa1d5dee70c7ef775",
+    ): "HarnessDelegate.usage with its default session_cls configures the process-global Session and loads UsageClient through it; no public fresh session class exists and tests may not configure or patch the shared Session in-process.",
+    (
+        "tests/delegate/integration/harness_integration_test.py",
         "6388d395c30e89fdf22436b81638660fae74038141f6087419c4edfa2dd7b654",
     ): "Two-process detach race needs DrivenDelegate's disk-backed FakeControl drive and PersistentSession's Hosts, injectable only as a session_cls class object.",
     (
@@ -86,6 +90,10 @@ EMBEDDED_PROGRAMS_ALLOWED = {
         "tests/delegate/integration/harness_contract_integration_test.py",
         "59fe3b8a4b565bc2929dcc4ca9a08aab98884f0813693836ebb2241fd595bb17",
     ): "Existing process fixture checks class methods answer for its roles and refuse an unknown one.",
+    (
+        "tests/delegate/integration/harness_integration_test.py",
+        "18f10c6337d4fdd297ccadc7943384323e8832b3ecc0552fa1d5dee70c7ef775",
+    ): "Existing process fixture checks role client usage preserves sentinel identity and none without starting.",
     (
         "tests/delegate/integration/harness_integration_test.py",
         "6388d395c30e89fdf22436b81638660fae74038141f6087419c4edfa2dd7b654",

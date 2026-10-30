@@ -79,13 +79,10 @@ from ensemble.utils import (
     Display,
     Record,
     Status,
-    kill_group,
     load_class,
     module_roots,
-    piped_popen,
     printable_abs,
-    redact,
-    save,
+    probe,
     sid_error,
     source_path,
     summary,
@@ -110,7 +107,6 @@ HARNESS = "ensemble.session.harness.process"
 LOG = logging.getLogger("session")
 PROBE_DIR = f"{STATE}/probe"
 PROBE_TIMEOUT = 120
-PROBE_RECORDS = f"{STATE}/usage/probes"
 UNCONFIGURED = "session not configured: call Session.configure first"
 MODES: dict[Mode, type[BaseMode]] = {
     mode.kind: mode for mode in (headless.HeadlessMode, tui.TuiMode, in_process.InProcessMode)
@@ -147,7 +143,7 @@ class _Setup:
     registry: Registry
     hosts: Hosts
     class_loader: Callable[..., Any]
-    probe: Callable[..., str | subprocess.CompletedProcess[str] | None]
+    probe: Callable[..., str | None]
     clock: Callable[[], float]
     host_factory: HostFactory
     viewer: Mapping
@@ -195,46 +191,8 @@ def _probe_dir() -> str | None:
     return path
 
 
-def _usage_probe(
-    argv, *, cwd: str, env: Mapping[str, str], timeout: float
-) -> subprocess.CompletedProcess[str]:
-    try:
-        proc = piped_popen(argv, cwd=cwd, env=env)
-    except (OSError, ValueError) as error:
-        return subprocess.CompletedProcess(argv, 127, "", str(error))
-    try:
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as error:
-            kill_group(proc)
-            stdout, stderr = error.output, error.stderr
-            stdout = (
-                stdout.decode("utf-8", errors="replace")
-                if isinstance(stdout, bytes)
-                else stdout or ""
-            )
-            stderr = (
-                stderr.decode("utf-8", errors="replace")
-                if isinstance(stderr, bytes)
-                else stderr or ""
-            )
-            return subprocess.CompletedProcess(argv, 124, stdout, stderr)
-        assert proc.returncode is not None
-        return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
-    finally:
-        assert proc.stdout is not None and proc.stderr is not None
-        proc.stdout.close()
-        proc.stderr.close()
-
-
 def _read_usage(
-    setup: _Setup,
-    client: Client,
-    launch: Launch | None,
-    *,
-    container: bool = False,
-    probe_accounts: tuple[str, ...] = (),
-    identity: str = "",
+    setup: _Setup, client: Client, launch: Launch | None, *, container: bool = False
 ) -> Usage | None:
     if launch is None or not launch.argv:
         return None
@@ -248,22 +206,7 @@ def _read_usage(
             raise ConfigError(
                 f"client executable {executable!r} is missing or not executable; install or configure this client"
             )
-    result = setup.probe(launch.argv, cwd=cwd, env=env, timeout=PROBE_TIMEOUT)
-    stderr, returncode = "", None
-    if isinstance(result, subprocess.CompletedProcess):
-        raw, stderr, returncode = result.stdout, result.stderr, result.returncode
-        output = raw if returncode == 0 else None
-    else:
-        output = raw = result
-    _record_probe(
-        type(client).__name__,
-        probe_accounts,
-        identity,
-        raw,
-        env,
-        stderr=stderr,
-        returncode=returncode,
-    )
+    output = setup.probe(launch.argv, cwd=cwd, env=env, timeout=PROBE_TIMEOUT)
     if output is None:
         return None
     try:
@@ -272,73 +215,17 @@ def _read_usage(
         return None
 
 
-def _record_probe(
-    client: str,
-    probe_accounts: tuple[str, ...],
-    identity: str,
-    output: str | None,
-    env: Mapping[str, str],
-    *,
-    stderr: str = "",
-    returncode: int | None = None,
-) -> None:
-    record = {
-        "at": time.time(),
-        "client": client,
-        "accounts": probe_accounts,
-        "identity": identity,
-        "output": _probe_text(output, env),
-        "stderr": _probe_text(stderr, env),
-        "returncode": returncode,
-    }
-    folder = os.path.expanduser(PROBE_RECORDS)
-    path = os.path.join(folder, f"{time.time_ns()}-{uuid.uuid4().hex}.json")
-    try:
-        os.makedirs(folder, mode=0o700, exist_ok=True)
-        save(path, json.dumps(record, sort_keys=True))
-    except OSError as error:
-        print(f"usage probe: could not record: {error}", file=sys.stderr)
-
-
-def _probe_text(text: str | None, env: Mapping[str, str]) -> str | None:
-    if text is None:
-        return None
-    text = redact(text)
-    secrets = {
-        value
-        for mapping in (os.environ, env)
-        for key, value in mapping.items()
-        if value and re.search(r"TOKEN|KEY|SECRET|PASSWORD|AUTH", key, re.I)
-    }
-    for value in sorted(secrets, key=len, reverse=True):
-        text = text.replace(value, "[REDACTED]")
-    text = re.sub(r"\bsk-[A-Za-z0-9_-]+", "[REDACTED]", text)
-    text = re.sub(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+", "[REDACTED]", text)
-    return re.sub(
-        r"""(?i)(\b[\w-]*(?:token|key|secret|password|authorization)[\w-]*["']?[ \t]*[:=]\s*)"""
-        r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n]*)""",
-        r"\1[REDACTED]",
-        text,
-    )
-
-
 def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, Usage | None] | None:
     probes = client._usage_probes()
-    if not probes or host._client_context().container is None:
+    if probes is None or len(probes) < 2 or host._client_context().container is None:
         return None
-
-    def read(launch: Launch) -> Usage | None:
-        identity = next(identity for identity, probe in probes.values() if probe is launch)
-        names = tuple(account for account, (source, _) in probes.items() if source == identity)
-        return _read_usage(setup, client, launch, probe_accounts=names, identity=identity)
-
-    return accounts.readings(name, probes, read)
+    return accounts.readings(name, probes, lambda launch: _read_usage(setup, client, launch))
 
 
 def _pool_account(spec: Spec, client: Client, host: Host) -> str | None:
-    """The account a start runs on, when its client has accounts on a container Host."""
+    """The account a start runs on, when its client has two or more on a container Host."""
     registered = client._accounts()
-    if not registered or host._client_context().container is None:
+    if registered is None or len(registered) < 2 or host._client_context().container is None:
         return None
     return spec.env.get(ACCOUNT_ENV) or DEFAULT_ACCOUNT
 
@@ -350,9 +237,8 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
     if (pool := _pooled(setup, name, client, host)) is None:
         return spec
-    if (account := accounts.pick(pool)) is None:
-        detail = "; ".join(f"{account}: {summary(reading)}" for account, reading in pool.items())
-        raise ConfigError(f"{name}: no available account for automatic selection ({detail})")
+    if (account := accounts.best(pool)) is None:
+        return spec
     print(f"{name} account {account}: picked ({summary(pool[account])})", file=sys.stderr)
     return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
 
@@ -392,7 +278,7 @@ def _reconstructible(setup: _Setup) -> bool:
     """Every callable the default, so a harness can rebuild it."""
     return (
         setup.class_loader is load_class
-        and setup.probe is _usage_probe
+        and setup.probe is probe
         and setup.host_factory is _built
         and setup.viewer_factory is Viewer
     )
@@ -569,7 +455,7 @@ class HostedSession(Session):
         clients: Mapping,
         hosts: Hosts,
         class_loader=load_class,
-        probe=_usage_probe,
+        probe=probe,
         clock: Callable[[], float] = time.monotonic,
         host_factory: HostFactory | None = None,
         viewer: Mapping | None = None,
@@ -885,6 +771,7 @@ class HostedSession(Session):
         _environment_check(spec, on, mode)
         viewer = cls.viewer()
         displays.validate_display(display, on)
+        spec = _picked(setup, spec, client_name, client, on)
         name = tui.TuiMode.resolve_name(spec) if mode == Mode.TUI else spec.name
 
         def check_name(name: str) -> None:
@@ -914,15 +801,6 @@ class HostedSession(Session):
             hosts=hosts,
             host=_host_key(setup, selected_host),
         ) as capacity:
-            if (
-                not (spec.env.get(ACCOUNT_ENV) or client._account())
-                and client._accounts()
-                and on._client_context().container is not None
-            ):
-                MODES[mode].preflight(
-                    spec, client, registry=setup.registry, host=on, display=display
-                )
-            spec = _picked(setup, spec, client_name, client, on)
             running = MODES[mode].start(
                 spec,
                 client,

@@ -28,7 +28,6 @@ NAMES = {
     "test-accounts",
     "gotchas",
     "docker-guard-main-process",
-    "claude-account-selection",
 }
 SECRET_READERS = (
     "install-ensemble/storekey-stdin",
