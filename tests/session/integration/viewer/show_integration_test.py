@@ -444,7 +444,9 @@ class LabelTest(LiveCase):
         )
 
     def test_a_docker_tui_pane_shows_its_name_in_the_border(self):
-        """AC12: a Docker worker pane's border shows [NAME]; its terminal keeps every row."""
+        """AC12, WDRC-519: a Docker worker pane's border shows [🐳 NAME]; its terminal keeps every
+        row.
+        """
         before = self.tmux("show-options", "-g")
         manager = self.tmux("show-options", "-t", "=mgr:")
         host = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
@@ -455,7 +457,7 @@ class LabelTest(LiveCase):
             self.tmux("show-options", "-wqv", "-t", window, "pane-border-status"), "bottom"
         )
         self.assertEqual(self.display(pane, "#{@worker-label}"), "w1")
-        self.assertEqual(self.display(pane, "#{T:pane-border-format}"), "[w1]")
+        self.assertEqual(self.display(pane, "#{T:pane-border-format}"), "[🐳 w1]")
         self.sized(pane)
         self.assertEqual(self.tmux("show-options", "-g"), before)
         self.assertEqual(self.tmux("show-options", "-t", "=mgr:"), manager)
