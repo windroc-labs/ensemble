@@ -60,7 +60,7 @@ def _read(fd: int) -> dict:
         not isinstance(value, dict)
         or value.get("kind") not in tuple(Mode)
         or not all(isinstance(value.get(k), str) and value[k] for k in ("name", "sid"))
-        or (value["kind"] == Mode.TUI or "host" in value)
+        or value["kind"] == Mode.TUI
         and not isinstance(value.get("host"), str)
     ):
         raise ValueError("invalid reservation")
@@ -79,12 +79,6 @@ def _retained(record: dict, known: dict) -> bool:
 
 
 def _holders(directory: str, known: dict, holders: dict) -> list[str]:
-    """Each counted reservation claims one host row of its run, else counts alone.
-
-    A row with its name (its sid or none) is its run's; only one with no such row, as an
-    unnamed run's, claims by sid a row no reservation names.
-    """
-    reservations = []
     for entry in os.scandir(directory):
         if not entry.name.endswith(".run"):
             continue
@@ -99,34 +93,20 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
                 held = False
             except BlockingIOError:
                 held = True
-            if held or record["kind"] == Mode.TUI and _retained(record, known):
-                namespace = None
-                if (host := record.get("host")) is not None:
+            if record["kind"] == Mode.TUI:
+                if held or _retained(record, known):
+                    host = record["host"]
                     namespace = known[host][0] if host in known else ("configuration", host)
-                reservations.append((entry.name, namespace, record["name"], record["sid"]))
+                    holders.pop((namespace, record["name"], None), None)
+                    holders[(namespace, record["name"], record["sid"])] = record["name"]
+                    continue
+            elif held:
+                holders[(entry.name,)] = record["name"]
                 continue
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(entry.path)
         finally:
             os.close(fd)
-    found, unclaimed = set(holders), set(holders)
-
-    def named(namespace, name: str, sid: str) -> list[tuple]:
-        return [
-            key
-            for key in ((namespace, name, sid), (namespace, name, None), (namespace, name, ""))
-            if key in found
-        ]
-
-    owned = {key for _, *run in reservations for key in named(*run)}
-    for entry, namespace, name, sid in sorted(reservations):
-        rows = named(namespace, name, sid) or [
-            key for key in found - owned if key[0] == namespace and key[2] == sid
-        ]
-        if row := next((key for key in rows if key in unclaimed), None):
-            unclaimed.remove(row)
-        else:
-            holders[(entry,)] = name
     return sorted(holders.values())
 
 
@@ -168,7 +148,7 @@ class Admission(AbstractContextManager):
         self.directory = os.path.join(os.path.expanduser(ROOT), client)
         self.path = os.path.join(self.directory, f"{uuid.uuid4().hex}.run")
         self.record = {"kind": mode, "name": name or sid, "sid": sid}
-        if mode == Mode.TUI or host or hosts:
+        if mode == Mode.TUI:
             self.record["host"] = host or next(iter(hosts))
         self._fd: int | None = None
         self._committed = False

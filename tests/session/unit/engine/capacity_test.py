@@ -1,6 +1,5 @@
 """Client admission across configurations; filesystem locks, no processes or credentials."""
 
-import fcntl
 import json
 import os
 import shutil
@@ -175,17 +174,6 @@ class AdmissionTest(Case):
                 self.assertFalse(any(seen), "the release recreated its state")
                 os.mkdir(self.ensemble)
 
-    def test_held_runs_sharing_a_name_and_sid_count_separately(self):
-        for _ in range(2):
-            ticket = self.enter(limit=2, name=None, sid="same")
-            with ticket:
-                ticket.started(lambda: Liveness.LIVE)
-        with (
-            self.assertRaisesRegex(SessionError, "held by: same, same"),
-            self.enter(limit=2, name="third", sid="s3"),
-        ):
-            self.fail("two runs must fill two slots")
-
     def test_live_transient_reservation_counts_and_failure_rolls_back(self):
         live = mock.Mock(return_value=Liveness.LIVE)
         first = self.enter()
@@ -255,97 +243,6 @@ class AdmissionTest(Case):
             self.enter(limit=2, name="third", sid="s3", hosts=hosts),
         ):
             self.fail("two real sessions must fill two slots")
-
-    def test_a_named_headless_run_and_its_held_reservation_count_once(self):
-        first = self.enter(limit=2)
-        with first:
-            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
-            first.started(lambda: Liveness.LIVE)
-        second = self.enter(limit=2, name="second", sid="s2")
-        with second:
-            second.started(lambda: Liveness.LIVE)
-        with (
-            self.assertRaisesRegex(SessionError, "held by: first, second"),
-            self.enter(limit=2, name="third", sid="s3"),
-        ):
-            self.fail("two runs must fill two slots")
-
-    def test_an_unnamed_headless_run_and_its_held_reservation_count_once(self):
-        first = self.enter(limit=2, name=None)
-        with first:
-            self.host.create("headless-g1", metadata={"client": "fake", "sid": "s1"})
-            first.started(lambda: Liveness.LIVE)
-        second = self.enter(limit=2, name="second", sid="s2")
-        with second:
-            second.started(lambda: Liveness.LIVE)
-        with (
-            self.assertRaisesRegex(SessionError, "held by: headless-g1, second$"),
-            self.enter(limit=2, name="third", sid="s3"),
-        ):
-            self.fail("two runs must fill two slots")
-
-    def assert_counted_in_any_scan_order(self, runs, held_by):
-        """runs: (name, sid) of live TUI starts; a fourth start sees held_by whatever scans first."""
-        paths = []
-        for name, sid in runs:
-            ticket = self.enter(limit=0, name=name, sid=sid, mode=Mode.TUI)
-            with ticket:
-                ticket.started(lambda: Liveness.LIVE)
-            paths.append(ticket.path)
-        scandir = os.scandir
-        for first in paths:
-            with (
-                self.subTest(scanned_first=paths.index(first)),
-                mock.patch.object(
-                    os,
-                    "scandir",
-                    lambda path, first=first: sorted(
-                        scandir(path), key=lambda entry: entry.path != first
-                    ),
-                ),
-                self.assertRaisesRegex(SessionError, f"held by: {held_by}$"),
-                self.enter(limit=len(held_by.split(", ")), name="fourth", sid="s4"),
-            ):
-                self.fail("the live runs must fill every slot")
-
-    def test_a_reservation_claims_its_own_row_before_another_sharing_its_sid(self):
-        self.host.create("a", metadata={"client": "fake", "sid": "s1"})
-        self.host.create("b", metadata={"client": "fake"})
-        self.assert_counted_in_any_scan_order([("a", "s1"), ("b", "s1")], "a, b")
-
-    def test_a_reservation_sharing_its_row_never_claims_another_by_sid(self):
-        self.host.create("a", metadata={"client": "fake"})
-        self.host.create("b", metadata={"client": "fake", "sid": "s1"})
-        self.assert_counted_in_any_scan_order([("a", "s1"), ("a", "s2")], "a, a, b")
-
-    def test_a_row_without_a_sid_is_not_another_runs_reservation(self):
-        self.host.create("other", metadata={"client": "fake", "sid": ""})
-        first = self.enter(limit=2, name=None)
-        with first:
-            first.started(lambda: Liveness.LIVE)
-        with (
-            self.assertRaisesRegex(SessionError, "held by: other, s1$"),
-            self.enter(limit=2, name="third", sid="s3"),
-        ):
-            self.fail("two runs must fill two slots")
-
-    def test_a_held_reservation_without_a_host_counts_until_released(self):
-        ticket = self.enter(limit=0)
-        with ticket:
-            pass
-        legacy = Path(ticket.directory) / "legacy.run"
-        legacy.parent.mkdir(parents=True, exist_ok=True)
-        legacy.write_text('{"kind":"headless","name":"old","sid":"old"}')
-        fd = os.open(legacy, os.O_RDONLY)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            with self.assertRaisesRegex(SessionError, "held by: old"), self.enter():
-                self.fail("admitted")
-        finally:
-            os.close(fd)
-        with self.enter():
-            pass
-        self.assertFalse(legacy.exists())
 
     def test_independent_backends_with_equal_name_and_sid_count_separately(self):
         other = MemoryHost("other")
