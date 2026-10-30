@@ -28,6 +28,13 @@ class WorkerPane(NamedTuple):
     attach: str = ""
 
 
+class CloseEntry(NamedTuple):
+    """after-kill-pane[index], a close hook ensemble set for worker pane `pane`."""
+
+    index: int
+    pane: str
+
+
 class Spot(NamedTuple):
     """grid: (window, manager)."""
 

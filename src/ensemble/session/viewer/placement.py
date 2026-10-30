@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import os
 import re
 import shlex
@@ -39,6 +40,7 @@ from ensemble.session.viewer.grid import (
     worker_panes,
 )
 from ensemble.session.viewer.types import (
+    CloseEntry,
     Retile,
     Split,
     Spot,
@@ -52,7 +54,11 @@ SHOW_TIMEOUT = 30
 SLOT = re.compile(r"\{\{([^{}]*)\}\}")
 HOOK_SID = re.compile(r"[A-Za-z0-9_.:-]+")
 LISTED = "#{S:#{W:#{P: #{pane_id} }}}"
-CLOSE_ENTRY = re.compile(r"after-kill-pane\[([0-9]+)\] ")
+HOOK_ENTRY = re.compile(r"after-kill-pane(?:\[([0-9]+)\](?: (.*))?)?")
+CLOSE_ENTRY = re.compile(  # _close_hook as show-hooks prints it
+    r"if-shell -F .#\{m:\* (%[0-9]+) \*,.* .set-hook -u -w -t @[0-9]+ "
+    r"after-kill-pane\[([0-9]+)\] ; run-shell -b .\S+ hide --if-closed --sid .*"
+)
 SPLIT = "#{pane_id}\t#{window_id}"
 LABEL = f"#{{?#{{{WORKER_LABEL}}},[#{{{WORKER_LABEL}}}],}}"
 
@@ -78,9 +84,16 @@ def _newest(name: str, workers: Sequence[WorkerPane]) -> str | None:
 
 
 def _close_hook(
-    command: str, name: str, pane: str, window: str, *, sid: str | None, generation: str | None
+    command: str,
+    name: str,
+    pane: str,
+    window: str,
+    *,
+    sid: str | None,
+    generation: str | None,
+    index: int,
 ) -> str | None:
-    """after-kill-pane[N]'s hide of `name`'s run once pane is gone; None off the allow-lists."""
+    """after-kill-pane[index]'s hide of `name`'s run once pane is gone; None off the allow-lists."""
     if not (
         HOOK_PATH.fullmatch(command)
         and NAME.fullmatch(name)
@@ -96,7 +109,7 @@ def _close_hook(
         f"run-shell -b '{command} hide --if-closed --sid {sid} --generation {generation} -- "
         f"{name} >/dev/null 2>&1 || true'"
     )
-    unset = f"set-hook -u -w -t {window} after-kill-pane[{pane[1:]}]"
+    unset = f"set-hook -u -w -t {window} after-kill-pane[{index}]"
     return f"if-shell -F '#{{m:* {pane} *,{LISTED}}}' '' \"{unset} ; {run}\""
 
 
@@ -187,14 +200,20 @@ class Placement:
         return [w for w in self.workers() if w.name == name]
 
     def close(self, worker: WorkerPane) -> None:
-        """Kills worker's pane, its close hook unset first; a gone pane is no error."""
-        res = self.tmux.run(
-            [
-                *("set-hook", "-u", "-w", "-t", worker.window),
-                f"after-kill-pane[{worker.pane[1:]}]",
-                *(";", "kill-pane", "-t", worker.pane),
-            ]
-        )
+        """Kills worker's pane, its close hooks unset first (none unread: one unsets itself once
+        its pane is gone); a gone pane is no error.
+        """
+        args = []
+        try:
+            _, ours, _ = self._entries(worker.window)
+        except TuiError as e:
+            print(f"tui: close: after-kill-pane: {e}", file=sys.stderr)
+            ours = []
+        for entry in ours:
+            if entry.pane == worker.pane:
+                args += ["set-hook", "-u", "-w", "-t", worker.window]
+                args += [f"after-kill-pane[{entry.index}]", ";"]
+        res = self.tmux.run([*args, "kill-pane", "-t", worker.pane])
         if res.returncode and not absent(res):
             raise TuiError(f"tmux: {error(res)}")
 
@@ -342,40 +361,74 @@ class Placement:
                 *(";", "set-option", "-w", "-t", window, "pane-border-format", LABEL),
             ]
         command, problem = hook_command()
-        hook = (
-            None
-            if problem
-            else _close_hook(command, name, pane, window, sid=sid, generation=generation)
-        )
-        if hook is None:
-            why = problem or f"refused run {sid!r:.80} {generation!r:.80}"
-            print(f"tui: show: after-kill-pane: {why}", file=sys.stderr)
-        else:
-            for index in self._gone_entries(window):
-                args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{index}]"]
-            args += [";", "set-hook", "-w", "-t", window, f"after-kill-pane[{pane[1:]}]", hook]
+        if problem is None:
+            try:
+                args += self._close_args(
+                    command, name, pane, window, sid=sid, generation=generation
+                )
+            except TuiError as e:
+                problem = str(e)
+        if problem is not None:
+            print(f"tui: show: after-kill-pane: {problem}", file=sys.stderr)
         try:
             self.tmux.checked(args)
         except TuiError as e:
             print(f"tui: show: @worker: {e}", file=sys.stderr)
 
-    def _gone_entries(self, window: str) -> list[str]:
-        """Each M of window's after-kill-pane[M] whose %M is gone; none when tmux fails."""
-        try:
-            res = self.tmux.run(
-                [
-                    *("show-hooks", "-w", "-t", window, "after-kill-pane"),
-                    *(";", "list-panes", "-a", "-F", "#{pane_id}"),
-                ]
-            )
-        except TuiError:
-            return []
+    def _close_args(
+        self,
+        command: str,
+        name: str,
+        pane: str,
+        window: str,
+        *,
+        sid: str | None,
+        generation: str | None,
+    ) -> list[str]:
+        """Calls unsetting window's gone panes' close hooks, setting pane's at a free index."""
+        taken, ours, live = self._entries(window)
+        gone = {entry.index for entry in ours if entry.pane not in live}
+        used = taken - gone
+        index = int(pane[1:])
+        if index in used:
+            index = next(i for i in itertools.count() if i not in used)
+        hook = _close_hook(command, name, pane, window, sid=sid, generation=generation, index=index)
+        if hook is None:
+            raise TuiError(f"refused run {sid!r:.80} {generation!r:.80}")
+        args = []
+        for stale in sorted(gone):
+            args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{stale}]"]
+        return [*args, ";", "set-hook", "-w", "-t", window, f"after-kill-pane[{index}]", hook]
+
+    def _entries(self, window: str) -> tuple[set[int], list[CloseEntry], set[str]]:
+        """window's after-kill-pane indexes, its close hooks and the live panes; TuiError when
+        tmux fails or misprints.
+        """
+        res = self.tmux.run(
+            [
+                *("show-hooks", "-w", "-t", window, "after-kill-pane"),
+                *(";", "list-panes", "-a", "-F", "#{pane_id}"),
+            ]
+        )
         if res.returncode:
-            return []
-        lines = res.stdout.splitlines()
-        live = {line for line in lines if PANE.fullmatch(line)}
-        found = (CLOSE_ENTRY.match(line) for line in lines)
-        return [m[1] for m in found if m is not None and f"%{m[1]}" not in live]
+            if absent(res):
+                return set(), [], set()
+            raise TuiError(f"tmux: {error(res)}")
+        taken, ours, live = set(), [], set()
+        for line in res.stdout.splitlines():
+            if PANE.fullmatch(line):
+                live.add(line)
+                continue
+            entry = HOOK_ENTRY.fullmatch(line)
+            if entry is None:
+                raise TuiError(f"tmux: show-hooks printed {line!r:.80}")
+            if entry[1] is None:
+                continue
+            taken.add(int(entry[1]))
+            hook = CLOSE_ENTRY.fullmatch(entry[2] or "")
+            if hook is not None and hook[2] == entry[1]:
+                ours.append(CloseEntry(int(entry[1]), hook[1]))
+        return taken, ours, live
 
     def run_command(self, session: str, template: str) -> str | None:
         """Runs template with /bin/sh, {{session}} the quoted name; why it failed, else None."""

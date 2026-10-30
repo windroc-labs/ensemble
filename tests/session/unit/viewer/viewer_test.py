@@ -61,12 +61,9 @@ def worker(name: str, sid: str | None, display: str | None = None) -> None:
         json.dump({"sid": sid, "generation": "g1", "display": display}, f)
 
 
-def closed(pane: str, window: str) -> list[str]:
-    """Placement.close's one call for worker pane `pane` of `window`."""
-    return [
-        *("tmux", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{pane[1:]}]"),
-        *(";", "kill-pane", "-t", pane),
-    ]
+def closed(pane: str) -> list[str]:
+    """Placement.close's call for worker pane `pane`."""
+    return ["tmux", "kill-pane", "-t", pane]
 
 
 class Base(HostBase):
@@ -283,7 +280,7 @@ class HideTest(Base):
         """AC5: hide closes w1's worker panes alone and marks it hidden; the worker runs on."""
         self.panes(("%5", "w1", "mgr", "@1"), ("%6", "w2", "mgr", "@1"), ("%8", "w1", "", "@2"))
         self.assertIsNone(self.viewer.hide("w1", self.host))
-        self.assertEqual(self.kills(), [closed("%5", "@1"), closed("%8", "@2")])
+        self.assertEqual(self.kills(), [closed("%5"), closed("%8")])
         self.assertTrue(hidden.read("w1", SID))
         self.assertNotIn("resize-window", [c[1] for c in self.runner.calls])
 
@@ -307,7 +304,7 @@ class HideTest(Base):
         worker("w1", None)
         self.panes(("%9", "w1", "mgr"))
         self.viewer.hide("w1", self.host)
-        self.assertEqual(self.kills(), [closed("%9", "@1")])
+        self.assertEqual(self.kills(), [closed("%9")])
         self.assertFalse(os.path.exists(os.path.join(self.ensemble, "hidden")))
 
     def test_hide_if_closed_with_a_live_pane_marks_nothing(self):
@@ -372,7 +369,7 @@ class HideTest(Base):
 
     def test_hide_names_a_failed_pane_kill_and_marks_nothing(self):
         self.panes(("%9", "w1", "mgr"))
-        self.runner.results["set-hook"] = (1, "", "boom\n")
+        self.runner.results["kill-pane"] = (1, "", "boom\n")
         with self.assertRaisesRegex(SessionError, "^tmux session w1: tmux: boom$"):
             self.viewer.hide("w1", self.host)
         self.assertFalse(hidden.read("w1", SID))
@@ -386,7 +383,7 @@ class HideTest(Base):
             SessionError, "^tmux session w1: hidden state: Permission denied$"
         ):
             self.viewer.hide("w1", self.host)
-        self.assertEqual(self.kills(), [closed("%9", "@1")])
+        self.assertEqual(self.kills(), [closed("%9")])
 
     def failed_show(self):
         self.enterContext(environ(HOME=self.home, **INSIDE))
@@ -400,14 +397,12 @@ class HideTest(Base):
         self.assertEqual(logs.output, ["WARNING:session:show w1: tmux: boom"])
 
     def worker_reads(self, *results):
-        """Each worker pane read's result in turn; other list-panes calls list nothing."""
         later = iter(results)
         self.runner.results["list-panes"] = lambda argv: (
             next(later) if argv[1:3] == ["list-panes", "-a"] and WORKERS[-1] in argv else (0, "")
         )
 
     def test_a_failed_show_clears_hidden_while_a_worker_pane_still_shows_it(self):
-        """A pane of this run's attach command that came up meanwhile counts as shown."""
         self.worker_reads(
             worker_rows(), worker_rows(("%9", "w1", "mgr", "@1", "mgr", "/fake/attach w1"))
         )
@@ -415,7 +410,6 @@ class HideTest(Base):
         self.assertFalse(hidden.read("w1", SID))
 
     def test_a_failed_show_with_no_worker_pane_keeps_hidden(self):
-        """An earlier run's pane, still closing, shows no run of this attach command."""
         for rows in (
             worker_rows(("%9", "w2", "mgr")),
             worker_rows(("%9", "w1", "mgr", "@1", "mgr", "/fake/attach w1 --old")),
@@ -439,7 +433,7 @@ class CloseTest(Base):
         )
         self.assertIsNone(self.viewer.close("w1", self.host))
         kills = [c for c in self.runner.calls if "kill-pane" in c]
-        self.assertEqual(kills, [closed("%5", "@1"), closed("%8", "@2")])
+        self.assertEqual(kills, [closed("%5"), closed("%8")])
         self.assertFalse(hidden.read("w1", SID))
 
     def test_close_on_a_host_that_cannot_attach_calls_no_tmux(self):
@@ -449,13 +443,13 @@ class CloseTest(Base):
         self.assertEqual(self.runner.calls, [])
 
     def test_close_names_a_failed_tmux_call(self):
-        for results in ({"list-panes": (1, "", "boom\n")}, {"set-hook": (1, "", "boom\n")}):
+        for results in ({"list-panes": (1, "", "boom\n")}, {"kill-pane": (1, "", "boom\n")}):
             with self.subTest(results=results):
                 self.runner.results["list-panes"] = worker_rows(("%9", "w1", "mgr"))
                 self.runner.results.update(results)
                 with self.assertRaisesRegex(SessionError, "^view w1: tmux: boom$"):
                     self.viewer.close("w1", self.host)
-                self.runner.results.pop("set-hook", None)
+                self.runner.results.pop("kill-pane", None)
 
 
 class AttachCommandTest(Base):

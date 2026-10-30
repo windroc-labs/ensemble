@@ -79,11 +79,21 @@ def done(argv, rc=0, out="", err=""):
     return SimpleNamespace(args=argv, returncode=rc, stdout=out, stderr=err)
 
 
-def close_hook(name, pane, window, *, sid=SID, generation=GENERATION, command=COMMAND):
+def close_hook(name, pane, window, *, sid=SID, generation=GENERATION, command=COMMAND, index=None):
+    index = pane[1:] if index is None else index
     return (
         f"if-shell -F '#{{m:* {pane} *,#{{S:#{{W:#{{P: #{{pane_id}} }}}}}}}}' '' "
-        f'"set-hook -u -w -t {window} after-kill-pane[{pane[1:]}] ; '
+        f'"set-hook -u -w -t {window} after-kill-pane[{index}] ; '
         f"run-shell -b '{command} hide --if-closed --sid {sid} --generation {generation} -- {name} "
+        ">/dev/null 2>&1 || true'\""
+    )
+
+
+def shown_hook(index, name, pane, window="@1"):
+    return (
+        f'after-kill-pane[{index}] if-shell -F "#{{m:* {pane} *,#{{S:#{{W:#{{P: #{{pane_id}} }}}}}}}}" '
+        f"'' \"set-hook -u -w -t {window} after-kill-pane[{index}] ; run-shell -b "
+        f"'{COMMAND} hide --if-closed --sid {SID} --generation {GENERATION} -- {name} "
         ">/dev/null 2>&1 || true'\""
     )
 
@@ -100,6 +110,8 @@ def record(
     hook=True,
     printed=PRINTED,
     pruned=(),
+    index=None,
+    read=None,
 ):
     """_record's calls tagging `pane`."""
     args = ["tmux", "set-option", "-p", "-t", pane, "@worker", name]
@@ -112,16 +124,18 @@ def record(
             *(";", "set-option", "-w", "-t", window, "pane-border-status", "bottom"),
             *(";", "set-option", "-w", "-t", window, "pane-border-format", LABEL),
         ]
+    hooks = ["tmux", "show-hooks", "-w", "-t", window, "after-kill-pane"]
+    hooks += [";", "list-panes", "-a", "-F", "#{pane_id}"]
     if not hook:
-        return [args]
-    for index in pruned:
-        args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{index}]"]
+        return [hooks, args] if read else [args]
+    for stale in pruned:
+        args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{stale}]"]
+    index = pane[1:] if index is None else index
     args += [
-        *(";", "set-hook", "-w", "-t", window, f"after-kill-pane[{pane[1:]}]"),
-        close_hook(name, pane, window, sid=sid, generation=generation),
+        *(";", "set-hook", "-w", "-t", window, f"after-kill-pane[{index}]"),
+        close_hook(name, pane, window, sid=sid, generation=generation, index=index),
     ]
-    read = ["tmux", "show-hooks", "-w", "-t", window, "after-kill-pane"]
-    return [[*read, ";", "list-panes", "-a", "-F", "#{pane_id}"], args]
+    return [hooks, args]
 
 
 def split_window(flag, pane, argv=ARGV):

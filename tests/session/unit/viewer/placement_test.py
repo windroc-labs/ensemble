@@ -30,6 +30,7 @@ from tests.session.tmux_fixtures import (
     opening_commands,
     placed,
     record,
+    shown_hook,
     split,
     split_window,
     which,
@@ -215,7 +216,7 @@ class RecordTest(Case):
             for run in ({"sid": bad}, {"generation": bad}):
                 with self.subTest(**run):
                     self.assertEqual(
-                        self.record(**run), record("mgr", "%20", name="w1", hook=False)
+                        self.record(**run), record("mgr", "%20", name="w1", hook=False, read=True)
                     )
                     self.assertRegex(
                         self.stderr.getvalue(), r"^tui: show: after-kill-pane: refused run .*\n$"
@@ -223,11 +224,11 @@ class RecordTest(Case):
 
     def test_close_hook_refuses_any_value_outside_its_allow_list(self):
         """AC6: a value off its allow-list: no hook."""
-        good = {"sid": SID, "generation": GENERATION}
-        self.assertEqual(
-            placement._close_hook(COMMAND, "w1", "%20", "@1", **good),
-            close_hook("w1", "%20", "@1"),
-        )
+
+        def hook(*values: str, sid: str | None = SID, generation: str | None = GENERATION):
+            return placement._close_hook(*values, sid=sid, generation=generation, index=7)
+
+        self.assertEqual(hook(COMMAND, "w1", "%20", "@1"), close_hook("w1", "%20", "@1", index=7))
         for at, bad in (
             (0, "/opt/#{pane_id}/ensemble-session"),
             (0, "/a b"),
@@ -242,7 +243,7 @@ class RecordTest(Case):
             with self.subTest(at=at, bad=bad):
                 values = [COMMAND, "w1", "%20", "@1"]
                 values[at] = bad
-                self.assertIsNone(placement._close_hook(*values, **good))
+                self.assertIsNone(hook(*values))
         for key, bad in (
             ("sid", None),
             ("sid", "a b"),
@@ -250,31 +251,61 @@ class RecordTest(Case):
             ("generation", "g'1"),
         ):
             with self.subTest(**{key: bad}):
-                hook = placement._close_hook(COMMAND, "w1", "%20", "@1", **{**good, key: bad})
-                self.assertIsNone(hook)
+                self.assertIsNone(hook(COMMAND, "w1", "%20", "@1", **{key: bad}))
 
-    def test_record_prunes_the_entries_of_gone_panes(self):
-        """AC6: the hook's call unsets only entries whose pane is gone."""
-        read = (
-            'after-kill-pane[5] if-shell -F "#{m:* %5 *,x}" \'\' "run-shell true"\n'
-            "after-kill-pane[7] run-shell true\n"
-            "after-kill-pane[11] run-shell true\n"
-            "after-kill-pane[x] run-shell true\n"
-            "after-kill-pane[9]\n"
-            "pane-exited[12] run-shell true\n"
-            " after-kill-pane[13] run-shell true\n"
-            "%3\n%7\n%20\n"
+    def test_record_prunes_only_its_own_entries_of_gone_panes(self):
+        """AC6."""
+        read = "".join(
+            line + "\n"
+            for line in (
+                "after-kill-pane",
+                shown_hook(5, "w2", "%5"),
+                shown_hook(7, "w3", "%7"),
+                shown_hook(11, "w4", "%11"),
+                shown_hook(12, "w5", "%12").replace("after-kill-pane[12] ;", "x[12] ;"),
+                'after-kill-pane[13] if-shell -F "#{m:* %13 *,x}" \'\' "run-shell true"',
+                "after-kill-pane[14] run-shell true",
+                "after-kill-pane[9]",
+                "%3",
+                "%7",
+                "%20",
+            )
         )
         fake = FakeTmux(results={"show-hooks": (0, read)})
-        self.assertEqual(
-            self.record(fake=fake), record("mgr", "%20", name="w1", pruned=("5", "11"))
-        )
-        for result in ((1, "", "boom\n"), (0, "")):
+        self.assertEqual(self.record(fake=fake), record("mgr", "%20", name="w1", pruned=(5, 11)))
+        self.assertEqual(self.stderr.getvalue(), "")
+        fake = FakeTmux(results={"show-hooks": (0, "")})
+        self.assertEqual(self.record(fake=fake), record("mgr", "%20", name="w1"))
+
+    def test_a_users_entry_at_the_panes_index_moves_the_hook_to_a_free_one(self):
+        users = "after-kill-pane[20] display-message x\nafter-kill-pane[0] run-shell true\n"
+        stale = shown_hook(0, "w2", "%3") + "\nafter-kill-pane[20] run-shell true\n"
+        for read, index, pruned in (
+            (users, 1, ()),
+            (stale + "%3\n", 1, ()),
+            (stale, 0, (0,)),
+        ):
+            with self.subTest(read=read):
+                fake = FakeTmux(results={"show-hooks": (0, read)})
+                self.assertEqual(
+                    self.record(fake=fake),
+                    record("mgr", "%20", name="w1", index=index, pruned=pruned),
+                )
+
+    def test_an_unread_hook_list_sets_and_unsets_no_hook(self):
+        for result in (
+            (1, "", "boom\n"),
+            (0, "after-kill-pane[1] x\nbad line\n"),
+            OSError(2, "no tmux"),
+        ):
             with self.subTest(result=result):
                 fake = FakeTmux(results={"show-hooks": result})
-                self.assertEqual(self.record(fake=fake), record("mgr", "%20", name="w1"))
-        fake = FakeTmux(results={"show-hooks": OSError(2, "no tmux")})
-        self.assertEqual(self.record(fake=fake)[1:], record("mgr", "%20", name="w1")[1:])
+                calls = self.record(fake=fake)
+                self.assertEqual(calls, record("mgr", "%20", name="w1", hook=False, read=True))
+                self.assertNotIn("set-hook", calls[-1])
+                self.assertRegex(
+                    self.stderr.getvalue(), r"^tui: show: after-kill-pane: tmux: .*\n$"
+                )
 
     def test_record_refuses_invalid_ids_and_sets_nothing(self):
         """AC6, AC11: a value tmux could misread tags nothing."""
@@ -327,25 +358,53 @@ class RecordTest(Case):
 class CloseTest(Case):
     PANE = types.WorkerPane("%20", "s", "mgr", "@1", "mgr")
 
-    CLOSE = [
-        *("tmux", "set-hook", "-u", "-w", "-t", "@1", "after-kill-pane[20]"),
-        *(";", "kill-pane", "-t", "%20"),
+    READ = [
+        *("tmux", "show-hooks", "-w", "-t", "@1", "after-kill-pane"),
+        *(";", "list-panes", "-a", "-F", "#{pane_id}"),
     ]
 
-    def test_close_unsets_the_close_hook_then_kills_the_pane_in_one_call(self):
-        fake = FakeTmux()
-        placed(fake).close(self.PANE)
-        self.assertEqual(fake.calls, [self.CLOSE])
+    HOOKS = "".join(
+        line + "\n"
+        for line in (
+            shown_hook(3, "s", "%20"),
+            shown_hook(20, "t", "%21"),
+            "after-kill-pane[4] run-shell 'echo %20'",
+            shown_hook(6, "s", "%20").replace("--sid", "--said"),
+        )
+    )
+
+    KILL = ["kill-pane", "-t", "%20"]
+
+    def close(self, **results):
+        fake = FakeTmux(results={"show-hooks": (0, self.HOOKS), **results})
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).close(self.PANE)
+        return fake.calls
+
+    def test_close_unsets_only_its_panes_close_hooks_then_kills_it_in_one_call(self):
+        unset = ["set-hook", "-u", "-w", "-t", "@1", "after-kill-pane[3]", ";"]
+        self.assertEqual(self.close(), [self.READ, ["tmux", *unset, *self.KILL]])
+        self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_an_unread_hook_list_unsets_nothing_and_still_kills(self):
+        for result in ((1, "", "boom\n"), (0, "bad line\n")):
+            with self.subTest(result=result):
+                self.assertEqual(
+                    self.close(**{"show-hooks": result}), [self.READ, ["tmux", *self.KILL]]
+                )
+                self.assertRegex(self.stderr.getvalue(), r"^tui: close: after-kill-pane: tmux: ")
 
     def test_a_gone_pane_window_or_server_is_no_error_another_failure_raises(self):
         for err in ("can't find pane: %20", "can't find window: @1", "no server running on /x"):
             with self.subTest(err=err):
-                fake = FakeTmux(results={"set-hook": (1, "", err + "\n")})
-                placed(fake).close(self.PANE)
-                self.assertEqual(fake.calls, [self.CLOSE])
-        fake = FakeTmux(results={"set-hook": (1, "", "boom\n")})
+                calls = self.close(
+                    **{"show-hooks": (1, "", err + "\n"), "kill-pane": (1, "", err + "\n")}
+                )
+                self.assertEqual(calls, [self.READ, ["tmux", *self.KILL]])
+                self.assertEqual(self.stderr.getvalue(), "")
         with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
-            placed(fake).close(self.PANE)
+            self.close(**{"set-hook": (1, "", "boom\n")})
 
 
 class WorkersTest(Case):
@@ -542,7 +601,7 @@ class PanePlacementTest(PaneFixture):
         self.assertNotIn("split-window", fake.commands())
 
     def test_a_failed_worker_pane_read_opens_nothing(self):
-        """FR-12: an unread pane list may hold this run's pane; no second pane opens."""
+        """FR-12."""
         for env, kw in ((INSIDE, {}), ({}, {"split_from": "b"})):
             with self.subTest(**kw):
                 fake = self.fake(**{"list-panes": (1, "", "boom\n")})

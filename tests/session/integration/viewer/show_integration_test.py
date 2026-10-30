@@ -20,7 +20,7 @@ from ensemble.session.viewer import display as displays
 from ensemble.session.viewer.viewer import fold
 from tests.session import guard_fixture, live_tmux
 from tests.session.case import SID, Case
-from tests.session.tmux_fixtures import placed
+from tests.session.tmux_fixtures import close_hook, placed
 
 
 class LiveCase(Case):
@@ -277,6 +277,27 @@ class ShowTest(LiveCase):
         self.assertIn(f"after-kill-pane[{new[1:]}]", hooks)
         run = f"--sid {SID} --generation {self.worker.generation}"
         self.assertIn(f" hide --if-closed {run} -- worker ", hooks)
+
+    def test_a_users_after_kill_pane_entries_survive_show_close_and_prune(self):
+        window = self.display(self.manager, "#{window_id}")
+        mine = ("set-hook", "-a", "-w", "-t", window, "after-kill-pane")
+        self.tmux(*mine, "display-message mine")
+        stale = close_hook("worker", "%900", window, index=900)
+        self.tmux("set-hook", "-w", "-t", window, "after-kill-pane[900]", stale)
+        before = self.server.panes("=mgr:")
+        self.assertIsNone(self.open())
+        new = self.added(before)
+        hooks = self.close_hooks(window)
+        self.assertNotIn("after-kill-pane[900]", hooks)
+        self.assertIn(" display-message mine", hooks)
+        self.assertIn(f"#{{m:* {new} *,", hooks)
+        self.tmux(*mine, "display-message later")
+        Viewer().hide("worker", self.host)
+        self.assertNotIn(new, self.server.panes("=mgr:"))
+        hooks = self.close_hooks(window)
+        self.assertNotIn(" hide --if-closed ", hooks)
+        for entry in (" display-message mine", " display-message later"):
+            self.assertIn(entry, hooks)
 
     def test_split_right_runs_the_attach_command(self):
         """AC3: --split right with --split-from mgr and no grid opens right of mgr's pane."""
