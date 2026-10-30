@@ -32,6 +32,7 @@ NO_PANE_HINT = ": run from tmux, or pass split_from"
 LOG = logging.getLogger("session")
 SHOW_TRIES = 3
 SHOW_RETRY_WAIT = 1  # seconds
+CHAIN_LINKS = 8
 
 Parts = tuple[str | None, str | None, str | None, bool]
 
@@ -85,6 +86,20 @@ def _known_opener(name: str) -> bool:
     return worker_state(name) is not None
 
 
+def _chain(opener: str | None) -> tuple[str, ...]:
+    """The display openers from opener's on, up to an unread one or a repeat."""
+    chain: list[str] = []
+    at = opener
+    while at is not None and len(chain) < CHAIN_LINKS:
+        state = worker_state(at)
+        found = None if state is None else unfold(state.display)
+        at = None if found is None else found[0]
+        if at is None or at == opener or at in chain:
+            break
+        chain.append(at)
+    return tuple(chain)
+
+
 class Viewer:
     """settings: [viewer]'s workers_per_column and grid_retile."""
 
@@ -131,6 +146,7 @@ class Viewer:
                     per_column=self._per_column,
                     retile=self._retile,
                     label=host.tui_settings().status_line,
+                    fallbacks=_chain(opener),
                 )
             else:
                 why = self._placement.run_command(name, command)

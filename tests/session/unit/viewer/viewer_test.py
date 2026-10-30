@@ -16,10 +16,20 @@ from ensemble.session.hosts.base import TUI_DIR, Host
 from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import display as displays
 from ensemble.session.viewer import hidden
+from ensemble.session.viewer import viewer as viewers
 from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import STALE_AGE
 from tests.session.hosted_support import SID
-from tests.session.tmux_fixtures import INSIDE, environ, record, split, split_window, worker_rows
+from tests.session.tmux_fixtures import (
+    CLIENTS,
+    INSIDE,
+    clients,
+    environ,
+    record,
+    split,
+    split_window,
+    worker_rows,
+)
 from tests.session.tmux_host_support import Base as HostBase
 
 TuiError = tmux_cli.TuiError
@@ -44,12 +54,12 @@ def sleeps() -> Iterator[list[float]]:
         yield slept
 
 
-def worker(name: str, sid: str | None) -> None:
-    """Worker `name`'s worker state naming `sid` (None: none)."""
+def worker(name: str, sid: str | None, display: str | None = None) -> None:
+    """Worker `name`'s worker state naming `sid` (None: none) and `display`."""
     folder = os.path.join(os.path.expanduser(TUI_DIR), name)
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "session.json"), "w", encoding="utf-8") as f:
-        json.dump({"sid": sid, "generation": "g1"}, f)
+        json.dump({"sid": sid, "generation": "g1", "display": display}, f)
 
 
 def closed(pane: str, window: str) -> list[str]:
@@ -201,6 +211,60 @@ class ShowTest(Base):
         with self.assertRaises(ConfigError) as caught:
             displays.layout(self.viewer, self.host, "//m1")
         self.assertEqual(str(caught.exception), "no tmux session m1")
+
+
+class OpenerChainTest(Base):
+    def test_chain_follows_display_openers_to_none_a_bad_state_a_repeat_or_eight_links(self):
+        """AC9 (D5): each worker's display opener from opener's on."""
+        worker("a", SID, "b/below")
+        worker("b", SID, "mgr")
+        worker("c", SID, "d")
+        worker("d", SID, "c//m1")
+        worker("e", SID, "x y")
+        worker("f", SID, "f")
+        worker("g", SID, None)
+        for i in range(20):
+            worker(f"w{i}", SID, f"w{i + 1}/right")
+        folder = os.path.join(os.path.expanduser(TUI_DIR), "h")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "session.json"), "w", encoding="utf-8") as f:
+            f.write("{")
+        for opener, chain in (
+            ("a", ("b", "mgr")),
+            ("b", ("mgr",)),
+            ("c", ("d",)),
+            ("e", ()),
+            ("f", ()),
+            ("g", ()),
+            ("h", ()),
+            ("mgr", ()),
+            (None, ()),
+            ("w0", tuple(f"w{i}" for i in range(1, 9))),
+        ):
+            with self.subTest(opener=opener):
+                self.assertEqual(viewers._chain(opener), chain)
+
+    def test_a_show_beside_a_hidden_opener_lands_where_its_opener_is(self):
+        """AC9 (D5): w1 shown with opener a, hidden (no pane, no tmux session), opens beside
+        the pane of a's display opener mgr (the caller's, %3), its @worker-opener still a.
+        """
+        self.enterContext(environ(HOME=self.home, **INSIDE))
+        worker("a", SID, "mgr")
+        worker("w1", SID, "a")
+        self.runner.pane = "mgr"
+        self.runner.results.update(
+            {
+                "list-clients": lambda argv: (
+                    clients((5, "%9")) if argv[3] == "=mgr" else (1, "", "can't find session: a\n")
+                ),
+                "split-window": split(),
+            }
+        )
+        self.assertIsNone(self.viewer.show("w1", self.host))
+        self.assertIn(split_window("-h", "%3", ("/fake/attach", "w1")), self.runner.calls)
+        self.assertIn(["tmux", "list-clients", "-t", "=a", "-F", CLIENTS], self.runner.calls)
+        tagged = next(c for c in self.runner.calls if c[1] == "set-option" and "-p" in c)
+        self.assertEqual(tagged, record("a", "%20", name="w1", sid=SID, printed=PRINTED)[-1])
 
 
 class HideTest(Base):

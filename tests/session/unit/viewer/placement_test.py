@@ -490,8 +490,8 @@ class PanePlacementTest(PaneFixture):
         """AC3: each placement splits a pane running exactly the Host's CommandView.argv."""
         head = [OWN, WORKERS, clients_of("own"), grid_read("%3")]
         for kw, rows, then in (
-            ({"split": "right"}, (), [clients_of("own"), split_window("-h", "%3")]),
-            ({"split": "below"}, (), [clients_of("own"), split_window("-v", "%3")]),
+            ({"split": "right"}, (), [split_window("-h", "%3")]),
+            ({"split": "below"}, (), [split_window("-v", "%3")]),
             ({"split_from": "b"}, (), [WORKERS, clients_of("b"), split_window("-h", "%9")]),
             (
                 {"split_from": "b", "split": "below"},
@@ -582,6 +582,140 @@ class PanePlacementTest(PaneFixture):
                 with self.assertRaises(tmux_cli.TuiError):
                     self.open(fake, {}, **kw)
                 self.assertEqual(fake.calls, [])
+
+
+class SpotTest(GridFixture):
+    """_spot for worker s, outside tmux: tmux session mgr's most recent client shows %9; a tmux
+    session not in `sessions` is gone; `windows` as GridFixture's.
+    """
+
+    W1 = types.WorkerPane("%10", "w1", "mgr", "@1", "mgr")
+    GRID = [("@1", "%3", "%3", "79", "48"), ("@1", "%3", "%10", "80", "48")]  # w1 in mgr's grid
+
+    def tmux(self, windows=None, sessions=("mgr",), rows=(), **results):
+        def listed(argv):
+            if argv[3][1:] not in sessions:
+                return 1, "", f"can't find session: {argv[3][1:]}\n"
+            return clients((5, "%9"))
+
+        return self.fake(windows or {}, rows, clients=listed, **results)
+
+    def spot(self, fake, opener: str | None = "mgr", workers=(), **kw):
+        kw = {"own": None, "split": None, "split_from": None, "fallbacks": (), **kw}
+        with environ():
+            return placed(fake)._spot("s", opener, workers=list(workers), **kw)
+
+    def test_each_branch(self):
+        right, below = types.Split.RIGHT, types.Split.BELOW
+        new = {"%9": [("@2", "", "%9", "160", "48")]}
+        stacked = types.WorkerPane("%7", "a", "mgr", "@1", "mgr")
+        for name, windows, opener, workers, kw, spot in (
+            ("grid", new, "mgr", (), {}, ("%9", right, ("@2", "%9"))),
+            ("grid below", {"%10": self.GRID}, "w1", [self.W1], {}, ("%10", below, ("@1", "%3"))),
+            ("split_from", {}, "mgr", (), {"split_from": "b"}, ("%9", right, None)),
+            (
+                "split_from below",
+                {},
+                None,
+                (),
+                {"split_from": "b", "split": "below"},
+                ("%9", below, None),
+            ),
+            ("split", {}, "mgr", [stacked], {"split": "below"}, ("%9", below, None)),
+            ("stack", {}, "mgr", [stacked], {}, ("%7", below, None)),
+            ("opener pane", {}, "mgr", (), {}, ("%9", right, None)),
+        ):
+            with self.subTest(name):
+                fake = self.tmux(windows, sessions=("mgr", "b"))
+                found = self.spot(fake, opener, workers, **kw)
+                self.assertEqual(found, types.Spot(*spot))
+        for opener, sessions, why in (
+            (None, (), "no anchor pane: not in tmux"),
+            ("mgr", (), "no anchor pane: no terminal shows tmux session mgr"),
+        ):
+            with self.subTest(opener=opener), self.assertRaisesRegex(tmux_cli.TuiError, why):
+                self.spot(self.tmux(sessions=sessions), opener)
+
+    def test_a_fallback_stands_in_for_an_opener_without_a_pane_or_client(self):
+        """D5: hidden a (no worker pane, no tmux session): the first of its fallbacks with a
+        worker pane or a client gives the grid, else the opener pane; the stack still keys on a.
+        """
+        right, below = types.Split.RIGHT, types.Split.BELOW
+        mine = types.WorkerPane("%7", "c", "a", "@1", "mgr")
+        theirs = types.WorkerPane("%8", "d", "mgr", "@1", "mgr")
+        new = {"%9": [("@2", "", "%9", "160", "48")]}
+        for name, windows, workers, fallbacks, spot in (
+            ("grid", new, (), ("x", "mgr"), ("%9", right, ("@2", "%9"))),
+            (
+                "worker pane's grid",
+                {"%10": self.GRID},
+                [self.W1],
+                ("w1",),
+                ("%10", below, ("@1", "%3")),
+            ),
+            ("opener pane", {}, (), ("x", "mgr"), ("%9", right, None)),
+            ("stack", {}, [mine, theirs], ("mgr",), ("%7", below, None)),
+        ):
+            with self.subTest(name):
+                fake = self.tmux(windows)
+                found = self.spot(fake, "a", workers, fallbacks=fallbacks)
+                self.assertEqual(found, types.Spot(*spot))
+        fake = self.tmux(new)
+        self.spot(fake, "a", fallbacks=("x", "mgr", "w1"))
+        self.assertEqual(
+            fake.calls, [clients_of("a"), clients_of("x"), clients_of("mgr"), grid_read("%9")]
+        )
+        with self.assertRaisesRegex(
+            tmux_cli.TuiError, "^no anchor pane: no terminal shows tmux session a$"
+        ):
+            self.spot(self.tmux(), "a", fallbacks=("x",))
+
+    def test_no_fallback_for_an_opener_with_a_pane_or_client_or_a_failed_read(self):
+        """An opener's own pane or client wins over a fallback's grid; a failed client read is
+        that failure, not a fallback.
+        """
+        grid = {"%10": self.GRID}
+        for opener, workers, spot in (
+            ("mgr", (), ("%9", types.Split.RIGHT, None)),
+            (
+                "a",
+                [types.WorkerPane("%5", "a", "mgr", "@3", "mgr")],
+                ("%5", types.Split.RIGHT, None),
+            ),
+        ):
+            with self.subTest(opener=opener):
+                fake = self.tmux(grid)
+                found = self.spot(
+                    fake, opener, [*workers, self.W1], split="right", fallbacks=("w1",)
+                )
+                self.assertEqual(found, types.Spot(*spot))
+        fake = self.tmux(grid, **{"list-clients": (1, "", "boom\n")})
+        with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
+            self.spot(fake, "a", [self.W1], fallbacks=("w1",))
+        self.assertEqual(fake.calls, [clients_of("a")])
+
+    def test_open_pane_records_the_opener_not_its_fallback(self):
+        """AC9: s shown for hidden a lands in mgr's grid; its @worker-opener stays a."""
+        fake = self.tmux(
+            {"%9": [("@2", "", "%9", "160", "48")]}, **{"split-window": split(window="@2")}
+        )
+        self.assertIsNone(self.open(fake, {}, opener="a", fallbacks=("mgr",)))
+        self.assertEqual(
+            fake.calls,
+            [
+                WORKERS,
+                clients_of("a"),
+                clients_of("mgr"),
+                grid_read("%9"),
+                *self.split("-h", "%9", "@2"),
+                *opening_commands(window="@2", manager="%9", opener="a"),
+            ],
+        )
+        for bad in ("a b", "", "a;"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(tmux_cli.TuiError, "invalid opener"):
+                fake = FakeTmux()
+                self.open(fake, {}, opener="a", fallbacks=("mgr", bad))
+            self.assertEqual(fake.calls, [])
 
 
 class GridShowTest(GridFixture):

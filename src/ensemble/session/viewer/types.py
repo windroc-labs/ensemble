@@ -31,6 +31,14 @@ class WorkerPane(NamedTuple):
     attach: str = ""
 
 
+class Spot(NamedTuple):
+    """grid: (window, manager)."""
+
+    pane: str
+    side: Split
+    grid: tuple[str, str] | None
+
+
 class Cell(NamedTuple):
     """A layout cell: w x h at x, y; a LEAF shows pane, a container holds children."""
 

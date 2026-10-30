@@ -88,15 +88,17 @@ class Live(Case):
         self.worker(name)
         return self.show(name, inside, **kwargs)
 
-    def worker(self, name):
+    def worker(self, name, display=None):
+        """Worker `name` started, its worker state naming its run and `display`."""
         handle = self.host.worker(
             name, Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd), terminal=True
         )
         self.workers[name] = handle
         self.addCleanup(self.cleanup_worker, name, handle)
         os.makedirs(worker_dir(name), exist_ok=True)
+        state = {"sid": f"sid-{name}", "generation": handle.generation, "client": "fake"}
         with open(os.path.join(worker_dir(name), "session.json"), "w", encoding="utf-8") as f:
-            json.dump({"sid": f"sid-{name}", "generation": handle.generation, "client": "fake"}, f)
+            json.dump({**state, "display": display}, f)
         return handle
 
     def cleanup_worker(self, name, handle):
@@ -235,6 +237,22 @@ class GridTest(Live):
         self.grid([["m1", ("m2", ["z3"])]])
         self.close("m2")
         self.grid([["m1", ["z3"]]])
+
+    def test_a_show_with_a_hidden_opener_lands_in_its_openers_grid(self):
+        """AC9 (D5): the manager opened a, then a hidden: a show of b with opener a places b in the
+        manager's grid (a's display opener), its opener still a; shown again, a takes b under it.
+        """
+        self.worker("a", display=MANAGER)
+        self.show("a")
+        self.grid([["a"]])
+        self.session_cls.viewer().hide("a", self.host)
+        self.assertEqual(self.server.pane_of("a"), "")
+        self.started("b", opener="a")
+        self.grid([["b"]])
+        shown = self.shown()
+        self.assertEqual((shown["a"], shown["b"]), ((None, None), (MANAGER, "a")))
+        self.show("a")
+        self.grid([[("a", ["b"])]])
 
     def test_showing_twice_keeps_one_pane(self):
         """AC9: a show of a worker with a live worker pane opens nothing, whatever its opener."""

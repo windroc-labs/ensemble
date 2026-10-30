@@ -41,6 +41,7 @@ from ensemble.session.viewer.grid import (
 from ensemble.session.viewer.types import (
     Retile,
     Split,
+    Spot,
     WorkerPane,
 )
 
@@ -59,13 +60,16 @@ LABEL = f"#{{?#{{{WORKER_LABEL}}},[#{{{WORKER_LABEL}}}],}}"
 NO_PANE = "no anchor pane: {}"
 
 
-def _layout(split: str | None, split_from: str | None, opener: str | None = None) -> None:
+def _layout(
+    split: str | None, split_from: str | None, opener: str | None, fallbacks: Sequence[str]
+) -> None:
     if split is not None and split not in tuple(Split):
         raise TuiError(f"split must be one of {', '.join(Split)}, not {split!r}")
     if split_from is not None:
         session_name(split_from)
-    if opener is not None and not NAME.fullmatch(opener):
-        raise TuiError(f"invalid opener {opener!r}: want a tmux session name")
+    for who in (opener, *fallbacks):
+        if who is not None and not NAME.fullmatch(who):
+            raise TuiError(f"invalid opener {who!r}: want a tmux session name")
 
 
 def _newest(name: str, workers: Sequence[WorkerPane]) -> str | None:
@@ -117,14 +121,15 @@ class Placement:
         per_column: int | None = None,
         retile: str | None = None,
         label: bool = False,
+        fallbacks: Sequence[str] = (),
     ) -> str | None:
-        """Keeps a worker pane of `name`, else splits one running argv in its grid, stack or
-        explicit anchor (label: its name in the window's pane border); returns failure.
+        """Keeps a worker pane of `name`, else splits one running argv at its spot (label: its name
+        in the window's pane border); returns failure. fallbacks: openers to try for opener.
         """
-        _layout(split, split_from, opener)
+        _layout(split, split_from, opener, fallbacks)
         validate_per_column(per_column)
         validate_retile(retile)
-        own = grid = new = window = None
+        own = new = window = None
         try:
             if opener is None:
                 try:
@@ -138,69 +143,46 @@ class Placement:
                 workers = []
             if any(w.name == name and w.attach == printed for w in workers):
                 return None  # an earlier run's pane, still closing, is not this run's
-            grid = self._grid(opener, workers, own=own) if opener is not None else None
-            if grid is not None:
-                grid_window, manager, at, side = grid
+            spot = self._spot(
+                name,
+                opener,
+                own=own,
+                split=split,
+                split_from=split_from,
+                workers=workers,
+                fallbacks=fallbacks,
+            )
+            if spot.grid is not None:
                 if split is not None or split_from is not None:
                     print("tui: show: grid: --split/--split-from ignored", file=sys.stderr)
                 # muted: an old mode's hook tile could land after a later drag; _grid_up unmutes
-                self.tmux.run(["set-option", "-w", "-t", grid_window, GRID_BUSY, grid_window])
-                try:
-                    new, window, why = self._split(argv, side, at)
-                    if new is not None and window is not None:
-                        # tagged before any tile
-                        self._record(
-                            name,
-                            opener,
-                            new,
-                            window,
-                            printed=printed,
-                            sid=sid,
-                            generation=generation,
-                            label=label,
-                        )
-                finally:
-                    if new is None:
-                        with contextlib.suppress(TuiError):
-                            self.tmux.run(["set-option", "-u", "-w", "-t", grid_window, GRID_BUSY])
-            elif split_from is not None:
-                new, window, why = self._split(argv, split or "right", self.anchor(split_from))
-            elif split is not None:
-                if opener is None:
-                    raise TuiError(NO_PANE.format("not in tmux"))
-                new, window, why = self._split(
-                    argv, split, self._opener_pane(opener, own=own, workers=workers)
-                )
-            else:
-                if opener is None:
-                    raise TuiError(NO_PANE.format("not in tmux"))
-                stacked = self._stack(name, opener, workers)
-                new, window, why = (
-                    self._split(argv, "below", stacked)
-                    if stacked is not None
-                    else self._split(
-                        argv, "right", self._opener_pane(opener, own=own, workers=workers)
+                self.tmux.run(["set-option", "-w", "-t", spot.grid[0], GRID_BUSY, spot.grid[0]])
+            try:
+                new, window, why = self._split(argv, spot.side, spot.pane)
+                if new is not None and window is not None:
+                    # tagged before any tile
+                    self._record(
+                        name,
+                        opener,
+                        new,
+                        window,
+                        printed=printed,
+                        sid=sid,
+                        generation=generation,
+                        label=label,
                     )
-                )
+            finally:
+                if new is None and spot.grid is not None:
+                    with contextlib.suppress(TuiError):
+                        self.tmux.run(["set-option", "-u", "-w", "-t", spot.grid[0], GRID_BUSY])
         except TuiError as e:
             return f"{e}; watch it with {printed}"
         if new is None or window is None:
             return why
-        if grid is None:
-            self._record(
-                name,
-                opener,
-                new,
-                window,
-                printed=printed,
-                sid=sid,
-                generation=generation,
-                label=label,
-            )
+        if spot.grid is None:
             return None
         return self.grid.configure(
-            grid_window,
-            manager,
+            *spot.grid,
             per_column=PER_COLUMN if per_column is None else per_column,
             retile=RETILE if retile is None else Retile(retile),
         )
@@ -224,22 +206,61 @@ class Placement:
         if res.returncode and not absent(res):
             raise TuiError(f"tmux: {error(res)}")
 
-    def _grid(
-        self, opener: str, workers: Sequence[WorkerPane], *, own: bool | None
-    ) -> tuple[str, str, str, str] | None:
-        """Grid window, manager, anchor pane and side; None when no grid is found."""
-        shown = _newest(opener, workers)
+    def _spot(
+        self,
+        name: str,
+        opener: str | None,
+        *,
+        own: bool | None,
+        split: str | None,
+        split_from: str | None,
+        workers: Sequence[WorkerPane],
+        fallbacks: Sequence[str],
+    ) -> Spot:
+        """opener's grid, else split_from's anchor, else opener's pane (split), else opener's stack,
+        else opener's pane.
+        """
+        at: tuple[str, str | None] | None = None
+        failed: TuiError | None = None
+        if opener is not None:
+            try:
+                at = self._opener_at(opener, own=own, workers=workers, fallbacks=fallbacks)
+            except TuiError as e:
+                failed = e
+        if at is not None and (gridded := self._grid(*at)) is not None:
+            return gridded
+        side = Split(split or Split.RIGHT)
+        if split_from is not None:
+            return Spot(self.anchor(split_from), side, None)
+        if opener is None:
+            raise TuiError(NO_PANE.format("not in tmux"))
+        if split is None and (stacked := self._stack(name, opener, workers)) is not None:
+            return Spot(stacked, Split.BELOW, None)
+        if at is None:
+            raise failed or TuiError(NO_PANE.format(f"no terminal shows tmux session {opener}"))
+        return Spot(at[0], side, None)
+
+    def _opener_at(
+        self,
+        opener: str,
+        *,
+        own: bool | None,
+        workers: Sequence[WorkerPane],
+        fallbacks: Sequence[str],
+    ) -> tuple[str, str | None] | None:
+        """The first of opener and fallbacks with a worker pane (manager None: the stored one) or
+        a tmux client: that pane and manager.
+        """
+        for who in (opener, *fallbacks):
+            if (pane := _newest(who, workers)) is not None:
+                return pane, None
+            if (pane := self._shown(who, own=own if who == opener else None)) is not None:
+                return pane, pane
+        return None
+
+    def _grid(self, pane: str, manager: str | None) -> Spot | None:
         try:
-            if shown is not None:
-                found = self._window(shown, None)
-            else:
-                clients = self._clients(opener)
-                if not clients:
-                    return None
-                if own is None:
-                    own = self.own_session() == opener
-                pane = os.environ["TMUX_PANE"] if own else clients[0][1]
-                found = self._window(pane, pane)
+            found = self._window(pane, manager)
         except TuiError:
             return None
         if found is None:
@@ -247,8 +268,9 @@ class Placement:
         window, manager, areas = found
         others = [p for p in areas if p != manager]
         if not others:
-            return window, manager, manager, "right"
-        return window, manager, max(others, key=lambda p: (areas[p], int(p[1:]))), "below"
+            return Spot(manager, Split.RIGHT, (window, manager))
+        anchor = max(others, key=lambda p: (areas[p], int(p[1:])))
+        return Spot(anchor, Split.BELOW, (window, manager))
 
     def _window(self, pane: str, manager: str | None) -> tuple[str, str, dict[str, int]] | None:
         """pane's window id, manager and pane areas; None when tmux fails."""
@@ -422,30 +444,27 @@ class Placement:
         own = self.own_session()
         if own is None:
             raise TuiError(NO_PANE.format("not in tmux"))
-        return self._opener_pane(own, own=True)
-
-    def _opener_pane(
-        self, opener: str, *, own: bool | None, workers: Sequence[WorkerPane] = ()
-    ) -> str:
-        """opener's newest worker pane, else the pane its tmux session shows."""
-        if (found := _newest(opener, workers)) is not None:
-            return found
-        if own is None:
-            own = self.own_session() == opener
-        found = self._shown(opener, own=own)
+        found = self._shown(own, own=True)
         if found is None:
-            raise TuiError(NO_PANE.format(f"no terminal shows tmux session {opener}"))
+            raise TuiError(NO_PANE.format(f"no terminal shows tmux session {own}"))
         return found
 
-    def _shown(self, session: str, *, own: bool) -> str | None:
+    def _shown(self, session: str, *, own: bool | None) -> str | None:
         """The pane the most recent client of tmux session `session` shows; $TMUX_PANE when own."""
         clients = self._clients(session)
         if not clients:
             return None
+        if own is None:
+            own = self.own_session() == session
         return os.environ["TMUX_PANE"] if own else clients[0][1]
 
     def _clients(self, session: str) -> list[list[str]]:
-        out = self.tmux.checked(["list-clients", "-t", f"={session}", "-F", CLIENTS]).stdout
+        res = self.tmux.run(["list-clients", "-t", f"={session}", "-F", CLIENTS])
+        if res.returncode:
+            if absent(res):
+                return []
+            raise TuiError(f"tmux: {error(res)}")
+        out = res.stdout
         return sorted(
             (
                 c

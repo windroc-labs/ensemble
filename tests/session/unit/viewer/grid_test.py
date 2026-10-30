@@ -160,7 +160,7 @@ class GridOpenTest(GridFixture):
         self.assertEqual(
             self.open(fake), "no anchor pane: no terminal shows tmux session mgr" + WATCH
         )
-        self.assertEqual(fake.calls, [OWN, WORKERS, clients_of("mgr"), clients_of("mgr")])
+        self.assertEqual(fake.calls, [OWN, WORKERS, clients_of("mgr")])
         rows = [("%10", "w1", "x")]
         for windows in (
             {"%10": [("@1", "", "%10", "160", "48")]},
@@ -208,14 +208,13 @@ class GridOpenTest(GridFixture):
                         WORKERS,
                         clients_of("mgr"),
                         grid_read("%3"),
-                        clients_of("mgr"),
                         split_window("-h", "%3"),
                         *record("mgr", "%20"),
                     ],
                 )
         fake = self.fake({"%3": self.NEW}, **{"list-clients": (1, "", "boom\n")})
         self.assertEqual(self.open(fake), "tmux: boom" + WATCH)
-        self.assertEqual(fake.calls, [OWN, WORKERS, clients_of("mgr"), clients_of("mgr")])
+        self.assertEqual(fake.calls, [OWN, WORKERS, clients_of("mgr")])
 
     def test_split_honored_outside_the_grid(self):
         fake = self.fake({})
