@@ -19,7 +19,8 @@ from tests.session.tmux_fixtures import (
 
 class GridTreeTest(Case):
     """Manager %0, its tmux session mgr; rows: (order, name, @worker-opener, worker pane), a row
-    without a pane a tmux session; worker panes listed by order, the first claim of a pane owning.
+    without a pane a known name (a tmux session or a known opener); worker panes listed by order,
+    the first claim of a pane owning.
     """
 
     def tree(self, rows, panes, layout=None):
@@ -32,8 +33,8 @@ class GridTreeTest(Case):
             for _, name, opener, pane in sorted(rows)
             if pane
         ]
-        sessions = {"mgr", *(name for _, name, _, pane in rows if not pane)}
-        return layouts.grid_tree("%0", panes, workers, sessions, layout)
+        known = {"mgr", *(name for _, name, _, pane in rows if not pane)}
+        return layouts.grid_tree("%0", panes, workers, known, layout)
 
     def test_cells_by_session_name_sub_workers_in_their_parents_cell(self):
         names = [
@@ -238,10 +239,9 @@ class GridTreeTest(Case):
             with self.subTest(case):
                 self.assertEqual(self.tree(rows, panes, layout), want)
 
-    def test_an_opener_without_a_pane_or_session_is_an_orphan_group(self):
-        """AC11 (D5): children of w2, neither a tmux session nor a worker with a pane (a hidden
-        worker), form an orphan group where the layout shows them; w2 as a tmux session keeps them
-        main.
+    def test_an_unknown_opener_without_a_pane_is_an_orphan_group(self):
+        """AC9 (D4): children of w2, neither known nor a worker with a pane, form an orphan group
+        where the layout shows them; w2 known (a tmux session or a hidden worker) keeps them main.
         """
         layout = (
             "160x48,0,0{79x48,0,0,0,80x48,80,0[80x16,80,0,1,80x15,80,17[80x7,80,17,4,80x7,80,25,5],"

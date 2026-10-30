@@ -349,9 +349,13 @@ def opening_commands(*, window="@1", manager="%3", opener="mgr", n=3, retile="al
     ]
 
 
+def unknown(_: str) -> bool:
+    return False
+
+
 def placed(fake) -> placement.Placement:
     tmux = TmuxCli(fake)
-    return placement.Placement(tmux=tmux, grid=grids.Grid(tmux))
+    return placement.Placement(tmux=tmux, grid=grids.Grid(tmux, known=unknown))
 
 
 class PaneFixture(Case):
@@ -564,10 +568,19 @@ class TileFixture(Case):
         )
 
     def tile(
-        self, layout, panes, rows=(), *, per_column=None, wait=True, if_panes_changed=False, **kw
+        self,
+        layout,
+        panes,
+        rows=(),
+        *,
+        per_column=None,
+        wait=True,
+        if_panes_changed=False,
+        known=unknown,
+        **kw,
     ):
         fake = self.fake(layout, panes, rows, **kw)
-        grids.Grid(TmuxCli(fake)).tile(
+        grids.Grid(TmuxCli(fake), known=known).tile(
             "@3", per_column=per_column, wait=wait, if_panes_changed=if_panes_changed
         )
         return fake

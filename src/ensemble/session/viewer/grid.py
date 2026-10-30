@@ -9,6 +9,7 @@ import re
 import stat
 import sys
 import time
+from collections.abc import Callable
 
 from ensemble.session.engine.tmux_cli import (
     NAME,
@@ -205,8 +206,9 @@ def hook_command() -> tuple[str, str | None]:
 
 
 class Grid:
-    def __init__(self, tmux: TmuxCli) -> None:
+    def __init__(self, tmux: TmuxCli, *, known: Callable[[str], bool]) -> None:
         self.tmux = tmux
+        self.known = known
 
     def configure(
         self,
@@ -292,7 +294,7 @@ class Grid:
         """Lays out grid window `window` under its _grid_lock (no wait: nothing while another tile
         holds it), its hooks muted by @grid-busy. if_panes_changed: no pass on an unchanged pane
         set. Over TILE_LIMIT re-tiles in TILE_WINDOW s, the grid is torn down. Holding the lock,
-        every exit unsets @grid-busy, a stale one too; without it, tile leaves @grid-busy alone.
+        every exit unsets @grid-busy, a stale one too; else tile leaves it alone.
         """
         if not WINDOW.fullmatch(window):
             raise TuiError(f"invalid window id {window!r}: want {WINDOW.pattern}")
@@ -395,17 +397,24 @@ class Grid:
         if if_panes_changed and recorded == pane_set:
             return None
         workers = worker_panes(self.tmux)
-        sessions = {
+        names = {
             name
             for name in self.tmux.checked(["list-sessions", "-F", "#{session_name}"]).stdout.split()
             if NAME.fullmatch(name)
         }
+        names.update(
+            {
+                w.opener
+                for w in workers
+                if w.opener and w.opener not in names and self.known(w.opener)
+            }
+        )
         if per_column is None:
             per_column = int(n) if re.fullmatch(r"[1-9][0-9]{0,3}", n) else PER_COLUMN
         order, at = panes, current
         for _ in range(1 + SETTLE_ITERATIONS):
             want = grid_layout(
-                grid_tree(manager, order, workers, sessions, at),
+                grid_tree(manager, order, workers, names, at),
                 manager,
                 width=int(width),
                 height=int(height),

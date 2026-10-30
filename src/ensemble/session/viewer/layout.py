@@ -139,20 +139,20 @@ def grid_tree(
     manager: str,
     panes: list[str],
     workers: Sequence[WorkerPane],
-    sessions: Collection[str],
+    known: Collection[str],
     layout: Cell,
 ) -> list[Slot]:
     """The main grid's cells in order: a worker pane's node sits in its @worker-opener's, an orphan
-    group (its opener neither a tmux session in `sessions` nor a worker with a pane) where the
-    layout shows it, the rest in main; main by _natural name, siblings by pane id, manual panes
-    last.
+    group (its opener neither in `known`, the tmux sessions and known pane-less openers, nor a
+    worker with a pane) where the layout shows it, the rest in main; main by _natural name,
+    siblings by pane id, manual panes last.
     """
     owner = {}
     for worker in workers:
         if worker.pane in panes and worker.pane != manager and worker.pane not in owner:
             owner[worker.pane] = worker.name, worker.opener
     node = {name: pane for pane, (name, _) in owner.items()}
-    names = {*sessions, *(worker.name for worker in workers)}
+    names = {*known, *(worker.name for worker in workers)}
     parent = {}  # a node's pane, or an orphan group's name -> its parent's; None: main
     for pane, (_, opener) in owner.items():
         parent[pane] = node.get(opener, opener if opener and opener not in names else None)

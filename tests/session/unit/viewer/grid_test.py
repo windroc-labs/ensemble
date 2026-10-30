@@ -42,6 +42,7 @@ from tests.session.tmux_fixtures import (
     split,
     split_window,
     tiled,
+    unknown,
     unmute,
     which,
 )
@@ -644,6 +645,27 @@ class TileApplicationTest(TileFixture):
                     ),
                 )
 
+    def test_a_known_opener_without_a_pane_keeps_its_children_main(self):
+        """AC9 (D4): a and b's opener w2 has no pane and no tmux session; known (a hidden worker)
+        it keeps them main, unknown they stay an orphan group.
+        """
+        layout = dump(
+            "160x48,0,0{79x48,0,0,0,80x48,80,0[80x16,80,0,1,80x15,80,17[80x7,80,17,4,80x7,80,25,5],"
+            "80x15,80,33,3]}"
+        )
+        panes = ["%0", "%1", "%4", "%5", "%3"]
+        rows = [("%1", "w1", "mgr"), ("%3", "w3", "mgr"), ("%4", "a", "w2"), ("%5", "b", "w2")]
+        steady = [self.SOCKET, self.READ, self.PANES, WORKERS, NAMES, self.UNMUTE]
+        for known in (unknown, {"w1", "a"}.__contains__):
+            with self.subTest(known=known):
+                self.assertEqual(self.tile(layout, panes, rows, known=known).calls, steady)
+        fake = self.tile(layout, panes, rows, known={"w2"}.__contains__)
+        self.assertEqual(fake.calls[:5], steady[:5])
+        self.assertEqual(
+            fake.calls[5][-1],
+            layouts.render_layout(grid([slot("%4"), slot("%5"), slot("%1"), slot("%3")])),
+        )
+
     def test_zoomed_or_no_grid_window_is_read_then_unmuted(self):
         for kw in ({"zoomed": "1"}, {"manager": ""}):
             with self.subTest(**kw):
@@ -833,7 +855,7 @@ class TileCoordinationTest(TileFixture):
                 release()
 
         slept = clock(self, poll)
-        grids.Grid(TmuxCli(fake)).tile("@3")
+        grids.Grid(TmuxCli(fake), known=unknown).tile("@3")
         self.assertEqual(slept, [grids.TILE_POLL] * 3)
         self.assertEqual(seen, [[self.SOCKET]] * 3)
         self.assertEqual(
@@ -854,7 +876,7 @@ class TileCoordinationTest(TileFixture):
         slept = clock(self)
         fake = self.fake(*self.WIDE)
         with self.assertRaisesRegex(tmux_cli.TuiError, "^grid @3: busy$"):
-            grids.Grid(TmuxCli(fake)).tile("@3")
+            grids.Grid(TmuxCli(fake), known=unknown).tile("@3")
         self.assertEqual(fake.calls, [self.SOCKET])
         self.assertEqual(set(slept), {grids.TILE_POLL})
         self.assertTrue(5 <= sum(slept) < 5.1)  # float steps: one poll more
@@ -864,11 +886,13 @@ class TileCoordinationTest(TileFixture):
         want = f"^grid lock {re.escape(self.lock)}: {os.strerror(errno.EISDIR)}$"
         fake = self.fake(*self.WIDE)
         with self.assertRaisesRegex(tmux_cli.TuiError, want):
-            grids.Grid(TmuxCli(fake)).tile("@3")
+            grids.Grid(TmuxCli(fake), known=unknown).tile("@3")
         self.assertEqual(fake.calls, [self.SOCKET])
         fake = self.fake(*self.WIDE)
         with which():
-            got = grids.Grid(TmuxCli(fake)).configure("@3", "%0", per_column=3, retile="all")
+            got = grids.Grid(TmuxCli(fake), known=unknown).configure(
+                "@3", "%0", per_column=3, retile="all"
+            )
         self.assertRegex(got, want)
         self.assertEqual(fake.calls, [grid_set("@3", "%0"), self.SOCKET])
 
@@ -885,7 +909,7 @@ class TileCoordinationTest(TileFixture):
                     tmux_cli.TuiError,
                     f"^grid @3: socket path {re.escape(repr(sock))}: want an absolute path$",
                 ):
-                    grids.Grid(TmuxCli(fake)).tile("@3")
+                    grids.Grid(TmuxCli(fake), known=unknown).tile("@3")
                 self.assertEqual(fake.calls, [self.SOCKET])
                 self.assertEqual(os.listdir(cwd.name), [])
 
@@ -893,7 +917,7 @@ class TileCoordinationTest(TileFixture):
         os.mkfifo(self.lock, 0o600)
         fake = self.fake(*self.WIDE)
         with deadline(), self.assertRaisesRegex(tmux_cli.TuiError, "not a regular file$"):
-            grids.Grid(TmuxCli(fake)).tile("@3")
+            grids.Grid(TmuxCli(fake), known=unknown).tile("@3")
         self.assertEqual(fake.calls, [self.SOCKET])
 
     def test_lock_is_exclusive_per_socket_window_and_released_after_exit(self):
@@ -975,7 +999,7 @@ class TileCoordinationTest(TileFixture):
                 window = (self.THREE, ["%0", "%1", "%2", "%3"], self.W3)
                 fake = self.fake(*window)
                 with which():
-                    got = grids.Grid(TmuxCli(fake)).configure(
+                    got = grids.Grid(TmuxCli(fake), known=unknown).configure(
                         "@3", "%0", per_column=n, retile="all"
                     )
                 self.assertIsNone(got)
@@ -991,7 +1015,9 @@ class TileCoordinationTest(TileFixture):
         del fake.calls[:]
         with which():
             self.assertIsNone(
-                grids.Grid(TmuxCli(fake)).configure("@3", "%0", per_column=3, retile="off")
+                grids.Grid(TmuxCli(fake), known=unknown).configure(
+                    "@3", "%0", per_column=3, retile="off"
+                )
             )
         self.assertEqual(fake.calls, [grid_set("@3", "%0", retile="off")])
 
@@ -1006,7 +1032,7 @@ class TileCoordinationTest(TileFixture):
             with self.subTest(window=window, **kw):
                 fake = FakeTmux()
                 with self.assertRaisesRegex(tmux_cli.TuiError, "^" + re.escape(error)):
-                    grids.Grid(TmuxCli(fake)).tile(window, **kw)
+                    grids.Grid(TmuxCli(fake), known=unknown).tile(window, **kw)
                 self.assertEqual(fake.calls, [])
 
     def test_a_tmux_failure_raises(self):
@@ -1014,10 +1040,10 @@ class TileCoordinationTest(TileFixture):
         fail = {"set-option": lambda argv: (1, "", "boom\n" if "@grid-tiles" in argv else "gone\n")}
         fake = self.fake(*self.WIDE, **fail)
         with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
-            grids.Grid(TmuxCli(fake)).tile("@3")
+            grids.Grid(TmuxCli(fake), known=unknown).tile("@3")
         self.assertEqual(fake.calls[5:], self.applied(self.WIDE_SENT))
         self.assertEqual(self.tile(*self.WIDE, wait=False).calls[:2], [self.SOCKET, self.READ])
         with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
             self.tile(dump("160x48,0,0,0"), ["%0"], fail=("set-hook",))
         with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
-            grids.Grid(TmuxCli(FakeTmux(fail=("display-message",)))).tile("@3")
+            grids.Grid(TmuxCli(FakeTmux(fail=("display-message",))), known=unknown).tile("@3")

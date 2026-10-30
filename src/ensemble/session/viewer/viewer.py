@@ -81,6 +81,10 @@ def listed(display: Display, value: Display) -> bool:
     )
 
 
+def _known_opener(name: str) -> bool:
+    return worker_state(name) is not None
+
+
 class Viewer:
     """settings: [viewer]'s workers_per_column and grid_retile."""
 
@@ -98,7 +102,7 @@ class Viewer:
             raise ConfigError(f"grid_retile: want one of {', '.join(Retile)}")
         self._per_column, self._retile = per, retile
         self._tmux = TmuxCli() if tmux is None else tmux
-        self._grid = Grid(self._tmux)
+        self._grid = Grid(self._tmux, known=_known_opener)
         self._placement = Placement(tmux=self._tmux, grid=self._grid)
 
     def show(

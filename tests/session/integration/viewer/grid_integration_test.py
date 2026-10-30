@@ -3,14 +3,17 @@
 import contextlib
 import functools
 import io
+import json
 import os
 import re
+import shutil
 import subprocess
 import time
 from unittest import mock
 
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, SessionError
+from ensemble.session.hosts.base import worker_dir
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer import grid as tmux_model
 from ensemble.session.viewer import layout
@@ -91,11 +94,15 @@ class Live(Case):
         )
         self.workers[name] = handle
         self.addCleanup(self.cleanup_worker, name, handle)
+        os.makedirs(worker_dir(name), exist_ok=True)
+        with open(os.path.join(worker_dir(name), "session.json"), "w", encoding="utf-8") as f:
+            json.dump({"sid": f"sid-{name}", "generation": handle.generation, "client": "fake"}, f)
         return handle
 
     def cleanup_worker(self, name, handle):
         with contextlib.suppress(SessionError):
             handle.close()
+        shutil.rmtree(worker_dir(name), ignore_errors=True)
         if self.workers.get(name) is handle:
             self.workers.pop(name)
 
@@ -193,7 +200,8 @@ class GridTest(Live):
     def test_sub_sessions(self):
         """AC10: the manager shows m1..m3; a show with opener m2 (display `m2`) nests in m2's
         cell; listed, each is shown in the manager's tmux session, its opener its pane's
-        @worker-opener; a worker with no worker pane is shown nowhere.
+        @worker-opener; a worker with no worker pane is shown nowhere. AC9: m2 hidden, z3 sits in
+        main till m2 closes.
         """
         for i, name in enumerate(("m1", "m2", "m3"), 1):
             self.started(name)
@@ -219,6 +227,12 @@ class GridTest(Live):
         self.session_cls.viewer().hide("m3", self.host)
         self.grid([["m1", ("m2", ["z3"])]])
         self.assertEqual(self.shown()["m3"], (None, None))
+        self.session_cls.viewer().hide("m2", self.host)
+        self.grid([["m1", "z3"]])
+        shown = self.shown()
+        self.assertEqual((shown["m2"], shown["z3"]), ((None, None), (MANAGER, "m2")))
+        self.show("m2")
+        self.grid([["m1", ("m2", ["z3"])]])
         self.close("m2")
         self.grid([["m1", ["z3"]]])
 
@@ -546,7 +560,7 @@ class SettleTest(Live):
         path = {"PATH": os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", "")))}
         with self.inside(MANAGER), mock.patch.dict(os.environ, path):
             self.assertIsNone(
-                tmux_model.Grid(TmuxCli()).configure(
+                tmux_model.Grid(TmuxCli(), known=lambda _: False).configure(
                     self.window, self.manager, per_column=1, retile=tmux_model.Retile("all")
                 )
             )
