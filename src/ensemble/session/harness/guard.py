@@ -477,7 +477,7 @@ class Screen:
         line[start:end] = [(" ", background(self.pen))] * (end - start)
         if end == self.columns:
             line.wrapped = False
-            line.used = line.used if start else 0  # tmux keeps it past a mid-row erase
+            line.used = line.used if start else 0
 
     def append(self, data: bytes) -> None:
         for char in self.decoder.decode(data):
@@ -549,18 +549,21 @@ class Screen:
                 self.column += width
 
     def resize(self, rows: int, columns: int) -> None:
-        """As tmux: a new width rewraps the main screen, its bottom rows kept shown."""
+        """As a terminal: a new width rewraps the main screen, its bottom rows kept shown."""
         cells, row, column, keyboard = self.normal or (self.cells, self.row, self.column, [])
+        read = self.normal is None
         if columns != self.columns:
             cells, row, column = reflow(cells, row, column, columns)
-        shift = max(min(row, len(cells) - self.rows), row + 1 - rows, 0)
-        end = shift
-        while 0 < end < row and cells[end - 1].wrapped:
-            end += 1
-        if shift and not cells[end - 1].wrapped:
-            shift = end
-        self._retire(cells, shift, read=self.normal is None)
-        cells, row = fit(cells[shift:], row - shift, rows, columns)
+            shift = end = max(0, len(cells) - self.rows)
+            last = row if row >= shift else len(cells) - 1
+            while 0 < end < last and cells[end - 1].wrapped:
+                end += 1
+            if shift and not cells[end - 1].wrapped:  # one the cursor is not on retires whole
+                shift = end
+            self._retire(cells, shift, read=read)
+            cells, row = cells[shift:], max(0, row - shift)
+        self._retire(cells, max(0, row + 1 - rows), read=read)
+        cells, row = fit(cells, row, rows, columns)
         if self.normal is None:
             self.cells, self.row, self.column = cells, row, min(column, columns)
         else:

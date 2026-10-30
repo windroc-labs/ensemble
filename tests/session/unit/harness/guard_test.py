@@ -482,6 +482,42 @@ class HistoryTest(Base):
         screen.append(b"\r\n\r\n\r\n")
         self.assertEqual(list(screen.lines), ["abcdef\r\n"])
 
+    def test_a_height_change_keeps_the_width_and_retires_above_the_cursor(self):
+        screen = guard.Screen(rows=3, columns=4)
+        screen.append(b"abcdef\r\nX")
+        screen.resize(2, 4)
+        self.assertEqual(
+            (screen.text(None), screen.row, list(screen.lines)), ("ef\nX", 1, ["abcd"])
+        )
+
+    def test_rows_below_the_cursor_stay_when_a_narrower_width_overflows(self):
+        screen = guard.Screen(rows=5, columns=80)
+        screen.append("\r\n".join(letter * 80 for letter in "ABCDE").encode() + b"\x1b[H")
+        screen.resize(5, 40)
+        self.assertEqual(logical(shown(screen, 5, 40))[:5], [letter * 80 for letter in "ABCDE"])
+        self.assertEqual((screen.row, screen.column), (0, 0))
+
+    def test_a_reflow_moves_a_wide_character_past_the_margin_and_keeps_a_pending_wrap(self):
+        screen = guard.Screen(rows=3, columns=5)
+        screen.append("ab中中\r\n".encode())
+        screen.resize(3, 3)
+        self.assertEqual(list(screen.lines), ["ab", "中", "中\r\n"])
+        self.assertEqual(logical(shown(screen, 3, 3))[0], "ab中中")
+        screen = guard.Screen(rows=2, columns=4)
+        screen.append(b"abcd")
+        screen.resize(2, 2)
+        self.assertEqual((screen.text(None), screen.row, screen.column), ("cd", 0, 2))
+        screen.append(b"e")
+        self.assertEqual(screen.text(None), "cd\ne")
+
+    def test_the_main_screen_under_the_alternate_one_reflows(self):
+        screen = guard.Screen(rows=3, columns=4)
+        screen.append(b"abcdef\x1b[?1049hX")
+        screen.resize(3, 8)
+        self.assertEqual(screen.text(None), "\n  X")
+        screen.append(b"\x1b[?1049l")
+        self.assertEqual((screen.text(None), screen.column), ("abcdef", 6))
+
     def test_a_reflow_keeps_written_blanks_as_tmux_does(self):
         """tmux 3.3a measured: written spaces and a mid-row erase keep a row's width; an erase
         from its first column drops it.
@@ -510,6 +546,22 @@ class HistoryTest(Base):
         screen.append(repainted(6, [b"d" * 10, b"d" * 10, b"> ", b"footer"]))
         lines = logical(shown(screen, 6, 10))
         self.assertEqual((lines.count("a" * 20), lines.count("b" * 20)), (1, 1))
+
+    def test_a_narrower_show_after_3000_lines_keeps_the_last_2000_rows_whole(self):
+        screen = guard.Screen(rows=24, columns=80)
+        lines = [f"line {n:04} " + "x" * 60 for n in range(1, 3001)]
+        screen.append("".join(f"{line}\r\n" for line in lines).encode() + b"> ")
+        screen.resize(30, 62)
+        layout = [part for line in lines for part in (line[:62], line[62:])] + ["> "]
+        screen.append(repainted(30, [line.encode() for line in layout[-30:]]))
+        self.assertLessEqual(len(screen.lines), guard.LINES)
+        shown_lines = logical(screen)
+        first = int(shown_lines[0].split()[1])
+        self.assertLess(abs(first - 1000), 20)
+        for line in lines[first:]:
+            self.assertTrue(
+                line in shown_lines or line[:62] in shown_lines and line[62:] in shown_lines, line
+            )
 
     def test_every_line_survives_a_narrower_and_taller_show(self):
         screen = guard.Screen(rows=24, columns=80)
@@ -1700,13 +1752,13 @@ class GuardTest(Base):
 
     def test_screen_resize_keeps_lines_and_the_cursor_line(self):
         screen = guard.Screen(rows=3, columns=10)
-        screen.append(b"one\r\ntwo\r\nthree")
+        screen.append(b"one\r\ntwo\r\nabcde")
         screen.resize(2, 4)
-        self.assertEqual((screen.text(None), screen.text(3)), ("thre\ne", "two\nthre\ne"))
+        self.assertEqual((screen.text(None), screen.text(3)), ("abcd\ne", "two\nabcd\ne"))
         self.assertEqual((screen.row, screen.column), (1, 1))
         screen.resize(4, 12)
         screen.append(b"!")
-        self.assertEqual(screen.text(None), "three!")
+        self.assertEqual(screen.text(None), "abcde!")
         self.assertEqual([len(line) for line in screen.cells], [12] * 4)
         screen = guard.Screen(rows=3, columns=10)
         screen.append(b"main\x1b[?1049halt")
