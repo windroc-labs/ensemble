@@ -2,11 +2,11 @@
 
 import contextlib
 import os
-import subprocess
 import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
 from unittest import mock
 
 from ensemble.session.engine.types import (
@@ -54,23 +54,30 @@ def free_lease(directory, generation):
     os.close(managed.lease_file(directory + "/" + generation + "/lease"))
 
 
-def reaped():
-    """A client record, [pid, start token], of a process that ended and was reaped."""
-    proc = subprocess.Popen(["true"])
-    token = guard.process_info(proc.pid)[1]  # unreaped until the wait: listed, a zombie at worst
-    proc.wait()
-    return [proc.pid, token]
+LIVE, ZOMBIE, GONE, REUSED = [10, "777"], [11, "778"], [12, "779"], [10, "776"]
 
 
-def zombie(case):
-    """A client record of an ended process its parent has not reaped."""
-    proc = subprocess.Popen(["true"])
-    case.addCleanup(proc.wait)
-    deadline = time.monotonic() + 10
-    while not guard.process_info(proc.pid)[2]:
-        case.assertLess(time.monotonic(), deadline, "no zombie")
-        time.sleep(0.01)
-    return [proc.pid, guard.process_info(proc.pid)[1]]
+@contextlib.contextmanager
+def clients():
+    """Linux's /proc listing LIVE running and ZOMBIE ended unreaped; GONE absent, REUSED's pid
+    another process's.
+    """
+    table = {10: "S 1 777", 11: "Z 1 778"}
+    real = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path.parts[:2] != ("/", "proc"):
+            return real(path, *args, **kwargs)
+        if (row := table.get(int(path.parts[2]))) is None:
+            raise FileNotFoundError(path)
+        state, parent, token = row.split()
+        return f"{path.parts[2]} (client) {state} {parent} " + "0 " * 17 + f"{token} 0"
+
+    with (
+        mock.patch.object(guard.sys, "platform", "linux"),
+        mock.patch.object(Path, "read_text", read_text),
+    ):
+        yield
 
 
 class ManagedTest(Case):
@@ -278,20 +285,19 @@ class ManagedTest(Case):
     def test_a_free_lease_ends_a_run_whose_recorded_client_is_gone(self):
         """A killed or failed guard's run ends once its client is gone: reaped, a zombie, reused."""
         generation = "a" * 32
-        live = [os.getpid(), guard.process_info(os.getpid())[1]]
         for state, client, expected in (
-            ("running", reaped(), Liveness.ABSENT),
-            ("failed", zombie(self), Liveness.ABSENT),
-            ("running", [live[0], live[1] + "0"], Liveness.ABSENT),
-            ("running", live, Liveness.UNKNOWN),
-            ("failed", live, Liveness.UNKNOWN),
+            ("running", GONE, Liveness.ABSENT),
+            ("failed", ZOMBIE, Liveness.ABSENT),
+            ("running", REUSED, Liveness.ABSENT),
+            ("running", LIVE, Liveness.UNKNOWN),
+            ("failed", LIVE, Liveness.UNKNOWN),
             ("failed", None, Liveness.ABSENT),
             ("running", None, Liveness.UNKNOWN),
-            ("starting", reaped(), Liveness.UNKNOWN),
-            ("running", [str(live[0]), live[1]], Liveness.UNKNOWN),
-            ("running", [True, live[1]], Liveness.UNKNOWN),
+            ("starting", GONE, Liveness.UNKNOWN),
+            ("running", [str(GONE[0]), GONE[1]], Liveness.UNKNOWN),
+            ("running", [True, GONE[1]], Liveness.UNKNOWN),
         ):
-            with self.subTest(state=state, client=client):
+            with self.subTest(state=state, client=client), clients():
                 directory = guard_dir(generation, state, client=client)
                 free_lease(directory, generation)
                 self.assertEqual(managed.liveness("tmux", "worker", generation), expected)
@@ -299,25 +305,27 @@ class ManagedTest(Case):
             with self.subTest(state=state, client="unrecorded"):
                 guard_dir(generation, state)
                 self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.UNKNOWN)
-        guard_dir(generation, "running", client=reaped())
+        guard_dir(generation, "running", client=GONE)
         lease = managed.lease_file(directory + "/" + generation + "/lease")
         try:
             managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
-            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.LIVE)
+            with clients():
+                self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.LIVE)
         finally:
             os.close(lease)
 
     def test_a_run_ended_with_its_client_gone_is_unlisted_and_frees_its_name(self):
         generation = "a" * 32
-        directory = guard_dir(generation, "running", client=reaped())
+        directory = guard_dir(generation, "running", client=GONE)
         free_lease(directory, generation)
         managed.save_json(
             directory + "/current.json",
             {"host": "tmux", "name": "worker", "generation": generation},
         )
         host = TmuxHost("tmux", tmux=mock.Mock())
-        self.assertEqual(host.rows(), [])
-        with spawned():
+        with clients():
+            self.assertEqual(host.rows(), [])
+        with clients(), spawned():
             channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
             channel.close()
         self.assertNotEqual(channel.generation, generation)

@@ -9,7 +9,6 @@ import os
 import re
 import signal
 import struct
-import subprocess
 import sys
 import termios
 import tty
@@ -1912,9 +1911,12 @@ class EndTest(Base):
         self.client_alive, self.proc.returncode = False, 0
 
     @contextlib.contextmanager
-    def world(self, select, *, ignores_signals=False, write=lambda _fd, data: len(data)):
+    def world(
+        self, select, *, ignores_signals=False, unlisted=False, write=lambda _fd, data: len(data)
+    ):
         """run's: client pid 100 (start token 777) listed while it lives, ending at its first
         signal unless it ignores them; a second passes per select, which `select(readers)` answers.
+        unlisted: listing /proc fails.
         """
         now = [0.0]
         stat = f"100 (client) S {os.getpid()} 100 100 " + "0 " * 15 + "777 0"
@@ -1924,6 +1926,11 @@ class EndTest(Base):
                 self.client_ends()
             raise ProcessLookupError
 
+        def listdir(_path):
+            if unlisted:
+                raise OSError(errno.EMFILE, "Too many open files")
+            return ["100"] * self.client_alive
+
         def selected(readers, _writers, _errors, _timeout):
             now[0] += 1
             return select(readers), [], []
@@ -1931,7 +1938,7 @@ class EndTest(Base):
         with (
             spawned(terminal=False, proc=self.proc) as (_, popen, sockets),
             mock.patch.object(guard.sys, "platform", "linux"),
-            mock.patch.object(os, "listdir", side_effect=lambda _: ["100"] * self.client_alive),
+            mock.patch.object(os, "listdir", side_effect=listdir),
             mock.patch.object(Path, "read_text", return_value=stat),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(os, "pidfd_open", side_effect=pidfd_open, create=True),
@@ -1977,17 +1984,28 @@ class EndTest(Base):
             self.expected("failed", "OSError: worker tree exit unconfirmed", client=[100, "777"]),
         )
 
-    def test_an_invalid_harness_command_records_failed_with_its_client(self):
+    def test_an_invalid_harness_command_records_the_exit_its_close_confirmed(self):
         runtime = self.runtime(lease="9", pending=guard.frame(b"z", b""))
         with self.world(lambda _: []), self.assertRaisesRegex(ValueError, "invalid guard command"):
             runtime.run()
         self.assertFalse(self.client_alive)
         self.assertEqual(
-            self.record(),
-            self.expected("failed", "ValueError: invalid guard command", client=[100, "777"]),
+            self.record(), self.expected("exited", "ValueError: invalid guard command")
         )
 
-    def test_output_still_open_9_s_after_the_client_exit_records_failed(self):
+    def test_a_failed_scan_after_the_client_starts_records_failed_with_its_client(self):
+        runtime = self.runtime(lease="9")
+        with (
+            self.world(lambda _: [], unlisted=True),
+            self.assertRaisesRegex(OSError, "Too many open files"),
+        ):
+            runtime.run()
+        self.assertEqual(
+            self.record(),
+            self.expected("failed", "OSError: [Errno 24] Too many open files", client=[100, "777"]),
+        )
+
+    def test_output_still_open_9_s_after_the_client_exit_records_the_exit_and_error(self):
         def select(_readers):
             self.client_ends()
             return []
@@ -1996,10 +2014,7 @@ class EndTest(Base):
         with self.world(select), self.assertRaisesRegex(OSError, "output open after its exit"):
             runtime.run()
         self.assertEqual(
-            self.record(),
-            self.expected(
-                "failed", "OSError: worker output open after its exit", client=[100, "777"]
-            ),
+            self.record(), self.expected("exited", "OSError: worker output open after its exit")
         )
 
     def test_output_undelivered_9_s_after_the_exit_keeps_exited_with_the_error(self):
@@ -2126,12 +2141,21 @@ class ProbeTest(Case):
         self.assertEqual(self.probe(), "exited\n")
 
     def test_free_lease_with_its_recorded_client_gone_is_exited(self):
-        proc = subprocess.Popen(["true"])
-        token = guard.process_info(proc.pid)[1]
-        proc.wait()
-        live = [os.getpid(), guard.process_info(os.getpid())[1]]
+        """Linux's /proc listing only pid 10, started at 777."""
+        real = Path.read_text
+
+        def read_text(path, *args, **kwargs):
+            if path.parts[:2] != ("/", "proc"):
+                return real(path, *args, **kwargs)
+            if path.parts[2] != "10":
+                raise FileNotFoundError(path)
+            return "10 (client) S 1 " + "0 " * 17 + "777 0"
+
+        self.enterContext(mock.patch.object(guard.sys, "platform", "linux"))
+        self.enterContext(mock.patch.object(Path, "read_text", read_text))
+        live = [10, "777"]
         for value, word in (
-            ({"state": "running", "client": [proc.pid, token]}, "exited"),
+            ({"state": "running", "client": [11, "777"]}, "exited"),
             ({"state": "failed", "client": None, "error": "OSError: x"}, "exited"),
             ({"state": "exited", "error": "OSError: guard output undelivered"}, "exited"),
             ({"state": "running", "client": live}, "dead"),

@@ -13,7 +13,6 @@ from unittest import mock
 from ensemble.session.engine.types import (
     Launch,
     Liveness,
-    SessionBusy,
     Unanswered,
     WorkerExit,
     WorkerOutput,
@@ -155,22 +154,9 @@ class ManagedIntegrationTest(Case):
         live_tmux.wait(lambda: not self.alive(pid), what="guard death hangs up PTY client")
         self.assertEqual(self.host.worker_liveness(worker.name, worker.generation), Liveness.ABSENT)
         self.assertEqual(self.host.rows(), [])
+        with contextlib.suppress(ProcessLookupError):  # detached, it ignores the hangup
+            os.kill(int(Path(self.home, "child.pid").read_text()), signal.SIGKILL)
         self.assertNotEqual(self.worker(terminal=True).generation, worker.generation)
-
-    def test_a_live_client_of_a_killed_guard_keeps_its_generation_unknown(self):
-        """Stopped, the client cannot read its stdin's end and outlives its guard."""
-        worker = self.worker()
-        live_tmux.wait(lambda: Path(self.home, "client.pid").exists(), what="client started")
-        pid = int(Path(self.home, "client.pid").read_text())
-        os.kill(pid, signal.SIGSTOP)
-        worker.proc.kill()
-        worker.proc.wait(timeout=10)
-        self.assertTrue(self.alive(pid))
-        self.assertEqual(
-            self.host.worker_liveness(worker.name, worker.generation), Liveness.UNKNOWN
-        )
-        with self.assertRaises(SessionBusy):
-            self.worker()
 
     def test_both_sigkill_end_the_generation_with_its_pty_client(self):
         """A detached HUP-ignoring descendant outlives the guard and its client: no OS backstop

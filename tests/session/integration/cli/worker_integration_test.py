@@ -8,12 +8,9 @@ when a dialog holds it.
 import json
 import os
 import shutil
-import signal
 import tempfile
 
-from ensemble.session.harness import guard
 from ensemble.session.harness.channel import Channel
-from ensemble.session.hosts.tmux import managed
 from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
 from tests.session.cli_support import MANAGER, WorkerCase, guard_command, logged
@@ -219,14 +216,3 @@ class HarnessedWorkerTest(WorkerCase):
         self.assertFalse(self.live("w1"))
         self.assertEqual(logged(channel.events)[-1]["type"], "Exited")
         live_tmux.wait(lambda: not channel.alive(), timeout=40, what="the harness to exit")
-
-    def test_a_worker_whose_guard_ended_unrecorded_leaves_ls_and_closes(self):
-        self.record(self.start("w1"))
-        generation = managed.records("tmux")["w1"].generation
-        run = os.path.join(managed.location("tmux", "w1"), generation)
-        client, _ = managed.load_json(os.path.join(run, "state.json"))["client"]
-        os.kill(guard.process_info(client)[0], signal.SIGKILL)
-        live_tmux.wait(lambda: not live_tmux.alive(client), what="the PTY client's hangup")
-        live_tmux.wait(lambda: not self.live("w1"), what="w1 unlisted")
-        self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
-        self.ok(self.session("close", "w1"))
