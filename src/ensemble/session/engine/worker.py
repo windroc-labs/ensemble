@@ -551,24 +551,22 @@ class Worker:
 
     def _died(self, session: Session, code: int) -> str:
         """Its last screen lines, read through its view while its harness can still show them,
-        else its Host row's (a harness refuses a screen once its worker exited).
+        else those its Host kept of that run (a harness refuses a screen once its worker exited).
         """
         head = f"{self.state.name}: {self.state.client} exited {code} while starting"
         try:
             screen = session.screen(SCREEN_LINES)
         except SessionError:
-            screen = self._row_lines(getattr(session, "generation", None))
+            screen = self._kept_lines(getattr(session, "generation", None))
         lines = [line for line in screen.splitlines() if line.strip()][-REPORT_LINES:]
         return "\n".join([f"{head}; its last lines:", *lines]) if lines else head
 
-    def _row_lines(self, generation: str | None = None) -> str:
-        """Its generation's diagnostic, else the matching Host row's last lines."""
+    def _kept_lines(self, generation: object) -> str:
         try:
-            host = self.session_cls.host(self.state.host)
-            if isinstance(generation, str):
-                return host._last_lines(self.state.name, self.state.sid, generation)
-            rows = host.rows()
+            return self.session_cls.host(self.state.host).last_lines(
+                self.state.name,
+                self.state.sid,
+                generation if isinstance(generation, str) else None,
+            )
         except (SessionError, ConfigError):
             return ""
-        key = (self.state.name, self.state.sid)
-        return next((row.last_lines or "" for row in rows if (row.name, row.sid) == key), "")

@@ -2446,11 +2446,10 @@ class StartedTest(HarnessCase):
 
     def exited(self):
         """The agent session left by a client that exited: its pane kept, its status dead, its
-        screen refused, its Host row holding SCREEN.
+        screen refused, its Host keeping SCREEN as its last lines.
         """
         self.start_agent()
         status = HarnessSession.status
-        row = SessionRow(AGENT, SID, "fake", StatusState.DEAD, None, None, SCREEN, own=False)
         return (
             mock.patch.object(
                 HarnessSession,
@@ -2460,15 +2459,16 @@ class StartedTest(HarnessCase):
             mock.patch.object(
                 HarnessSession, "screen", side_effect=SessionError("not running"), create=True
             ),
-            mock.patch.object(RecordingHost, "rows", return_value=[row], create=True),
+            mock.patch.object(RecordingHost, "last_lines", return_value=SCREEN),
         )
 
     def test_an_exited_clients_last_lines_join_the_error(self):
         self.ends(lambda: self.end_with(Result(3, None, "the client exited 3")))
-        dead, refused, rows = self.exited()
+        dead, refused, kept = self.exited()
         agent = HarnessSession.live[AGENT]
-        with dead, refused, rows:
+        with dead, refused, kept as last_lines:
             message = self.failed(self.tui())
+        last_lines.assert_called_once_with(AGENT, SID)
         self.assertEqual(
             message,
             f"tui session {AGENT} did not start: its harness ended: exit 3: the client exited 3"
@@ -2494,12 +2494,12 @@ class StartedTest(HarnessCase):
 
     def test_an_unreadable_tail_is_left_out(self):
         self.ends()
-        dead, refused, _rows = self.exited()
+        dead, refused, _kept = self.exited()
         with (
             dead,
             refused,
             mock.patch.object(
-                RecordingHost, "rows", side_effect=SessionError("docker ps: timed out"), create=True
+                RecordingHost, "last_lines", side_effect=SessionError("docker ps: timed out")
             ),
         ):
             message = self.failed(self.tui())

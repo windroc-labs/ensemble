@@ -176,7 +176,9 @@ class _Broker:
         return None
 
 
-def docker_worker(directory: str, proc, *, hooks=None, remove=lambda: None, start_reader=True):
+def docker_worker(
+    directory: str, proc, *, hooks=None, remove=lambda: None, start_reader=True, terminal=False
+):
     from ensemble.session.hosts.docker.maintenance import Maintenance
     from ensemble.session.hosts.docker.worker import DockerWorker
 
@@ -193,18 +195,25 @@ def docker_worker(directory: str, proc, *, hooks=None, remove=lambda: None, star
             "w1", directory, GEN, _Broker(), report=report, root="/", close=close
         ),
         report=lambda *_: None,
-        terminal=False,
+        terminal=terminal,
         start_reader=start_reader,
     )
 
 
-def worker(directory: str, proc: subprocess.Popen, client: list[str], *, remove=lambda: None):
-    handle = docker_worker(directory, proc, remove=remove)
+def worker(
+    directory: str,
+    proc: subprocess.Popen,
+    client: list[str],
+    *,
+    remove=lambda: None,
+    terminal=False,
+):
+    handle = docker_worker(directory, proc, remove=remove, terminal=terminal)
     handle.launch(
         {
             "argv": ["with-secrets", "--client", "c", *client],
             "env": {},
-            "terminal": False,
+            "terminal": terminal,
             "generation": GEN,
             "size": "80x24",
         }

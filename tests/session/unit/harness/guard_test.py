@@ -367,9 +367,11 @@ class DisplayTest(Base):
             self.assertEqual(b"".join(sent), b"" if stalled or sizeless else data.encode())
         if sizeless:
             self.assertGreaterEqual(now[0] - runtime.exit_at, guard.DISPLAY_DRAIN_WAIT)
-        kinds = [kind for kind, _ in guard.Decoder().feed(b"".join(captured))]
+        frames = guard.Decoder().feed(b"".join(captured))
+        kinds = [kind for kind, _ in frames]
         self.assertEqual(kinds[-1], b"x")
         self.assertEqual(kinds.count(b"x"), 1)
+        self.assertEqual(json.loads(frames[-1][1]), {"returncode": 0, "text": "current screen"})
 
 
 class CellTest(Base):
@@ -2151,9 +2153,9 @@ class GuardTest(Base):
         ):
             sockets.return_value.accept.side_effect = BlockingIOError
             self.assertEqual(runtime.run(), 0)
-        self.assertEqual(
-            [kind for kind, _ in guard.Decoder().feed(b"".join(captured))], [b"s", b"o", b"h", b"x"]
-        )
+        frames = guard.Decoder().feed(b"".join(captured))
+        self.assertEqual([kind for kind, _ in frames], [b"s", b"o", b"h", b"x"])
+        self.assertEqual(json.loads(frames[-1][1]), {"returncode": 0})
         self.assertEqual(
             json.loads(peer.sendall.call_args.args[0]), {"ok": True, "delivery_id": "a" * 32}
         )

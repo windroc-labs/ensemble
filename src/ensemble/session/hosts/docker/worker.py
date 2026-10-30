@@ -22,6 +22,7 @@ from ensemble.session.hosts.base import GUARD_WAIT, sent
 from ensemble.session.hosts.docker.hooks import HookWorker
 from ensemble.session.hosts.docker.maintenance import RETRY, Maintenance, run
 from ensemble.session.hosts.managed import QUEUE_MAX, ManagedProcess
+from ensemble.utils import save
 
 GUARD = "/opt/ensemble/src/ensemble/session/harness/guard.py"
 BEAT = 1.0  # s between heartbeats; the guard ends its worker after guard.HEARTBEAT s without one
@@ -30,6 +31,11 @@ SEEN = 4096
 HOOK_PAUSE = 1.0
 HOOK_TRIES_FOR = 60.0
 LOG_MAX = 1 << 20
+
+
+def diagnostic_file(state: str, generation: str) -> str:
+    """Its run's exit tail on the host: the guard's own goes with its container."""
+    return os.path.join(state, f"{generation}.diagnostic.json")
 
 
 def reject(state: str, generation: str, reason: str) -> None:
@@ -249,6 +255,12 @@ class DockerWorker(ManagedProcess):
             self.end_releases()
         with contextlib.suppress(OSError, ValueError):
             self.proc.stdin.close()
+        if self.last_lines:
+            with contextlib.suppress(OSError):
+                save(
+                    diagnostic_file(self.state_dir, self.generation),
+                    json.dumps({"text": self.last_lines}),
+                )
         while True:
             try:
                 self.remove()

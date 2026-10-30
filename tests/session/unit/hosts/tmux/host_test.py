@@ -103,14 +103,16 @@ class GuardInventoryTest(Case):
         generation = "a" * 32
         path = os.path.join(directory, generation, "diagnostic.json")
         managed.save_json(path, {"text": "final error"})
-        self.assertEqual(self.host._last_lines("ended", OTHER, generation), "final error")
-        self.assertEqual(self.host._last_lines("ended", "foreign", generation), "")
-        self.assertEqual(self.host._last_lines("ended", OTHER, "b" * 32), "")
-        self.assertEqual(TmuxHost("other")._last_lines("ended", OTHER, generation), "")
+        self.assertEqual(self.host.last_lines("ended", OTHER, generation), "final error")
+        self.assertEqual(self.host.last_lines("ended", OTHER), "final error")
+        self.assertEqual(self.host.last_lines("ended", "foreign"), "")
+        self.assertEqual(self.host.last_lines("ended", "foreign", generation), "")
+        self.assertEqual(self.host.last_lines("ended", OTHER, "b" * 32), "")
+        self.assertEqual(TmuxHost("other").last_lines("ended", OTHER, generation), "")
         self.assertEqual(self.host.list(), [])
         os.unlink(path)
         os.symlink(os.path.join(directory, "current.json"), path)
-        self.assertEqual(self.host._last_lines("ended", OTHER, generation), "")
+        self.assertEqual(self.host.last_lines("ended", OTHER, generation), "")
         self.assertEqual(self.tmux.mock_calls, [])
 
     def test_activity_belongs_to_the_guard_generation_without_a_display(self):

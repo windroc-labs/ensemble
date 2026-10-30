@@ -158,6 +158,18 @@ class HostDefaults(Case):
         self.assertEqual(SIGNALS, (signal.SIGHUP, signal.SIGTERM, signal.SIGINT))
 
 
+class LastLines(Case):
+    def test_a_host_keeping_no_run_of_its_own_reads_its_rows(self):
+        host = MinimalHost("m")
+        row = SessionRow("w", "s1", "c", StatusState.DEAD, None, None, "error", own=False)
+        host.rows = mock.Mock(
+            return_value=[dataclasses.replace(row, sid="s2", last_lines="no"), row]
+        )
+        self.assertEqual(host.last_lines("w", "s1"), "error")
+        self.assertEqual(host.last_lines("w", "s1", "a" * 32), "error")
+        self.assertEqual(host.last_lines("v", "s1"), "")
+
+
 class CapacityRows(Case):
     """Admission's inventory: a row for every session listed before and after rows()."""
 

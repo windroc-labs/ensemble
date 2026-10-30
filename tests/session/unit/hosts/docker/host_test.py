@@ -2078,6 +2078,34 @@ class RemoveWorkspacesTest(Base):
         self.assertEqual(self.removals(), [])
 
 
+class LastLinesTest(Base):
+    def diagnostic(self, value, gen=GEN):
+        with open(os.path.join(self.state, f"{gen}.diagnostic.json"), "w") as f:
+            f.write(value if isinstance(value, str) else json.dumps(value))
+
+    def test_its_recorded_generations_last_lines_outlive_its_container(self):
+        self.record()
+        self.assertEqual(self.host.last_lines("w", "s1", GEN), "")
+        self.diagnostic({"text": "error: bad flag"})
+        self.assertEqual(self.docker.ps, [])
+        self.assertEqual(self.host.last_lines("w", "s1", GEN), "error: bad flag")
+        self.assertEqual(self.host.last_lines("w", "s1"), "error: bad flag")
+        self.assertEqual(self.host.last_lines("w", "s2"), "")
+        self.assertEqual(self.host.last_lines("w", "s2", GEN), "")
+        self.assertEqual(self.host.last_lines("w", "s1", "f" * 32), "")
+        self.assertEqual(self.host.last_lines("v", "s1", GEN), "")
+
+    def test_a_bad_record_or_diagnostic_has_no_last_lines(self):
+        self.record(generation="../" + GEN)
+        self.diagnostic({"text": "error"}, gen="../" + GEN)
+        self.assertEqual(self.host.last_lines("w", "s1"), "")
+        self.record()
+        for value in ("not json", {"text": 5}, ["error"], {"text": "x" * (1 << 20)}):
+            with self.subTest(value=str(value)[:20]):
+                self.diagnostic(value)
+                self.assertEqual(self.host.last_lines("w", "s1", GEN), "")
+
+
 class ListTest(Base):
     def test_admission_inventory_distinguishes_missing_docker_from_empty(self):
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
