@@ -625,6 +625,127 @@ class ManualPromptTest(PromptTest):
 
 
 class BindingTest(Case):
+    def test_registered_launcher_hands_off_only_to_its_native_tui_child(self):
+        self.tree[100] = 80
+        self.assertEqual(
+            self.call(
+                ("--binding", "launch", "--client", "codex", "--client-pid", "80"),
+                {"session_id": "saved", "cwd": "/same/project"},
+                self.environ("second"),
+            )[0],
+            0,
+        )
+        self.tree[81], self.births[81] = 80, "native-child"
+        self.bind("second", 81, "saved")
+        self.assertEqual(self.record("second")["pid"], 81)
+        self.tree[82], self.births[82], self.tree[100] = 81, "nested-client", 82
+        result = self.call(
+            ("--binding", "record", "--client", "codex", "--client-pid", "82"),
+            {"session_id": "saved", "cwd": "/same/project"},
+            self.environ("second"),
+        )
+        self.assertEqual(result, (2, ""))
+
+    def test_local_hook_finalizes_a_registered_launch(self):
+        self.tree[100] = 80
+        self.assertEqual(
+            self.call(
+                ("--binding", "launch", "--client", "codex", "--client-pid", "80"),
+                {"session_id": None, "cwd": "/same/project"},
+                self.environ("second"),
+            )[0],
+            0,
+        )
+        self.tree[100], self.tree[90] = 90, 80
+        result = self.call(
+            (
+                "--binding",
+                "lookup",
+                "--client",
+                "codex",
+                "--client-pid",
+                "80",
+                "--hook-daemon",
+                "app-server",
+            ),
+            {"session_id": "native", "cwd": "/chosen", "source": "startup"},
+            self.environ("second"),
+        )
+        self.assertIn("in manager `second`", result[1])
+        self.assertEqual(
+            self.record("second"), {"client": "codex", "sid": "native", "pid": 80, "cwd": "/chosen"}
+        )
+
+    def test_direct_hook_cannot_return_another_live_managers_rearm(self):
+        self.bind("first", 70, "shared")
+        self.bind("second", 80, "other")
+        self.tree[90] = 80
+        argv = (
+            "--binding",
+            "lookup",
+            "--mode",
+            "manual",
+            "--client",
+            "codex",
+            "--client-pid",
+            "80",
+            "--hook-daemon",
+            "app-server",
+        )
+        result = self.call(
+            argv,
+            {"session_id": "shared", "cwd": "/same/project", "source": "resume"},
+            self.environ("second"),
+        )
+        self.assertEqual(result, (0, ""))
+        self.assertEqual(self.record("first")["sid"], "shared")
+        self.assertEqual(self.record("second")["sid"], "other")
+
+    def test_record_cannot_claim_a_client_outside_the_callers_ancestry(self):
+        self.tree[71], self.births[71] = 41, "unrelated-tui"
+        result = self.call(
+            ("--binding", "record", "--client", "codex", "--client-pid", "71"),
+            {"session_id": "unrelated", "cwd": "/same/project"},
+            self.environ("first"),
+        )
+        self.assertEqual(result, (2, ""))
+
+    def test_launch_registers_pid_without_inventing_a_session(self):
+        self.tree[100] = 80
+        code, output = self.call(
+            ("--binding", "launch", "--client", "codex", "--client-pid", "80"),
+            {"session_id": None, "cwd": "/same/project"},
+            self.environ("second"),
+        )
+        self.assertEqual((code, output), (0, '{"recorded": true}\n'))
+        path = Path(self.second.directory, "live-client.json")
+        binding = json.loads(path.read_text())
+        self.assertEqual(
+            (binding["pid"], binding["sid"], binding["birth"]), (80, None, "start-second")
+        )
+        self.assertFalse(Path(self.second.directory, "session.json").exists())
+
+    def test_launch_records_explicit_resume_before_any_hook(self):
+        self.tree[100] = 80
+        code, output = self.call(
+            ("--binding", "launch", "--client", "codex", "--client-pid", "80"),
+            {"session_id": "saved", "cwd": "/same/project"},
+            self.environ("second"),
+        )
+        self.assertEqual((code, output), (0, '{"recorded": true}\n'))
+        self.assertEqual(self.record("second")["pid"], 80)
+
+    def test_same_hold_second_tui_cannot_replace_a_live_launch(self):
+        self.bind("first", 70, "first-session")
+        self.tree[71], self.births[71], self.tree[100] = 41, "second-tui", 71
+        result = self.call(
+            ("--binding", "record", "--client", "codex", "--client-pid", "71"),
+            {"session_id": "different-session", "cwd": "/same/project"},
+            self.environ("first"),
+        )
+        self.assertEqual(result, (2, ""))
+        self.assertEqual(self.record("first")["pid"], 70)
+
     def setUp(self):
         super().setUp()
         self.first = Roster(str(Path(self.ensemble, "managers", "first")))
@@ -906,6 +1027,7 @@ class BindingTest(Case):
         self.bind("second", 80, "saved")
         self.births.pop(80)
         self.tree[81] = 42
+        self.births[81] = "new-native-tui"
         self.tree[90] = 81
         argv = (
             "--binding",

@@ -18,6 +18,23 @@ class Executed(BaseException):
 
 
 class ProtocolTest(Case):
+    def test_both_routes_register_the_launcher_before_exec(self):
+        for argv in (
+            ("hello",),
+            ("resume", "01a18728-8ee7-7123-8123-123456789abc", "--sandbox", "read-only"),
+        ):
+            with self.subTest(argv=argv):
+                self.launch(argv, {"ENSEMBLE_MANAGER": "m"})
+                calls = [call for call in self.runs if "launch" in call.args[0]]
+                self.assertEqual(len(calls), 1, "every managed TUI must register before exec")
+                command = calls[0].args[0]
+                self.assertEqual(command[-2:], ("--client-pid", str(os.getpid())))
+                event = json.loads(calls[0].kwargs["input"])
+                self.assertEqual(
+                    event["session_id"],
+                    "01a18728-8ee7-7123-8123-123456789abc" if argv[0] == "resume" else None,
+                )
+
     def test_prompt_separator_keeps_command_words_interactive(self):
         self.assertTrue(manager.Arguments(("--", "exec")).interactive())
 
@@ -28,6 +45,16 @@ class ProtocolTest(Case):
 
     def test_explicit_no_daemon_is_an_interactive_launch(self):
         self.assertTrue(manager.Arguments(("--no-daemon", "hello")).interactive())
+        _, called, count = self.launch(("--no-daemon", "hello"), {"ENSEMBLE_MANAGER": "m"})
+        self.assertEqual(called[1].count("--no-daemon"), 1)
+        self.assertEqual(count, 2)
+
+    def test_named_and_picker_resumes_do_not_guess_a_native_sid(self):
+        for argv in (("resume", "named"), ("resume", "--last"), ("--", "resume")):
+            with self.subTest(argv=argv):
+                self.launch(argv, {"ENSEMBLE_MANAGER": "m"})
+                call = next(call for call in self.runs if "launch" in call.args[0])
+                self.assertIsNone(json.loads(call.kwargs["input"])["session_id"])
 
     def test_remote_word_after_separator_is_a_literal_prompt(self):
         _, called, _ = self.launch(("--", "--remote=literal"), {"ENSEMBLE_MANAGER": "m"})
@@ -74,7 +101,14 @@ class ProtocolTest(Case):
         started = server or SimpleNamespace(returncode=0, stdout='{"socketPath":"/shared"}')
         with (
             mock.patch.dict(os.environ, env, clear=True),
-            mock.patch("subprocess.run", side_effect=[context, started]) as run,
+            mock.patch(
+                "subprocess.run",
+                side_effect=[
+                    context,
+                    SimpleNamespace(returncode=0, stdout='{"recorded":true}'),
+                    started,
+                ],
+            ) as run,
             mock.patch("socket.socket"),
             mock.patch(
                 "tempfile.mkdtemp",
@@ -102,7 +136,7 @@ class ProtocolTest(Case):
 
     def test_manager_launch_preserves_default_and_explicit_cwd(self):
         _, called, count = self.launch(("hello",), {"ENSEMBLE_MANAGER": "m"})
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 3)
         args = called[1]
         self.assertIn("--cd", args)
         self.assertEqual(args[args.index("--cd") + 1], os.getcwd())
@@ -127,7 +161,7 @@ class ProtocolTest(Case):
             with self.subTest(arguments=arguments):
                 native, called, count = self.launch(arguments, {"ENSEMBLE_MANAGER": "m"})
                 self.assertEqual(called, (str(native), (str(native), "--no-daemon", *arguments)))
-                self.assertEqual(count, 1)
+                self.assertEqual(count, 2)
 
     def test_native_environment_choices_do_not_get_a_remote_workspace(self):
         for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"):
@@ -136,7 +170,7 @@ class ProtocolTest(Case):
                     ("hello",), {"ENSEMBLE_MANAGER": "m", name: "chosen"}
                 )
                 self.assertEqual(called, (str(native), (str(native), "--no-daemon", "hello")))
-                self.assertEqual(count, 1)
+                self.assertEqual(count, 2)
 
     def test_supported_options_and_literal_prompt_keep_the_shared_route(self):
         for arguments in (
@@ -147,7 +181,7 @@ class ProtocolTest(Case):
         ):
             with self.subTest(arguments=arguments):
                 _, called, count = self.launch(arguments, {"ENSEMBLE_MANAGER": "m"})
-                self.assertEqual(count, 2)
+                self.assertEqual(count, 3)
                 self.assertEqual(called[1][1], "--remote")
 
     def test_stale_holder_passes_through_and_unavailable_server_fails_closed(self):
@@ -163,7 +197,7 @@ class ProtocolTest(Case):
             expected=ValueError,
         )
         self.assertIsNone(called)
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 3)
         _, called, count = self.launch(
             ("--remote", "unix:///elsewhere"), {"ENSEMBLE_MANAGER": "m"}, expected=ValueError
         )

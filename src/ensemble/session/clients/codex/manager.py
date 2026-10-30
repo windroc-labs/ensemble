@@ -13,6 +13,7 @@ import tempfile
 import threading
 from collections.abc import Callable, Mapping
 from typing import BinaryIO
+from uuid import UUID
 
 THREAD_METHODS = frozenset({"thread/start", "thread/resume", "thread/fork"})
 NONINTERACTIVE = frozenset(
@@ -123,6 +124,15 @@ class Arguments:
             name in os.environ
             for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT")
         )
+
+    def resume_sid(self) -> str | None:
+        if self.command != "resume" or "--last" in self.options or len(self.positionals) < 2:
+            return None
+        value = self.positionals[1]
+        try:
+            return value if str(UUID(value)) == value else None
+        except ValueError:
+            return None
 
 
 class ThreadBridge:
@@ -313,9 +323,9 @@ def peer(connection: socket.socket) -> tuple[int, int]:
     return pid, uid
 
 
-def recording(command: tuple[str, ...], pid: int, event: dict) -> None:
+def recording(command: tuple[str, ...], pid: int, event: dict, action: str = "record") -> None:
     done = subprocess.run(
-        (*command, "--binding", "record", "--client", "codex", "--client-pid", str(pid)),
+        (*command, "--binding", action, "--client", "codex", "--client-pid", str(pid)),
         input=json.dumps(event),
         text=True,
         capture_output=True,
@@ -418,8 +428,16 @@ def main(root: str, argv: tuple[str, ...]) -> int:
     identity = json.loads(context.stdout)
     if "--remote" in arguments.options:
         raise ValueError("manager clients require the local shared server; omit --remote")
+    cwd = arguments.options.get("--cd") or os.getcwd()
+    recording(
+        recorder,
+        os.getpid(),
+        {"session_id": arguments.resume_sid(), "cwd": os.path.abspath(cwd)},
+        "launch",
+    )
     if arguments.local_launch():
-        os.execv(real, (real, "--no-daemon", *argv))
+        flags = () if "--no-daemon" in arguments.options else ("--no-daemon",)
+        os.execv(real, (real, *flags, *argv))
     started = subprocess.run(
         (real, "app-server", "daemon", "start"),
         capture_output=True,

@@ -103,6 +103,95 @@ class RecordTest(RosterCase):
 
 
 class ReadTest(RosterCase):
+    def test_dead_launch_does_not_hide_another_clients_live_record(self):
+        self.write_record(LIVE)
+        with Roster(self.directory).hold("owner") as lease:
+            binding = {
+                "client": "codex",
+                "sid": None,
+                "cwd": self.home,
+                "pid": DEAD,
+                "birth": "old",
+                "holder_pid": 41,
+                "holder_id": lease.id,
+                "holder_generation": lease.generation,
+            }
+            path = Path(self.directory, "live-client.json")
+            path.write_text(json.dumps(binding))
+            self.assertEqual(
+                read(self.directory, running=rearm.client_running).state, HolderState.CLIENT_RUNNING
+            )
+
+    def test_dead_or_stale_binding_does_not_trust_a_recycled_record_pid(self):
+        self.write_record(LIVE)
+        record_path = Path(self.directory, "session.json")
+        record_path.write_text(
+            json.dumps({**json.loads(record_path.read_text()), "client": "codex"})
+        )
+        with Roster(self.directory).hold("owner") as lease:
+            binding = {
+                "client": "codex",
+                "sid": "saved",
+                "cwd": self.home,
+                "pid": LIVE,
+                "birth": "old",
+                "holder_pid": 41,
+                "holder_id": lease.id,
+                "holder_generation": lease.generation,
+            }
+            path = Path(self.directory, "live-client.json")
+            path.write_text(json.dumps(binding))
+            self.assertEqual(
+                read(self.directory, running=rearm.client_running).state, HolderState.HOLD_ONLY
+            )
+            path.write_text("{")
+            self.assertEqual(
+                read(self.directory, running=rearm.client_running).state, HolderState.HOLD_ONLY
+            )
+
+    def test_live_launch_is_client_running_before_the_first_hook(self):
+        self.write_record(DEAD)
+        with Roster(self.directory).hold("owner") as lease:
+            binding = {
+                "client": "codex",
+                "sid": None,
+                "cwd": self.home,
+                "pid": LIVE,
+                "birth": "launched",
+                "holder_pid": 41,
+                "holder_id": lease.id,
+                "holder_generation": lease.generation,
+            }
+            Path(self.directory, "live-client.json").write_text(json.dumps(binding))
+            real_isdir = os.path.isdir
+
+            def ps(argv, **_options):
+                return mock.Mock(
+                    returncode=0,
+                    stdout=b"launched\n"
+                    if "-p" in argv
+                    else f"{LIVE} 41 codex\n41 1 hold\n".encode(),
+                )
+
+            with (
+                mock.patch(
+                    "os.path.isdir",
+                    side_effect=lambda path: False if path == "/proc/self" else real_isdir(path),
+                ),
+                mock.patch("subprocess.run", side_effect=ps),
+            ):
+                self.assertEqual(
+                    read(self.directory, running=rearm.client_running).state,
+                    HolderState.CLIENT_RUNNING,
+                )
+                self.assertEqual(
+                    read_record(os.path.join(self.directory, "session.json")).pid, DEAD
+                )
+            with mock.patch("subprocess.run", return_value=mock.Mock(returncode=1, stdout=b"")):
+                self.assertEqual(
+                    read(self.directory, running=rearm.client_running).state, HolderState.HOLD_ONLY
+                )
+
     def setUp(self):
         super().setUp()
         self.live()

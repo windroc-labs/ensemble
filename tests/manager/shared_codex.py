@@ -72,6 +72,21 @@ def header(connection):
     return bytes(data)
 
 
+def hook(sid, cwd, source):
+    root = os.environ["PLUGIN_ROOT"]
+    with open(os.path.join(root, "hooks", "manual.json"), encoding="utf-8") as f:
+        command = json.load(f)["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+    done = subprocess.run(
+        ("sh", "-c", command),
+        input=json.dumps({"session_id": sid, "cwd": cwd, "source": source}),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    return json.loads(done.stdout) if done.stdout else None
+
+
 def handle(connection):
     with connection:
         try:
@@ -107,23 +122,8 @@ def handle(connection):
                         policy = params["config"]["shell_environment_policy"]
                         result = {"thread": {"id": sid, "cwd": cwd}}
                     elif method == "turn/start":
-                        root = os.environ["PLUGIN_ROOT"]
-                        with open(
-                            os.path.join(root, "hooks", "manual.json"), encoding="utf-8"
-                        ) as f:
-                            command = json.load(f)["hooks"]["SessionStart"][0]["hooks"][0][
-                                "command"
-                            ]
-                        hook = subprocess.run(
-                            ("sh", "-c", command),
-                            input=json.dumps({"session_id": sid, "cwd": cwd, "source": source}),
-                            capture_output=True,
-                            text=True,
-                            check=True,
-                            timeout=10,
-                        )
                         result = {
-                            "hook": json.loads(hook.stdout),
+                            "hook": hook(sid, cwd, source),
                             "shell_env": policy["set"],
                             "daemon": os.getpid(),
                         }
@@ -190,6 +190,19 @@ def tui(argv):
                     print(json.dumps(call("turn/start", {})), flush=True)
 
 
+def local_tui(argv):
+    resumed = "resume" in argv
+    sid = argv[argv.index("resume") + 1] if resumed else str(uuid.uuid4())
+    print(json.dumps({"pid": os.getpid(), "sid": sid}), flush=True)
+    for line in sys.stdin:
+        if line.strip() == "quit":
+            return
+        print(
+            json.dumps({"hook": hook(sid, os.getcwd(), "resume" if resumed else "startup")}),
+            flush=True,
+        )
+
+
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--fake-daemon"]:
         daemon(sys.argv[2])
@@ -198,5 +211,7 @@ if __name__ == "__main__":
     elif os.environ.get("FAKE_PASSTHROUGH"):
         print(json.dumps(sys.argv[1:]))
         sys.exit(23)
+    elif "--no-daemon" in sys.argv:
+        local_tui(sys.argv[1:])
     else:
         tui(sys.argv[1:])

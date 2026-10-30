@@ -338,11 +338,11 @@ class SharedCodexTest(Case):
             "ENSEMBLE_HOLDER_ID": roster["holder"]["id"],
             "ENSEMBLE_HOLDER_GENERATION": str(roster["lease_gen"]),
         }
+        Path(self.home, "app-server").symlink_to(Path(REPO, "tests", "manager", "shared_codex.py"))
         daemon = subprocess.Popen(
             (
                 sys.executable,
-                "-I",
-                os.path.join(REPO, "tests", "manager", "shared_codex.py"),
+                "app-server",
                 "--fake-daemon",
                 env["FAKE_DAEMON_SOCKET"],
             ),
@@ -414,6 +414,63 @@ class SharedCodexTest(Case):
 
     def test_two_holds_and_resume_share_the_same_detached_daemon(self):
         self.shared()
+
+    def test_local_launch_and_manual_resume_are_running_before_the_first_turn(self):
+        env = self.environment()
+        process = self.start("local", env)
+        self.send(process, "codex --sandbox read-only")
+        client = json.loads(self.line(process))
+        binding = Path(self.ensemble, "managers", "local", "live-client.json")
+        self.assertEqual(json.loads(binding.read_text())["pid"], client["pid"])
+        self.assertIsNone(json.loads(binding.read_text())["sid"])
+        self.assertFalse(Path(self.ensemble, "managers", "local", "session.json").exists())
+        listing = subprocess.run(
+            (os.path.join(REPO, "bin", "ensemble-crew"), "list"),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        self.assertIn("local\tclient-running", listing.stdout)
+        self.send(process, "turn")
+        answer = json.loads(self.line(process))
+        self.assertIn(
+            "in manager `local`", answer["hook"]["hookSpecificOutput"]["additionalContext"]
+        )
+        self.send(process, "quit")
+        self.send(process, f"codex resume {client['sid']} --sandbox read-only")
+        resumed = json.loads(self.line(process))
+        self.assertNotEqual(client["pid"], resumed["pid"])
+        self.assertEqual(self.saved("local")["pid"], resumed["pid"])
+        listing = subprocess.run(
+            (os.path.join(REPO, "bin", "ensemble-crew"), "list"),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        self.assertIn("local\tclient-running", listing.stdout)
+        self.send(process, "turn")
+        answer = json.loads(self.line(process))
+        self.assertIn(
+            "`resume` in manager `local`", answer["hook"]["hookSpecificOutput"]["additionalContext"]
+        )
+
+    def test_local_resume_cannot_claim_a_shared_daemons_live_session(self):
+        env = self.environment()
+        first, second = self.start("first", env), self.start("second", env)
+        self.daemon(env, first)
+        self.send(first, "codex")
+        client = json.loads(self.line(first))
+        before = self.saved("first")
+        self.send(
+            second, f"codex resume {client['sid']} --sandbox read-only; printf 'exit:%s\\n' \"$?\""
+        )
+        self.assertRegex(self.line(second).decode(), r"^exit:[1-9][0-9]*\n$")
+        self.assertEqual(self.saved("first"), before)
+        self.assertFalse(Path(self.ensemble, "managers", "second", "session.json").exists())
 
     def test_another_cwd_is_preserved_on_the_shared_daemon(self):
         self.shared(different_cwd=True)
