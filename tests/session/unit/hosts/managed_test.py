@@ -544,6 +544,28 @@ class ManagedProcessTest(Case):
         with self.assertRaises(ValueError):
             channel.accept(b"o", b"late")
 
+    def test_an_exit_keeps_its_terminals_last_lines_bounded(self):
+        long = "x" * guard.DIAGNOSTIC_CHARS + "end"
+        cases = (
+            ({"returncode": 2}, None),
+            ({"returncode": 2, "text": "error: bad flag"}, "error: bad flag"),
+            ({"returncode": 2, "text": long}, long[-guard.DIAGNOSTIC_CHARS :]),
+        )
+        for value, kept in cases:
+            with self.subTest(value=str(value)[:40]):
+                channel = self.channel(terminal=True)
+                channel.accept(b"s", b'{"pid":123}')
+                channel.accept(b"x", json.dumps(value).encode())
+                self.assertEqual(channel.read(0), [WorkerExit(2)])
+                self.assertEqual(channel.last_lines, kept)
+
+    def test_an_exit_whose_text_is_not_a_string_fails(self):
+        for text in (5, None, ["a"]):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                channel = self.channel(terminal=True)
+                channel.accept(b"s", b'{"pid":123}')
+                channel.accept(b"x", json.dumps({"returncode": 2, "text": text}).encode())
+
     def test_up_marks_its_client_up_and_queues_nothing(self):
         channel = self.channel()
         channel.accept(b"s", b'{"pid":123}')

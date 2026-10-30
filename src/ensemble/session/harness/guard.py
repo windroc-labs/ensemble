@@ -985,13 +985,17 @@ class Guard:
         if self.lease is None:
             return
         if status == "exited" and self.args.terminal:
-            self._save("diagnostic.json", {"text": self.screen.text(20)[-DIAGNOSTIC_CHARS:]})
+            self._save("diagnostic.json", {"text": self.last_lines()})
         value = {"generation": os.path.basename(self.directory), "state": status}
         if status != "exited" and (self.client is not None or self.proc is None):
             value["client"] = self.client  # None: it started no client
         if error is not None:
             value["error"] = error.encode("utf-8", "backslashreplace").decode()[:ERROR_CHARS]
         self._save("state.json", value)
+
+    def last_lines(self) -> str:
+        """Its terminal's last lines, its client's own error among them."""
+        return self.screen.text(20)[-DIAGNOSTIC_CHARS:]
 
     def _save(self, name: str, value: dict) -> None:
         path = os.path.join(self.directory, name)
@@ -1334,7 +1338,10 @@ class Guard:
                     self.final_hooks()
                     self.state("exited")
                     if self.channel:
-                        self.emit(json_frame(b"x", {"returncode": self.proc.returncode}))
+                        exit_value = {"returncode": self.proc.returncode}
+                        if self.args.terminal:
+                            exit_value["text"] = self.last_lines()
+                        self.emit(json_frame(b"x", exit_value))
                     self.exit_sent, self.exit_at = True, time.monotonic()
                 self.flush()
                 if self.exit_sent and (not self.output or not self.channel):

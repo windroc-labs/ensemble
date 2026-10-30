@@ -90,6 +90,7 @@ class ManagedProcess(InteractiveProcess):
         self.messages = deque()
         self.size = 0
         self.code = None
+        self.last_lines: str | None = None  # its terminal's, from its exit frame
         self.failure = None
         self.started = False
         self.up = False
@@ -165,9 +166,15 @@ class ManagedProcess(InteractiveProcess):
                 self.view_pending = False
             elif kind == b"x":
                 value = json.loads(data)
-                if not isinstance(value, dict) or type(value.get("returncode")) is not int:
+                if (
+                    not isinstance(value, dict)
+                    or type(value.get("returncode")) is not int
+                    or not isinstance(value.get("text", ""), str)
+                ):
                     raise ValueError("invalid guard exit")
                 self.code = value["returncode"]
+                if "text" in value:
+                    self.last_lines = value["text"][-guard.DIAGNOSTIC_CHARS :]
                 message = WorkerExit(self.code)
                 self._ended()
             else:
