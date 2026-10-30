@@ -263,6 +263,31 @@ class AdmissionTest(Case):
         ):
             self.fail("two runs must fill two slots")
 
+    def test_a_reservation_claims_its_own_row_before_another_sharing_its_sid(self):
+        self.host.create("a", metadata={"client": "fake", "sid": "s1"})
+        self.host.create("b", metadata={"client": "fake"})
+        records = {}
+        for name in ("a", "b"):
+            ticket = self.enter(limit=0, name=name, mode=Mode.TUI)
+            with ticket:
+                ticket.started(lambda: Liveness.LIVE)
+            records[name] = ticket.path
+        scandir = os.scandir
+        for first in ("a", "b"):
+            with (
+                self.subTest(scanned_first=first),
+                mock.patch.object(
+                    os,
+                    "scandir",
+                    lambda path, first=first: sorted(
+                        scandir(path), key=lambda entry: entry.path != records[first]
+                    ),
+                ),
+                self.assertRaisesRegex(SessionError, "held by: a, b$"),
+                self.enter(limit=2, name="third", sid="s3"),
+            ):
+                self.fail("two runs must fill two slots")
+
     def test_a_row_without_a_sid_is_not_another_runs_reservation(self):
         self.host.create("other", metadata={"client": "fake", "sid": ""})
         first = self.enter(limit=2, name=None)

@@ -79,11 +79,11 @@ def _retained(record: dict, known: dict) -> bool:
 
 
 def _holders(directory: str, known: dict, holders: dict) -> list[str]:
-    """Each counted reservation file claims one host row of its run, else counts alone."""
-    rows: dict[tuple, list[tuple]] = {}
-    for namespace, name, sid in holders:
-        identity = (namespace, "sid", sid) if sid else (namespace, "name", name)
-        rows.setdefault(identity, []).append((namespace, name, sid))
+    """Each counted reservation claims one host row of its run, else counts alone.
+
+    Its own row (its name, with its sid or none) goes first: none takes another run's row by sid.
+    """
+    reservations = []
     for entry in os.scandir(directory):
         if not entry.name.endswith(".run"):
             continue
@@ -99,23 +99,28 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
             except BlockingIOError:
                 held = True
             if held or record["kind"] == Mode.TUI and _retained(record, known):
-                claimable: list[tuple] = []
+                namespace = None
                 if (host := record.get("host")) is not None:
                     namespace = known[host][0] if host in known else ("configuration", host)
-                    claimable = (
-                        rows.get((namespace, "sid", record["sid"]))
-                        or rows.get((namespace, "name", record["name"]))
-                        or []
-                    )
-                if claimable:
-                    claimable.pop()
-                else:
-                    holders[(entry.name,)] = record["name"]
+                reservations.append((entry.name, namespace, record["name"], record["sid"]))
                 continue
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(entry.path)
         finally:
             os.close(fd)
+    rows = set(holders)
+    unmatched = []
+    for entry, namespace, name, sid in reservations:
+        own = [(namespace, name, sid), (namespace, name, None), (namespace, name, "")]
+        if row := next((key for key in own if key in rows), None):
+            rows.remove(row)
+        else:
+            unmatched.append((entry, namespace, name, sid))
+    for entry, namespace, name, sid in unmatched:
+        if row := next((key for key in rows if key[0] == namespace and key[2] == sid), None):
+            rows.remove(row)
+        else:
+            holders[(entry,)] = name
     return sorted(holders.values())
 
 
