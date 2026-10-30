@@ -94,7 +94,7 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
             except BlockingIOError:
                 held = True
             if record["kind"] == Mode.TUI:
-                if _retained(record, known):
+                if held or _retained(record, known):
                     host = record["host"]
                     namespace = known[host][0] if host in known else ("configuration", host)
                     holders.pop((namespace, record["name"], None), None)
@@ -152,53 +152,64 @@ class Admission(AbstractContextManager):
             self.record["host"] = host or next(iter(hosts))
         self._fd: int | None = None
         self._committed = False
-        self._yielded = False
         self._mutex = threading.Lock()
         self.finished = threading.Event()
 
     def __enter__(self) -> Admission:
         self._context = self._admit()
-        return self._context.__enter__()
+        try:
+            return self._context.__enter__()
+        except BaseException:
+            self._tidy()
+            raise
 
     def __exit__(self, *args):
-        return self._context.__exit__(*args)
+        try:
+            return self._context.__exit__(*args)
+        finally:
+            self._tidy()
+
+    def _tidy(self) -> None:
+        """The gate's exit removes a client directory this start left empty."""
+        with contextlib.suppress(OSError), _locked(self.directory, self.client):
+            pass
 
     @contextlib.contextmanager
     def _admit(self) -> Iterator[Admission]:
         try:
             with _locked(self.directory, self.client):
-                try:
-                    if self.limit:
-                        known, holders = _inventory(self.hosts, self.client)
-                        active = _holders(self.directory, known, holders)
-                        if len(active) >= self.limit:
-                            raise SessionError(
-                                f"client {self.client} reached max_runs limit {self.limit}; "
-                                f"held by: {', '.join(active)}"
-                            )
-                    self._fd = os.open(
-                        self.path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
-                    )
-                    fcntl.flock(self._fd, fcntl.LOCK_EX)
-                    with os.fdopen(os.dup(self._fd), "w", encoding="utf-8") as stream:
-                        json.dump(self.record, stream)
-                        stream.flush()
-                        os.fsync(stream.fileno())
-                    sync_directory(self.directory)
-                    self._yielded = True
-                    yield self
-                except ConfigError:
-                    if not self._committed:
-                        self.close()
-                    raise
-                finally:
-                    if not self._committed and not self.finished.is_set():
-                        self._rollback()
+                if self.limit:
+                    known, holders = _inventory(self.hosts, self.client)
+                    active = _holders(self.directory, known, holders)
+                    if len(active) >= self.limit:
+                        raise SessionError(
+                            f"client {self.client} reached max_runs limit {self.limit}; "
+                            f"held by: {', '.join(active)}"
+                        )
+                self._fd = os.open(
+                    self.path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+                )
+                fcntl.flock(self._fd, fcntl.LOCK_EX)
+                with os.fdopen(os.dup(self._fd), "w", encoding="utf-8") as stream:
+                    json.dump(self.record, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                sync_directory(self.directory)
         except (OSError, ValueError) as error:
-            if self._yielded:
-                raise
             self.close()
             raise SessionError(f"client {self.client}: capacity: {error}") from error
+        except BaseException:
+            self.close()
+            raise
+        try:
+            yield self
+        except ConfigError:
+            if not self._committed:
+                self.close()
+            raise
+        finally:
+            if not self._committed and not self.finished.is_set():
+                self._rollback()
 
     @classmethod
     def reconcile(
@@ -222,7 +233,7 @@ class Admission(AbstractContextManager):
             threading.Thread(target=self._watch, args=(state,), daemon=True).start()
 
     def _rollback(self) -> None:
-        if self._yielded and self.record["kind"] == Mode.TUI:
+        if self.record["kind"] == Mode.TUI:
             try:
                 host = self.record["host"]
                 known, _ = _inventory({host: self.hosts[host]}, self.client)
@@ -235,9 +246,17 @@ class Admission(AbstractContextManager):
         self.close()
 
     def _detach(self) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
-            self._fd = None
+        """Under the gate: a count between its inventory and its scan would reap the record."""
+        try:
+            with _locked(self.directory, self.client):
+                self._unhold()
+        except OSError:
+            self._unhold()
+
+    def _unhold(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            os.close(fd)
 
     def _watch(self, state: Callable[[], Liveness]) -> None:
         while not self.finished.wait(POLL):
@@ -254,7 +273,9 @@ class Admission(AbstractContextManager):
         with self._mutex:
             if self.finished.is_set():
                 return
+            # No gate: unlinked before unheld, the record is never half released, and a
+            # watcher ending after its home is gone recreates none of it.
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(self.path)
-            self._detach()
+            self._unhold()
             self.finished.set()
