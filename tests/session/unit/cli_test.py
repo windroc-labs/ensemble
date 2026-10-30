@@ -11,14 +11,13 @@ from unittest import mock
 
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.tmux_cli import TmuxCli, attach_command
+from ensemble.session.engine.tmux_cli import attach_command
 from ensemble.session.engine.types import ConfigError, Hosts, Liveness, SessionError
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes.tui import TuiStore
 from ensemble.session.viewer import display as displays
-from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import ACCOUNT_ENV, Record
 from tests.session import harnesses
 from tests.session.case import Case
@@ -182,12 +181,11 @@ class ElsewhereHost(ScreenHost):
 class ControlBase(HostedTuiBase):
     def setUp(self):
         super().setUp()
-        transport = mock.Mock(
-            side_effect=lambda _argv, **_kw: argparse.Namespace(
-                returncode=1, stdout="", stderr="no server running"
-            )
-        )
-        self.cli_viewer = Viewer(tmux=TmuxCli(transport))
+        self.tmux_process = mock.MagicMock()
+        process = self.tmux_process.__enter__.return_value
+        process.communicate.return_value = ("", "no server running")
+        process.poll.return_value = 1
+        process.args = ["tmux"]
         CliHost.current = self.host
         self.addCleanup(setattr, HostedSession, "_setup", None)
         Path(self.ensemble).mkdir(exist_ok=True)
@@ -215,7 +213,7 @@ class ControlBase(HostedTuiBase):
         source = stdin if stdin is not None else "" if record is None else record.to_line() + "\n"
         with (
             mock.patch.object(sys, "stdin", io.StringIO(source)),
-            mock.patch.object(HostedSession, "viewer", return_value=self.cli_viewer),
+            mock.patch("subprocess.Popen", return_value=self.tmux_process),
             contextlib.redirect_stdout(out),
             contextlib.redirect_stderr(err),
         ):

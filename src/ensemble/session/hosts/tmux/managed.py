@@ -30,10 +30,10 @@ from ensemble.session.hosts.base import (
     GUARD_LEASE_FD,
     GUARD_WAIT,
     STATE_MAX,
-    WorkerState,
     created_events,
 )
 from ensemble.session.hosts.managed import ManagedProcess
+from ensemble.session.hosts.types import WorkerState
 
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
 ONE_SHOT = re.compile(r"o[0-9a-f]{15}")

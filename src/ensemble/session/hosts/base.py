@@ -11,7 +11,7 @@ import stat
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import ClassVar
 
 from ensemble.session.engine.types import (
@@ -37,7 +37,7 @@ from ensemble.session.engine.types import (
     TuiSettings,
     WorkerMessage,
 )
-from ensemble.session.hosts.types import CommandView
+from ensemble.session.hosts.types import CommandView, WorkerState
 from ensemble.utils import (
     CLASS_PATH,
     CONFIG_NAME,
@@ -113,16 +113,6 @@ def created_events(path: str | None) -> str | None:
         return None if path is None else events_file(path)
     except ValueError as error:
         raise SessionError(str(error)) from None
-
-
-@dataclass(frozen=True)
-class WorkerState:
-    sid: str | None
-    generation: str | None
-    client: str | None
-    display: str | None
-    owner: str | None
-    host: str | None = None
 
 
 def worker_dir(name: str) -> str:
