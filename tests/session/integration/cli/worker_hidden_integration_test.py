@@ -185,6 +185,21 @@ class HookTest(HiddenCase):
         self.assertNotIn(gone, self.entries())
         self.assertLessEqual(self.entries(), set(self.server.panes(WINDOW)))
 
+    def test_an_ended_run_reads_gone_once_its_pane_exits(self):
+        """AC6: right after its pane exits, with no wait for its run to end, w1 reads gone, its
+        close hook exits 1 and another pane's kill-pane marks it nothing.
+        """
+        record = self.record(self.start("w1"))
+        self.record(self.start("w2"))
+        self.wait_event("w1", "done")
+        pane, generation = self.shows(), worker_state("w1").generation
+        self.crash()
+        live_tmux.wait(lambda: pane not in self.server.panes(WINDOW), what="w1's pane to exit")
+        self.assertFalse(self.status("w1")[0].alive)
+        self.assertEqual(self.hide(record.sid, generation).returncode, 1)
+        self.control("w2")
+        self.assertFalse(self.hidden())
+
     def test_an_ended_runs_close_hook_leaves_a_resumed_run_unhidden(self):
         """AC6: exit, resume shown nowhere, kill-pane of another pane: w1 not hidden; another
         run's hide exits 1.
