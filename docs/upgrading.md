@@ -29,28 +29,6 @@ terminal it then asks which manager to open, and attaches to its session or resu
 hold. A manager named `list` can no longer be opened with `ensemble list`: attach to its session with
 `tmux attach -t =list`, or start it under another name.
 
-## Codex manager sessions
-
-After updating the plugin, rerun `scripts/install.sh` or the updated plugin's
-`skills/manage/scripts/ensemble --install`. This installs `~/.ensemble/bin/codex` alongside the Ensemble commands.
-Use that `codex` entry on PATH inside a manager's hold. The shared-daemon route binds each native session to its TUI before the first turn,
-including when two managers share a daemon or a resume reuses a daemon left by an exited TUI.
-It does not edit Codex configuration. Outside a manager and in workers it runs the existing Codex executable directly.
-
-Restart existing manager TUIs through this entry after upgrading; the shared daemon can stay running.
-If an older record names another manager's conversation, select the correct conversation once with `codex resume`.
-Absolute paths to a different Codex executable bypass the entry. Explicit `--remote` is refused inside a manager;
-`--no-daemon` uses the registered native local path.
-
-Permission, additional-workspace and configuration flags run through Codex's native local client
-with `--no-daemon`, so remote mode cannot discard an explicit resume restriction or reject local workspace options.
-The shared route supports model, cwd, image, resume-picker and display options; other flags use the native local route.
-Explicit executor or workload-identity environments also use the native local route. No setting change is needed.
-Both routes register the launching process under the live holder before exec, so `ensemble list` shows `client-running` before the first turn.
-A known resume UUID is claimed then; a local picker, named resume or fresh session claims its native sid at SessionStart before re-arm.
-The launching process can hand its binding to its native TUI child; another live TUI cannot replace it.
-The last complete session record stays available while a new session has no native sid yet.
-
 ## ctmux is now ensemble
 
 The command that opens a manager's tmux session is now `ensemble <name>`. After updating the plugin, rerun

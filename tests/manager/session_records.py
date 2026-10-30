@@ -96,6 +96,8 @@ CALLS: dict[str, HookCall] = {
     "codex": _call(
         VALID["codex"],
         _MANUAL,
+        "--hook-daemon",
+        "app-server",
         transcript_path="/home/user/.codex/sessions/rollout-01a18587.jsonl",
         hook_event_name="SessionStart",
         model="gpt-5",

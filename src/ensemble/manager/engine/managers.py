@@ -6,7 +6,6 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Callable
 from dataclasses import asdict
 
 from ensemble.manager.engine.roster import Roster
@@ -70,9 +69,7 @@ def alive(pid: int) -> bool:
     return True
 
 
-def read(
-    directory: str, *, running: Callable[[str, str | None], bool | None] | None = None
-) -> Manager | Unreadable:
+def read(directory: str) -> Manager | Unreadable:
     name = os.path.basename(directory)
     try:
         holder, entries = Roster(directory).snapshot()
@@ -82,25 +79,16 @@ def read(
         record = read_record(os.path.join(directory, RECORD))
     except ValueError as error:
         record = Unread(str(error))
-    launched = (
-        running(directory, record.client if isinstance(record, SessionRecord) else None)
-        if running is not None and holder is not None
-        else None
-    )
     if holder is None:
         state = HolderState.NOT_HELD
-    elif launched is True or (
-        launched is None and isinstance(record, SessionRecord) and alive(record.pid)
-    ):
+    elif isinstance(record, SessionRecord) and alive(record.pid):
         state = HolderState.CLIENT_RUNNING
     else:
         state = HolderState.HOLD_ONLY
     return Manager(name, state, holder, record, entries)
 
 
-def managers(
-    root: str, *, running: Callable[[str, str | None], bool | None] | None = None
-) -> list[Manager | Unreadable]:
+def managers(root: str) -> list[Manager | Unreadable]:
     """Every manager directory under root, by name; [] when root is absent."""
     try:
         with os.scandir(root) as items:
@@ -111,7 +99,7 @@ def managers(
             )
     except FileNotFoundError:
         return []
-    return [read(os.path.join(root, name), running=running) for name in names]
+    return [read(os.path.join(root, name)) for name in names]
 
 
 def plan(manager: Manager | Unreadable, *, live: bool) -> Plan | Refused:

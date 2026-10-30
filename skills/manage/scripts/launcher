@@ -1,15 +1,11 @@
 #!/bin/sh
 # install.sh and ensemble --install copy this under each command's name into ~/.ensemble/bin: it runs that
 # command from the plugin selected by that install. Older installs without a selection use client discovery.
-if [ "${0##*/}" = launcher ] && [ "${1:-}" = --commands ]; then
-  printf '%s\n' ensemble ensemble-crew ensemble-session ensemble-delegate ensemble-orchestrator codex
-  exit 0
-fi
 target=$(python3 -I - "${0##*/}" "$@" <<'EOF'
 import glob, json, os, sys, tempfile
 
 name = sys.argv[1]
-rel = os.path.join("skills", "manage", "scripts", name) if name in ("ensemble", "codex") else os.path.join("bin", name)
+rel = os.path.join("skills", "manage", "scripts", name) if name == "ensemble" else os.path.join("bin", name)
 home = os.path.expanduser("~")
 record = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude"), "plugins", "installed_plugins.json")
 cache = os.path.join(os.environ.get("CODEX_HOME") or os.path.join(home, ".codex"), "plugins", "cache", "windroc", "ensemble")
@@ -123,5 +119,4 @@ sys.exit(f"{name}: no installed ensemble plugin has {rel}; looked in {record}, {
 EOF
 ) || exit
 [ "${0##*/}" != launcher ] || [ "${1:-}" != --select ] || exit 0
-[ "${0##*/}" != codex ] || exec "$target" --ensemble-launcher "$0" "$@"
 exec "$target" "$@"
