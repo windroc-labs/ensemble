@@ -44,6 +44,7 @@ WAIT = 20  # s, bound on any wait
 IDLE = 0.3  # s, idle_timeout
 SILENCE = 0.9  # 3 × IDLE
 GAP = 0.2  # s between stderr lines, under a 3 × GAP idle_timeout
+MARK = {"run": [sys.executable, "-I", "-c", ""]}  # logs {"ran": ...} after the steps before it
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}[+-]\d\d:\d\d\Z")
 
 
@@ -78,8 +79,9 @@ grandchild = subprocess.Popen(
 print(json.dumps({"type": "message", "text": str(grandchild.pid)}), flush=True)
 time.sleep(60)
 """
-CLOSED_PIPES = """import json, os, time
+CLOSED_PIPES = """import json, os, sys, time
 print(json.dumps({"type": "activity", "name": "Read"}), flush=True)
+open(sys.argv[1], "w").close()
 os.close(1)
 os.close(2)
 time.sleep(60)
@@ -99,11 +101,15 @@ class ScriptRun(fake_client.FakeHeadless):
     def launch(self, spec: Spec):
         if self.owner.config["script"] == "grandchild":
             return Launch((sys.executable, "-I", "-c", GRANDCHILD))
-        return Launch((sys.executable, "-I", "-c", CLOSED_PIPES))
+        return Launch((sys.executable, "-I", "-c", CLOSED_PIPES, printed(spec.workdir)))
 
 
 SCRIPT = types.ModuleType("ensemble.session.clients.script")
 SCRIPT.ScriptClient = ScriptClient
+
+
+def printed(workdir: str) -> str:
+    return os.path.join(workdir, "printed")
 
 
 def out(kind, **fields) -> dict:
@@ -162,6 +168,16 @@ class Base(Case):
 
     def logged(self) -> list[dict]:
         return read_jsonl(self.log)
+
+    def until(self, check):
+        """Up to WAIT s: drained once its first line is out, start-up stays out of the idle window."""
+        began = time.monotonic()
+        while not check():
+            self.assertLess(time.monotonic() - began, WAIT)
+            time.sleep(0.01)
+
+    def marked(self) -> bool:
+        return any("ran" in entry for entry in read_jsonl(self.log, missing_ok=True))
 
     def forget(self):
         """Drops the client log."""
@@ -240,8 +256,9 @@ class AcceptanceTest(Base):
 class IdleTest(Base):
     def test_silence_yields_idle_timeouts_while_the_process_lives_then_exited(self):
         release = os.path.join(self.dir, "release")
-        self.steps(out("activity", name="Read"), {"until": release})
+        self.steps(out("activity", name="Read"), MARK, {"until": release})
         handle = self.start(idle_timeout=IDLE)
+        self.until(self.marked)
         marks, alive = [], []
 
         def on(event):
@@ -264,21 +281,31 @@ class IdleTest(Base):
             self.assertGreaterEqual(after - before, IDLE - 0.01)
 
     def test_a_headless_permission_request_fails_without_waiting_for_an_answer(self):
+        # SIGHUP ignored: its close lasts until the guard's SIGTERM, longer than IDLE
         self.steps(
+            {"ignore": "SIGHUP"},
+            MARK,
+            {"until": self.gate},
             out("blocked", reason="approve"),
             {"sleep": 60},
         )
         began = time.monotonic()
-        found = drain(self, self.start(idle_timeout=IDLE))
+        handle = self.start(idle_timeout=IDLE)
+        self.until(self.marked)
+        Path(self.gate).touch()
+        marks = []
+        found = drain(self, handle, lambda _event: marks.append(time.monotonic()))
         self.assertLess(time.monotonic() - began, WAIT)
         self.assertEqual(found[0], TurnFailed("permission_required", "approve"))
         self.assertIsInstance(found[-1], Exited)
         self.assertLess(found[-1].returncode, 0)
+        self.assertGreater(marks[-1] - marks[0], IDLE)
         self.assertFalse(any(isinstance(event, IdleTimeout | TurnEnd) for event in found))
 
     def test_no_idle_timeout_without_one_or_while_stderr_restarts_it(self):
         restarting = (
             {"err": "1"},
+            MARK,
             {"sleep": GAP},
             {"err": "2"},
             {"sleep": GAP},
@@ -308,8 +335,12 @@ class IdleTest(Base):
             ),
         ):
             with self.subTest(case=case):
+                self.forget()
                 self.steps(*steps)
-                self.assertEqual(drain(self, self.start(idle_timeout=idle)), want)
+                handle = self.start(idle_timeout=idle)
+                if MARK in steps:
+                    self.until(self.marked)
+                self.assertEqual(drain(self, handle), want)
 
 
 class ExitTest(Base):
@@ -376,6 +407,7 @@ class ProcessGroupTest(Base):
         self,
     ):
         handle = self.script("closed pipes", idle_timeout=IDLE)
+        self.until(lambda: os.path.exists(printed(self.workdir)))
         found = drain(
             self, handle, lambda event: handle.stop() if isinstance(event, IdleTimeout) else None
         )

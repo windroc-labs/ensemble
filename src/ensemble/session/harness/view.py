@@ -24,6 +24,8 @@ from ensemble.session.engine.types import (
     StatusState,
     Stderr,
     TurnEnd,
+    TurnFailed,
+    TurnStarted,
     Unanswered,
 )
 from ensemble.session.harness.channel import Channel, Tie
@@ -62,13 +64,13 @@ def dialog(current: str | None, event: SessionEvent | Stderr | ClientBound) -> s
 
 
 class _Reader:
-    """The log's records of `generation` with increasing seq, folded."""
+    """The log's records of `generation` with increasing seq, folded; settled: its last turn ended."""
 
     def __init__(self, channel: Channel, generation: str) -> None:
         self.channel, self.generation = channel, generation
         self.cursor, self.seq = 0, 0
         self.reply: str | None = None
-        self.blocked = self.exited = False
+        self.blocked = self.exited = self.settled = False
 
     def read(self, *, replayed: bool = False) -> list[Logged]:
         found, self.cursor = self.channel.read(self.cursor)
@@ -81,13 +83,15 @@ class _Reader:
                 self.reply, logged.event, blocked=self.blocked, replayed=replayed
             )
             self.exited = self.exited or isinstance(logged.event, Exited)
+            if isinstance(logged.event, TurnStarted | TurnEnd | TurnFailed):
+                self.settled = not isinstance(logged.event, TurnStarted)
             taken.append(logged)
         return taken
 
     def copy(self) -> _Reader:
         other = _Reader(self.channel, self.generation)
         other.cursor, other.seq, other.reply = self.cursor, self.seq, self.reply
-        other.blocked, other.exited = self.blocked, self.exited
+        other.blocked, other.exited, other.settled = self.blocked, self.exited, self.settled
         return other
 
 
@@ -157,7 +161,9 @@ class OwnedSession(Session):
             if taken:
                 continue
             wait = POLL
-            if self._idle is not None and not reader.blocked:
+            # a headless run's turn is its last: only its exit is left to come
+            settled = self.mode == Mode.HEADLESS and reader.settled
+            if self._idle is not None and not reader.blocked and not settled:
                 wait = min(POLL, last + self._idle - self._clock())
                 if wait <= 0:
                     last = self._clock()

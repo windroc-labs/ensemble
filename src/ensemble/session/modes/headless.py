@@ -330,10 +330,11 @@ class HeadlessMode(BaseMode):
         if isinstance(item, TurnEnd):
             self._candidate = item
             return [], False
-        if isinstance(item, Blocked):
+        if isinstance(item, Blocked):  # failed before its worker's close, which can take a while
             self._failure = self._failure or TurnFailed("permission_required", item.reason)
-            self.stop()
-            return [], False
+            self.stopped.set()
+            self._finished = True
+            return [self._failure], True
         if isinstance(item, LimitHit):
             self._failure = self._failure or TurnFailed("usage_limit")
         if isinstance(item, Stderr) and item.text:
@@ -359,7 +360,11 @@ class HeadlessMode(BaseMode):
         return [terminal], True
 
     def returncode(self, timeout: float) -> int | None:
-        """Once the worker's exit came and its Host confirmed it; then its handle closes."""
+        """Once the worker's exit came and its Host confirmed it; then its handle closes. A stopped
+        worker's closes first.
+        """
+        if self.stopped.is_set():
+            self._close()
         deadline = time.monotonic() + timeout
         while self._code is None and self.exited.wait(max(0.0, deadline - time.monotonic())):
             self._code = self.worker.returncode()

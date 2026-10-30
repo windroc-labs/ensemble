@@ -396,10 +396,18 @@ class TerminalEvents(Base):
         mode = self.mode_for([failure, failure, TurnEnd("false success")], (1,))
         self.assertEqual(self.drain(mode), [failure])
 
-    def test_uninteractive_permission_stops_worker_and_never_succeeds(self):
+    def test_uninteractive_permission_fails_at_once_then_its_exit_closes_the_worker(self):
         mode = self.mode_for([Blocked("approve tool"), TurnEnd("false success")])
-        self.assertEqual(self.drain(mode), [TurnFailed("permission_required", "approve tool")])
+        self.assertEqual(mode.poll(0), ([TurnFailed("permission_required", "approve tool")], True))
+        self.assertEqual(mode.worker.closes, 0)
+        self.assertEqual(mode.returncode(0), 0)
         self.assertEqual(mode.worker.closes, 1)
+        self.assertEqual(mode.poll(0), ([], True))
+
+    def test_an_earlier_native_failure_is_the_one_a_permission_request_yields(self):
+        failure = TurnFailed("server_overloaded", "try again")
+        mode = self.mode_for([failure, Blocked("approve tool")])
+        self.assertEqual(self.drain(mode), [failure])
 
     def test_usage_limit_is_observable_and_cannot_be_a_success(self):
         mode = self.mode_for([LimitHit(5), TurnEnd("false success")])

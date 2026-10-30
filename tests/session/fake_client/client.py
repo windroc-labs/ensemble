@@ -2,13 +2,14 @@
 
 Logs argv, pid, cwd and env as a JSON line, then runs its steps (on --resume, {"resume": [...]}'s):
 out, raw, err, sleep, until (a path exists), exit, hook (HOOK + [label], payload on stdin), read (a
-stdin line), run (argv, logging {ran, found, rc}); then exits 0.
+stdin line), run (argv, logging {ran, found, rc}), ignore (a signal's name); then exits 0.
 """
 
 import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -73,6 +74,8 @@ def execute(steps, hook, log):
                     json.dumps({"ran": argv, "found": shutil.which(argv[0]), "rc": done.returncode})
                     + "\n"
                 )
+        elif "ignore" in step:
+            signal.signal(getattr(signal, step["ignore"]), signal.SIG_IGN)
     return 0
 
 
