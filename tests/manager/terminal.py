@@ -28,7 +28,7 @@ def main():
     fd, holder, *argv = sys.argv[1:]
     fcntl.ioctl(int(fd), termios.TIOCSCTTY, 0)
     os.close(int(fd))
-    if holder in {"parent", "client"}:
+    if holder == "parent":
         os.environ["ENSEMBLE_HOLDER_PID"] = str(os.getpid())
     if holder in {"parent", "shell"}:
         return subprocess.call(argv)

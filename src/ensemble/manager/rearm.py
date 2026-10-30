@@ -1,6 +1,7 @@
 """SessionStart hook for startup, resume, compact and clear. Emits re-arm context and records
---client KIND --client-pid PID with stdin session_id and cwd when PID shares the hold's terminal.
-Otherwise emits a restart hint; a detached Codex gets it even without a manager identity.
+--client KIND --client-pid PID with stdin session_id and cwd. `--require-terminal HINT`: only
+when PID shares the hold's controlling terminal; otherwise emits HINT instead, and a PID with no
+terminal gets it even without a manager identity.
 A manager needs valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and an
 ancestor ENSEMBLE_HOLDER_PID: variables alone leak to later tmux windows.
 Bad record fields or writes skip only recording. Other events stay silent. Always exits 0.
@@ -21,7 +22,7 @@ SOURCES = frozenset({"startup", "resume", "compact", "clear"})
 MANAGER_NAME = re.compile(r"[A-Za-z0-9_-]+")  # ensemble-crew's own rule (cli.py _roster)
 PID = re.compile(r"[1-9][0-9]*")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
-OPTIONS = frozenset({"--mode", "--client", "--client-pid"})
+OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--require-terminal"})
 MANAGERS = "~/.ensemble/managers"
 PS = (
     "ps",
@@ -34,11 +35,6 @@ PS = (
     "-o",
     "tty=",
 )  # one -o each: text after = is a header
-
-DAEMON_WARNING = (
-    "this Codex runs on the shared daemon, so ensemble can't tell which manager it belongs to; "
-    "/quit and restart with `codex --no-daemon`"
-)
 
 PROMPT = """\
 ensemble: SessionStart `{source}` in manager `{name}`'s session (under \
@@ -145,6 +141,8 @@ def options(argv: tuple[str, ...]) -> dict[str, str] | None:
     if len(argv) % 2 or len(set(keys)) != len(keys) or not OPTIONS.issuperset(keys):
         return None
     found = dict(zip(keys, argv[1::2], strict=True))
+    if "--require-terminal" in found and not PID.fullmatch(found.get("--client-pid", "")):
+        return None
     return found if found.get("--mode", "manual") == "manual" else None
 
 
@@ -183,11 +181,16 @@ def main(argv: tuple[str, ...] = ()) -> int:
     try:
         processes = Processes()
         name = manager(os.environ, processes)
-        raw_pid = found.get("--client-pid", "")
-        pid = int(raw_pid) if PID.fullmatch(raw_pid) else None
-        terminal = processes.terminal(pid) if pid is not None else None
-        daemon = found.get("--client") == "codex" and pid is not None and terminal is None
-        if name is None and not daemon:
+        hint = found.get("--require-terminal")
+        if hint is not None:
+            terminal = processes.terminal(int(found["--client-pid"]))
+            if name is None and terminal is not None:
+                return 0
+            if terminal is None or terminal != processes.terminal(
+                int(os.environ["ENSEMBLE_HOLDER_PID"])
+            ):
+                name = None
+        elif name is None:
             return 0
         chunks = []
         while chunk := os.read(0, 65536):
@@ -196,18 +199,10 @@ def main(argv: tuple[str, ...] = ()) -> int:
         source = event.get("source") if isinstance(event, dict) else None
         if not isinstance(source, str) or source not in SOURCES:
             return 0
-        text = DAEMON_WARNING if name is None else prompt(name, source, manual="--mode" in found)
         if name is not None and (entry := record(found, event)) is not None:
-            if terminal is not None and terminal == processes.terminal(
-                int(os.environ["ENSEMBLE_HOLDER_PID"])
-            ):
-                save(name, entry)
-            else:
-                text = DAEMON_WARNING
-        context = {
-            "hookEventName": "SessionStart",
-            "additionalContext": text,
-        }
+            save(name, entry)
+        text = hint if name is None else prompt(name, source, manual="--mode" in found)
+        context = {"hookEventName": "SessionStart", "additionalContext": text}
         data = (json.dumps({"hookSpecificOutput": context}) + "\n").encode()
         while data:
             data = data[os.write(1, data) :]

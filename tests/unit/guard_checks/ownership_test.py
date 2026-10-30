@@ -255,14 +255,6 @@ class ClientNames(Sample):
             [f"{outside}:1: client name opencode"],
         )
 
-    def test_rearm_may_diagnose_codex_but_other_client_boundaries_stay_generic(self):
-        hook, other = "src/ensemble/manager/rearm.py", "src/ensemble/manager/engine/x.py"
-        root = self.tree({hook: 'CLIENT = "Codex opencode"\n', other: 'CLIENT = "codex"\n'})
-        self.assertEqual(
-            ownership.client_names(root),
-            [f"{other}:1: client name codex", f"{hook}:1: client name opencode"],
-        )
-
     def test_help_exemptions_preserve_same_line_code_and_interpolated_expressions(self):
         path = "src/ensemble/manager/cli.py"
         for text in (

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -I \"${PLUGIN_ROOT}/src/ensemble/manager/rearm.py\" --mode manual --client codex --client-pid \"$PPID\"",
+            "command": "python3 -I \"${PLUGIN_ROOT}/src/ensemble/manager/rearm.py\" --mode manual --client codex --client-pid \"$PPID\" --require-terminal 'this Codex runs on the shared daemon, so ensemble cannot tell which manager it belongs to; /quit and restart with `codex --no-daemon`'",
             "timeout": 5
           }
         ]

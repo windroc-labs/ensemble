@@ -71,6 +71,13 @@ class RearmHookTest(Case):
             with self.subTest(extra=extra):
                 done = self.run_hook(extra, _start("startup"), manual=True)
                 self.assertEqual((done.returncode, done.stdout, done.stderr), (0, b"", b""))
+        # The hold is this process, off the hook's terminal: the hook's own restart hint only.
+        done = self.run_hook(
+            {**MANAGER, "ENSEMBLE_HOLDER_PID": str(os.getpid())}, _start("startup"), manual=True
+        )
+        self.assertEqual((done.returncode, done.stderr), (0, b""))
+        context = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(context, session_records.CODEX_HINT)
 
     def test_hooks_json_command(self):
         silent = {

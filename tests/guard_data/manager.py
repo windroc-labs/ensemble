@@ -7,13 +7,6 @@ ENTRY_MODULES = {
 
 STANDALONE = frozenset({"src/ensemble/manager/rearm.py"})
 
-CLIENT_NAMES_ALLOWED = {
-    (
-        "src/ensemble/manager/rearm.py",
-        "codex",
-    ): "Standalone hook diagnoses the shared daemon before manager identity is available.",
-}
-
 
 NO_COVER_ALLOWED = {
     (

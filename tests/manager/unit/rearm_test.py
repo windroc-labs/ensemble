@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -89,6 +90,9 @@ class MainTest(Case):
             ("--client", "claude", "--client", "codex"),
             ("--mode", "manual", "--mode", "manual"),
             ("--other", "x"),
+            ("--require-terminal", "hint"),
+            ("--client", "codex", "--client-pid", "x", "--require-terminal", "hint"),
+            (*_hinted(60), "--require-terminal", "hint"),
         ):
             with self.subTest(argv):
                 self.assertEqual(_run(MANAGER, _start("startup"), argv=argv), (0, "", ""))
@@ -228,7 +232,7 @@ class MainTest(Case):
         self.assertIn("compact", json.loads(out)["hookSpecificOutput"]["additionalContext"])
 
 
-def _with_pid(argv: tuple[str, ...], pid: int) -> tuple[str, ...]:
+def _with_pid(argv: tuple[str, ...], pid: int | str) -> tuple[str, ...]:
     at = argv.index("--client-pid") + 1
     return (*argv[:at], str(pid), *argv[at + 1 :])
 
@@ -236,9 +240,8 @@ def _with_pid(argv: tuple[str, ...], pid: int) -> tuple[str, ...]:
 def _bare(argv: tuple[str, ...]) -> tuple[str, ...]:
     """argv without the record options."""
     pairs = zip(argv[::2], argv[1::2], strict=True)
-    return tuple(
-        word for pair in pairs if pair[0] not in {"--client", "--client-pid"} for word in pair
-    )
+    record = {"--client", "--client-pid", "--require-terminal"}
+    return tuple(word for pair in pairs if pair[0] not in record for word in pair)
 
 
 class RecordTest(Case):
@@ -332,18 +335,19 @@ TREE = {
     70: (4242, 0),
     71: (4242, 124),
 }
-DAEMON_WARNING = (
-    "this Codex runs on the shared daemon, so ensemble can't tell which manager it belongs to; "
-    "/quit and restart with `codex --no-daemon`"
-)
+HINT = "restart this client on its manager's terminal"
+
+
+def _hinted(pid: int, hint: str = HINT, client: str = "other") -> tuple[str, ...]:
+    return ("--client", client, "--client-pid", str(pid), "--require-terminal", hint)
 
 
 class TerminalTest(Case):
     def run_with(
-        self, client, pid, *, proc=False, tree=None, no_tty="??", previous=None, environ=None
+        self, argv, *, proc=False, tree=None, no_tty="??", previous=None, environ=None, stdin=None
     ):
         tree = TREE if tree is None else tree
-        call = session_records.CALLS[client]
+        stdin = session_records.CALLS["codex"].stdin if stdin is None else stdin
         directory = Path(self.ensemble, "managers", "mgr")
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / "session.json"
@@ -366,74 +370,104 @@ class TerminalTest(Case):
         ).encode()
         result = _run(
             {**(MANAGER if environ is None else environ), "HOME": self.home},
-            json.dumps(call.stdin).encode(),
-            argv=_with_pid(call.argv, pid),
+            json.dumps(stdin).encode(),
+            argv=argv,
             ps=mock.Mock(side_effect=AssertionError) if proc else _ps(rows),
             opened=opened if proc else None,
         )
         saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
         return result, saved
 
+    def context(self, out: str) -> str:
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
     def test_same_terminal_records_the_supplied_pid_for_each_client(self):
         for proc in (False, True):
-            for client in session_records.CALLS:
+            for client, call in session_records.CALLS.items():
                 with self.subTest(proc=proc, client=client):
-                    (code, out, err), saved = self.run_with(client, 60, proc=proc)
+                    (code, out, err), saved = self.run_with(
+                        _with_pid(call.argv, 60), proc=proc, stdin=call.stdin
+                    )
                     self.assertEqual((code, err), (0, ""))
                     self.assertIn("Re-arm it now", out)
                     self.assertEqual(saved, {**session_records.VALID[client], "pid": 60})
 
-    def test_no_terminal_or_other_terminal_warns_without_rearming_or_recording(self):
+    def test_codex_hook_on_no_or_another_terminal_prints_its_hint_only(self):
+        argv = session_records.CALLS["codex"].argv
         for proc in (False, True):
             for pid in (70, 71, 4999):
                 with self.subTest(proc=proc, pid=pid):
-                    (code, out, err), saved = self.run_with("codex", pid, proc=proc)
+                    (code, out, err), saved = self.run_with(_with_pid(argv, pid), proc=proc)
                     self.assertEqual((code, err, saved), (0, "", None))
-                    self.assertEqual(
-                        json.loads(out)["hookSpecificOutput"]["additionalContext"], DAEMON_WARNING
-                    )
+                    self.assertEqual(self.context(out), session_records.CODEX_HINT)
                     self.assertNotIn("Re-arm", out)
+
+    def test_any_client_takes_its_check_and_hint_from_the_arguments(self):
+        hint = 'custom `hint`; with "quotes" and ünïcode'
+        for proc in (False, True):
+            with self.subTest(proc=proc):
+                (code, out, err), saved = self.run_with(_hinted(71, hint), proc=proc)
+                self.assertEqual((code, err, saved), (0, "", None))
+                self.assertEqual(self.context(out), hint)
+                (code, out, err), saved = self.run_with(_hinted(60, hint), proc=proc)
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn("Re-arm it now", out)
+                self.assertEqual(saved["client"], "other")
+
+    def test_without_the_check_any_terminal_records(self):
+        for proc in (False, True):
+            for client in ("claude", "opencode"):
+                for pid in (70, 71):
+                    with self.subTest(proc=proc, client=client, pid=pid):
+                        call = session_records.CALLS[client]
+                        (code, out, err), saved = self.run_with(
+                            _with_pid(call.argv, pid), proc=proc, stdin=call.stdin
+                        )
+                        self.assertEqual((code, err), (0, ""))
+                        self.assertIn("Re-arm it now", out)
+                        self.assertEqual(saved, {**session_records.VALID[client], "pid": pid})
 
     def test_rejected_client_preserves_the_existing_record(self):
         previous = session_records.VALID["codex"]
         for proc in (False, True):
             with self.subTest(proc=proc):
-                _, saved = self.run_with("codex", 70, proc=proc, previous=previous)
+                _, saved = self.run_with(_hinted(70), proc=proc, previous=previous)
                 self.assertEqual(saved, previous)
 
     def test_hold_without_a_terminal_does_not_match_a_detached_client(self):
         tree = {**TREE, 4242: (1, 0)}
         for proc in (False, True):
             with self.subTest(proc=proc):
-                (code, out, err), saved = self.run_with("codex", 70, proc=proc, tree=tree)
+                (code, out, err), saved = self.run_with(_hinted(70), proc=proc, tree=tree)
                 self.assertEqual((code, err, saved), (0, "", None))
-                self.assertIn(DAEMON_WARNING, out)
+                self.assertEqual(self.context(out), HINT)
 
     def test_ps_question_mark_means_no_terminal(self):
-        (code, out, err), saved = self.run_with("codex", 70, no_tty="?")
+        (code, out, err), saved = self.run_with(_hinted(70), no_tty="?")
         self.assertEqual((code, err, saved), (0, "", None))
-        self.assertIn(DAEMON_WARNING, out)
+        self.assertEqual(self.context(out), HINT)
 
-    def test_shared_daemon_warns_without_manager_identity(self):
+    def test_detached_client_gets_the_hint_without_manager_identity(self):
         tree = {**TREE, 90: (70, 0), 70: (1, 0)}
         for proc in (False, True):
             for environ in ({}, MANAGER):
                 with self.subTest(proc=proc, environ=environ):
                     (code, out, err), saved = self.run_with(
-                        "codex", 70, proc=proc, tree=tree, environ=environ
+                        _hinted(70), proc=proc, tree=tree, environ=environ
                     )
                     self.assertEqual((code, err, saved), (0, "", None))
-                    self.assertEqual(
-                        json.loads(out)["hookSpecificOutput"]["additionalContext"], DAEMON_WARNING
-                    )
+                    self.assertEqual(self.context(out), HINT)
 
-    def test_terminal_client_outside_a_manager_and_workers_stay_silent(self):
+    def test_without_manager_terminal_clients_unchecked_hooks_and_workers_stay_silent(self):
         for proc in (False, True):
-            for environ, pid in (({}, 60), ({**MANAGER, "ENSEMBLE_AGENT_SESSION": "1"}, 70)):
-                with self.subTest(proc=proc, environ=environ, pid=pid):
+            for environ, argv in (
+                ({}, _hinted(60)),
+                ({}, ("--client", "other", "--client-pid", "70")),
+                ({**MANAGER, "ENSEMBLE_AGENT_SESSION": "1"}, _hinted(70)),
+            ):
+                with self.subTest(proc=proc, environ=environ, argv=argv):
                     self.assertEqual(
-                        self.run_with("codex", pid, proc=proc, environ=environ),
-                        ((0, "", ""), None),
+                        self.run_with(argv, proc=proc, environ=environ), ((0, "", ""), None)
                     )
 
 
@@ -591,11 +625,12 @@ class HooksJsonTest(Case):
         self.assertEqual(set(entry["matcher"].split("|")), rearm.SOURCES)
         (command,) = entry["hooks"]
         self.assertEqual(command["type"], "command")
+        python, isolated, script, *argv = shlex.split(command["command"])
         self.assertEqual(
-            command["command"],
-            'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual'
-            ' --client codex --client-pid "$PPID"',
+            (python, isolated, script),
+            ("python3", "-I", "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py"),
         )
+        self.assertEqual(tuple(argv), _with_pid(session_records.CALLS["codex"].argv, "$PPID"))
         self.assertEqual(command["timeout"], 5)
 
     def test_session_start_entry(self):
