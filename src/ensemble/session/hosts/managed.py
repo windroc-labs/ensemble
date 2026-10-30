@@ -6,7 +6,6 @@ import json
 import os
 import select
 import subprocess
-import sys
 import threading
 import time
 from collections import deque
@@ -206,8 +205,6 @@ class ManagedProcess(InteractiveProcess):
                 self.fail("guard transport exit unconfirmed")
             with self.condition:
                 self.condition.notify_all()
-            if self.failure is not None and sys.platform == "darwin":
-                self.close_display()
 
     def checked(self) -> None:
         if self.failure is not None:
@@ -366,15 +363,6 @@ class ManagedProcess(InteractiveProcess):
         self.checked()
         return self.code
 
-    def close_display(self) -> None:
-        """Ends this generation's display, where its Host keeps one."""
-
-    def redisplay(self) -> bool:
-        """Opens this generation's display again while its worker runs, where its Host keeps one:
-        True once opened; False with none to open.
-        """
-        return False
-
     def close(self) -> None:
         self.checked()
         if self.code is None:
@@ -399,7 +387,6 @@ class ManagedProcess(InteractiveProcess):
         self.end_releases()  # once the reader is done: it starts the releaser
         self.checked()
         self.proc.stdin.close()
-        self.close_display()
 
     def _join(self, thread: threading.Thread | None) -> None:
         if thread is not None:

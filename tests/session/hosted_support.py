@@ -3,11 +3,9 @@
 import dataclasses
 import json
 import os
-import shutil
 import tempfile
 import threading
 import types
-from pathlib import Path
 from unittest import mock
 
 from ensemble.session import Host, Session
@@ -21,7 +19,6 @@ from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryViewer, ScreenHost
 from tests.session.modules import client_loader
 from tests.session.threads import capture_errors
-from tests.session.tmux_fixtures import expected_row as listed
 from tests.session.tmux_fixtures import which
 
 WAIT = 10
@@ -278,33 +275,13 @@ class Base(Case):
         self.assertFalse(os.path.exists(self.log))
 
 
-def fake_tmux(case=None) -> mock.Mock:
+def fake_tmux() -> mock.Mock:
     host = mock.create_autospec(TmuxCli, instance=True)
-    host.PAUSE = 0
     host.runner = mock.Mock(side_effect=AssertionError("a direct runner call"))
     host.status.return_value = None
     host.listing.return_value = []
-    tags = {}
-    host.option.side_effect = lambda _target, key: tags.get(key)
+    host.option.return_value = None
     host.process.return_value = "1 $1 %1 4242"
-
-    def started(_name, _launch, **kw):
-        tags.update(kw["tags"], **{"@process": host.process.return_value})
-        if case is not None:
-            case.addCleanup(shutil.rmtree, tags["@control"], ignore_errors=True)
-        host.listing.return_value.append(listed(_name))
-        host.status.return_value = 0
-        Path(tags["@control"], "state.json").write_text(
-            json.dumps({"started": {"started": True}, "done": 0})
-        )
-        return host.process.return_value
-
-    def killed(_target):
-        host.listing.return_value = []
-        host.status.return_value = None
-
-    host.start.side_effect = started
-    host.kill.side_effect = killed
     return host
 
 
@@ -315,7 +292,7 @@ class TuiBase(Base):
         super().setUp()
         self.root = os.path.join(os.path.dirname(self.probe_dir), "tui")
         self.events = os.path.join(self.dir, "events")
-        self.host = fake_tmux(self)
+        self.host = fake_tmux()
         self.enterContext(which(TMUX))
         self.session_dependencies = {**self.session_dependencies, "host": self.host}
         self.configure(tui=True)

@@ -7,11 +7,11 @@ import signal
 from unittest import mock
 
 from ensemble.session import Host, SessionError, Viewer
-from ensemble.session.engine.tmux_cli import TmuxCli
+from ensemble.session.engine.tmux_cli import TmuxCli, attach_command
 from ensemble.session.engine.types import Launch, Liveness, SessionRow, StatusState
 from ensemble.session.hosts.base import InteractiveProcess, worker_state
 from ensemble.session.hosts.tmux import managed
-from ensemble.session.hosts.types import SessionView
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer.placement import Placement
 from tests.session.fakes.worker import ScriptedWorker
 
@@ -206,7 +206,7 @@ class ScreenHost(MemoryHost):
         self.calls.attach_command.return_value = None
 
     def attach_target(self, name):
-        return SessionView(name)
+        return CommandView(attach_command(name), ("/fake/attach", name))
 
 
 class MemoryViewer(Viewer):
@@ -221,6 +221,9 @@ class MemoryViewer(Viewer):
         tmux.runner = mock.Mock(side_effect=AssertionError("no tmux in MemoryViewer"))
         super().__init__(settings, tmux=tmux)
         self.placement = self._placement = mock.create_autospec(Placement, instance=True)
+
+    def _prepare(self, name, host):
+        return False
 
     def show(self, name, host, *, display=None, command=None):
         if display is None and (state := worker_state(name)) is not None:

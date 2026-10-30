@@ -1,19 +1,17 @@
-"""TmuxHost, the Host on tmux, runs every tmux call through the TmuxCli it holds; its workers run
-under the guard (hosts/tmux/managed.py), each displayed in the tmux session of its name, which the
-Viewer shows as it is (SessionView).
-"""
+"""Local guard workers; Viewer owns their tmux displays."""
 
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
+import sys
 from collections.abc import Mapping
 from dataclasses import replace
 
 from ensemble.session.engine.tmux_cli import (
     NAME,
     TmuxCli,
-    TuiError,
-    validate_start,
 )
 from ensemble.session.engine.types import (
     ConfigError,
@@ -23,15 +21,18 @@ from ensemble.session.engine.types import (
     SessionRow,
     StatusState,
     TuiSettings,
+    Unanswered,
 )
+from ensemble.session.harness import guard
 from ensemble.session.hosts.base import (
+    STATE_MAX,
     Host,
     InteractiveProcess,
     worker_row,
 )
 from ensemble.session.hosts.base import activity as worker_activity
 from ensemble.session.hosts.tmux import managed
-from ensemble.session.hosts.types import SessionView
+from ensemble.session.hosts.types import CommandView
 from ensemble.utils import (
     Display,
 )
@@ -56,8 +57,34 @@ class TmuxHost(Host):
             raise ConfigError(f"unknown key {extra[0]!r} in [hosts.{name}]")
         self.tmux = TmuxCli() if tmux is None else tmux
 
-    def attach_target(self, name: str) -> SessionView:
-        return SessionView(_session(name))
+    def attach_target(self, name: str) -> CommandView:
+        name = _session(name)
+        directory = managed.location(self.name, name)
+        try:
+            managed.check_directory(managed.control_root())
+            managed.check_directory(directory)
+            generation = managed.load_json(
+                os.path.join(directory, "current.json"), limit=STATE_MAX
+            ).get("generation")
+        except FileNotFoundError:
+            raise SessionError(f"no tmux worker {name}") from None
+        except (OSError, ValueError) as error:
+            raise Unanswered(f"worker {name}: guard record: {error}") from error
+        if not isinstance(generation, str) or not managed.GENERATION.fullmatch(generation):
+            raise Unanswered(f"worker {name}: generation unknown")
+        live = self.worker_liveness(name, generation)
+        if live == Liveness.ABSENT:
+            raise SessionError(f"no tmux worker {name}")
+        if live == Liveness.UNKNOWN:
+            raise Unanswered(f"worker {name}: guard unknown")
+        argv = (
+            sys.executable,
+            "-I",
+            guard.__file__,
+            "--attach",
+            os.path.join(directory, generation, "display"),
+        )
+        return CommandView(printed=shlex.join(argv), argv=argv)
 
     def worker(
         self,
@@ -76,20 +103,11 @@ class TmuxHost(Host):
     def worker_liveness(self, name: str, generation: str) -> Liveness:
         return managed.liveness(self.name, _session(name), generation)
 
-    def _release(self, name: str, generation: str) -> None:
-        """Its display, the tmux session `name`, only while tagged with `generation`."""
-        try:
-            if self.tmux.option(_session(name), "@generation") == generation:
-                self.tmux.kill(name)
-        except TuiError as error:
-            raise SessionError(f"tmux session {name}: {error}") from error
-
     def validate(self, name: str, launch: Launch) -> None:
         super().validate(name, launch)
-        try:
-            validate_start(name, launch.argv, launch.env, {})
-        except TuiError as error:
-            raise SessionError(str(error)) from error
+        _session(name)
+        if shutil.which(launch.argv[0], path=launch.env.get("PATH", os.defpath)) is None:
+            raise SessionError(f"command not found: {launch.argv[0]}")
         self.tui_settings()
 
     def tui_settings(self) -> TuiSettings:

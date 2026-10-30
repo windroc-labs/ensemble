@@ -353,8 +353,6 @@
  "ensemble.session.extension.SessionStatus.last_active": "attribute",
  "ensemble.session.extension.SessionStatus.resumable": "attribute",
  "ensemble.session.extension.SessionStatus.resume_command": "attribute",
- "ensemble.session.extension.SessionView": "class(builtins.object)(session:POSITIONAL_OR_KEYWORD)",
- "ensemble.session.extension.SessionView.session": "attribute",
  "ensemble.session.extension.Spec": "class(ensemble.session.engine.types.ProcessOptions)(flags:KEYWORD_ONLY=tuple(), env:KEYWORD_ONLY=_HAS_DEFAULT_FACTORY_CLASS, workdir:KEYWORD_ONLY, access:KEYWORD_ONLY, tier:KEYWORD_ONLY=None, effort:KEYWORD_ONLY=None, sid:KEYWORD_ONLY=None, name:KEYWORD_ONLY=None, reply_tags:KEYWORD_ONLY=None, client:KEYWORD_ONLY=None, mode:KEYWORD_ONLY=None, prompt:KEYWORD_ONLY='', resume:KEYWORD_ONLY=False, events:KEYWORD_ONLY=None, environment:KEYWORD_ONLY=None, credentials:KEYWORD_ONLY=None, environment_credentials:KEYWORD_ONLY=None, handlers:KEYWORD_ONLY=tuple())",
  "ensemble.session.extension.Spec.access": "attribute",
  "ensemble.session.extension.Spec.client": "attribute",

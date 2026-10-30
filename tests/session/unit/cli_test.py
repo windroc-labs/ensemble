@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -11,13 +12,14 @@ from unittest import mock
 
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.tmux_cli import attach_command
+from ensemble.session.engine.tmux_cli import TmuxCli, attach_command
 from ensemble.session.engine.types import ConfigError, Hosts, Liveness, SessionError
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes.tui import TuiStore
 from ensemble.session.viewer import display as displays
+from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import ACCOUNT_ENV, Record
 from tests.session import harnesses
 from tests.session.case import Case
@@ -181,6 +183,12 @@ class ElsewhereHost(ScreenHost):
 class ControlBase(HostedTuiBase):
     def setUp(self):
         super().setUp()
+        transport = mock.Mock(
+            side_effect=lambda argv, **_kw: subprocess.CompletedProcess(
+                argv, 1, "", "no server running"
+            )
+        )
+        self.cli_viewer = Viewer(tmux=TmuxCli(transport))
         CliHost.current = self.host
         self.addCleanup(setattr, HostedSession, "_setup", None)
         Path(self.ensemble).mkdir(exist_ok=True)
@@ -208,6 +216,7 @@ class ControlBase(HostedTuiBase):
         source = stdin if stdin is not None else "" if record is None else record.to_line() + "\n"
         with (
             mock.patch.object(sys, "stdin", io.StringIO(source)),
+            mock.patch.object(HostedSession, "viewer", return_value=self.cli_viewer),
             contextlib.redirect_stdout(out),
             contextlib.redirect_stderr(err),
         ):
@@ -537,9 +546,8 @@ class DisplayGone(ControlBase):
     def test_hide_names_no_other_host(self):
         with self.no_tmux():
             code, out, err = self.invoke("hide", "w1")
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("tmux: [Errno 2] no tmux", err)
-        self.assertNotIn("docker", err)
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertTrue(json.loads(self.invoke("status", "w1")[1])["hidden"])
 
 
 class HeadlessElsewhere(ControlBase):

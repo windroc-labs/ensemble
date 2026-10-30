@@ -15,19 +15,24 @@ import time
 import uuid
 from collections.abc import Callable
 
-from ensemble.session.engine.tmux_cli import TuiError
+from ensemble.session.engine.tmux_cli import display_error
 from ensemble.session.engine.types import (
     SESSION_NAME,
     ConfigError,
-    Launch,
     Liveness,
-    PaneStatus,
     SessionBusy,
     SessionError,
     Unanswered,
 )
 from ensemble.session.harness import guard
-from ensemble.session.hosts.base import GUARD_HOOK_SOCKET, GUARD_LEASE_FD, GUARD_WAIT, WorkerState
+from ensemble.session.hosts.base import (
+    GUARD_HOOK_SOCKET,
+    GUARD_LEASE_FD,
+    GUARD_WAIT,
+    STATE_MAX,
+    WorkerState,
+    created_events,
+)
 from ensemble.session.hosts.managed import ManagedProcess
 
 GENERATION = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -38,23 +43,8 @@ LOG = logging.getLogger("session")
 
 
 class TmuxManagedProcess(ManagedProcess):
-    """Its display: the host tmux session of its name, while tagged with its generation; opener
-    starts it (None: it has none).
-    """
-
-    def __init__(
-        self,
-        name,
-        generation,
-        proc,
-        *,
-        terminal,
-        tmux,
-        opener: Callable[[], None] | None = None,
-        start_reader=True,
-    ):
-        self.tmux, self.opener = tmux, opener
-        self.removal: Callable[[], None] | None = None  # a one-shot dir's, after its close
+    def __init__(self, name, generation, proc, *, terminal, start_reader=True):
+        self.removal: Callable[[], None] | None = None
         super().__init__(name, generation, proc, terminal=terminal, start_reader=start_reader)
 
     def close(self) -> None:
@@ -65,39 +55,6 @@ class TmuxManagedProcess(ManagedProcess):
                 removal, self.removal = self.removal, None
                 if removal is not None:
                     removal()
-
-    def close_display(self) -> None:
-        if not self.terminal:
-            return
-        with contextlib.suppress(TuiError):
-            if self.tmux.option(self.name, "@generation") == self.generation:
-                self.tmux.kill(self.name)
-
-    def redisplay(self) -> bool:
-        """False while its own display runs; its own dead one is replaced. Another session of its
-        name is refused, left alone; the worker is never restarted.
-        """
-        if self.opener is None:
-            return False
-        self.checked()
-        if self.code is not None:
-            raise SessionError(f"worker {self.name}: exited")
-        try:
-            shown = self.tmux.option(self.name, "@generation")
-            if shown is not None:
-                if shown != self.generation:
-                    raise SessionError(f"worker {self.name}: its name shows another display")
-                state = self.tmux.status(self.name)
-                if state == PaneStatus.RUNNING:
-                    return False
-                if state == PaneStatus.UNKNOWN:
-                    raise Unanswered(f"worker {self.name}: its display unknown")
-                if state is not None:
-                    self.tmux.kill(self.name)
-            self.opener()
-        except TuiError as error:
-            raise SessionError(f"worker {self.name}: display: {error}") from error
-        return True
 
 
 def private_directory(path: str) -> None:
@@ -135,7 +92,7 @@ def one_shot(host: str, generation: str) -> str:
     return os.path.join(control_root(), f"o{key}")
 
 
-def load_json(path: str) -> dict:
+def load_json(path: str, *, limit: int = 4096) -> dict:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor) as stream:
         info = os.fstat(stream.fileno())
@@ -143,10 +100,10 @@ def load_json(path: str) -> dict:
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) != 0o600
-            or info.st_size > 4096
+            or info.st_size > limit
         ):
             raise OSError("invalid guard record")
-        value = json.loads(stream.read(4097))
+        value = json.loads(stream.read(limit + 1))
     if not isinstance(value, dict):
         raise ValueError("invalid guard record")
     return value
@@ -231,7 +188,7 @@ def liveness(host: str, name: str, generation: str) -> Liveness:
         check_directory(directory)
         if not GENERATION.fullmatch(generation):
             return Liveness.UNKNOWN
-        current = load_json(os.path.join(directory, "current.json"))
+        current = load_json(os.path.join(directory, "current.json"), limit=STATE_MAX)
         if current.get("generation") != generation:
             return Liveness.UNKNOWN
         run = os.path.join(directory, generation)
@@ -266,7 +223,7 @@ def records(host: str) -> dict[str, WorkerState]:
                 continue
             directory = os.path.join(root, entry)
             check_directory(directory)
-            record = load_json(os.path.join(directory, "current.json"))
+            record = load_json(os.path.join(directory, "current.json"), limit=STATE_MAX)
             if set(record) == {"generation"}:  # old records still gate starts by their lease
                 continue
             if record.get("host") != host:
@@ -301,9 +258,22 @@ def start(
     host, name, launch, *, terminal, display=None, events=None, metadata=None
 ) -> ManagedProcess:
     host.validate(name, launch)
+    if why := display_error(display):
+        raise ConfigError(why)
+    created_events(events)
     generation = (metadata or {}).get("generation") or uuid.uuid4().hex
     if not GENERATION.fullmatch(generation):
         raise ConfigError("worker generation: invalid")
+    record = {
+        "host": host.name,
+        "name": name,
+        "generation": generation,
+        "sid": (metadata or {}).get("sid"),
+        "client": (metadata or {}).get("client"),
+        "display": display,
+    }
+    if terminal and len(json.dumps(record)) > STATE_MAX:
+        raise ConfigError(f"worker {name}: guard identity exceeds {STATE_MAX} bytes")
     directory = location(host.name, name) if terminal else one_shot(host.name, generation)
     socket = os.path.join(directory, generation, "display" if terminal else "hook")
     if (size := len(os.fsencode(socket))) > SOCKET_PATH_MAX:
@@ -314,7 +284,7 @@ def start(
     private_directory(control_root())
     sweep(control_root())
     if not terminal:
-        return _start_one_shot(host, name, launch, generation, metadata=metadata)
+        return _start_one_shot(host, name, launch, generation)
     fresh = not os.path.lexists(directory)
     private_directory(directory)
     lock = lease_file(os.path.join(directory, "start.lock"))
@@ -322,7 +292,9 @@ def start(
         fcntl.flock(lock, fcntl.LOCK_EX)
         if os.path.lexists(os.path.join(directory, "current.json")) or not fresh:
             try:
-                old = load_json(os.path.join(directory, "current.json"))["generation"]
+                old = load_json(os.path.join(directory, "current.json"), limit=STATE_MAX)[
+                    "generation"
+                ]
             except (OSError, ValueError, KeyError) as error:
                 raise Unanswered(f"worker {name}: previous generation unknown") from error
             if not isinstance(old, str) or liveness(host.name, name, old) != Liveness.ABSENT:
@@ -331,30 +303,14 @@ def start(
         os.mkdir(run, 0o700)
         save_json(
             os.path.join(directory, "current.json"),
-            {
-                "host": host.name,
-                "name": name,
-                "generation": generation,
-                "sid": (metadata or {}).get("sid"),
-                "client": (metadata or {}).get("client"),
-                "display": display,
-            },
+            record,
         )
-        return _spawn(
-            host,
-            name,
-            launch,
-            run,
-            terminal=True,
-            display=display,
-            events=events,
-            metadata=metadata,
-        )
+        return _spawn(host, name, launch, run, terminal=True)
     finally:
         os.close(lock)
 
 
-def _start_one_shot(host, name, launch, generation, *, metadata) -> ManagedProcess:
+def _start_one_shot(host, name, launch, generation) -> ManagedProcess:
     """In its one-shot dir, which owner.lock marks as this process's until its handle's close."""
     directory = one_shot(host.name, generation)
     if os.path.lexists(directory):
@@ -374,7 +330,7 @@ def _start_one_shot(host, name, launch, generation, *, metadata) -> ManagedProce
         fcntl.flock(owner, fcntl.LOCK_EX)
         run = os.path.join(directory, generation)
         os.mkdir(run, 0o700)
-        handle = _spawn(host, name, launch, run, terminal=False, metadata=metadata)
+        handle = _spawn(host, name, launch, run, terminal=False)
     except BaseException:
         remove()
         raise
@@ -382,9 +338,7 @@ def _start_one_shot(host, name, launch, generation, *, metadata) -> ManagedProce
     return handle
 
 
-def _spawn(
-    host, name, launch, run, *, terminal, display=None, events=None, metadata=None
-) -> TmuxManagedProcess:
+def _spawn(host, name, launch, run, *, terminal) -> TmuxManagedProcess:
     generation = os.path.basename(run)
     settings = host.tui_settings()
     save_json(os.path.join(run, "state.json"), {"generation": generation, "state": "starting"})
@@ -433,38 +387,6 @@ def _spawn(
     finally:
         os.close(lease)
 
-    def open_display() -> None:
-        host.tmux.start(
-            name,
-            Launch(
-                (
-                    sys.executable,
-                    "-I",
-                    guard.__file__,
-                    "--attach",
-                    os.path.join(run, "display"),
-                ),
-                cwd=launch.cwd,
-            ),
-            events=events,
-            status_line=settings.status_line,
-            size=settings.hidden_size,
-            tags={
-                "@kind": "guard",
-                "@generation": generation,
-                **{
-                    f"@{key}": value
-                    for key, value in (metadata or {}).items()
-                    if key in ("sid", "client")
-                },
-                **({"@display": display} if display is not None else {}),
-            },
-        )
-        if sys.platform == "darwin":
-            host.tmux.checked(
-                ["set-hook", "-p", "-t", name, "pane-died", f"kill-session -t ={name}"]
-            )
-
     handle = None
     try:
         assert proc.stdin is not None
@@ -474,12 +396,8 @@ def _spawn(
             generation,
             proc,
             terminal=terminal,
-            tmux=host.tmux,
-            opener=open_display if terminal else None,
         )
         handle.await_start()
-        if terminal:
-            open_display()
     except BaseException:
         if handle is not None:
             with contextlib.suppress(SessionError):

@@ -67,8 +67,7 @@ from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.docker.worker import DockerWorker
-from ensemble.session.hosts.managed import ManagedProcess
-from ensemble.session.hosts.tmux import TmuxHost
+from ensemble.session.hosts.tmux import TmuxHost, managed
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.utils import ACCOUNT_ENV, Record, StatusState, exhausted, inode_lock, load_class
@@ -92,7 +91,6 @@ from tests.session.hosted_support import (
     ProbeClient,
     TuiBase,
     fake_tmux,
-    listed,
 )
 from tests.session.threads import capture_errors
 from tests.utils.clock import FakeClock
@@ -358,8 +356,21 @@ class AliasedClientCapacityTest(TuiBase):
     def test_two_tmux_aliases_count_one_existing_tui_and_still_enforce_the_limit(self):
         self.configure(client="checked", max_runs=2)
         setup = self.session._config()
-        self.host.checked.return_value = SimpleNamespace(stdout="/fake/server.sock\n")
-        self.host.listing.return_value = [listed("existing", client="checked", sid="s1")]
+        directory = managed.location("tmux", "existing")
+        managed.private_directory(directory + "/g1")
+        managed.save_json(
+            directory + "/current.json",
+            {
+                "host": "tmux",
+                "name": "existing",
+                "generation": "g1",
+                "client": "checked",
+                "sid": "s1",
+            },
+        )
+        lease = managed.lease_file(directory + "/g1/lease")
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        self.addCleanup(os.close, lease)
         self.session = harnesses.Threaded.configured(
             clients=setup.registry.settings.clients,
             hosts=parsed(
@@ -838,7 +849,7 @@ class DisplayTest(HostedTuiBase):
         self.assertEqual(self.host.calls.mock_calls, [])
 
     def test_a_display_not_printable_or_ending_in_a_semicolon_is_refused(self):
-        transport = fake_tmux(self)
+        transport = fake_tmux()
         selected = TmuxHost("tmux", tmux=transport)
         given = self.session._config()
         self.session = harnesses.Threaded.configured(
@@ -3077,14 +3088,13 @@ class OwnedTest(HostedTuiBase):
         self.assertIn("client_session", kinds)
         self.assertIn("stderr", kinds)
 
-    def test_redisplay_asks_its_managed_handle(self):
+    def test_redisplay_prepares_the_viewer_without_restarting_the_worker(self):
         owned = self.own()
-        self.assertFalse(owned.redisplay())  # a plain terminal: nothing to open
-        handle = mock.create_autospec(ManagedProcess, instance=True)
-        handle.redisplay.return_value = True
-        owned._session._running._terminal = handle
-        self.assertTrue(owned.redisplay())
-        handle.redisplay.assert_called_once_with()
+        terminal = owned._session._running._terminal
+        with mock.patch.object(owned._session._viewer, "_prepare", return_value=True) as prepare:
+            self.assertTrue(owned.redisplay())
+        prepare.assert_called_once_with("w1", self.host)
+        self.assertIs(owned._session._running._terminal, terminal)
 
     def test_view_is_bound_to_this_worker(self):
         owned = self.own()

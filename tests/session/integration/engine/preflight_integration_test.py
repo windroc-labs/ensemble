@@ -15,7 +15,7 @@ from ensemble.session.hosts.tmux import TmuxHost
 from tests.session import harnesses
 from tests.session.case import HOSTS, PY, REPO, SPAWNS, Case, child_env, no_spawn
 from tests.session.fakes.preflight import PreflightClient
-from tests.session.hosted_support import SID, fake_tmux, listed
+from tests.session.hosted_support import SID, fake_tmux
 from tests.utils.sandbox import scratch
 
 
@@ -324,7 +324,6 @@ print(json.dumps(result))
             hosts=Host.parse_hosts({**HOSTS, "default": "tmux"}),
             host_factory=lambda _kind, name, settings: Workers(name, settings, tmux=self.tmux),
         )
-        self.tmux.listing.return_value = [listed("worker")]
         owner = os.path.join(self.ensemble, "harness", "a" * 32)
         os.makedirs(owner, 0o700)
         worker = os.path.join(self.ensemble, "tui", "worker")

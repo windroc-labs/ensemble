@@ -14,6 +14,7 @@ from ensemble.session import Launch, SessionError
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Key, KeyPress, Liveness, Paste, Unanswered, WorkerExit
 from ensemble.session.hosts.tmux import TmuxHost
+from ensemble.session.viewer.viewer import Viewer
 from tests.session import live_tmux
 from tests.session.case import Case
 
@@ -30,6 +31,8 @@ class LaunchTest(Case):
     def worker(self, name, launch, *, terminal=True):
         handle = self.host.worker(name, launch, terminal=terminal)
         self.addCleanup(self.close, handle)
+        if terminal:
+            Viewer()._prepare(name, self.host)
         return handle
 
     def close(self, handle):

@@ -3086,15 +3086,13 @@ class RecordRuleTest(Base):
             self.start()
         self.assertEqual(self.saved(), state)
 
-    def test_owned_close_closes_its_display_the_handle_then_the_dir(self):
-        """Its display first: a requested close reports no pane death."""
+    def test_owned_close_closes_the_handle_then_the_dir(self):
         self.owned()
         order = mock.Mock()
         handle = self.handle()
         handle.close.side_effect = lambda: order("handle")
-        handle.close_display.side_effect = lambda: order("display")
         self.assertTrue(self.store.close(handle, "g1"))
-        self.assertEqual(order.call_args_list, [mock.call("display"), mock.call("handle")])
+        self.assertEqual(order.call_args_list, [mock.call("handle")])
         self.assertNoSessionDir()
         self.liveness.assert_not_called()
 
@@ -3114,7 +3112,6 @@ class RecordRuleTest(Base):
                 with self.assertRaisesRegex(Unanswered, "^worker w1: exit unconfirmed$"):
                     self.store.close(handle, "g1")
                 self.assertEqual(handle.close.call_count, 0 if failure == "unknown" else 1)
-                handle.close_display.assert_called_once_with()
                 self.assertEqual(self.saved(), state)
 
     def test_owned_close_of_an_old_generation_keeps_the_new_record_and_display(self):
@@ -3272,18 +3269,6 @@ class ManagedStartTest(OwnedBase):
         self.assertIsNone(kwargs["display"])
         self.assertEqual(kwargs["metadata"]["generation"], tui.TuiMode.snapshot(NAME)["generation"])
         self.assertIs(mode._terminal, self.handle)
-
-    def test_owned_redisplay_asks_its_managed_handle(self):
-        managed = mock.create_autospec(ManagedProcess, instance=True)
-        managed.state.return_value = Liveness.LIVE
-        managed.read.return_value = []
-        managed.redisplay.return_value = True
-        self.host.worker.return_value = managed
-        self.assertTrue(self.owned_start().redisplay())
-        managed.redisplay.assert_called_once_with()
-
-    def test_redisplay_of_a_plain_terminal_opens_nothing(self):
-        self.assertFalse(self.owned_start().redisplay())
 
     def test_owned_poll_takes_worker_exit_code(self):
         mode = self.owned_start()

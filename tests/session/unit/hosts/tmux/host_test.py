@@ -5,6 +5,7 @@ workers: managed_test.py).
 
 import json
 import os
+import shlex
 import time
 from unittest import mock
 
@@ -18,10 +19,11 @@ from ensemble.session.engine.types import (
     Liveness,
     Permission,
     StatusState,
+    Unanswered,
 )
 from ensemble.session.hosts.base import ACTIVITY, TUI_DIR, TUI_STATE
 from ensemble.session.hosts.tmux import TmuxHost, managed
-from ensemble.session.hosts.types import SessionView
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import STALE_AGE, load_class
 from tests.session.case import Case
@@ -32,6 +34,30 @@ NO_PANE = "no anchor pane: not in tmux"
 OTHER = "1f8fad5b-d9cb-469f-a165-70867728950e"
 
 
+def _worker(case, name, *, host="tmux", state="running", live=True):
+    generation = "a" * 32
+    directory = managed.location(host, name)
+    run = os.path.join(directory, generation)
+    managed.private_directory(run)
+    managed.save_json(
+        os.path.join(directory, "current.json"),
+        {
+            "host": host,
+            "name": name,
+            "generation": generation,
+            "sid": OTHER,
+            "client": "claude",
+            "display": "manager",
+        },
+    )
+    managed.save_json(os.path.join(run, "state.json"), {"generation": generation, "state": state})
+    lease = managed.lease_file(os.path.join(run, "lease"))
+    case.addCleanup(os.close, lease)
+    if live:
+        managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+    return directory
+
+
 class GuardInventoryTest(Case):
     def setUp(self):
         super().setUp()
@@ -39,36 +65,11 @@ class GuardInventoryTest(Case):
         self.tmux.listing.side_effect = AssertionError("inventory reached display server")
         self.host = TmuxHost("tmux", tmux=self.tmux)
 
-    def worker(self, name, *, host="tmux", state="running", live=True):
-        generation = "a" * 32
-        directory = managed.location(host, name)
-        run = os.path.join(directory, generation)
-        managed.private_directory(run)
-        managed.save_json(
-            os.path.join(directory, "current.json"),
-            {
-                "host": host,
-                "name": name,
-                "generation": generation,
-                "sid": OTHER,
-                "client": "claude",
-                "display": "manager",
-            },
-        )
-        managed.save_json(
-            os.path.join(run, "state.json"), {"generation": generation, "state": state}
-        )
-        lease = managed.lease_file(os.path.join(run, "lease"))
-        self.addCleanup(os.close, lease)
-        if live:
-            managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
-        return directory
-
     def test_guard_workers_are_listed_without_a_display_or_harness_record(self):
-        self.worker("live")
-        self.worker("unknown", live=False)
-        self.worker("ended", state="exited", live=False)
-        self.worker("theirs", host="other")
+        _worker(self, "live")
+        _worker(self, "unknown", live=False)
+        _worker(self, "ended", state="exited", live=False)
+        _worker(self, "theirs", host="other")
         self.assertEqual(self.host.list(), ["live", "unknown"])
         rows = self.host.rows()
         self.assertEqual([row.name for row in rows], ["live", "unknown"])
@@ -84,6 +85,20 @@ class GuardInventoryTest(Case):
         self.assertEqual(self.host.rows(), [])
         self.assertEqual(self.tmux.mock_calls, [])
 
+    def test_activity_belongs_to_the_guard_generation_without_a_display(self):
+        _worker(self, "worker")
+        folder = os.path.join(os.path.expanduser(TUI_DIR), "worker")
+        os.makedirs(folder)
+        for generation, state, expected in (
+            ("a" * 32, "done", StatusState.DONE),
+            ("a" * 32, "blocked", StatusState.BLOCKED),
+            ("older", "done", StatusState.WORKING),
+        ):
+            with self.subTest(generation=generation, state=state):
+                with open(os.path.join(folder, ACTIVITY), "w") as stream:
+                    stream.write(f"{generation} {state}\n")
+                self.assertEqual(self.host.rows()[0].state, expected)
+
     def test_guard_inventory_rejects_an_untrusted_root(self):
         root = managed.control_root()
         os.symlink(self.home, root)
@@ -91,7 +106,7 @@ class GuardInventoryTest(Case):
             self.host.list()
 
     def test_guard_record_cannot_claim_another_workers_directory(self):
-        directory = self.worker("worker")
+        directory = _worker(self, "worker")
         record = managed.load_json(os.path.join(directory, "current.json"))
         managed.save_json(os.path.join(directory, "current.json"), {**record, "name": "forged"})
         with self.assertRaises(SessionError):
@@ -120,10 +135,6 @@ class ClassTest(Case):
         self.assertFalse(host._isolated)
         self.assertTrue(TmuxHost("tmux", {"isolated": True})._isolated)
         self.assertIsInstance(host.tmux, TmuxCli)
-        self.assertEqual(
-            (f"{host.tmux.runner.__module__}.{host.tmux.runner.__name__}", host.tmux.sleep),
-            ("subprocess.run", time.sleep),
-        )
 
     def test_client_context_is_the_loopback_and_the_isolated_permission_mode(self):
         self.assertEqual(
@@ -136,44 +147,22 @@ class ClassTest(Case):
 
 
 class AttachTargetTest(Base):
-    def test_attach_target_is_the_session_itself_and_refuses_a_bad_name(self):
-        self.assertTrue(TmuxHost.attachable)
-        self.assertEqual(self.host.attach_target("w1"), SessionView("w1"))
-        with self.assertRaisesRegex(SessionError, "^no tmux session 'a b'$"):
-            self.host.attach_target("a b")
-
-
-class Release(Base):
-    """_release: a dead generation's display, the tmux session of its name, goes only while
-    tagged with that generation.
-    """
-
-    def shown(self, generation):
-        self.tmux.option.side_effect = lambda _target, key: (
-            generation if key == "@generation" else None
-        )
-
-    def test_the_display_of_that_generation_is_killed(self):
-        self.shown("g1")
-        self.host._release("w1", "g1")
-        self.tmux.kill.assert_called_once_with("w1")
-
-    def test_another_generations_display_or_none_is_left(self):
-        for shown in ("g2", None):
-            with self.subTest(shown=shown):
-                self.shown(shown)
-                self.host._release("w1", "g1")
-        self.tmux.kill.assert_not_called()
-
-    def test_a_tmux_failure_is_a_driver_error_and_a_bad_name_reaches_no_tmux(self):
-        self.shown("g1")
-        self.tmux.kill.side_effect = TuiError("tmux: boom")
-        with self.assertRaisesRegex(SessionError, r"\Atmux session w1: tmux: boom\Z"):
-            self.host._release("w1", "g1")
-        self.tmux.reset_mock()
-        with self.assertRaisesRegex(SessionError, "^no tmux session 'a b'$"):
-            self.host._release("a b", "g1")
+    def test_attach_target_uses_the_guard_generation_without_a_display(self):
+        directory = _worker(self, "w1")
+        target = self.host.attach_target("w1")
+        self.assertIsInstance(target, CommandView)
+        self.assertEqual(target.argv[-2:], ("--attach", directory + "/" + "a" * 32 + "/display"))
+        self.assertEqual(shlex.split(target.printed), list(target.argv))
         self.assertEqual(self.tmux.mock_calls, [])
+
+    def test_attach_refuses_missing_unknown_and_invalid_workers(self):
+        with self.assertRaises(SessionError):
+            self.host.attach_target("missing")
+        _worker(self, "unknown", live=False)
+        with self.assertRaises(Unanswered):
+            self.host.attach_target("unknown")
+        with self.assertRaises(SessionError):
+            self.host.attach_target("a b")
 
 
 class ListTest(Base):

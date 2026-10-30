@@ -66,7 +66,7 @@ class HookLifecycleTest(Live):
         self.assertEqual(stream.next(idle=False, poke=self.poke), Exited(0))
         self.lines(f"{name} dead")
         self.assert_events(self.events, name, "dead")
-        self.assertEqual(self.server.option(name, "@state"), "dead")
+        self.assertEqual(session.status().state, "dead")
         self.assertEqual(done_file.read_bytes(), done_bytes)
         self.assertEqual(blocked_file.read_bytes(), blocked_bytes)
         journal = Path(self.ensemble, "tui", name, "hooks.jsonl")
@@ -75,15 +75,16 @@ class HookLifecycleTest(Live):
             ["tool", "stop", "ask"],
         )
 
-    def test_a_fast_terminal_exit_writes_one_dead_event_and_retains_its_session(self):
+    def test_a_fast_terminal_exit_writes_one_dead_event_without_tmux_identity(self):
         name = "fast-terminal"
         session = self.start(name, {"exit": 7})
         stream = Stream(self, session)
         self.assertEqual(stream.next(idle=False, poke=self.poke), Exited(7))
         self.lines(f"{name} dead")
-        self.assertEqual(self.server.option(name, "@state"), "dead")
-        self.assertEqual([row.state for row in self.session_cls.list(name)], ["dead"])
-        self.assertEqual(self.server.tmux("has-session", "-t", f"={name}").returncode, 0)
+        self.assertEqual(session.status().state, "dead")
+        live_tmux.wait(
+            lambda: not self.session_cls.list(name), what="exited guard leaves inventory"
+        )
         self.poke()
         self.poke()
         self.assert_events(self.events, name, "dead")

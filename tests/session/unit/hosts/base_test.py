@@ -31,7 +31,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness import guard
 from ensemble.session.hosts import base as host_base
 from ensemble.session.hosts.base import InteractiveProcess
-from ensemble.session.hosts.types import CommandView, SessionView
+from ensemble.session.hosts.types import CommandView
 from ensemble.utils import Record, StatusState
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryHost
@@ -103,7 +103,6 @@ class HostDefaults(Case):
         host = MinimalHost("m")
         self.assertFalse(host.attachable)
         self.assertIsNone(host.attach_target("a"))
-        self.assertEqual(SessionView("a"), SessionView(session="a"))
         self.assertEqual(CommandView("p", ("x",)), CommandView(printed="p", argv=("x",)))
 
     def test_name_and_a_copy_of_settings(self):

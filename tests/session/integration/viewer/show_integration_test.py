@@ -3,12 +3,10 @@
 import io
 import os
 import subprocess
-import sys
 from contextlib import redirect_stderr
 from unittest import mock
 
 from ensemble.session import Viewer
-from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.tmux import TmuxHost
@@ -25,14 +23,11 @@ class ShowTest(Case):
         self.server.attach("mgr")
         self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
         self.host = TmuxHost("tmux")
-        TmuxCli().start(
-            "worker",
-            Launch(
-                (sys.executable, "-I", "-c", "import time; time.sleep(300)"),
-                self.server.env(),
-                cwd=self.home,
-            ),
+        self.worker = self.host.worker(
+            "worker", Launch(live_tmux.IDLE, self.server.env(), cwd=self.home), terminal=True
         )
+        self.addCleanup(self.worker.close)
+        Viewer()._prepare("worker", self.host)
         self.environment = self.server.env(**self.server.inside("mgr"))
         self.calls = []
         self.fail_metadata = False

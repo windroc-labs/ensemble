@@ -9,7 +9,6 @@ import subprocess
 import time
 from unittest import mock
 
-from ensemble.session import Viewer
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, SessionError
 from ensemble.session.hosts.tmux import TmuxHost
@@ -43,6 +42,7 @@ class Live(Case):
         self.addCleanup(patch.stop)
         self.cwd = scratch(self)
         self.host = TmuxHost("tmux")
+        self.workers = {}
         self.settings = {}
         self.configure()
 
@@ -78,12 +78,30 @@ class Live(Case):
 
     def started(self, name: str, inside: str | None = MANAGER, **kwargs) -> str:
         """tmux session `name` started with no pane, then show()n; show's stderr."""
-        TmuxCli().start(name, Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd))
+        self.worker(name)
         return self.show(name, inside, **kwargs)
 
+    def worker(self, name):
+        handle = self.host.worker(
+            name, Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd), terminal=True
+        )
+        self.workers[name] = handle
+        self.addCleanup(self.cleanup_worker, name, handle)
+        self.session_cls.viewer()._prepare(name, self.host)
+        return handle
+
+    def cleanup_worker(self, name, handle):
+        with contextlib.suppress(SessionError):
+            handle.close()
+        if self.workers.get(name) is handle:
+            self.workers.pop(name)
+            self.session_cls.viewer().close(name, self.host)
+
     def close(self, name: str) -> None:
-        """tmux session `name` gone, its viewer client with it."""
-        TmuxCli().kill(name)
+        if name in self.workers:
+            self.cleanup_worker(name, self.workers[name])
+        else:
+            TmuxCli().kill(name)
 
     def tmux(self, *args: str) -> str:
         res = self.server.tmux(*args)
@@ -233,10 +251,10 @@ class SplitsTest(Live):
             caught.exception,
         )
         before = self.server.panes(f"={MANAGER}:")
-        TmuxCli().start("w1", Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd))
+        self.worker("w1")
         self.assertEqual(
             self.session_cls.viewer().show("w1", self.host, display=beside),
-            "tmux attach -t '=w1'",
+            self.host.attach_target("w1").printed,
         )
         self.assertEqual(self.server.panes(f"={MANAGER}:"), before)
         self.assertEqual(self.server.option("w1", "@pane"), "")
@@ -244,26 +262,6 @@ class SplitsTest(Live):
             [self.window_option(MANAGER, k) for k in ("@grid-manager", "@grid-per-column")],
             ["", ""],
         )
-
-
-class StartTest(Live):
-    def test_a_command_ending_at_once_gets_its_dead_line_and_state(self):
-        events = os.path.join(self.cwd, "events")
-        TmuxCli().start(
-            "s1",
-            Launch(tuple(["/bin/sh", "-c", "exit 3"]), self.server.env(), cwd=self.cwd),
-            events=events,
-        )
-
-        def dead():
-            self.server.tmux("run-shell", "-b", "true")
-            self.assertEqual(
-                [line.split(" ", 1)[1] for line in live_tmux.events(events)], ["s1 dead"]
-            )
-            return True
-
-        live_tmux.wait(dead, what="s1's dead line")
-        self.assertEqual((TmuxCli().status("s1"), self.server.option("s1", "@state")), (3, "dead"))
 
 
 class RetileTest(Live):
@@ -417,12 +415,20 @@ class BoundaryTest(Live):
         self.assertEqual(len(leaves), len(actual))
 
     def test_manual_and_retained_dead_terminals_keep_one_grid_cell_each(self):
-        TmuxCli().start(
-            "dead", Launch(("/bin/sh", "-c", "exit 7"), self.server.env(), cwd=self.cwd)
+        self.tmux("set-option", "-w", "-t", self.window, "remain-on-exit", "on")
+        dead = self.tmux(
+            "split-window",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            self.window,
+            "/bin/sh",
+            "-c",
+            "exit 7",
         )
-        live_tmux.wait(lambda: TmuxCli().status("dead") == 7, what="retained terminal exit")
-        with self.inside(MANAGER):
-            self.assertIsNone(Viewer().show("dead", self.host, display=MANAGER))
+        live_tmux.wait(lambda: TmuxCli().status(dead) == 7, what="retained terminal exit")
         manual = self.tmux(
             "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", self.window, *live_tmux.IDLE
         )
@@ -433,13 +439,13 @@ class BoundaryTest(Live):
             order,
             [
                 self.manager,
-                self.server.pane_of("dead"),
+                dead,
                 self.server.pane_of("w1"),
                 self.server.pane_of("w2"),
                 manual,
             ],
         )
-        self.assertEqual(self.server.option("dead", "@state"), "dead")
+        self.assertEqual(self.tmux("display-message", "-p", "-t", dead, "#{pane_dead}"), "1")
 
     def test_duplicate_and_invalid_claims_do_not_drop_or_duplicate_real_panes(self):
         for name, pane in (("duplicate", self.server.pane_of("w1")), ("invalid", "%999999")):

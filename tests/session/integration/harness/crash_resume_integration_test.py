@@ -223,8 +223,8 @@ class ResumeTest(CrashCase):
                 display = int(self.pane(name, "#{pane_pid}"))
                 self.assertIn("--attach", ps(display, "args"))
                 self.assertEqual(
-                    self.pane(name, "#{@generation} #{@sid} #{pane_dead}"),
-                    f"{found['generation']} {found['record'].sid} 0",
+                    self.pane(name, "#{@view} #{pane_dead}"),
+                    "viewer 0",
                 )
                 self.assertEqual(len(self.calls(name)), 1)
                 self.assertTrue(running(found["call"]["pid"]))
@@ -351,7 +351,7 @@ class DisplayTest(ApiCase):
         self.turn_end("third")  # its send reached the display: the view holds that attach
         self.ok(self.server.tmux("kill-session", "-t", "=w1"))
         self.assertEqual(self.owner("w1").ask(Op.DISPLAY, {}), {"reopened": True})
-        self.assertEqual(self.pane("w1", "#{@generation} #{pane_dead}"), f"{view.generation} 0")
+        self.assertEqual(self.pane("w1", "#{@view} #{pane_dead}"), "viewer 0")
         Path(send).write_text("again from the handler", encoding="utf-8")
         self.ok(self.session("send", "w1", "go on"))
         self.assertEqual(self.turn_end("fourth")["sent"], "again from the handler")
