@@ -91,31 +91,70 @@ class Base(Case):
         return guard.Guard(args, **options)
 
 
+SIZED = guard.json_frame(b"w", {"rows": 24, "columns": 80})
+
+
 class DisplayTest(Base):
     def output(self, runtime, data):
         for start in range(0, len(data), guard.READ_SIZE):
             with mock.patch.object(os, "read", return_value=data[start : start + guard.READ_SIZE]):
                 runtime.read_stream(8)
 
-    def terminal(self, screen=b"current screen"):
+    def terminal(self, *parts):
         runtime = self.runtime(terminal=True)
         runtime.screen = mock.Mock()
-        runtime.screen.replay.return_value = deque([screen.decode()])
+        runtime.screen.replay.side_effect = lambda: deque(parts or ["current screen"])
         runtime.streams[8] = b"t"
         return runtime
 
     @staticmethod
-    def connect(runtime, send):
+    def connect(runtime, send, *, sized=True):
         server, peer = mock.Mock(), mock.Mock()
         server.accept.return_value = (peer, "")
         peer.send.side_effect = send
         runtime.take_display(server)
+        if sized:
+            runtime.display_frame(peer, b"w", SIZED[5:])
         return peer
 
-    def test_short_writes_and_eagain_keep_the_screen_before_live_bytes(self):
-        screen = "\x1b[31m早\x1b[0m\r\n".encode()
+    @staticmethod
+    def drain(runtime, peer, limit=100000):
+        for _ in range(limit):
+            if peer not in runtime.display_writers():
+                return
+            runtime.write_display(peer)
+
+    def test_nothing_before_w_then_replay_before_live(self):
+        runtime, sent = self.terminal("history", "screen"), []
+        peer = self.connect(
+            runtime, lambda chunk: sent.append(bytes(chunk)) or len(chunk), sized=False
+        )
+        self.output(runtime, b"before")
+        self.assertEqual((runtime.display_writers(), runtime.owed()), ([], [peer]))
+        runtime.display_frame(peer, b"w", SIZED[5:])
+        self.output(runtime, b"after")
+        self.drain(runtime, peer)
+        self.assertEqual(b"".join(sent), b"historyscreenafter")
+
+    def test_a_later_w_only_resizes(self):
+        runtime = self.terminal()
+        peer = self.connect(runtime, len)
+        runtime.display_frame(peer, b"w", guard.json_frame(b"w", {"rows": 5, "columns": 9})[5:])
+        self.assertEqual(runtime.screen.replay.call_count, 1)
+        self.assertEqual(runtime.sizes[peer], (5, 9))
+
+    def test_a_display_without_w_gets_nothing_but_types(self):
+        runtime = self.terminal()
+        peer = self.connect(runtime, len, sized=False)
+        peer.recv.return_value = guard.frame(b"i", b"typed")
+        runtime.peer_read(peer)
+        self.output(runtime, b"live")
+        self.assertEqual((runtime.input, peer.send.call_count), (b"typed", 0))
+
+    def test_short_writes_and_eagain_keep_replay_before_live(self):
+        screen = "\x1b[31m早\x1b[0m\r\n"
         live = b"\x1b[32mlive\x1b[0m\r\n"
-        runtime = self.terminal(screen)
+        runtime = self.terminal("history\r\n", screen)
         sent, attempts = [], []
 
         def send(chunk):
@@ -126,21 +165,32 @@ class DisplayTest(Base):
             return min(2, len(chunk))
 
         peer = self.connect(runtime, send)
-        self.assertIn(peer, runtime.peers)
         self.output(runtime, live)
-        for _ in range(len(screen) + len(live)):
-            runtime.write_display(peer)
-        self.assertEqual(b"".join(sent), screen + live)
+        self.drain(runtime, peer)
+        self.assertEqual(b"".join(sent), b"history\r\n" + screen.encode() + live)
 
-    def test_slow_display_is_dropped_without_closing_worker(self):
-        runtime = self.terminal()
+    def test_replay_larger_than_the_buffer_limit_is_sent_in_batches(self):
+        parts = ["x" * (3 << 20), "中" * (1 << 20), "y" * 10]
+        runtime, sent = self.terminal(*parts), []
+        peer = self.connect(runtime, lambda chunk: sent.append(len(chunk)) or len(chunk))
+        self.output(runtime, b"z" * 100)
+        self.assertIn(peer, runtime.peers)
+        self.drain(runtime, peer)
+        self.assertEqual(sum(sent), len("".join(parts).encode()) + 100)
+        self.assertLessEqual(max(sent), guard.READ_SIZE)
+
+    def test_live_backlog_over_the_limit_drops_only_that_display(self):
+        runtime = self.terminal("x" * (guard.BUFFER_MAX + 1))
         peer = self.connect(runtime, mock.Mock(side_effect=BlockingIOError))
-        self.output(runtime, b"x" * (guard.BUFFER_MAX + 1))
+        other = self.connect(runtime, mock.Mock(side_effect=BlockingIOError))
+        self.output(runtime, b"x" * guard.BUFFER_MAX)
+        self.assertEqual((peer in runtime.peers, other in runtime.peers), (True, True))
+        self.output(runtime, b"x")
         self.assertNotIn(peer, runtime.peers)
         self.assertIsNone(runtime.closing)
         self.assertFalse(runtime.output)
 
-    def test_display_send_failure_closes_only_that_display(self):
+    def test_send_failure_drops_only_that_display(self):
         for result in (BrokenPipeError(), 0):
             with self.subTest(result=result):
                 runtime = self.terminal()
@@ -150,31 +200,80 @@ class DisplayTest(Base):
                 else:
                     send.return_value = result
                 peer = self.connect(runtime, send)
+                runtime.write_display(peer)
                 self.assertNotIn(peer, runtime.peers)
+                self.assertNotIn(peer, runtime.displays)
                 self.assertIsNone(runtime.closing)
 
-    def test_exit_grace_drains_the_screen_before_returning(self):
-        self.drain_exit(b"\x1b[31m" + b"x" * (guard.READ_SIZE + 17))
+    def test_a_second_display_gets_its_own_replay_at_its_size(self):
+        runtime = self.runtime(terminal=True, size=(10, 60))
+        runtime.master = 20
+        runtime.streams[8] = b"t"
+        self.output(
+            runtime, b"".join(b"\x1b[3%dmline-%d\x1b[0m\r\n" % (i % 7, i) for i in range(40))
+        )
+        sent = {}
+        with mock.patch.object(guard.fcntl, "ioctl"):
+            first = self.connect(
+                runtime,
+                lambda chunk: sent.setdefault("first", []).append(bytes(chunk)) or len(chunk),
+            )
+            server, second = mock.Mock(), mock.Mock()
+            server.accept.return_value = (second, "")
+            second.send.side_effect = lambda chunk: (
+                sent.setdefault("second", []).append(bytes(chunk)) or len(chunk)
+            )
+            runtime.take_display(server)
+            runtime.display_frame(
+                second, b"w", guard.json_frame(b"w", {"rows": 6, "columns": 30})[5:]
+            )
+        self.assertEqual(runtime.size, (6, 30))
+        for peer in (first, second):
+            self.drain(runtime, peer)
+        terminal = guard.Screen(1 << 30, rows=6, columns=30)
+        terminal.append(b"".join(sent["second"]))
+        self.assertEqual(terminal.text(None), runtime.screen.text(None))
+        self.assertIn("\x1b[0;31mline-1\x1b[0m\r\n", terminal.lines)
 
-    def test_large_exit_screen_keeps_draining_while_the_display_progresses(self):
-        self.drain_exit(b"x" * (16 << 20), progressing=True)
+    def test_displays_share_history_strings_and_pin_at_most_their_bound(self):
+        runtime = self.runtime(terminal=True)
+        runtime.streams[8] = b"t"
+        self.output(runtime, b"".join(b"row-%d\r\n" % i for i in range(100)))
+        peer = self.connect(runtime, mock.Mock(side_effect=BlockingIOError))
+        replay = runtime.displays[peer].replay
+        self.assertTrue(any(part is runtime.screen.lines[0] for part in replay))
+        self.output(runtime, b"".join(b"new-%d\r\n" % i for i in range(3000)))
+        pinned = sum(len(part.encode()) for part in replay)
+        self.assertLessEqual(
+            pinned, guard.LINES_SIZE + len(replay[-1].encode()) + len(replay[-2].encode())
+        )
+
+    def test_exit_grace_drains_the_replay_before_returning(self):
+        self.drain_exit("\x1b[31m" + "x" * (guard.READ_SIZE + 17))
+
+    def test_large_exit_replay_keeps_draining_while_the_display_progresses(self):
+        self.drain_exit("x" * (16 << 20), progressing=True)
 
     def test_stalled_exit_display_is_released_after_inactivity(self):
-        self.drain_exit(b"screen", stalled=True)
+        self.drain_exit("screen", stalled=True)
 
-    def test_explicit_close_reclaims_a_guard_during_a_large_progressing_drain(self):
+    def test_a_sizeless_exit_display_is_released_after_the_wait(self):
+        self.drain_exit("screen", sizeless=True)
+
+    def test_explicit_close_reclaims_a_guard_during_a_large_progressing_replay(self):
         for close in ("command", "eof"):
             with self.subTest(close=close):
-                self.drain_exit(b"x" * (16 << 20), progressing=True, close=close)
+                self.drain_exit("x" * (16 << 20), progressing=True, close=close)
 
-    def drain_exit(self, data, *, progressing=False, stalled=False, close=None):
+    def drain_exit(self, data, *, progressing=False, stalled=False, sizeless=False, close=None):
         runtime = self.runtime(terminal=True, display_grace=True)
         runtime.screen = mock.Mock()
-        runtime.screen.replay.return_value = deque([data.decode()])
+        runtime.screen.replay.return_value = deque([data])
         runtime.args.display_socket = self.home + "/display"
         hook_server, display_server, peer = mock.Mock(), mock.Mock(), mock.Mock()
         hook_server.accept.side_effect = BlockingIOError
         display_server.accept.side_effect = [(peer, ""), *([BlockingIOError] * 5000)]
+        peer.recv.return_value = SIZED
         proc = mock.Mock(pid=100, returncode=None)
         chunks = iter([b"output", b""])
         now, sent, requested = [100.0], [], []
@@ -200,13 +299,16 @@ class DisplayTest(Base):
         peer.send.side_effect = send
 
         def select(readers, writers, _errors, _timeout):
-            if stalled:
+            if stalled or sizeless:
                 now[0] += 0.1
             if close and runtime.exit_sent and now[0] - runtime.exit_at >= 0.2:
                 if not requested:
                     requested.append(now[0])
                 return [0] if 0 in readers else [], writers, []
-            return [20] if 20 in readers else [], writers, []
+            ready = [20] if 20 in readers else []
+            if peer in readers and not sizeless:
+                ready.append(peer)
+            return ready, writers, []
 
         with (
             spawned(sockets=[hook_server, display_server], proc=proc),
@@ -214,11 +316,7 @@ class DisplayTest(Base):
             mock.patch.object(os, "read", side_effect=read),
             mock.patch.object(os, "write", side_effect=lambda _fd, chunk: len(chunk)),
             mock.patch.object(guard.time, "monotonic", side_effect=lambda: now[0]),
-            mock.patch.object(
-                guard.select,
-                "select",
-                side_effect=select,
-            ),
+            mock.patch.object(guard.select, "select", side_effect=select),
         ):
             self.assertEqual(runtime.run(), 0)
         if close:
@@ -226,7 +324,9 @@ class DisplayTest(Base):
             self.assertLess(now[0] - requested[0], 10)
             self.assertLess(len(b"".join(sent)), len(data))
         else:
-            self.assertEqual(b"".join(sent), b"" if stalled else data)
+            self.assertEqual(b"".join(sent), b"" if stalled or sizeless else data.encode())
+        if sizeless:
+            self.assertGreaterEqual(now[0] - runtime.exit_at, guard.DISPLAY_DRAIN_WAIT)
 
 
 class CellTest(Base):
@@ -709,6 +809,8 @@ class GuardTest(Base):
         server.accept.return_value = peer, ""
         peer.send.side_effect = len
         runtime.take_display(server)
+        runtime.display_frame(peer, b"w", SIZED[5:])
+        runtime.write_display(peer)
         self.assertIn(b"\x1b[?1049h", peer.send.call_args.args[0])
 
     def test_scroll_region_linefeed_index_nextline_and_wrap_preserve_footer(self):
@@ -868,14 +970,20 @@ class GuardTest(Base):
         hook_server.accept.side_effect = BlockingIOError
         display_server.accept.return_value = (peer, "")
         peer.send.side_effect = len
+        peer.recv.return_value = SIZED
         proc = mock.Mock(returncode=0, pid=100)
+        ready = [[20], [display_server], [peer], [20]]
         with (
             spawned(sockets=[hook_server, display_server], proc=proc),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(
                 guard.select,
                 "select",
-                side_effect=[([20], [], []), ([display_server], [], []), ([20], [], [])],
+                side_effect=lambda _r, writers, _e, _t: (
+                    ready.pop(0) if ready else [],
+                    writers,
+                    [],
+                ),
             ),
             mock.patch.object(os, "read", side_effect=[b"idle prompt", b""]),
             mock.patch.object(os, "write", side_effect=lambda _fd, data: len(data)),
@@ -1066,6 +1174,8 @@ class GuardTest(Base):
         server.accept.side_effect, server.accept.return_value = None, (peer, "")
         peer.send.side_effect = len
         runtime.take_display(server)
+        runtime.display_frame(peer, b"w", SIZED[5:])
+        runtime.write_display(peer)
         self.assertIn(b"unrecognized arguments", peer.send.call_args.args[0])
         self.assertFalse(runtime.lingers(100.5))
 
@@ -1448,6 +1558,7 @@ class GuardTest(Base):
         peer = mock.Mock()
         peer.send.side_effect = [1, 4]
         runtime.peers[peer] = ("display", guard.Decoder())
+        runtime.displays[peer] = guard.Display(deque(), 0.0)
         runtime.displayed = True
         runtime.streams[8] = b"t"
         with mock.patch.object(os, "read", return_value=b"hello"):

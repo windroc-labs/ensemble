@@ -22,6 +22,7 @@ import time
 import tty
 import unicodedata
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 
 FRAME_MAX = 64 << 20
@@ -749,6 +750,18 @@ def child_setup(slave: int | None) -> None:
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
 
+@dataclass
+class Display:
+    """A display that reported its size: its replay (history strings shared with the screen),
+    then live bytes; progress: when it last took bytes.
+    """
+
+    replay: deque[str]
+    progress: float
+    head: bytearray = field(default_factory=bytearray)
+    pending: bytearray = field(default_factory=bytearray)
+
+
 class Guard:
     def __init__(
         self,
@@ -767,8 +780,8 @@ class Guard:
         self.streams = {}
         self.servers = {}
         self.peers = {}
-        self.display_buffers: dict[socket.socket, bytearray] = {}
-        self.display_progress: dict[socket.socket, float] = {}
+        self.displays: dict[socket.socket, Display] = {}
+        self.awaiting: dict[socket.socket, float] = {}  # display without its size yet: accepted at
         self.output = deque()
         self.output_size = 0
         self.taken = deque()  # (peer, delivery) of each written h, until its harness's k
@@ -876,19 +889,30 @@ class Guard:
 
     def drop(self, peer) -> None:
         self.peers.pop(peer, None)
-        self.display_buffers.pop(peer, None)
-        self.display_progress.pop(peer, None)
+        self.displays.pop(peer, None)
+        self.awaiting.pop(peer, None)
         peer.close()
         if self.sizes.pop(peer, None) is not None and self.closing is None:
             self.follow()
 
     def display_writers(self) -> list[socket.socket]:
-        return [peer for peer, pending in self.display_buffers.items() if pending]
+        return [
+            peer
+            for peer, display in self.displays.items()
+            if display.replay or display.head or display.pending
+        ]
+
+    def owed(self) -> list[socket.socket]:
+        return [*self.display_writers(), *self.awaiting]
 
     def write_display(self, peer: socket.socket) -> None:
-        if peer not in self.display_buffers:
+        display = self.displays.get(peer)
+        if display is None:
             return
-        data = self.display_buffers[peer][:READ_SIZE]
+        while len(display.head) < READ_SIZE and display.replay:
+            display.head += display.replay.popleft().encode()
+        queue = display.head or display.pending
+        data = bytes(queue[:READ_SIZE])
         if not data:
             return
         try:
@@ -901,8 +925,8 @@ class Guard:
         if count == 0:
             self.drop(peer)
             return
-        self.display_progress[peer] = time.monotonic()
-        del self.display_buffers[peer][:count]
+        display.progress = time.monotonic()
+        del queue[:count]
 
     def follow(self) -> None:
         """The PTY at the latest sized display's size, else unsized; a change redraws its client."""
@@ -1040,6 +1064,9 @@ class Guard:
             self.sizes.pop(peer, None)
             self.sizes[peer] = size
             self.follow()
+            if peer not in self.displays:
+                self.awaiting.pop(peer, None)
+                self.displays[peer] = Display(self.screen.replay(), time.monotonic())
         else:
             raise ValueError("invalid display frame")
 
@@ -1056,13 +1083,11 @@ class Guard:
         kind = self.streams[descriptor]
         if kind == b"t":
             self.screen.append(data)
-            for peer, (role, _) in list(self.peers.items()):
-                if role == "display":
-                    pending = self.display_buffers.setdefault(peer, bytearray())
-                    if len(pending) + len(data) > BUFFER_MAX:
-                        self.drop(peer)
-                    else:
-                        pending.extend(data)
+            for peer, display in list(self.displays.items()):
+                if len(display.pending) + len(data) > BUFFER_MAX:
+                    self.drop(peer)
+                else:
+                    display.pending.extend(data)
         elif self.channel:
             self.emit(frame(kind, data))
 
@@ -1116,7 +1141,7 @@ class Guard:
             scan_due = 0.0
             while True:
                 if self.display_closed:
-                    for peer in list(self.display_buffers):
+                    for peer in [*self.displays, *self.awaiting]:
                         self.drop(peer)
                 now = time.monotonic()
                 if now >= scan_due:
@@ -1130,7 +1155,7 @@ class Guard:
                     self.exit_sent, self.exit_at = True, time.monotonic()
                 self.flush()
                 if self.exit_sent and (not self.output or not self.channel):
-                    if not self.lingers(time.monotonic()) and not self.display_writers():
+                    if not self.lingers(time.monotonic()) and not self.owed():
                         return 0
                     for server, role in self.servers.items():
                         if role == "display":
@@ -1143,16 +1168,21 @@ class Guard:
                 ):
                     return 1
                 if self.exit_sent:
-                    writers = self.display_writers()
-                    for peer in writers:
-                        since = max(self.exit_at, self.display_progress.get(peer, self.exit_at))
+                    for peer in self.owed():
+                        display = self.displays.get(peer)
+                        since = max(
+                            self.exit_at, display.progress if display else self.awaiting[peer]
+                        )
                         if time.monotonic() - since >= DISPLAY_DRAIN_WAIT:
                             self.drop(peer)
-                    writers = self.display_writers()
                     readers = [0] if self.channel and not self.display_closed else []
-                    ready, writable, _ = select.select(readers, writers, [], TICK)
-                    if 0 in ready:
-                        self.read_channel()
+                    readers += list(self.awaiting)  # a w in the grace window starts its replay
+                    ready, writable, _ = select.select(readers, self.display_writers(), [], TICK)
+                    for descriptor in ready:
+                        if descriptor == 0:
+                            self.read_channel()
+                        elif descriptor in self.peers:
+                            self.peer_read(descriptor)
                     for peer in writable:
                         self.write_display(peer)
                     continue
@@ -1210,7 +1240,7 @@ class Guard:
         )
 
     def take_display(self, server) -> None:
-        """A new display gets the current screen, then live output."""
+        """A new display gets nothing until its size (w): then its replay, then live output."""
         try:
             peer, _ = server.accept()
         except BlockingIOError:
@@ -1220,9 +1250,8 @@ class Guard:
             return
         peer.settimeout(0)
         self.peers[peer] = ("display", Decoder())
-        self.display_buffers[peer] = bytearray("".join(self.screen.replay()).encode())
+        self.awaiting[peer] = time.monotonic()
         self.displayed = True
-        self.write_display(peer)
 
     def final_hooks(self) -> None:
         for server, role in self.servers.items():
