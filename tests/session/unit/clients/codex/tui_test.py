@@ -192,6 +192,13 @@ class TuiTest(Base):
         plan = tui.decode(json.loads(launch.argv[-1]))
         self.assertEqual(launch.argv[0], "/opt/ensemble/venv/bin/python")
         self.assertEqual(plan.executable, "/opt/ensemble/bin/codex")
+        snapshot = self.common.load(str(self.work), spec.sid).snapshot
+        for selection in ((), ("resume", NATIVE)):
+            with self.subTest(selection=selection):
+                argv = tui.execution_argv(
+                    dataclasses.replace(plan, selection=selection), snapshot, "trusted"
+                )
+                self.assertIn("--no-alt-screen", argv[: argv.index("--")])
         self.assertEqual(plan.store, "/run/ensemble/codex-store")
         self.assertEqual(launch.env["PYTHONPATH"], "/opt/ensemble/src")
         self.assertNotIn(tui.CLIENT_PYTHONPATH, launch.env)
@@ -324,7 +331,9 @@ class TuiTest(Base):
         )
         plan = tui.decode(data)
         argv = tui.execution_argv(plan, run.state.snapshot, "hooks.state={trusted}")
-        self.assertEqual(argv[:4], ["/protected/codex", "--no-daemon", "-C", str(self.cwd)])
+        self.assertEqual(
+            argv[:5], ["/protected/codex", "--no-daemon", "--no-alt-screen", "-C", str(self.cwd)]
+        )
         self.assertEqual(argv[-2:], ["--", "quoted ' prompt\nnext"])
         self.assertIn('tui.notification_method="bel"', argv)
         self.assertNotIn("sandbox_workspace_write.writable_roots=[]", argv)
@@ -356,6 +365,7 @@ class TuiTest(Base):
         run, launch, data = self.launch(resume=True, client=other)
         argv = tui.execution_argv(tui.decode(data), run.state.snapshot, "hooks.state={trusted}")
         self.assertEqual(argv[:3], ["/protected/codex", "resume", NATIVE])
+        self.assertIn("--no-alt-screen", argv[: argv.index("--")])
         self.assertIn("gpt-test", argv)
         self.assertIn("sandbox_workspace_write.network_access=false", argv)
         self.assertEqual(launch.env["CODEX_HOME"], saved.snapshot.codex_home)
@@ -1622,8 +1632,15 @@ class PlanTest(PlanCase):
                 command = tui.execution_argv(decoded, self.snapshot, "trusted")
                 self.assertEqual(command[: 1 + len(selection)], [plan.executable, *selection])
                 self.assertEqual(
-                    command[1 + len(selection) :][:5],
-                    ["--no-daemon", "-C", "/work", "-c", 'tui.notification_method="bel"'],
+                    command[1 + len(selection) :][:6],
+                    [
+                        "--no-daemon",
+                        "--no-alt-screen",
+                        "-C",
+                        "/work",
+                        "-c",
+                        'tui.notification_method="bel"',
+                    ],
                 )
 
     def test_fixed_frontend_uses_the_saved_snapshot_cwd(self):
