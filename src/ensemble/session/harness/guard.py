@@ -298,7 +298,7 @@ class Screen:
         self.limit, self.rows, self.columns = limit, rows, columns
         self.cells = [blank(columns) for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
-        self.lines: deque[str] = deque()  # rendered rows for a new display, oldest first
+        self.lines: deque[tuple[Row, str]] = deque()  # retired rows, rendered for a new display
         self.lines_size = 0  # UTF-8 bytes in lines
         self.row, self.column = 0, 0
         self.scroll_top, self.scroll_bottom = 0, rows - 1
@@ -336,10 +336,10 @@ class Screen:
             after = cells[index + 1] if index + 1 < len(cells) else None
             margin = after is not None and leads_wide(after)
             text = render(row, wrapped=row.wrapped, margin=margin)
-            self.lines.append(text)
+            self.lines.append((row, text))
             self.lines_size += len(text.encode())
         while len(self.lines) > LINES or self.lines_size > LINES_SIZE:
-            self.lines_size -= len(self.lines.popleft().encode())
+            self.lines_size -= len(self.lines.popleft()[1].encode())
 
     def mode(self, key: str, sequence: str) -> None:
         self.modes.pop(key, None)
@@ -620,8 +620,8 @@ class Screen:
             return "".join(f"\x1b[>{flags}u" for flags in stack)
 
         parts = deque([RESET + "\x1b[0m\x1b[?1049l\x1b7\x1b[r\x1b8\r\x1b[J"])
-        parts.extend(self.lines)
-        if self.lines and not self.lines[-1].endswith("\r\n"):
+        parts.extend(text for _, text in self.lines)
+        if self.lines and not self.lines[-1][1].endswith("\r\n"):
             parts.append("\r\n")
         main = self.normal or (self.cells, self.row, self.column, self.keyboard)
         parts.append(screen(main[0]))
