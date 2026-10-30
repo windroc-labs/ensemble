@@ -373,13 +373,18 @@ class DisplayTest(ApiCase):
 class GenerationTest(ApiCase):
     """A view's close acts on its own generation, never on the newer one now holding the name."""
 
-    def assert_lives(self, view: OwnedSession) -> None:
+    def resumed(self) -> int:
+        return live_tmux.wait(lambda: self.calls("w1")[1:], what="the resumed client's line")[-1][
+            "pid"
+        ]
+
+    def assert_lives(self, view: OwnedSession, pid: int) -> None:
         channel = self.owner("w1")
         self.assertEqual(channel.status()["state"], "running")
         self.assertEqual(channel.status()["generation"], view.generation)
         self.assertEqual(self.liveness("w1", view.generation), Liveness.LIVE)
         self.assertTrue(self.live("w1"))
-        self.assertTrue(running(self.calls("w1")[-1]["pid"]))
+        self.assertTrue(running(pid))
 
     def test_old_harness_close_in_drain_keeps_the_new_generation(self):
         self.sid = str(uuid.uuid4())
@@ -391,9 +396,10 @@ class GenerationTest(ApiCase):
         self.assertTrue(draining.alive(), draining.status())
         new = self.started(resume=True)
         self.assertNotEqual(new.generation, old.generation)
+        pid = self.resumed()
         old.close()
         old.stop()
-        self.assert_lives(new)
+        self.assert_lives(new, pid)
 
     def test_stale_view_close_keeps_the_new_generation(self):
         self.sid = str(uuid.uuid4())
@@ -403,5 +409,6 @@ class GenerationTest(ApiCase):
         os.kill(first.status()["pid"], signal.SIGKILL)
         live_tmux.wait(lambda: not first.alive(), what="the killed harness to let go")
         new = self.started(resume=True)
+        pid = self.resumed()
         old.close()
-        self.assert_lives(new)
+        self.assert_lives(new, pid)
