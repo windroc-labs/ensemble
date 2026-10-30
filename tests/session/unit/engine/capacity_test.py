@@ -1,5 +1,7 @@
 """Client admission across configurations; filesystem locks, no processes or credentials."""
 
+import fcntl
+import itertools
 import json
 import os
 import shutil
@@ -7,26 +9,21 @@ import threading
 from pathlib import Path
 from unittest import mock
 
+from ensemble.session.engine import capacity
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.types import Liveness, Mode, SessionError, SessionRow
+from ensemble.session.hosts.base import capacity_row
 from tests.session.case import Case
 from tests.session.fakes.terminal import MemoryHost
 
-
-class NamespacedHost(MemoryHost):
-    namespace = "shared-backend"
-
-    def _capacity_namespace(self):
-        return self.namespace
+FIRST = {"client": "fake", "sid": "s1"}
 
 
-class EndingHost(MemoryHost):
-    """Its sessions end, and a tmux server exits with its last one, before the namespace read."""
+class UnidentifiedHost(MemoryHost):
+    """Its rows name no generation, as a Host may whose workers keep none."""
 
-    def _capacity_namespace(self):
-        for terminal in list(self.processes.values()):
-            terminal.close()
-        raise SessionError("no server running")
+    def _capacity_rows(self):
+        return [capacity_row(row, None) for row in self.rows()]
 
 
 class SettlingHost(MemoryHost):
@@ -53,14 +50,11 @@ class AdmissionTest(Case):
     def setUp(self):
         self.host = MemoryHost()
 
-    def enter(
-        self, *, client="fake", limit=1, name="first", sid="s1", mode=Mode.HEADLESS, hosts=None
-    ):
+    def enter(self, *, client="fake", limit=1, label="first", mode=Mode.HEADLESS, hosts=None):
         ticket = Admission(
             client,
             limit,
-            name=name,
-            sid=sid,
+            label=label,
             mode=mode,
             hosts={"h": self.host} if hosts is None else hosts,
         )
@@ -97,9 +91,7 @@ class AdmissionTest(Case):
             with self.subTest(limit=limit):
                 first = self.enter(limit=limit, mode=Mode.TUI)
                 with first:
-                    self.assertIsNone(
-                        self.admitted(self.enter(limit=limit, name="second", sid="s2"))
-                    )
+                    self.assertIsNone(self.admitted(self.enter(limit=limit, label="second")))
                     self.assertIsNone(
                         self.promptly(lambda: Admission.reconcile("fake", {"h": self.host}))
                     )
@@ -107,20 +99,20 @@ class AdmissionTest(Case):
     def test_an_in_flight_tui_start_holds_its_slot_before_its_session_exists(self):
         first = self.enter(mode=Mode.TUI)
         with first:
-            error = self.admitted(self.enter(name="second", sid="s2"))
+            error = self.admitted(self.enter(label="second"))
             self.assertRegex(str(error), "limit 1; held by: first")
             self.assertIsNone(self.promptly(lambda: Admission.reconcile("fake", {"h": self.host})))
             self.assertTrue(os.path.exists(first.path))
-            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            self.host.create("first", metadata=FIRST | {"generation": first.generation})
             first.started(lambda: Liveness.LIVE)
-        with self.assertRaisesRegex(SessionError, "held by: first"), self.enter(name="third"):
+        with self.assertRaisesRegex(SessionError, "held by: first"), self.enter(label="third"):
             self.fail("admitted")
 
     def test_an_in_flight_tui_start_and_its_session_count_once(self):
         first = self.enter(limit=2, mode=Mode.TUI)
         with first:
-            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
-            self.assertIsNone(self.admitted(self.enter(limit=2, name="second", sid="s2")))
+            self.host.create("first", metadata=FIRST | {"generation": first.generation})
+            self.assertIsNone(self.admitted(self.enter(limit=2, label="second")))
             first.started(lambda: Liveness.LIVE)
 
     def test_a_tui_start_settling_during_a_count_is_still_counted(self):
@@ -128,14 +120,14 @@ class AdmissionTest(Case):
         first = self.enter(mode=Mode.TUI)
 
         def settle():
-            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            self.host.create("first", metadata=FIRST | {"generation": first.generation})
             first.started(lambda: Liveness.LIVE)
 
         with first:
             self.host.settle = settle
             with (
                 self.assertRaisesRegex(SessionError, "held by: first"),
-                self.enter(name="second", sid="s2"),
+                self.enter(label="second"),
             ):
                 self.fail("admitted beside a live first")
             self.host.settled.join(5)
@@ -149,7 +141,7 @@ class AdmissionTest(Case):
         first = self.enter()
         with first:
             first.started(lambda: Liveness.LIVE)
-        with self.assertRaises(SessionError), self.enter(name="second", sid="s2"):
+        with self.assertRaises(SessionError), self.enter(label="second"):
             pass
         first.close()
         self.assertTrue(os.path.exists(root), "a release from a watcher thread removes nothing")
@@ -184,7 +176,7 @@ class AdmissionTest(Case):
             first.started(live)
         with (
             self.assertRaisesRegex(SessionError, "client fake.*limit 1.*first"),
-            self.enter(name="second", sid="s2"),
+            self.enter(label="second"),
         ):
             self.fail("admitted")
         first.close()
@@ -194,7 +186,7 @@ class AdmissionTest(Case):
             pass
 
     def test_unlimited_runs_are_counted_by_a_limited_caller_and_clients_are_separate(self):
-        first = self.enter(limit=0, name=None)
+        first = self.enter(limit=0, label="s1")
         with first:
             first.started(lambda: Liveness.LIVE)
         with self.assertRaisesRegex(SessionError, "s1"), self.enter():
@@ -219,7 +211,7 @@ class AdmissionTest(Case):
     def test_tui_record_survives_a_disjoint_host_configuration(self):
         first = self.enter(mode=Mode.TUI)
         with first:
-            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            self.host.create("first", metadata=FIRST | {"generation": first.generation})
             first.started(lambda: Liveness.LIVE)
         with (
             self.assertRaisesRegex(SessionError, "first"),
@@ -228,22 +220,22 @@ class AdmissionTest(Case):
             pass
         # Matching inventory reconciles an ended holder; a different sid is not the holder.
         self.host.processes["first"].calls.alive.return_value = False
-        with self.enter(name="second", sid="s2"):
+        with self.enter(label="second"):
             pass
 
-    def test_alias_inventory_and_its_reservation_count_one_physical_tui(self):
-        shared = NamespacedHost()
+    def test_alias_configurations_count_one_run_by_generation(self):
+        shared = MemoryHost()
         hosts = {"original-config": shared, "alias-config": shared}
         first = self.enter(limit=2, mode=Mode.TUI, hosts=hosts)
         with first:
-            shared.create("first", metadata={"client": "fake", "sid": "s1"})
+            shared.create("first", metadata=FIRST | {"generation": first.generation})
             first.started(lambda: Liveness.LIVE)
-        second = self.enter(limit=2, name="second", sid="s2", hosts=hosts)
+        second = self.enter(limit=2, label="second", hosts=hosts)
         with second:
             second.started(lambda: Liveness.LIVE)
         with (
             self.assertRaisesRegex(SessionError, "held by: first, second"),
-            self.enter(limit=2, name="third", sid="s3", hosts=hosts),
+            self.enter(limit=2, label="third", hosts=hosts),
         ):
             self.fail("two real sessions must fill two slots")
 
@@ -257,23 +249,12 @@ class AdmissionTest(Case):
         ):
             self.fail("equal logical IDs do not identify a shared backend")
 
-    def test_distinct_known_namespaces_keep_equal_session_identities_separate(self):
-        first, second = NamespacedHost(), NamespacedHost()
-        second.namespace = "other-backend"
-        for host in (first, second):
-            host.create("same", metadata={"client": "fake", "sid": "same"})
-        with (
-            self.assertRaisesRegex(SessionError, "held by: same, same"),
-            self.enter(limit=2, hosts={"a": first, "b": second}),
-        ):
-            self.fail("independent servers must consume independent slots")
-
     def test_unknown_configuration_is_not_merged_by_matching_name_and_sid(self):
-        first = self.enter(mode=Mode.TUI, hosts={"old-config": NamespacedHost()})
+        first = self.enter(mode=Mode.TUI, hosts={"old-config": MemoryHost()})
         with first:
             first.started(lambda: Liveness.LIVE)
-        other = NamespacedHost()
-        other.create("first", metadata={"client": "fake", "sid": "s1"})
+        other = MemoryHost()
+        other.create("first", metadata=FIRST)  # another run of equal name and sid
         with (
             self.assertRaisesRegex(SessionError, "held by: first, first"),
             self.enter(limit=2, hosts={"new-config": other}),
@@ -303,7 +284,9 @@ class AdmissionTest(Case):
         with first:
             records = list(Path(first.directory).glob("*.run"))
             self.assertEqual([record.name for record in records], [f"{first.generation}.run"])
-            self.assertEqual(json.loads(records[0].read_text())["sid"], "s1")
+            self.assertEqual(
+                json.loads(records[0].read_text()), {"kind": "tui", "name": "first", "host": "h"}
+            )
             # Simulate a vanished launcher after spawn by retaining its pre-spawn reservation.
             first.started(lambda: Liveness.LIVE)
         with self.assertRaises(SessionError), self.enter(hosts={}):
@@ -340,23 +323,10 @@ class AdmissionTest(Case):
             self.assertEqual(self.host.list(), [])
         ended.calls.close.assert_called_once_with()
 
-    def test_sessions_all_ending_before_the_namespace_read_leave_no_rows(self):
-        self.host = EndingHost()
-        self.host.create("old", metadata={"client": "fake", "sid": "old"})
-        with self.enter():
-            pass
-
-    def test_a_namespace_failure_with_sessions_still_listed_fails_closed(self):
-        self.host = EndingHost()
-        self.host.create("old", metadata={"client": "fake", "sid": "old"})
-        self.host.calls.list.return_value = ["old"]
-        with self.assertRaisesRegex(SessionError, "no server running"), self.enter():
-            pass
-
     def test_concurrent_admissions_serialize_the_count_and_reservation(self):
         barrier = threading.Barrier(2)
         admitted, refused, errors = [], [], []
-        tickets = [self.enter(name=f"n{i}", sid=f"s{i}") for i in range(2)]
+        tickets = [self.enter(label=f"n{i}") for i in range(2)]
 
         def run(ticket):
             try:
@@ -422,19 +392,42 @@ class AdmissionTest(Case):
         with self.assertRaises(SessionError), self.enter():
             pass
 
-    def test_replaced_tui_identity_is_reconciled_and_partial_identity_is_counted_once(self):
+    def test_replaced_tui_generation_is_reconciled(self):
         first = self.enter(mode=Mode.TUI)
         with first:
-            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            self.host.create("first", metadata=FIRST | {"generation": first.generation})
             first.started(lambda: Liveness.LIVE)
-        self.host.processes["first"].metadata["sid"] = None
-        with self.enter(limit=2, name="second", sid="s2"):
-            pass
-        self.host.processes["first"].metadata["sid"] = "replacement"
-        self.host.processes["first"].metadata["client"] = "other"
-        with self.enter():
-            pass
+        self.host.create("first", metadata=FIRST)  # its next worker, of another generation
+        with self.assertRaisesRegex(SessionError, "held by: first$"), self.enter(label="second"):
+            self.fail("the replacement counts once")
         self.assertFalse(Path(first.path).exists())
+
+    def test_earlier_format_reservations_count_by_stem_or_are_reaped(self):
+        directory = Path(self.enter(limit=0).directory)
+        directory.mkdir(parents=True)
+        held = directory / "0123.run"
+        held.write_text('{"kind": "headless", "name": "old", "sid": "s0"}')
+        lease = os.open(held, os.O_RDONLY)
+        self.addCleanup(os.close, lease)
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        detached = directory / "4567.run"
+        detached.write_text('{"kind": "tui", "name": "older", "sid": "s1", "host": "h"}')
+        self.host.create("older", metadata=FIRST)
+        with (
+            self.assertRaisesRegex(SessionError, "limit 2; held by: old, older$"),
+            self.enter(limit=2, label="new"),
+        ):
+            self.fail("the held earlier file and the row count, the detached file does not")
+        self.assertTrue(held.exists())
+        self.assertFalse(detached.exists())
+
+    def test_a_live_row_without_generation_counts_once(self):
+        self.host = UnidentifiedHost()
+        self.host.create("bare", metadata=FIRST)
+        with self.assertRaisesRegex(SessionError, "limit 1; held by: bare$"), self.enter():
+            self.fail("an unidentified live row holds its slot")
+        with self.enter(limit=2):
+            pass
 
     def test_unknown_mode_probe_keeps_capacity_until_it_can_confirm_exit(self):
         ticket = self.enter()
@@ -445,3 +438,91 @@ class AdmissionTest(Case):
             ticket.started(state)
         self.assertTrue(ticket.finished.wait(5))
         self.assertGreaterEqual(state.call_count, 3)
+
+
+class IdentityCountTest(Case):
+    """Each live run counts once, by its generation, whatever pairs a guess could confuse."""
+
+    CASES = tuple(
+        itertools.product(
+            (Mode.TUI, Mode.HEADLESS),
+            (True, False),  # named
+            (True, False),  # another live run shares its sid
+            ("live", "absent", "dead"),  # its Host row
+            ("kept", "released"),  # its reservation
+            (False, True),  # reservations scanned in reverse
+        )
+    )
+
+    def run_of(self, client, hosts, host, *, mode, named, row, reservation, name):
+        """A started run of `client` on `host`, with its row and reservation as given; whether
+        it is live.
+        """
+        sid = "shared"
+        label = name if named or mode == Mode.TUI else sid
+        ticket = Admission(client, 0, label=label, mode=mode, hosts=hosts, host=host)
+        self.addCleanup(ticket.close)
+        with ticket:
+            if row != "absent":
+                worker = name if named or mode == Mode.TUI else f"headless-{ticket.generation}"
+                metadata = {"client": client, "sid": sid, "generation": ticket.generation}
+                hosts[host].create(worker, metadata=metadata)
+                hosts[host].processes[worker].calls.alive.return_value = row == "live"
+            ticket.started(lambda: Liveness.LIVE)
+        if reservation == "released":
+            ticket.close()
+        kept = reservation == "kept" and (mode == Mode.HEADLESS or row == "live")
+        return kept or row == "live"
+
+    def count_is(self, client, hosts, expected, reverse):
+        scan = os.scandir
+
+        def ordered(path):
+            entries = sorted(scan(path), key=lambda entry: entry.name)
+            return iter(entries[::-1] if reverse else entries)
+
+        probe = {"label": "probe", "mode": Mode.HEADLESS, "hosts": hosts}
+        with mock.patch.object(capacity.os, "scandir", ordered):
+            if expected:
+                with (
+                    self.assertRaisesRegex(SessionError, f"limit {expected}; held by"),
+                    Admission(client, expected, **probe),
+                ):
+                    self.fail(f"admitted beside {expected} live runs")
+            with Admission(client, expected + 1, **probe):
+                pass
+
+    def test_every_live_run_counts_once(self):
+        for index, (mode, named, shared, row, reservation, reverse) in enumerate(self.CASES):
+            with self.subTest(
+                mode=mode.value,
+                named=named,
+                shared=shared,
+                row=row,
+                reservation=reservation,
+                reverse=reverse,
+            ):
+                client = f"c{index}"
+                hosts = {"h": MemoryHost("h"), "other": MemoryHost("other")}
+                live = self.run_of(
+                    client,
+                    hosts,
+                    "h",
+                    mode=mode,
+                    named=named,
+                    row=row,
+                    reservation=reservation,
+                    name="a",
+                )
+                if shared:
+                    self.run_of(
+                        client,
+                        hosts,
+                        "other",
+                        mode=mode,
+                        named=named,
+                        row="live",
+                        reservation="kept",
+                        name="b",
+                    )
+                self.count_is(client, hosts, int(live) + int(shared), reverse)

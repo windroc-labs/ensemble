@@ -12,7 +12,7 @@ from tests.session.fakes.terminal import MemoryHost
 def compete(ready, release, output, name):
     ready.wait(10)
     try:
-        with Admission("fake", 1, name=name, sid=name, mode=Mode.HEADLESS, hosts={}) as ticket:
+        with Admission("fake", 1, label=name, mode=Mode.HEADLESS, hosts={}) as ticket:
             ticket.started(lambda: Liveness.LIVE)
         output.put("admitted")
         release.wait(10)
@@ -23,14 +23,14 @@ def compete(ready, release, output, name):
 
 def interrupted_tui():
     with Admission(
-        "fake", 0, name="held", sid="s1", mode=Mode.TUI, hosts={"elsewhere": MemoryHost()}
+        "fake", 0, label="held", mode=Mode.TUI, hosts={"elsewhere": MemoryHost()}
     ) as ticket:
         assert os.path.isfile(ticket.path)
         os._exit(0)  # A crash after reservation cannot execute context cleanup.
 
 
 def interrupted_transient(mode):
-    with Admission("fake", 1, name="held", sid="s1", mode=mode, hosts={}) as ticket:
+    with Admission("fake", 1, label="held", mode=mode, hosts={}) as ticket:
         ticket.started(lambda: Liveness.LIVE)
     os._exit(0)  # The kernel, not normal ticket cleanup, releases the lease.
 
@@ -48,7 +48,7 @@ class CapacityTest(Case):
                     child.kill()
                     child.join(10)
                 self.assertEqual(child.exitcode, 0)
-                with Admission("fake", 1, name="new", sid="s2", mode=mode, hosts={}):
+                with Admission("fake", 1, label="new", mode=mode, hosts={}):
                     pass
 
     def test_simultaneous_processes_cannot_both_take_the_last_slot(self):
@@ -86,11 +86,11 @@ class CapacityTest(Case):
         self.assertEqual(child.exitcode, 0)
         with (
             self.assertRaisesRegex(SessionError, "held"),
-            Admission("fake", 1, name="other", sid="s2", mode=Mode.HEADLESS, hosts={}),
+            Admission("fake", 1, label="other", mode=Mode.HEADLESS, hosts={}),
         ):
             self.fail("lost reservation")
         # Its matching Host can confirm that no session was ever created.
         with Admission(
-            "fake", 1, name="other", sid="s2", mode=Mode.HEADLESS, hosts={"elsewhere": MemoryHost()}
+            "fake", 1, label="other", mode=Mode.HEADLESS, hosts={"elsewhere": MemoryHost()}
         ):
             pass

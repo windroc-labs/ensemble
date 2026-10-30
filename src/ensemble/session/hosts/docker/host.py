@@ -30,6 +30,7 @@ from ensemble.session.engine.types import (
     PLUGIN_SOURCE,
     RESUME,
     SESSION_NAME,
+    CapacityRow,
     ClientContext,
     ClientHome,
     ConfigError,
@@ -50,6 +51,7 @@ from ensemble.session.hosts.base import (
     TUI_DIR,
     TUI_STATE,
     Host,
+    capacity_row,
     created_events,
     start_phase,
     tui_lock,
@@ -1162,12 +1164,12 @@ class DockerHost(Host):
     def list(self) -> list[str]:
         return sorted(self._containers())
 
-    def _capacity_rows(self) -> list[SessionRow]:
+    def _capacity_rows(self) -> list[CapacityRow]:
         containers = self._containers(required=True)
-        return [self._row(row, probe=True) for _, row in sorted(containers.items())]
-
-    def _capacity_namespace(self) -> str:
-        return f"docker:{endpoint()}"
+        return [
+            capacity_row(self._row(row, probe=True), row.generation)
+            for _, row in sorted(containers.items())
+        ]
 
     def rows(self) -> list[SessionRow]:
         """[] when docker fails, so other Hosts' rows list; list() raises: callers act on absence."""

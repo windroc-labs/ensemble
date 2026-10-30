@@ -23,6 +23,7 @@ from ensemble.session import (
 )
 from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
+    CapacityRow,
     ClientContext,
     Hosts,
     Launch,
@@ -181,7 +182,7 @@ class CapacityRows(Case):
         self.assertEqual([row.name for row in host._capacity_rows()], ["b", "a"])
 
     def test_default_rows_are_each_listed_names_worker_state_and_activity(self):
-        """sid, client and display from its session.json (none: None), state from its activity
+        """client and generation from its session.json (none: None), state from its activity
         of that generation (none, or another generation's: working).
         """
         root = os.path.join(self.home, ".ensemble", "tui")
@@ -201,9 +202,9 @@ class CapacityRows(Case):
         self.assertEqual(
             host._capacity_rows(),
             [
-                SessionRow("w1", "s1", "c", StatusState.DONE, "mgr", None, None, own=False),
-                SessionRow("w2", "s2", "c", StatusState.WORKING, None, None, None, own=False),
-                SessionRow("w3", None, None, StatusState.WORKING, None, None, None, own=False),
+                CapacityRow("w1", "c", StatusState.DONE, "g1"),
+                CapacityRow("w2", "c", StatusState.WORKING, "g2"),
+                CapacityRow("w3", None, StatusState.WORKING, None),
             ],
         )
 

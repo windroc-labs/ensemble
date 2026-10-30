@@ -19,6 +19,7 @@ from ensemble.session.engine.types import (
     LOCAL_CONTEXT,
     MARKS,
     SESSION_NAME,
+    CapacityRow,
     ClientContext,
     ClientHome,
     ConfigError,
@@ -130,6 +131,10 @@ def worker_row(name: str, found: WorkerState | None, state: StatusState) -> Sess
         None,
         own=False,
     )
+
+
+def capacity_row(row: SessionRow, generation: str | None) -> CapacityRow:
+    return CapacityRow(row.name, row.client, row.state, generation)
 
 
 def worker_file(name: str, file: str, limit: int) -> bytes | None:
@@ -357,16 +362,15 @@ class Host(ABC):
             rows.append(worker_row(name, found, word or StatusState.WORKING))
         return rows
 
-    def _capacity_rows(self) -> list[SessionRow]:
+    def _capacity_rows(self) -> list[CapacityRow]:
         names = set(self.list())
         rows = self.rows()
         if (missing := names - {row.name for row in rows}) and missing & set(self.list()):
             raise SessionError(f"host {self.name}: inventory unavailable")
-        return rows
-
-    def _capacity_namespace(self) -> str | None:
-        """Shared backend identity, if known."""
-        return None
+        return [
+            capacity_row(row, found.generation if (found := worker_state(row.name)) else None)
+            for row in rows
+        ]
 
     def attach_target(self, name: str) -> CommandView | None:
         """None unless attachable."""

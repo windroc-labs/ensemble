@@ -782,6 +782,20 @@ class SessionRow:
 
 
 @dataclass(frozen=True)
+class CapacityRow:
+    """A Host's worker as client admission counts it; generation: its run's, from admission."""
+
+    name: str
+    client: str | None
+    state: StatusState
+    generation: str | None
+
+    @property
+    def live(self) -> bool:
+        return self.state not in (StatusState.DEAD, StatusState.GONE)
+
+
+@dataclass(frozen=True)
 class Hosts:
     default: str
     tables: Mapping[str, Mapping]

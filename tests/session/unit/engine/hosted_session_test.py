@@ -180,6 +180,19 @@ class ClientCapacityTest(HostedTuiBase):
         session = own(self, client="checked", mode="in_process", sid="a")
         self.assertEqual(session._running.generation, session._capacity.generation)
 
+    def test_an_unnamed_headless_run_takes_one_slot(self):
+        self.configure(tui=True, max_runs=2)
+
+        def listed(name, _launch, metadata):  # a Host that lists it, as its client's
+            self.host.create(name, metadata={**metadata, "client": "fake", "sid": "s1"})
+
+        self.host.calls.headless_worker.side_effect = listed
+        first = own(self, mode="headless", sid="s1")
+        self.assertEqual(self.host.list(), [f"headless-{first._capacity.generation}"])
+        own(self, mode="headless", sid="s2")
+        with self.assertRaisesRegex(SessionError, "limit 2; held by: s1, s2$"):
+            own(self, mode="headless", sid="s3")
+
     def test_independent_configurations_share_capacity_and_attached_closes_release_it(self):
         for action in ("original", "attached-close", "attached-stop", "retire"):
             with self.subTest(action=action):
@@ -349,16 +362,13 @@ def parsed(tables, default) -> Hosts:
 
 class AliasHost(ScreenHost):
     """A Host table of one shared backend (two tmux Host tables on one tmux server, say): of
-    `original`, its sessions and calls; every one, its capacity namespace.
+    `original`, its sessions and calls.
     """
 
     def __init__(self, name, original=None):
         super().__init__(name)
         if original is not None:
             self.processes, self.calls = original.processes, original.calls
-
-    def _capacity_namespace(self):
-        return "shared"
 
 
 class AliasedClientCapacityTest(TuiBase):

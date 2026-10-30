@@ -13,11 +13,11 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 
 from ensemble.session.engine.types import (
+    CapacityRow,
     ConfigError,
     Liveness,
     Mode,
     SessionError,
-    StatusState,
 )
 from ensemble.session.hosts.base import Host
 from ensemble.utils import STATE, inode_lock, sync_directory
@@ -27,28 +27,25 @@ POLL = 0.1
 MAX_RECORD = 16384
 
 
+Known = dict[str, list[CapacityRow]]
+Holders = dict[str | tuple[str, str], str]  # a run's generation (else host and row name): label
+
+
 def _inventory(
     hosts: Mapping[str, Host], client: str, *, required: str | None = None
-) -> tuple[dict, dict]:
-    known, holders = {}, {}
+) -> tuple[Known, Holders]:
+    known: Known = {}
+    holders: Holders = {}
     for key, host in hosts.items():
         try:
-            rows = {row.name: row for row in host._capacity_rows()}
-            try:
-                backend = host._capacity_namespace() if rows else None
-            except SessionError:
-                if host.list():
-                    raise
-                rows, backend = {}, None
+            known[key] = host._capacity_rows()
         except (OSError, SessionError):
             if required is None or key == required:
                 raise
             continue
-        namespace = ("backend", backend) if backend is not None else ("configuration", key)
-        known[key] = namespace, rows
-        for row in rows.values():
-            if row.client == client and row.state not in (StatusState.DEAD, StatusState.GONE):
-                holders[(namespace, row.name, row.sid)] = row.name
+        for row in known[key]:
+            if row.client == client and row.live:
+                holders.setdefault(row.generation or (key, row.name), row.name)
     return known, holders
 
 
@@ -59,7 +56,8 @@ def _read(fd: int) -> dict:
     if (
         not isinstance(value, dict)
         or value.get("kind") not in tuple(Mode)
-        or not all(isinstance(value.get(k), str) and value[k] for k in ("name", "sid"))
+        or not isinstance(value.get("name"), str)
+        or not value["name"]
         or value["kind"] == Mode.TUI
         and not isinstance(value.get("host"), str)
     ):
@@ -67,18 +65,13 @@ def _read(fd: int) -> dict:
     return value
 
 
-def _retained(record: dict, known: dict) -> bool:
-    if record["host"] not in known:
-        return True
-    row = known[record["host"]][1].get(record["name"])
-    return (
-        row is not None
-        and row.state not in (StatusState.DEAD, StatusState.GONE)
-        and (row.sid is None or row.sid == record["sid"])
-    )
+def _retained(record: dict, generation: str, known: Known) -> bool:
+    """A tui record stays while its Host is unknown or lists its generation live."""
+    rows = known.get(record["host"])
+    return rows is None or any(row.live and row.generation == generation for row in rows)
 
 
-def _holders(directory: str, known: dict, holders: dict) -> list[str]:
+def _holders(directory: str, known: Known, holders: Holders) -> list[str]:
     for entry in os.scandir(directory):
         if not entry.name.endswith(".run"):
             continue
@@ -88,20 +81,14 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
             continue
         try:
             record = _read(fd)
+            generation = entry.name.removesuffix(".run")
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 held = False
             except BlockingIOError:
                 held = True
-            if record["kind"] == Mode.TUI:
-                if held or _retained(record, known):
-                    host = record["host"]
-                    namespace = known[host][0] if host in known else ("configuration", host)
-                    holders.pop((namespace, record["name"], None), None)
-                    holders[(namespace, record["name"], record["sid"])] = record["name"]
-                    continue
-            elif held:
-                holders[(entry.name,)] = record["name"]
+            if held or record["kind"] == Mode.TUI and _retained(record, generation, known):
+                holders[generation] = record["name"]
                 continue
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(entry.path)
@@ -138,8 +125,7 @@ class Admission(AbstractContextManager):
         client: str,
         limit: int,
         *,
-        name: str | None,
-        sid: str,
+        label: str,
         mode: Mode,
         hosts: Mapping[str, Host],
         host: str | None = None,
@@ -148,7 +134,7 @@ class Admission(AbstractContextManager):
         self.generation = uuid.uuid4().hex  # the run's identity: its reservation's and its worker's
         self.directory = os.path.join(os.path.expanduser(ROOT), client)
         self.path = os.path.join(self.directory, f"{self.generation}.run")
-        self.record = {"kind": mode, "name": name or sid, "sid": sid}
+        self.record = {"kind": mode, "name": label}
         if mode == Mode.TUI:
             self.record["host"] = host or next(iter(hosts))
         self._fd: int | None = None
@@ -238,7 +224,7 @@ class Admission(AbstractContextManager):
             try:
                 host = self.record["host"]
                 known, _ = _inventory({host: self.hosts[host]}, self.client)
-                retained = _retained(self.record, known)
+                retained = _retained(self.record, self.generation, known)
             except (OSError, SessionError):
                 retained = True
             if retained:
