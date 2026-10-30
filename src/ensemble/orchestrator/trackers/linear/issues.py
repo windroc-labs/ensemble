@@ -84,6 +84,6 @@ class LinearIssues:
         with self._keychain():
             return issue_archive.archive(LinearTracker(self.gql), self.gql, ident)
 
-    def swap(self, ident, old, new):
+    def label(self, op, ident, old=None, new=None):
         with self._keychain():
-            return issue_label.swap(self.gql, ident, old, new)
+            return issue_label.change(self.gql, op, ident, old, new)

@@ -872,7 +872,7 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
         return USAGE
     try:
         if isinstance(board, LinearIssues) and args.command == "label":
-            data = receipt(receipt_payload(board.swap(args.id, args.old, args.new)))
+            data = receipt(receipt_payload(board.label(args.op, args.id, args.old, args.new)))
         elif isinstance(board, LinearIssues) and isinstance(request, LookupQuery):
             data = _listed(board.lookup_page, board.lookup_walk, request, args)
         else:
