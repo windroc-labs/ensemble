@@ -1166,12 +1166,14 @@ class GuardTest(Base):
         ):
             self.assertFalse(runtime.tick())
 
-    def attached(self, *, terminal, ready, sizes=()):
+    def attached(self, *, terminal, ready, sizes=(), peers=None):
         """guard.main --attach: (what it sent the guard, what it wrote out, restore, raw) with
-        stdin and the SIGWINCH pipe (30) read in ready's order.
+        stdin, the SIGWINCH pipe (30) and peers (by name, connected in order) read in ready's order.
         """
-        peer = mock.Mock()
-        peer.recv.side_effect = [b"terminal output", b""]
+        if peers is None:
+            peer = mock.Mock()
+            peer.recv.side_effect = [b"terminal output", b""]
+            peers = {"peer": peer}
         output = io.BytesIO()
         reads = {0: b"typed", 30: b"\x1c"}
         sizes = iter(sizes)
@@ -1182,7 +1184,7 @@ class GuardTest(Base):
             return next(sizes)
 
         with (
-            mock.patch.object(guard.socket, "socket", return_value=peer),
+            mock.patch.object(guard.socket, "socket", side_effect=list(peers.values())),
             mock.patch.object(os, "isatty", return_value=terminal),
             mock.patch.object(termios, "tcgetattr", return_value=["saved"]),
             mock.patch.object(termios, "tcsetattr") as restore,
@@ -1196,7 +1198,7 @@ class GuardTest(Base):
             mock.patch.object(
                 guard.select,
                 "select",
-                side_effect=[([fd if fd != "peer" else peer], [], []) for fd in ready],
+                side_effect=[([peers.get(fd, fd)], [], []) for fd in ready],
             ),
             mock.patch.object(os, "read", side_effect=lambda fd, _size: reads[fd]),
             mock.patch.object(sys, "stdout", buffer=output),
@@ -1204,9 +1206,12 @@ class GuardTest(Base):
             self.assertEqual(guard.main(["--attach", self.home + "/display"]), 0)
         self.assertEqual(wakeup.call_args_list, [mock.call(31), mock.call(-1)])
         self.assertEqual(handlers.call_args_list[-1], mock.call(signal.SIGWINCH, signal.SIG_DFL))
-        peer.close.assert_called_once()
-        sent = guard.Decoder().feed(b"".join(c.args[0] for c in peer.sendall.call_args_list))
-        return sent, output.getvalue(), restore, raw
+        sent = {}
+        for name, peer in peers.items():
+            peer.close.assert_called_once()
+            wire = b"".join(c.args[0] for c in peer.sendall.call_args_list)
+            sent[name] = guard.Decoder().feed(wire)
+        return sent if len(peers) > 1 else sent["peer"], output.getvalue(), restore, raw
 
     def test_display_attach_sends_its_size_typing_and_each_resize(self):
         sent, output, restore, raw = self.attached(
@@ -1225,6 +1230,28 @@ class GuardTest(Base):
         self.assertEqual(output, b"terminal output")
         raw.assert_called_once_with(0, termios.TCSANOW)  # keeps what was typed before it
         restore.assert_called_once_with(0, termios.TCSADRAIN, ["saved"])
+
+    def test_display_attach_to_a_guard_before_replay_shows_a_second_connection(self):
+        """That guard paints its screen at its own size on connect; a connection made after it
+        took the display's size gets it at that size. The first stays open: its close would size
+        the PTY back.
+        """
+        calls, old, shown = mock.Mock(), mock.Mock(), mock.Mock()
+        calls.attach_mock(old, "old")
+        calls.attach_mock(shown, "shown")
+        old.recv.side_effect = [b"\x1b[?1049l\x1b[r\x1b[2J\x1b[1;1Hat its own size", b"repaint"]
+        shown.recv.side_effect = [b"terminal output", b""]
+        sent, output, _, _ = self.attached(
+            terminal=True,
+            ready=["old", "shown", 0, "old", 30, "shown"],
+            sizes=[os.terminal_size((33, 19))] * 2 + [os.terminal_size((80, 24))],
+            peers={"old": old, "shown": shown},
+        )
+        sized, resized = (b"w", b'{"rows":19,"columns":33}'), (b"w", b'{"rows":24,"columns":80}')
+        self.assertEqual(sent, {"old": [sized], "shown": [sized, (b"i", b"typed"), resized]})
+        self.assertEqual(output, b"terminal output")
+        order = [name for name, _, _ in calls.mock_calls]
+        self.assertLess(order.index("old.sendall"), order.index("shown.connect"))
 
     def test_display_attach_without_a_terminal_sends_no_size(self):
         sent, output, restore, raw = self.attached(terminal=False, ready=[0, 30, "peer", "peer"])

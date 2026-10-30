@@ -42,6 +42,7 @@ RUN = "/run/ensemble/guard"  # a --serve guard's run dirs, one per generation
 LAUNCH_WAIT = 60.0  # s from its start a --serve guard waits for its launch handoff
 HEARTBEAT = 5.0  # s a --serve guard runs on with no byte from its harness
 HOOK_ENV = "ENSEMBLE_GUARD_HOOK_SOCKET"
+SNAPSHOT = b"\x1b[?1049l\x1b[r\x1b[2J"
 LINES = 2000  # rows of display history, as tmux's default history-limit
 LINES_SIZE = 8 << 20
 # Modes replayed as last set, after RESET's defaults; none moves the cursor or clears the screen.
@@ -1299,14 +1300,23 @@ class Guard:
                     self.peer_read(peer)
 
 
-def attach(path: str) -> int:
+def connect(path: str) -> socket.socket | None:
     peer = socket.socket(socket.AF_UNIX)
     try:
         peer.connect(path)
     except OSError as error:
         peer.close()
         print(f"guard: display {path}: {error.strerror or error}", file=sys.stderr)
+        return None
+    return peer
+
+
+def attach(path: str) -> int:
+    """Pre-replay guards paint before sizing: show a 2nd connection."""
+    if (peer := connect(path)) is None:
         return 1
+    stale: socket.socket | None = None
+    first = True
     previous = termios.tcgetattr(0) if os.isatty(0) else None
     resized, poke = os.pipe()  # SIGWINCH wakes the select through it
     os.set_blocking(poke, False)
@@ -1323,18 +1333,28 @@ def attach(path: str) -> int:
             tty.setraw(0, termios.TCSANOW)  # TCSAFLUSH would drop what was typed before it
         send_size()
         while True:
-            ready, _, _ = select.select([0, peer, resized], [], [])
+            ready, _, _ = select.select([0, peer, resized, *filter(None, [stale])], [], [])
             for descriptor in ready:
                 if descriptor == resized:
                     os.read(resized, READ_SIZE)
                     send_size()
+                    continue
+                if descriptor is stale:
+                    if not stale.recv(READ_SIZE):
+                        return 0
                     continue
                 data = os.read(0, READ_SIZE) if descriptor == 0 else peer.recv(READ_SIZE)
                 if not data:
                     return 0
                 if descriptor == 0:
                     peer.sendall(frame(b"i", data))
+                elif first and previous is not None and data.startswith(SNAPSHOT):
+                    if (shown := connect(path)) is None:
+                        return 1
+                    stale, peer, first = peer, shown, False
+                    send_size()
                 else:
+                    first = False
                     sys.stdout.buffer.write(data)
                     sys.stdout.buffer.flush()
     finally:
@@ -1345,6 +1365,8 @@ def attach(path: str) -> int:
         if previous is not None:
             termios.tcsetattr(0, termios.TCSADRAIN, previous)
         peer.close()
+        if stale is not None:
+            stale.close()
 
 
 def hold_lease(path: str) -> int | None:
