@@ -17,15 +17,13 @@ import socket
 import struct
 import subprocess
 import sys
-import tempfile
 import termios
 import time
 import tty
 import unicodedata
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
 
 FRAME_MAX = 64 << 20
 BUFFER_MAX = 8 << 20
@@ -44,6 +42,30 @@ RUN = "/run/ensemble/guard"  # a --serve guard's run dirs, one per generation
 LAUNCH_WAIT = 60.0  # s from its start a --serve guard waits for its launch handoff
 HEARTBEAT = 5.0  # s a --serve guard runs on with no byte from its harness
 HOOK_ENV = "ENSEMBLE_GUARD_HOOK_SOCKET"
+LINES = 2000  # rows of display history, as tmux's default history-limit
+LINES_SIZE = 8 << 20
+# Modes replayed as last set, after RESET's defaults; none moves the cursor or clears the screen.
+MODES = {
+    **dict.fromkeys(
+        (
+            f"?{n}"
+            for n in (1, 5, 12, 66, 1000, 1002, 1003, 1004, 1005, 1006, 1007, 1015, 1016, 2004)
+        ),
+        "l",
+    ),
+    "?7": "h",
+    "?25": "h",
+    "4": "l",
+    "20": "l",
+}
+MODIFY_KEYS = frozenset({0, 1, 2, 4})  # XTMODKEYS resources
+KEYBOARD_DEPTH = 16  # kitty keyboard flags per screen
+RESET = (
+    "".join(f"\x1b[{key}{default}" for key, default in MODES.items())
+    + "\x1b[0 q\x1b>"
+    + "".join(f"\x1b[>{n}n" for n in sorted(MODIFY_KEYS))
+    + "\x1b[<99u"
+)
 
 
 def frame(kind: bytes, payload: bytes) -> bytes:
@@ -143,52 +165,266 @@ def await_launch(deadline: float) -> tuple[dict, bytes]:
     raise ValueError("no launch handoff")
 
 
+Pen = tuple[str | None, ...]
+Cell = tuple[str, Pen]
+PLAIN: Pen = (None,) * 11
+BACKGROUND = 9  # the pen slot an erase keeps (BCE)
+SGR = {
+    1: (0, "1"), 2: (0, "2"), 22: (0, None), 3: (1, "3"), 23: (1, None), 4: (2, "4"),
+    21: (2, "21"), 24: (2, None), 5: (3, "5"), 6: (3, "6"), 25: (3, None), 7: (4, "7"),
+    27: (4, None), 8: (5, "8"), 28: (5, None), 9: (6, "9"), 29: (6, None), 53: (7, "53"),
+    55: (7, None), 39: (8, None), 49: (BACKGROUND, None), 59: (10, None),
+    **{n: (8, str(n)) for n in (*range(30, 38), *range(90, 98))},
+    **{n: (BACKGROUND, str(n)) for n in (*range(40, 48), *range(100, 108))},
+}  # fmt: skip
+COLORS = {38: 8, 48: BACKGROUND, 58: 10}
+SGR_CHARS = frozenset("0123456789;:")
+
+
+def color(args: list[str]) -> str | None:
+    """A 38/48/58 color's normalized arguments: 5;n or 2;r;g;b, each 0 to 255."""
+    try:
+        values = [int(arg or 0) for arg in args]
+    except ValueError:
+        return None
+    if not all(0 <= value < 256 for value in values):
+        return None
+    if values[:1] == [5] and len(values) == 2 or values[:1] == [2] and len(values) == 4:
+        return ";".join(map(str, values))
+    return None
+
+
+def sgr(pen: Pen, raw: str) -> Pen:
+    """pen after SGR parameters raw (`;` and `:` forms); every slot rebuilt from integers."""
+    slots, params, index = list(pen), raw.split(";"), 0
+    while index < len(params):
+        group = params[index].split(":")
+        index += 1
+        try:
+            head = int(group[0] or 0)
+        except ValueError:
+            continue
+        if head == 0:
+            slots = list(PLAIN)
+        elif head in COLORS:
+            if len(group) > 1:
+                args = group[1:]
+                if args[:1] == ["2"] and len(args) == 5:  # 2:colorspace:r:g:b
+                    args = ["2", *args[2:]]
+            else:
+                count = {"5": 2, "2": 4}.get(params[index] if index < len(params) else "", 1)
+                args, index = params[index : index + count], index + count
+            if (value := color(args)) is not None:
+                slots[COLORS[head]] = f"{head};{value}"
+        elif head == 4 and len(group) > 1:
+            with contextlib.suppress(ValueError):
+                style = int(group[1] or 0)
+                if 0 <= style <= 5:
+                    slots[2] = f"4:{style}" if style else None
+        elif head in SGR:
+            slot, value = SGR[head]
+            slots[slot] = value
+    return tuple(slots)
+
+
+def background(pen: Pen) -> Pen:
+    return PLAIN if pen[BACKGROUND] is None else (*PLAIN[:BACKGROUND], pen[BACKGROUND], None)
+
+
+class Row(list):
+    """One screen line of cells. wrapped: its text runs on into the next row. full: its cells as
+    written while a width change shows them cut or padded; any write drops it and its wrap.
+    """
+
+    wrapped = False
+    full: list[Cell] | None = None
+
+    def __setitem__(self, index, value) -> None:
+        if self.full is not None:
+            self.full, self.wrapped = None, False
+        super().__setitem__(index, value)
+
+
+def sgr_code(pen: Pen) -> str:
+    return "\x1b[0m" if pen == PLAIN else "\x1b[0;" + ";".join(filter(None, pen)) + "m"
+
+
+def wide(text: str) -> bool:
+    return bool(text) and not text[0].isascii() and unicodedata.east_asian_width(text[0]) in "WF"
+
+
+def leads_wide(cells) -> bool:
+    """cells start with a whole wide character (a row wrapping onto it skipped a column)."""
+    return len(cells) > 1 and wide(cells[0][0]) and cells[1][0] == ""
+
+
+def render(cells, *, wrapped: bool, margin: bool = False) -> str:
+    """cells with their colors in exactly len(cells) columns: a split wide character is a blank.
+    margin: the last cell is the column a wrapping wide character skipped; it renders nothing.
+    """
+    cells = list(cells)
+    while not wrapped and cells and cells[-1] == (" ", PLAIN):
+        cells.pop()
+    out, last, skip = [], PLAIN, False
+    for index, (text, pen) in enumerate(cells):
+        if skip:
+            skip = False
+            continue
+        if not text:
+            if wrapped and margin and index == len(cells) - 1:
+                continue
+            text = " "
+        elif wide(text):
+            skip = index + 1 < len(cells) and cells[index + 1][0] == ""
+            text = text if skip else " "
+        if pen != last:
+            out.append(sgr_code(pen))
+            last = pen
+        out.append(text)
+    if last != PLAIN:
+        out.append("\x1b[0m")
+    if not wrapped:
+        out.append("\r\n")
+    return "".join(out)
+
+
+def cut(line: Row, columns: int) -> Row:
+    """line at another width, keeping its written cells and wrap for history."""
+    row = Row(line[:columns] + [(" ", PLAIN)] * (columns - len(line)))
+    row.wrapped, row.full = line.wrapped, line.full or list(line)
+    return row
+
+
+def blank(columns: int, pen: Pen = PLAIN) -> Row:
+    return Row([(" ", pen)] * columns)
+
+
+def line_text(cells) -> str:
+    return "".join(text for text, _ in cells).rstrip()
+
+
 class Screen:
     """Bounded VT screen; visible cells and scrollback have separate ownership."""
 
     def __init__(self, limit=1 << 20, *, rows=SIZE[0], columns=SIZE[1]):
         self.limit, self.rows, self.columns = limit, rows, columns
-        self.cells = [[" "] * columns for _ in range(rows)]
+        self.cells = [blank(columns) for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
+        self.lines: deque[str] = deque()  # rendered rows for a new display, oldest first
+        self.lines_size = 0  # UTF-8 bytes in lines
         self.row, self.column = 0, 0
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = (0, 0)
-        self.normal: tuple[list[list[str]], int, int] | None = None
+        self.normal: tuple[list[Row], int, int, list[int]] | None = None
+        self.pen = PLAIN
+        self.modes: dict[str, str] = {}  # replayed mode -> its sequence as last set, latest last
+        self.keyboard: list[int] = []  # the active screen's kitty keyboard flags stack
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.escape = ""
 
-    def newline(self) -> None:
+    def newline(self, *, wrap: bool = False) -> None:
+        line = self.cells[self.row]
+        line.wrapped = wrap
+        if wrap:  # the row as shown wraps, not cells a resize cut
+            line.full = None
         if self.row == self.scroll_bottom:
-            self._scroll(self.scroll_top, self.scroll_bottom, 1, history=True)
+            self._scroll(self.scroll_top, self.scroll_bottom, 1, history=True, bce=not wrap)
         else:
             self.row = min(self.rows - 1, self.row + 1)
 
-    def _scroll(self, top: int, bottom: int, count: int, *, history=False) -> None:
+    def _scroll(self, top: int, bottom: int, count: int, *, history=False, bce=True) -> None:
         amount = min(abs(count), bottom - top + 1)
-        blank = [[" "] * self.columns for _ in range(amount)]
+        pen = background(self.pen) if bce else PLAIN
+        fill = [blank(self.columns, pen) for _ in range(amount)]
         if count > 0:
             if history and top == 0 and self.normal is None:
-                self.history.extend("".join(line).rstrip() for line in self.cells[:amount])
-            self.cells[top : bottom + 1] = self.cells[top + amount : bottom + 1] + blank
+                self._retire(self.cells, amount)
+            self.cells[top : bottom + 1] = self.cells[top + amount : bottom + 1] + fill
         else:
-            self.cells[top : bottom + 1] = blank + self.cells[top : bottom + 1 - amount]
+            self.cells[top : bottom + 1] = fill + self.cells[top : bottom + 1 - amount]
+
+    def _retire(self, cells: list[Row], count: int, *, read: bool = True) -> None:
+        """The first count rows of cells into both histories (read: the read history too)."""
+        for index, row in enumerate(cells[:count]):
+            if read:
+                self.history.append(line_text(row))
+            after = cells[index + 1] if index + 1 < len(cells) else None
+            margin = after is not None and leads_wide(after.full or after)
+            text = render(row.full or row, wrapped=row.wrapped, margin=margin)
+            self.lines.append(text)
+            self.lines_size += len(text.encode())
+        while len(self.lines) > LINES or self.lines_size > LINES_SIZE:
+            self.lines_size -= len(self.lines.popleft().encode())
+
+    def mode(self, key: str, sequence: str) -> None:
+        self.modes.pop(key, None)
+        self.modes[key] = sequence
+
+    def reset(self) -> None:
+        self.modes.clear()
+        self.keyboard = []
+        if self.normal is not None:
+            self.normal = (*self.normal[:3], [])
+        self.pen = PLAIN
+
+    def setting(self, raw: str, command: str) -> None:
+        """A CSI with a <=> prefix or an intermediate: the replayed keyboard and cursor settings."""
+        prefix, body = (raw[0], raw[1:]) if raw.startswith(("<", "=", ">")) else ("", raw)
+        try:
+            values = [int(value or 0) for value in body.rstrip(" !").split(";")]
+        except ValueError:
+            return
+        first = values[0]
+        if raw == "!" and command == "p":
+            self.reset()
+        elif command == "q" and re.fullmatch(r"[0-6]? ", raw):
+            self.mode(" q", f"\x1b[{first} q")
+        elif prefix == ">" and command in "mn" and first in MODIFY_KEYS:
+            if command == "m" and len(values) > 1:
+                self.mode(f">{first}", f"\x1b[>{first};{values[1]}m")
+            else:
+                self.modes.pop(f">{first}", None)
+        elif prefix == ">" and command == "u":
+            self.keyboard = [*self.keyboard, first][-KEYBOARD_DEPTH:]
+        elif prefix == "<" and command == "u":
+            del self.keyboard[max(0, len(self.keyboard) - max(1, first)) :]
+        elif prefix == "=" and command == "u":
+            how = values[1] if len(values) > 1 else 1
+            top = self.keyboard[-1] if self.keyboard else 0
+            flags = {1: first, 2: top | first, 3: top & ~first}.get(how)
+            if flags is not None:
+                self.keyboard = [*self.keyboard[:-1], flags] if self.keyboard else [flags]
 
     def csi(self, sequence: str) -> None:
         command, raw = sequence[-1], sequence[:-1]
+        if command == "m" and SGR_CHARS.issuperset(raw):
+            self.pen = sgr(self.pen, raw)
+            return
+        if raw.startswith(("<", "=", ">")) or raw.endswith((" ", "!")):
+            self.setting(raw, command)
+            return
         private = raw.startswith("?")
         try:
             values = [int(value or 0) for value in raw.lstrip("?").split(";")]
         except ValueError:
             return
+        if command in "hl":
+            for number in values:
+                if (key := f"{'?' if private else ''}{number}") in MODES:
+                    self.mode(key, f"\x1b[{key}{command}")
         if private:
             if 1049 in values and command == "h" and self.normal is None:
-                self.normal = self.cells, self.row, self.column
-                self.cells = [[" "] * self.columns for _ in range(self.rows)]
+                self.normal = self.cells, self.row, self.column, self.keyboard
+                self.cells = [blank(self.columns) for _ in range(self.rows)]
+                self.keyboard = []
             elif 1049 in values and command == "l" and self.normal is not None:
-                self.cells, self.row, self.column = self.normal
+                self.cells, self.row, self.column, self.keyboard = self.normal
                 self.normal = None
             return
+        if command in "hl":
+            return
         value = values[0] or 1
+        fill = (" ", background(self.pen))
         if command in "Hf":
             self.row = min(self.rows - 1, max(0, value - 1))
             self.column = min(self.columns - 1, max(0, (values[1] if len(values) > 1 else 1) - 1))
@@ -209,20 +445,22 @@ class Screen:
             mode = values[0]
             for row in range(self.rows):
                 if mode in (2, 3) or mode == 0 and row > self.row or mode == 1 and row < self.row:
-                    self.cells[row] = [" "] * self.columns
+                    self.cells[row] = blank(self.columns, fill[1])
             if mode in (0, 1):
                 self.erase_line(mode)
             if mode == 3:
                 self.history.clear()
+                self.lines.clear()
+                self.lines_size = 0
         elif command == "K":
             self.erase_line(values[0])
         elif command == "P":
             line = self.cells[self.row]
             count = min(value, self.columns - self.column)
-            line[self.column :] = line[self.column + count :] + [" "] * count
+            line[self.column :] = line[self.column + count :] + [fill] * count
         elif command == "@":
             line = self.cells[self.row]
-            line[self.column :] = ([" "] * min(value, self.columns) + line[self.column :])[
+            line[self.column :] = ([fill] * min(value, self.columns) + line[self.column :])[
                 : self.columns - self.column
             ]
         elif command == "r":
@@ -250,7 +488,10 @@ class Screen:
         column = min(self.column, self.columns - 1)
         start = column if mode == 0 else 0
         end = column + 1 if mode == 1 else self.columns
-        self.cells[self.row][start:end] = [" "] * (end - start)
+        line = self.cells[self.row]
+        line[start:end] = [(" ", background(self.pen))] * (end - start)
+        if end == self.columns:
+            line.wrapped = False
 
     def append(self, data: bytes) -> None:
         for char in self.decoder.decode(data):
@@ -265,7 +506,11 @@ class Screen:
                     else:
                         self.escape = self.escape[:2] + char  # enough to see ST
                 elif len(self.escape) == 2 and char not in "[]()":
-                    if char == "7":
+                    if char in "=>":
+                        self.mode("keypad", self.escape)
+                    elif char == "c":
+                        self.reset()
+                    elif char == "7":
                         self.saved = self.row, self.column
                     elif char == "8":
                         self.row, self.column = self.saved
@@ -293,74 +538,119 @@ class Screen:
                 self.column = max(0, self.column - 1)
             elif char == "\t":
                 self.column = min(self.columns - 1, (self.column // 8 + 1) * 8)
-            elif char >= " " and char != "\x7f":
+            elif char >= " " and char != "\x7f" and not "\x80" <= char <= "\x9f":
+                line = self.cells[self.row]
                 if unicodedata.combining(char):
                     if self.column:
                         index = min(self.columns - 1, self.column - 1)
-                        if self.cells[self.row][index] == "" and index:
+                        if line[index][0] == "" and index:
                             index -= 1
-                        if len(self.cells[self.row][index]) < 16:
-                            self.cells[self.row][index] += char
+                        text, pen = line[index]
+                        if len(text) < 16:
+                            line[index] = text + char, pen
                     continue
-                width = min(
-                    self.columns, 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-                )
+                width = min(self.columns, 2 if wide(char) else 1)
                 if self.column + width > self.columns:
+                    if self.column < self.columns:  # a wide character skips the last column
+                        line[self.column] = "", self.pen
                     self.column = 0
-                    self.newline()
-                self.cells[self.row][self.column] = char
+                    self.newline(wrap=True)
+                    line = self.cells[self.row]
+                line[self.column] = char, self.pen
                 if width == 2 and self.column + 1 < self.columns:
-                    self.cells[self.row][self.column + 1] = ""
+                    line[self.column + 1] = "", self.pen
                 self.column += width
 
     def resize(self, rows: int, columns: int) -> None:
         if self.normal is None:
-            for line in self.cells[: max(0, self.row + 1 - rows)]:
-                self.history.append("".join(line).rstrip())
+            self._retire(self.cells, max(0, self.row + 1 - rows))
         else:
-            cells, row, column = self.normal
+            cells, row, column, keyboard = self.normal
+            self._retire(cells, max(0, row + 1 - rows), read=False)
             cells, row = fit(cells, row, rows, columns)
-            self.normal = cells, row, min(column, columns)
+            self.normal = cells, row, min(column, columns), keyboard
         self.cells, self.row = fit(self.cells, self.row, rows, columns)
         self.rows, self.columns, self.column = rows, columns, min(self.column, columns)
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = min(self.saved[0], rows - 1), min(self.saved[1], columns - 1)
 
     def text(self, lines: int | None) -> str:
-        rows = ["".join(row).rstrip() for row in self.cells]
+        rows = [line_text(row) for row in self.cells]
         while rows and not rows[-1]:
             rows.pop()
         return "\n".join(rows if lines is None else [*self.history, *rows][-lines:])[-self.limit :]
 
-    def snapshot(self) -> bytes:
-        def paint(cells):
-            return "\x1b[2J" + "".join(
-                f"\x1b[{row + 1};1H{text}"
-                for row, line in enumerate(cells)
-                if (text := "".join(line).rstrip())
-            )
+    def replay(self) -> deque[str]:
+        """A new display's replay: history to wrap at its width, the screen row for row, cursor,
+        modes, pen, a split character's bytes; history parts are lines' own; encode surrogateescape.
+        """
+
+        def screen(cells):
+            out = []
+            for index, row in enumerate(cells):
+                after = cells[index + 1] if index + 1 < len(cells) else blank(0)
+                # only a printed character autowraps: a blank next row takes \r\n
+                shown = any(cell != (" ", PLAIN) for cell in after)
+                wrapped = row.wrapped and row.full is None and shown
+                margin = leads_wide(after)
+                out.append(render(row, wrapped=wrapped, margin=margin))
+            return "".join(out).removesuffix("\r\n")
 
         def cursor(cells, row, column):
             if column < self.columns:
                 return f"\x1b[{row + 1};{column + 1}H"
             column = self.columns - 1
-            if cells[row][column] == "" and column:
+            text, pen = cells[row][column]
+            if text == "" and column and wide(cells[row][column - 1][0]):
                 column -= 1
-            return f"\x1b[{row + 1};{column + 1}H{cells[row][column]}"
+                text, pen = cells[row][column]
+            elif not text or wide(text):  # as render draws it: one column
+                text = " "
+            return f"\x1b[{row + 1};{column + 1}H{sgr_code(pen)}{text}"
 
-        primary = self.normal or (self.cells, self.row, self.column)
-        text = "\x1b[?1049l\x1b[r" + paint(primary[0])
+        def unfinished(escape):
+            """A half-sent sequence's safe start; a string gets an unknown command."""
+            if escape.startswith("\x1b[") and all(" " <= char <= "?" for char in escape[2:]):
+                return escape
+            if escape[1:2] in tuple("]P_^X"):
+                return escape[:2] + "x" + ("\x1b" if escape.endswith("\x1b") else "")
+            return escape if escape in ("\x1b", "\x1b(", "\x1b)") else ""
+
+        def keys(stack):
+            return "".join(f"\x1b[>{flags}u" for flags in stack)
+
+        parts = deque([RESET + "\x1b[0m\x1b[?1049l\x1b7\x1b[r\x1b8\r\x1b[J"])
+        parts.extend(self.lines)
+        if self.lines and not self.lines[-1].endswith("\r\n"):
+            parts.append("\r\n")
+        main = self.normal or (self.cells, self.row, self.column, self.keyboard)
+        parts.append(screen(main[0]))
         if self.normal is not None:
-            text += cursor(*primary) + "\x1b[?1049h" + paint(self.cells)
-        text += f"\x1b[{self.scroll_top + 1};{self.scroll_bottom + 1}r"
-        return (text + cursor(self.cells, self.row, self.column)).encode()
+            parts.append(keys(main[3]) + cursor(*main[:3]) + "\x1b[?1049h")
+            parts.extend(
+                f"\x1b[{row + 1};1H" + render(line, wrapped=False).removesuffix("\r\n")
+                for row, line in enumerate(self.cells)
+            )
+        parts.append(
+            f"\x1b[{self.scroll_top + 1};{self.scroll_bottom + 1}r"
+            + f"\x1b[{self.saved[0] + 1};{self.saved[1] + 1}H\x1b7"
+            + cursor(self.cells, self.row, self.column)
+            + "".join(self.modes.values())
+            + keys(self.keyboard)
+            + sgr_code(self.pen)
+            + unfinished(self.escape)
+            + self.decoder.getstate()[0].decode("utf-8", "surrogateescape")
+        )
+        return parts
 
 
-def fit(cells: list[list[str]], row: int, rows: int, columns: int) -> tuple[list[list[str]], int]:
+def fit(cells: list[Row], row: int, rows: int, columns: int) -> tuple[list[Row], int]:
     """cells cut or padded to rows x columns, top lines dropped to keep row: (cells, its row)."""
     shift = max(0, row + 1 - rows)
-    lines = [line[:columns] + [" "] * (columns - len(line)) for line in cells[shift : shift + rows]]
-    return lines + [[" "] * columns for _ in range(rows - len(lines))], row - shift
+    lines = [
+        line if len(line) == columns else cut(line, columns) for line in cells[shift : shift + rows]
+    ]
+    return lines + [blank(columns) for _ in range(rows - len(lines))], row - shift
 
 
 def size(value: str) -> tuple[int, int]:
@@ -490,10 +780,15 @@ def child_setup(slave: int | None) -> None:
 
 
 @dataclass
-class Startup:
-    stream: IO[bytes]
-    peer: socket.socket | None = None
-    pending: bytes = b""
+class Display:
+    """A display that reported its size: its replay (history strings shared with the screen),
+    then live bytes; progress: when it last took bytes.
+    """
+
+    replay: deque[str]
+    progress: float
+    head: bytearray = field(default_factory=bytearray)
+    pending: bytearray = field(default_factory=bytearray)
 
 
 class Guard:
@@ -514,10 +809,8 @@ class Guard:
         self.streams = {}
         self.servers = {}
         self.peers = {}
-        self.display_buffers: dict[socket.socket, bytearray] = {}
-        self.display_progress: dict[socket.socket, float] = {}
-        self.startup: Startup | None = None
-        self.startup_resources = contextlib.ExitStack()
+        self.displays: dict[socket.socket, Display] = {}
+        self.awaiting: dict[socket.socket, float] = {}  # display without its size yet: accepted at
         self.output = deque()
         self.output_size = 0
         self.taken = deque()  # (peer, delivery) of each written h, until its harness's k
@@ -625,31 +918,30 @@ class Guard:
 
     def drop(self, peer) -> None:
         self.peers.pop(peer, None)
-        self.display_buffers.pop(peer, None)
-        self.display_progress.pop(peer, None)
-        if self.startup is not None and self.startup.peer is peer:
-            self._release_startup()
+        self.displays.pop(peer, None)
+        self.awaiting.pop(peer, None)
         peer.close()
         if self.sizes.pop(peer, None) is not None and self.closing is None:
             self.follow()
 
-    def _release_startup(self) -> None:
-        self.startup = None
-        self.startup_resources.close()
-
     def display_writers(self) -> list[socket.socket]:
         return [
             peer
-            for peer, pending in self.display_buffers.items()
-            if pending or (self.startup is not None and self.startup.peer is peer)
+            for peer, display in self.displays.items()
+            if display.replay or display.head or display.pending
         ]
 
+    def owed(self) -> list[socket.socket]:
+        return [*self.display_writers(), *self.awaiting]
+
     def write_display(self, peer: socket.socket) -> None:
-        if peer not in self.display_buffers:
+        display = self.displays.get(peer)
+        if display is None:
             return
-        startup = self.startup
-        replaying = startup is not None and startup.peer is peer
-        data = startup.pending if replaying and startup else self.display_buffers[peer][:READ_SIZE]
+        while len(display.head) < READ_SIZE and display.replay:
+            display.head += display.replay.popleft().encode("utf-8", "surrogateescape")
+        queue = display.head or display.pending
+        data = bytes(queue[:READ_SIZE])
         if not data:
             return
         try:
@@ -662,16 +954,8 @@ class Guard:
         if count == 0:
             self.drop(peer)
             return
-        self.display_progress[peer] = time.monotonic()
-        if replaying:
-            assert startup is not None
-            startup.pending = startup.pending[count:]
-            if not startup.pending:
-                startup.pending = startup.stream.read(READ_SIZE)
-                if not startup.pending:
-                    self._release_startup()
-        else:
-            del self.display_buffers[peer][:count]
+        display.progress = time.monotonic()
+        del queue[:count]
 
     def follow(self) -> None:
         """The PTY at the latest sized display's size, else unsized; a change redraws its client."""
@@ -810,6 +1094,9 @@ class Guard:
             self.sizes.pop(peer, None)
             self.sizes[peer] = size
             self.follow()
+            if peer not in self.displays:
+                self.awaiting.pop(peer, None)
+                self.displays[peer] = Display(self.screen.replay(), time.monotonic())
         else:
             raise ValueError("invalid display frame")
 
@@ -826,20 +1113,11 @@ class Guard:
         kind = self.streams[descriptor]
         if kind == b"t":
             self.screen.append(data)
-            if not self.displayed and not self.display_closed:
-                if self.startup is None:
-                    with contextlib.ExitStack() as resources:
-                        stream = resources.enter_context(tempfile.TemporaryFile(dir=self.directory))
-                        self.startup = Startup(stream)
-                        self.startup_resources = resources.pop_all()
-                self.startup.stream.write(data)
-            for peer, (role, _) in list(self.peers.items()):
-                if role == "display":
-                    pending = self.display_buffers.setdefault(peer, bytearray())
-                    if len(pending) + len(data) > BUFFER_MAX:
-                        self.drop(peer)
-                    else:
-                        pending.extend(data)
+            for peer, display in list(self.displays.items()):
+                if len(display.pending) + len(data) > BUFFER_MAX:
+                    self.drop(peer)
+                else:
+                    display.pending.extend(data)
         elif self.channel:
             self.emit(frame(kind, data))
 
@@ -893,9 +1171,8 @@ class Guard:
             scan_due = 0.0
             while True:
                 if self.display_closed:
-                    for peer in list(self.display_buffers):
+                    for peer in [*self.displays, *self.awaiting]:
                         self.drop(peer)
-                    self._release_startup()
                 now = time.monotonic()
                 if now >= scan_due:
                     ended = self.tick() or ended
@@ -908,7 +1185,7 @@ class Guard:
                     self.exit_sent, self.exit_at = True, time.monotonic()
                 self.flush()
                 if self.exit_sent and (not self.output or not self.channel):
-                    if not self.lingers(time.monotonic()) and not self.display_writers():
+                    if not self.lingers(time.monotonic()) and not self.owed():
                         return 0
                     for server, role in self.servers.items():
                         if role == "display":
@@ -921,16 +1198,21 @@ class Guard:
                 ):
                     return 1
                 if self.exit_sent:
-                    writers = self.display_writers()
-                    for peer in writers:
-                        since = max(self.exit_at, self.display_progress.get(peer, self.exit_at))
+                    for peer in self.owed():
+                        display = self.displays.get(peer)
+                        since = max(
+                            self.exit_at, display.progress if display else self.awaiting[peer]
+                        )
                         if time.monotonic() - since >= DISPLAY_DRAIN_WAIT:
                             self.drop(peer)
-                    writers = self.display_writers()
                     readers = [0] if self.channel and not self.display_closed else []
-                    ready, writable, _ = select.select(readers, writers, [], TICK)
-                    if 0 in ready:
-                        self.read_channel()
+                    readers += list(self.awaiting)  # a w in the grace window starts its replay
+                    ready, writable, _ = select.select(readers, self.display_writers(), [], TICK)
+                    for descriptor in ready:
+                        if descriptor == 0:
+                            self.read_channel()
+                        elif descriptor in self.peers:
+                            self.peer_read(descriptor)
                     for peer in writable:
                         self.write_display(peer)
                     continue
@@ -966,7 +1248,6 @@ class Guard:
                         time.sleep(TICK)
             for peer in list(self.peers):
                 self.drop(peer)
-            self._release_startup()
             for server in self.servers:
                 server.close()
             if self.master is not None:
@@ -989,7 +1270,7 @@ class Guard:
         )
 
     def take_display(self, server) -> None:
-        """First display replays startup; subsequent displays get the current screen."""
+        """A new display gets nothing until its size (w): then its replay, then live output."""
         try:
             peer, _ = server.accept()
         except BlockingIOError:
@@ -999,15 +1280,8 @@ class Guard:
             return
         peer.settimeout(0)
         self.peers[peer] = ("display", Decoder())
-        self.display_buffers[peer] = bytearray()
-        if not self.displayed and self.startup is not None:
-            self.startup.stream.seek(0)
-            self.startup.pending = self.startup.stream.read(READ_SIZE)
-            self.startup.peer = peer
-        else:
-            self.display_buffers[peer].extend(self.screen.snapshot())
+        self.awaiting[peer] = time.monotonic()
         self.displayed = True
-        self.write_display(peer)
 
     def final_hooks(self) -> None:
         for server, role in self.servers.items():
