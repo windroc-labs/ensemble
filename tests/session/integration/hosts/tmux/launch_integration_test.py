@@ -205,8 +205,8 @@ class LaunchTest(Case):
                     what=f"{mode} initial screen",
                 )
                 self.assertEqual(worker.screen(), expected)
-                worker.close_display()
-                self.assertTrue(worker.redisplay())
+                Viewer().close(mode, self.host)
+                self.assertTrue(Viewer()._prepare(mode, self.host))
                 live_tmux.wait(
                     lambda mode=mode, expected=expected: self.displayed(mode) == expected,
                     what=f"{mode} reconnected screen",

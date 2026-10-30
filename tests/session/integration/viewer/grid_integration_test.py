@@ -439,9 +439,9 @@ class BoundaryTest(Live):
             order,
             [
                 self.manager,
-                dead,
                 self.server.pane_of("w1"),
                 self.server.pane_of("w2"),
+                dead,
                 manual,
             ],
         )
