@@ -1289,7 +1289,7 @@ class HostedSession(Session):
         from its Viewer.
         """
         liveness, name = self._running.state(), self._tui()
-        if liveness == Liveness.LIVE and self._running.exited():
+        if liveness == Liveness.LIVE and self._running.client_exited():
             liveness = Liveness.ABSENT
         if liveness == Liveness.LIVE and name is not None:
             generation = self._running.generation

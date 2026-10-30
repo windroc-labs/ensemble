@@ -1074,7 +1074,7 @@ class TuiMode(BaseMode):
         except SessionError:
             return False
 
-    def exited(self) -> bool:
+    def client_exited(self) -> bool:
         return self._store.host._client_exited(self.name, self._generation)
 
     def _input_ready(self) -> bool:

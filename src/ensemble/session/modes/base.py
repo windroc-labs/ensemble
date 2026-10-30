@@ -177,7 +177,7 @@ class BaseMode(ABC):
     def client_alive(self) -> bool:
         return self.state() == Liveness.LIVE
 
-    def exited(self) -> bool:
+    def client_exited(self) -> bool:
         return False
 
     @abstractmethod
