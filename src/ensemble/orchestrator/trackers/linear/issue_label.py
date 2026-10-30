@@ -1,7 +1,6 @@
-"""ensemble-orchestrator issue label swap, add and remove: one label of an issue leaves, joins, or
-both, in one update naming only those (addedLabelIds, removedLabelIds), so every other label stays;
-refused when a swap's issue carries neither, or the joining label would join a label group the
-issue already holds another of.
+"""ensemble-orchestrator issue label swap, add and remove: one update naming only the labels that
+leave and join (addedLabelIds, removedLabelIds), so every other label stays; refused when a swap's
+issue carries neither, or the joining label's group already holds another of the issue's labels.
 """
 
 from ensemble.orchestrator.engine.types import IssueError, LabelRefused, LinearError
@@ -26,14 +25,11 @@ M_SWAP = (
 )
 
 
-# The options naming the label that leaves and the one that joins, by op.
 OPTIONS = {"swap": ("--from", "--to"), "add": (None, "LABEL"), "remove": ("LABEL", None)}
 
 
 def change(gql, op, ident, old=None, new=None):
-    """op on ident's labels: the label old names leaves and the one new names joins, each within the
-    issue's team and the workspace.
-    """
+    """op on ident: the label old names leaves, the one new names joins (OPTIONS: their options)."""
     what, (leaving, joining) = f"label {op}", OPTIONS[op]
     data = issue_read.lookup(gql, Q_READ, ident)
     node, team_id = data["issue"], data["issue"]["team"]["id"]

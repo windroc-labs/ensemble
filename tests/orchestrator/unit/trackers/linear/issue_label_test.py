@@ -1,5 +1,5 @@
-"""ensemble-orchestrator issue label swap: one label replaced by another in a single update that names
-only those two, every other label kept, a label group never holding two.
+"""ensemble-orchestrator issue label swap, add and remove: one label replaced, added or removed in a
+single update that names only those, every other label kept, a label group never holding two.
 """
 
 from ensemble.orchestrator.engine.types import (
@@ -99,6 +99,98 @@ class Swap(Case):
         gql = gql_of(CHORE, catalog=(*CATALOG, twin))
         issue_label.change(gql, "swap", "TASK-2", "chore", "bug")
         self.assertEqual(gql.writes[0][1]["r"], [CHORE["id"]])
+
+
+class Add(Case):
+    def test_adds_only_the_label_and_prints_the_receipt(self):
+        gql = gql_of(BUG, TODO)
+        receipt = issue_label.change(gql, "add", "TASK-2", None, "keep")
+        self.assertEqual(
+            gql.writes, [(issue_label.M_SWAP, {"i": "id-TASK-2", "a": [KEEP["id"]], "r": []})]
+        )
+        self.assertEqual(gql.carried, [BUG["id"], TODO["id"], KEEP["id"]])
+        self.assertEqual(receipt_payload(receipt), receipt_of("label add"))
+
+    def test_a_label_already_carried_is_unchanged(self):
+        for new in ("keep", KEEP["id"], "todo"):
+            gql = gql_of(KEEP, TODO)
+            with self.subTest(new=new):
+                receipt = issue_label.change(gql, "add", "TASK-2", None, new)
+                self.assertEqual((receipt.result, gql.writes), ("unchanged", []))
+
+    def test_a_second_label_of_its_group_is_refused(self):
+        gql = gql_of(TODO, BUG)
+        with self.assertRaises(LabelRefused) as cm:
+            issue_label.change(gql, "add", "TASK-2", None, "doing")
+        text = str(cm.exception)
+        for phrase in (
+            "label add TASK-2 refused, nothing written",
+            "LABEL 'doing' is in label group",
+            GROUP,
+            f"{TODO['id']} 'todo'",
+            "swap that one instead",
+        ):
+            self.assertIn(phrase, text)
+        self.assertEqual(gql.writes, [])
+
+    def test_an_unsettable_or_unresolved_label_writes_nothing(self):
+        catalog = (*CATALOG, label(7, "old", retired="2026-01-01T00:00:00.000Z"))
+        for new, phrase in (
+            ("Status", "is a label group"),
+            ("old", "is retired"),
+            ("nope", "no label of team"),
+        ):
+            gql = gql_of(BUG, catalog=catalog)
+            with self.subTest(new=new), self.assertRaises(IssueError) as cm:
+                issue_label.change(gql, "add", "TASK-2", None, new)
+            self.assertIn(f"LABEL {new}", str(cm.exception).replace("'", ""))
+            self.assertIn(phrase, str(cm.exception))
+            self.assertIn(f"lookup labels --team {TEAM}", str(cm.exception))
+            self.assertEqual(gql.writes, [])
+
+
+class Remove(Case):
+    def test_removes_only_the_label_and_prints_the_receipt(self):
+        gql = gql_of(KEEP, BUG, TODO)
+        receipt = issue_label.change(gql, "remove", "TASK-2", "keep")
+        self.assertEqual(
+            gql.writes, [(issue_label.M_SWAP, {"i": "id-TASK-2", "a": [], "r": [KEEP["id"]]})]
+        )
+        self.assertEqual(gql.carried, [BUG["id"], TODO["id"]])
+        self.assertEqual(receipt_payload(receipt), receipt_of("label remove"))
+
+    def test_a_label_not_carried_is_unchanged(self):
+        for old in ("keep", KEEP["id"]):
+            gql = gql_of(BUG)
+            with self.subTest(old=old):
+                receipt = issue_label.change(gql, "remove", "TASK-2", old)
+                self.assertEqual((receipt.result, gql.writes), ("unchanged", []))
+
+    def test_a_retired_label_still_carried_is_removed(self):
+        retired = {**KEEP, "retiredAt": "2026-01-01T00:00:00.000Z"}
+        catalog = (*[n for n in CATALOG if n is not KEEP], retired)
+        gql = gql_of(BUG, KEEP, catalog=catalog)
+        self.assertEqual(issue_label.change(gql, "remove", "TASK-2", "keep").result, "changed")
+        self.assertEqual(gql.carried, [BUG["id"]])
+
+    def test_an_unresolved_or_ambiguous_label_writes_nothing(self):
+        twins = (label(8, "dup"), label(9, "dup", None))
+        for carried, old, phrase in (
+            ((BUG,), "nope", "LABEL 'nope': no label of team"),
+            (twins, "dup", "LABEL 'dup': the issue carries 2"),
+        ):
+            gql = gql_of(*carried, catalog=(*CATALOG, *twins))
+            with self.subTest(old=old), self.assertRaises(IssueError) as cm:
+                issue_label.change(gql, "remove", "TASK-2", old)
+            self.assertIn(phrase, str(cm.exception))
+            self.assertEqual(gql.writes, [])
+
+    def test_a_write_outage_is_result_unknown(self):
+        gql = gql_of(KEEP, result=Unavailable("issueUpdate", reason="timed out"))
+        with self.assertRaises(WriteUnknown) as cm:
+            issue_label.change(gql, "remove", "TASK-2", "keep")
+        self.assertIn("label remove TASK-2: result unknown", str(cm.exception))
+        self.assertEqual(len(gql.writes), 1)
 
 
 class Refused(Case):

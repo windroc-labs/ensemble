@@ -1,5 +1,5 @@
 """ensemble-orchestrator issue: help, the shared stdout/stderr/exit rules, and read, move, edit, comment,
-archive, relation and label swap through main; on a local board, its backend choice and refusals.
+archive, relation and label swap, add and remove through main; on a local board, its backend choice and refusals.
 """
 
 import io
@@ -110,10 +110,12 @@ class Help(Case):
                     "backlog, ready, running, review, approved, done, canceled",
                     "me (the\n  [linear.manager] OAuth app) or unassigned",
                     "none, urgent, high, medium, low",
-                    "Linear only (a local board exits 2): lookup, label swap, --label, --project,\n"
-                    "  --milestone.",
+                    "Linear only (a local board exits 2): lookup, label swap, add and remove,\n"
+                    "  --label, --project, --milestone.",
                     "a local board ($ENSEMBLE_BOARD_DIR) directly",
-                    "create, edit, move, comment, archive, relation and label swap write",
+                    "create, edit, move, comment, archive, relation and label write",
+                    "ensemble-orchestrator issue label add TASK-1 keep",
+                    "ensemble-orchestrator issue label remove --help",
                     "ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task build",
                     "ensemble-orchestrator issue edit --help",
                     "ensemble-orchestrator issue move TASK-1 done",
@@ -191,6 +193,11 @@ class Help(Case):
             ("relation add", ("--blocks OTHER", "--blocked-by OTHER", "same edge", "itself")),
             ("relation remove", ("--blocks OTHER", "other types", "unchanged")),
             ("label swap", ("--from OLD", "--to NEW", "label group", "every other label")),
+            (
+                "label add",
+                ("LABEL", "label group", "every other label", "not retired", "unchanged"),
+            ),
+            ("label remove", ("LABEL", "every other label", "may be retired", "unchanged")),
         ):
             if command not in ("", "read", "lookup", "list"):
                 example = (
@@ -213,6 +220,8 @@ class Help(Case):
             "archive",
             "relation add",
             "label swap",
+            "label add",
+            "label remove",
         ):
             output = io.StringIO()
             with (
@@ -292,6 +301,10 @@ class Help(Case):
             ["label", "swap", "TASK-1", "--to", "bug"],
             ["label", "swap", "TASK-1", "--from", "a", "--from", "b", "--to", "c"],
             ["label", "TASK-1", "--from", "a", "--to", "b"],
+            ["label", "add", "TASK-1"],
+            ["label", "remove", "TASK-1"],
+            ["label", "add", "TASK-1", "a", "b"],
+            ["label", "remove", "TASK-1", "--from", "a"],
         ):
             with (
                 self.subTest(argv=argv),
@@ -906,6 +919,54 @@ class LabelSwap(IssueCase):
         self.assertEqual([len(gql.writes) for gql, *_ in cases], [0, 0, 1])
 
 
+class LabelAddRemove(IssueCase):
+    BUG, KEEP = label(1, "bug"), label(3, "keep")
+
+    def test_prints_the_receipt(self):
+        for op, carried, want in (
+            ("add", [self.BUG["id"]], [self.BUG["id"], self.KEEP["id"]]),
+            ("remove", [self.KEEP["id"], self.BUG["id"]], [self.BUG["id"]]),
+        ):
+            gql = LabelGql((self.BUG, self.KEEP), carried)
+            with self.subTest(op=op):
+                code, out, err = self.run_main(["label", op, "TASK-2", "keep"], gql)
+                self.assertEqual((code, err, len(gql.writes), gql.carried), (0, "", 1, want))
+                self.assertEqual(json.loads(out), receipt_of(f"label {op}"))
+                self.assertLessEqual(len(out), 1024)
+
+    def test_an_add_already_there_or_a_remove_already_gone_is_unchanged(self):
+        for op, carried in (("add", [self.KEEP["id"]]), ("remove", [self.BUG["id"]])):
+            gql = LabelGql((self.BUG, self.KEEP), carried)
+            with self.subTest(op=op):
+                code, out, err = self.run_main(["label", op, "TASK-2", "keep"], gql)
+                self.assertEqual((code, err, gql.writes), (0, "", []))
+                self.assertEqual(json.loads(out), receipt_of(f"label {op}", result="unchanged"))
+
+    def test_failures_print_no_receipt(self):
+        group = uid(10)
+        todo, doing = label(4, "todo", group=group), label(5, "doing", group=group)
+        catalog = (self.BUG, self.KEEP, todo, doing)
+        cases = (
+            ("add", LabelGql(catalog, [todo["id"]]), "doing", 1, "refused"),
+            ("add", LabelGql(catalog, []), "nope", 2, "LABEL 'nope'"),
+            ("remove", LabelGql(catalog, []), "nope", 2, "LABEL 'nope'"),
+            (
+                "remove",
+                LabelGql(catalog, [self.KEEP["id"]], result=GraphQLErrors([{"message": "boom"}])),
+                "keep",
+                1,
+                "boom",
+            ),
+        )
+        for op, gql, value, want, phrase in cases:
+            with self.subTest(op=op, phrase=phrase):
+                code, out, err = self.run_main(["label", op, "TASK-2", value], gql)
+                self.assertEqual((code, out), (want, b""))
+                self.assertTrue(err.startswith("ensemble-orchestrator issue: "), err)
+                self.assertIn(phrase, err)
+        self.assertEqual([len(gql.writes) for _, gql, *_ in cases], [0, 0, 0, 1])
+
+
 class Failures(IssueCase):
     def test_exit_codes_and_stderr(self):
         cases = (
@@ -1142,6 +1203,8 @@ class LinearOnlyOnLocal(LocalCase):
         (["lookup", "teams"], "lookup"),
         (["lookup", "milestones", "--project", "P"], "lookup"),
         (["label", "swap", "LOC-1", "--from", "a", "--to", "b"], "label swap"),
+        (["label", "add", "LOC-1", "a"], "label add"),
+        (["label", "remove", "LOC-1", "a"], "label remove"),
         (["list", "--label", "bug"], "--label"),
         (["list", "--project", "P"], "--project"),
         (["list", "--project", "P", "--label", "bug"], "--label"),
@@ -1340,6 +1403,8 @@ class HelpOnBothTrackers(LocalCase):
             "relation add",
             "relation remove",
             "label swap",
+            "label add",
+            "label remove",
         ):
             texts = []
             for text in (LOCAL, CONFIG):
