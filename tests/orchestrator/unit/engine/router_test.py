@@ -2510,6 +2510,16 @@ class LocalBoard(TickBase):
         self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", "LOC-1"), 0)
         self.assertIn("pick-none LOC-1 reason=not in ready/", self.said())
 
+    def test_unqueued_diagnostic_names_a_missing_role_or_issue(self):
+        folder = os.path.join(self.tmp, "board", "me", "ready")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "LOC-1 One.md"), "w", encoding="utf-8") as file:
+            file.write("---\nid: LOC-1\ntitle: One\ncreated: 2026-09-01T00:00:00Z\n---\n")
+        for ident, reason in (("LOC-1", "not assigned to a role"), ("LOC-9", "no such issue")):
+            with self.subTest(ident=ident):
+                self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", ident), 0)
+                self.assertIn(f"pick-none {ident} reason={reason}", self.said())
+
     def test_brake_on_local(self):
         self.api.usages = {"a": reading(70)}
         self.assertEqual(self.on_local(self.fake(), "--brake", "researcher"), 0)
@@ -4186,7 +4196,7 @@ class ExplicitIssueRuns(TickBase):
             ("TASK-2", "no configured role delegate"),
             ("TASK-3", "no configured role delegate"),
             ("TASK-4", "not in Todo; no configured role delegate"),
-            ("TASK-9", "not in Todo; no configured role delegate"),
+            ("TASK-9", "no such issue"),
         ):
             with self.subTest(ident=ident):
                 self.assertEqual(self.tick(fake, "--issue", ident), 2)

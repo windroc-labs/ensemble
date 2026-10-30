@@ -29,6 +29,7 @@ from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import (
     ISSUE_ID,
+    NO_ISSUE,
     IssueState,
 )
 from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
@@ -155,6 +156,7 @@ STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
 NOT_QUEUED = "not in {state}"
+NO_SUCH_ISSUE = "no such issue"
 NOT_LISTED = "a {state} issue {ownership}, yet not in the {state} list (it can lag a change: retry)"
 SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
@@ -623,6 +625,8 @@ class Board:
     def unqueued(self, ident):
         """Why ident is not queued: each unmet precondition, then the tracker's refusal."""
         current = self.tracker.recheck(ident)
+        if current is NO_ISSUE:
+            return NO_SUCH_ISSUE
         state = self.tracker.state_name(IssueState.READY)
         reasons = [] if current.ready else [NOT_QUEUED.format(state=state)]
         reasons += [] if current.role else [UNOWNED[self.cfg.tracker]]
