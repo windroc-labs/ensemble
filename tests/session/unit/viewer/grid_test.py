@@ -219,7 +219,7 @@ class GridOpenTest(GridFixture):
     def test_split_honored_outside_the_grid(self):
         fake = self.fake({})
         self.assertIsNone(self.open(fake, split="below"))
-        self.assertEqual(fake.calls[-2:], [split_window("-v", "%3"), *record("mgr", "%20")])
+        self.assertEqual(fake.calls[-3:], [split_window("-v", "%3"), *record("mgr", "%20")])
         self.assertEqual(self.stderr.getvalue(), "")
 
     def test_a_failed_split_changes_nothing_else(self):
@@ -334,14 +334,14 @@ class GridOpenTest(GridFixture):
             **{"set-option": lambda argv: (1, "", "boom\n") if argv[2] == "-w" else (0,)},
         )
         self.assertEqual(self.open(fake), "tmux: boom")
-        self.assertEqual(fake.calls[-2:], [*record("mgr", "%20"), grid_set("@1", "%3")])
+        self.assertEqual(fake.calls[-3:], [*record("mgr", "%20"), grid_set("@1", "%3")])
         socket = ["tmux", "display-message", "-p", "-t", "@1", "#{socket_path}"]
         fake = self.fake({"%3": self.NEW})
         fake.results["display-message"] = lambda argv: (
             (1, "", "boom\n") if argv == socket else (0, "mgr\n")
         )
         self.assertEqual(self.open(fake), "tmux: boom")
-        self.assertEqual(fake.calls[-3:], [*record("mgr", "%20"), grid_set("@1", "%3"), socket])
+        self.assertEqual(fake.calls[-4:], [*record("mgr", "%20"), grid_set("@1", "%3"), socket])
         self.assertNotIn("kill-pane", fake.commands())
         self.assertEqual(self.stderr.getvalue(), "")
 

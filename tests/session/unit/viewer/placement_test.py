@@ -5,11 +5,12 @@ import re
 from contextlib import redirect_stderr
 
 from ensemble.session.engine import tmux_cli
-from ensemble.session.viewer import types
-from tests.session.case import Case
+from ensemble.session.viewer import placement, types
+from tests.session.case import SID, Case
 from tests.session.tmux_fixtures import (
     ARGV,
     COMMAND,
+    GENERATION,
     INSIDE,
     OWN,
     PRINTED,
@@ -35,8 +36,6 @@ from tests.session.tmux_fixtures import (
     worker_rows,
 )
 from tests.utils.process_fixtures import TimeoutExpired
-
-SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 
 class PaneAnchorTest(PaneFixture):
@@ -175,55 +174,112 @@ class RecordTest(Case):
     def record(self, *, name="w1", opener="mgr", pane="%20", window="@1", fake=None, **kw):
         fake = fake or FakeTmux()
         self.stderr = io.StringIO()
+        run = {"printed": PRINTED, "sid": SID, "generation": GENERATION, "label": False}
         with which(kw.pop("command", COMMAND)), redirect_stderr(self.stderr):
-            placed(fake)._record(
-                name,
-                opener,
-                pane,
-                window,
-                **{"printed": PRINTED, "sid": None, "label": False, **kw},
-            )
+            placed(fake)._record(name, opener, pane, window, **{**run, **kw})
         return fake.calls
 
     def test_record_sets_pane_options_and_close_hook(self):
-        """AC6: one call sets @worker, @worker-attach, @worker-opener and the window's
-        after-kill-pane[N] hook, which once %20 is gone unsets itself and hides run S of w1 as
-        closed by hand.
+        """AC6: after a hooks read, one call sets @worker, @worker-attach, @worker-opener and the
+        after-kill-pane[N] hook hiding run S/G of w1 once %20 is gone.
         """
         hook = (
             "if-shell -F '#{m:* %20 *,#{S:#{W:#{P: #{pane_id} }}}}' '' "
             '"set-hook -u -w -t @1 after-kill-pane[20] ; '
-            "run-shell -b '/opt/a_b.c@1+2-3/bin/ensemble-session hide --if-closed --sid S -- w1 "
-            ">/dev/null 2>&1 || true'\""
+            "run-shell -b '/opt/a_b.c@1+2-3/bin/ensemble-session hide --if-closed --sid S "
+            "--generation G -- w1 >/dev/null 2>&1 || true'\""
         )
         self.assertEqual(
-            self.record(sid="S"),
+            self.record(sid="S", generation="G"),
             [
+                [
+                    *("tmux", "show-hooks", "-w", "-t", "@1", "after-kill-pane"),
+                    *(";", "list-panes", "-a", "-F", "#{pane_id}"),
+                ],
                 [
                     *("tmux", "set-option", "-p", "-t", "%20", "@worker", "w1"),
                     *(";", "set-option", "-p", "-t", "%20", "@worker-attach", PRINTED),
                     *(";", "set-option", "-p", "-t", "%20", "@worker-opener", "mgr"),
                     *(";", "set-hook", "-w", "-t", "@1", "after-kill-pane[20]", hook),
-                ]
+                ],
             ],
         )
         self.assertEqual(self.stderr.getvalue(), "")
-        self.assertEqual(self.record(opener=None, sid="S"), record(None, "%20", name="w1", sid="S"))
+        self.assertEqual(self.record(opener=None), record(None, "%20", name="w1"))
 
-    def test_close_hook_carries_the_sid(self):
-        """AC8 (D2): the hook names the run's sid, so it marks no later run of the name; a sid
-        outside HOOK_SID, or none, gets the name-only hook.
-        """
-        for sid in (SID, "a.b:c_d-1"):
-            with self.subTest(sid=sid):
-                hook = self.record(sid=sid)[0][-1]
-                self.assertEqual(hook, close_hook("w1", "%20", "@1", sid))
-                self.assertIn(f"hide --if-closed --sid {sid} -- w1 ", hook)
-        for sid in (None, "", "a b", "a;b", "a'b", "a$(x)"):
-            with self.subTest(sid=sid):
-                hook = self.record(sid=sid)[0][-1]
-                self.assertEqual(hook, close_hook("w1", "%20", "@1"))
-                self.assertNotIn("--sid", hook)
+    def test_close_hook_carries_the_run(self):
+        """AC6 (D2): the hook names the run's sid and generation; either missing or bad: none."""
+        for sid, generation in ((SID, "g1"), ("a.b:c_d-1", "0f8f-1:2")):
+            with self.subTest(sid=sid, generation=generation):
+                calls = self.record(sid=sid, generation=generation)
+                self.assertEqual(
+                    calls, record("mgr", "%20", name="w1", sid=sid, generation=generation)
+                )
+                self.assertEqual(self.stderr.getvalue(), "")
+        for bad in (None, "", "a b", "a;b", "a'b", "a$(x)", "#{pane_id}"):
+            for run in ({"sid": bad}, {"generation": bad}):
+                with self.subTest(**run):
+                    self.assertEqual(
+                        self.record(**run), record("mgr", "%20", name="w1", hook=False)
+                    )
+                    self.assertRegex(
+                        self.stderr.getvalue(), r"^tui: show: after-kill-pane: refused run .*\n$"
+                    )
+
+    def test_close_hook_refuses_any_value_outside_its_allow_list(self):
+        """AC6: every value in the hook passes its allow-list, else no hook."""
+        good = {"sid": SID, "generation": GENERATION}
+        self.assertEqual(
+            placement._close_hook(COMMAND, "w1", "%20", "@1", **good),
+            close_hook("w1", "%20", "@1"),
+        )
+        for at, bad in (
+            (0, "/opt/#{pane_id}/ensemble-session"),
+            (0, "/a b"),
+            (0, "/a';x"),
+            (1, "x';touch p;'"),
+            (1, ""),
+            (2, "20"),
+            (2, "%20;"),
+            (3, "1"),
+            (3, "@1 "),
+        ):
+            with self.subTest(at=at, bad=bad):
+                values = [COMMAND, "w1", "%20", "@1"]
+                values[at] = bad
+                self.assertIsNone(placement._close_hook(*values, **good))
+        for key, bad in (
+            ("sid", None),
+            ("sid", "a b"),
+            ("generation", None),
+            ("generation", "g'1"),
+        ):
+            with self.subTest(**{key: bad}):
+                hook = placement._close_hook(COMMAND, "w1", "%20", "@1", **{**good, key: bad})
+                self.assertIsNone(hook)
+
+    def test_record_prunes_the_entries_of_gone_panes(self):
+        """AC6: the hook's call unsets each after-kill-pane[M] whose %M is gone; nothing else."""
+        read = (
+            'after-kill-pane[5] if-shell -F "#{m:* %5 *,x}" \'\' "run-shell true"\n'
+            "after-kill-pane[7] run-shell true\n"
+            "after-kill-pane[11] run-shell true\n"
+            "after-kill-pane[x] run-shell true\n"
+            "after-kill-pane[9]\n"
+            "pane-exited[12] run-shell true\n"
+            " after-kill-pane[13] run-shell true\n"
+            "%3\n%7\n%20\n"
+        )
+        fake = FakeTmux(results={"show-hooks": (0, read)})
+        self.assertEqual(
+            self.record(fake=fake), record("mgr", "%20", name="w1", pruned=("5", "11"))
+        )
+        for result in ((1, "", "boom\n"), (0, "")):
+            with self.subTest(result=result):
+                fake = FakeTmux(results={"show-hooks": result})
+                self.assertEqual(self.record(fake=fake), record("mgr", "%20", name="w1"))
+        fake = FakeTmux(results={"show-hooks": OSError(2, "no tmux")})
+        self.assertEqual(self.record(fake=fake)[1:], record("mgr", "%20", name="w1")[1:])
 
     def test_record_refuses_invalid_ids_and_sets_nothing(self):
         """AC6, AC11: a pane, window, name or opener tmux could misread tags nothing."""
@@ -255,22 +311,22 @@ class RecordTest(Case):
 
     def test_a_failure_to_record_is_printed(self):
         fake = FakeTmux(fail=("set-option",))
-        self.assertEqual(len(self.record(fake=fake)), 1)
+        self.assertEqual(len(self.record(fake=fake)), 2)
         self.assertEqual(self.stderr.getvalue(), "tui: show: @worker: tmux: boom\n")
 
     def test_label_sets_the_border_only_when_asked(self):
         """AC12 (D6): a labeled worker's pane holds its name in @worker-label, shown in the
         window's bottom pane border; unlabeled, no border option is set.
         """
-        labeled = self.record(label=True)[0]
-        self.assertEqual(labeled, record("mgr", "%20", name="w1", label=True)[0])
+        labeled = self.record(label=True)[-1]
+        self.assertEqual(labeled, record("mgr", "%20", name="w1", label=True)[-1])
         for option in (
             "set-option -p -t %20 @worker-label w1 ;",
             "set-option -w -t @1 pane-border-status bottom ;",
             "set-option -w -t @1 pane-border-format #{?#{@worker-label},[#{@worker-label}],} ;",
         ):
             self.assertIn(option, " ".join(labeled))
-        plain = self.record()[0]
+        plain = self.record()[-1]
         for option in ("@worker-label", "pane-border-status", "pane-border-format"):
             self.assertNotIn(option, plain)
 
@@ -391,7 +447,7 @@ class ReuseTest(PaneFixture):
         )
         self.assertIsNone(self.open(fake, INSIDE))
         self.assertEqual(fake.commands().count("split-window"), 1)
-        self.assertEqual(fake.calls[-1:], record("own", "%20"))
+        self.assertEqual(fake.calls[-2:], record("own", "%20"))
 
     def test_a_dead_pane_or_another_workers_does_not_count(self):
         for rows in (
@@ -543,7 +599,7 @@ class GridShowTest(GridFixture):
                 clients_of("mgr"),
                 grid_read("%3"),
                 *self.split("-h", "%3"),
-                *opening_commands(sid=SID),
+                *opening_commands(),
             ],
         )
         command = fake.calls[5]
@@ -557,9 +613,9 @@ class GridShowTest(GridFixture):
         fake = self.fake({"%3": self.NEW})
         self.assertIsNone(self.open(fake))
         self.assertEqual(
-            fake.calls[4:8],
+            fake.calls[4:9],
             [mute("@1"), split_window("-h", "%3"), *record("mgr", "%20"), grid_set("@1", "%3")],
         )
-        self.assertEqual(fake.calls[6][5:7], ["@worker", "s"])
-        self.assertIn("set-option -u -w -t @1 @grid-busy", " ".join(fake.calls[7]))
-        self.assertFalse(any("@grid-busy" in c for c in fake.calls[5:7]))
+        self.assertEqual(fake.calls[7][5:7], ["@worker", "s"])
+        self.assertIn("set-option -u -w -t @1 @grid-busy", " ".join(fake.calls[8]))
+        self.assertFalse(any("@grid-busy" in c for c in fake.calls[5:8]))

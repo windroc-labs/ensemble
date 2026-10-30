@@ -330,6 +330,10 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
                 help="only once nothing shows it, closed by hand (automation); default: hide now",
             )
             p.add_argument("--sid", help="require this session id (default: no identity guard)")
+            p.add_argument(
+                "--generation",
+                help="require this run's generation; with --if-closed, that run live (automation)",
+            )
     p = sub.add_parser(
         "ls",
         help="list sessions",
@@ -614,14 +618,17 @@ def _carried(name: str, record: Record | None, *, stale_ok: bool = False) -> tup
     return sessions
 
 
-def _check_held(session: str, sid: str | None) -> None:
-    """SessionError unless the worker state of `session` holds `sid` (None: any)."""
-    if sid is None:
+def _check_held(session: str, sid: str | None, generation: str | None = None) -> None:
+    """SessionError unless the worker state of `session` holds `sid` and `generation` (None:
+    any).
+    """
+    if sid is None and generation is None:
         return
     found = worker_state(session)
-    actual = None if found is None else found.sid
-    if actual != sid:
-        raise SessionError(f"session {session}: expected sid {sid!r}, found {actual!r}")
+    held = (None, None) if found is None else (found.sid, found.generation)
+    for key, wanted, actual in zip(("sid", "generation"), (sid, generation), held, strict=True):
+        if wanted is not None and actual != wanted:
+            raise SessionError(f"session {session}: expected {key} {wanted!r}, found {actual!r}")
 
 
 def _holds(session: str, sid: str | None) -> bool:
@@ -650,9 +657,17 @@ def _hide(
     *,
     if_closed: bool = False,
     sid: str | None = None,
+    generation: str | None = None,
 ) -> None:
+    """if_closed with generation (a close hook's): only while that run is live, as the hidden mark
+    is keyed by sid alone.
+    """
     for session in _carried(name, record):
-        _check_held(session, sid)
+        _check_held(session, sid, generation)
+        if if_closed and generation is not None:
+            run = Session.attach(session, sid=sid, host=_host_of(session, hosts))
+            if not run.status().alive:
+                raise SessionError(f"session {session}: run {generation} is not live")
         hosted_viewer().hide(session, _shown(session, hosts), if_closed=if_closed)
 
 
@@ -701,7 +716,9 @@ BATCH = {
 def _answers(args, hosts: Hosts) -> int:
     act = BATCH[args.cmd]
     if args.cmd == "hide":
-        act = functools.partial(_hide, if_closed=args.if_closed, sid=args.sid)
+        act = functools.partial(
+            _hide, if_closed=args.if_closed, sid=args.sid, generation=args.generation
+        )
     if not args.names and (sys.stdin is None or sys.stdin.isatty()):
         raise UsageError(f"{args.cmd}: give session names or Records on stdin")
     failed: list[Exception] = []

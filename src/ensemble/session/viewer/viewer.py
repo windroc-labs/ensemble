@@ -120,6 +120,7 @@ class Viewer:
                     target.argv,
                     target.printed,
                     sid=None if state is None else state.sid,
+                    generation=None if state is None else state.generation,
                     opener=opener,
                     split=split,
                     split_from=split_from,

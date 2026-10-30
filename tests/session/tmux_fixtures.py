@@ -16,7 +16,7 @@ from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.viewer import grid as grids
 from ensemble.session.viewer import layout as layouts
 from ensemble.session.viewer import placement, types
-from tests.session.case import Case
+from tests.session.case import SID, Case
 from tests.utils.process_fixtures import DEVNULL
 
 CLIENTS = "#{client_activity}\t#{pane_id}"
@@ -60,6 +60,8 @@ GRID_PANES = "#{window_id}\t#{@grid-manager}\t#{pane_id}\t#{pane_width}\t#{pane_
 
 COMMAND = "/opt/a_b.c@1+2-3/bin/ensemble-session"
 
+GENERATION = "g1"
+
 LABEL = "#{?#{@worker-label},[#{@worker-label}],}"
 
 GRID_HOOKS = ("pane-exited", "window-resized", "window-layout-changed")
@@ -77,20 +79,30 @@ def done(argv, rc=0, out="", err=""):
     return SimpleNamespace(args=argv, returncode=rc, stdout=out, stderr=err)
 
 
-def close_hook(name, pane, window, sid=None, command=COMMAND):
-    """after-kill-pane[N]'s value for worker pane `pane` of `name` in `window`."""
-    who = f"--sid {sid} " if sid else ""
+def close_hook(name, pane, window, *, sid=SID, generation=GENERATION, command=COMMAND):
+    """after-kill-pane[N]'s value for `pane` of run sid/generation of `name`."""
     return (
         f"if-shell -F '#{{m:* {pane} *,#{{S:#{{W:#{{P: #{{pane_id}} }}}}}}}}' '' "
         f'"set-hook -u -w -t {window} after-kill-pane[{pane[1:]}] ; '
-        f"run-shell -b '{command} hide --if-closed {who}-- {name} >/dev/null 2>&1 || true'\""
+        f"run-shell -b '{command} hide --if-closed --sid {sid} --generation {generation} -- {name} "
+        ">/dev/null 2>&1 || true'\""
     )
 
 
 def record(
-    opener, pane, *, window="@1", name="s", sid=None, label=False, hook=True, printed=PRINTED
+    opener,
+    pane,
+    *,
+    window="@1",
+    name="s",
+    sid=SID,
+    generation=GENERATION,
+    label=False,
+    hook=True,
+    printed=PRINTED,
+    pruned=(),
 ):
-    """_record's one call tagging `pane`, as a list of calls."""
+    """_record's calls tagging `pane` (hook: after its hooks read)."""
     args = ["tmux", "set-option", "-p", "-t", pane, "@worker", name]
     args += [";", "set-option", "-p", "-t", pane, "@worker-attach", printed]
     if opener:
@@ -101,12 +113,16 @@ def record(
             *(";", "set-option", "-w", "-t", window, "pane-border-status", "bottom"),
             *(";", "set-option", "-w", "-t", window, "pane-border-format", LABEL),
         ]
-    if hook:
-        args += [
-            *(";", "set-hook", "-w", "-t", window, f"after-kill-pane[{pane[1:]}]"),
-            close_hook(name, pane, window, sid),
-        ]
-    return [args]
+    if not hook:
+        return [args]
+    for index in pruned:
+        args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{index}]"]
+    args += [
+        *(";", "set-hook", "-w", "-t", window, f"after-kill-pane[{pane[1:]}]"),
+        close_hook(name, pane, window, sid=sid, generation=generation),
+    ]
+    read = ["tmux", "show-hooks", "-w", "-t", window, "after-kill-pane"]
+    return [[*read, ";", "list-panes", "-a", "-F", "#{pane_id}"], args]
 
 
 def split_window(flag, pane, argv=ARGV):
@@ -324,12 +340,10 @@ def tiled(window):
     ]
 
 
-def opening_commands(
-    *, window="@1", manager="%3", opener="mgr", n=3, retile="all", hooks=True, sid=None
-):
+def opening_commands(*, window="@1", manager="%3", opener="mgr", n=3, retile="all", hooks=True):
     """A grid show's calls after its split: the pane tagged, then the grid set and tiled."""
     return [
-        *record(opener, "%20", window=window, sid=sid, hook=hooks),
+        *record(opener, "%20", window=window, hook=hooks),
         grid_set(window, manager, n, hooks=hooks, retile=retile),
         *([] if retile == "off" else tiled(window)),
     ]
@@ -344,6 +358,7 @@ class PaneFixture(Case):
     def open(self, fake, env, command=COMMAND, **kw):
         """open_pane s running ARGV; ensemble-session at `command` (None: on PATH)."""
         self.stderr = io.StringIO()
+        kw = {"sid": SID, "generation": GENERATION, **kw}
         with environ(**env), which(command), redirect_stderr(self.stderr):
             return placed(fake).open_pane("s", ARGV, PRINTED, **kw)
 
@@ -392,6 +407,7 @@ class GridFixture(Case):
     def open(self, fake, env=INSIDE, retile="all", command=COMMAND, argv=ARGV, **kw):
         """open_pane s running argv; ensemble-session at `command` (None: on PATH)."""
         self.stderr = io.StringIO()
+        kw = {"sid": SID, "generation": GENERATION, **kw}
         with environ(**env), which(command), redirect_stderr(self.stderr):
             return placed(fake).open_pane("s", argv, PRINTED, retile=retile, **kw)
 

@@ -67,7 +67,16 @@ class GuardDisplayTest(LiveCase):
         self.addCleanup(self.cleanup, self.worker)
         state = Path(worker_dir(self.NAME), "session.json")
         state.parent.mkdir(parents=True, exist_ok=True)
-        state.write_text(json.dumps({"sid": SID, "client": "fake", "display": "manager"}))
+        state.write_text(
+            json.dumps(
+                {
+                    "sid": SID,
+                    "generation": self.worker.generation,
+                    "client": "fake",
+                    "display": "manager",
+                }
+            )
+        )
         live_tmux.wait(
             lambda: "startup-079" in self.worker.screen(lines=200),
             what="startup output collected before the first display",
@@ -246,7 +255,13 @@ class ShowTest(LiveCase):
         self.stderr = io.StringIO()
         with redirect_stderr(self.stderr):
             return placed(self.transport).open_pane(
-                "worker", self.target.argv, self.target.printed, split="below", split_from="mgr"
+                "worker",
+                self.target.argv,
+                self.target.printed,
+                sid=SID,
+                generation=self.worker.generation,
+                split="below",
+                split_from="mgr",
             )
 
     def split(self) -> list[str]:
@@ -278,7 +293,8 @@ class ShowTest(LiveCase):
         self.assertEqual(self.server.opener_of("worker"), "")
         hooks = self.close_hooks(self.display(new, "#{window_id}"))
         self.assertIn(f"after-kill-pane[{new[1:]}]", hooks)
-        self.assertIn(" hide --if-closed -- worker ", hooks)
+        run = f"--sid {SID} --generation {self.worker.generation}"
+        self.assertIn(f" hide --if-closed {run} -- worker ", hooks)
 
     def test_split_right_runs_the_attach_command(self):
         """AC3: --split right beside --split-from mgr, from a session no client shows (no grid),

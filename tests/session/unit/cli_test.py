@@ -425,6 +425,35 @@ class RecordControl(ControlBase):
         self.assertEqual((code, out, err), (0, "", ""))
         self.assertTrue(json.loads(self.invoke("status", "w1")[1])["hidden"])
 
+    def test_hide_if_closed_needs_the_held_generation_of_a_live_run(self):
+        """AC6: a hook's --sid/--generation must be held and live, else exit 1, nothing written."""
+        self.owned("w1", held=False)
+        self.addCleanup(self.ended)
+        generation = json.loads(Path(self.root, "w1", "session.json").read_text())["generation"]
+
+        def hide(sid, run):
+            return self.invoke("hide", "--if-closed", "--sid", sid, "--generation", run, "w1")
+
+        def hidden():
+            return json.loads(self.invoke("status", "w1")[1])["hidden"]
+
+        code, out, err = hide(SID, generation)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(f"session w1: run {generation} is not live", err)
+        self.host.calls.worker_liveness.return_value = Liveness.LIVE
+        self.assertFalse(hidden())
+        for sid, run, why in (
+            (SID, "other", f"expected generation 'other', found {generation!r}"),
+            ("replacement", generation, f"expected sid 'replacement', found {SID!r}"),
+        ):
+            with self.subTest(why=why):
+                code, out, err = hide(sid, run)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn(f"session w1: {why}", err)
+                self.assertFalse(hidden())
+        self.assertEqual(hide(SID, generation), (0, "", ""))
+        self.assertTrue(hidden())
+
     def test_duplicate_keys_refuse_before_close(self):
         process = self.host.create("w1", sid=SID)
         self.assertEqual(self.invoke("close", "w1", "w1")[:2], (2, ""))

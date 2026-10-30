@@ -24,6 +24,7 @@ from ensemble.session.viewer.grid import (
     GRID_BUSY,
     GRID_PANES,
     GRID_ROW,
+    HOOK_PATH,
     PER_COLUMN,
     RETILE,
     WINDOW,
@@ -50,6 +51,7 @@ SHOW_TIMEOUT = 30
 SLOT = re.compile(r"\{\{([^{}]*)\}\}")
 HOOK_SID = re.compile(r"[A-Za-z0-9_.:-]+")
 LISTED = "#{S:#{W:#{P: #{pane_id} }}}"
+CLOSE_ENTRY = re.compile(r"after-kill-pane\[([0-9]+)\] ")
 SPLIT = "#{pane_id}\t#{window_id}"
 LABEL = f"#{{?#{{{WORKER_LABEL}}},[#{{{WORKER_LABEL}}}],}}"
 
@@ -72,12 +74,27 @@ def _newest(name: str, workers: Sequence[WorkerPane]) -> str | None:
     return max(found, key=lambda p: int(p[1:])) if found else None
 
 
-def _close_hook(command: str, name: str, pane: str, window: str, sid: str | None) -> str:
-    """after-kill-pane[N]'s: once pane is gone, it unsets itself and hides run `sid` of `name` as
-    closed by hand.
+def _close_hook(
+    command: str, name: str, pane: str, window: str, *, sid: str | None, generation: str | None
+) -> str | None:
+    """after-kill-pane[N]'s: once pane is gone, unsets itself and hides run sid/generation of
+    `name`; None when a value fails its allow-list.
     """
-    who = f"--sid {sid} " if sid is not None and HOOK_SID.fullmatch(sid) else ""
-    run = f"run-shell -b '{command} hide --if-closed {who}-- {name} >/dev/null 2>&1 || true'"
+    if not (
+        HOOK_PATH.fullmatch(command)
+        and NAME.fullmatch(name)
+        and PANE.fullmatch(pane)
+        and WINDOW.fullmatch(window)
+        and sid is not None
+        and HOOK_SID.fullmatch(sid)
+        and generation is not None
+        and HOOK_SID.fullmatch(generation)
+    ):
+        return None
+    run = (
+        f"run-shell -b '{command} hide --if-closed --sid {sid} --generation {generation} -- "
+        f"{name} >/dev/null 2>&1 || true'"
+    )
     unset = f"set-hook -u -w -t {window} after-kill-pane[{pane[1:]}]"
     return f"if-shell -F '#{{m:* {pane} *,{LISTED}}}' '' \"{unset} ; {run}\""
 
@@ -93,6 +110,7 @@ class Placement:
         printed: str,
         *,
         sid: str | None = None,
+        generation: str | None = None,
         split: str | None = None,
         split_from: str | None = None,
         opener: str | None = None,
@@ -132,7 +150,14 @@ class Placement:
                     if new is not None and window is not None:
                         # tagged before any tile
                         self._record(
-                            name, opener, new, window, printed=printed, sid=sid, label=label
+                            name,
+                            opener,
+                            new,
+                            window,
+                            printed=printed,
+                            sid=sid,
+                            generation=generation,
+                            label=label,
                         )
                 finally:
                     if new is None:
@@ -162,7 +187,16 @@ class Placement:
         if new is None or window is None:
             return why
         if grid is None:
-            self._record(name, opener, new, window, printed=printed, sid=sid, label=label)
+            self._record(
+                name,
+                opener,
+                new,
+                window,
+                printed=printed,
+                sid=sid,
+                generation=generation,
+                label=label,
+            )
             return None
         return self.grid.configure(
             grid_window,
@@ -272,6 +306,7 @@ class Placement:
         *,
         printed: str,
         sid: str | None,
+        generation: str | None,
         label: bool,
     ) -> None:
         """Tags pane as name's worker pane running `printed`, with its close hook and (label) its
@@ -300,15 +335,40 @@ class Placement:
                 *(";", "set-option", "-w", "-t", window, "pane-border-format", LABEL),
             ]
         command, problem = hook_command()
-        if problem:
-            print(f"tui: show: after-kill-pane: {problem}", file=sys.stderr)
+        hook = (
+            None
+            if problem
+            else _close_hook(command, name, pane, window, sid=sid, generation=generation)
+        )
+        if hook is None:
+            why = problem or f"refused run {sid!r:.80} {generation!r:.80}"
+            print(f"tui: show: after-kill-pane: {why}", file=sys.stderr)
         else:
-            hook = _close_hook(command, name, pane, window, sid)
+            for index in self._gone_entries(window):
+                args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{index}]"]
             args += [";", "set-hook", "-w", "-t", window, f"after-kill-pane[{pane[1:]}]", hook]
         try:
             self.tmux.checked(args)
         except TuiError as e:
             print(f"tui: show: @worker: {e}", file=sys.stderr)
+
+    def _gone_entries(self, window: str) -> list[str]:
+        """Each M of window's after-kill-pane[M] whose %M is gone; none when tmux fails."""
+        try:
+            res = self.tmux.run(
+                [
+                    *("show-hooks", "-w", "-t", window, "after-kill-pane"),
+                    *(";", "list-panes", "-a", "-F", "#{pane_id}"),
+                ]
+            )
+        except TuiError:
+            return []
+        if res.returncode:
+            return []
+        lines = res.stdout.splitlines()
+        live = {line for line in lines if PANE.fullmatch(line)}
+        found = (CLOSE_ENTRY.match(line) for line in lines)
+        return [m[1] for m in found if m is not None and f"%{m[1]}" not in live]
 
     def run_command(self, session: str, template: str) -> str | None:
         """Runs template with /bin/sh, each {{session}} the quoted session name; why it failed, else

@@ -109,7 +109,9 @@ class ShowTest(Base):
         self.assertEqual(self.runner.calls, [])
 
     def test_show_passes_the_status_line_as_label_and_the_workers_sid(self):
-        """AC12: the Host's status_line labels the pane; its close hook names the worker's sid."""
+        """AC12: the Host's status_line labels the pane; its close hook names the worker's sid and
+        generation, and with no sid it has none.
+        """
         self.enterContext(environ(HOME=self.home, **INSIDE))
         self.runner.pane = "mgr"
         self.runner.results.update({"list-clients": (0, "5\t%3\n"), "split-window": split()})
@@ -121,9 +123,10 @@ class ShowTest(Base):
                 self.assertIsNone(self.viewer.show("w1", self.host, display="mgr/right"))
                 self.assertIn(split_window("-h", "%3", ("/fake/attach", "w1")), self.runner.calls)
                 tagged = [c for c in self.runner.calls if c[1] == "set-option" and "-p" in c]
-                self.assertEqual(
-                    tagged, record("mgr", "%20", name="w1", sid=sid, label=line, printed=PRINTED)
+                found = record(
+                    "mgr", "%20", name="w1", sid=sid, label=line, hook=bool(sid), printed=PRINTED
                 )
+                self.assertEqual(tagged, found[-1:])
 
     def test_show_with_a_command_runs_it_instead_of_opening_a_pane(self):
         sh = ["/bin/sh", "-c"]

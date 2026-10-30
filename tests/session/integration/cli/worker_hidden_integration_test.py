@@ -2,15 +2,17 @@
 none` opens no pane and is hidden; show clears hidden; restart and resume keep it; a new start of
 the same sid takes its own pane; a given hidden part is refused; Codex the same. A worker pane
 killed by hand marks it hidden through its close hook, and a resume keeps it hidden; losing the
-manager's window does not.
+manager's window does not; a close hook its pane outlived acts on no other run.
 """
 
 import os
+import re
 import shlex
 import shutil
 import signal
 import tempfile
 
+from ensemble.session.hosts.base import worker_state
 from ensemble.utils import Record
 from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
@@ -161,6 +163,60 @@ class HookTest(HiddenCase):
         self.assertTrue(self.hidden())
         self.assertEqual(set(self.server.panes(WINDOW)), {manager, beside})
         self.assertTrue(pid_alive(pid))
+
+    def entries(self) -> set[str]:
+        """Panes the after-kill-pane entries name."""
+        out = self.ok(self.server.tmux("show-hooks", "-w", "-t", WINDOW, "after-kill-pane")).stdout
+        return {f"%{m[1]}" for m in re.finditer(r"^after-kill-pane\[([0-9]+)\] ", out, re.M)}
+
+    def exited(self) -> tuple[str, str]:
+        """w1's pane and generation once its run ends and its pane exits, leaving its hook."""
+        pane, generation = self.shows(), worker_state("w1").generation
+        self.crash()
+        live_tmux.wait(lambda: pane not in self.server.panes(WINDOW), what="w1's pane to exit")
+        live_tmux.wait(lambda: not self.status("w1")[0].alive, what="w1's run to end")
+        self.assertIn(pane, self.entries())
+        return pane, generation
+
+    def hide(self, sid: str, generation: str):
+        return self.session("hide", "--if-closed", "--sid", sid, "--generation", generation, "w1")
+
+    def test_an_ended_runs_close_hook_leaves_its_resume_shown(self):
+        """AC6: exit, kill-pane of another pane, resume: w1 shown, its stale entry pruned."""
+        record = self.record(self.start("w1"))
+        self.record(self.start("w2"))
+        self.wait_event("w1", "done")
+        gone, generation = self.exited()
+        self.assertEqual(self.hide(record.sid, generation).returncode, 1)
+        self.control("w2")
+        self.assertFalse(self.hidden())
+        self.record(self.again("resume"))
+        self.shows()
+        self.assertFalse(self.hidden())
+        self.assertNotIn(gone, self.entries())
+        self.assertLessEqual(self.entries(), set(self.server.panes(WINDOW)))
+
+    def test_an_ended_runs_close_hook_leaves_a_resumed_run_unhidden(self):
+        """AC6: exit, resume shown nowhere, kill-pane of another pane: w1 not hidden; another
+        run's hide exits 1.
+        """
+        record = self.record(self.start("w1"))
+        self.record(self.start("w2"))
+        self.wait_event("w1", "done")
+        _, ended = self.exited()
+        self.record(self.again("resume", inside=None))
+        self.assertEqual(self.pane(), "")
+        self.control("w2")
+        self.assertFalse(self.hidden())
+        self.assertTrue(live_tmux.running("w1"))
+        generation = worker_state("w1").generation
+        self.assertNotEqual(generation, ended)
+        for sid, run in ((record.sid, ended), ("other", generation)):
+            with self.subTest(sid=sid, generation=run):
+                self.assertEqual(self.hide(sid, run).returncode, 1)
+                self.assertFalse(self.hidden())
+        self.ok(self.hide(record.sid, generation))
+        self.assertTrue(self.hidden())
 
     def test_losing_the_managers_window_marks_nothing(self):
         self.tmux("new-session", "-d", "-s", OTHER, "-x", "200", "-y", "50", *live_tmux.IDLE)
