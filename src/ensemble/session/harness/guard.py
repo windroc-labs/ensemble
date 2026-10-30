@@ -329,11 +329,10 @@ class Screen:
         else:
             self.cells[top : bottom + 1] = fill + self.cells[top : bottom + 1 - amount]
 
-    def _retire(self, cells: list[Row], count: int, *, read: bool = True) -> None:
-        """The first count rows of cells into both histories (read: the read history too)."""
+    def _retire(self, cells: list[Row], count: int) -> None:
+        """The first count rows of cells into both histories."""
         for index, row in enumerate(cells[:count]):
-            if read:
-                self.history.append(line_text(row))
+            self.history.append(line_text(row))
             after = cells[index + 1] if index + 1 < len(cells) else None
             margin = after is not None and leads_wide(after)
             text = render(row, wrapped=row.wrapped, margin=margin)
@@ -552,19 +551,19 @@ class Screen:
     def resize(self, rows: int, columns: int) -> None:
         """As a terminal: a new width rewraps the main screen, its bottom rows kept shown."""
         cells, row, column, keyboard = self.normal or (self.cells, self.row, self.column, [])
-        read = self.normal is None
+        gone = 0
         if columns != self.columns:
             cells, row, column = reflow(cells, row, column, columns)
-            shift = end = max(0, len(cells) - self.rows)
-            last = row if row >= shift else len(cells) - 1
+            gone = end = max(0, len(cells) - self.rows)
+            last = row if row >= gone else len(cells) - 1
             while 0 < end < last and cells[end - 1].wrapped:
                 end += 1
-            if shift and not cells[end - 1].wrapped:  # one the cursor is not on retires whole
-                shift = end
-            self._retire(cells, shift, read=read)
-            cells, row = cells[shift:], max(0, row - shift)
-        self._retire(cells, max(0, row + 1 - rows), read=read)
-        cells, row = fit(cells, row, rows, columns)
+            if gone and not cells[end - 1].wrapped:  # one the cursor is not on retires whole
+                gone = end
+        row = max(0, row - gone)
+        above = max(0, row + 1 - rows)
+        self._retire(cells, gone + above)
+        cells, row = fit(cells[gone + above :], row - above, rows, columns)
         if self.normal is None:
             self.cells, self.row, self.column = cells, row, min(column, columns)
         else:

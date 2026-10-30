@@ -590,13 +590,37 @@ class HistoryTest(Base):
         self.assertIs(screen.cells[0], row)
         self.assertTrue(row.wrapped)
 
-    def test_an_alternate_screen_resize_retires_main_rows_to_display_history_only(self):
+    def test_an_alternate_screen_resize_retires_main_rows_to_both_histories(self):
         screen = guard.Screen(rows=4, columns=8)
         screen.append(b"a\r\nb\r\nc\r\nd\x1b[?1049h")
         screen.resize(2, 8)
         screen.append(b"\x1b[?1049l")
         self.assertEqual(list(screen.lines), ["a\r\n", "b\r\n"])
-        self.assertEqual(screen.text(10), "c\nd")
+        self.assertEqual(screen.text(10), "a\nb\nc\nd")
+
+    def test_a_narrower_width_under_the_alternate_screen_keeps_main_rows_readable(self):
+        screen = guard.Screen(rows=4, columns=10)
+        screen.append(b"0123456789abc\r\nline 2\r\nline 3\x1b[?1049h\x1b[Halt")
+        screen.resize(4, 5)
+        self.assertEqual(screen.text(20).split("\n"), ["01234", "56789", "abc", "alt"])
+        screen.append(b"\x1b[?1049l")
+        rows = ["01234", "56789", "abc", "line", "2", "line", "3"]
+        self.assertEqual(screen.text(20).split("\n"), rows)
+        self.assertEqual(logical(shown(screen)), ["0123456789abc", "line 2", "line 3"])
+
+    def test_a_narrower_show_keeps_every_line_once_on_either_screen(self):
+        lines = [f"line {n:02} " + "x" * (n % 3 * 30 + 1) for n in range(1, 21)]
+        for alternate in (False, True):
+            with self.subTest(alternate=alternate):
+                screen = guard.Screen(rows=8, columns=80)
+                screen.append("\r\n".join(lines).encode())
+                if alternate:
+                    screen.append(b"\x1b[?1049h\x1b[Hfull screen")
+                screen.resize(8, 62)
+                if alternate:
+                    screen.append(b"\x1b[?1049l")
+                self.assertEqual(logical(shown(screen)), lines)
+                self.assertEqual(screen.text(100).replace("\n", ""), "".join(lines))
 
     def test_a_rendered_row_spans_its_columns(self):
         plain = guard.PLAIN
