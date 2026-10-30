@@ -1,14 +1,11 @@
-"""SessionStart hook: in a manager session under `ensemble-crew hold`, for the
-startup, resume, compact and clear sources, prints the re-arm prompt as
-additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
-replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
-that). `--hook-daemon WORD`: while PID's argv[1] is WORD, its parent replaces it (none: no
-record).
-Anything else prints nothing. Always exits 0.
-A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
-ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
-later tmux windows. Standalone: the standard library only.
-`--mode manual` replaces the monitoring tail with turn-based reads and a notifying-tool fallback.
+"""SessionStart hook for startup, resume, compact and clear. Emits re-arm context and records
+--client KIND --client-pid PID with stdin session_id and cwd. `--require-terminal HINT`: only
+when PID shares the hold's controlling terminal; otherwise emits HINT instead, and a PID with no
+terminal gets it even without a manager identity.
+A manager needs valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and an
+ancestor ENSEMBLE_HOLDER_PID: variables alone leak to later tmux windows.
+Bad record fields or writes skip only recording. Other events stay silent. Always exits 0.
+Standalone, standard library only. --mode manual selects turn-based monitoring.
 """
 
 import contextlib
@@ -25,7 +22,7 @@ SOURCES = frozenset({"startup", "resume", "compact", "clear"})
 MANAGER_NAME = re.compile(r"[A-Za-z0-9_-]+")  # ensemble-crew's own rule (cli.py _roster)
 PID = re.compile(r"[1-9][0-9]*")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
-OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--hook-daemon"})
+OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--require-terminal"})
 MANAGERS = "~/.ensemble/managers"
 PS = (
     "ps",
@@ -36,7 +33,7 @@ PS = (
     "-o",
     "ppid=",
     "-o",
-    "args=",
+    "tty=",
 )  # one -o each: text after = is a header
 
 PROMPT = """\
@@ -83,19 +80,19 @@ repeat from step 1; without a notifying tool, keep Manual monitoring.
 
 
 class Processes:
-    """Parents and argvs: /proc where it exists, else one ps table."""
+    """Parents and controlling terminals: /proc where it exists, else one ps table."""
 
     def __init__(self) -> None:
         self.proc = os.path.isdir("/proc/self")
 
     @cached_property
-    def table(self) -> dict[int, tuple[int, list[str]]]:
+    def table(self) -> dict[int, tuple[int, str]]:
         try:
             done = subprocess.run(PS, capture_output=True, timeout=2, check=False)
             if done.returncode != 0:
                 return {}
             rows = [line.split() for line in done.stdout.decode(errors="replace").splitlines()]
-            return {int(row[0]): (int(row[1]), row[2:]) for row in rows}
+            return {int(row[0]): (int(row[1]), row[2]) for row in rows}
         except (OSError, subprocess.SubprocessError, ValueError, IndexError):
             return {}
 
@@ -108,13 +105,14 @@ class Processes:
         except (OSError, ValueError, IndexError):
             return None
 
-    def argv(self, pid: int) -> list[str] | None:
+    def terminal(self, pid: int) -> int | str | None:
         if not self.proc:
-            return self.table[pid][1] if pid in self.table else None
+            tty = self.table[pid][1] if pid in self.table else "?"
+            return None if tty in {"?", "??"} else tty
         try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                return f.read().decode(errors="replace").split("\0")[:-1]
-        except OSError:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                return int(f.read().rpartition(b")")[2].split()[4]) or None
+        except (OSError, ValueError, IndexError):
             return None
 
     def ancestors(self, pid: int) -> set[int]:
@@ -122,15 +120,6 @@ class Processes:
         while (pid := self.parent(pid) or 0) > 1 and pid not in found:
             found.add(pid)
         return found
-
-    def client(self, pid: int, daemon: str | None) -> int | None:
-        seen: set[int] = set()
-        while daemon is not None and (self.argv(pid) or [])[1:2] == [daemon]:
-            seen.add(pid)
-            pid = self.parent(pid) or 0
-            if pid <= 1 or pid in seen or self.argv(pid) is None:
-                return None
-        return pid
 
 
 def manager(environ: Mapping[str, str], processes: Processes) -> str | None:
@@ -152,6 +141,8 @@ def options(argv: tuple[str, ...]) -> dict[str, str] | None:
     if len(argv) % 2 or len(set(keys)) != len(keys) or not OPTIONS.issuperset(keys):
         return None
     found = dict(zip(keys, argv[1::2], strict=True))
+    if "--require-terminal" in found and not PID.fullmatch(found.get("--client-pid", "")):
+        return None
     return found if found.get("--mode", "manual") == "manual" else None
 
 
@@ -184,12 +175,23 @@ def main(argv: tuple[str, ...] = ()) -> int:
     found = options(argv)
     if found is None:
         return 0
-    processes = Processes()
-    name = manager(os.environ, processes)
-    if name is None:
+    if "ENSEMBLE_AGENT_SESSION" in os.environ:
         return 0
     # Raw fds: a closed or broken stdout then fails here, not in a flush at exit.
     try:
+        processes = Processes()
+        name = manager(os.environ, processes)
+        hint = found.get("--require-terminal")
+        if hint is not None:
+            terminal = processes.terminal(int(found["--client-pid"]))
+            if name is None and terminal is not None:
+                return 0
+            if terminal is None or terminal != processes.terminal(
+                int(os.environ["ENSEMBLE_HOLDER_PID"])
+            ):
+                name = None
+        elif name is None:
+            return 0
         chunks = []
         while chunk := os.read(0, 65536):
             chunks.append(chunk)
@@ -197,14 +199,10 @@ def main(argv: tuple[str, ...] = ()) -> int:
         source = event.get("source") if isinstance(event, dict) else None
         if not isinstance(source, str) or source not in SOURCES:
             return 0
-        if (entry := record(found, event)) is not None:
-            pid = processes.client(int(found["--client-pid"]), found.get("--hook-daemon"))
-            if pid is not None:
-                save(name, {**entry, "pid": pid})
-        context = {
-            "hookEventName": "SessionStart",
-            "additionalContext": prompt(name, source, manual="--mode" in found),
-        }
+        if name is not None and (entry := record(found, event)) is not None:
+            save(name, entry)
+        text = hint if name is None else prompt(name, source, manual="--mode" in found)
+        context = {"hookEventName": "SessionStart", "additionalContext": text}
         data = (json.dumps({"hookSpecificOutput": context}) + "\n").encode()
         while data:
             data = data[os.write(1, data) :]

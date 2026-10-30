@@ -123,7 +123,8 @@ class ClientTest(Refusals):
             ("claude", "--resume", UUID),
         )
         self.assertEqual(
-            CodexClient({"flags": ["-m", "x"]}).resume_argv("t-1"), ("codex", "resume", "t-1")
+            CodexClient({"flags": ["-m", "x"]}).resume_argv("t-1"),
+            ("codex", "resume", "t-1", "--no-daemon"),
         )
         self.refused(lambda: ClaudeClient({}).resume_argv("n"), "session ids are UUIDs, got 'n'")
 
@@ -141,7 +142,8 @@ class ClientTest(Refusals):
                     f"session id {native!r:.80}: want [A-Za-z0-9][A-Za-z0-9._:-]*",
                 )
         self.assertEqual(
-            CodexClient({}).resume_argv("ses_1.a:b-C"), ("codex", "resume", "ses_1.a:b-C")
+            CodexClient({}).resume_argv("ses_1.a:b-C"),
+            ("codex", "resume", "ses_1.a:b-C", "--no-daemon"),
         )
 
     def test_keeps_a_copy_of_its_config(self):

@@ -21,6 +21,12 @@ from tests.session.unit.clients.codex.support import CHILD, NATIVE, Base
 FIVE, WEEK = Window(62, 2000), Window(41, 4000)
 
 
+class SelectionTest(Case):
+    def test_interactive_resume_bypasses_the_shared_daemon(self):
+        client = CodexClient({})
+        self.assertIn("--no-daemon", client.resume_argv(NATIVE))
+
+
 class SessionStatusTest(Base):
     def test_client_inspects_binding_session_and_descendant_by_cwd(self):
         self.prepare()
