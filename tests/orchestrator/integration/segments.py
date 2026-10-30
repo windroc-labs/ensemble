@@ -385,9 +385,6 @@ class Segment(TmuxFlow):
             res.stderr,
             rf"router\.py: {re.escape(ident)}: attach: .+ -I .+guard\.py --attach .+/display\n",
         )
-        for name in sessions:
-            line = f"router.py: {ident}: {name}: ensemble-session attach-command {name}\n"
-            self.assertIn(line, res.stderr)
         self.assertNotIn(self.harness(role, ident, sid), res.stderr)
         return record
 

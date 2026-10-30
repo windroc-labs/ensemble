@@ -241,7 +241,7 @@ class RecordControl(ControlBase):
     def test_record_sid_mismatch_command_results(self):
         self.tui(name="w1", sid="replacement")
         replacement = self.host.processes["w1"]
-        for command in ("status", "close", "show", "hide", "attach-command", "content"):
+        for command in ("status", "close", "show", "hide", "content"):
             with self.subTest(command=command):
                 code, out, err = self.invoke(command, record=self.record)
                 if command == "status":
@@ -475,10 +475,11 @@ class RecordControl(ControlBase):
             + replace(self.record, name="w2", sessions=("w2",)).to_line()
             + "\n"
         )
-        code, out, err = self.invoke("attach-command", stdin=records)
-        self.assertEqual(code, 1)
+        with mock.patch("subprocess.Popen", side_effect=FileNotFoundError(2, "no tmux", "tmux")):
+            code, out, err = self.invoke("show", stdin=records)
+        self.assertEqual((code, out), (1, ""))
         self.assertIn(SID, err)
-        self.assertEqual(out, f"{attach_command('w2')}\n")
+        self.assertIn(f"session w2: not shown; attach with {attach_command('w2')}", err)
 
     def ended(self):
         """Its Host's fakes back to every worker ended, closing cleanly."""
@@ -668,7 +669,6 @@ COMMANDS = (
     "show",
     "hide",
     "close",
-    "attach-command",
     "ls",
     "send",
     "read",
@@ -780,7 +780,12 @@ class HelpTest(Case):
             )
         )
         fallback = cli._parser(None).format_help()
-        for text in ("config could not be read", "--display none", "attach-command", "anchor"):
+        for text in (
+            "config could not be read",
+            "--display none",
+            "ensemble-session status",
+            "anchor",
+        ):
             self.assertIn(text, fallback)
         invalid = Hosts(default="unknown", tables={"unknown": {}})
         self.assertEqual(cli._display_help(invalid), cli._display_help(None))
@@ -797,7 +802,7 @@ class HelpTest(Case):
             "hidden",
             "printable",
             ";",
-            "attach-command",
+            "ensemble-session status helper",
             "--display none",
         ):
             with self.subTest(term=term):
@@ -833,10 +838,7 @@ class HelpTest(Case):
             ["restart", "helper"],
             ["resume", "helper"],
             ["reply", "helper"],
-            *(
-                [command, "helper"]
-                for command in ("status", "content", "show", "hide", "close", "attach-command")
-            ),
+            *([command, "helper"] for command in ("status", "content", "show", "hide", "close")),
             ["ls", "--here", "--records"],
             ["send", "helper", "hello"],
             ["send", "helper", "--key", "C-c"],

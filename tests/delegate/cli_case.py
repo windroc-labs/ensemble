@@ -58,7 +58,6 @@ COMMANDS = [
     "show",
     "hide",
     "close",
-    "attach-command",
     "prompt",
 ]
 

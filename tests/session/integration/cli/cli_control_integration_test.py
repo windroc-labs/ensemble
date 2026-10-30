@@ -1,9 +1,9 @@
 """ensemble-session's batch commands through bin/ensemble-session on a private tmux server: status
 answers each name or stdin Record in order (Q11), using answer_keys batch rules;
-show, hide, close and attach-command by name and by stdin Record, show placing a
+show, hide and close by name and by stdin Record, show placing a
 session by its own display or by a Record's, close repeatable and only for the named (Q12), show
 and close checking private session identity; on a Host that cannot show
-(tests.session.fakes.host:FakeHost, the module entry) show, hide, attach-command and tile exit 1
+(tests.session.fakes.host:FakeHost, the module entry) show, hide and tile exit 1
 saying so, while read and status, which read workers through their harness and worker dir, find no
 session in its process outside a harness.
 """
@@ -124,7 +124,7 @@ class StatusTest(ControlCase):
         w1 = self.done("w1")
         pane = self.server.pane_of("w1")
         line = w1.to_line() + "\n"
-        for cmd in ("status", "show", "close", "attach-command"):
+        for cmd in ("status", "show", "close"):
             for argv, stdin, stderr in (
                 (("w1", "w1"), None, f"{PROG}: name w1 given more than once\n"),
                 ((), line + line, f"{PROG}: name w1 given more than once\n"),
@@ -164,16 +164,6 @@ class StatusTest(ControlCase):
 
 
 class ControlTest(ControlCase):
-    def test_attach_command_prints_each_sessions_attach_command_in_input_order(self):
-        w1, w2 = self.record(self.start("w1")), self.record(self.start("w2"))
-        both = f"{guard_command('w1')}\n{guard_command('w2')}\n"
-        self.assert_printed(self.session("attach-command", "w1", "w2"), both)
-        self.assert_printed(self.session("attach-command", stdin=lines(w1, w2)), both)
-        self.assert_printed(
-            self.session("attach-command", stdin=lines(w2, w1)),
-            f"{guard_command('w2')}\n{guard_command('w1')}\n",
-        )
-
     def test_close_closes_only_the_named_sessions_and_again_is_fine(self):
         records = {name: self.done(name) for name in ("w1", "w2", "w3")}
         pids = {name: self.calls(name)[0]["pid"] for name in records}
@@ -197,7 +187,7 @@ class ControlTest(ControlCase):
         live_tmux.wait(lambda: self.status("w1")[0].hidden, what="w1 hidden")
         pane = self.server.pane_of("w1")
         reused = dataclasses.replace(w1, sid=str(uuid.uuid4()))
-        for verb in ("show", "hide", "attach-command", "content"):
+        for verb in ("show", "hide", "content"):
             with self.subTest(verb=verb):
                 res = self.session(verb, stdin=lines(reused))
                 self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
@@ -288,15 +278,13 @@ class NotShowableTest(ControlCase):
         )
         self.addCleanup(process.close)
 
-    def test_show_hide_attach_command_and_tile_exit_1_saying_the_host_cannot_show(self):
+    def test_show_hide_and_tile_exit_1_saying_the_host_cannot_show(self):
         refused = "session f1: host fake cannot show\n"
         batch_refused = f"{PROG}: f1: {refused}"
         for argv, stdin, stderr in (
             (("show", "f1"), None, batch_refused),
             (("show",), lines(self.f1), batch_refused),
             (("hide", "f1"), None, batch_refused),
-            (("attach-command", "f1"), None, batch_refused),
-            (("attach-command",), lines(self.f1), batch_refused),
             (("tile", MANAGER), None, f"session {MANAGER}: host fake cannot show\n"),
         ):
             with self.subTest(argv=argv, stdin=stdin):

@@ -343,10 +343,9 @@ class Tui(Detach):
         self.ended(turn_ends=2)
         printed = [res.stdout, res.stderr, ps.stdout, self.drive_log()]
         for layer, name in (("delegate", self.work), ("session", TUI)):
-            for query in ("status", "attach-command"):
-                out = self.cli([*PY, "-m", f"ensemble.{layer}.cli", query, name])
-                self.assertEqual(out.returncode, 0, out.stderr)
-                printed += [out.stdout, out.stderr]
+            out = self.cli([*PY, "-m", f"ensemble.{layer}.cli", "status", name])
+            self.assertEqual(out.returncode, 0, out.stderr)
+            printed += [out.stdout, out.stderr]
         options = self.server.tmux("show-options", "-t", f"={TUI}:")
         self.assertIn("@view viewer", options.stdout)
         self.assertNotIn("@kind", options.stdout)

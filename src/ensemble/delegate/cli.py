@@ -29,7 +29,6 @@ from ensemble.session import (
     SESSION_NAME,
     SESSION_NAME_RULE,
     Mode,
-    NotShowable,
     SessionBusy,
     SessionError,
 )
@@ -140,11 +139,11 @@ Recovery and next help:
         ("show", True, "show each run's agent session"),
         ("hide", True, "close each run's agent and harness panes; the runs go on"),
         ("close", True, "close each run's sessions"),
-        ("attach-command", False, "the command attaching to the run"),
     ):
         single = not many
         effect = {
-            "status": "Prints a Status JSON line per target; does not launch or show sessions.",
+            "status": "Prints a Status JSON line per target; does not launch or show sessions.\n"
+            "Its attach field is the command attaching to the run's live showable session.",
             "content": "Prints the run's current content; does not resume it.",
             "outcome": "Prints outcome JSON, or null when no outcome is recorded.",
             "resume": "Live/completed runs return their Record; interrupted runs restart.\n"
@@ -154,8 +153,6 @@ Recovery and next help:
             "show": "Shows the agent session using saved display; accepts no new --display.",
             "hide": "Closes agent/harness panes; the run continues in the background.",
             "close": "Terminates the run's sessions; keeps its workdir and recorded outcome.",
-            "attach-command": "Prints an attachment command; run that printed command to attach.\n"
-            "Fails when the run has no live showable session.",
         }[name]
         query = commands.add_parser(
             name,
@@ -176,7 +173,7 @@ Recovery and next help:
                 "  With a recorded run at /tmp/ensemble-role:\n"
                 f"  ensemble-delegate {name} /tmp/ensemble-role\n\n"
                 "Recovery and next help:\n"
-                "  No live view: ensemble-delegate attach-command --help\n"
+                "  No live view: ensemble-delegate status WORKDIR; run its attach command\n"
                 "  Interrupted run: ensemble-delegate resume --help\n"
                 "  Placement: ensemble-session --help\n"
                 "  Selection, environment and exits: ensemble-delegate --help\n"
@@ -570,7 +567,7 @@ def _prompt(
 
 
 def _query(a: argparse.Namespace, delegate_cls: type[HarnessDelegate], sid: str | None) -> int:
-    single = a.command in ("outcome", "resume", "attach-command", "content")
+    single = a.command in ("outcome", "resume", "content")
     keys = ([] if a.keys is None else [a.keys]) if single else a.keys
 
     def viewed(key):
@@ -597,7 +594,6 @@ def _query(a: argparse.Namespace, delegate_cls: type[HarnessDelegate], sid: str 
         "outcome": _outcome,
         "content": lambda view: view.content(),
         "resume": resumed,
-        "attach-command": _attach_command,
     }[a.command]
     code = answer_keys(
         keys,
@@ -627,13 +623,6 @@ def _resume(view, input: str | None) -> str:
 def _outcome(view) -> str:
     outcome = view.outcome()
     return json.dumps(None if outcome is None else asdict(outcome), separators=(",", ":"))
-
-
-def _attach_command(view) -> str:
-    command = view.attach_command()
-    if command is None:
-        raise NotShowable("no showable session")
-    return command
 
 
 def listing(composer: Composer) -> str:
