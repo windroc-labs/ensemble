@@ -229,6 +229,8 @@ class GuardDisplayTest(LiveCase):
             *("set-option", "-t", target, "@pane", pane, ";"),
             *("set-option", "-t", target, "@opener", "manager", ";"),
             *("set-option", "-w", "-t", target, "remain-on-exit", "on", ";"),
+            *("set-hook", "-t", target, "client-attached", ran, ";"),
+            *("set-hook", "-t", target, "client-session-changed", ran, ";"),
             *("set-hook", "-t", target, "client-detached", ran),
         )
         live_tmux.wait(

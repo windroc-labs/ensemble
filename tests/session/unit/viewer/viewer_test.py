@@ -603,23 +603,41 @@ class NotShowableTest(Base):
             ):
                 call()
         self.viewer._unclaimed("p1", plain)
-        self.assertEqual(self.runner.calls, [])
+        self.tmux.has_session.assert_not_called()
 
 
 class UnclaimedTest(Base):
     def test_a_name_a_tmux_session_holds_is_refused(self):
         """AC17: a worker never shares its name with a host tmux session."""
-        self.runner.results["list-sessions"] = sessions(("mgr", "", ""), ("w1", "", "%4"))
+        self.tmux.has_session.return_value = True
         with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
             self.viewer._unclaimed("w1", self.host)
-        self.runner.results["list-sessions"] = sessions(("mgr", "", ""), ("w10", "viewer", "%4"))
+        self.tmux.has_session.return_value = False
         self.viewer._unclaimed("w1", self.host)
-        self.runner.results["list-sessions"] = (1, "", "no server running on /tmp/x\n")
-        self.viewer._unclaimed("w1", self.host)
-        self.runner.results["list-sessions"] = (1, "", "boom\n")
+        self.tmux.has_session.side_effect = TuiError("tmux: boom")
         with self.assertRaisesRegex(SessionError, "^show w1: tmux: boom$"):
             self.viewer._unclaimed("w1", self.host)
+
+    def test_a_start_refuses_an_old_view_session_and_leaves_it(self):
+        self.runner.results["list-sessions"] = sessions(("w1", "viewer", "%4"))
+        self.tmux.has_session.return_value = True
+        with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
+            self.viewer._unclaimed("w1", self.host)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_unview_refuses_only_another_session_of_the_name(self):
+        self.runner.results["list-sessions"] = sessions(("mgr", "", ""), ("w1", "", "%4"))
+        with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
+            self.viewer._unclaimed("w1", self.host, unview=True)
+        self.runner.results["list-sessions"] = sessions(("mgr", "", ""), ("w10", "viewer", "%4"))
+        self.viewer._unclaimed("w1", self.host, unview=True)
+        self.runner.results["list-sessions"] = (1, "", "no server running on /tmp/x\n")
+        self.viewer._unclaimed("w1", self.host, unview=True)
+        self.runner.results["list-sessions"] = (1, "", "boom\n")
+        with self.assertRaisesRegex(SessionError, "^show w1: tmux: boom$"):
+            self.viewer._unclaimed("w1", self.host, unview=True)
         self.assertNotIn("kill-session", self.runner.commands())
+        self.tmux.has_session.assert_not_called()
 
 
 class OldViewTest(Base):

@@ -140,7 +140,7 @@ class Viewer:
         target, display = self._viewed(name, host, display)
         if command is None and not os.environ.get("TMUX"):
             return target.printed
-        self._unclaimed(name, host)
+        self._unclaimed(name, host, unview=True)
         try:
             if command is None:
                 opener, split, split_from, _ = parts(display)
@@ -245,20 +245,21 @@ class Viewer:
         except SessionError:
             return None
 
-    def _unclaimed(self, name: str, host: Host) -> None:
-        """SessionError when an attachable Host's worker `name` is a host tmux session's name."""
+    def _unclaimed(self, name: str, host: Host, *, unview: bool = False) -> None:
+        """SessionError when an attachable Host's worker `name` is a host tmux session's name
+        (unview: old view session removed first)."""
         if not host.attachable:
             return
         try:
-            taken = self._unviewed(name)
+            taken = self._unviewed(name) if unview else self._tmux.has_session(name)
         except TuiError as e:
             raise SessionError(f"show {name}: {e}") from None
         if taken:
             raise SessionError(f"show {name}: a host tmux session {name} exists")
 
     def _unviewed(self, name: str) -> bool:
-        """Whether a tmux session holds `name` once its old view session (@pane: its grid pane) is
-        gone, hooks unset first."""
+        """Whether a tmux session holds `name` once its old view session and @pane are gone, hooks
+        first."""
         session_name(name)
         res = self._tmux.run(["list-sessions", "-F", OLD_VIEW])
         if res.returncode:
