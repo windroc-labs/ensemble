@@ -38,8 +38,8 @@ attaches a worker, so a custom delegate `show` command running `tmux attach -t {
 attach command instead: `tmux split-window "$(ensemble-session status {{session}} | jq -r .attach)"`. A worker pane has one
 tmux prefix; scroll back with the manager's copy mode or mouse. Its name shows in the window's bottom pane border
 (Docker Host always, tmux Host with `[hosts.tmux] status_line = true`). A worker started by an earlier version keeps
-its old view session, and `show` refuses it (`a host tmux session NAME exists`) until you run
-`tmux kill-session -t =NAME`; that worker keeps running.
+running: its first `show` from tmux, `hide` or `close` removes its old view session and nested pane, dropping their
+scrollback, and from then on its pane attaches directly.
 
 ## ensemble list
 

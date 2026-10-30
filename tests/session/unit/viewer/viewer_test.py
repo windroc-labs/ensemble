@@ -62,6 +62,24 @@ def worker(name: str, sid: str | None, display: str | None = None) -> None:
         json.dump({"sid": sid, "generation": "g1", "display": display}, f)
 
 
+OLD_VIEW = ["tmux", "list-sessions", "-F", "#{session_name}\t#{@view}\t#{@pane}"]
+
+
+def sessions(*rows: tuple[str, str, str]) -> tuple[int, str]:
+    """A list-sessions OLD_VIEW result: rows of (name, @view, @pane)."""
+    return 0, "".join("\t".join(row) + "\n" for row in rows)
+
+
+def unviewed(name: str, pane: str | None = "%4") -> list[list[str]]:
+    """The calls removing `name`'s old view session."""
+    target = f"={name}:"
+    unset = ["tmux", "set-hook", "-u", "-t", target, "client-attached"]
+    unset += [";", "set-hook", "-u", "-t", target, "client-session-changed"]
+    unset += [";", "set-hook", "-u", "-t", target, "client-detached"]
+    kill = [] if pane is None else [["tmux", "kill-pane", "-t", pane]]
+    return [unset, *kill, ["tmux", "kill-session", "-t", f"={name}"]]
+
+
 def closed(pane: str) -> list[str]:
     """Placement.close's call for worker pane `pane`."""
     return ["tmux", "kill-pane", "-t", pane]
@@ -109,11 +127,10 @@ class ShowTest(Base):
     def test_show_refuses_a_name_a_tmux_session_holds(self):
         """AC17: a worker named like a live host tmux session is not shown."""
         self.enterContext(environ(**INSIDE))
-        self.tmux.has_session.return_value = True
+        self.runner.results["list-sessions"] = sessions(("w1", "", ""))
         with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
             self.viewer.show("w1", self.host, display="mgr")
-        self.tmux.has_session.assert_called_once_with("w1")
-        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.runner.calls, [OLD_VIEW])
 
     def test_show_passes_the_status_line_as_label_and_the_workers_sid(self):
         """AC12: status_line labels the pane; the close hook needs the worker's sid."""
@@ -136,7 +153,7 @@ class ShowTest(Base):
     def test_show_with_a_command_runs_it_instead_of_opening_a_pane(self):
         sh = ["/bin/sh", "-c"]
         self.assertIsNone(self.viewer.show("w1", self.host, command="open -a T {{session}}"))
-        self.assertEqual(self.runner.calls, [[*sh, "open -a T w1"]])
+        self.assertEqual(self.runner.calls, [OLD_VIEW, [*sh, "open -a T w1"]])
         self.runner.results["/bin/sh"] = (3,)
         with self.assertLogs("session", logging.WARNING) as logs:
             self.assertEqual(self.viewer.show("w1", self.host, command="false"), "/fake/attach w1")
@@ -145,13 +162,14 @@ class ShowTest(Base):
         self.assertIsNone(
             self.viewer.show("w1", self.host, display="elsewhere:1.2", command="true")
         )
-        self.assertEqual(self.runner.calls, [[*sh, "open -a T w1"], [*sh, "false"], [*sh, "true"]])
+        shells = [c for c in self.runner.calls if c != OLD_VIEW]
+        self.assertEqual(shells, [[*sh, "open -a T w1"], [*sh, "false"], [*sh, "true"]])
 
     def test_show_refuses_an_absent_session_a_foreign_display_or_a_bad_setting(self):
         with self.assertRaisesRegex(ConfigError, r"^display 'elsewhere:1\.2': not <opener>"):
             self.enterContext(environ(**INSIDE))
             self.viewer.show("w1", self.host, display="elsewhere:1.2")
-        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.runner.calls, [OLD_VIEW])
 
     def test_bad_settings_are_refused_when_built(self):
         for key, values, want in (
@@ -513,7 +531,7 @@ class CommandViewTest(Base):
         )
         self.assertIsNone(self.viewer.show("d1", self.docker, display="mgr"))
         self.assertNotIn("split-window", [c[1] for c in self.runner.calls])
-        self.tmux.has_session.return_value = True
+        self.runner.results["list-sessions"] = sessions(("d1", "", ""))
         with self.assertRaisesRegex(SessionError, "^show d1: a host tmux session d1 exists$"):
             self.viewer.show("d1", self.docker)
 
@@ -522,7 +540,7 @@ class CommandViewTest(Base):
         hidden.write("d1", SID, hidden=True, live=None)
         with self.assertRaises(ConfigError):
             self.viewer.show("d1", self.docker, display="mgr")
-        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.runner.calls, [OLD_VIEW])
         self.assertTrue(hidden.read("d1", SID))
 
     def test_hide_without_a_worker_pane_only_marks_it_hidden(self):
@@ -599,3 +617,109 @@ class UnclaimedTest(Base):
         self.tmux.has_session.side_effect = TuiError("tmux: boom")
         with self.assertRaisesRegex(SessionError, "^show w1: tmux: boom$"):
             self.viewer._unclaimed("w1", self.host)
+
+    def test_a_start_refuses_an_old_view_session_and_leaves_it(self):
+        self.runner.results["list-sessions"] = sessions(("w1", "viewer", "%4"))
+        self.tmux.has_session.return_value = True
+        with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
+            self.viewer._unclaimed("w1", self.host)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_unview_refuses_only_another_session_of_the_name(self):
+        self.runner.results["list-sessions"] = sessions(("mgr", "", ""), ("w1", "", "%4"))
+        with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
+            self.viewer._unclaimed("w1", self.host, unview=True)
+        self.runner.results["list-sessions"] = sessions(("mgr", "", ""), ("w10", "viewer", "%4"))
+        self.viewer._unclaimed("w1", self.host, unview=True)
+        self.runner.results["list-sessions"] = (1, "", "no server running on /tmp/x\n")
+        self.viewer._unclaimed("w1", self.host, unview=True)
+        self.runner.results["list-sessions"] = (1, "", "boom\n")
+        with self.assertRaisesRegex(SessionError, "^show w1: tmux: boom$"):
+            self.viewer._unclaimed("w1", self.host, unview=True)
+        self.assertNotIn("kill-session", self.runner.commands())
+        self.tmux.has_session.assert_not_called()
+
+
+class OldViewTest(Base):
+    """w1's old view session, its nested pane %4."""
+
+    def setUp(self):
+        super().setUp()
+        worker("w1", SID)
+        self.old = True
+
+        def listed(argv):
+            if argv != OLD_VIEW:
+                return 0, ""
+            return sessions(("mgr", "", ""), *([("w1", "viewer", "%4")] if self.old else []))
+
+        def killed(_argv):
+            self.old = False
+            return 0, ""
+
+        self.runner.results.update({"list-sessions": listed, "kill-session": killed})
+
+    def cleaned(self, pane: str | None = "%4") -> list[list[str]]:
+        calls = self.runner.calls
+        start = calls.index(OLD_VIEW)
+        return calls[start : start + len(unviewed("w1", pane)) + 1]
+
+    def test_show_removes_the_old_view_session_then_opens_a_direct_pane(self):
+        """FR-19: hooks unset before any kill."""
+        self.enterContext(environ(**INSIDE))
+        self.runner.pane = "mgr"
+        self.runner.results.update({"list-clients": (0, "5\t%9\n"), "split-window": split()})
+        self.assertIsNone(self.viewer.show("w1", self.host, display="mgr"))
+        self.assertEqual(self.cleaned(), [OLD_VIEW, *unviewed("w1")])
+        command = next(c for c in self.runner.calls if c[1] == "split-window")
+        self.assertGreater(self.runner.calls.index(command), self.runner.calls.index(OLD_VIEW))
+        self.assertEqual(command[command.index("--") + 1 :], ["/fake/attach", "w1"])
+        self.runner.calls.clear()
+        self.runner.results["list-panes"] = worker_rows(("%20", "w1", "mgr", "@1", "mgr", PRINTED))
+        self.assertIsNone(self.viewer.show("w1", self.host, display="mgr"))
+        self.assertEqual(self.runner.calls.count(OLD_VIEW), 1)
+        self.assertFalse({"set-hook", "kill-pane", "kill-session"} & set(self.runner.commands()))
+
+    def test_a_gone_pane_or_session_is_no_error(self):
+        self.enterContext(environ(**INSIDE))
+        self.runner.pane = "mgr"
+        self.runner.results.update(
+            {
+                "list-clients": (0, "5\t%9\n"),
+                "split-window": split(),
+                "kill-pane": (1, "", "can't find pane: %4\n"),
+                "kill-session": (1, "", "can't find session: =w1\n"),
+            }
+        )
+        self.assertIsNone(self.viewer.show("w1", self.host, display="mgr"))
+        self.assertEqual(self.cleaned(), [OLD_VIEW, *unviewed("w1")])
+
+    def test_a_session_without_a_pane_id_loses_only_its_hooks_and_itself(self):
+        self.old = False
+        self.runner.results["list-sessions"] = lambda _argv: sessions(("w1", "viewer", ""))
+        self.viewer.close("w1", self.host)
+        self.assertEqual(self.cleaned(None), [OLD_VIEW, *unviewed("w1", None)])
+
+    def test_hide_removes_it_and_marks_the_worker_hidden(self):
+        hidden.write("w1", SID, hidden=False, live=None)
+        self.viewer.hide("w1", self.host)
+        self.assertEqual(self.cleaned(), [OLD_VIEW, *unviewed("w1")])
+        self.assertTrue(hidden.read("w1", SID))
+
+    def test_close_removes_it(self):
+        hidden.write("w1", SID, hidden=False, live=None)
+        self.viewer.close("w1", self.host)
+        self.assertEqual(self.cleaned(), [OLD_VIEW, *unviewed("w1")])
+        self.assertFalse(hidden.read("w1", SID))
+
+    def test_a_failed_removal_names_tmux_in_each_verb(self):
+        self.enterContext(environ(**INSIDE))
+        self.runner.results["kill-session"] = (1, "", "boom\n")
+        for call, want in (
+            (lambda: self.viewer.show("w1", self.host, display="mgr"), "^show w1: tmux: boom$"),
+            (lambda: self.viewer.hide("w1", self.host), "^tmux session w1: tmux: boom$"),
+            (lambda: self.viewer.close("w1", self.host), "^view w1: tmux: boom$"),
+        ):
+            with self.subTest(want=want), self.assertRaisesRegex(SessionError, want):
+                call()
+        self.assertNotIn("split-window", self.runner.commands())
