@@ -222,6 +222,10 @@ class GuardDisplayTest(LiveCase):
             *("split-window", "-d", "-h", "-P", "-F", "#{pane_id}", "-t", manager),
             *(*nested, "attach", "-t", f"={self.NAME}"),
         )
+        live_tmux.wait(
+            lambda: self.NAME in self.tmux("list-clients", "-F", "#{session_name}").split(),
+            what=f"the nested client attached to {self.NAME}'s view session",
+        )
         target = f"={self.NAME}:"
         ran = f"run-shell {shlex.quote('touch ' + shlex.quote(str(self.old_hook)))}"
         self.tmux(
@@ -232,10 +236,6 @@ class GuardDisplayTest(LiveCase):
             *("set-hook", "-t", target, "client-attached", ran, ";"),
             *("set-hook", "-t", target, "client-session-changed", ran, ";"),
             *("set-hook", "-t", target, "client-detached", ran),
-        )
-        live_tmux.wait(
-            lambda: self.NAME in self.tmux("list-clients", "-F", "#{session_name}").split(),
-            what=f"the nested client attached to {self.NAME}'s view session",
         )
         return pane
 
