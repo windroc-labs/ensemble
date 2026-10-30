@@ -47,6 +47,22 @@ class Manage(Case):
         self.assertIn("`stale holder generation`", events)
         self.assertFalse([rule for rule in rules("manage") if rule.startswith("env ")])
 
+    def test_without_a_hold_or_a_named_manager_start_stops_for_the_user(self):
+        start = section("manage", "Start")
+        [first] = re.findall(r"^1\. .*$", start, re.M)
+        for phrase in (
+            "`<manager>` is only the hold's `ENSEMBLE_MANAGER` or a name the user gives",
+            "plain `ensemble-crew attach` asks for `--manager`",
+            "choose, infer or guess no manager",
+            "`~/.ensemble/managers/`",
+            "run no `attach` or other crew command for one",
+            "`ensemble list`",
+            "`ensemble <new name>`",
+            "wait for their choice",
+        ):
+            self.assertIn(phrase, first, phrase)
+        self.assertLess(start.index(first), start.index("2. `ensemble-crew attach`"))
+
     def test_a_mid_turn_answer_is_a_reply_event(self):
         direct = section("manage", "Direct")
         self.assertNotIn("send after `done`", direct)
