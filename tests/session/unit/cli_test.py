@@ -620,6 +620,9 @@ class Ls(HostedTuiBase):
 
 
 class ResumeArgv(Case):
+    def setUp(self):
+        self.addCleanup(setattr, HostedSession, "_setup", HostedSession._setup)
+
     def invoke(self, *argv):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -675,6 +678,9 @@ COMMANDS = (
 
 
 class HelpTest(Case):
+    def setUp(self):
+        self.addCleanup(setattr, HostedSession, "_setup", HostedSession._setup)
+
     def test_descriptions_and_display_prose_fit_eighty_columns(self):
         for command in ("start", "send", "hide"):
             description = self.help([command, "--help"]).split("\n\n")[1]
