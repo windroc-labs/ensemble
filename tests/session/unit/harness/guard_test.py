@@ -418,18 +418,23 @@ class HistoryTest(Base):
         self.assertEqual(screen.lines[0], "\x1b[0;1;31mred\x1b[0m plain\r\n")
 
     def test_the_byte_bound_drops_the_oldest_rows(self):
-        screen = guard.Screen(rows=2, columns=10)
-        with mock.patch.object(guard, "LINES_SIZE", 30):
-            screen.append(b"".join(b"row-%d\r\n" % i for i in range(9)))
-        self.assertEqual(list(screen.lines), ["row-4\r\n", "row-5\r\n", "row-6\r\n", "row-7\r\n"])
-        self.assertEqual(screen.size, 28)
+        screen = guard.Screen(rows=1, columns=4000)
+        heavy = "a" + "\u0301" * 15  # 31 bytes a cell
+        for number in range(80):
+            screen.cells[0] = guard.Row(
+                [(str(number % 10), guard.PLAIN)] + [(heavy, guard.PLAIN)] * 3999
+            )
+            screen.append(b"\n")
+        row = len(screen.lines[-1].encode())
+        self.assertEqual(len(screen.lines), guard.LINES_SIZE // row)
+        self.assertEqual(screen.lines_size, len(screen.lines) * row)
+        self.assertTrue(screen.lines[-1].startswith("9"))
 
     def test_display_and_read_histories_are_independent(self):
-        screen = guard.Screen(40, rows=2, columns=10)
-        with mock.patch.object(guard, "LINES", 3):
-            screen.append(b"".join(b"r%d\r\n" % i for i in range(9)))
-        self.assertEqual(list(screen.lines), ["r5\r\n", "r6\r\n", "r7\r\n"])
-        self.assertEqual(screen.text(5), "r4\nr5\nr6\nr7\nr8")
+        screen = guard.Screen(rows=2, columns=10)
+        screen.append(b"".join(b"r%d\r\n" % i for i in range(2100)))
+        self.assertEqual((len(screen.lines), screen.lines[0]), (guard.LINES, "r99\r\n"))
+        self.assertEqual(screen.text(2100).split("\n")[:2], ["r0", "r1"])
         screen = guard.Screen(20, rows=2, columns=10)
         screen.append(b"".join(b"r%d\r\n" % i for i in range(9)))
         self.assertEqual(screen.text(9), "r6\nr7\nr8")
@@ -438,7 +443,7 @@ class HistoryTest(Base):
     def test_ed3_clears_both_histories(self):
         screen = guard.Screen(rows=2, columns=10)
         screen.append(b"a\r\nb\r\nc\r\n\x1b[3J")
-        self.assertEqual((list(screen.lines), screen.size, screen.text(5)), ([], 0, ""))
+        self.assertEqual((list(screen.lines), screen.lines_size, screen.text(5)), ([], 0, ""))
 
     def test_lines_cut_by_a_narrower_width_retire_whole(self):
         screen = guard.Screen(rows=3, columns=12)
@@ -593,8 +598,7 @@ class StateTest(Base):
         for number in range(0, 70000, 7):
             screen.append(b"\x1b[?%dh\x1b[%dh\x1b[>%d;1m" % (number, number, number))
         screen.append(b"\x1b[>1u" * 50 + b"\x1b[>2u" * 50)
-        allowed = {f"?{n}" for n in guard.PRIVATE_MODES} | {str(n) for n in guard.ANSI_MODES}
-        allowed |= {f">{n}" for n in guard.MODIFY_KEYS}
+        allowed = set(guard.MODES) | {f">{n}" for n in guard.MODIFY_KEYS}
         self.assertLessEqual(set(screen.modes), allowed)
         self.assertEqual(screen.keyboard, [2] * guard.KEYBOARD_DEPTH)
 
@@ -602,8 +606,8 @@ class StateTest(Base):
         screen = guard.Screen(rows=2, columns=8)
         screen.append(guard.RESET.encode())
         self.assertEqual(screen.keyboard, [])
-        for number in guard.PRIVATE_MODES:
-            self.assertIn(f"\x1b[?{number}", guard.RESET)
+        for key in guard.MODES:
+            self.assertIn(f"\x1b[{key}", guard.RESET)
         self.assertTrue(guard.RESET.endswith("\x1b[<99u"))
 
 
@@ -726,6 +730,54 @@ class ReplayTest(Base):
         terminal = shown(screen)
         self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
         self.assertTrue(all(len(row) == 10 for row in terminal.cells))
+
+    def test_a_wrapped_row_before_an_empty_row_keeps_every_row(self):
+        screen = guard.Screen(rows=4, columns=10)
+        screen.append(b"top\r\n0123456789ab\r\x1b[K\r\nnext")
+        terminal = shown(screen)
+        self.assertEqual(terminal.text(None), screen.text(None))
+        self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
+
+    def test_a_pending_wrap_on_a_cut_wide_character_keeps_the_cursor(self):
+        for wire in ("\r\n\r\nabcd中", "\r\n\r\nabc中\x1b[1;1H\x1b[3;4H\x1b[P"):
+            with self.subTest(wire=wire):
+                screen = guard.Screen(rows=3, columns=12)
+                screen.append(wire.encode())
+                screen.resize(3, 5)
+                screen.column = screen.columns
+                terminal = shown(screen)
+                self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
+                for each in (screen, terminal):
+                    each.append(b"X")
+                self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
+                self.assertEqual(terminal.text(None).splitlines()[-1], "X")
+
+    def test_autowrap_after_narrowing_drops_the_old_width_cells(self):
+        screen = guard.Screen(rows=3, columns=120)
+        screen.append(b"a" * 100)
+        screen.resize(3, 50)
+        screen.append(b"bc\r\n\n\n\n")
+        self.assertEqual(list(screen.lines)[:2], ["a" * 50, "bc\r\n"])
+
+    def test_the_default_cursor_style_replaces_a_set_one(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(b"\x1b[5 q\x1b[ q")
+        self.assertEqual(screen.modes, {" q": "\x1b[0 q"})
+
+    def test_an_unfinished_sequence_replays_only_a_safe_prefix(self):
+        for wire, tail in (
+            ("\x1b[\x9d11;?\x07", ""),
+            ("\x1b[\x1b#8", ""),
+            ("\x1b[?20", "\x1b[?20"),
+            ("\x1b]52;c;eA", "\x1b]"),
+            ("\x1b", "\x1b"),
+        ):
+            with self.subTest(wire=wire):
+                screen = guard.Screen(rows=2, columns=20)
+                screen.append(b"ok" + wire.encode())
+                replay = "".join(screen.replay())
+                self.assertTrue(replay.endswith(guard.sgr_code(screen.pen) + tail))
+                self.assertFalse(any("\x80" <= char <= "\x9f" for char in replay))
 
     def test_a_replay_shares_the_history_strings(self):
         screen = guard.Screen(rows=2, columns=8)

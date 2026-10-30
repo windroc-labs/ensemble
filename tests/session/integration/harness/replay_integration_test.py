@@ -27,7 +27,7 @@ class ReplayTest(Case):
         self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
         self.host = TmuxHost("tmux")
 
-    def worker(self, count):
+    def worker(self, count, long=0):
         launch = Launch(
             (
                 sys.executable,
@@ -37,6 +37,8 @@ class ReplayTest(Case):
                 self.home,
                 "--count",
                 str(count),
+                "--long",
+                str(long),
             ),
             self.server.env(),
             cwd=self.home,
@@ -88,6 +90,14 @@ class ReplayTest(Case):
         self.attach("pane-a", rows=20)
         shown = self.numbered("pane-a")
         self.assertEqual((min(shown), max(shown), len(shown)), (981, 2999, 2019))
+
+    def test_long_lines_rewrap_whole_in_a_narrower_pane_without_spinner_repeats(self):
+        self.worker(40, long=3)
+        self.attach("pane-a", columns=50)
+        joined = self.capture("pane-a", "-J", "-S", "-").split("\n")
+        for n in range(3):
+            self.assertIn(f"long-{n}:" + chr(ord("a") + n) * (200 + n), joined)
+        self.assertEqual([line for line in joined if "spin" in line], ["spinner-9"])
 
     def test_output_while_shown_and_while_hidden_is_in_the_next_pane(self):
         worker = self.worker(0)

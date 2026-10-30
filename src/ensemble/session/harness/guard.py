@@ -44,16 +44,25 @@ HEARTBEAT = 5.0  # s a --serve guard runs on with no byte from its harness
 HOOK_ENV = "ENSEMBLE_GUARD_HOOK_SOCKET"
 LINES = 2000  # rows of display history, as tmux's default history-limit
 LINES_SIZE = 8 << 20
-# Modes a display gets back as last set: none moves the cursor or clears the screen.
-PRIVATE_MODES = frozenset(
-    {1, 5, 7, 12, 25, 66, 1000, 1002, 1003, 1004, 1005, 1006, 1007, 1015, 1016, 2004}
-)
-ANSI_MODES = frozenset({4, 20})
+# Modes replayed as last set, after RESET's defaults; none moves the cursor or clears the screen.
+MODES = {
+    **dict.fromkeys(
+        (
+            f"?{n}"
+            for n in (1, 5, 12, 66, 1000, 1002, 1003, 1004, 1005, 1006, 1007, 1015, 1016, 2004)
+        ),
+        "l",
+    ),
+    "?7": "h",
+    "?25": "h",
+    "4": "l",
+    "20": "l",
+}
 MODIFY_KEYS = frozenset({0, 1, 2, 4})  # XTMODKEYS resources
 KEYBOARD_DEPTH = 16  # kitty keyboard flags per screen
 RESET = (
-    "".join(f"\x1b[?{n}{'h' if n in (7, 25) else 'l'}" for n in sorted(PRIVATE_MODES))
-    + "\x1b[4l\x1b[20l\x1b[0 q\x1b>"
+    "".join(f"\x1b[{key}{default}" for key, default in MODES.items())
+    + "\x1b[0 q\x1b>"
     + "".join(f"\x1b[>{n}n" for n in sorted(MODIFY_KEYS))
     + "\x1b[<99u"
 )
@@ -169,6 +178,7 @@ SGR = {
     **{n: (BACKGROUND, str(n)) for n in (*range(40, 48), *range(100, 108))},
 }  # fmt: skip
 COLORS = {38: 8, 48: BACKGROUND, 58: 10}
+SGR_CHARS = frozenset("0123456789;:")
 
 
 def color(args: list[str]) -> str | None:
@@ -240,13 +250,17 @@ def sgr_code(pen: Pen) -> str:
 
 
 def wide(text: str) -> bool:
-    return bool(text) and unicodedata.east_asian_width(text[0]) in ("W", "F")
+    return bool(text) and not text[0].isascii() and unicodedata.east_asian_width(text[0]) in "WF"
+
+
+def leads_wide(cells) -> bool:
+    """cells start with a whole wide character (a row wrapping onto it skipped a column)."""
+    return len(cells) > 1 and wide(cells[0][0]) and cells[1][0] == ""
 
 
 def render(cells, *, wrapped: bool, margin: bool = False) -> str:
-    """cells with their colors, spanning exactly len(cells) columns: a wide character without
-    its right half, or a half without its character, is a blank. margin: the last cell is the
-    column a wrapping wide character skipped, so it stays out of the logical line.
+    """cells with their colors in exactly len(cells) columns: a split wide character is a blank.
+    margin: the last cell is the column a wrapping wide character skipped; it renders nothing.
     """
     cells = list(cells)
     while not wrapped and cells and cells[-1] == (" ", PLAIN):
@@ -275,7 +289,7 @@ def render(cells, *, wrapped: bool, margin: bool = False) -> str:
 
 
 def cut(line: Row, columns: int) -> Row:
-    """line at another width; its written cells and wrap kept for history."""
+    """line at another width, keeping its written cells and wrap for history."""
     row = Row(line[:columns] + [(" ", PLAIN)] * (columns - len(line)))
     row.wrapped, row.full = line.wrapped, line.full or list(line)
     return row
@@ -297,7 +311,7 @@ class Screen:
         self.cells = [blank(columns) for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
         self.lines: deque[str] = deque()  # rendered rows for a new display, oldest first
-        self.size = 0  # UTF-8 bytes in lines
+        self.lines_size = 0  # UTF-8 bytes in lines
         self.row, self.column = 0, 0
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = (0, 0)
@@ -309,15 +323,19 @@ class Screen:
         self.escape = ""
 
     def newline(self, *, wrap: bool = False) -> None:
-        self.cells[self.row].wrapped = wrap
+        line = self.cells[self.row]
+        line.wrapped = wrap
+        if wrap:  # the row as shown wraps, not cells a resize cut
+            line.full = None
         if self.row == self.scroll_bottom:
-            self._scroll(self.scroll_top, self.scroll_bottom, 1, history=True)
+            self._scroll(self.scroll_top, self.scroll_bottom, 1, history=True, bce=not wrap)
         else:
             self.row = min(self.rows - 1, self.row + 1)
 
-    def _scroll(self, top: int, bottom: int, count: int, *, history=False) -> None:
+    def _scroll(self, top: int, bottom: int, count: int, *, history=False, bce=True) -> None:
         amount = min(abs(count), bottom - top + 1)
-        fill = [blank(self.columns, background(self.pen)) for _ in range(amount)]
+        pen = background(self.pen) if bce else PLAIN
+        fill = [blank(self.columns, pen) for _ in range(amount)]
         if count > 0:
             if history and top == 0 and self.normal is None:
                 self._retire(self.cells, amount)
@@ -331,12 +349,12 @@ class Screen:
             if read:
                 self.history.append(line_text(row))
             after = cells[index + 1] if index + 1 < len(cells) else None
-            margin = after is not None and wide((after.full or after)[0][0])
+            margin = after is not None and leads_wide(after.full or after)
             text = render(row.full or row, wrapped=row.wrapped, margin=margin)
             self.lines.append(text)
-            self.size += len(text.encode())
-        while len(self.lines) > LINES or self.size > LINES_SIZE:
-            self.size -= len(self.lines.popleft().encode())
+            self.lines_size += len(text.encode())
+        while len(self.lines) > LINES or self.lines_size > LINES_SIZE:
+            self.lines_size -= len(self.lines.popleft().encode())
 
     def mode(self, key: str, sequence: str) -> None:
         self.modes.pop(key, None)
@@ -359,7 +377,7 @@ class Screen:
         first = values[0]
         if raw == "!" and command == "p":
             self.reset()
-        elif raw == f"{first} " and command == "q" and first <= 6:
+        elif command == "q" and re.fullmatch(r"[0-6]? ", raw):
             self.mode(" q", f"\x1b[{first} q")
         elif prefix == ">" and command in "mn" and first in MODIFY_KEYS:
             if command == "m" and len(values) > 1:
@@ -379,7 +397,7 @@ class Screen:
 
     def csi(self, sequence: str) -> None:
         command, raw = sequence[-1], sequence[:-1]
-        if command == "m" and set(raw) <= set("0123456789;:"):
+        if command == "m" and SGR_CHARS.issuperset(raw):
             self.pen = sgr(self.pen, raw)
             return
         if raw.startswith(("<", "=", ">")) or raw.endswith((" ", "!")):
@@ -391,10 +409,9 @@ class Screen:
         except ValueError:
             return
         if command in "hl":
-            allowed, mark = (PRIVATE_MODES, "?") if private else (ANSI_MODES, "")
             for number in values:
-                if number in allowed:
-                    self.mode(f"{mark}{number}", f"\x1b[{mark}{number}{command}")
+                if (key := f"{'?' if private else ''}{number}") in MODES:
+                    self.mode(key, f"\x1b[{key}{command}")
         if private:
             if 1049 in values and command == "h" and self.normal is None:
                 self.normal = self.cells, self.row, self.column, self.keyboard
@@ -434,7 +451,7 @@ class Screen:
             if mode == 3:
                 self.history.clear()
                 self.lines.clear()
-                self.size = 0
+                self.lines_size = 0
         elif command == "K":
             self.erase_line(values[0])
         elif command == "P":
@@ -532,9 +549,7 @@ class Screen:
                         if len(text) < 16:
                             line[index] = text + char, pen
                     continue
-                width = min(
-                    self.columns, 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-                )
+                width = min(self.columns, 2 if wide(char) else 1)
                 if self.column + width > self.columns:
                     if self.column < self.columns:  # a wide character skips the last column
                         line[self.column] = "", self.pen
@@ -573,9 +588,11 @@ class Screen:
         def screen(cells):
             out = []
             for index, row in enumerate(cells):
-                wrapped = row.wrapped and row.full is None
-                after = cells[index + 1] if index + 1 < len(cells) else None
-                margin = after is not None and wide(after[0][0])
+                after = cells[index + 1] if index + 1 < len(cells) else blank(0)
+                # only a printed character autowraps: a blank next row takes \r\n
+                shown = any(cell != (" ", PLAIN) for cell in after)
+                wrapped = row.wrapped and row.full is None and shown
+                margin = leads_wide(after)
                 out.append(render(row, wrapped=wrapped, margin=margin))
             return "".join(out).removesuffix("\r\n")
 
@@ -583,10 +600,21 @@ class Screen:
             if column < self.columns:
                 return f"\x1b[{row + 1};{column + 1}H"
             column = self.columns - 1
-            if cells[row][column][0] == "" and column:
-                column -= 1
             text, pen = cells[row][column]
-            return f"\x1b[{row + 1};{column + 1}H{sgr_code(pen)}{text or ' '}"
+            if text == "" and column and wide(cells[row][column - 1][0]):
+                column -= 1
+                text, pen = cells[row][column]
+            elif not text or wide(text):  # as render draws it: one column
+                text = " "
+            return f"\x1b[{row + 1};{column + 1}H{sgr_code(pen)}{text}"
+
+        def unfinished(escape):
+            """A half-sent sequence's safe start: a CSI prefix or a string's introducer."""
+            if escape.startswith("\x1b[") and all(" " <= char <= "?" for char in escape[2:]):
+                return escape
+            if escape[1:2] in tuple("]P_^X"):
+                return escape[:2] + ("\x1b" if escape.endswith("\x1b") else "")
+            return escape if escape == "\x1b" else ""
 
         def keys(stack):
             return "".join(f"\x1b[>{flags}u" for flags in stack)
@@ -610,7 +638,7 @@ class Screen:
             + "".join(self.modes.values())
             + keys(self.keyboard)
             + sgr_code(self.pen)
-            + self.escape
+            + unfinished(self.escape)
         )
         return parts
 

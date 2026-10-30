@@ -61,9 +61,16 @@ def colors(directory: str) -> None:
         print(f"\x1b[32m{line.strip()}\x1b[0m", flush=True)
 
 
-def history(directory: str, count: int) -> None:
-    """count colored numbered lines, then a prompt; `emit N TAG` prints N lines, others echo."""
+def history(directory: str, count: int, long: int) -> None:
+    """long lines of 200+ characters with spinner redraws after them, count colored numbered lines,
+    then a prompt; `emit N TAG` prints N lines, others echo.
+    """
     _publish(Path(directory, "display.pid"), str(os.getpid()))
+    sys.stdout.write(
+        "".join(f"long-{n}:" + chr(ord("a") + n) * (200 + n) + "\n" for n in range(long))
+    )
+    if long:
+        sys.stdout.write("spin\n" + "".join(f"\x1b[1A\r\x1b[2Kspinner-{n}\n" for n in range(10)))
     sys.stdout.write("".join(f"\x1b[3{1 + n % 6}mline-{n:04}\x1b[0m\n" for n in range(count)))
     print("\x1b[36m> \x1b[0m", end="", flush=True)
     for line in sys.stdin:
@@ -110,6 +117,7 @@ def main() -> None:
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--daemon", action="store_true")
     parser.add_argument("--count", type=int, default=0)
+    parser.add_argument("--long", type=int, default=0)
     args = parser.parse_args()
     if args.kind == "harness":
         harness(args.directory, terminal=args.terminal, daemon=args.daemon)
@@ -118,7 +126,7 @@ def main() -> None:
     elif args.kind == "colors":
         colors(args.directory)
     elif args.kind == "history":
-        history(args.directory, args.count)
+        history(args.directory, args.count, args.long)
     else:
         child(args.directory, daemon=args.daemon)
 
