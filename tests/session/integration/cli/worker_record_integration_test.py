@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
-from tests.session.cli_support import MANAGER, WorkerCase, logged
+from tests.session.cli_support import MANAGER, WorkerCase, guard_command, logged
 
 GIVEN = "36900000-0000-4000-8000-000000000006"
 OTHER = "36900000-0000-4000-8000-000000000007"
@@ -170,7 +170,7 @@ class AdoptionTest(RecordCase):
                 alive=True,
                 state="done",
                 outcome=None,
-                attach="tmux attach -t '=w1'",
+                attach=guard_command("w1"),
                 cwd=self.cwd,
                 hidden=False,
             )

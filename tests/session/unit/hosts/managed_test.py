@@ -327,6 +327,18 @@ class ManagedProcessTest(Case):
         self.assertEqual(channel.read(0), [WorkerOutput(b"last"), WorkerExit(0)])
         channel.proc.wait.assert_called_with(timeout=GUARD_WAIT)
 
+    def test_close_closes_lifecycle_before_waiting_for_a_draining_guard(self):
+        channel = self.channel(terminal=True)
+        channel.accept(b"s", b'{"pid":123}')
+        channel.accept(b"x", b'{"returncode":0}')
+
+        def waited(*_args, **_kwargs):
+            channel.proc.stdin.close.assert_called_once()
+            return 0
+
+        channel.proc.wait.side_effect = waited
+        channel.close()
+
     def test_confirmed_worker_but_live_guard_does_not_report_close_success(self):
         channel = self.channel()
         channel.accept(b"s", b'{"pid":123}')

@@ -16,7 +16,7 @@ import uuid
 from ensemble.session.engine.types import Launch
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
-from tests.session.cli_support import COMMAND, MANAGER, CliCase
+from tests.session.cli_support import COMMAND, MANAGER, CliCase, guard_command
 from tests.session.fakes.host import FakeHost
 from tests.utils.fakes.ctl import lines
 from tests.utils.sandbox import pid_exists as pid_alive
@@ -24,10 +24,6 @@ from tests.utils.sandbox import pid_exists as pid_alive
 PROG = "ensemble-session"
 OTHER = "other"
 SLEEP = "import time; time.sleep(120)"
-
-
-def attach(name: str) -> str:
-    return f"tmux attach -t '={name}'"
 
 
 def absent(name: str) -> Record:
@@ -50,13 +46,13 @@ def gone(name: str) -> Status:
 
 
 def live(name: str, state: str, *, cwd: str | None = None, hidden: bool = False) -> Status:
-    """A live session's Status: its tmux attach command; a worker's cwd."""
+    """A live worker's Status, including its guard attach command."""
     return Status(
         name=name,
         alive=True,
         state=state,
         outcome=None,
-        attach=attach(name),
+        attach=guard_command(name),
         cwd=cwd,
         hidden=hidden,
     )
@@ -254,7 +250,7 @@ class ControlTest(ControlCase):
     def test_hide_of_an_absent_session_fails_with_its_reason(self):
         res = self.session("hide", "nope")
         self.assertEqual((res.returncode, res.stdout), (1, ""), res.stderr)
-        self.assertEqual(res.stderr, f"{PROG}: nope: no tmux session nope\n")
+        self.assertEqual(res.stderr, f"{PROG}: nope: no tmux worker nope\n")
 
     def test_a_key_its_host_refuses_fails_alone_and_the_batch_goes_on(self):
         w1, w2 = self.done("w1"), self.done("w2")

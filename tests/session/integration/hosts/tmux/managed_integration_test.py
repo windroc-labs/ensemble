@@ -171,7 +171,7 @@ class ManagedIntegrationTest(Case):
         )
         # Detached HUP-ignoring descendants intentionally demonstrate the absent OS backstop.
         for pid in pids:
-            if self.alive(pid):
+            with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
 
     def test_display_disconnect_does_not_end_worker(self):

@@ -474,7 +474,8 @@ class TuiLaunchIntegrationTest(Live):
         self.assertEqual(handle.reply, raw)
         self.assertEqual(len(self.server.panes("=mgr:")), 1)
         self.assertEqual([r.name for r in self.session_cls.list("w1")], ["w1"])
-        self.assertEqual(self.server.option("w1", "@sid"), self.sid)
+        self.assertEqual(self.server.option("w1", "@sid"), "")
+        self.assertEqual(self.session_cls.list("w1")[0].sid, self.sid)
         self.assertEqual(stat.S_IMODE(self.record().stat().st_mode), 0o600)
         hook_store = self.home / ".ensemble" / "tui" / "w1" / "hooks.jsonl"
         self.assertEqual(stat.S_IMODE(hook_store.stat().st_mode), 0o600)
@@ -1082,7 +1083,7 @@ class TuiRecoveryIntegrationTest(Live):
         with self.assertRaisesRegex(ConfigError, "project Codex settings"):
             self.start(spec=spec)
         self.assertEqual(self.logged(), [])
-        self.assertEqual([r.name for r in self.session_cls.list()], ["mgr"])
+        self.assertEqual(self.session_cls.list(), [])
         self.assertFalse((self.work / "run.jsonl").exists())
 
 

@@ -53,6 +53,14 @@ def child(directory: str, *, daemon: bool) -> None:
         time.sleep(1)
 
 
+def colors(directory: str) -> None:
+    _publish(Path(directory, "display.pid"), str(os.getpid()))
+    for number in range(80):
+        print(f"\x1b[31mstartup-{number:03}\x1b[0m", flush=True)
+    for line in sys.stdin:
+        print(f"\x1b[32m{line.strip()}\x1b[0m", flush=True)
+
+
 def harness(directory: str, *, terminal: bool, daemon: bool) -> None:
     from ensemble.session.engine.types import Launch
     from ensemble.session.hosts.tmux import TmuxHost
@@ -83,7 +91,7 @@ def harness(directory: str, *, terminal: bool, daemon: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("kind", choices=("harness", "client", "child"))
+    parser.add_argument("kind", choices=("harness", "client", "child", "colors"))
     parser.add_argument("directory")
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--daemon", action="store_true")
@@ -92,6 +100,8 @@ def main() -> None:
         harness(args.directory, terminal=args.terminal, daemon=args.daemon)
     elif args.kind == "client":
         client(args.directory, daemon=args.daemon)
+    elif args.kind == "colors":
+        colors(args.directory)
     else:
         child(args.directory, daemon=args.daemon)
 

@@ -842,6 +842,8 @@ class HostedSession(Session):
     ) -> None:
         try:
             viewer.close(name, on)
+            if on.attachable:
+                viewer._prepare(name, on)
             displays.started(viewer, name, on, display)
         except SessionError:
             running.close()
@@ -1355,10 +1357,13 @@ class HostedSession(Session):
 
     def close(self) -> None:
         name = self._tui()
-        kept = self._running.close() is False  # a tui record of another generation stays
         try:
-            if name is not None and not kept:
-                self._viewer.close(name, self._host)
+            try:
+                close_view = None if name is None else self._viewer._capture_close(name, self._host)
+            finally:
+                kept = self._running.close() is False
+            if close_view is not None and not kept:
+                close_view()
         finally:
             self._release_capacity()
 
@@ -1516,8 +1521,11 @@ class Owned:
 
     def redisplay(self) -> bool:
         """Its worker's display opened again where gone; False: none to open."""
-        running = self._session._running
-        return isinstance(running, tui.TuiMode) and running.redisplay()
+        session = self._session
+        if not isinstance(session._running, tui.TuiMode) or not session._host.attachable:
+            return False
+        viewer, name = session._shown("redisplay")
+        return viewer._prepare(name, session._host)
 
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
         return type(self._session)._view(

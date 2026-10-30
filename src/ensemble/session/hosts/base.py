@@ -11,7 +11,7 @@ import stat
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import ClassVar
 
 from ensemble.session.engine.types import (
@@ -37,7 +37,7 @@ from ensemble.session.engine.types import (
     TuiSettings,
     WorkerMessage,
 )
-from ensemble.session.hosts.types import CommandView, SessionView
+from ensemble.session.hosts.types import CommandView, WorkerState
 from ensemble.utils import (
     CLASS_PATH,
     CONFIG_NAME,
@@ -115,30 +115,8 @@ def created_events(path: str | None) -> str | None:
         raise SessionError(str(error)) from None
 
 
-@dataclass(frozen=True)
-class WorkerState:
-    sid: str | None
-    generation: str | None
-    client: str | None
-    display: str | None
-    owner: str | None
-    host: str | None = None
-
-
 def worker_dir(name: str) -> str:
     return os.path.join(os.path.expanduser(TUI_DIR), name)
-
-
-def worker_names() -> list[str]:
-    try:
-        with os.scandir(os.path.expanduser(TUI_DIR)) as entries:
-            return sorted(
-                e.name
-                for e in entries
-                if SESSION_NAME.fullmatch(e.name) and e.is_dir(follow_symlinks=False)
-            )
-    except OSError:
-        return []
 
 
 def worker_row(name: str, found: WorkerState | None, state: StatusState) -> SessionRow:
@@ -280,6 +258,11 @@ class Host(ABC):
     _remote_tui: ClassVar[bool] = False  # its owned tui workers are reached only through a guard
     _named_headless: ClassVar[bool] = False
 
+    def _last_lines(self, name: str, sid: str, generation: str) -> str:
+        return next(
+            (row.last_lines or "" for row in self.rows() if (row.name, row.sid) == (name, sid)), ""
+        )
+
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         return None
 
@@ -382,7 +365,7 @@ class Host(ABC):
         """Shared backend identity, if known."""
         return None
 
-    def attach_target(self, name: str) -> SessionView | CommandView | None:
+    def attach_target(self, name: str) -> CommandView | None:
         """None unless attachable."""
         return None
 

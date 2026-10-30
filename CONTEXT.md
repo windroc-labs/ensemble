@@ -70,7 +70,7 @@ _Avoid_: agent run (a role's run, in a session)
 What a caller asks the session layer to run: workdir, Access, tier, effort, flags, env, the sid to resume. In code: `src/ensemble/session/engine/types.py`.
 
 **Host**:
-Where the session layer runs workers by name, each launched by its session harness through `Host.worker` (e.g. local processes with a tmux display, or each in its own Docker container). It only runs them: an attachable Host names an attach target (`SessionView`, `CommandView`) the Viewer shows a session through; a worker's handle reads its screen (`InteractiveProcess.screen`). In code: `src/ensemble/session/hosts/`.
+Where the session layer runs workers by name, each launched by its session harness through `Host.worker` (e.g. local processes with a tmux display, or each in its own Docker container). An attachable Host supplies a `CommandView` for the Viewer to display; a worker's handle reads its screen (`InteractiveProcess.screen`). In code: `src/ensemble/session/hosts/`.
 
 **Viewer**:
 The one display of every Host's sessions, on the host tmux: show, hide, layout, tile, the `--display` grammar, hidden state, opener relations and the grid settings (`[viewer]`). In code: `Viewer` (`src/ensemble/session/viewer/viewer.py`, reached through `ensemble.session.get_viewer()`) and the session layer's display functions (`viewer/display.py`).

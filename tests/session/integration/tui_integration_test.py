@@ -1,10 +1,9 @@
 """HostedSession's tui mode on a private tmux server (tests/session/live_tmux.py) with the fake
 client (tests/session/fake_client/): hooks, events lines, send, idle, attach, stop, exit, close,
-list with tmux unknown, name reuse, racing starts and closes.
+inventory with tmux unavailable, name reuse, racing starts and closes.
 """
 
 import contextlib
-import itertools
 import json
 import os
 import signal
@@ -18,7 +17,6 @@ from unittest import mock
 
 from ensemble.session import Session
 from ensemble.session.engine.records import RunLog
-from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -70,7 +68,8 @@ class TuiTest(Live):
             idle_timeout=IDLE,
         )
         self.assertEqual(len(self.server.panes(f"={MANAGER}:")), 1)
-        self.assertEqual(self.server.option("w1", "@sid"), SID)
+        self.assertEqual(self.server.option("w1", "@sid"), "")
+        self.assertEqual(self.session_cls.list("w1")[0].sid, SID)
         first = RunLog(self.workdir).read()[0]  # its harness may have bound the client since
         self.assertEqual((first["kind"], first["sid"]), ("session", SID))
         self.assertEqual(tui.TuiMode.snapshot("w1")["sid"], SID)
@@ -139,7 +138,7 @@ class TuiTest(Live):
         for start in starts:
             start.assert_not_called()
 
-    def test_a_client_exit_ends_with_its_code_the_session_listed_dead_until_close(self):
+    def test_a_client_exit_ends_with_its_code_and_leaves_guard_inventory(self):
         handle = self.start("w2", {"hook": "stop", "payload": {"last_message": "bye"}}, {"exit": 3})
         stream = Stream(self, handle)
         self.assertEqual(stream.next(), TurnEnd("bye", 0))
@@ -151,17 +150,18 @@ class TuiTest(Live):
             self.assertCountEqual(got, ["w2 done", "w2 dead"])
             return True
 
-        live_tmux.wait(ended, what="w2 done (its harness) and w2 dead (tmux), either order")
-        self.assertEqual(  # its worker ended, its display kept till close
-            (handle.alive(), [r.state for r in self.session_cls.list("w2")]), (False, ["dead"])
+        live_tmux.wait(ended, what="w2 done and guard-confirmed dead")
+        live_tmux.wait(
+            lambda: not self.session_cls.list("w2"), what="exited guard leaves inventory"
         )
+        self.assertEqual((handle.alive(), self.session_cls.list("w2")), (False, []))
         tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
         self.assertEqual((handle.alive(), self.session_cls.list("w2")), (False, []))
         self.assertFalse(
             os.path.lexists(tui.TuiStore.attach("w2", host=self.session_cls.host()).dir)
         )
 
-    def test_an_unreachable_server_is_unknown_and_no_end(self):
+    def test_an_unreachable_display_server_keeps_guard_inventory_and_worker_running(self):
         if os.getuid() == 0:
             self.skipTest("root connects to a mode 000 socket")
         handle = self.start("w3", {"read": True})
@@ -169,8 +169,8 @@ class TuiTest(Live):
         mode = os.stat(self.server.socket).st_mode
         os.chmod(self.server.socket, 0)
         self.addCleanup(os.chmod, self.server.socket, mode)
-        with self.assertRaisesRegex(SessionError, "^tmux sessions unknown: "):
-            self.session_cls.list("w.*")
+        self.assertEqual([row.name for row in self.session_cls.list("w.*")], ["w3"])
+        self.assertTrue(handle.alive())
         stream.quiet(1.0)  # its harness, not tmux, supervises the worker
         os.chmod(self.server.socket, mode)
         self.assertEqual([r.name for r in self.session_cls.list("w3")], ["w3"])
@@ -255,16 +255,11 @@ class SameNameTest(Live):
     def test_two_starts_of_one_name_at_once_make_one_session_its_dir_kept(self):
         with open(self.clients["fake"]["scenario"], "w") as f:
             json.dump([{"read": True}], f)
-        tmux = TmuxCli()
-        real, order, second, first_done = (
-            tmux.start,
-            itertools.count(),
-            threading.Event(),
-            threading.Event(),
-        )
-        results, threads = [], []
+        together = threading.Barrier(3)
+        results = []
 
         def run():
+            together.wait(WAIT)
             try:
                 results.append(
                     self.session_cls.start(
@@ -281,32 +276,19 @@ class SameNameTest(Live):
             except SessionError as e:
                 results.append(e)
 
-        def start(*args, **kwargs):
-            if next(order):
-                second.set()
-                first_done.wait(WAIT)
-                return real(*args, **kwargs)
-            threads.append(threading.Thread(target=run))
-            threads[0].start()
-            second.wait(1)  # unlocked, the second start prepares meanwhile
-            try:
-                return real(*args, **kwargs)
-            finally:
-                first_done.set()
-
-        self.session_cls = self.fake_session(
-            host=type(
-                "HostProxy",
-                (),
-                {"__getattr__": lambda _, key: start if key == "start" else getattr(tmux, key)},
-            )()
-        )
-        run()
-        threads[0].join(WAIT)
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        together.wait(WAIT)
+        for thread in threads:
+            thread.join(WAIT)
+            self.assertFalse(thread.is_alive(), "concurrent session start did not finish")
+        self.assertEqual(len(results), 2)
         handle, error = sorted(results, key=lambda result: isinstance(result, Exception))
         self.addCleanup(handle.stop)
         self.assertEqual(tui.TuiMode.snapshot("w6")["sid"], handle.sid)
-        self.assertEqual(str(error), "tui session w6 is running; tmux attach -t '=w6'")
+        self.assertIsInstance(error, SessionError)
+        self.assertIn("tui session w6 is running", str(error))
         self.assertEqual(
             (
                 handle.alive(),

@@ -148,10 +148,6 @@ PYTHON_CODE_ALLOWED = {
         "ec5dfcbc92032c9ec70596f6a779897ed3305cd4f9acfd399665c83bdcff3d2f",
     ): "Codex tui launch (argv, PYTHONPATH) from an installed-layout site through HostedSession's client registry; no public API returns a configured Client's launch, and only a fresh interpreter on the copied site sees that layout.",
     (
-        "src/ensemble/session/engine/tmux_cli.py",
-        "2353827626a3c6e192d6841bde2f5dfdcdbbc4a8bff857d91303607d99299413",
-    ): "Shipped tmux pane wrapper: stdlib-only f-string interpolating TERMINAL_KEYS (one home), run with -I; production code, no ensemble import.",
-    (
         "tests/session/integration/clients/codex/tui/start_integration_test.py",
         "7e4699b393a08c5b495eef12293120ce9612e2b3e1ddb34344a1329cd6505d0f",
     ): "Runs internal codex tui start (a hook entry named in argv, not a layer command) as __main__ under -P -s and counts json.loads calls in that interpreter.",

@@ -1,11 +1,4 @@
-"""A Claude tui worker under its session harness on the managed guard transport, on a private tmux
-server with the fake claude (WDRC-199 FR-13, FR-17, FR-18): the guard parents the client and only
-the harness holds its lifecycle pipe, so kill -9 of the harness ends guard and client; resume then
-starts a new harness, guard and client on the same sid, cwd, account and flags that answers from the
-old conversation, waiting out a reaping guard and refusing a live or unknown generation; resume of a
-live worker whose display was killed reopens it, and its handlers' view sends to the reopened one;
-closes act only on their own generation.
-"""
+"""Guard lifecycle, conversation recovery and display rebuild on a private tmux server."""
 
 import os
 import re
@@ -75,9 +68,7 @@ def holders(link: str) -> set[int]:
 
 class CrashCase(WorkerCase):
     def launched(self, name: str = "w1", *args: str, **kw) -> dict:
-        """A started worker once its first turn is done: its record, harness channel and pid,
-        generation, guard pid and client call.
-        """
+        """The first completed turn's worker identities."""
         record = self.record(self.start(name, *args, **kw))
         self.wait_event(name, "done")
         channel = self.owner(name)
@@ -223,8 +214,8 @@ class ResumeTest(CrashCase):
                 display = int(self.pane(name, "#{pane_pid}"))
                 self.assertIn("--attach", ps(display, "args"))
                 self.assertEqual(
-                    self.pane(name, "#{@generation} #{@sid} #{pane_dead}"),
-                    f"{found['generation']} {found['record'].sid} 0",
+                    self.pane(name, "#{@view} #{pane_dead}"),
+                    "viewer 0",
                 )
                 self.assertEqual(len(self.calls(name)), 1)
                 self.assertTrue(running(found["call"]["pid"]))
@@ -286,8 +277,6 @@ class CloseTest(CrashCase):
 
 
 class ApiCase(CrashCase):
-    """w1 started through the API, with the recording handler."""
-
     def setUp(self):
         super().setUp()
         self.out = os.path.join(self.root, "handled.jsonl")
@@ -351,7 +340,7 @@ class DisplayTest(ApiCase):
         self.turn_end("third")  # its send reached the display: the view holds that attach
         self.ok(self.server.tmux("kill-session", "-t", "=w1"))
         self.assertEqual(self.owner("w1").ask(Op.DISPLAY, {}), {"reopened": True})
-        self.assertEqual(self.pane("w1", "#{@generation} #{pane_dead}"), f"{view.generation} 0")
+        self.assertEqual(self.pane("w1", "#{@view} #{pane_dead}"), "viewer 0")
         Path(send).write_text("again from the handler", encoding="utf-8")
         self.ok(self.session("send", "w1", "go on"))
         self.assertEqual(self.turn_end("fourth")["sent"], "again from the handler")
