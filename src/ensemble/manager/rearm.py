@@ -2,8 +2,8 @@
 startup, resume, compact and clear sources, prints the re-arm prompt as
 additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
 replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
-that). `--hook-daemon WORD`: while PID's argv[1] is WORD, its parent replaces it (none: no
-record).
+that). PID must share the hold's controlling terminal; otherwise prints a restart hint instead.
+A Codex without a controlling terminal gets the restart hint even without a manager identity.
 Anything else prints nothing. Always exits 0.
 A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
 ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
@@ -25,7 +25,7 @@ SOURCES = frozenset({"startup", "resume", "compact", "clear"})
 MANAGER_NAME = re.compile(r"[A-Za-z0-9_-]+")  # ensemble-crew's own rule (cli.py _roster)
 PID = re.compile(r"[1-9][0-9]*")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
-OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--hook-daemon"})
+OPTIONS = frozenset({"--mode", "--client", "--client-pid"})
 MANAGERS = "~/.ensemble/managers"
 PS = (
     "ps",
@@ -36,8 +36,13 @@ PS = (
     "-o",
     "ppid=",
     "-o",
-    "args=",
+    "tty=",
 )  # one -o each: text after = is a header
+
+DAEMON_WARNING = (
+    "this Codex runs on the shared daemon, so ensemble can't tell which manager it belongs to; "
+    "/quit and restart with `codex --no-daemon`"
+)
 
 PROMPT = """\
 ensemble: SessionStart `{source}` in manager `{name}`'s session (under \
@@ -83,19 +88,19 @@ repeat from step 1; without a notifying tool, keep Manual monitoring.
 
 
 class Processes:
-    """Parents and argvs: /proc where it exists, else one ps table."""
+    """Parents and controlling terminals: /proc where it exists, else one ps table."""
 
     def __init__(self) -> None:
         self.proc = os.path.isdir("/proc/self")
 
     @cached_property
-    def table(self) -> dict[int, tuple[int, list[str]]]:
+    def table(self) -> dict[int, tuple[int, str]]:
         try:
             done = subprocess.run(PS, capture_output=True, timeout=2, check=False)
             if done.returncode != 0:
                 return {}
             rows = [line.split() for line in done.stdout.decode(errors="replace").splitlines()]
-            return {int(row[0]): (int(row[1]), row[2:]) for row in rows}
+            return {int(row[0]): (int(row[1]), row[2]) for row in rows}
         except (OSError, subprocess.SubprocessError, ValueError, IndexError):
             return {}
 
@@ -108,13 +113,14 @@ class Processes:
         except (OSError, ValueError, IndexError):
             return None
 
-    def argv(self, pid: int) -> list[str] | None:
+    def terminal(self, pid: int) -> int | str | None:
         if not self.proc:
-            return self.table[pid][1] if pid in self.table else None
+            tty = self.table[pid][1] if pid in self.table else "?"
+            return None if tty in {"?", "??"} else tty
         try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                return f.read().decode(errors="replace").split("\0")[:-1]
-        except OSError:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                return int(f.read().rpartition(b")")[2].split()[4]) or None
+        except (OSError, ValueError, IndexError):
             return None
 
     def ancestors(self, pid: int) -> set[int]:
@@ -122,15 +128,6 @@ class Processes:
         while (pid := self.parent(pid) or 0) > 1 and pid not in found:
             found.add(pid)
         return found
-
-    def client(self, pid: int, daemon: str | None) -> int | None:
-        seen: set[int] = set()
-        while daemon is not None and (self.argv(pid) or [])[1:2] == [daemon]:
-            seen.add(pid)
-            pid = self.parent(pid) or 0
-            if pid <= 1 or pid in seen or self.argv(pid) is None:
-                return None
-        return pid
 
 
 def manager(environ: Mapping[str, str], processes: Processes) -> str | None:
@@ -184,12 +181,18 @@ def main(argv: tuple[str, ...] = ()) -> int:
     found = options(argv)
     if found is None:
         return 0
-    processes = Processes()
-    name = manager(os.environ, processes)
-    if name is None:
+    if "ENSEMBLE_AGENT_SESSION" in os.environ:
         return 0
     # Raw fds: a closed or broken stdout then fails here, not in a flush at exit.
     try:
+        processes = Processes()
+        name = manager(os.environ, processes)
+        raw_pid = found.get("--client-pid", "")
+        pid = int(raw_pid) if PID.fullmatch(raw_pid) else None
+        terminal = processes.terminal(pid) if pid is not None else None
+        daemon = found.get("--client") == "codex" and pid is not None and terminal is None
+        if name is None and not daemon:
+            return 0
         chunks = []
         while chunk := os.read(0, 65536):
             chunks.append(chunk)
@@ -197,13 +200,17 @@ def main(argv: tuple[str, ...] = ()) -> int:
         source = event.get("source") if isinstance(event, dict) else None
         if not isinstance(source, str) or source not in SOURCES:
             return 0
-        if (entry := record(found, event)) is not None:
-            pid = processes.client(int(found["--client-pid"]), found.get("--hook-daemon"))
-            if pid is not None:
-                save(name, {**entry, "pid": pid})
+        text = DAEMON_WARNING if name is None else prompt(name, source, manual="--mode" in found)
+        if name is not None and (entry := record(found, event)) is not None:
+            if terminal is not None and terminal == processes.terminal(
+                int(os.environ["ENSEMBLE_HOLDER_PID"])
+            ):
+                save(name, entry)
+            else:
+                text = DAEMON_WARNING
         context = {
             "hookEventName": "SessionStart",
-            "additionalContext": prompt(name, source, manual="--mode" in found),
+            "additionalContext": text,
         }
         data = (json.dumps({"hookSpecificOutput": context}) + "\n").encode()
         while data:

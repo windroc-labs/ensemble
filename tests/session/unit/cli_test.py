@@ -640,7 +640,8 @@ class ResumeArgv(Case):
             (0, json.dumps(["claude", "--resume", SID]) + "\n", ""),
         )
         self.assertEqual(
-            self.invoke("resume-argv", "codex", "t-1"), (0, '["codex", "resume", "t-1"]\n', "")
+            self.invoke("resume-argv", "codex", "t-1"),
+            (0, '["codex", "resume", "t-1", "--no-daemon"]\n', ""),
         )
 
     def test_an_unknown_client_or_a_refused_id_is_a_config_error(self):
