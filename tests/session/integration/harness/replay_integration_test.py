@@ -85,7 +85,7 @@ class ReplayTest(Case):
         for number in range(60):
             self.assertIn(f"\x1b[3{1 + number % 6}mline-{number:04}", text)
 
-    def test_3000_lines_leave_the_last_2000_and_reattach_keeps_510(self):
+    def test_3000_hidden_lines_leave_the_last_2000_in_the_scrollback(self):
         self.worker(3000)
         self.attach("pane-a", rows=20)
         shown = self.numbered("pane-a")
