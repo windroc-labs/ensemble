@@ -269,7 +269,12 @@ class IdleTest(Base):
             {"sleep": 60},
         )
         began = time.monotonic()
-        found = drain(self, self.start(idle_timeout=IDLE))
+        handle = self.start(idle_timeout=IDLE)
+        # its harness ends the client only after logging the failure: start-up stays out of IDLE
+        while not (client := read_jsonl(self.log, missing_ok=True)) or running(client[0]["pid"]):
+            self.assertLess(time.monotonic() - began, WAIT)
+            time.sleep(0.01)
+        found = drain(self, handle)
         self.assertLess(time.monotonic() - began, WAIT)
         self.assertEqual(found[0], TurnFailed("permission_required", "approve"))
         self.assertIsInstance(found[-1], Exited)
