@@ -176,11 +176,8 @@ class Base(Case):
             self.assertLess(time.monotonic() - began, WAIT)
             time.sleep(0.01)
 
-    def logged_if_any(self) -> list[dict]:
-        return read_jsonl(self.log, missing_ok=True)
-
     def marked(self) -> bool:
-        return any("ran" in entry for entry in self.logged_if_any())
+        return any("ran" in entry for entry in read_jsonl(self.log, missing_ok=True))
 
     def forget(self):
         """Drops the client log."""
@@ -284,19 +281,25 @@ class IdleTest(Base):
             self.assertGreaterEqual(after - before, IDLE - 0.01)
 
     def test_a_headless_permission_request_fails_without_waiting_for_an_answer(self):
+        # SIGHUP ignored: its close lasts until the guard's SIGTERM, longer than IDLE
         self.steps(
+            {"ignore": "SIGHUP"},
+            MARK,
+            {"until": self.gate},
             out("blocked", reason="approve"),
             {"sleep": 60},
         )
         began = time.monotonic()
         handle = self.start(idle_timeout=IDLE)
-        # its harness ends the client only after logging the failure
-        self.until(lambda: (client := self.logged_if_any()) and not running(client[0]["pid"]))
-        found = drain(self, handle)
+        self.until(self.marked)
+        Path(self.gate).touch()
+        marks = []
+        found = drain(self, handle, lambda _event: marks.append(time.monotonic()))
         self.assertLess(time.monotonic() - began, WAIT)
         self.assertEqual(found[0], TurnFailed("permission_required", "approve"))
         self.assertIsInstance(found[-1], Exited)
         self.assertLess(found[-1].returncode, 0)
+        self.assertGreater(marks[-1] - marks[0], IDLE)
         self.assertFalse(any(isinstance(event, IdleTimeout | TurnEnd) for event in found))
 
     def test_no_idle_timeout_without_one_or_while_stderr_restarts_it(self):
