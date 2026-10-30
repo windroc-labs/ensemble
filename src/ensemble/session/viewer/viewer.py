@@ -155,7 +155,7 @@ class Viewer:
         placed = why is None
         if not placed and command is None:
             with contextlib.suppress(TuiError):
-                placed = bool(self._placement.panes(name))
+                placed = any(w.attach == target.printed for w in self._placement.panes(name))
         if placed:
             self._mark(name, host, hidden=False)
         if why is None:

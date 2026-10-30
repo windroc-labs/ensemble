@@ -23,6 +23,7 @@ from tests.session.hosted_support import SID
 from tests.session.tmux_fixtures import (
     CLIENTS,
     INSIDE,
+    WORKERS,
     clients,
     environ,
     record,
@@ -399,12 +400,23 @@ class HideTest(Base):
         self.assertEqual(logs.output, ["WARNING:session:show w1: tmux: boom"])
 
     def test_a_failed_show_clears_hidden_while_a_worker_pane_still_shows_it(self):
-        self.panes(("%9", "w1", "mgr"))
+        """A pane of this run's attach command that came up meanwhile counts as shown."""
+        later = iter(
+            (worker_rows(), worker_rows(("%9", "w1", "mgr", "@1", "mgr", "/fake/attach w1")))
+        )
+        self.runner.results["list-panes"] = lambda argv: (
+            next(later) if argv[1:3] == ["list-panes", "-a"] and WORKERS[-1] in argv else (0, "")
+        )
         self.failed_show()
         self.assertFalse(hidden.read("w1", SID))
 
     def test_a_failed_show_with_no_worker_pane_keeps_hidden(self):
-        for rows in (worker_rows(("%9", "w2", "mgr")), (1, "", "boom\n")):
+        """An earlier run's pane, still closing, shows no run of this attach command."""
+        for rows in (
+            worker_rows(("%9", "w2", "mgr")),
+            worker_rows(("%9", "w1", "mgr", "@1", "mgr", "/fake/attach w1 --old")),
+            (1, "", "boom\n"),
+        ):
             with self.subTest(rows=rows):
                 self.runner.results["list-panes"] = rows
                 self.failed_show()
