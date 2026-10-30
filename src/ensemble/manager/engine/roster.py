@@ -532,7 +532,7 @@ class Roster:
     def _settle_receipts(self, data: dict) -> None:
         for name, value in data["entries"].items():
             entry = _entry(value)
-            if entry.receipt is None:
+            if entry.receipt is None or entry.state in {State.STARTING, State.RESUMING}:
                 continue
             path = os.path.join(self.directory, entry.receipt)
             try:
@@ -629,6 +629,10 @@ class Roster:
             self._lease(data)
             value = data["entries"].get(name)
             if value is None or _entry(value) != expected:
+                print(
+                    f"manager: {name}: could not mark {state}: entry changed or disappeared",
+                    file=sys.stderr,
+                )
                 return False
             self._mark(data, name, state)
             return True
@@ -654,6 +658,10 @@ class Roster:
             self._lease(data)
             value = data["entries"].get(name)
             if value is None or _entry(value) != expected:
+                print(
+                    f"manager: {name}: could not remove: entry changed or disappeared",
+                    file=sys.stderr,
+                )
                 return False
             del data["entries"][name]
             return True
