@@ -4,7 +4,6 @@ files only under the test's HOME).
 """
 
 import contextlib
-import dataclasses
 import errno
 import io
 import itertools
@@ -34,7 +33,6 @@ from ensemble.session.engine.types import (
     IdleTimeout,
     LimitHit,
     Reply,
-    SessionRow,
     TurnEnd,
     TurnStarted,
 )
@@ -286,18 +284,17 @@ class StartTest(Base):
             self.worker().start(prompt="", resume=False)
         self.assertEqual(str(caught.exception), "w1: claude exited 7 while starting")
 
-    def test_an_early_exit_its_harness_cannot_show_reports_its_host_rows_last_lines(self):
+    def test_an_early_exit_its_harness_cannot_show_reports_its_hosts_kept_lines(self):
         self.session.events.return_value = iter([Exited(2)])
         self.session.screen.side_effect = SessionError("session w1: worker exited")
-        row = SessionRow("w1", SID, "claude", StatusState.DEAD, None, None, "a\n\nb", own=False)
-        other = dataclasses.replace(row, sid=OTHER, last_lines="not this")
-        self.host.rows.return_value = [other, row]
+        self.host.last_lines.return_value = "a\n\nb"
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
         self.assertEqual(
             str(caught.exception), "w1: claude exited 2 while starting; its last lines:\na\nb"
         )
-        self.host.rows.side_effect = SessionError("tmux sessions unknown")
+        self.host.last_lines.assert_called_once_with("w1", SID, None)
+        self.host.last_lines.side_effect = SessionError("tmux sessions unknown")
         self.session.events.return_value = iter([Exited(2)])
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
@@ -307,15 +304,14 @@ class StartTest(Base):
         self.session.events.return_value = iter([Exited(2)])
         self.session.screen.side_effect = SessionError("worker exited")
         self.session.generation = "g1"
-        self.host.rows.return_value = []
-        self.host._last_lines.return_value = "final error"
+        self.host.last_lines.return_value = "final error"
         with self.assertRaises(SessionError) as caught:
             self.worker().start(prompt="", resume=False)
         self.assertEqual(
             str(caught.exception),
             "w1: claude exited 2 while starting; its last lines:\nfinal error",
         )
-        self.host._last_lines.assert_called_once_with("w1", SID, "g1")
+        self.host.last_lines.assert_called_once_with("w1", SID, "g1")
 
     def test_the_watch_ends_on_the_first_event_once_its_client_is_up(self):
         type(self.session).client_up = mock.PropertyMock(side_effect=[False, True, True])

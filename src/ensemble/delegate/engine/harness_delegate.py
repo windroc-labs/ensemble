@@ -1337,24 +1337,17 @@ class HarnessDelegate(Delegate):
         return f": exit {result.returncode}" + (f": {result.error}" if result.error else "")
 
     def _tail(self, state: DelegateState, agent: Session | None) -> str:
-        """`; last lines: …` of the agent's client: its screen, else its Host row's."""
+        """`; last lines: …` of the agent's client: its screen, else those its Host kept."""
         try:
             text = "" if agent is None else agent.screen()
         except SessionError:
             text = ""
         if not text:
             try:
-                rows = self.session_cls.host(state.host).rows()
+                host = self.session_cls.host(state.host)
+                text = host.last_lines(state.agent_name, state.plan.sid)
             except (SessionError, SessionConfigError):
-                rows = []
-            text = next(
-                (
-                    r.last_lines or ""
-                    for r in rows
-                    if (r.name, r.sid) == (state.agent_name, state.plan.sid)
-                ),
-                "",
-            )
+                text = ""
         tail = last_lines(text)
         return f"; last lines: {tail}" if tail else ""
 

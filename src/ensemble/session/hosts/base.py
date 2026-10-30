@@ -263,7 +263,8 @@ class Host(ABC):
     _remote_tui: ClassVar[bool] = False  # its owned tui workers are reached only through a guard
     _named_headless: ClassVar[bool] = False
 
-    def _last_lines(self, name: str, sid: str, generation: str) -> str:
+    def last_lines(self, name: str, sid: str, generation: str | None = None) -> str:
+        """`generation`'s (None: the latest) last lines, kept past its exit; "" unless `sid`'s."""
         return next(
             (row.last_lines or "" for row in self.rows() if (row.name, row.sid) == (name, sid)), ""
         )

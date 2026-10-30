@@ -124,11 +124,12 @@ class TmuxHost(Host):
     def list(self) -> list[str]:
         return [row.name for row in self.rows()]
 
-    def _last_lines(self, name: str, sid: str, generation: str) -> str:
+    def last_lines(self, name: str, sid: str, generation: str | None = None) -> str:
         found = managed.records(self.name).get(name)
-        if found is None or (found.sid, found.generation) != (sid, generation):
+        if found is None or found.sid != sid or generation not in (None, found.generation):
             return ""
-        directory = os.path.join(managed.location(self.name, name), generation)
+        assert found.generation is not None
+        directory = os.path.join(managed.location(self.name, name), found.generation)
         try:
             managed.check_directory(directory)
             text = managed.load_json(

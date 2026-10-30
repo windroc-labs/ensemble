@@ -1172,10 +1172,17 @@ class DockerHost(Host):
             for _, row in sorted(containers.items())
         ]
 
-    def _last_lines(self, name: str, sid: str, generation: str) -> str:
+    def last_lines(self, name: str, sid: str, generation: str | None = None) -> str:
         found = _record(name)
-        if (found.get("sid"), found.get("generation")) != (sid, generation):
+        recorded = found.get("generation")
+        if (
+            found.get("sid") != sid
+            or not isinstance(recorded, str)
+            or not GEN.fullmatch(recorded)
+            or generation not in (None, recorded)
+        ):
             return ""
+        generation = recorded
         try:
             text = json.loads(
                 read_regular(diagnostic_file(state_dir(name), generation), limit=STATE_MAX)
