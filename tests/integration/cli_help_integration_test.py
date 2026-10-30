@@ -42,7 +42,6 @@ SURFACES = {
             "show",
             "hide",
             "close",
-            "attach-command",
             "ls",
             "send",
             "read",
@@ -64,7 +63,6 @@ SURFACES = {
             "show",
             "hide",
             "close",
-            "attach-command",
             "prompt",
         ],
     ),
@@ -79,7 +77,6 @@ SURFACES = {
             "show",
             "hide",
             "close",
-            "attach-command",
             "resume",
             "content",
             "writeback",
@@ -151,7 +148,7 @@ class HelpSafety(Case):
             self.assertIn("ensemble-", out)
 
     def matrix(self, root):
-        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 62)
+        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 59)
         before = self.snapshot()
         package, commands = SURFACES[root]
         for leaf in [None, *commands]:

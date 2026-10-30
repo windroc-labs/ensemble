@@ -12,6 +12,16 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## attach-command removed
+
+`ensemble-session attach-command`, `ensemble-delegate attach-command` and `ensemble-orchestrator attach-command` are
+gone; each now fails as an unknown command. The same layer's `status` prints the same command in its `attach` field,
+with no side effect: `ensemble-session status NAME`, `ensemble-delegate status WORKDIR`,
+`ensemble-orchestrator status ISSUE`. `ensemble-crew attach` lists it per entry in its `attach` column. Do not use
+`show` for this: inside tmux it opens a pane instead of printing. An attended `ensemble-orchestrator router --tui` run
+prints its `router.py: <ID>: attach: <command>` line on stderr, without the per-session `ensemble-session` line. A
+tmux session whose session state cannot be read has a null `attach` field: attach with `tmux attach -t =NAME`.
+
 ## ensemble list
 
 `ensemble list` prints every manager in `~/.ensemble/managers/`, with its holder state, client, cwd and entries. On a

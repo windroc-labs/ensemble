@@ -204,7 +204,6 @@ class Wirings(run_fixtures.Base):
             "show",
             "hide",
             "close",
-            "attach-command",
             "resume",
             "content",
             "writeback",
@@ -264,10 +263,14 @@ class Wirings(run_fixtures.Base):
     def test_run_control_help_explains_selection_effects_and_recovery(self):
         expected = {
             "status": ("Status", "read-only"),
-            "show": ("saved display", "attach-command"),
+            "show": (
+                "saved display",
+                "ensemble-orchestrator status TASK-1",
+                "ensemble-crew attach",
+                "show prints an attach command",
+            ),
             "hide": ("continues", "show"),
             "close": ("Terminate", "resume"),
-            "attach-command": ("one command per", "printed command"),
             "resume": ("exactly one", "--input", "issue board", "usage gate"),
             "content": ("exactly one", "stdout"),
         }
@@ -300,7 +303,7 @@ class Wirings(run_fixtures.Base):
                 "reaches Linear as the [linear.harness] OAuth app, whose token any command renews"
                 " before a call when under 5 days are left (the issue commands: the [linear.manager]"
                 " OAuth app)",
-                "{router,promote,prune,issue,credentials,status,show,hide,close,attach-command,resume,content,writeback}",
+                "{router,promote,prune,issue,credentials,status,show,hide,close,resume,content,writeback}",
             ),
             "router": (
                 "ensemble-orchestrator router",
@@ -451,28 +454,6 @@ def _call(arguments, *, stdin="", tty=False):
 
 
 class Queries(RunCase):
-    def test_attach_command_example_supports_ordered_batch_records(self):
-        _, first = self.start("TASK-1")
-        _, second = self.start("TASK-2")
-        with mock.patch.object(
-            ReadyDelegate,
-            "attach_command",
-            lambda view: f"attach {view.workdir}",
-        ):
-            for arguments, stdin, selected in (
-                (["attach-command", "TASK-1"], "", (first,)),
-                (["attach-command", "TASK-2", "TASK-1"], "", (second, first)),
-                (["attach-command"], second.to_line() + "\n" + first.to_line(), (second, first)),
-            ):
-                with self.subTest(arguments=arguments, stdin=stdin):
-                    result, output, errors = _call(arguments, stdin=stdin)
-                    self.assertEqual((result, errors), (0, ""))
-                    self.assertEqual(
-                        output.splitlines(), [f"attach {record.workdir}" for record in selected]
-                    )
-        self.assertTrue(FakeDelegate.attach(first.workdir).alive())
-        self.assertTrue(FakeDelegate.attach(second.workdir).alive())
-
     def test_resume_checks_and_removes_the_environment_sid_before_starting(self):
         _, record = self.start()
         for supplied in (None, record.sid, "00000000-0000-4000-8000-000000000000"):
@@ -626,7 +607,7 @@ class Queries(RunCase):
         self.assertEqual((result, output, errors), (0, "", ""))
         self.assertFalse(one.delegate.alive())
         self.assertTrue(two.delegate.alive())
-        for command in ("show", "hide", "attach-command"):
+        for command in ("show", "hide"):
             result, output, errors = _call([command, "TASK-2"])
             self.assertEqual((result, output), (1, ""))
             self.assertEqual(len(errors.splitlines()), 1)
