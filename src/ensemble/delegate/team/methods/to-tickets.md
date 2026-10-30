@@ -10,7 +10,7 @@ Work from whatever is already in the conversation context. If the user passes a 
 
 ### 2. Explore the codebase
 
-Grep the target repo for every symbol, option, command and file the PRD changes or removes, plus their callers and tests. Every hit goes into one ticket's Scope or is ruled out in a line.
+Grep the target repo for every symbol, option, command and file the PRD changes or removes, plus their callers and tests. Use the hits to split the tickets and set their blocking edges: every hit belongs to one ticket's work or is ruled out in a line.
 
 Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
 
@@ -58,4 +58,4 @@ The end-to-end behaviour this ticket makes work, from the user's perspective, no
 
 </issue-template>
 
-Outside `Scope:`, avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+Avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
