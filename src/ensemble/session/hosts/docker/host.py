@@ -405,7 +405,7 @@ class DockerHost(Host):
         self._workers: dict[str, DockerWorker] = {}
 
     def tui_settings(self) -> TuiSettings:
-        return replace(super().tui_settings(), status_line=True)
+        return replace(super().tui_settings(), status_line=True, badge="🐳")
 
     def _ps(self, *, required: bool = False) -> list[list[str]]:
         """Admission requires an answer; others list none without a daemon/CLI."""

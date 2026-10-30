@@ -31,6 +31,7 @@ from ensemble.session.viewer.grid import (
     WINDOW,
     WORKER,
     WORKER_ATTACH,
+    WORKER_BADGE,
     WORKER_LABEL,
     WORKER_OPENER,
     Grid,
@@ -60,7 +61,8 @@ CLOSE_ENTRY = re.compile(  # _close_hook as show-hooks prints it
     r"after-kill-pane\[([0-9]+)\] ; run-shell -b .\S+ hide --if-closed --sid .*"
 )
 SPLIT = "#{pane_id}\t#{window_id}"
-LABEL = f"#{{?#{{{WORKER_LABEL}}},[#{{{WORKER_LABEL}}}],}}"
+BADGE = f"#{{?#{{{WORKER_BADGE}}},#{{{WORKER_BADGE}}} ,}}"
+LABEL = f"#{{?#{{{WORKER_LABEL}}},[{BADGE}#{{{WORKER_LABEL}}}],}}"
 BORDERS = {"pane-border-status": "bottom", "pane-border-format": LABEL}
 SAVED = "@worker-saved-"  # +option: its own value under a label border, unset if none
 LABELS = f"#{{window_id}}\t#{{{WORKER_LABEL}}}\t#{{pane-border-format}}"
@@ -134,6 +136,7 @@ class Placement:
         per_column: int | None = None,
         retile: str | None = None,
         label: bool = False,
+        badge: str = "",
         fallbacks: Sequence[str] = (),
     ) -> str | None:
         """Keeps `name`'s worker pane, else splits one running argv at its spot; why it failed."""
@@ -178,6 +181,7 @@ class Placement:
                         sid=sid,
                         generation=generation,
                         label=label,
+                        badge=badge,
                     )
             finally:
                 if new is None and spot.grid is not None:
@@ -391,8 +395,11 @@ class Placement:
         sid: str | None,
         generation: str | None,
         label: bool,
+        badge: str = "",
     ) -> None:
-        """Tags pane as name's worker pane running `printed`; a failure is only printed."""
+        """Tags pane as name's worker pane running `printed`, labelled with badge before name
+        when label; a failure is only printed.
+        """
         if not (
             PANE.fullmatch(pane)
             and WINDOW.fullmatch(window)
@@ -411,6 +418,10 @@ class Placement:
             args += [";", "set-option", "-p", "-t", pane, WORKER_OPENER, opener]
         if label:
             args += [";", "set-option", "-p", "-t", pane, WORKER_LABEL, name]
+            if badge.endswith(";"):
+                print(f"tui: show: label: tmux would misread {badge!r:.80}", file=sys.stderr)
+            elif badge:
+                args += [";", "set-option", "-p", "-t", pane, WORKER_BADGE, badge]
             try:
                 args += self._label_args(window)
             except TuiError as e:

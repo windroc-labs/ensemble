@@ -259,10 +259,11 @@ def _free(path):
 
 
 class ConfigTest(Base):
-    def test_tui_settings_show_the_status_line_and_keep_the_hidden_size(self):
+    def test_tui_settings_show_the_status_line_badged_and_keep_the_hidden_size(self):
         host = DockerHost("docker", {"docker": DOCKER, "hidden_size": "100x30"})
         self.assertTrue(self.host.tui_settings().status_line)
         self.assertTrue(host.tui_settings().status_line)
+        self.assertEqual(host.tui_settings().badge, "🐳")
         self.assertEqual(host.tui_settings().hidden_size, (100, 30))
 
     def test_provider_usage_rejects_broker_18_before_probing_credentials(self):

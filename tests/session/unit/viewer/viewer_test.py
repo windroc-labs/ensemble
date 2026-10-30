@@ -516,8 +516,18 @@ class CommandViewTest(Base):
                 self.assertEqual(tagged[5:7], ["@worker", "d1"])
                 self.assertEqual("pane-border-status" in tagged, labeled)
                 self.assertEqual(("@worker-label" in tagged), labeled)
+                self.assertNotIn("@worker-badge", tagged)
                 self.assertNotIn("new-session", [c[1] for c in self.runner.calls])
                 self.assertFalse(hidden.read("d1", SID))
+
+    def test_show_badges_the_label_with_the_hosts_badge(self):
+        """WDRC-519: the badge is the Host's, not read from the session name."""
+        self.docker.tui_settings.return_value = TuiSettings(status_line=True, badge="🐳")
+        self.assertIsNone(self.viewer.show("d1", self.docker, display="mgr/right"))
+        tagged = next(c for c in self.runner.calls if "@worker" in c)
+        line = " ".join(tagged)
+        self.assertIn("@worker-label d1 ;", line)
+        self.assertIn("@worker-badge 🐳 ;", line)
 
     def test_show_outside_tmux_prints_attach_without_opening_a_pane(self):
         self.enterContext(environ(HOME=self.home))

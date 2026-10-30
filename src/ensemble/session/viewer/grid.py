@@ -94,6 +94,9 @@ WORKER_OPENER = "@worker-opener"
 WORKER_LABEL = "@worker-label"
 
 
+WORKER_BADGE = "@worker-badge"
+
+
 WORKER_ATTACH = "@worker-attach"
 
 
