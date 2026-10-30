@@ -62,7 +62,7 @@ COMMAND = "/opt/a_b.c@1+2-3/bin/ensemble-session"
 
 GENERATION = "g1"
 
-LABEL = "#{?#{@worker-label},[#{@worker-label}],}"
+LABEL = "#{?#{@worker-label},[#{?#{@worker-badge},#{@worker-badge} ,}#{@worker-label}],}"
 
 GRID_HOOKS = ("pane-exited", "window-resized", "window-layout-changed")
 
@@ -107,6 +107,7 @@ def record(
     sid=SID,
     generation=GENERATION,
     label=False,
+    badge="",
     hook=True,
     printed=PRINTED,
     pruned=(),
@@ -123,6 +124,7 @@ def record(
         reads = [own(window, "pane-border-format"), own(window, "pane-border-status")]
         args += [
             *(";", "set-option", "-p", "-t", pane, "@worker-label", name),
+            *((";", "set-option", "-p", "-t", pane, "@worker-badge", badge) if badge else ()),
             *(";", "set-option", "-u", "-w", "-t", window, "@worker-saved-pane-border-status"),
             *(";", "set-option", "-u", "-w", "-t", window, "@worker-saved-pane-border-format"),
             *(";", "set-option", "-w", "-t", window, "pane-border-status", "bottom"),

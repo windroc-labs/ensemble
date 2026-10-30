@@ -145,6 +145,7 @@ class Viewer:
             if command is None:
                 opener, split, split_from, _ = parts(display)
                 state = worker_state(name)
+                tui = host.tui_settings()
                 why = self._placement.open_pane(
                     name,
                     target.argv,
@@ -156,7 +157,8 @@ class Viewer:
                     split_from=split_from,
                     per_column=self._per_column,
                     retile=self._retile,
-                    label=host.tui_settings().status_line,
+                    label=tui.status_line,
+                    badge=tui.badge,
                     fallbacks=_chain(opener),
                 )
             else:

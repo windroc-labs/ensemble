@@ -263,6 +263,7 @@ HIDDEN_SIZE = (80, 24)
 class TuiSettings:
     status_line: bool = False
     hidden_size: tuple[int, int] = HIDDEN_SIZE
+    badge: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)

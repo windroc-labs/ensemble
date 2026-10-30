@@ -350,12 +350,33 @@ class RecordTest(Case):
         for option in (
             "set-option -p -t %20 @worker-label w1 ;",
             "set-option -w -t @1 pane-border-status bottom ;",
-            "set-option -w -t @1 pane-border-format #{?#{@worker-label},[#{@worker-label}],} ;",
+            "set-option -w -t @1 pane-border-format "
+            "#{?#{@worker-label},[#{?#{@worker-badge},#{@worker-badge} ,}#{@worker-label}],} ;",
         ):
             self.assertIn(option, " ".join(labeled))
-        plain = self.record()[-1]
-        for option in ("@worker-label", "pane-border-status", "pane-border-format"):
+        self.assertNotIn("@worker-badge", labeled)
+        plain = self.record(badge="🐳")[-1]
+        for option in (
+            "@worker-label",
+            "@worker-badge",
+            "pane-border-status",
+            "pane-border-format",
+        ):
             self.assertNotIn(option, plain)
+
+    def test_a_label_carries_the_hosts_badge(self):
+        """WDRC-519: the Host's badge goes in @worker-badge; @worker-label stays the name."""
+        calls = self.record(label=True, badge="🐳")
+        self.assertEqual(calls, record("mgr", "%20", name="w1", label=True, badge="🐳"))
+        line = " ".join(calls[-1])
+        self.assertIn("set-option -p -t %20 @worker-label w1 ;", line)
+        self.assertIn("set-option -p -t %20 @worker-badge 🐳 ;", line)
+        self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_a_badge_tmux_would_misread_is_dropped_and_the_label_kept(self):
+        calls = self.record(label=True, badge="x;")
+        self.assertEqual(calls, record("mgr", "%20", name="w1", label=True))
+        self.assertEqual(self.stderr.getvalue(), "tui: show: label: tmux would misread 'x;'\n")
 
 
 class BorderTest(Case):
