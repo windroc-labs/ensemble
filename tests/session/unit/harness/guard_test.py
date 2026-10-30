@@ -195,6 +195,78 @@ class DisplayTest(Base):
             self.assertEqual(b"".join(sent), b"" if stalled else data)
 
 
+class CellTest(Base):
+    def test_sgr_sets_and_clears_each_slot_from_integers(self):
+        cases = (
+            ("1;31", {0: "1", 8: "31"}),
+            ("1;22", {}),
+            ("38;5;208;48;2;1;2;3", {8: "38;5;208", 9: "48;2;1;2;3"}),
+            ("38:2::1:2:3;58:5:9", {8: "38;2;1;2;3", 10: "58;5;9"}),
+            ("38:2:1:2:3", {8: "38;2;1;2;3"}),
+            ("4:3;53", {2: "4:3", 7: "53"}),
+            ("4:3;4:0", {}),
+            ("7;9;0;3", {1: "3"}),
+            ("38;5;256;31", {8: "31"}),
+            ("38;7;1", {0: "1"}),  # an unknown color kind consumes only itself
+            ("x;1;;95", {8: "95"}),
+            ("101;49", {}),
+        )
+        for raw, slots in cases:
+            with self.subTest(raw=raw):
+                expected = tuple(slots.get(i) for i in range(len(guard.PLAIN)))
+                self.assertEqual(guard.sgr(guard.PLAIN, raw), expected)
+
+    def test_only_a_bare_sgr_sets_the_pen(self):
+        for wire in (b"\x1b[4:3$m", b"\x1b[?4m", b"\x1b[>4;2m", b"\x1b[31 m"):
+            with self.subTest(wire=wire):
+                screen = guard.Screen(rows=2, columns=8)
+                screen.append(wire + b"x")
+                self.assertEqual(screen.cells[0][0], ("x", guard.PLAIN))
+
+    def test_cells_keep_their_pen_and_erase_keeps_the_background(self):
+        screen = guard.Screen(rows=2, columns=6)
+        screen.append(b"\x1b[1;31ma\x1b[44mb\x1b[0mc\x1b[42m\x1b[K")
+        red = guard.sgr(guard.PLAIN, "1;31")
+        self.assertEqual(
+            screen.cells[0][:3], [("a", red), ("b", guard.sgr(red, "44")), ("c", guard.PLAIN)]
+        )
+        self.assertEqual(screen.cells[0][3], (" ", guard.sgr(guard.PLAIN, "42")))
+        self.assertEqual(screen.text(None), "abc")
+
+    def test_c1_code_points_never_become_cells(self):
+        screen = guard.Screen(rows=2, columns=12)
+        screen.append("a\x9b6n\x9d52;x\x07b".encode())
+        self.assertEqual(screen.text(None), "a6n52;x\x07b".replace("\x07", ""))
+        self.assertFalse(any("\x80" <= text <= "\x9f" for text, _ in screen.cells[0]))
+
+    def test_autowrap_marks_the_row_and_a_newline_or_erase_clears_it(self):
+        screen = guard.Screen(rows=4, columns=4)
+        screen.append(b"abcdef\r\nxy")
+        self.assertEqual([row.wrapped for row in screen.cells], [True, False, False, False])
+        screen.append(b"\x1b[1;1H\n")
+        self.assertFalse(screen.cells[0].wrapped)
+        screen.append(b"\x1b[3;1Hwxyz12\x1b[3;2H\x1b[K")
+        self.assertFalse(screen.cells[2].wrapped)
+        screen.append(b"\x1b[3;1Hwxyz12\x1b[3;2H\x1b[1K")
+        self.assertTrue(screen.cells[2].wrapped)
+
+    def test_a_wide_character_at_the_margin_leaves_an_empty_skipped_cell(self):
+        screen = guard.Screen(rows=2, columns=4)
+        screen.append("abc中".encode())
+        self.assertEqual(screen.cells[0][3], ("", guard.PLAIN))
+        self.assertTrue(screen.cells[0].wrapped)
+        self.assertEqual(screen.text(None), "abc\n中")
+
+    def test_writing_a_row_drops_its_full_cells_and_their_wrap(self):
+        row = guard.Row([("a", guard.PLAIN)] * 2)
+        row.full, row.wrapped = [("a", guard.PLAIN)] * 4, True
+        row[1:] = [("b", guard.PLAIN)]
+        self.assertEqual((row.full, row.wrapped), (None, False))
+        row.wrapped = True
+        row[0] = ("c", guard.PLAIN)
+        self.assertTrue(row.wrapped)
+
+
 class GuardTest(Base):
     def test_private_csi_queries_do_not_execute_normal_screen_commands(self):
         for query in (b"\x1b[?1;1;0S", b"\x1b[?1T", b"\x1b[?1L", b"\x1b[?1M", b"\x1b[?2J"):

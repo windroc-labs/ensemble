@@ -140,21 +140,110 @@ def await_launch(deadline: float) -> tuple[dict, bytes]:
     raise ValueError("no launch handoff")
 
 
+Pen = tuple[str | None, ...]
+Cell = tuple[str, Pen]
+PLAIN: Pen = (None,) * 11
+BACKGROUND = 9  # the pen slot an erase keeps (BCE)
+SGR = {
+    1: (0, "1"), 2: (0, "2"), 22: (0, None), 3: (1, "3"), 23: (1, None), 4: (2, "4"),
+    21: (2, "21"), 24: (2, None), 5: (3, "5"), 6: (3, "6"), 25: (3, None), 7: (4, "7"),
+    27: (4, None), 8: (5, "8"), 28: (5, None), 9: (6, "9"), 29: (6, None), 53: (7, "53"),
+    55: (7, None), 39: (8, None), 49: (BACKGROUND, None), 59: (10, None),
+    **{n: (8, str(n)) for n in (*range(30, 38), *range(90, 98))},
+    **{n: (BACKGROUND, str(n)) for n in (*range(40, 48), *range(100, 108))},
+}  # fmt: skip
+COLORS = {38: 8, 48: BACKGROUND, 58: 10}
+
+
+def color(args: list[str]) -> str | None:
+    """A 38/48/58 color's normalized arguments: 5;n or 2;r;g;b, each 0 to 255."""
+    try:
+        values = [int(arg or 0) for arg in args]
+    except ValueError:
+        return None
+    if not all(0 <= value < 256 for value in values):
+        return None
+    if values[:1] == [5] and len(values) == 2 or values[:1] == [2] and len(values) == 4:
+        return ";".join(map(str, values))
+    return None
+
+
+def sgr(pen: Pen, raw: str) -> Pen:
+    """pen after SGR parameters raw (`;` and `:` forms); every slot rebuilt from integers."""
+    slots, params, index = list(pen), raw.split(";"), 0
+    while index < len(params):
+        group = params[index].split(":")
+        index += 1
+        try:
+            head = int(group[0] or 0)
+        except ValueError:
+            continue
+        if head == 0:
+            slots = list(PLAIN)
+        elif head in COLORS:
+            if len(group) > 1:
+                args = group[1:]
+                if args[:1] == ["2"] and len(args) == 5:  # 2:colorspace:r:g:b
+                    args = ["2", *args[2:]]
+            else:
+                count = {"5": 2, "2": 4}.get(params[index] if index < len(params) else "", 1)
+                args, index = params[index : index + count], index + count
+            if (value := color(args)) is not None:
+                slots[COLORS[head]] = f"{head};{value}"
+        elif head == 4 and len(group) > 1:
+            with contextlib.suppress(ValueError):
+                style = int(group[1] or 0)
+                if 0 <= style <= 5:
+                    slots[2] = f"4:{style}" if style else None
+        elif head in SGR:
+            slot, value = SGR[head]
+            slots[slot] = value
+    return tuple(slots)
+
+
+def background(pen: Pen) -> Pen:
+    return PLAIN if pen[BACKGROUND] is None else (*PLAIN[:BACKGROUND], pen[BACKGROUND], None)
+
+
+class Row(list):
+    """One screen line of cells. wrapped: its text runs on into the next row. full: its cells as
+    written while a width change shows them cut or padded; any write drops it and its wrap.
+    """
+
+    wrapped = False
+    full: list[Cell] | None = None
+
+    def __setitem__(self, index, value) -> None:
+        if self.full is not None:
+            self.full, self.wrapped = None, False
+        super().__setitem__(index, value)
+
+
+def blank(columns: int, pen: Pen = PLAIN) -> Row:
+    return Row([(" ", pen)] * columns)
+
+
+def line_text(cells) -> str:
+    return "".join(text for text, _ in cells).rstrip()
+
+
 class Screen:
     """Bounded VT screen; visible cells and scrollback have separate ownership."""
 
     def __init__(self, limit=1 << 20, *, rows=SIZE[0], columns=SIZE[1]):
         self.limit, self.rows, self.columns = limit, rows, columns
-        self.cells = [[" "] * columns for _ in range(rows)]
+        self.cells = [blank(columns) for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
         self.row, self.column = 0, 0
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = (0, 0)
-        self.normal: tuple[list[list[str]], int, int] | None = None
+        self.normal: tuple[list[Row], int, int] | None = None
+        self.pen = PLAIN
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.escape = ""
 
-    def newline(self) -> None:
+    def newline(self, *, wrap: bool = False) -> None:
+        self.cells[self.row].wrapped = wrap
         if self.row == self.scroll_bottom:
             self._scroll(self.scroll_top, self.scroll_bottom, 1, history=True)
         else:
@@ -162,16 +251,20 @@ class Screen:
 
     def _scroll(self, top: int, bottom: int, count: int, *, history=False) -> None:
         amount = min(abs(count), bottom - top + 1)
-        blank = [[" "] * self.columns for _ in range(amount)]
+        fill = [blank(self.columns, background(self.pen)) for _ in range(amount)]
         if count > 0:
             if history and top == 0 and self.normal is None:
-                self.history.extend("".join(line).rstrip() for line in self.cells[:amount])
-            self.cells[top : bottom + 1] = self.cells[top + amount : bottom + 1] + blank
+                self.history.extend(line_text(line) for line in self.cells[:amount])
+            self.cells[top : bottom + 1] = self.cells[top + amount : bottom + 1] + fill
         else:
-            self.cells[top : bottom + 1] = blank + self.cells[top : bottom + 1 - amount]
+            self.cells[top : bottom + 1] = fill + self.cells[top : bottom + 1 - amount]
 
     def csi(self, sequence: str) -> None:
         command, raw = sequence[-1], sequence[:-1]
+        if command == "m":
+            if set(raw) <= set("0123456789;:"):
+                self.pen = sgr(self.pen, raw)
+            return
         private = raw.startswith("?")
         try:
             values = [int(value or 0) for value in raw.lstrip("?").split(";")]
@@ -180,12 +273,13 @@ class Screen:
         if private:
             if 1049 in values and command == "h" and self.normal is None:
                 self.normal = self.cells, self.row, self.column
-                self.cells = [[" "] * self.columns for _ in range(self.rows)]
+                self.cells = [blank(self.columns) for _ in range(self.rows)]
             elif 1049 in values and command == "l" and self.normal is not None:
                 self.cells, self.row, self.column = self.normal
                 self.normal = None
             return
         value = values[0] or 1
+        fill = (" ", background(self.pen))
         if command in "Hf":
             self.row = min(self.rows - 1, max(0, value - 1))
             self.column = min(self.columns - 1, max(0, (values[1] if len(values) > 1 else 1) - 1))
@@ -206,7 +300,7 @@ class Screen:
             mode = values[0]
             for row in range(self.rows):
                 if mode in (2, 3) or mode == 0 and row > self.row or mode == 1 and row < self.row:
-                    self.cells[row] = [" "] * self.columns
+                    self.cells[row] = blank(self.columns, fill[1])
             if mode in (0, 1):
                 self.erase_line(mode)
             if mode == 3:
@@ -216,10 +310,10 @@ class Screen:
         elif command == "P":
             line = self.cells[self.row]
             count = min(value, self.columns - self.column)
-            line[self.column :] = line[self.column + count :] + [" "] * count
+            line[self.column :] = line[self.column + count :] + [fill] * count
         elif command == "@":
             line = self.cells[self.row]
-            line[self.column :] = ([" "] * min(value, self.columns) + line[self.column :])[
+            line[self.column :] = ([fill] * min(value, self.columns) + line[self.column :])[
                 : self.columns - self.column
             ]
         elif command == "r":
@@ -247,7 +341,10 @@ class Screen:
         column = min(self.column, self.columns - 1)
         start = column if mode == 0 else 0
         end = column + 1 if mode == 1 else self.columns
-        self.cells[self.row][start:end] = [" "] * (end - start)
+        line = self.cells[self.row]
+        line[start:end] = [(" ", background(self.pen))] * (end - start)
+        if end == self.columns:
+            line.wrapped = False
 
     def append(self, data: bytes) -> None:
         for char in self.decoder.decode(data):
@@ -290,30 +387,35 @@ class Screen:
                 self.column = max(0, self.column - 1)
             elif char == "\t":
                 self.column = min(self.columns - 1, (self.column // 8 + 1) * 8)
-            elif char >= " " and char != "\x7f":
+            elif char >= " " and char != "\x7f" and not "\x80" <= char <= "\x9f":
+                line = self.cells[self.row]
                 if unicodedata.combining(char):
                     if self.column:
                         index = min(self.columns - 1, self.column - 1)
-                        if self.cells[self.row][index] == "" and index:
+                        if line[index][0] == "" and index:
                             index -= 1
-                        if len(self.cells[self.row][index]) < 16:
-                            self.cells[self.row][index] += char
+                        text, pen = line[index]
+                        if len(text) < 16:
+                            line[index] = text + char, pen
                     continue
                 width = min(
                     self.columns, 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
                 )
                 if self.column + width > self.columns:
+                    if self.column < self.columns:  # a wide character skips the last column
+                        line[self.column] = "", self.pen
                     self.column = 0
-                    self.newline()
-                self.cells[self.row][self.column] = char
+                    self.newline(wrap=True)
+                    line = self.cells[self.row]
+                line[self.column] = char, self.pen
                 if width == 2 and self.column + 1 < self.columns:
-                    self.cells[self.row][self.column + 1] = ""
+                    line[self.column + 1] = "", self.pen
                 self.column += width
 
     def resize(self, rows: int, columns: int) -> None:
         if self.normal is None:
             for line in self.cells[: max(0, self.row + 1 - rows)]:
-                self.history.append("".join(line).rstrip())
+                self.history.append(line_text(line))
         else:
             cells, row, column = self.normal
             cells, row = fit(cells, row, rows, columns)
@@ -324,7 +426,7 @@ class Screen:
         self.saved = min(self.saved[0], rows - 1), min(self.saved[1], columns - 1)
 
     def text(self, lines: int | None) -> str:
-        rows = ["".join(row).rstrip() for row in self.cells]
+        rows = [line_text(row) for row in self.cells]
         while rows and not rows[-1]:
             rows.pop()
         return "\n".join(rows if lines is None else [*self.history, *rows][-lines:])[-self.limit :]
@@ -334,16 +436,16 @@ class Screen:
             return "\x1b[2J" + "".join(
                 f"\x1b[{row + 1};1H{text}"
                 for row, line in enumerate(cells)
-                if (text := "".join(line).rstrip())
+                if (text := line_text(line))
             )
 
         def cursor(cells, row, column):
             if column < self.columns:
                 return f"\x1b[{row + 1};{column + 1}H"
             column = self.columns - 1
-            if cells[row][column] == "" and column:
+            if cells[row][column][0] == "" and column:
                 column -= 1
-            return f"\x1b[{row + 1};{column + 1}H{cells[row][column]}"
+            return f"\x1b[{row + 1};{column + 1}H{cells[row][column][0]}"
 
         primary = self.normal or (self.cells, self.row, self.column)
         text = "\x1b[?1049l\x1b[r" + paint(primary[0])
@@ -353,11 +455,14 @@ class Screen:
         return (text + cursor(self.cells, self.row, self.column)).encode()
 
 
-def fit(cells: list[list[str]], row: int, rows: int, columns: int) -> tuple[list[list[str]], int]:
+def fit(cells: list[Row], row: int, rows: int, columns: int) -> tuple[list[Row], int]:
     """cells cut or padded to rows x columns, top lines dropped to keep row: (cells, its row)."""
     shift = max(0, row + 1 - rows)
-    lines = [line[:columns] + [" "] * (columns - len(line)) for line in cells[shift : shift + rows]]
-    return lines + [[" "] * columns for _ in range(rows - len(lines))], row - shift
+    lines = [
+        Row(line[:columns] + [(" ", PLAIN)] * (columns - len(line)))
+        for line in cells[shift : shift + rows]
+    ]
+    return lines + [blank(columns) for _ in range(rows - len(lines))], row - shift
 
 
 def size(value: str) -> tuple[int, int]:
