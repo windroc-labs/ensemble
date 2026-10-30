@@ -1170,7 +1170,7 @@ class RosterTest(RosterCase):
                 self.roster.remove("alias")
 
     def test_missing_receipt_reference_is_repaired_and_entry_remains_removable(self):
-        for state in (State.STARTING, State.LOST, State.LIVE, State.GONE):
+        for state in (State.LOST, State.LIVE, State.GONE):
             with self.subTest(state=state):
                 self.begin()
                 entry = self.roster.entries()["x"]
@@ -1191,6 +1191,20 @@ class RosterTest(RosterCase):
                 self.assertIsNone(self.roster.entries()["x"].receipt)
                 self.roster.remove("x")
                 self.assertEqual(self.roster.entries(), {})
+
+    def test_missing_receipt_maintenance_preserves_active_launch_snapshots(self):
+        for state in (State.STARTING, State.RESUMING):
+            with self.subTest(state=state):
+                self._prepare_receipt(state)
+                entry = self.roster.entries()["x"]
+                Path(self.directory, entry.receipt).unlink()
+                self.roster.check_lease()
+                try:
+                    self.assertEqual(self.roster.entries()["x"], entry)
+                    target = State.LOST if state == State.STARTING else State.GONE
+                    self.assertTrue(self.roster.mark_if("x", entry, target))
+                finally:
+                    self.roster.remove("x")
 
     def test_a_fifo_orphan_receipt_warns_without_blocking_ledger_operations(self):
         self.live()

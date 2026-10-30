@@ -3,8 +3,8 @@
 
     scope_check.py --base OWNER/NAME=DIR [--base ...] PRD TICKET...
 
-A ticket's `Repo:` picks its DIR, `Task:` build or light-build makes it an engineer ticket, and its
-`Covers:` line names its FR/NFR ids. Its `Scope:` line is followed, past blank lines, by `- `
+A ticket's `Repo:` picks its DIR; `Task:` build or light-build marks an engineer ticket.
+`Covers:` names FR/NFR ids, at most MAX_COVERS for engineers. `Scope:` is followed, past blank lines, by `- `
 items: `path` [`[table] key`] [(new)]; other backtick text is prose. A path is a file, a directory
 or a glob; it must exist on DIR unless (new). Items of one repo overlap when a path equals or
 contains the other's and their keys match or either has none. A PRD backtick literal is a path when
@@ -19,6 +19,7 @@ import re
 import sys
 
 ENGINEER = {"build", "light-build"}
+MAX_COVERS = 8
 _ID = re.compile(r"\bN?FR-\d+\b")
 _LITERAL = re.compile(r"`([^`\n]+)`")
 _KEY = re.compile(r"^\[[A-Za-z][\w.-]*\](?: [\w.-]+)?$")
@@ -128,8 +129,14 @@ def _owners(count, noun, names):
 def check(prd: str, tickets: list[dict], bases: dict[str, str]) -> list[str]:
     failures, owned = [], {}
     for ticket in tickets:
-        if ticket["task"] in ENGINEER and not ticket["scope"]:
-            failures.append(f"{ticket['name']}: no Scope:")
+        if ticket["task"] in ENGINEER:
+            if not ticket["scope"]:
+                failures.append(f"{ticket['name']}: no Scope:")
+            if len(ticket["covers"]) > MAX_COVERS:
+                failures.append(
+                    f"{ticket['name']}: too large ({len(ticket['covers'])} Covers ids > "
+                    f"{MAX_COVERS}): split it along an interface (e.g. read-only vs write)"
+                )
         if ticket["repo"] not in bases:
             failures.append(f"{ticket['name']}: Repo: {ticket['repo']} has no --base")
             continue

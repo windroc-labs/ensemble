@@ -1023,7 +1023,7 @@ class Principles(Packaged):
         self.assertIn("conflicts with a task it runs", universal)
         self.assertNotRegex(universal, r"roles (?:name|select) none")
 
-    def test_engineer_keeps_standing_principles_and_reviewer_briefs(self):
+    def test_engineer_keeps_standing_principles_without_reviewer_briefs(self):
         rules = section(team_texts()["roles/engineer.md"], "Rules")
         for label, name in (
             ("Fix root causes", "fix-root-causes"),
@@ -1032,8 +1032,8 @@ class Principles(Packaged):
         ):
             standing_rule = item(rules, label)
             self.assertIn(f"<team>/principles/{name}.md", standing_rule)
-            self.assertIn("Every brief to a reviewer sub-agent", standing_rule)
-            self.assertIn("for the reviewer to read", standing_rule)
+            self.assertIn("read and follow", standing_rule)
+            self.assertNotIn("reviewer", standing_rule)
 
     def test_shared_contract_keeps_outcomes_without_subagent_guidance(self):
         text = team_texts()["principles.md"]
