@@ -94,7 +94,7 @@ Arguments and options:
               passed on as given), its events written to FILE, else $ENSEMBLE_EVENTS. Exits 2 before
               any Linear call without either, or when the Delegate refuses D or FILE (no place to
               show the TUI, a D its Host cannot use, FILE not writable). A run it starts or resumes
-              prints its Record line on stdout, its attach commands on stderr. launchd never passes
+              prints its Record line on stdout, its attach command on stderr. launchd never passes
               it: a tick resumes a run headless.
 --brake ROLE  Print the run's client usage (else ROLE's); exit 0 if a deep-research round may start, 1 if not or
               unknown, 2 no such role.
@@ -143,7 +143,7 @@ Examples (configured Linear access, client and a claimable TASK-1):
 
 Recovery and next help:
   Busy or being started: retry later. Live run: ensemble-orchestrator status TASK-1
-  View recovery: the attach command of ensemble-orchestrator status TASK-1
+  View recovery: the attach command of ensemble-orchestrator status TASK-1 or ensemble-crew attach
   Interrupted run: ensemble-orchestrator resume --help
   Termination: ensemble-orchestrator close --help
   Fix reported configuration/Keychain errors before retrying.

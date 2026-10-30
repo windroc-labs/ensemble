@@ -20,7 +20,7 @@ with no side effect: `ensemble-session status NAME`, `ensemble-delegate status W
 `ensemble-orchestrator status ISSUE`. `ensemble-crew attach` lists it per entry in its `attach` column. Do not use
 `show` for this: inside tmux it opens a pane instead of printing. An attended `ensemble-orchestrator router --tui` run
 prints its `router.py: <ID>: attach: <command>` line on stderr, without the per-session `ensemble-session` line. A
-tmux session whose session state cannot be read has no `attach` field: attach with `tmux attach -t =NAME`.
+tmux session whose session state cannot be read has a null `attach` field: attach with `tmux attach -t =NAME`.
 
 ## ensemble list
 
