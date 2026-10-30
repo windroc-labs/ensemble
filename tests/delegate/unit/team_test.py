@@ -128,6 +128,8 @@ class Acceptance(Packaged):
             "a figure (Mermaid, or SVG: [Researcher › Standards › Figures](#standards)) or table",
             "avoid long essay-style paragraphs",
             "Both have:",
+            "A compared project with its own address is a link to it",
+            "| [Grok Build](https://github.com/xai-org/grok-build) |",
             "| Impact | Gap |",
             "<summary>Findings (<count>)</summary>",
             "<summary>Sources (<count>)</summary>",
