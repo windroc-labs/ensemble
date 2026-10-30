@@ -70,37 +70,59 @@ VALUED = frozenset(
 MAX_MESSAGE = 128 << 20
 REMOTE_VALUES = frozenset({"--model", "-m", "--cd", "-C", "--image", "-i"})
 REMOTE_FLAGS = frozenset({"--last", "--all", "--include-non-interactive", "--no-alt-screen"})
+ALIASES = {
+    "-C": "--cd",
+    "-a": "--ask-for-approval",
+    "-c": "--config",
+    "-i": "--image",
+    "-m": "--model",
+    "-p": "--profile",
+    "-s": "--sandbox",
+    "-h": "--help",
+    "-V": "--version",
+}
 
 
-def local_launch(argv: tuple[str, ...]) -> bool:
-    """Remote mode discards local permission choices; let native code resolve them."""
-    words = iter(argv)
-    for word in words:
-        if word == "--":
-            break
-        name, equals, _value = word.partition("=")
-        if name in REMOTE_VALUES:
-            if not equals:
-                next(words, None)
-        elif word.startswith(("-m", "-C", "-i")):
-            continue
-        elif word.startswith("-") and name not in REMOTE_FLAGS:
-            return True
-    return any(
-        name in os.environ for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT")
-    )
+class Arguments:
+    def __init__(self, argv: tuple[str, ...]):
+        self.options: dict[str, str | None] = {}
+        self.positionals: list[str] = []
+        self.command: str | None = None
+        literal = False
+        words = iter(argv)
+        for word in words:
+            if not literal and word == "--":
+                literal = True
+            elif not literal and word.startswith("--"):
+                name, equals, value = word.partition("=")
+                self.options[name] = (
+                    value if equals else next(words, None) if name in VALUED else None
+                )
+            elif not literal and word.startswith("-") and word != "-":
+                for at, letter in enumerate(word[1:], 2):
+                    name = "-" + letter
+                    value = None
+                    if name in VALUED:
+                        value = word[at:] or next(words, None)
+                    self.options[ALIASES.get(name, name)] = value
+                    if name in VALUED:
+                        break
+            else:
+                if not self.positionals and not literal:
+                    self.command = word
+                self.positionals.append(word)
 
+    def interactive(self) -> bool:
+        return (
+            not self.options.keys() & {"--help", "--version"} and self.command not in NONINTERACTIVE
+        )
 
-def interactive(argv: tuple[str, ...]) -> bool:
-    if any(word in {"--help", "-h", "--version", "-V", "--no-daemon"} for word in argv):
-        return False
-    words = iter(argv)
-    for word in words:
-        if word in VALUED:
-            next(words, None)
-        elif not word.startswith("-"):
-            return word not in NONINTERACTIVE
-    return True
+    def local_launch(self) -> bool:
+        """Remote mode discards local permission choices; preserve native resolution."""
+        return bool(self.options.keys() - REMOTE_VALUES - REMOTE_FLAGS) or any(
+            name in os.environ
+            for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT")
+        )
 
 
 class ThreadBridge:
@@ -380,10 +402,11 @@ def main(root: str, argv: tuple[str, ...]) -> int:
     if argv[:1] == ("--ensemble-launcher",):
         launcher, argv = argv[1], argv[2:]
     real = executable(root, launcher)
+    arguments = Arguments(argv)
     if (
         "ENSEMBLE_AGENT_SESSION" in os.environ
         or not os.environ.get("ENSEMBLE_MANAGER")
-        or not interactive(argv)
+        or not arguments.interactive()
     ):
         os.execv(real, (real, *argv))
     recorder = (sys.executable, "-I", os.path.join(root, "src", "ensemble", "manager", "rearm.py"))
@@ -393,9 +416,9 @@ def main(root: str, argv: tuple[str, ...]) -> int:
     if context.returncode != 0 or not context.stdout:
         os.execv(real, (real, *argv))
     identity = json.loads(context.stdout)
-    if any(word == "--remote" or word.startswith("--remote=") for word in argv):
+    if "--remote" in arguments.options:
         raise ValueError("manager clients require the local shared server; omit --remote")
-    if local_launch(argv):
+    if arguments.local_launch():
         os.execv(real, (real, "--no-daemon", *argv))
     started = subprocess.run(
         (real, "app-server", "daemon", "start"),
@@ -440,7 +463,7 @@ def main(root: str, argv: tuple[str, ...]) -> int:
                 shutil.rmtree(directory)
             os._exit(0)
         listener.close()
-        if not any(word in {"--cd", "-C"} or word.startswith(("--cd=", "-C")) for word in argv):
+        if "--cd" not in arguments.options:
             argv = ("--cd", os.getcwd(), *argv)
         os.execv(real, (real, "--remote", f"unix://{path}", *argv))
     except BaseException:

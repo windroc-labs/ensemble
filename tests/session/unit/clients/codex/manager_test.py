@@ -18,6 +18,30 @@ class Executed(BaseException):
 
 
 class ProtocolTest(Case):
+    def test_prompt_separator_keeps_command_words_interactive(self):
+        self.assertTrue(manager.Arguments(("--", "exec")).interactive())
+
+    def test_prompt_and_option_values_do_not_disable_interactive_launch(self):
+        for argv in (("--", "--help"), ("--model", "--help"), ("--image", "--version")):
+            with self.subTest(argv=argv):
+                self.assertTrue(manager.Arguments(argv).interactive())
+
+    def test_explicit_no_daemon_is_an_interactive_launch(self):
+        self.assertTrue(manager.Arguments(("--no-daemon", "hello")).interactive())
+
+    def test_remote_word_after_separator_is_a_literal_prompt(self):
+        _, called, _ = self.launch(("--", "--remote=literal"), {"ENSEMBLE_MANAGER": "m"})
+        self.assertEqual(called[1][-2:], ("--", "--remote=literal"))
+        self.assertEqual(called[1][1], "--remote")
+
+    def test_remote_word_in_a_value_is_not_a_remote_option(self):
+        _, called, _ = self.launch(("--model", "--remote=literal"), {"ENSEMBLE_MANAGER": "m"})
+        self.assertEqual(called[1][-2:], ("--model", "--remote=literal"))
+
+    def test_cwd_word_in_a_prompt_does_not_suppress_default_cwd(self):
+        _, called, _ = self.launch(("--", "--cd=/literal"), {"ENSEMBLE_MANAGER": "m"})
+        self.assertEqual(called[1][3:5], ("--cd", os.getcwd()))
+
     def test_user_filters_survive_identity_overlay(self):
         for policy in (
             {"filters": {"SECRET*": "exclude", "PATH": "include"}},
@@ -65,6 +89,7 @@ class ProtocolTest(Case):
         ):
             manager.main(REPO, argv)
         self.assertEqual(settings.read_bytes(), b"user_setting = true\n")
+        self.runs = run.call_args_list
         return native, execute.call_args.args if execute.called else None, run.call_count
 
     def test_worker_and_non_manager_launches_keep_argv_without_a_proxy(self):
@@ -460,11 +485,10 @@ class ProtocolTest(Case):
             ("app-server", "daemon", "start"),
             ("exec", "task"),
             ("--version",),
-            ("--no-daemon",),
             ("--config", "x=1", "login"),
         ):
             with self.subTest(argv=argv):
-                self.assertFalse(manager.interactive(argv))
+                self.assertFalse(manager.Arguments(argv).interactive())
         for argv in (
             (),
             ("resume", "native"),
@@ -473,4 +497,4 @@ class ProtocolTest(Case):
             ("--config", "x=1", "hello"),
         ):
             with self.subTest(argv=argv):
-                self.assertTrue(manager.interactive(argv))
+                self.assertTrue(manager.Arguments(argv).interactive())
