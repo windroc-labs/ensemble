@@ -79,8 +79,9 @@ grandchild = subprocess.Popen(
 print(json.dumps({"type": "message", "text": str(grandchild.pid)}), flush=True)
 time.sleep(60)
 """
-CLOSED_PIPES = """import json, os, time
+CLOSED_PIPES = """import json, os, sys, time
 print(json.dumps({"type": "activity", "name": "Read"}), flush=True)
+open(sys.argv[1], "w").close()
 os.close(1)
 os.close(2)
 time.sleep(60)
@@ -100,11 +101,15 @@ class ScriptRun(fake_client.FakeHeadless):
     def launch(self, spec: Spec):
         if self.owner.config["script"] == "grandchild":
             return Launch((sys.executable, "-I", "-c", GRANDCHILD))
-        return Launch((sys.executable, "-I", "-c", CLOSED_PIPES))
+        return Launch((sys.executable, "-I", "-c", CLOSED_PIPES, printed(spec.workdir)))
 
 
 SCRIPT = types.ModuleType("ensemble.session.clients.script")
 SCRIPT.ScriptClient = ScriptClient
+
+
+def printed(workdir: str) -> str:
+    return os.path.join(workdir, "printed")
 
 
 def out(kind, **fields) -> dict:
@@ -399,6 +404,7 @@ class ProcessGroupTest(Base):
         self,
     ):
         handle = self.script("closed pipes", idle_timeout=IDLE)
+        self.until(lambda: os.path.exists(printed(self.workdir)))
         found = drain(
             self, handle, lambda event: handle.stop() if isinstance(event, IdleTimeout) else None
         )
