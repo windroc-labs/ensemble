@@ -1414,7 +1414,7 @@ def attach(path: str) -> int:
     """Pre-replay guards paint before sizing: show a 2nd connection."""
     if (first := connect(path)) is None:
         return 1
-    peers = [first]  # the last shows; closing another sizes the PTY back
+    peers = [first]  # the last shows; others stay open: one closed before its size resizes the PTY
     previous = termios.tcgetattr(0) if os.isatty(0) else None
     resized, poke = os.pipe()  # SIGWINCH wakes the select through it
     os.set_blocking(poke, False)
