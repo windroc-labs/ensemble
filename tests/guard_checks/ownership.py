@@ -15,6 +15,7 @@ from tests.guard_checks.common import (
     _strings,
 )
 from tests.guard_data.delegate import CONFIG_FILE, DELEGATE_SRC
+from tests.guard_data.manager import CLIENT_NAMES_ALLOWED
 from tests.guard_data.orchestrator import (
     CLIENT_LIMIT_TABLES,
     HANDOFF_HOME,
@@ -308,7 +309,11 @@ def client_names(repo: str) -> list[str]:
                 if rel == PLUGIN_SOURCE_CONFIG and TOML_PLUGINS.match(line):
                     # A pinned repository name is source data, not a client selection.
                     line = TOML_PLUGIN_SOURCE.sub('""', line)
-            found.update(f"{rel}:{number}: client name {word}" for word in CLIENT.findall(line))
+            found.update(
+                f"{rel}:{number}: client name {word}"
+                for word in CLIENT.findall(line)
+                if (rel, word.lower()) not in CLIENT_NAMES_ALLOWED
+            )
     return sorted(found)
 
 

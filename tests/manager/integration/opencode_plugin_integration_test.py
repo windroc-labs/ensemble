@@ -1,5 +1,5 @@
-"""The OpenCode plugin (.opencode-plugin/ensemble.js) under Node, driven as OpenCode calls it by
-opencode_host.mjs; its re-arm runs the real rearm.py under this test process, its stand-in hold.
+"""The OpenCode plugin under Node on an isolated terminal, driven by opencode_host.mjs.
+Node is the stand-in hold and client; its hooks run the real rearm.py.
 """
 
 import json
@@ -9,6 +9,7 @@ import subprocess
 import sys
 import unittest
 
+from tests.manager import terminal
 from tests.manager.case import REPO, Case
 
 NODE = shutil.which("node")
@@ -47,8 +48,9 @@ class OpenCodePluginTest(Case):
 
     def play(self, steps, plugin=PLUGIN, **extra):
         env = {"PATH": self.path, "HOME": self.home, **extra}
-        with subprocess.Popen(
+        with terminal.process(
             (NODE, HOST, plugin),
+            holder="client" if extra.get("ENSEMBLE_HOLDER_PID") == str(os.getpid()) else "inherit",
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

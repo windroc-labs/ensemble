@@ -1,14 +1,10 @@
-"""SessionStart hook: in a manager session under `ensemble-crew hold`, for the
-startup, resume, compact and clear sources, prints the re-arm prompt as
-additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
-replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
-that). PID must share the hold's controlling terminal; otherwise prints a restart hint instead.
-A Codex without a controlling terminal gets the restart hint even without a manager identity.
-Anything else prints nothing. Always exits 0.
-A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
-ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
-later tmux windows. Standalone: the standard library only.
-`--mode manual` replaces the monitoring tail with turn-based reads and a notifying-tool fallback.
+"""SessionStart hook for startup, resume, compact and clear. Emits re-arm context and records
+--client KIND --client-pid PID with stdin session_id and cwd when PID shares the hold's terminal.
+Otherwise emits a restart hint; a detached Codex gets it even without a manager identity.
+A manager needs valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and an
+ancestor ENSEMBLE_HOLDER_PID: variables alone leak to later tmux windows.
+Bad record fields or writes skip only recording. Other events stay silent. Always exits 0.
+Standalone, standard library only. --mode manual selects turn-based monitoring.
 """
 
 import contextlib

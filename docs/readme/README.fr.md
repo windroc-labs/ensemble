@@ -97,7 +97,7 @@ ensemble work
 claude
 ```
 
-Utilisez `codex` ou `opencode` à la place de `claude` si c’est votre client. Dans cette conversation, invoquez :
+Utilisez `codex --no-daemon` ou `opencode` à la place de `claude` si c’est votre client. Dans cette conversation, invoquez :
 
 ```text
 /ensemble:manage
