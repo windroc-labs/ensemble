@@ -2,10 +2,13 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class SessionView:
-    """An existing session the Viewer places as it is."""
-
-    session: str
+class WorkerState:
+    sid: str | None
+    generation: str | None
+    client: str | None
+    display: str | None
+    owner: str | None
+    host: str | None = None
 
 
 @dataclass(frozen=True)

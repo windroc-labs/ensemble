@@ -6,8 +6,10 @@ import shlex
 import subprocess
 import sys
 
+from ensemble.session.harness import guard
 from ensemble.session.harness.channel import Channel
 from ensemble.session.hosts.base import stored_record, worker_state
+from ensemble.session.hosts.tmux import managed
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
 from tests.session.case import REPO, ROOTS, Case
@@ -30,6 +32,21 @@ CLAUDE_HOOKS = {
 POLICY = ("--allowedTools", "--add-dir", "--dangerously-skip-permissions")
 
 
+def guard_command(name: str) -> str:
+    directory = managed.location("tmux", name)
+    with open(os.path.join(directory, "current.json"), encoding="utf-8") as stream:
+        generation = json.load(stream)["generation"]
+    return shlex.join(
+        (
+            sys.executable,
+            "-I",
+            guard.__file__,
+            "--attach",
+            os.path.join(directory, generation, "display"),
+        )
+    )
+
+
 class CliCase(live_tmux.Calls, Case):
     ATTACH = True
 
@@ -38,7 +55,13 @@ class CliCase(live_tmux.Calls, Case):
         self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
         lines = result.stderr.splitlines()
         self.assertGreaterEqual(len(lines), 2, result.stderr)
-        self.assertEqual(lines[0], f"session {name}: tmux attach -t '={name}'", result.stderr)
+        self.assertTrue(lines[0].startswith(f"session {name}: "), result.stderr)
+        command = shlex.split(lines[0].removeprefix(f"session {name}: "))
+        self.assertEqual(len(command), 5, result.stderr)
+        self.assertEqual(
+            (command[1], os.path.basename(command[2]), command[3]), ("-I", "guard.py", "--attach")
+        )
+        self.assertEqual(os.path.basename(command[4]), "display")
         head = f"ensemble-session: {name}: claude exited {code} while starting"
         self.assertEqual(lines[1], head + ("; its last lines:" if lines[2:] else ""), result.stderr)
         return lines[2:]

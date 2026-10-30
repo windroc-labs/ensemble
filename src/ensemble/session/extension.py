@@ -54,7 +54,7 @@ from ensemble.session.hosts.base import (
     Host,
     InteractiveProcess,
 )
-from ensemble.session.hosts.types import CommandView, SessionView
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.modes.client_adapters.headless import Headless, JsonHeadless
 from ensemble.session.modes.client_adapters.in_process import InProcess
 from ensemble.session.modes.client_adapters.tui import Tui
@@ -67,7 +67,6 @@ __all__ = [
     "Tui",
     "InProcess",
     "Host",
-    "SessionView",
     "CommandView",
     "WorkerMessage",
     "WorkerHook",

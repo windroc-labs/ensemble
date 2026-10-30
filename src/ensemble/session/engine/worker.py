@@ -565,14 +565,17 @@ class Worker:
         try:
             screen = session.screen(SCREEN_LINES)
         except SessionError:
-            screen = self._row_lines()
+            screen = self._row_lines(getattr(session, "generation", None))
         lines = [line for line in screen.splitlines() if line.strip()][-REPORT_LINES:]
         return "\n".join([f"{head}; its last lines:", *lines]) if lines else head
 
-    def _row_lines(self) -> str:
-        """The last lines its Host lists for its name and sid, else ""."""
+    def _row_lines(self, generation: str | None = None) -> str:
+        """Its generation's diagnostic, else the matching Host row's last lines."""
         try:
-            rows = self.session_cls.host(self.state.host).rows()
+            host = self.session_cls.host(self.state.host)
+            if isinstance(generation, str):
+                return host._last_lines(self.state.name, self.state.sid, generation)
+            rows = host.rows()
         except (SessionError, ConfigError):
             return ""
         key = (self.state.name, self.state.sid)

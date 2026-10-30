@@ -381,7 +381,10 @@ class Segment(TmuxFlow):
             (record.ctl, record.resume),
             (("ensemble-orchestrator",), ("ensemble-orchestrator", "resume", ident)),
         )
-        self.assertIn(f"router.py: {ident}: attach: tmux attach -t '={sessions[0]}'\n", res.stderr)
+        self.assertRegex(
+            res.stderr,
+            rf"router\.py: {re.escape(ident)}: attach: .+ -I .+guard\.py --attach .+/display\n",
+        )
         self.assertNotIn(self.harness(role, ident, sid), res.stderr)
         return record
 

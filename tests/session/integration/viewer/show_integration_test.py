@@ -5,17 +5,115 @@ import os
 import subprocess
 import sys
 from contextlib import redirect_stderr
+from pathlib import Path
 from unittest import mock
 
 from ensemble.session import Viewer
-from ensemble.session.engine.tmux_cli import TmuxCli
-from ensemble.session.engine.types import Launch
+from ensemble.session.engine.types import Launch, Liveness, SessionBusy
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.hosts.types import CommandView
-from tests.session import live_tmux
-from tests.session.case import Case
+from tests.session import guard_fixture, live_tmux
+from tests.session.case import SID, Case
 from tests.session.tmux_fixtures import placed
+
+
+class GuardDisplayTest(Case):
+    NAME = "color-worker"
+
+    def setUp(self):
+        self.server = live_tmux.Server(self, self.home)
+        self.server.start("manager")
+        self.server.attach("manager")
+        self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
+        self.host, self.viewer = TmuxHost("tmux"), Viewer()
+        self.launch = Launch(
+            (sys.executable, "-I", guard_fixture.__file__, "colors", self.home),
+            self.server.env(),
+            cwd=self.home,
+        )
+        self.worker = self.host.worker(
+            self.NAME,
+            self.launch,
+            terminal=True,
+            display="manager",
+            metadata={"sid": SID, "client": "fake"},
+        )
+        self.addCleanup(self.cleanup_worker)
+        live_tmux.wait(
+            lambda: "startup-079" in self.worker.screen(lines=200),
+            what="startup output collected before the first display",
+        )
+        self.pid = int(Path(self.home, "display.pid").read_text())
+
+    def cleanup_worker(self):
+        try:
+            self.worker.close()
+        finally:
+            self.viewer.close(self.NAME, self.host)
+
+    def capture(self):
+        result = self.server.tmux("capture-pane", "-p", "-e", "-S", "-", "-t", f"={self.NAME}:")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def shown(self):
+        with mock.patch.dict(os.environ, self.server.inside("manager")):
+            self.assertIsNone(self.viewer.show(self.NAME, self.host, display="manager"))
+
+    def output(self, text):
+        self.worker.write((text + "\n").encode())
+        live_tmux.wait(lambda: f"\x1b[32m{text}" in self.capture(), what=f"colored {text}")
+
+    def assert_worker_unchanged(self):
+        self.assertEqual(int(Path(self.home, "display.pid").read_text()), self.pid)
+        self.assertTrue(live_tmux.alive(self.pid))
+        self.assertEqual(self.worker.state(), Liveness.LIVE)
+        self.assertEqual(self.host.list(), [self.NAME])
+
+    def test_startup_hide_and_manual_pane_close_preserve_colored_scrollback(self):
+        self.assertTrue(self.viewer._prepare(self.NAME, self.host))
+        self.assertEqual(self.server.option(self.NAME, "@view"), "viewer")
+        self.assertEqual(self.server.option(self.NAME, "@pane"), "")
+        live_tmux.wait(
+            lambda: "\x1b[31mstartup-000" in self.capture(),
+            what="colored history before first show",
+        )
+        inner = self.server.tmux(
+            "display-message", "-p", "-t", f"={self.NAME}:", "#{pane_id}"
+        ).stdout
+        self.shown()
+        self.viewer.hide(self.NAME, self.host)
+        self.output("hidden-output")
+        self.shown()
+        outer = self.server.option(self.NAME, "@pane")
+        killed = self.server.tmux("kill-pane", "-t", outer)
+        self.assertEqual(killed.returncode, 0, killed.stderr)
+        self.output("manual-output")
+        self.shown()
+        self.assertIn("\x1b[31mstartup-000", self.capture())
+        self.assertIn("\x1b[32mhidden-output", self.capture())
+        self.assertEqual(
+            self.server.tmux("display-message", "-p", "-t", f"={self.NAME}:", "#{pane_id}").stdout,
+            inner,
+        )
+        self.assert_worker_unchanged()
+
+    def test_deleting_display_keeps_guard_inventory_and_show_rebuilds(self):
+        target = self.host.attach_target(self.NAME)
+        self.viewer._prepare(self.NAME, self.host)
+        display_id = self.server.option(self.NAME, "@view-id")
+        self.assertRegex(display_id, r"\A[0-9a-f]{32}\Z")
+        killed = self.server.tmux("kill-session", "-t", f"={self.NAME}")
+        self.assertEqual(killed.returncode, 0, killed.stderr)
+        self.assert_worker_unchanged()
+        with self.assertRaises(SessionBusy):
+            self.host.worker(self.NAME, self.launch, terminal=True)
+        self.shown()
+        self.output("rebuilt-output")
+        self.assertNotEqual(self.server.option(self.NAME, "@view-id"), display_id)
+        self.assertEqual(self.host.attach_target(self.NAME), target)
+        self.assert_worker_unchanged()
 
 
 class ShowTest(Case):
@@ -25,14 +123,11 @@ class ShowTest(Case):
         self.server.attach("mgr")
         self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
         self.host = TmuxHost("tmux")
-        TmuxCli().start(
-            "worker",
-            Launch(
-                (sys.executable, "-I", "-c", "import time; time.sleep(300)"),
-                self.server.env(),
-                cwd=self.home,
-            ),
+        self.worker = self.host.worker(
+            "worker", Launch(live_tmux.IDLE, self.server.env(), cwd=self.home), terminal=True
         )
+        self.addCleanup(self.worker.close)
+        Viewer()._prepare("worker", self.host)
         self.environment = self.server.env(**self.server.inside("mgr"))
         self.calls = []
         self.fail_metadata = False

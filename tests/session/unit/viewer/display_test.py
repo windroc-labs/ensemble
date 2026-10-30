@@ -11,13 +11,15 @@ from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.tmux_cli import TmuxCli, TuiError
 from ensemble.session.engine.types import SessionRow
 from ensemble.session.hosts.base import Host
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import display as displays
 from ensemble.session.viewer import hidden
 from ensemble.session.viewer.viewer import Viewer, fold, unfold
 from ensemble.utils import Status, StatusState
 from tests.session.case import Case
-from tests.session.hosted_support import SID, listed
+from tests.session.hosted_support import SID
 from tests.session.tmux_fixtures import INSIDE, SESSIONS, FakeTmux, TileFixture, environ, hold
+from tests.session.tmux_fixtures import expected_row as listed
 from tests.session.tmux_host_support import Base
 
 NO_PANE = "no anchor pane: not in tmux"
@@ -157,6 +159,16 @@ class DisplayTest(Base):
 
 class DescendantsTest(Base):
     def test_the_matching_sessions_then_those_each_opened_transitively(self):
+        self.host = _plain_host(
+            [
+                _row("a", "mgr"),
+                _row("b", "a/below"),
+                _row("c", "b"),
+                _row("d", "d"),
+                _row("x", "other"),
+            ]
+        )
+        self.host.attachable = True
         self.tmux.listing.return_value = [
             listed("a", opener="mgr", display="mgr"),
             listed("b", opener="a", display="a/below"),
@@ -171,96 +183,38 @@ class DescendantsTest(Base):
         self.assertEqual(displays.names(self.viewer, self.host, "other", descendants=True), ["x"])
         self.assertEqual(displays.names(self.viewer, self.host, "", descendants=True), [])
 
-    def test_a_tmux_failure_is_a_driver_error(self):
-        self.tmux.listing.side_effect = [
-            [listed("a", opener="mgr", display="mgr")],
-            TuiError("tmux list-sessions exited 1: lost server"),
-        ]
-        with self.assertRaisesRegex(
-            SessionError, r"\Atmux sessions unknown: tmux list-sessions exited 1: lost server\Z"
-        ):
-            displays.names(self.viewer, self.host, "mgr", descendants=True)
+    def test_a_tmux_failure_keeps_descendants_from_guard_display_records(self):
+        self.host = _plain_host([_row("a", "mgr")])
+        self.host.attachable = True
+        self.tmux.listing.side_effect = TuiError("tmux list-sessions exited 1: lost server")
+        self.assertEqual(displays.names(self.viewer, self.host, "mgr", descendants=True), ["a"])
 
 
 class RowsTest(Base):
-    def test_a_row_per_listed_session_in_its_order(self):
+    def test_unavailable_display_server_keeps_worker_inventory(self):
+        workers = [_row("w1", "manager")]
+        self.host = _plain_host(workers)
+        self.host.attachable = True
+        self.tmux.listing.side_effect = TuiError("lost server")
+        self.assertEqual(displays.rows(self.viewer, self.host, None), workers)
+
+    def test_only_worker_rows_get_display_placement_without_tmux_identity(self):
         self.enterContext(environ(**INSIDE))
-        self.runner.pane = "mgr"
+        self.runner.pane = "manager"
+        workers = [_row("w1", "manager"), _row("w2", "manager")]
+        self.host = _plain_host(workers)
+        self.host.attachable = True
         self.tmux.listing.return_value = [
-            listed("mgr"),
-            listed("w1", sid=SID, client="fake", state="done", display="mgr/below", shown="m"),
-            listed("w2", sid="a/b", client="Fake", state="blocked", shown=""),
-            listed("w3", client="x-y", state="dead"),
-            listed("w4", client="fake", state="done", dead=True, last_lines="bye"),
-            listed("w5", client="fake9_", state="other", dead=None),
+            listed("manager"),
+            listed("w1", sid="forged", client="other", state="dead", shown="manager"),
         ]
         rows = displays.rows(self.viewer, self.host, None)
-        self.assertEqual([type(r.state) for r in rows], [StatusState] * 6)
-        row = SessionRow
+        self.assertEqual([row.name for row in rows], ["w1", "w2"])
+        self.assertEqual([row.state for row in rows], [StatusState.WORKING] * 2)
+        self.assertEqual([row.shown for row in rows], ["manager", None])
         self.assertEqual(
-            rows,
-            [
-                row(
-                    name="mgr",
-                    sid=None,
-                    client=None,
-                    state="working",
-                    display=None,
-                    shown=None,
-                    last_lines=None,
-                    own=True,
-                ),
-                row(
-                    name="w1",
-                    sid=SID,
-                    client="fake",
-                    state="done",
-                    display="mgr/below",
-                    shown="m",
-                    last_lines=None,
-                    own=False,
-                ),
-                row(
-                    name="w2",
-                    sid=None,
-                    client=None,
-                    state="blocked",
-                    display=None,
-                    shown="",
-                    last_lines=None,
-                    own=False,
-                ),
-                row(
-                    name="w3",
-                    sid=None,
-                    client=None,
-                    state="working",
-                    display=None,
-                    shown=None,
-                    last_lines=None,
-                    own=False,
-                ),
-                row(
-                    name="w4",
-                    sid=None,
-                    client="fake",
-                    state="dead",
-                    display=None,
-                    shown=None,
-                    last_lines="bye",
-                    own=False,
-                ),
-                row(
-                    name="w5",
-                    sid=None,
-                    client="fake9_",
-                    state="working",
-                    display=None,
-                    shown=None,
-                    last_lines=None,
-                    own=False,
-                ),
-            ],
+            [(row.sid, row.client, row.display) for row in rows],
+            [(row.sid, row.client, row.display) for row in workers],
         )
 
 
@@ -341,6 +295,10 @@ class HostFailureTest(Base):
 
 class OpenerTest(Base):
     def test_opener_falls_back_to_display(self):
+        self.host = _plain_host(
+            [_row("a", "mgr/right"), _row("b", "a/below"), _row("c", None), _row("d", "d")]
+        )
+        self.host.attachable = True
         self.tmux.listing.return_value = [
             listed("a", display="mgr/right"),
             listed("b", display="a/below"),
@@ -354,9 +312,7 @@ class OpenerTest(Base):
     def test_a_view_sessions_live_opener_and_shown_fill_its_row(self):
         docker = _plain_host([_row("d1", "other"), _row("d2", "x")])
         docker.attachable = True
-        self.tmux.listing.side_effect = lambda *_match, views=False: (
-            [listed("d1", opener="mgr", shown="m")] if views else []
-        )
+        self.tmux.listing.return_value = [listed("d1", opener="mgr", shown="m")]
         self.assertEqual(displays.names(self.viewer, docker, "d1", descendants=True), [])
         self.assertEqual(displays.names(self.viewer, docker, "mgr", descendants=False), [])
         docker.rows.return_value = [_row("d1", "mgr"), _row("d2", "d1/below")]
@@ -393,6 +349,9 @@ class StatusTest(Base):
                 )
 
     def test_hidden_and_attach_come_from_the_viewer(self):
+        self.host = _plain_host()
+        self.host.attachable = True
+        self.host.attach_target.return_value = CommandView("tmux attach -t '=w1'", ("attach",))
         hidden.write("w1", SID, hidden=True, live=None)
         self.assertEqual(
             displays.status(self.viewer, self.host, "w1", SID, None),

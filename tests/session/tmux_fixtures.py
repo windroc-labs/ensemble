@@ -7,15 +7,13 @@ import os
 import re
 import shutil
 import signal
-import stat
 import tempfile
 import unittest
 import unittest.mock
 from contextlib import contextmanager, redirect_stderr
 from types import SimpleNamespace
 
-from ensemble.session.engine.tmux_cli import EXEC, TmuxCli
-from ensemble.session.engine.types import Launch
+from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.viewer import grid as grids
 from ensemble.session.viewer import layout as layouts
 from ensemble.session.viewer import placement, types
@@ -248,33 +246,6 @@ def which(tmux=TMUX, session=COMMAND):
     return unittest.mock.patch("shutil.which", side_effect=found)
 
 
-def decorations(session, events=None, status="off"):
-    target = f"={session}:"
-    return [
-        *([["tmux", "set-option", "-t", target, "@events", events]] if events else []),
-        ["tmux", "set-hook", "-p", "-t", target, "pane-died", DIED_EVENTS if events else DIED],
-        ["tmux", "set-option", "-w", "-t", target, "pane-border-status", "top"],
-        [
-            "tmux",
-            "set-option",
-            "-w",
-            "-t",
-            target,
-            "pane-border-format",
-            " #{session_name} #{@state} ",
-        ],
-        ["tmux", "set-option", "-t", target, "status", status],
-    ]
-
-
-def chained(calls):
-    return [arg for call in calls for arg in (";", *call[1:])]
-
-
-def recorded(session):
-    return [";", "set-option", "-F", "-t", f"={session}:", "@process", NEW[2]]
-
-
 def expected_panes(*rows):
     """Print (pane_dead, pane_tty, pane_id) rows in the list-panes call's -F format."""
 
@@ -291,15 +262,11 @@ def expected_panes(*rows):
 
 
 class FakeTmux:
-    """Records tmux/sh calls; results maps commands to outcomes, exceptions or argv functions.
-    wrapper: exec closes the errpipe, hang holds it, other values write errno."""
+    """Records tmux/sh calls; results maps commands to outcomes, exceptions or argv functions."""
 
-    def __init__(self, pane=None, fail=(), *, hand_over=True, results=None, wrapper="exec"):
-        self.pane, self.fail, self.hand_over, self.results = pane, fail, hand_over, results or {}
-        self.wrapper = wrapper
+    def __init__(self, pane=None, fail=(), *, results=None):
+        self.pane, self.fail, self.results = pane, fail, results or {}
         self.calls, self.kwargs = [], []
-        self.path = self._handover = self.mode = self.dir_mode = self.dir_at_kill = None
-        self.fifo = self.fifo_mode = self.writer = None
 
     def __call__(self, argv, **kw):
         self.calls.append(argv)
@@ -312,8 +279,6 @@ class FakeTmux:
             if isinstance(result, BaseException):
                 raise result
             return done(argv, *result)
-        if argv[1] == "kill-session" and self.path:
-            self.dir_at_kill = os.path.isdir(os.path.dirname(self.path))
         if argv[1] in self.fail:
             return done(argv, 1, err="boom\n")
         if argv[1] == "display-message":
@@ -322,28 +287,7 @@ class FakeTmux:
                 if self.pane is None
                 else done(argv, 0, self.pane + "\n")
             )
-        if argv[1] == "new-session":
-            self.take_launch(argv)
-            if "-P" in argv:
-                return done(argv, 0, NEW_PROCESS + "\n")
         return done(argv)
-
-    def take_launch(self, argv):
-        at = argv.index(EXEC)
-        self.path, self.fifo = argv[at + 1 : at + 3]
-        self.mode = stat.S_IMODE(os.stat(self.path).st_mode)
-        self.dir_mode = stat.S_IMODE(os.stat(os.path.dirname(self.path)).st_mode)
-        self.fifo_mode = os.stat(self.fifo).st_mode
-        with open(self.path) as f:
-            self._handover = json.load(f)
-        if self.hand_over:
-            self.writer = os.open(self.fifo, os.O_WRONLY | os.O_NONBLOCK)
-            os.unlink(self.path)
-            if self.wrapper != "hang":
-                if self.wrapper != "exec":
-                    data = self.wrapper
-                    os.write(self.writer, data if isinstance(data, bytes) else b"%d" % data)
-                os.close(self.writer)
 
     def commands(self):
         return [c[1] if c[0] == "tmux" else c[0] for c in self.calls]
@@ -459,39 +403,6 @@ def opening_commands(*, window="@1", manager="%3", opener="mgr", n=3, retile="al
         grid_set(window, manager, n, hooks=hooks, retile=retile),
         *([] if retile == "off" else tiled(window)),
     ]
-
-
-class StartFixture(Case):
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = os.path.realpath(tmp.name)
-        self.bin, self.temp, self.cwd = (os.path.join(self.root, d) for d in ("bin", "temp", "cwd"))
-        for d in (self.bin, self.temp, self.cwd):
-            os.makedirs(d)
-        self.tool = os.path.join(self.bin, "tool")
-        with open(self.tool, "w") as f:
-            f.write("#!/bin/sh\n")
-        os.chmod(self.tool, 0o755)
-        for p in (
-            unittest.mock.patch.object(tempfile, "tempdir", self.temp),
-            unittest.mock.patch(  # the session's size is not the caller's terminal's
-                "shutil.get_terminal_size", return_value=os.terminal_size((33, 19))
-            ),
-            unittest.mock.patch.dict(os.environ),
-        ):
-            p.start()
-            self.addCleanup(p.stop)
-        os.environ.pop("TUI_ATTACH_PREFIX", None)
-        self.sleep = unittest.mock.Mock()
-        self.stderr = io.StringIO()
-
-    def start(self, fake, session="s", argv=("tool", "-x", "a b"), env=None, **kw):
-        env = {"PATH": self.bin, "HOME": "/h"} if env is None else env
-        with redirect_stderr(self.stderr):
-            return TmuxCli(fake, sleep=self.sleep).start(
-                session, Launch(tuple(argv), env, cwd=self.cwd), **kw
-            )
 
 
 def placed(fake) -> placement.Placement:

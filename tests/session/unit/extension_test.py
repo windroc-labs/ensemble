@@ -75,7 +75,6 @@ TYPES = {
         ),
         engine_types,
     ),
-    "SessionView": hosts_types,
     "EventCall": harness_types,
     "CommandView": hosts_types,
     "Record": utils,

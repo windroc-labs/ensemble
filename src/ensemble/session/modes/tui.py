@@ -67,11 +67,9 @@ from ensemble.session.hosts.base import (
     tui_lock,
     worker_state,
 )
-from ensemble.session.hosts.managed import ManagedProcess
 from ensemble.session.modes import tui_hook
 from ensemble.session.modes.base import BaseMode, identity_drop
 from ensemble.session.modes.client_adapters.tui import Tui
-from ensemble.session.viewer.viewer import printed
 from ensemble.utils import CONFIG_NAME as NAME
 from ensemble.utils import (
     STALE_AGE,
@@ -237,8 +235,9 @@ class TuiStore:
         return (command, "hook", self.dir)
 
     def set_activity(self, generation: str, word: StatusState, events: str | None) -> None:
-        save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
-        if word in (StatusState.DONE, StatusState.BLOCKED) and events:
+        if word != StatusState.DEAD:
+            save(os.path.join(self.dir, ACTIVITY), f"{generation} {word}\n")
+        if word in (StatusState.DONE, StatusState.BLOCKED, StatusState.DEAD) and events:
             SessionStatusLog(events).write(self.name, word)
 
     def store_record(self, generation: str, record: ControlRecord) -> None:
@@ -443,8 +442,6 @@ class TuiStore:
     def _close_own(
         self, handle: InteractiveProcess, generation: str | None, record: dict | None
     ) -> bool:
-        if isinstance(handle, ManagedProcess):
-            handle.close_display()  # first: its pane dying is no exit to report
         failed = handle.state() == Liveness.UNKNOWN
         if not failed:
             try:
@@ -587,8 +584,10 @@ def settled_liveness(host: Host, name: str, generation: str, *, wait: bool = Tru
 
 
 def _running(name: str, host: Host) -> SessionError:
-    target = host.attach_target(name)
-    hint = "" if target is None else f"; {printed(target)}"
+    target = None
+    with contextlib.suppress(SessionError):
+        target = host.attach_target(name)
+    hint = "" if target is None else f"; {target.printed}"
     return SessionError(f"tui session {name} is running{hint}")
 
 
@@ -904,6 +903,7 @@ class TuiMode(BaseMode):
                             )
                         )
                         self._active_turn = False
+                    self._mark(StatusState.DEAD)
                     self._end()
                     return final, True
                 if self._terminal is not None:
@@ -1146,10 +1146,6 @@ class TuiMode(BaseMode):
             return self._owner().screen(lines)
         except NotShowable:
             raise SessionError(f"host {self.host.name} cannot show") from None
-
-    def redisplay(self) -> bool:
-        """False: no display to open."""
-        return isinstance(self._terminal, ManagedProcess) and self._terminal.redisplay()
 
     def _running(self) -> None:
         self._store.check()

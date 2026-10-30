@@ -8,12 +8,10 @@ import threading
 import time
 from unittest import mock
 
-from ensemble.session.engine.tmux_cli import TuiError
 from ensemble.session.engine.types import (
     ConfigError,
     Launch,
     Liveness,
-    PaneStatus,
     SessionBusy,
     SessionError,
     Unanswered,
@@ -51,6 +49,70 @@ def guard_dir(generation, state, name="worker"):
 
 
 class ManagedTest(Case):
+    def test_next_generation_removes_the_previous_exit_diagnostic(self):
+        generation = "a" * 32
+        directory = guard_dir(generation, "exited")
+        os.close(managed.lease_file(os.path.join(directory, generation, "lease")))
+        diagnostic = os.path.join(directory, generation, "diagnostic.json")
+        managed.save_json(diagnostic, {"text": "old error"})
+        with spawned():
+            channel = TmuxHost("tmux").worker(
+                "worker", Launch((sys.executable,), cwd=self.home), terminal=True
+            )
+            channel.close()
+        self.assertFalse(os.path.exists(diagnostic))
+
+    def test_an_unreadable_inventory_record_is_refused_before_claiming_the_name(self):
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with spawned() as spawn, self.assertRaises(ConfigError):
+            host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                display="x" * 65536,
+            )
+        spawn.assert_not_called()
+        self.assertFalse(os.path.lexists(managed.location("tmux", "worker")))
+
+    def test_guard_inventory_keeps_a_display_larger_than_a_control_record(self):
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        display = "manager/" + "x" * 5000
+        with spawned():
+            channel = host.worker(
+                "worker", Launch((sys.executable,), cwd=self.home), terminal=True, display=display
+            )
+            channel.close()
+        with mock.patch.object(host, "worker_liveness", return_value=Liveness.LIVE):
+            self.assertEqual(host.rows()[0].display, display)
+
+    def test_terminal_start_persists_only_guard_inventory_fields(self):
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with spawned():
+            channel = host.worker(
+                "worker",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                display="manager",
+                metadata={
+                    "generation": "a" * 32,
+                    "sid": "sid",
+                    "client": "claude",
+                    "prompt": "secret",
+                },
+            )
+            channel.close()
+        self.assertEqual(
+            managed.load_json(managed.location("tmux", "worker") + "/current.json"),
+            {
+                "host": "tmux",
+                "name": "worker",
+                "generation": "a" * 32,
+                "sid": "sid",
+                "client": "claude",
+                "display": "manager",
+            },
+        )
+
     def test_attacker_owned_or_symlinked_user_root_is_never_absent(self):
         directory = managed.location("tmux", "worker")
         root = os.path.dirname(directory)
@@ -152,7 +214,7 @@ class ManagedTest(Case):
             channel.close()
         argv = spawn.call_args.args[0]
         self.assertEqual(argv[argv.index("--size") + 1], "100x30")
-        self.assertEqual(host.tmux.start.call_args.kwargs["size"], (100, 30))
+        host.tmux.start.assert_not_called()
 
     def test_never_started_name_is_absent(self):
         self.assertEqual(managed.liveness("tmux", "worker", "a" * 32), Liveness.ABSENT)
@@ -202,18 +264,6 @@ class ManagedTest(Case):
         finally:
             os.close(lease)
 
-    def test_display_teardown_kills_only_its_generation(self):
-        tmux = mock.Mock()
-        channel = managed.TmuxManagedProcess(
-            "worker", "a" * 32, mock.Mock(), terminal=True, tmux=tmux, start_reader=False
-        )
-        tmux.option.return_value = "b" * 32
-        channel.close_display()
-        tmux.kill.assert_not_called()
-        tmux.option.return_value = "a" * 32
-        channel.close_display()
-        tmux.kill.assert_called_once_with("worker")
-
     def spawned_env(self, launch: Launch, **environ) -> dict:
         """The guard's environment for `launch`, the harness's environment holding `environ`."""
         host = TmuxHost("tmux", tmux=mock.Mock())
@@ -246,130 +296,6 @@ class ManagedTest(Case):
     def test_term_default_only_when_absent(self):
         env = self.spawned_env(Launch((sys.executable,), env={}, cwd=self.home), TERM="dumb")
         self.assertEqual(env["TERM"], "xterm-256color")
-
-    def reopener(self, *, terminal: bool = True):
-        """A running handle of generation a…a, its tmux and display opener mocked."""
-        tmux, opener = mock.Mock(), mock.Mock()
-        channel = managed.TmuxManagedProcess(
-            "worker",
-            "a" * 32,
-            mock.Mock(),
-            terminal=terminal,
-            tmux=tmux,
-            opener=opener if terminal else None,
-            start_reader=False,
-        )
-        return channel, tmux, opener
-
-    def test_redisplay_opens_only_a_gone_or_dead_own_display(self):
-        channel, tmux, opener = self.reopener()
-        tmux.option.return_value = "a" * 32
-        tmux.status.return_value = PaneStatus.RUNNING
-        self.assertFalse(channel.redisplay())
-        opener.assert_not_called()
-        tmux.kill.assert_not_called()
-        tmux.status.return_value = -9  # its attach killed, its pane kept
-        self.assertTrue(channel.redisplay())
-        tmux.kill.assert_called_once_with("worker")
-        opener.assert_called_once_with()
-        tmux.kill.reset_mock()
-        opener.reset_mock()
-        tmux.option.return_value = None  # its session killed
-        self.assertTrue(channel.redisplay())
-        tmux.kill.assert_not_called()
-        opener.assert_called_once_with()
-
-    def test_redisplay_reopens_a_dead_display_and_marks_nothing(self):
-        """Its state lives in the worker dir (its harness's mark): no tmux mark, no events line."""
-        channel, tmux, opener = self.reopener()
-        options = {"@generation": "a" * 32, "@process": "4242 $3 %7 5555"}
-        tmux.option.side_effect = lambda _target, key: options.get(key)
-        opener.side_effect = lambda: options.update({"@process": "4243 $4 %8 5556"})
-        tmux.status.return_value = -9
-        self.assertTrue(channel.redisplay())
-        opener.assert_called_once_with()
-        tmux.mark.assert_not_called()
-
-    def test_redisplay_refuses_and_leaves_alone_what_it_cannot_tell(self):
-        channel, tmux, opener = self.reopener()
-        tmux.option.return_value = "b" * 32
-        with self.assertRaisesRegex(
-            SessionError, "^worker worker: its name shows another display$"
-        ):
-            channel.redisplay()
-        tmux.option.return_value = "a" * 32
-        tmux.status.return_value = PaneStatus.UNKNOWN
-        with self.assertRaisesRegex(Unanswered, "^worker worker: its display unknown$"):
-            channel.redisplay()
-        tmux.option.side_effect = TuiError("tmux: no server")
-        with self.assertRaisesRegex(SessionError, "^worker worker: display: tmux: no server$"):
-            channel.redisplay()
-        tmux.kill.assert_not_called()
-        opener.assert_not_called()
-        tmux.option.side_effect = None
-        tmux.option.return_value = None
-        opener.side_effect = TuiError("session worker exists")
-        with self.assertRaisesRegex(
-            SessionError, "^worker worker: display: session worker exists$"
-        ):
-            channel.redisplay()
-
-    def test_redisplay_of_an_exited_or_failed_worker_is_refused(self):
-        channel, tmux, opener = self.reopener()
-        channel.code = 0
-        with self.assertRaisesRegex(SessionError, "^worker worker: exited$"):
-            channel.redisplay()
-        channel, tmux, opener = self.reopener()
-        channel.failure = "guard channel: closed"
-        with self.assertRaisesRegex(Unanswered, "^worker worker: guard channel: closed$"):
-            channel.redisplay()
-        tmux.option.assert_not_called()
-        opener.assert_not_called()
-
-    def test_redisplay_without_a_display_opens_nothing(self):
-        channel, tmux, _ = self.reopener(terminal=False)
-        self.assertFalse(channel.redisplay())
-        tmux.option.assert_not_called()
-        tmux.start.assert_not_called()
-
-    def test_redisplay_opens_the_display_its_start_opened(self):
-        gate = threading.Event()
-        self.addCleanup(gate.set)
-        frames = iter([guard.json_frame(b"s", {"pid": 123})])
-
-        def read(_size):
-            try:
-                return next(frames)
-            except StopIteration:
-                gate.wait(GUARD_WAIT)  # running until the test ends
-                return b""
-
-        tmux = mock.Mock()
-        with spawned(read):
-            channel = TmuxHost("tmux", tmux=tmux).worker(
-                "worker",
-                Launch((sys.executable,), cwd=self.home),
-                terminal=True,
-                display="manager",
-                events="/events",
-                metadata={"generation": "a" * 32, "sid": "s1", "client": "claude", "x": "y"},
-            )
-        first = tmux.start.call_args
-        self.assertEqual(
-            first.kwargs["tags"],
-            {
-                "@kind": "guard",
-                "@generation": "a" * 32,
-                "@sid": "s1",
-                "@client": "claude",
-                "@display": "manager",
-            },
-        )
-        self.assertEqual(first.kwargs["events"], "/events")
-        self.assertEqual(first.args[1].argv[-2], "--attach")
-        tmux.option.return_value = None  # its display killed
-        self.assertTrue(channel.redisplay())
-        self.assertEqual(tmux.start.call_args_list, [first, first])
 
 
 class OneShotTest(Case):
@@ -446,13 +372,6 @@ class OneShotTest(Case):
         self.assertFalse(os.path.lexists(directory))
         worker.close()
         self.host.tmux.option.assert_not_called()  # a headless worker has no display
-
-    def test_a_headless_handle_without_tmux_has_no_display(self):
-        channel = managed.TmuxManagedProcess(
-            "x", "a" * 32, mock.Mock(), terminal=False, tmux=None, start_reader=False
-        )
-        channel.close_display()
-        self.assertFalse(channel.redisplay())
 
     def test_a_failed_close_removes_the_dir_only_once_its_guard_is_gone(self):
         for gone in (False, True):

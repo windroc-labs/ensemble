@@ -1,6 +1,6 @@
 """HostedSession on a private tmux server (tests/session/live_tmux.py), os.environ that server's env,
 the fake client's Tui: Session.attach(name).close() and the by-name close Session.retire(name) leave
-the same state (FR-4); a display given to start stored on its display and in its worker state, and
+the same state (FR-4); a display given to start stored in guard and worker state, and
 listed (FR-48).
 """
 
@@ -44,7 +44,7 @@ class CloseTest(Live):
                 os.path.lexists(tui.TuiStore.attach(name, host=self.session_cls.host()).dir),
             )
         self.assertEqual(found, {"w1": (False, [], False), "w2": (False, [], False)})
-        self.assertEqual([row.name for row in self.session_cls.list()], [MANAGER])
+        self.assertEqual(self.session_cls.list(), [])
 
     def test_list_and_close_by_name_through_the_configured_class(self):
         self.start("w3", {"read": True})
@@ -76,7 +76,7 @@ class DisplayTest(Live):
             self.addCleanup(configured.start(spec, display=display).stop)
         for name, display in DISPLAYS.items():
             with self.subTest(name=name):
-                self.assertEqual(self.server.option(name, "@display"), display)
+                self.assertEqual(self.server.option(name, "@display"), "")
                 self.assertEqual(worker_state(name).display, display)
                 self.assertEqual([row.name for row in configured.list(display=display)], [name])
 

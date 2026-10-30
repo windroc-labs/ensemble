@@ -181,6 +181,11 @@ class ElsewhereHost(ScreenHost):
 class ControlBase(HostedTuiBase):
     def setUp(self):
         super().setUp()
+        self.tmux_process = mock.MagicMock()
+        process = self.tmux_process.__enter__.return_value
+        process.communicate.return_value = ("", "no server running")
+        process.poll.return_value = 1
+        process.args = ["tmux"]
         CliHost.current = self.host
         self.addCleanup(setattr, HostedSession, "_setup", None)
         Path(self.ensemble).mkdir(exist_ok=True)
@@ -208,6 +213,7 @@ class ControlBase(HostedTuiBase):
         source = stdin if stdin is not None else "" if record is None else record.to_line() + "\n"
         with (
             mock.patch.object(sys, "stdin", io.StringIO(source)),
+            mock.patch("subprocess.Popen", return_value=self.tmux_process),
             contextlib.redirect_stdout(out),
             contextlib.redirect_stderr(err),
         ):
@@ -538,9 +544,8 @@ class DisplayGone(ControlBase):
     def test_hide_names_no_other_host(self):
         with self.no_tmux():
             code, out, err = self.invoke("hide", "w1")
-        self.assertEqual((code, out), (1, ""))
-        self.assertIn("tmux: [Errno 2] no tmux", err)
-        self.assertNotIn("docker", err)
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertTrue(json.loads(self.invoke("status", "w1")[1])["hidden"])
 
 
 class HeadlessElsewhere(ControlBase):

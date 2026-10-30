@@ -17,19 +17,24 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 import tty
 import unicodedata
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 FRAME_MAX = 64 << 20
 BUFFER_MAX = 8 << 20
 HOOK_MAX = 1 << 20
 READ_SIZE = 65536
 TICK = 0.05
-DISPLAY_GRACE = 2.0  # a client dead at once still reaches the display its Host starts at launch
+DISPLAY_GRACE = 2.0  # a client dead at once still reaches the Viewer's startup display
+DISPLAY_DRAIN_WAIT = 9.0  # seconds without a successful display write after worker exit
+DIAGNOSTIC_CHARS = 8192
 UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
 SIZE = (24, 80)  # rows, columns of a PTY no display sizes, without --size
 SIZE_ARG = re.compile(r"([1-9][0-9]*)x([1-9][0-9]*)")
@@ -484,6 +489,13 @@ def child_setup(slave: int | None) -> None:
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
 
+@dataclass
+class Startup:
+    stream: IO[bytes]
+    peer: socket.socket | None = None
+    pending: bytes = b""
+
+
 class Guard:
     def __init__(
         self,
@@ -502,6 +514,10 @@ class Guard:
         self.streams = {}
         self.servers = {}
         self.peers = {}
+        self.display_buffers: dict[socket.socket, bytearray] = {}
+        self.display_progress: dict[socket.socket, float] = {}
+        self.startup: Startup | None = None
+        self.startup_resources = contextlib.ExitStack()
         self.output = deque()
         self.output_size = 0
         self.taken = deque()  # (peer, delivery) of each written h, until its harness's k
@@ -522,6 +538,7 @@ class Guard:
         self.spawned = 0.0
         self.up_sent = False
         self.displayed = False
+        self.display_closed = False
         self.children_pending = False
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
         self.directory = os.path.dirname(args.hook_socket)
@@ -529,13 +546,17 @@ class Guard:
     def state(self, status: str) -> None:
         if self.lease is None:
             return
-        value = {"generation": os.path.basename(self.directory), "state": status}
-        path = os.path.join(self.directory, "state.json")
+        if status == "exited" and self.args.terminal:
+            self._save("diagnostic.json", {"text": self.screen.text(20)[-DIAGNOSTIC_CHARS:]})
+        self._save("state.json", {"generation": os.path.basename(self.directory), "state": status})
+
+    def _save(self, name: str, value: dict) -> None:
+        path = os.path.join(self.directory, name)
         descriptor = os.open(
             path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
         )
         with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream)
+            json.dump(value, stream, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(path + ".new", path)
@@ -594,17 +615,63 @@ class Guard:
         self.output.append((wire, ack, delivery))
         self.output_size += len(wire)
 
-    def close(self) -> None:
+    def close(self, *, display: bool = False) -> None:
         if self.closing is None:
             self.closing = time.monotonic()
             while self.taken:
                 self.ack(*self.taken.popleft())
+        if display:
+            self.display_closed = True
 
     def drop(self, peer) -> None:
         self.peers.pop(peer, None)
+        self.display_buffers.pop(peer, None)
+        self.display_progress.pop(peer, None)
+        if self.startup is not None and self.startup.peer is peer:
+            self._release_startup()
         peer.close()
         if self.sizes.pop(peer, None) is not None and self.closing is None:
             self.follow()
+
+    def _release_startup(self) -> None:
+        self.startup = None
+        self.startup_resources.close()
+
+    def display_writers(self) -> list[socket.socket]:
+        return [
+            peer
+            for peer, pending in self.display_buffers.items()
+            if pending or (self.startup is not None and self.startup.peer is peer)
+        ]
+
+    def write_display(self, peer: socket.socket) -> None:
+        if peer not in self.display_buffers:
+            return
+        startup = self.startup
+        replaying = startup is not None and startup.peer is peer
+        data = startup.pending if replaying and startup else self.display_buffers[peer][:READ_SIZE]
+        if not data:
+            return
+        try:
+            count = peer.send(data)
+        except BlockingIOError:
+            return
+        except OSError:
+            self.drop(peer)
+            return
+        if count == 0:
+            self.drop(peer)
+            return
+        self.display_progress[peer] = time.monotonic()
+        if replaying:
+            assert startup is not None
+            startup.pending = startup.pending[count:]
+            if not startup.pending:
+                startup.pending = startup.stream.read(READ_SIZE)
+                if not startup.pending:
+                    self._release_startup()
+        else:
+            del self.display_buffers[peer][:count]
 
     def follow(self) -> None:
         """The PTY at the latest sized display's size, else unsized; a change redraws its client."""
@@ -625,7 +692,7 @@ class Guard:
                 self.channel = False
                 self.output.clear()
                 self.output_size = 0
-                self.close()
+                self.close(display=True)
                 break
             self.output_size -= count
             if count < len(wire):
@@ -651,7 +718,7 @@ class Guard:
                     raise ValueError("guard input buffer full")
                 self.input.extend(data)
         elif kind == b"c" and json.loads(data) == {}:
-            self.close()
+            self.close(display=True)
         elif kind == b"p" and json.loads(data) == {}:
             pass
         elif kind == b"k" and json.loads(data) == {}:
@@ -670,7 +737,7 @@ class Guard:
         """Harness bytes: each read restarts the heartbeat limit; EOF is a close."""
         data = os.read(0, READ_SIZE)
         if not data:
-            self.close()
+            self.close(display=True)
             return
         self.heard = time.monotonic()
         for kind, payload in self.decoder.feed(data):
@@ -679,7 +746,7 @@ class Guard:
     def listen(self, ready) -> None:
         """After a select, so a guard frozen past the limit (docker pause) reads its bytes first."""
         if 0 not in ready and self.lost(time.monotonic()):
-            self.close()
+            self.close(display=True)
 
     def lost(self, now: float) -> bool:
         return (
@@ -758,13 +825,20 @@ class Guard:
         kind = self.streams[descriptor]
         if kind == b"t":
             self.screen.append(data)
+            if not self.displayed and not self.display_closed:
+                if self.startup is None:
+                    with contextlib.ExitStack() as resources:
+                        stream = resources.enter_context(tempfile.TemporaryFile(dir=self.directory))
+                        self.startup = Startup(stream)
+                        self.startup_resources = resources.pop_all()
+                self.startup.stream.write(data)
             for peer, (role, _) in list(self.peers.items()):
                 if role == "display":
-                    try:
-                        if peer.send(data) != len(data):
-                            self.drop(peer)
-                    except OSError:
+                    pending = self.display_buffers.setdefault(peer, bytearray())
+                    if len(pending) + len(data) > BUFFER_MAX:
                         self.drop(peer)
+                    else:
+                        pending.extend(data)
         elif self.channel:
             self.emit(frame(kind, data))
 
@@ -817,6 +891,10 @@ class Guard:
             ended = False
             scan_due = 0.0
             while True:
+                if self.display_closed:
+                    for peer in list(self.display_buffers):
+                        self.drop(peer)
+                    self._release_startup()
                 now = time.monotonic()
                 if now >= scan_due:
                     ended = self.tick() or ended
@@ -829,24 +907,41 @@ class Guard:
                     self.exit_sent, self.exit_at = True, time.monotonic()
                 self.flush()
                 if self.exit_sent and (not self.output or not self.channel):
-                    if not self.lingers(time.monotonic()):
+                    if not self.lingers(time.monotonic()) and not self.display_writers():
                         return 0
                     for server, role in self.servers.items():
                         if role == "display":
                             self.take_display(server)
-                # A stalled consumer must not hold an already-reclaimed guard indefinitely.
-                if ended and self.closing is not None and time.monotonic() - self.closing > 9:
+                if (
+                    ended
+                    and self.closing is not None
+                    and time.monotonic() - self.closing > 9
+                    and (not self.exit_sent or self.output and self.channel)
+                ):
                     return 1
                 if self.exit_sent:
-                    time.sleep(TICK)
+                    writers = self.display_writers()
+                    for peer in writers:
+                        since = max(self.exit_at, self.display_progress.get(peer, self.exit_at))
+                        if time.monotonic() - since >= DISPLAY_DRAIN_WAIT:
+                            self.drop(peer)
+                    writers = self.display_writers()
+                    readers = [0] if self.channel and not self.display_closed else []
+                    ready, writable, _ = select.select(readers, writers, [], TICK)
+                    if 0 in ready:
+                        self.read_channel()
+                    for peer in writable:
+                        self.write_display(peer)
                     continue
                 readers: list[int | socket.socket] = [0] if self.closing is None else []
                 if self.output_size < BUFFER_MAX - READ_SIZE - HOOK_MAX:
                     readers += list(self.streams)
                     readers += [p for p, (role, _) in self.peers.items() if role != "ack"]
                     readers += list(self.servers) if len(self.peers) < 64 else []
-                ready, _, _ = select.select(readers, [], [], TICK)
+                ready, writable, _ = select.select(readers, self.display_writers(), [], TICK)
                 self.listen(ready)
+                for peer in writable:
+                    self.write_display(peer)
                 for descriptor in ready:
                     if descriptor == 0:
                         self.read_channel()
@@ -870,6 +965,7 @@ class Guard:
                         time.sleep(TICK)
             for peer in list(self.peers):
                 self.drop(peer)
+            self._release_startup()
             for server in self.servers:
                 server.close()
             if self.master is not None:
@@ -887,24 +983,30 @@ class Guard:
             self.args.display_grace
             and self.master is not None
             and not self.displayed
+            and not self.display_closed
             and now - self.exit_at < DISPLAY_GRACE
         )
 
     def take_display(self, server) -> None:
-        """A display connecting: the current screen first, then live output."""
+        """First display replays startup; subsequent displays get the current screen."""
         try:
             peer, _ = server.accept()
         except BlockingIOError:
             return
+        if self.display_closed:
+            peer.close()
+            return
         peer.settimeout(0)
         self.peers[peer] = ("display", Decoder())
+        self.display_buffers[peer] = bytearray()
+        if not self.displayed and self.startup is not None:
+            self.startup.stream.seek(0)
+            self.startup.pending = self.startup.stream.read(READ_SIZE)
+            self.startup.peer = peer
+        else:
+            self.display_buffers[peer].extend(self.screen.snapshot())
         self.displayed = True
-        snapshot = self.screen.snapshot()
-        try:
-            if peer.send(snapshot) != len(snapshot):
-                self.drop(peer)
-        except OSError:
-            self.drop(peer)
+        self.write_display(peer)
 
     def final_hooks(self) -> None:
         for server, role in self.servers.items():
@@ -1093,7 +1195,7 @@ def supervise(args, lease_path: str | None, **options) -> int:
             return 1
     runtime = Guard(args, lease, **options)
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda _sig, _frame: runtime.close())
+        signal.signal(sig, lambda _sig, _frame: runtime.close(display=True))
     try:
         return runtime.run()
     except (OSError, ValueError) as error:

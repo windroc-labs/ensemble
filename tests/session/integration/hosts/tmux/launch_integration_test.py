@@ -14,6 +14,7 @@ from ensemble.session import Launch, SessionError
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Key, KeyPress, Liveness, Paste, Unanswered, WorkerExit
 from ensemble.session.hosts.tmux import TmuxHost
+from ensemble.session.viewer.viewer import Viewer
 from tests.session import live_tmux
 from tests.session.case import Case
 
@@ -30,6 +31,8 @@ class LaunchTest(Case):
     def worker(self, name, launch, *, terminal=True):
         handle = self.host.worker(name, launch, terminal=terminal)
         self.addCleanup(self.close, handle)
+        if terminal:
+            Viewer()._prepare(name, self.host)
         return handle
 
     def close(self, handle):
@@ -102,28 +105,9 @@ class LaunchTest(Case):
 
         live_tmux.wait(lambda: pane() == "100x30", what="the display pane at 100x30")
         tmux.checked(["resize-window", "-t", "=sized:", "-x", "50", "-y", "20"])
-        self.assertEqual(pane(), "50x19")
-        tmux.unview("sized", (100, 30), border=True)
+        self.assertEqual(pane(), "50x20")
+        tmux.unview("sized", (100, 30))
         self.assertEqual(pane(), "100x30")
-
-    def test_start_hands_a_long_argv_and_env_over_in_cwd_and_views_are_not_listed(self):
-        out = os.path.join(self.home, "launched.json")
-        code = "import json, os, sys, time; json.dump([sys.argv[1:], os.getcwd(), os.environ['X']], open(sys.argv[1], 'w')); time.sleep(30)"
-        prompt = "a b ; $(echo x)\n" * 4096
-        tmux = TmuxCli()
-        tmux.start(
-            "v1",
-            Launch(
-                (sys.executable, "-I", "-c", code, out, prompt), cwd=self.home, env={"X": "x y"}
-            ),
-            tags={"@view": "docker"},
-        )
-        self.addCleanup(tmux.kill, "v1")
-        live_tmux.wait(lambda: os.path.exists(out) and os.path.getsize(out), what="launch")
-        with open(out) as f:
-            self.assertEqual(json.load(f), [[out, prompt], os.path.realpath(self.home), "x y"])
-        self.assertEqual(tmux.sessions(), ["manager"])
-        self.assertEqual([row["name"] for row in tmux.listing()], ["manager"])
 
     def test_long_unicode_multiline_paste_is_literal_and_does_not_submit(self):
         text = ("雪 a b\n" * 3000) + "literal ; $(echo x)"
@@ -221,8 +205,8 @@ class LaunchTest(Case):
                     what=f"{mode} initial screen",
                 )
                 self.assertEqual(worker.screen(), expected)
-                worker.close_display()
-                self.assertTrue(worker.redisplay())
+                Viewer().close(mode, self.host)
+                self.assertTrue(Viewer()._prepare(mode, self.host))
                 live_tmux.wait(
                     lambda mode=mode, expected=expected: self.displayed(mode) == expected,
                     what=f"{mode} reconnected screen",

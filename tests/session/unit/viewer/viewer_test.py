@@ -13,15 +13,15 @@ from ensemble.session import ConfigError, NotShowable, SessionError
 from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.types import PaneStatus, TuiSettings, Unanswered
 from ensemble.session.hosts.base import TUI_DIR, Host
-from ensemble.session.hosts.tmux import TmuxHost
-from ensemble.session.hosts.types import CommandView, SessionView
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import display as displays
 from ensemble.session.viewer import hidden
 from ensemble.session.viewer.viewer import VIEW_TAG, Viewer
 from ensemble.utils import STALE_AGE
 from tests.session.hosted_support import SID
 from tests.session.tmux_fixtures import INSIDE, SOCK, environ
-from tests.session.tmux_host_support import PROCESS, Base
+from tests.session.tmux_host_support import PROCESS
+from tests.session.tmux_host_support import Base as HostBase
 
 TuiError = tmux_cli.TuiError
 NO_PANE = "no anchor pane: not in tmux"
@@ -50,6 +50,22 @@ def worker(name: str, sid: str | None) -> None:
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "session.json"), "w", encoding="utf-8") as f:
         json.dump({"sid": sid, "generation": "g1"}, f)
+
+
+class Base(HostBase):
+    def setUp(self):
+        super().setUp()
+
+        def target(name):
+            if not isinstance(name, str) or not tmux_cli.NAME.fullmatch(name):
+                raise SessionError(f"no tmux session {name!r}")
+            return CommandView(tmux_cli.attach_command(name), ("guard", "--attach", name))
+
+        self.enterContext(mock.patch.object(self.host, "attach_target", side_effect=target))
+        options = self.tmux.option.side_effect
+        self.tmux.option.side_effect = lambda pane, key: (
+            VIEW_TAG if key == "@view" else options(pane, key)
+        )
 
 
 class ShowTest(Base):
@@ -97,9 +113,6 @@ class ShowTest(Base):
         self.assertEqual(self.runner.calls, [[*sh, "open -a T w1"], [*sh, "false"], [*sh, "true"]])
 
     def test_show_refuses_an_absent_session_a_foreign_display_or_a_bad_setting(self):
-        self.tmux.status.return_value = None
-        with self.assertRaisesRegex(SessionError, "^no tmux session w1$"):
-            self.viewer.show("w1", self.host)
         self.tmux.status.return_value = PaneStatus.RUNNING
         with self.assertRaisesRegex(ConfigError, r"^display 'elsewhere:1\.2': not <opener>"):
             self.enterContext(environ(**INSIDE))
@@ -176,14 +189,15 @@ class HideTest(Base):
         self.options(pane="%9", sid=SID)
         self.assertIsNone(self.viewer.hide("w1", self.host))
         self.tmux.kill.assert_called_once_with("%9")
-        self.tmux.unview.assert_called_once_with("w1", (80, 24), border=True)
+        self.tmux.unview.assert_called_once_with("w1", (80, 24))
         self.assertTrue(hidden.read("w1", SID))
 
     def test_hide_returns_the_window_to_its_hosts_configured_size(self):
         self.options(pane="%9", sid=SID)
-        host = TmuxHost("tmux", {"hidden_size": "100x30"}, tmux=self.tmux)
+        host = self.host
+        host._hidden_size = (100, 30)
         self.assertIsNone(self.viewer.hide("w1", host))
-        self.tmux.unview.assert_called_once_with("w1", (100, 30), border=True)
+        self.tmux.unview.assert_called_once_with("w1", (100, 30))
 
     def test_a_failed_hidden_size_still_hides(self):
         self.options(pane="%9", sid=SID)
@@ -263,7 +277,7 @@ class HideTest(Base):
                 self.assertIsNone(self.viewer.hide("w1", self.host, if_closed=True))
                 self.assertEqual(hidden.read("w1", SID), want)
                 self.assertEqual(
-                    self.tmux.unview.call_args_list, [mock.call("w1", (80, 24), border=True)] * want
+                    self.tmux.unview.call_args_list, [mock.call("w1", (80, 24))] * want
                 )
                 self.assertEqual(found["pane"], None if want else pane)
         self.tmux.kill.assert_not_called()
@@ -341,18 +355,6 @@ class HideTest(Base):
         self.assertIsNone(found["window"])
         self.assertTrue(hidden.read("w1", SID))
 
-    def test_hide_if_closed_refuses_an_absent_session(self):
-        self.tmux.status.return_value = None
-        with self.assertRaisesRegex(SessionError, "^no tmux session w1$"):
-            self.viewer.hide("w1", self.host, if_closed=True)
-
-    def test_hide_refuses_an_absent_session(self):
-        self.tmux.status.return_value = None
-        with self.assertRaisesRegex(SessionError, "^no tmux session w1$"):
-            self.viewer.hide("w1", self.host)
-        self.tmux.kill.assert_not_called()
-        self.assertFalse(os.path.exists(os.path.join(self.ensemble, "hidden")))
-
     def test_hide_names_a_failed_pane_kill_and_marks_nothing(self):
         self.options(pane="%9", sid=SID)
         self.tmux.kill.side_effect = TuiError("tmux: boom")
@@ -427,7 +429,9 @@ class CommandViewTest(Base):
                 self.tmux.checked.assert_any_call(
                     [
                         *("new-session", "-d", "-s", "d1", "-x", x, "-y", y, "--", *self.ARGV),
+                        *(";", "set-option", "-t", "=d1:", "@view-id", mock.ANY),
                         *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
+                        *(";", "set-option", "-w", "-t", "=d1:", "remain-on-exit", "on"),
                         *(";", "set-option", "-t", "=d1:", "status", status),
                         *(
                             [";", "set-option", "-t", "=d1:", "status-left-length", "5"]
@@ -436,6 +440,24 @@ class CommandViewTest(Base):
                         ),
                     ]
                 )
+
+    def test_prepare_creates_the_internal_display_without_opening_an_outer_pane(self):
+        self.tmux.status.return_value = None
+        self.runner.results["new-session"] = (0,)
+        self.assertTrue(self.viewer._prepare("d1", self.docker))
+        self.assertEqual([call[1] for call in self.runner.calls], ["new-session"])
+        self.assertIn(
+            list(self.ARGV),
+            [call[call.index("--") + 1 : call.index(";")] for call in self.runner.calls],
+        )
+
+    def test_prepare_reuses_its_running_display_and_recreates_a_dead_one(self):
+        self.view = VIEW_TAG
+        self.assertFalse(self.viewer._prepare("d1", self.docker))
+        self.tmux.status.return_value = 1
+        self.runner.results["new-session"] = (0,)
+        self.assertTrue(self.viewer._prepare("d1", self.docker))
+        self.tmux.kill.assert_called_once_with("d1")
 
     def test_show_outside_tmux_prints_attach_without_starting_a_view(self):
         self.enterContext(environ(HOME=self.home))
@@ -456,7 +478,7 @@ class CommandViewTest(Base):
         self.tmux.status.return_value = PaneStatus.RUNNING
         self.docker.tui_settings.return_value = TuiSettings(hidden_size=(100, 30))
         self.viewer.hide("d1", self.docker)
-        self.tmux.unview.assert_called_once_with("d1", (100, 30), border=False)
+        self.tmux.unview.assert_called_once_with("d1", (100, 30))
         self.assertTrue(hidden.read("d1", SID))
 
     def test_a_bad_host_setting_fails_a_hide_before_it_changes_anything(self):
@@ -530,16 +552,6 @@ class CommandViewTest(Base):
                     self.viewer.show("d1", self.docker)
                 self.assertEqual(self.docker.attach_target.call_count, 1)
                 self.assertEqual(slept, [])
-
-
-class SessionViewCloseTest(Base):
-    def test_close_on_a_host_whose_target_is_its_own_tmux_session_touches_no_tmux(self):
-        host = mock.create_autospec(Host, instance=True)
-        host.name, host.attachable = "tmux", True
-        host.attach_target.return_value = SessionView("w1")
-        self.viewer.close("w1", host)
-        self.tmux.option.assert_not_called()
-        self.tmux.kill.assert_not_called()
 
 
 class NotShowableTest(Base):

@@ -3086,15 +3086,13 @@ class RecordRuleTest(Base):
             self.start()
         self.assertEqual(self.saved(), state)
 
-    def test_owned_close_closes_its_display_the_handle_then_the_dir(self):
-        """Its display first: a requested close reports no pane death."""
+    def test_owned_close_closes_the_handle_then_the_dir(self):
         self.owned()
         order = mock.Mock()
         handle = self.handle()
         handle.close.side_effect = lambda: order("handle")
-        handle.close_display.side_effect = lambda: order("display")
         self.assertTrue(self.store.close(handle, "g1"))
-        self.assertEqual(order.call_args_list, [mock.call("display"), mock.call("handle")])
+        self.assertEqual(order.call_args_list, [mock.call("handle")])
         self.assertNoSessionDir()
         self.liveness.assert_not_called()
 
@@ -3114,7 +3112,6 @@ class RecordRuleTest(Base):
                 with self.assertRaisesRegex(Unanswered, "^worker w1: exit unconfirmed$"):
                     self.store.close(handle, "g1")
                 self.assertEqual(handle.close.call_count, 0 if failure == "unknown" else 1)
-                handle.close_display.assert_called_once_with()
                 self.assertEqual(self.saved(), state)
 
     def test_owned_close_of_an_old_generation_keeps_the_new_record_and_display(self):
@@ -3273,18 +3270,6 @@ class ManagedStartTest(OwnedBase):
         self.assertEqual(kwargs["metadata"]["generation"], tui.TuiMode.snapshot(NAME)["generation"])
         self.assertIs(mode._terminal, self.handle)
 
-    def test_owned_redisplay_asks_its_managed_handle(self):
-        managed = mock.create_autospec(ManagedProcess, instance=True)
-        managed.state.return_value = Liveness.LIVE
-        managed.read.return_value = []
-        managed.redisplay.return_value = True
-        self.host.worker.return_value = managed
-        self.assertTrue(self.owned_start().redisplay())
-        managed.redisplay.assert_called_once_with()
-
-    def test_redisplay_of_a_plain_terminal_opens_nothing(self):
-        self.assertFalse(self.owned_start().redisplay())
-
     def test_owned_poll_takes_worker_exit_code(self):
         mode = self.owned_start()
         self.handle.read.return_value = [WorkerExit(3)]
@@ -3293,6 +3278,15 @@ class ManagedStartTest(OwnedBase):
         self.host.processes.clear()  # its display went with the guard
         self.assertEqual(mode.poll(0), ([], True))
         self.assertEqual(mode.returncode(0), 3)
+
+    def test_confirmed_guard_exit_marks_dead_once_without_a_display(self):
+        mode = self.owned_start()
+        self.handle.state.return_value = Liveness.ABSENT
+        self.handle.returncode.return_value = 7
+        self.assertEqual(mode.poll(0), ([], True))
+        self.assertEqual(mode.poll(0), ([], True))
+        with open(self.events, encoding="utf-8") as stream:
+            self.assertEqual([line.split(" ", 1)[1] for line in stream], [f"{NAME} dead\n"])
 
     def test_owned_poll_ends_a_removed_handle_without_a_code(self):
         """A handle gone without a confirmed code (a Docker worker removed after a failure)."""
