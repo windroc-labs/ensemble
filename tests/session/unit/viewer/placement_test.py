@@ -488,6 +488,34 @@ class BorderTest(Case):
         fake = FakeTmux(results={"list-panes": (1, "", "no server running on /x\n")})
         placed(fake).unlabel()
         self.assertEqual(fake.calls, [LABELS])
+        fake = FakeTmux(results={"list-panes": (1, "", "boom\n")})
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).unlabel()
+        self.assertEqual(
+            (fake.calls, self.stderr.getvalue()), ([LABELS], "tui: close: label: tmux: boom\n")
+        )
+
+    def test_a_failed_window_restores_nothing_there_and_the_next_one_still(self):
+        rows = [("@1", "", LABEL), ("@3", "", LABEL)]
+
+        def own_or_fail(argv):
+            if argv[-2] == "@1" and argv[-1].startswith("@worker-saved-"):
+                return 1, "", "boom\n"
+            return 0, LABEL + "\n" if argv[-1] == "pane-border-format" else ""
+
+        fake = FakeTmux(
+            results={
+                "list-panes": (0, "".join("\t".join(r) + "\n" for r in rows)),
+                "show-options": own_or_fail,
+            }
+        )
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).unlabel()
+        writes = [c for c in fake.calls if c[1] == "set-option"]
+        self.assertEqual([c[c.index("-t") + 1] for c in writes], ["@3"])
+        self.assertEqual(self.stderr.getvalue(), "tui: close: label: @1: tmux: boom\n")
 
 
 class CloseTest(Case):
@@ -655,13 +683,13 @@ class ReuseTest(PaneFixture):
 
 
 class PanePlacementTest(PaneFixture):
-    """The caller is in session own, pane %3, its grid read failing; b's client shows %9."""
+    """The caller is in session own, pane %3, outside a grid; b's client shows %9."""
 
     def fake(self, rows=(), **results):
         return FakeTmux(
             results={
                 "display-message": (0, "own\n"),
-                "list-panes": lambda argv: worker_rows(*rows) if "-a" in argv else (1,),
+                "list-panes": lambda argv: worker_rows(*rows) if "-a" in argv else (0, ""),
                 "list-clients": clients((5, "%9")),
                 "split-window": split(),
                 **results,
@@ -744,6 +772,18 @@ class PanePlacementTest(PaneFixture):
                 self.assertEqual(self.open(fake, env, **kw), "tmux: boom" + WATCH)
                 self.assertNotIn("split-window", fake.commands())
                 self.assertNotIn("set-option", fake.commands())
+
+    def test_an_unread_grid_writes_no_grid_option(self):
+        """A failed or misprinted grid read: a plain split, no grid write, a stderr line."""
+        for result, why in (((1, "", "boom\n"), "boom"), ((0, "x\n"), "list-panes printed 'x'")):
+            with self.subTest(why=why):
+                fake = self.fake(
+                    **{"list-panes": lambda argv, r=result: worker_rows() if "-a" in argv else r}
+                )
+                self.assertIsNone(self.open(fake, INSIDE))
+                self.assertIn(split_window("-h", "%3"), fake.calls)
+                self.assertNotIn("@grid-busy", [a for c in fake.calls for a in c])
+                self.assertIn(f"tui: show: grid: tmux: {why}\n", self.stderr.getvalue())
 
     def test_tmux_split_failures(self):
         fake = self.fake(**{"split-window": (1, "", "no space for new pane\n")})

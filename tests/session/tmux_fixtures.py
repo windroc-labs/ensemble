@@ -143,7 +143,7 @@ def record(
 
 
 def own(window, option):
-    """Placement's read of window's own value of option."""
+    """Placement's read of window's own option value."""
     return ["tmux", "show-options", "-w", "-q", "-v", "-t", window, option]
 
 
@@ -411,7 +411,7 @@ class GridFixture(Case):
             if "-a" in argv:
                 return worker_rows(*rows)
             if argv[3] not in windows:
-                return 1, "", f"can't find pane: {argv[3]}\n"
+                return 0, ""
             return 0, "".join("\t".join(r) + "\n" for r in windows[argv[3]])
 
         return FakeTmux(

@@ -231,15 +231,19 @@ class Placement:
             if any(len(row) != 3 or not WINDOW.fullmatch(row[0]) for row in rows):
                 raise TuiError(f"tmux: list-panes printed {res.stdout!r:.80}")
             labelled = {window for window, label, _ in rows if label}
-            for window in sorted({w for w, _, shown in rows if shown == LABEL} - labelled):
+        except TuiError as e:
+            print(f"tui: close: label: {e}", file=sys.stderr)
+            return
+        for window in sorted({w for w, _, shown in rows if shown == LABEL} - labelled):
+            try:
                 if self._own(window, "pane-border-format") == LABEL:
                     args = []
                     for option in BORDERS:
                         args += self._set(window, option, self._own(window, SAVED + option))
                         args += [";", "set-option", "-u", "-w", "-t", window, SAVED + option]
                     self.tmux.checked(args[1:])
-        except TuiError as e:
-            print(f"tui: close: label: {e}", file=sys.stderr)
+            except TuiError as e:
+                print(f"tui: close: label: {window}: {e}", file=sys.stderr)
 
     def _own(self, window: str, option: str) -> str | None:
         """window's own value of option (None: unset)."""
@@ -319,7 +323,8 @@ class Placement:
     def _grid(self, pane: str, manager: str | None) -> Spot | None:
         try:
             found = self._window(pane, manager)
-        except TuiError:
+        except TuiError as e:
+            print(f"tui: show: grid: {e}", file=sys.stderr)
             return None
         if found is None:
             return None
@@ -331,15 +336,13 @@ class Placement:
         return Spot(anchor, Split.BELOW, (window, manager))
 
     def _window(self, pane: str, manager: str | None) -> tuple[str, str, dict[str, int]] | None:
-        """pane's window id, manager and pane areas; None when tmux fails."""
-        res = self.tmux.run(["list-panes", "-t", pane, "-F", GRID_PANES])
+        """pane's window id, manager and pane areas; None outside a grid."""
+        out = self.tmux.checked(["list-panes", "-t", pane, "-F", GRID_PANES]).stdout
         rows = []
-        if res.returncode:
-            return None
-        for line in res.stdout.splitlines():
+        for line in out.splitlines():
             match = GRID_ROW.fullmatch(line)
             if match is None:
-                return None
+                raise TuiError(f"tmux: list-panes printed {line!r:.80}")
             rows.append(match)
         if not rows:
             return None
