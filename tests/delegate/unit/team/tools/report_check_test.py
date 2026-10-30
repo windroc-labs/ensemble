@@ -107,6 +107,14 @@ class ReportCheck(Case):
                 self.assertIn("line 3: cell 31>30:", self.check("| a | b |\n|---|---|\n" + row)[1])
         self.assertIn("paragraph 83>80:", self.check("x|" + "a" * 81)[1])
 
+    def test_table_cells_skip_link_targets(self):
+        url = "https://github.com/example/" + "repo" * 20
+        linked = "| Need | [" + "x" * 30 + "](" + url + ") | B |\n|---|---|---|"
+        self.assertEqual(self.check(linked), (0, "ok\n"))
+        code, out = self.check("| Need | [" + "x" * 31 + "](" + url + ") | B |\n|---|---|---|")
+        self.assertEqual(code, 1)
+        self.assertIn("line 1: cell 31>30:", out)
+
     def test_table_boundaries_and_missing_or_extra_cells(self):
         header = "| A | B |\n|---|---|\n"
         for following in ("- " + "x" * 80, "> " + "x" * 80, "\n" + "x" * 80):

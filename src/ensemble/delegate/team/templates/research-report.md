@@ -32,7 +32,7 @@ Instruction sections: omit Template rules and Filled example from the report. St
 
 ## Comparison table
 
-Optional; omit when the input asks for no comparison. A table ([Principles › Writing › Diagrams and tables](#writing)), labeled as your synthesis. Score cells with ✅⚠️❌ plus short values; below it, a one-line legend. Remove rows whose compared values are the same; combine them below as `<Both have, translated>: …`. Over the list/paragraph limit → that label followed by short list items instead.
+Optional; omit when the input asks for no comparison. A table ([Principles › Writing › Diagrams and tables](#writing)), labeled as your synthesis. A compared project with its own address is a link to it, wherever the table names it: `[<name>](<URL>)`, the URL its official code repository, else its official homepage; no address → plain text. Score cells with ✅⚠️❌ plus short values; below it, a one-line legend. Remove rows whose compared values are the same; combine them below as `<Both have, translated>: …`. Over the list/paragraph limit → that label followed by short list items instead.
 
 ## Findings
 
@@ -90,7 +90,7 @@ Light Research: light-research · mixed · windroc-labs/ensemble@f597b17033e7
 
 - Synthesis: compare integration differences.
 
-| Need | Cursor CLI | Grok Build |
+| Need | [Cursor CLI](https://cursor.com/cli) | [Grok Build](https://github.com/xai-org/grok-build) |
 |---|---|---|
 | New session id | ⚠️ create-chat first | ✅ caller UUID via -s |
 | Hooks | ⚠️ CLI coverage unclear | ✅ Claude-style payloads |
