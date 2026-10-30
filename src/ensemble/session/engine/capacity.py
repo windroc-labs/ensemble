@@ -254,24 +254,17 @@ class Admission(AbstractContextManager):
         self.close()
 
     def _detach(self) -> None:
-        self._settle(keep=True)
-
-    def _settle(self, *, keep: bool) -> None:
-        """Ends this process's hold under the gate, so no count sees it half done."""
-
-        def settle():
-            if not keep:
-                with contextlib.suppress(FileNotFoundError):
-                    os.unlink(self.path)
-            fd, self._fd = self._fd, None
-            if fd is not None:
-                os.close(fd)
-
+        """Under the gate: a count between its inventory and its scan would reap the record."""
         try:
             with _locked(self.directory, self.client):
-                settle()
+                self._unhold()
         except OSError:
-            settle()
+            self._unhold()
+
+    def _unhold(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            os.close(fd)
 
     def _watch(self, state: Callable[[], Liveness]) -> None:
         while not self.finished.wait(POLL):
@@ -288,5 +281,9 @@ class Admission(AbstractContextManager):
         with self._mutex:
             if self.finished.is_set():
                 return
-            self._settle(keep=False)
+            # No gate: unlinked before unheld, the record is never half released, and a
+            # watcher ending after its home is gone recreates none of it.
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(self.path)
+            self._unhold()
             self.finished.set()

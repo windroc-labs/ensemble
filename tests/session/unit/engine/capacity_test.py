@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+import shutil
 import threading
 from pathlib import Path
 from unittest import mock
@@ -141,18 +142,38 @@ class AdmissionTest(Case):
             self.host.settled.join(5)
         self.assertTrue(os.path.exists(first.path))
 
-    def test_ended_reservations_leave_no_client_directory(self):
+    def test_the_next_gate_holder_removes_an_ended_starts_client_directory(self):
         root = os.path.dirname(self.enter(limit=0).directory)
         with self.assertRaisesRegex(ValueError, "failed"), self.enter():
             raise ValueError("failed")
-        self.assertFalse(os.path.exists(root))
         first = self.enter()
         with first:
             first.started(lambda: Liveness.LIVE)
-        with self.assertRaises(SessionError), self.enter(name="second", sid="s2"):
-            pass
         first.close()
+        self.assertTrue(os.path.exists(root))
+        Admission.reconcile("fake", {"h": self.host})
         self.assertFalse(os.path.exists(root))
+
+    def test_a_release_after_its_state_is_removed_creates_none_meanwhile(self):
+        """A run's watcher may release after its home is being removed; it must not race that."""
+        seen, unlink = [], os.unlink
+
+        def observed(path, **kwargs):
+            seen.append(os.path.exists(self.ensemble))
+            unlink(path, **kwargs)
+
+        for mode in (Mode.HEADLESS, Mode.TUI):
+            with self.subTest(mode=mode):
+                ticket = self.enter(mode=mode)
+                with ticket:
+                    ticket.started(lambda: Liveness.LIVE)
+                shutil.rmtree(self.ensemble)
+                seen.clear()
+                with mock.patch.object(os, "unlink", observed):
+                    ticket.close()
+                self.assertTrue(seen, "the release removed no reservation")
+                self.assertFalse(any(seen), "the release recreated its state")
+                os.mkdir(self.ensemble)
 
     def test_held_runs_sharing_a_name_and_sid_count_separately(self):
         for _ in range(2):
