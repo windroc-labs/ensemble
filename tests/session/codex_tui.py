@@ -65,6 +65,7 @@ class PlanCase(Case):
             "resume",
             "saved-native",
             "--no-daemon",
+            "--no-alt-screen",
             "-C",
             "/work",
             "-c",

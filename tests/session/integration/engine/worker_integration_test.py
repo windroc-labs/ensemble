@@ -1,15 +1,71 @@
-"""Worker state on the real filesystem: private modes, and a state file that is a FIFO,
-directory or oversize, or a pointer that holds no sid, is refused promptly.
+"""Worker launch-turn exits through a real guard and tmux, and state on the real filesystem:
+private modes, a refused FIFO, directory or oversize state, and a refused pointer with no sid.
 """
 
 import os
 import stat
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 from ensemble.session import SessionError
 from ensemble.session.engine import worker
+from ensemble.session.engine.types import Exited, TurnEnd, TurnStarted
 from ensemble.session.engine.worker import Worker, WorkerState
+from tests.session import live_tmux
 from tests.session.case import SID, Case
+from tests.session.cli_support import MANAGER, WorkerCase
+
+
+class LaunchTurnTest(WorkerCase):
+    def test_exit_after_up_and_the_opening_still_fails_start(self):
+        release = os.path.join(self.root, "release")
+        scene = self.scene("w1", steps=[{"kind": "pause", "file": release}, {"kind": "exit"}])
+        with mock.patch.dict(os.environ, self.env(**scene), clear=True):
+            self.configure_session(
+                {"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}}
+            )
+            state = WorkerState(
+                name="w1", sid=SID, client="claude", cwd=self.cwd, host="tmux", display=MANAGER
+            )
+            # The observation deadline is tested with a virtual clock in unit tests.
+            launch = Worker(state, session_cls=self.session_cls, clock=lambda: 0)
+
+            def start():
+                with launch.locked():
+                    return launch.start(prompt="hi", resume=False)
+
+            def ready():
+                try:
+                    owner = self.owner("w1")
+                except FileNotFoundError:
+                    return False
+                status = owner.status()
+                return (
+                    status.get("up") is True
+                    and status.get("opening") is None
+                    and any(isinstance(row.event, TurnStarted) for row in owner.read(0)[0])
+                )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                started = pool.submit(start)
+                try:
+                    live_tmux.wait(
+                        ready, what="w1 up with its opening sent and launch turn started"
+                    )
+                    self.assertFalse(started.done(), self.harness_files("w1"))
+                finally:
+                    with open(release, "w", encoding="utf-8"):
+                        pass
+                with self.assertRaisesRegex(SessionError, "^w1: claude exited 0 while starting"):
+                    started.result(timeout=40)
+
+            owner = self.owner("w1")
+            self.assertTrue(owner.status().get("up") is True)
+            events = [row.event for row in owner.read(0)[0]]
+            self.assertIn(Exited(0), events)
+            self.assertFalse(any(isinstance(event, TurnEnd) for event in events), events)
+            self.assertIsNone(self.dir_record("w1"))
 
 
 class StateFileTest(Case):
