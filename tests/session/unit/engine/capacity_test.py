@@ -34,11 +34,16 @@ class SettlingHost(MemoryHost):
 
     settle = None
 
+    def __init__(self, case):
+        super().__init__()
+        self.case = case
+
     def _capacity_rows(self):
         rows = super()._capacity_rows()
         if self.settle is not None:
             thread, self.settle = threading.Thread(target=self.settle, daemon=True), None
             thread.start()
+            self.case.addCleanup(thread.join, 5)
             thread.join(0.5)
             self.settled = thread
         return rows
@@ -119,7 +124,7 @@ class AdmissionTest(Case):
             first.started(lambda: Liveness.LIVE)
 
     def test_a_tui_start_settling_during_a_count_is_still_counted(self):
-        self.host = SettlingHost()
+        self.host = SettlingHost(self)
         first = self.enter(mode=Mode.TUI)
 
         def settle():
