@@ -34,6 +34,7 @@ from ensemble.session.engine import hosted_session
 from ensemble.session.engine import types as engine_types
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.records import RunLog
+from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -3079,6 +3080,44 @@ class OwnedTest(HostedTuiBase):
         owned.close()
         self.host.calls.close_view.assert_not_called()
         self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
+
+    def test_close_cannot_delete_a_display_replaced_after_the_old_worker_ends(self):
+        owned = self.own()
+        old = self.host.processes["w1"]
+        display = {"id": "$7"}
+
+        def run(argv, **_kwargs):
+            if "w1" not in self.host.processes:
+                self.host.create("w1", metadata={"sid": SID, "generation": "newer"})
+                display["id"] = "$8"
+            command = argv[1]
+            output = ""
+            if command == "display-message":
+                output = f"{display['id']}\tviewer\n"
+            elif command == "show-options":
+                output = "viewer\n"
+            elif command == "kill-session" and argv[-1] in ("=w1", display["id"]):
+                display["id"] = ""
+            return SimpleNamespace(returncode=0, stdout=output, stderr="")
+
+        owned._session._viewer = Viewer(tmux=TmuxCli(run))
+        owned.close()
+        old.calls.close.assert_called_once()
+        self.assertEqual(display["id"], "$8")
+        self.assertEqual(self.host.processes["w1"].metadata["generation"], "newer")
+
+    def test_a_display_capture_error_still_ends_the_worker(self):
+        owned = self.own()
+        terminal = self.host.processes["w1"]
+        owned._session._viewer = Viewer(
+            tmux=TmuxCli(
+                lambda *_args, **_kw: SimpleNamespace(returncode=1, stdout="", stderr="lost socket")
+            )
+        )
+        with self.assertRaisesRegex(SessionError, "lost socket"):
+            owned.close()
+        terminal.calls.close.assert_called_once()
+        self.assertNotIn("w1", self.host.processes)
 
     def test_record_notes_client_sessions_and_stderr(self):
         owned = self.own()

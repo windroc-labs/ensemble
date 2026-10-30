@@ -49,6 +49,19 @@ def guard_dir(generation, state, name="worker"):
 
 
 class ManagedTest(Case):
+    def test_next_generation_removes_the_previous_exit_diagnostic(self):
+        generation = "a" * 32
+        directory = guard_dir(generation, "exited")
+        os.close(managed.lease_file(os.path.join(directory, generation, "lease")))
+        diagnostic = os.path.join(directory, generation, "diagnostic.json")
+        managed.save_json(diagnostic, {"text": "old error"})
+        with spawned():
+            channel = TmuxHost("tmux").worker(
+                "worker", Launch((sys.executable,), cwd=self.home), terminal=True
+            )
+            channel.close()
+        self.assertFalse(os.path.exists(diagnostic))
+
     def test_an_unreadable_inventory_record_is_refused_before_claiming_the_name(self):
         host = TmuxHost("tmux", tmux=mock.Mock())
         with spawned() as spawn, self.assertRaises(ConfigError):

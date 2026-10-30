@@ -83,6 +83,20 @@ class GuardInventoryTest(Case):
     def test_an_empty_guard_inventory_never_lists_a_display_session(self):
         self.assertEqual(self.host.list(), [])
         self.assertEqual(self.host.rows(), [])
+
+    def test_exit_diagnostic_is_bound_to_host_name_sid_and_generation_without_listing_dead(self):
+        directory = _worker(self, "ended", state="exited", live=False)
+        generation = "a" * 32
+        path = os.path.join(directory, generation, "diagnostic.json")
+        managed.save_json(path, {"text": "final error"})
+        self.assertEqual(self.host._last_lines("ended", OTHER, generation), "final error")
+        self.assertEqual(self.host._last_lines("ended", "foreign", generation), "")
+        self.assertEqual(self.host._last_lines("ended", OTHER, "b" * 32), "")
+        self.assertEqual(TmuxHost("other")._last_lines("ended", OTHER, generation), "")
+        self.assertEqual(self.host.list(), [])
+        os.unlink(path)
+        os.symlink(os.path.join(directory, "current.json"), path)
+        self.assertEqual(self.host._last_lines("ended", OTHER, generation), "")
         self.assertEqual(self.tmux.mock_calls, [])
 
     def test_activity_belongs_to_the_guard_generation_without_a_display(self):

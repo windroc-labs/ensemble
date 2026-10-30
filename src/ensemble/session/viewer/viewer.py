@@ -8,7 +8,7 @@ import contextlib
 import logging
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.tmux_cli import NAME, VIEW, TmuxCli, TuiError, display_error
@@ -206,6 +206,35 @@ class Viewer:
                 self._tmux.kill(name)
         except TuiError as error:
             raise SessionError(f"view {name}: {error}") from None
+
+    def _capture_close(self, name: str, host: Host) -> Callable[[], None] | None:
+        if not host.attachable:
+            return None
+        try:
+            found = self._tmux.run(
+                ["display-message", "-p", "-t", tmux_cli.address(name), "#{session_id}\t#{@view}"]
+            )
+            if found.returncode:
+                if tmux_cli.absent(found):
+                    return None
+                raise TuiError(tmux_cli.error(found))
+            ident, _, tag = found.stdout.strip().partition("\t")
+            if tag != VIEW_TAG:
+                return None
+            if not tmux_cli.SESSION_ID.fullmatch(ident):
+                raise TuiError("display identity unknown")
+        except TuiError as error:
+            raise SessionError(f"view {name}: {error}") from None
+
+        def close() -> None:
+            try:
+                removed = self._tmux.run(["kill-session", "-t", ident])
+                if removed.returncode and not tmux_cli.absent(removed):
+                    raise TuiError(tmux_cli.error(removed))
+            except TuiError as error:
+                raise SessionError(f"view {name}: {error}") from None
+
+        return close
 
     def _mark(self, name: str, host: Host, *, hidden: bool) -> None:
         """Only a session whose worker state names a sid keeps it."""

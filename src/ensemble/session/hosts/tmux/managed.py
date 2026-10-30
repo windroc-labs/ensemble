@@ -299,6 +299,8 @@ def start(
                 raise Unanswered(f"worker {name}: previous generation unknown") from error
             if not isinstance(old, str) or liveness(host.name, name, old) != Liveness.ABSENT:
                 raise SessionBusy(name, "previous worker generation (live or unknown)")
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(os.path.join(directory, old, "diagnostic.json"))
         run = os.path.join(directory, generation)
         os.mkdir(run, 0o700)
         save_json(

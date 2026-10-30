@@ -230,6 +230,9 @@ class MemoryViewer(Viewer):
         if host.attachable:
             host.calls.close_view(name)
 
+    def _capture_close(self, name, host):
+        return lambda: self.close(name, host)
+
 
 class GuardHost(MemoryHost):
     """A MemoryHost whose headless runs start their client under a real local guard."""

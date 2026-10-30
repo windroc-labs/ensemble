@@ -33,6 +33,8 @@ HOOK_MAX = 1 << 20
 READ_SIZE = 65536
 TICK = 0.05
 DISPLAY_GRACE = 2.0  # a client dead at once still reaches the Viewer's startup display
+DISPLAY_DRAIN_WAIT = 9.0  # seconds without a successful display write after worker exit
+DIAGNOSTIC_CHARS = 8192
 UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
 SIZE = (24, 80)  # rows, columns of a PTY no display sizes, without --size
 SIZE_ARG = re.compile(r"([1-9][0-9]*)x([1-9][0-9]*)")
@@ -513,6 +515,7 @@ class Guard:
         self.servers = {}
         self.peers = {}
         self.display_buffers: dict[socket.socket, bytearray] = {}
+        self.display_progress: dict[socket.socket, float] = {}
         self.startup: Startup | None = None
         self.startup_resources = contextlib.ExitStack()
         self.output = deque()
@@ -542,13 +545,17 @@ class Guard:
     def state(self, status: str) -> None:
         if self.lease is None:
             return
-        value = {"generation": os.path.basename(self.directory), "state": status}
-        path = os.path.join(self.directory, "state.json")
+        if status == "exited" and self.args.terminal:
+            self._save("diagnostic.json", {"text": self.screen.text(20)[-DIAGNOSTIC_CHARS:]})
+        self._save("state.json", {"generation": os.path.basename(self.directory), "state": status})
+
+    def _save(self, name: str, value: dict) -> None:
+        path = os.path.join(self.directory, name)
         descriptor = os.open(
             path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
         )
         with os.fdopen(descriptor, "w") as stream:
-            json.dump(value, stream)
+            json.dump(value, stream, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(path + ".new", path)
@@ -616,6 +623,7 @@ class Guard:
     def drop(self, peer) -> None:
         self.peers.pop(peer, None)
         self.display_buffers.pop(peer, None)
+        self.display_progress.pop(peer, None)
         if self.startup is not None and self.startup.peer is peer:
             self._release_startup()
         peer.close()
@@ -650,7 +658,9 @@ class Guard:
             return
         if count == 0:
             self.drop(peer)
-        elif replaying:
+            return
+        self.display_progress[peer] = time.monotonic()
+        if replaying:
             assert startup is not None
             startup.pending = startup.pending[count:]
             if not startup.pending:
@@ -895,10 +905,19 @@ class Guard:
                     for server, role in self.servers.items():
                         if role == "display":
                             self.take_display(server)
-                # A stalled consumer must not hold an already-reclaimed guard indefinitely.
-                if ended and self.closing is not None and time.monotonic() - self.closing > 9:
+                if (
+                    ended
+                    and self.closing is not None
+                    and time.monotonic() - self.closing > 9
+                    and (not self.exit_sent or self.output and self.channel)
+                ):
                     return 1
                 if self.exit_sent:
+                    writers = self.display_writers()
+                    for peer in writers:
+                        since = max(self.exit_at, self.display_progress.get(peer, self.exit_at))
+                        if time.monotonic() - since >= DISPLAY_DRAIN_WAIT:
+                            self.drop(peer)
                     writers = self.display_writers()
                     if writers:
                         _, writable, _ = select.select([], writers, [], TICK)

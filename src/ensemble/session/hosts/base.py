@@ -258,6 +258,11 @@ class Host(ABC):
     _remote_tui: ClassVar[bool] = False  # its owned tui workers are reached only through a guard
     _named_headless: ClassVar[bool] = False
 
+    def _last_lines(self, name: str, sid: str, generation: str) -> str:
+        return next(
+            (row.last_lines or "" for row in self.rows() if (row.name, row.sid) == (name, sid)), ""
+        )
+
     def _provider_usage(self, request: ProviderProbe) -> bool | None:
         return None
 

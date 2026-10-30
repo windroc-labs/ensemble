@@ -1357,10 +1357,13 @@ class HostedSession(Session):
 
     def close(self) -> None:
         name = self._tui()
-        kept = self._running.close() is False  # a tui record of another generation stays
         try:
-            if name is not None and not kept:
-                self._viewer.close(name, self._host)
+            try:
+                close_view = None if name is None else self._viewer._capture_close(name, self._host)
+            finally:
+                kept = self._running.close() is False
+            if close_view is not None and not kept:
+                close_view()
         finally:
             self._release_capacity()
 

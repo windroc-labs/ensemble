@@ -119,6 +119,20 @@ class TmuxHost(Host):
     def list(self) -> list[str]:
         return [row.name for row in self.rows()]
 
+    def _last_lines(self, name: str, sid: str, generation: str) -> str:
+        found = managed.records(self.name).get(name)
+        if found is None or (found.sid, found.generation) != (sid, generation):
+            return ""
+        directory = os.path.join(managed.location(self.name, name), generation)
+        try:
+            managed.check_directory(directory)
+            text = managed.load_json(
+                os.path.join(directory, "diagnostic.json"), limit=STATE_MAX
+            ).get("text")
+        except (OSError, ValueError):
+            return ""
+        return text if isinstance(text, str) else ""
+
     def rows(self) -> list[SessionRow]:
         rows = []
         for name, state in managed.records(self.name).items():

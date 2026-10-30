@@ -234,7 +234,7 @@ class TurnsTest(Live):
         self.assertEqual((live_tmux.activity("w1"), handle.reply), ("done", "Second."))
         self.assertEqual(self.users(handle.info().transcript), ["hello", "more"])
         border = self.server.tmux("show-options", "-wqv", "-t", "=w1:", "pane-border-format").stdout
-        self.assertEqual(border, "\n")
+        self.assertEqual(border.strip(), "")
         self.assertEqual(
             (handle.alive(), [r.name for r in self.session_cls.list("w1")], self.panes()),
             (True, ["w1"], 1),

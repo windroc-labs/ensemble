@@ -307,6 +307,20 @@ class StartTest(Base):
             self.worker().start(prompt="", resume=False)
         self.assertEqual(str(caught.exception), "w1: claude exited 2 while starting")
 
+    def test_early_exit_reads_guard_diagnostic_for_its_original_generation(self):
+        self.session.events.return_value = iter([Exited(2)])
+        self.session.screen.side_effect = SessionError("worker exited")
+        self.session.generation = "g1"
+        self.host.rows.return_value = []
+        self.host._last_lines.return_value = "final error"
+        with self.assertRaises(SessionError) as caught:
+            self.worker().start(prompt="", resume=False)
+        self.assertEqual(
+            str(caught.exception),
+            "w1: claude exited 2 while starting; its last lines:\nfinal error",
+        )
+        self.host._last_lines.assert_called_once_with("w1", SID, "g1")
+
     def test_the_watch_ends_on_the_first_event_once_its_client_is_up(self):
         type(self.session).client_up = mock.PropertyMock(side_effect=[False, True, True])
         self.session.events.return_value = iter([Reply("a"), Reply("b"), Exited(1)])

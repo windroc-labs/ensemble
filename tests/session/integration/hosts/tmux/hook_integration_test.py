@@ -66,7 +66,7 @@ class HookLifecycleTest(Live):
         self.assertEqual(stream.next(idle=False, poke=self.poke), Exited(0))
         self.lines(f"{name} dead")
         self.assert_events(self.events, name, "dead")
-        self.assertEqual(session.status().state, "dead")
+        self.assertEqual(session.status().state, "gone")
         self.assertEqual(done_file.read_bytes(), done_bytes)
         self.assertEqual(blocked_file.read_bytes(), blocked_bytes)
         journal = Path(self.ensemble, "tui", name, "hooks.jsonl")
@@ -81,7 +81,7 @@ class HookLifecycleTest(Live):
         stream = Stream(self, session)
         self.assertEqual(stream.next(idle=False, poke=self.poke), Exited(7))
         self.lines(f"{name} dead")
-        self.assertEqual(session.status().state, "dead")
+        self.assertEqual(session.status().state, "gone")
         live_tmux.wait(
             lambda: not self.session_cls.list(name), what="exited guard leaves inventory"
         )

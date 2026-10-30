@@ -155,7 +155,15 @@ class StartupDisplayTest(Base):
                 self.assertIsNone(runtime.closing)
 
     def test_exit_grace_drains_the_replay_before_returning(self):
-        data = b"\x1b[31m" + b"x" * (guard.READ_SIZE + 17)
+        self.drain_exit(b"\x1b[31m" + b"x" * (guard.READ_SIZE + 17))
+
+    def test_large_exit_replay_keeps_draining_while_the_display_progresses(self):
+        self.drain_exit(b"x" * (16 << 20), progressing=True)
+
+    def test_stalled_exit_display_is_released_after_inactivity(self):
+        self.drain_exit(b"startup", stalled=True)
+
+    def drain_exit(self, data, *, progressing=False, stalled=False):
         runtime = self.runtime(terminal=True, display_grace=True)
         self.addCleanup(self.cleanup, runtime)
         runtime.screen = mock.Mock()
@@ -163,9 +171,15 @@ class StartupDisplayTest(Base):
         runtime.args.display_socket = self.home + "/display"
         hook_server, display_server, peer = mock.Mock(), mock.Mock(), mock.Mock()
         hook_server.accept.side_effect = BlockingIOError
-        display_server.accept.side_effect = [(peer, ""), *([BlockingIOError] * 100)]
+        display_server.accept.side_effect = [(peer, ""), *([BlockingIOError] * 5000)]
         proc = mock.Mock(pid=100, returncode=None)
-        chunks = iter([data[: guard.READ_SIZE], data[guard.READ_SIZE :], b""])
+        chunks = iter(
+            [
+                data[start : start + guard.READ_SIZE]
+                for start in range(0, len(data), guard.READ_SIZE)
+            ]
+            + [b""]
+        )
         now, sent = [100.0], []
 
         def read(_fd, _size):
@@ -175,9 +189,22 @@ class StartupDisplayTest(Base):
                 proc.returncode = 0
             return chunk
 
-        peer.send.side_effect = lambda chunk: (
-            sent.append(bytes(chunk[:4096])) or min(4096, len(chunk))
-        )
+        def send(chunk):
+            if stalled:
+                raise BlockingIOError
+            count = min(4096, len(chunk))
+            sent.append(bytes(chunk[:count]))
+            if progressing:
+                now[0] += count / (1 << 20)
+            return count
+
+        peer.send.side_effect = send
+
+        def select(readers, writers, _errors, _timeout):
+            if stalled:
+                now[0] += 0.1
+            return [20] if 20 in readers else [], writers, []
+
         with (
             spawned(sockets=[hook_server, display_server], proc=proc),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
@@ -187,11 +214,12 @@ class StartupDisplayTest(Base):
             mock.patch.object(
                 guard.select,
                 "select",
-                side_effect=lambda r, w, _e, _t: ([20] if 20 in r else [], w, []),
+                side_effect=select,
             ),
         ):
             self.assertEqual(runtime.run(), 0)
-        self.assertEqual(b"".join(sent), data)
+        self.assertEqual(b"".join(sent), b"" if stalled else data)
+        self.assertIsNone(runtime.startup)
 
 
 class GuardTest(Base):
@@ -1181,6 +1209,21 @@ class GuardTest(Base):
         with open(self.home + "/state.json") as stream:
             self.assertEqual(json.load(stream)["state"], "exited")
 
+    def test_confirmed_terminal_exit_saves_a_bounded_private_final_diagnostic(self):
+        runtime = self.runtime(terminal=True)
+        runtime.lease = "9"
+        runtime.screen = mock.Mock()
+        runtime.screen.text.return_value = "雪" * 10000 + "\nfinal error"
+        runtime.state("running")
+        path = self.home + "/diagnostic.json"
+        self.assertFalse(os.path.exists(path))
+        runtime.state("exited")
+        with open(path, encoding="utf-8") as stream:
+            value = json.load(stream)
+        self.assertTrue(value["text"].endswith("final error"))
+        self.assertLessEqual(os.stat(path).st_size, 64 << 10)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
     def test_start_client_exec_failure_never_emits_started(self):
         runtime = self.runtime()
         with spawned(terminal=False) as (_, popen, _), self.assertRaises(FileNotFoundError):
@@ -1259,7 +1302,9 @@ class LeaseTest(Case):
         self.assertEqual(os.stat(self.lease).st_mode & 0o777, 0o600)
         self.assertFalse(os.get_inheritable(lease))
         self.assertIsNone(guard.hold_lease(self.lease))
-        args = argparse.Namespace(hook_socket=self.run + "/hook", lease=self.lease, size=guard.SIZE)
+        args = argparse.Namespace(
+            hook_socket=self.run + "/hook", lease=self.lease, size=guard.SIZE, terminal=False
+        )
         runtime = guard.Guard(args, lease)
         self.assertEqual(runtime.directory, self.run)
         runtime.state("exited")
