@@ -33,6 +33,7 @@ TICK = 0.05
 DISPLAY_GRACE = 2.0  # a client dead at once still reaches the first show's pane
 DISPLAY_DRAIN_WAIT = 9.0  # seconds without a successful display write after worker exit
 DIAGNOSTIC_CHARS = 8192
+ERROR_CHARS = 512
 UP = 5.0  # s its client runs after exec before the guard reports it up (`u`)
 SIZE = (24, 80)  # rows, columns of a PTY no display sizes, without --size
 SIZE_ARG = re.compile(r"([1-9][0-9]*)x([1-9][0-9]*)")
@@ -868,6 +869,7 @@ class Guard:
         self.env, self.heartbeat, self.pending = env, heartbeat, pending
         self.heard = 0.0
         self.proc = None
+        self.client: list | None = None  # [pid, start token]
         self.master = None
         self.streams = {}
         self.servers = {}
@@ -899,19 +901,24 @@ class Guard:
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
         self.directory = os.path.dirname(args.hook_socket)
 
-    def state(self, status: str) -> None:
+    def state(self, status: str, error: str | None = None) -> None:
         if self.lease is None:
             return
         if status == "exited" and self.args.terminal:
             self._save("diagnostic.json", {"text": self.screen.text(20)[-DIAGNOSTIC_CHARS:]})
-        self._save("state.json", {"generation": os.path.basename(self.directory), "state": status})
+        value = {"generation": os.path.basename(self.directory), "state": status}
+        if status != "exited" and (self.client is not None or self.proc is None):
+            value["client"] = self.client  # None: it started no client
+        if error is not None:
+            value["error"] = error.encode("utf-8", "backslashreplace").decode()[:ERROR_CHARS]
+        self._save("state.json", value)
 
     def _save(self, name: str, value: dict) -> None:
         path = os.path.join(self.directory, name)
         descriptor = os.open(
             path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
         )
-        with os.fdopen(descriptor, "w") as stream:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())
@@ -944,6 +951,9 @@ class Guard:
                 env=env,
             )
             self.spawned = time.monotonic()
+            if (info := process_info(self.proc.pid)) is not None:
+                self.client = [self.proc.pid, info[1]]
+            self.state("running")
         finally:
             if slave is not None:
                 os.close(slave)
@@ -962,7 +972,6 @@ class Guard:
         for descriptor in (*self.streams, self.input_fd, 0, 1):
             os.set_blocking(descriptor, False)
         self.known = descendants(processes(), {}, os.getpid())
-        self.state("running")
         self.emit(json_frame(b"s", {"pid": self.proc.pid}))
 
     def emit(self, wire: bytes, ack: socket.socket | None = None, delivery: str = "") -> None:
@@ -1224,6 +1233,7 @@ class Guard:
         return self.proc.returncode is not None and not live and not self.children_pending
 
     def run(self) -> int:
+        failure, confirmed = None, False
         try:
             self.start()
             assert self.proc is not None
@@ -1259,7 +1269,11 @@ class Guard:
                     and time.monotonic() - self.closing > 9
                     and (not self.exit_sent or self.output and self.channel)
                 ):
-                    return 1
+                    raise OSError(
+                        "guard output undelivered"
+                        if self.exit_sent
+                        else "worker output open after its exit"
+                    )
                 if self.exit_sent:
                     for peer in self.owed():
                         display = self.displays.get(peer)
@@ -1303,12 +1317,16 @@ class Guard:
                     elif isinstance(descriptor, int) and descriptor in self.streams:
                         self.read_stream(descriptor)
                 self.write_input(ended=ended)
+        except BaseException as error:
+            failure = f"{type(error).__name__}: {error}"
+            raise
         finally:
             if self.proc is not None and not self.exit_sent:
                 self.close()
                 with contextlib.suppress(OSError):
                     while not self.tick():
                         time.sleep(TICK)
+                    confirmed = True
             for peer in list(self.peers):
                 self.drop(peer)
             for server in self.servers:
@@ -1319,6 +1337,9 @@ class Guard:
                 for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
                     if stream is not None:
                         stream.close()
+            if failure is not None:
+                with contextlib.suppress(OSError):
+                    self.state("exited" if confirmed or self.exit_sent else "failed", failure)
 
     def lingers(self, now: float) -> bool:
         """A --display-grace terminal guard whose client ended before any display came waits
@@ -1446,8 +1467,30 @@ def hold_lease(path: str) -> int | None:
     return descriptor
 
 
+def exited(record: dict, generation: str) -> bool:
+    return record.get("generation") == generation and record.get("state") == "exited"
+
+
+def ended(record: dict, generation: str) -> bool:
+    """Whether run `generation`, its lease free, ended: exited, no client or its client gone."""
+    if exited(record, generation):
+        return True
+    if record.get("generation") != generation or record.get("state") not in ("running", "failed"):
+        return False
+    match record.get("client", "unrecorded"):
+        case None:
+            return record["state"] == "failed"
+        case [int() as pid, str() as token] if type(pid) is int and pid > 0:
+            try:
+                info = process_info(pid)
+            except OSError:
+                return False
+            return info is None or info[1] != token or info[2]
+    return False
+
+
 def probe(directory: str) -> str:
-    """live: a guard holds DIR/lease; exited: free, its state.json confirming the exit; absent: no
+    """live: a guard holds DIR/lease; exited: free, its state.json recording its end; absent: no
     DIR; dead: anything else.
     """
     if not os.path.lexists(directory):
@@ -1466,8 +1509,11 @@ def probe(directory: str) -> str:
     except (OSError, ValueError):
         return "dead"
     else:
-        expected = {"generation": os.path.basename(directory), "state": "exited"}
-        return "exited" if value == expected else "dead"
+        return (
+            "exited"
+            if isinstance(value, dict) and ended(value, os.path.basename(directory))
+            else "dead"
+        )
     finally:
         os.close(descriptor)
 

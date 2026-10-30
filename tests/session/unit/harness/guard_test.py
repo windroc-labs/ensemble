@@ -2019,6 +2019,227 @@ class GuardTest(Base):
         )
 
 
+class EndTest(Base):
+    """How a run ended, in its state.json: its guard records it on every way out of run."""
+
+    def setUp(self):
+        super().setUp()
+        self.client_alive = True
+        self.proc = mock.Mock(pid=100, returncode=None)
+        self.proc.stdin.fileno.return_value = 10
+        self.proc.stdout.fileno.return_value = 11
+        self.proc.stderr.fileno.return_value = 12
+
+    def client_ends(self):
+        self.client_alive, self.proc.returncode = False, 0
+
+    @contextlib.contextmanager
+    def world(
+        self, select, *, ignores_signals=False, unlisted=False, write=lambda _fd, data: len(data)
+    ):
+        """run's: client pid 100 (start token 777) listed while it lives, ending at its first
+        signal unless it ignores them; a second passes per select, which `select(readers)` answers.
+        unlisted: listing /proc fails.
+        """
+        now = [0.0]
+        stat = f"100 (client) S {os.getpid()} 100 100 " + "0 " * 15 + "777 0"
+
+        def pidfd_open(_pid):
+            if not ignores_signals:
+                self.client_ends()
+            raise ProcessLookupError
+
+        def listdir(_path):
+            if unlisted:
+                raise OSError(errno.EMFILE, "Too many open files")
+            return ["100"] * self.client_alive
+
+        def selected(readers, _writers, _errors, _timeout):
+            now[0] += 1
+            return select(readers), [], []
+
+        with (
+            spawned(terminal=False, proc=self.proc) as (_, popen, sockets),
+            mock.patch.object(guard.sys, "platform", "linux"),
+            mock.patch.object(os, "listdir", side_effect=listdir),
+            mock.patch.object(Path, "read_text", return_value=stat),
+            mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
+            mock.patch.object(os, "pidfd_open", side_effect=pidfd_open, create=True),
+            mock.patch.object(os, "read", return_value=b""),
+            mock.patch.object(os, "write", side_effect=write),
+            mock.patch.object(guard.time, "monotonic", side_effect=lambda: now[0]),
+            mock.patch.object(guard.select, "select", side_effect=selected),
+        ):
+            sockets.return_value.accept.side_effect = BlockingIOError
+            yield popen
+
+    def record(self):
+        with open(self.home + "/state.json") as stream:
+            return json.load(stream)
+
+    def expected(self, state, error, **fields):
+        return {
+            "generation": os.path.basename(self.home),
+            "state": state,
+            **fields,
+            "error": error,
+        }
+
+    def test_a_running_record_names_its_client(self):
+        runtime = self.runtime(lease="9")
+        with self.world(lambda _: []):
+            runtime.start()
+        self.assertEqual(
+            self.record(),
+            {"generation": os.path.basename(self.home), "state": "running", "client": [100, "777"]},
+        )
+
+    def test_a_guard_killed_at_its_first_scan_leaves_its_client_recorded(self):
+        """A SIGKILL runs no handler: the record on disk at the guard's first process scan is its
+        last; with the lease free, its run ends once that client is gone.
+        """
+        generation = os.path.basename(self.home)
+        runtime, records = self.runtime(lease="9"), []
+        with self.world(lambda _: []):
+            listdir = os.listdir
+
+            def scan(path):
+                if path == "/proc" and not records:
+                    try:
+                        records.append(self.record())
+                    except FileNotFoundError:
+                        records.append(None)
+                return listdir(path)
+
+            with mock.patch.object(os, "listdir", side_effect=scan):
+                runtime.start()
+            self.assertEqual(
+                records, [{"generation": generation, "state": "running", "client": [100, "777"]}]
+            )
+            self.assertFalse(guard.ended(records[0], generation))
+        with mock.patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            self.assertTrue(guard.ended(records[0], generation))
+
+    def test_an_unconfirmed_tree_exit_records_failed_with_its_client(self):
+        """The harness hangs up; the client outlives every signal past the close deadline."""
+        runtime = self.runtime(lease="9")
+        with (
+            self.world(lambda readers: [0] if 0 in readers else [], ignores_signals=True),
+            self.assertRaisesRegex(OSError, "worker tree exit unconfirmed"),
+        ):
+            runtime.run()
+        self.assertEqual(
+            self.record(),
+            self.expected("failed", "OSError: worker tree exit unconfirmed", client=[100, "777"]),
+        )
+
+    def test_an_invalid_harness_command_records_the_exit_its_close_confirmed(self):
+        runtime = self.runtime(lease="9", pending=guard.frame(b"z", b""))
+        with self.world(lambda _: []), self.assertRaisesRegex(ValueError, "invalid guard command"):
+            runtime.run()
+        self.assertFalse(self.client_alive)
+        self.assertEqual(
+            self.record(), self.expected("exited", "ValueError: invalid guard command")
+        )
+
+    def test_a_failed_scan_after_the_client_starts_records_failed_with_its_client(self):
+        runtime = self.runtime(lease="9")
+        with (
+            self.world(lambda _: [], unlisted=True),
+            self.assertRaisesRegex(OSError, "Too many open files"),
+        ):
+            runtime.run()
+        self.assertEqual(
+            self.record(),
+            self.expected("failed", "OSError: [Errno 24] Too many open files", client=[100, "777"]),
+        )
+
+    def test_output_still_open_9_s_after_the_client_exit_records_the_exit_and_error(self):
+        def select(_readers):
+            self.client_ends()
+            return []
+
+        runtime = self.runtime(lease="9")
+        with self.world(select), self.assertRaisesRegex(OSError, "output open after its exit"):
+            runtime.run()
+        self.assertEqual(
+            self.record(), self.expected("exited", "OSError: worker output open after its exit")
+        )
+
+    def test_output_undelivered_9_s_after_the_exit_keeps_exited_with_the_error(self):
+        def select(readers):
+            self.client_ends()
+            return [fd for fd in readers if fd in (11, 12)]
+
+        def write(_fd, _data):
+            raise BlockingIOError
+
+        runtime = self.runtime(lease="9")
+        with (
+            self.world(select, write=write),
+            self.assertRaisesRegex(OSError, "guard output undelivered"),
+        ):
+            runtime.run()
+        self.assertTrue(runtime.exit_sent)
+        self.assertEqual(
+            self.record(), self.expected("exited", "OSError: guard output undelivered")
+        )
+
+    def test_a_client_that_never_started_records_failed_with_no_client(self):
+        runtime = self.runtime(lease="9")
+        with self.world(lambda _: []) as popen, self.assertRaises(FileNotFoundError):
+            popen.side_effect = FileNotFoundError(2, "No such file", "fake")
+            runtime.run()
+        self.assertEqual(
+            self.record(),
+            self.expected(
+                "failed", "FileNotFoundError: [Errno 2] No such file: 'fake'", client=None
+            ),
+        )
+
+    def test_a_recorded_error_is_bounded(self):
+        runtime = self.runtime(lease="9")
+        with self.world(lambda _: []) as popen, self.assertRaises(OSError):
+            popen.side_effect = OSError("\x01" * 5000)
+            runtime.run()
+        self.assertEqual(len(self.record()["error"]), guard.ERROR_CHARS)
+        self.assertLessEqual(os.stat(self.home + "/state.json").st_size, 4096)
+
+    def test_an_error_carrying_undecodable_bytes_is_recorded_escaped(self):
+        """A surrogate-escaped byte (os.fsdecode's) is no UTF-8: the record shows it escaped."""
+        for message, error in (
+            ("cannot run fake\udcff", "OSError: cannot run fake\\udcff"),
+            ("\udcff" * 5000, ("OSError: " + "\\udcff" * 5000)[: guard.ERROR_CHARS]),
+        ):
+            with self.subTest(message=message[:20]):
+                runtime = self.runtime(lease="9")
+                with self.world(lambda _: []) as popen, self.assertRaises(OSError):
+                    popen.side_effect = OSError(message)
+                    runtime.run()
+                self.assertEqual(self.record(), self.expected("failed", error, client=None))
+                self.assertLessEqual(os.stat(self.home + "/state.json").st_size, 4096)
+
+    def test_a_non_ascii_error_is_recorded_as_utf_8_in_an_ascii_locale(self):
+        real = os.fdopen
+
+        def fdopen(descriptor, mode="r", *args, encoding=None, **kwargs):
+            return real(descriptor, mode, *args, encoding=encoding or "ascii", **kwargs)
+
+        runtime = self.runtime(lease="9")
+        with (
+            self.world(lambda _: []) as popen,
+            mock.patch.object(os, "fdopen", fdopen),
+            self.assertRaises(OSError),
+        ):
+            popen.side_effect = OSError("cannot run /opt/中/client")
+            runtime.run()
+        with open(self.home + "/state.json", encoding="utf-8") as stream:
+            self.assertEqual(
+                json.load(stream),
+                self.expected("failed", "OSError: cannot run /opt/中/client", client=None),
+            )
+
+
 class LeaseTest(Case):
     def setUp(self):
         super().setUp()
@@ -2102,11 +2323,37 @@ class ProbeTest(Case):
         self.write(json.dumps({"generation": "a" * 32, "state": "exited"}))
         self.assertEqual(self.probe(), "exited\n")
 
+    def test_free_lease_with_its_recorded_client_gone_is_exited(self):
+        """Linux's /proc listing only pid 10, started at 777."""
+        real = Path.read_text
+
+        def read_text(path, *args, **kwargs):
+            if path.parts[:2] != ("/", "proc"):
+                return real(path, *args, **kwargs)
+            if path.parts[2] != "10":
+                raise FileNotFoundError(path)
+            return "10 (client) S 1 " + "0 " * 17 + "777 0"
+
+        self.enterContext(mock.patch.object(guard.sys, "platform", "linux"))
+        self.enterContext(mock.patch.object(Path, "read_text", read_text))
+        live = [10, "777"]
+        for value, word in (
+            ({"state": "running", "client": [11, "777"]}, "exited"),
+            ({"state": "failed", "client": None, "error": "OSError: x"}, "exited"),
+            ({"state": "exited", "error": "OSError: guard output undelivered"}, "exited"),
+            ({"state": "running", "client": live}, "dead"),
+            ({"state": "failed", "error": "OSError: x"}, "dead"),
+        ):
+            with self.subTest(value=value):
+                self.write(json.dumps({"generation": "a" * 32, **value}))
+                self.assertEqual(self.probe(), word + "\n")
+
     def test_anything_else_is_dead(self):
         for state, lease in (
             (json.dumps({"generation": "a" * 32, "state": "running"}), True),
             (json.dumps({"generation": "b" * 32, "state": "exited"}), True),
             ("{", True),
+            ("[]", True),
             (None, True),
             (json.dumps({"generation": "a" * 32, "state": "exited"}), False),
         ):
