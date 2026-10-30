@@ -666,7 +666,6 @@ class HistoryTest(Base):
             (b"\x1b[H\x1b[M", ["top", "aaaaaaaaaa", "r"]),
             (b"\x1b[H\x1b[5C\x1b[K", ["top", "aaaaaaaaaaBBBB", "r"]),
             (b"\x1b[H\x1b[1K", ["top", "aaaaaaaaaa BBB", "r"]),
-            (b"\x1b[2J\x1b[Hprompt", ["top", "aaaaaaaaaa", "prompt"]),  # a clear keeps no rows
         ):
             with self.subTest(tail=tail):
                 screen = guard.Screen(rows=3, columns=10)
@@ -675,6 +674,13 @@ class HistoryTest(Base):
                 while found and not found[-1]:
                     found.pop()
                 self.assertEqual(found, lines)
+
+    def test_a_clear_screen_keeps_none_of_its_rows_and_ends_the_line_above(self):
+        """Unlike tmux's scroll-on-clear, the cleared rows never reach history or a display."""
+        screen = guard.Screen(rows=3, columns=10)
+        screen.append(b"top\r\n" + b"a" * 10 + b"B" * 4 + b"\r\nr\r\n\x1b[2J\x1b[Hprompt")
+        self.assertEqual(logical(shown(screen))[:3], ["top", "aaaaaaaaaa", "prompt"])
+        self.assertEqual(screen.text(10), "top\naaaaaaaaaa\nprompt")
 
     def test_a_wrapped_history_row_joins_the_screen_only_where_it_continues(self):
         for output, first in (
