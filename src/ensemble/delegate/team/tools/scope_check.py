@@ -3,15 +3,14 @@
 
     scope_check.py --base OWNER/NAME=DIR [--base ...] PRD TICKET...
 
-A ticket's `Repo:` picks its DIR, `Task:` build or light-build makes it an engineer ticket, and its
-`Covers:` line names its FR/NFR ids. Its `Scope:` line is followed, past blank lines, by `- `
+A ticket's `Repo:` picks its DIR; `Task:` build or light-build marks an engineer ticket.
+`Covers:` names FR/NFR ids, at most MAX_COVERS for engineers. `Scope:` is followed, past blank lines, by `- `
 items: `path` [`[table] key`] [(new)]; other backtick text is prose. A path is a file, a directory
 or a glob; it must exist on DIR unless (new). Items of one repo overlap when a path equals or
 contains the other's and their keys match or either has none. A PRD backtick literal is a path when
 it has no space, starts with none of `/~-$`, holds none of `:<>{}|` and exists on a DIR or holds
 `/` before a dotted last segment (a glob without `/` needs a dotted name); it is a key in
 `[table] key` form. Each must equal one ticket's item path or key.
-Engineer tickets may cover at most MAX_COVERS distinct FR/NFR ids.
 """
 
 import glob
