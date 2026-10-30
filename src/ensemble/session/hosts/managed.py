@@ -379,14 +379,15 @@ class ManagedProcess(InteractiveProcess):
                 if self.code is None:
                     self.fail("worker exit unconfirmed")
                     self.checked()
+        self.end_releases()
+        self.proc.stdin.close()
         try:
             self.proc.wait(timeout=GUARD_WAIT)
         except subprocess.TimeoutExpired as error:
             raise Unanswered(f"worker {self.name}: guard exit unconfirmed") from error
         self._join(self.reader)
-        self.end_releases()  # once the reader is done: it starts the releaser
+        self.end_releases()
         self.checked()
-        self.proc.stdin.close()
 
     def _join(self, thread: threading.Thread | None) -> None:
         if thread is not None:

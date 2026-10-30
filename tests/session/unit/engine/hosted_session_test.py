@@ -3082,28 +3082,43 @@ class OwnedTest(HostedTuiBase):
         self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
 
     def test_close_cannot_delete_a_display_replaced_after_the_old_worker_ends(self):
+        self.close_replaced_display()
+
+    def test_close_keeps_a_replacement_after_its_server_reuses_the_session_id(self):
+        self.close_replaced_display(reuse_id=True)
+
+    def close_replaced_display(self, *, reuse_id=False):
         owned = self.own()
         old = self.host.processes["w1"]
-        display = {"id": "$7"}
+        display = {"id": "$0", "token": "a" * 32}
 
         def run(argv, **_kwargs):
             if "w1" not in self.host.processes:
                 self.host.create("w1", metadata={"sid": SID, "generation": "newer"})
-                display["id"] = "$8"
+                display["id"] = "$0" if reuse_id else "$8"
+                display["token"] = "b" * 32
             command = argv[1]
             output = ""
             if command == "display-message":
-                output = f"{display['id']}\tviewer\n"
+                output = f"{display['id']}\tviewer"
+                if "@view-id" in argv[-1]:
+                    output += f"\t{display['token']}"
+                output += "\n"
             elif command == "show-options":
                 output = "viewer\n"
-            elif command == "kill-session" and argv[-1] in ("=w1", display["id"]):
+            elif (
+                command == "kill-session"
+                and argv[-1] in ("=w1", display["id"])
+                or command == "if-shell"
+                and display["token"] in argv[-2]
+            ):
                 display["id"] = ""
             return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
         owned._session._viewer = Viewer(tmux=TmuxCli(run))
         owned.close()
         old.calls.close.assert_called_once()
-        self.assertEqual(display["id"], "$8")
+        self.assertEqual(display["id"], "$0" if reuse_id else "$8")
         self.assertEqual(self.host.processes["w1"].metadata["generation"], "newer")
 
     def test_a_display_capture_error_still_ends_the_worker(self):

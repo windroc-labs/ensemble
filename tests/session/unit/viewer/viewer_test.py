@@ -429,6 +429,7 @@ class CommandViewTest(Base):
                 self.tmux.checked.assert_any_call(
                     [
                         *("new-session", "-d", "-s", "d1", "-x", x, "-y", y, "--", *self.ARGV),
+                        *(";", "set-option", "-t", "=d1:", "@view-id", mock.ANY),
                         *(";", "set-option", "-t", "=d1:", "@view", VIEW_TAG),
                         *(";", "set-option", "-w", "-t", "=d1:", "remain-on-exit", "on"),
                         *(";", "set-option", "-t", "=d1:", "status", status),

@@ -8,6 +8,7 @@ import contextlib
 import logging
 import os
 import time
+import uuid
 from collections.abc import Callable, Mapping
 
 from ensemble.session.engine import tmux_cli
@@ -212,23 +213,43 @@ class Viewer:
             return None
         try:
             found = self._tmux.run(
-                ["display-message", "-p", "-t", tmux_cli.address(name), "#{session_id}\t#{@view}"]
+                [
+                    "display-message",
+                    "-p",
+                    "-t",
+                    tmux_cli.address(name),
+                    "#{session_id}\t#{@view}\t#{@view-id}",
+                ]
             )
             if found.returncode:
                 if tmux_cli.absent(found):
                     return None
                 raise TuiError(tmux_cli.error(found))
-            ident, _, tag = found.stdout.strip().partition("\t")
+            fields = found.stdout.rstrip("\n").split("\t")
+            if fields == [""]:
+                return None
+            if len(fields) != 3:
+                raise TuiError("display identity unknown")
+            ident, tag, token = fields
             if tag != VIEW_TAG:
                 return None
-            if not tmux_cli.SESSION_ID.fullmatch(ident):
+            if not tmux_cli.SESSION_ID.fullmatch(ident) or uuid.UUID(token).hex != token:
                 raise TuiError("display identity unknown")
-        except TuiError as error:
+        except (TuiError, ValueError) as error:
             raise SessionError(f"view {name}: {error}") from None
 
         def close() -> None:
             try:
-                removed = self._tmux.run(["kill-session", "-t", ident])
+                removed = self._tmux.run(
+                    [
+                        "if-shell",
+                        "-F",
+                        "-t",
+                        ident,
+                        f"#{{==:#{{@view-id}},{token}}}",
+                        f"kill-session -t '{ident}'",
+                    ]
+                )
                 if removed.returncode and not tmux_cli.absent(removed):
                     raise TuiError(tmux_cli.error(removed))
             except TuiError as error:
@@ -278,6 +299,7 @@ class Viewer:
             self._tmux.checked(
                 [
                     *("new-session", "-d", "-s", name, *size, "--", *target.argv),
+                    *(";", "set-option", "-t", f"={name}:", "@view-id", uuid.uuid4().hex),
                     *(";", "set-option", "-t", f"={name}:", VIEW, VIEW_TAG),
                     *(";", "set-option", "-w", "-t", f"={name}:", "remain-on-exit", "on"),
                     *(";", *tmux_cli.status(name, on=settings.status_line)),

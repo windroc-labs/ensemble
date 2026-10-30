@@ -102,6 +102,8 @@ class GuardDisplayTest(Case):
     def test_deleting_display_keeps_guard_inventory_and_show_rebuilds(self):
         target = self.host.attach_target(self.NAME)
         self.viewer._prepare(self.NAME, self.host)
+        display_id = self.server.option(self.NAME, "@view-id")
+        self.assertRegex(display_id, r"\A[0-9a-f]{32}\Z")
         killed = self.server.tmux("kill-session", "-t", f"={self.NAME}")
         self.assertEqual(killed.returncode, 0, killed.stderr)
         self.assert_worker_unchanged()
@@ -109,6 +111,7 @@ class GuardDisplayTest(Case):
             self.host.worker(self.NAME, self.launch, terminal=True)
         self.shown()
         self.output("rebuilt-output")
+        self.assertNotEqual(self.server.option(self.NAME, "@view-id"), display_id)
         self.assertEqual(self.host.attach_target(self.NAME), target)
         self.assert_worker_unchanged()
 

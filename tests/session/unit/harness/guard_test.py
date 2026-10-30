@@ -163,7 +163,12 @@ class StartupDisplayTest(Base):
     def test_stalled_exit_display_is_released_after_inactivity(self):
         self.drain_exit(b"startup", stalled=True)
 
-    def drain_exit(self, data, *, progressing=False, stalled=False):
+    def test_explicit_close_reclaims_a_guard_during_large_progressing_replay(self):
+        for close in ("command", "eof"):
+            with self.subTest(close=close):
+                self.drain_exit(b"x" * (16 << 20), progressing=True, close=close)
+
+    def drain_exit(self, data, *, progressing=False, stalled=False, close=None):
         runtime = self.runtime(terminal=True, display_grace=True)
         self.addCleanup(self.cleanup, runtime)
         runtime.screen = mock.Mock()
@@ -180,9 +185,11 @@ class StartupDisplayTest(Base):
             ]
             + [b""]
         )
-        now, sent = [100.0], []
+        now, sent, requested = [100.0], [], []
 
         def read(_fd, _size):
+            if _fd == 0:
+                return guard.json_frame(b"c", {}) if close == "command" else b""
             chunk = next(chunks)
             now[0] += 0.2
             if not chunk:
@@ -203,6 +210,10 @@ class StartupDisplayTest(Base):
         def select(readers, writers, _errors, _timeout):
             if stalled:
                 now[0] += 0.1
+            if close and runtime.exit_sent and now[0] - runtime.exit_at >= 0.2:
+                if not requested:
+                    requested.append(now[0])
+                return [0] if 0 in readers else [], writers, []
             return [20] if 20 in readers else [], writers, []
 
         with (
@@ -218,7 +229,12 @@ class StartupDisplayTest(Base):
             ),
         ):
             self.assertEqual(runtime.run(), 0)
-        self.assertEqual(b"".join(sent), b"" if stalled else data)
+        if close:
+            self.assertTrue(requested)
+            self.assertLess(now[0] - requested[0], 10)
+            self.assertLess(len(b"".join(sent)), len(data))
+        else:
+            self.assertEqual(b"".join(sent), b"" if stalled else data)
         self.assertIsNone(runtime.startup)
 
 
@@ -654,10 +670,9 @@ class GuardTest(Base):
         self.assertFalse(runtime.lingers(100.5))
 
     def test_a_close_with_no_display_ever_connected_skips_the_grace(self):
-        """An owned Docker tui worker nobody viewed: no --display-grace, so a close ends at once."""
+        """Explicit close skips display grace on every Host."""
         self.assertEqual(self.closed_without_display(display_grace=False), 0)
-        with self.assertRaisesRegex(AssertionError, "lingered"):
-            self.closed_without_display(display_grace=True)
+        self.assertEqual(self.closed_without_display(display_grace=True), 0)
 
     def closed_without_display(self, *, display_grace):
         """A terminal guard told to close before any display connected, the clock frozen."""

@@ -538,6 +538,7 @@ class Guard:
         self.spawned = 0.0
         self.up_sent = False
         self.displayed = False
+        self.display_closed = False
         self.children_pending = False
         self.lease = os.environ.get("ENSEMBLE_GUARD_LEASE_FD") if lease is None else lease
         self.directory = os.path.dirname(args.hook_socket)
@@ -614,11 +615,13 @@ class Guard:
         self.output.append((wire, ack, delivery))
         self.output_size += len(wire)
 
-    def close(self) -> None:
+    def close(self, *, display: bool = False) -> None:
         if self.closing is None:
             self.closing = time.monotonic()
             while self.taken:
                 self.ack(*self.taken.popleft())
+        if display:
+            self.display_closed = True
 
     def drop(self, peer) -> None:
         self.peers.pop(peer, None)
@@ -689,7 +692,7 @@ class Guard:
                 self.channel = False
                 self.output.clear()
                 self.output_size = 0
-                self.close()
+                self.close(display=True)
                 break
             self.output_size -= count
             if count < len(wire):
@@ -715,7 +718,7 @@ class Guard:
                     raise ValueError("guard input buffer full")
                 self.input.extend(data)
         elif kind == b"c" and json.loads(data) == {}:
-            self.close()
+            self.close(display=True)
         elif kind == b"p" and json.loads(data) == {}:
             pass
         elif kind == b"k" and json.loads(data) == {}:
@@ -734,7 +737,7 @@ class Guard:
         """Harness bytes: each read restarts the heartbeat limit; EOF is a close."""
         data = os.read(0, READ_SIZE)
         if not data:
-            self.close()
+            self.close(display=True)
             return
         self.heard = time.monotonic()
         for kind, payload in self.decoder.feed(data):
@@ -743,7 +746,7 @@ class Guard:
     def listen(self, ready) -> None:
         """After a select, so a guard frozen past the limit (docker pause) reads its bytes first."""
         if 0 not in ready and self.lost(time.monotonic()):
-            self.close()
+            self.close(display=True)
 
     def lost(self, now: float) -> bool:
         return (
@@ -822,7 +825,7 @@ class Guard:
         kind = self.streams[descriptor]
         if kind == b"t":
             self.screen.append(data)
-            if not self.displayed:
+            if not self.displayed and not self.display_closed:
                 if self.startup is None:
                     with contextlib.ExitStack() as resources:
                         stream = resources.enter_context(tempfile.TemporaryFile(dir=self.directory))
@@ -888,6 +891,10 @@ class Guard:
             ended = False
             scan_due = 0.0
             while True:
+                if self.display_closed:
+                    for peer in list(self.display_buffers):
+                        self.drop(peer)
+                    self._release_startup()
                 now = time.monotonic()
                 if now >= scan_due:
                     ended = self.tick() or ended
@@ -919,12 +926,12 @@ class Guard:
                         if time.monotonic() - since >= DISPLAY_DRAIN_WAIT:
                             self.drop(peer)
                     writers = self.display_writers()
-                    if writers:
-                        _, writable, _ = select.select([], writers, [], TICK)
-                        for peer in writable:
-                            self.write_display(peer)
-                    else:
-                        time.sleep(TICK)
+                    readers = [0] if self.channel and not self.display_closed else []
+                    ready, writable, _ = select.select(readers, writers, [], TICK)
+                    if 0 in ready:
+                        self.read_channel()
+                    for peer in writable:
+                        self.write_display(peer)
                     continue
                 readers: list[int | socket.socket] = [0] if self.closing is None else []
                 if self.output_size < BUFFER_MAX - READ_SIZE - HOOK_MAX:
@@ -976,6 +983,7 @@ class Guard:
             self.args.display_grace
             and self.master is not None
             and not self.displayed
+            and not self.display_closed
             and now - self.exit_at < DISPLAY_GRACE
         )
 
@@ -984,6 +992,9 @@ class Guard:
         try:
             peer, _ = server.accept()
         except BlockingIOError:
+            return
+        if self.display_closed:
+            peer.close()
             return
         peer.settimeout(0)
         self.peers[peer] = ("display", Decoder())
@@ -1184,7 +1195,7 @@ def supervise(args, lease_path: str | None, **options) -> int:
             return 1
     runtime = Guard(args, lease, **options)
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda _sig, _frame: runtime.close())
+        signal.signal(sig, lambda _sig, _frame: runtime.close(display=True))
     try:
         return runtime.run()
     except (OSError, ValueError) as error:
