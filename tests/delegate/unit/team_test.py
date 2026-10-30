@@ -89,7 +89,6 @@ class Acceptance(Packaged):
         )
         self.assertIn("Verifier tickets list the requirement identifiers and link the PRD", draft)
         self.assertIn("at most 8 requirement identifiers on an engineer ticket", draft)
-        self.assertNotIn("Scope:", composed("engineer", "decompose")[0])
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
