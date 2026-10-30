@@ -22,8 +22,6 @@ FLAGS = ("--model", "m-test")
 REAPED = 10  # FR-13's bound for guard and client to end after kill -9 of the harness
 RECALL = [{"kind": "recall"}]
 HANDLER = "tests.session.integration.harness.recording_handler"
-GATE_BUSY = "busy: lock w1 is held by previous worker generation (live or unknown)"
-CLOSE_BUSY = "busy: lock w1 is held by worker generation (live or unknown)"
 
 
 def ps(pid: int, field: str) -> str:
@@ -166,15 +164,15 @@ class ResumeTest(CrashCase):
             what="the resumed client's answer from the old conversation",
         )
 
-    def test_resume_after_guard_sigkill_is_busy_and_starts_nothing(self):
+    def test_resume_after_guard_sigkill_starts_a_new_client_once_the_old_one_ended(self):
         found = self.launched()
         os.kill(found["guard"], signal.SIGKILL)
         self.settled(found["channel"])
+        self.reaped(found["call"]["pid"])
         res = self.resume()
-        self.assertEqual((res.returncode, res.stdout), (75, ""), res.stderr)
-        self.assertIn(GATE_BUSY, res.stderr)
-        self.assertEqual(len(self.calls("w1")), 1)
-        self.assertEqual(self.owner("w1").directory, found["channel"].directory)
+        self.assertEqual(self.record(res), found["record"])
+        self.assertEqual(len(self.calls("w1")), 2)
+        self.assertNotEqual(self.owner("w1").directory, found["channel"].directory)
 
     def test_start_with_display_killed_keeps_the_live_worker(self):
         found = self.launched()
@@ -271,14 +269,14 @@ class ResumeTest(CrashCase):
 
 
 class CloseTest(CrashCase):
-    def test_close_after_guard_sigkill_is_busy_and_keeps_the_record(self):
+    def test_close_after_guard_sigkill_and_its_clients_end_drops_the_record(self):
         found = self.launched()
         os.kill(found["guard"], signal.SIGKILL)
         self.settled(found["channel"])
-        res = self.session("close", "w1")
-        self.assertEqual(res.returncode, 75, res.stderr)  # every failed key refused busy
-        self.assertIn(CLOSE_BUSY, res.stderr)
-        self.assertEqual(self.owner("w1").directory, found["channel"].directory)
+        self.reaped(found["call"]["pid"])
+        self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
+        self.ok(self.session("close", "w1"))
+        self.assertFalse(os.path.exists(os.path.join(self.ensemble, "tui", "w1")))
 
     def test_close_after_harness_sigkill_waits_out_reaping(self):
         found = self.launched()
