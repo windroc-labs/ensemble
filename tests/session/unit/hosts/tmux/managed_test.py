@@ -1,11 +1,13 @@
 """Managed channel and conservative crash admission, without real processes."""
 
 import contextlib
+import json
 import os
 import sys
 import tempfile
 import threading
 import time
+from pathlib import Path
 from unittest import mock
 
 from ensemble.session.engine.types import (
@@ -37,15 +39,46 @@ def spawned(read=EXITED):
         yield spawn
 
 
-def guard_dir(generation, state, name="worker"):
-    """`name`'s guard dir, `generation` current in `state`."""
+def guard_dir(generation, state, name="worker", **fields):
+    """`name`'s guard dir, `generation` current in `state` with `fields`."""
     directory = managed.location("tmux", name)
     managed.private_directory(directory + "/" + generation)
     managed.save_json(directory + "/current.json", {"generation": generation})
     managed.save_json(
-        directory + "/" + generation + "/state.json", {"generation": generation, "state": state}
+        directory + "/" + generation + "/state.json",
+        {"generation": generation, "state": state, **fields},
     )
     return directory
+
+
+def free_lease(directory, generation):
+    os.close(managed.lease_file(directory + "/" + generation + "/lease"))
+
+
+LIVE, ZOMBIE, GONE, REUSED = [10, "777"], [11, "778"], [12, "779"], [10, "776"]
+
+
+@contextlib.contextmanager
+def clients():
+    """Linux's /proc listing LIVE running and ZOMBIE ended unreaped; GONE absent, REUSED's pid
+    another process's.
+    """
+    table = {10: "S 1 777", 11: "Z 1 778"}
+    real = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path.parts[:2] != ("/", "proc"):
+            return real(path, *args, **kwargs)
+        if (row := table.get(int(path.parts[2]))) is None:
+            raise FileNotFoundError(path)
+        state, parent, token = row.split()
+        return f"{path.parts[2]} (client) {state} {parent} " + "0 " * 17 + f"{token} 0"
+
+    with (
+        mock.patch.object(guard.sys, "platform", "linux"),
+        mock.patch.object(Path, "read_text", read_text),
+    ):
+        yield
 
 
 class ManagedTest(Case):
@@ -195,7 +228,7 @@ class ManagedTest(Case):
         self.assertNotIn("--display-grace", spawn.call_args.args[0])
 
     def test_terminal_worker_guard_awaits_the_display_it_starts(self):
-        """tmux starts the guard's display at launch, so its guard keeps the display grace."""
+        """Its guard keeps the display grace, so a first show still gets an early death's screen."""
         host = TmuxHost("tmux", tmux=mock.Mock())
         with spawned() as spawn:
             channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
@@ -250,6 +283,80 @@ class ManagedTest(Case):
         self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
         self.assertEqual(managed.liveness("tmux", "worker", "b" * 32), Liveness.UNKNOWN)
 
+    def test_a_free_lease_ends_a_run_whose_recorded_client_is_gone(self):
+        """A killed or failed guard's run ends once its client is gone: reaped, a zombie, reused."""
+        generation = "a" * 32
+        for state, client, expected in (
+            ("running", GONE, Liveness.ABSENT),
+            ("failed", ZOMBIE, Liveness.ABSENT),
+            ("running", REUSED, Liveness.ABSENT),
+            ("running", LIVE, Liveness.UNKNOWN),
+            ("failed", LIVE, Liveness.UNKNOWN),
+            ("failed", None, Liveness.ABSENT),
+            ("running", None, Liveness.UNKNOWN),
+            ("starting", GONE, Liveness.UNKNOWN),
+            ("running", [str(GONE[0]), GONE[1]], Liveness.UNKNOWN),
+            ("running", [True, GONE[1]], Liveness.UNKNOWN),
+        ):
+            with self.subTest(state=state, client=client), clients():
+                directory = guard_dir(generation, state, client=client)
+                free_lease(directory, generation)
+                self.assertEqual(managed.liveness("tmux", "worker", generation), expected)
+        for state in ("running", "failed"):
+            with self.subTest(state=state, client="unrecorded"):
+                guard_dir(generation, state)
+                self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.UNKNOWN)
+        guard_dir(generation, "running", client=GONE)
+        lease = managed.lease_file(directory + "/" + generation + "/lease")
+        try:
+            managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+            with clients():
+                self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.LIVE)
+        finally:
+            os.close(lease)
+
+    def test_a_run_ended_with_its_client_gone_is_unlisted_and_frees_its_name(self):
+        generation = "a" * 32
+        directory = guard_dir(generation, "running", client=GONE)
+        free_lease(directory, generation)
+        managed.save_json(
+            directory + "/current.json",
+            {"host": "tmux", "name": "worker", "generation": generation},
+        )
+        host = TmuxHost("tmux", tmux=mock.Mock())
+        with clients():
+            self.assertEqual(host.rows(), [])
+        with clients(), spawned():
+            channel = host.worker("worker", Launch((sys.executable,), cwd=self.home), terminal=True)
+            channel.close()
+        self.assertNotEqual(channel.generation, generation)
+
+    def test_an_exit_recorded_with_a_later_guard_error_still_ended(self):
+        generation = "a" * 32
+        directory = guard_dir(generation, "exited", error="OSError: guard output undelivered")
+        free_lease(directory, generation)
+        self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
+        self.assertTrue(managed.exited("tmux", "worker", generation))
+
+    def test_a_guard_record_reads_as_utf_8_in_an_ascii_locale(self):
+        generation, error = "a" * 32, "OSError: cannot run /opt/中/client"
+        directory = guard_dir(generation, "failed")
+        Path(directory, generation, "state.json").write_text(
+            json.dumps(
+                {"generation": generation, "state": "failed", "client": None, "error": error},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        free_lease(directory, generation)
+        real = os.fdopen
+
+        def fdopen(descriptor, mode="r", *args, encoding=None, **kwargs):
+            return real(descriptor, mode, *args, encoding=encoding or "ascii", **kwargs)
+
+        with mock.patch.object(os, "fdopen", fdopen):
+            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
+
     def test_a_concurrent_probe_is_no_live_guard(self):
         """Probes take the lease shared: one probing (as ls or a tmux hook does) while another asks
         makes no ended worker LIVE; only its guard's exclusive lease does.
@@ -263,6 +370,35 @@ class ManagedTest(Case):
             self.assertFalse(managed.held(directory + "/" + generation + "/lease"))
         finally:
             os.close(lease)
+
+    def test_exited_reads_its_runs_exited_state_even_while_its_lease_is_held(self):
+        generation = "a" * 32
+        directory = guard_dir(generation, "exited")
+        lease = managed.lease_file(directory + "/" + generation + "/lease")
+        try:
+            managed.fcntl.flock(lease, managed.fcntl.LOCK_EX)
+            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.LIVE)
+            self.assertTrue(managed.exited("tmux", "worker", generation))
+            self.assertTrue(TmuxHost("tmux")._client_exited("worker", generation))
+        finally:
+            os.close(lease)
+
+    def test_exited_is_false_for_any_other_state_generation_or_a_missing_run(self):
+        generation = "a" * 32
+        self.assertFalse(managed.exited("tmux", "worker", generation))
+        for state in ("starting", "running"):
+            with self.subTest(state=state):
+                guard_dir(generation, state)
+                self.assertFalse(managed.exited("tmux", "worker", generation))
+        directory = guard_dir(generation, "exited")
+        for other in ("b" * 32, "../" + generation, ""):
+            with self.subTest(other=other):
+                self.assertFalse(managed.exited("tmux", "worker", other))
+        managed.save_json(
+            directory + "/" + generation + "/state.json",
+            {"generation": "b" * 32, "state": "exited"},
+        )
+        self.assertFalse(managed.exited("tmux", "worker", generation))
 
     def spawned_env(self, launch: Launch, **environ) -> dict:
         """The guard's environment for `launch`, the harness's environment holding `environ`."""

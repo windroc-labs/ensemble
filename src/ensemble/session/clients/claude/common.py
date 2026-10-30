@@ -69,7 +69,7 @@ MODEL_KEYS = ("model", "effortLevel", "modelSettings")
 MODEL_ENTRY_DROP = frozenset({"autoCompactWindow"})  # host-only keys of a modelSettings entry
 ENV_KEYS = ("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",)
 # A container worker runs unattended: no prompt may stop it, none is suggested, it answers
-# concisely, and it renders fullscreen, which stops flicker in tmux.
+# concisely; fullscreen applies only once TUI_ENV's alternate-screen default is overridden.
 UNATTENDED = MappingProxyType(
     {
         "skipWorkflowUsageWarning": True,
@@ -81,11 +81,13 @@ UNATTENDED = MappingProxyType(
     }
 )
 HOME_READ_MAX = 64 << 20
-TUI_ENV = MappingProxyType({"CLAUDE_CODE_DISABLE_AGENT_VIEW": "1"})
+# Off: the alternate screen keeps a hidden worker's output out of scrollback.
+TUI_ENV = MappingProxyType(
+    {"CLAUDE_CODE_DISABLE_AGENT_VIEW": "1", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"}
+)
 
 
 def added_dirs(flags: tuple[str, ...]) -> Iterator[str]:
-    """Each --add-dir X or --add-dir=X's X before "--"."""
     return (
         flag.value
         for flag in scan(flags, {"--add-dir": "--add-dir"})
@@ -111,9 +113,7 @@ def _read(path: str) -> str:
 
 
 def _parsed(value: str, cwd: str) -> dict:
-    """A --settings value: inline JSON when it starts with "{", else a settings file's path,
-    relative to `cwd`; errors name the file by that resolved path.
-    """
+    """Inline JSON when it starts with "{", else a file path relative to `cwd`."""
     inline = value.lstrip().startswith("{")
     path = os.path.join(cwd, value)
     text = value if inline else _read(path)
@@ -144,7 +144,7 @@ def _split(flags: tuple[str, ...], cwd: str) -> tuple[list[dict], tuple[str, ...
 
 
 def _settings(*parts: Mapping) -> tuple[str, ...]:
-    """Claude's one --settings: `parts` merged, the later winning; none without parts."""
+    """`parts` merged, the later winning."""
     return ("--settings", json.dumps(functools.reduce(_merge, parts, {}))) if parts else ()
 
 
@@ -162,9 +162,7 @@ def _merge(base: dict, over: Mapping) -> dict:
 
 
 def _models(settings: dict) -> dict:
-    """`settings`' MODEL_KEYS, each modelSettings entry without MODEL_ENTRY_DROP; an entry left
-    empty is dropped, and modelSettings too when none is left.
-    """
+    """MODEL_KEYS; modelSettings entries lose MODEL_ENTRY_DROP, empty ones dropped."""
     found = {k: settings[k] for k in MODEL_KEYS if k in settings}
     entries = found.get("modelSettings")
     if isinstance(entries, dict):
@@ -293,7 +291,6 @@ def _accounts(config: Mapping) -> dict[str, _Account]:
 
 
 def size(path: str) -> int:
-    """A regular file's size; 0 for anything else."""
     try:
         info = os.stat(path)
     except (OSError, ValueError):
@@ -302,7 +299,6 @@ def size(path: str) -> int:
 
 
 def texts(content) -> list[str]:
-    """A transcript message content's text blocks."""
     if not isinstance(content, list):
         return []
     return [
@@ -313,9 +309,7 @@ def texts(content) -> list[str]:
 
 
 def read(path: str, *, offset: int = 0, limit: int | None = None, tail: bool = False):
-    """read_regular; under a Docker session's home, which its container writes, never through a
-    link and at most HOME_READ_MAX bytes.
-    """
+    """read_regular; a container-written home: no link, at most HOME_READ_MAX bytes."""
     path = os.path.abspath(path)
     root = docker_home_of(path, HOME.dir)
     if root is None:
@@ -407,11 +401,7 @@ class ClaudeCommon:
         return replace(HOME, files=self.home_files())
 
     def home_files(self) -> tuple[tuple[str, str], ...]:
-        """A container home's settings.json: UNATTENDED, then only the host settings' MODEL_KEYS
-        (per `_models`) and its env's ENV_KEYS, so a worker runs unattended on the host's
-        default model and effort; UNATTENDED alone when the host settings are unreadable or
-        without them.
-        """
+        """settings.json: UNATTENDED, the host's `_models` and ENV_KEYS env, if readable."""
         try:
             settings = json.loads(_read(os.path.join(self.config_dir(), "settings.json")))
         except (ConfigError, ValueError, RecursionError):
@@ -481,13 +471,11 @@ class ClaudeCommon:
         return os.path.join(os.path.realpath(os.path.expanduser("~")), STORE.removeprefix("~/"))
 
     def resume(self, cwd: str, sid: str) -> str:
-        """A reference to save()'s launch state, which resume_main execs; it never holds env values."""
+        """A reference to save()'s launch state; it never holds env values."""
         return resume_command(cwd, {}, (COMMAND, "client-resume", "claude", self.store, cwd, sid))
 
     def save(self, spec: Spec) -> None:
-        """What resume_main replays: spec's cwd, flags, model, effort, name and Access, and the
-        config, Access and Spec env.
-        """
+        """What resume_main replays: spec's launch, Access and env."""
         access, sid = spec.access, self.uuid(spec.sid)
         env = {**self.env(), **access.env, **spec.env}
         state = {
@@ -516,10 +504,8 @@ class ClaudeCommon:
             print(f"claude resume: {error}", file=sys.stderr)
 
     def resume_main(self, argv) -> int:
-        """resume()'s run (STORE CWD SID): execs claude resuming SID as launch() would, the saved
-        launch and env over this environment, in CWD; 1 and one stderr line when it cannot. It runs
-        on this machine, not the launch's Host, so in auto mode with this config's flags and allow,
-        as they are now; and as the TUI without hooks, whose callback serves only an ensemble session.
+        """Execs claude resuming SID in CWD as launch() would. It runs here, not on the Host:
+        auto mode, current config, the TUI without hooks.
         """
         try:
             store, cwd, sid = argv
@@ -571,7 +557,6 @@ class ClaudeCommon:
         env: Mapping[str, str] = MappingProxyType({}),
         permission: Permission,
     ) -> Launch:
-        """Build a Claude command (_argv) for `spec`; env under the config's."""
         sid = spec.sid
         model, effort = self.model(spec.tier), self.effort(spec.effort)
         access = spec.access
@@ -635,11 +620,8 @@ class ClaudeCommon:
         hooks: Mapping = MappingProxyType({}),
         tail: tuple[str, ...] = (),
     ) -> tuple[str, ...]:
-        """Claude's argv: configured settings, `permission`'s mode flags, access grants, output
-        arguments and `flags` before `tail`. Exactly one --settings: the config's and its mode's,
-        then `flags`', then `hooks`, merged (a file path read relative to `cwd`), since the docs
-        leave a repeated --settings undefined. --mcp-config keeps a project's .mcp.json that a
-        --strict-mcp-config in `flags` would drop.
+        """One merged --settings (config, mode, `flags`, `hooks`): a repeated one is undefined.
+        --mcp-config keeps a project's .mcp.json that --strict-mcp-config would drop.
         """
         if any(flag.word == "--setting-sources" for flag in scan(flags)):
             raise ConfigError("--setting-sources is set by the Claude client: use Access.project")
@@ -673,9 +655,7 @@ class ClaudeCommon:
         )
 
     def probe(self, account: str | None = None) -> Launch:
-        """The configured account's env (CLAUDE_CONFIG_DIR), else registered `account`'s dir
-        (CLAUDE_CONFIG_DIR unset for ~/.claude), without API credentials that would pick another.
-        """
+        """The config's env, else `account`'s dir (unset for ~/.claude); no API credentials."""
         env = {k: v for k, v in self.env().items() if not _credential(k)}
         found = sorted(
             name for name in {*os.environ, "CLAUDE_CODE_OAUTH_TOKEN"} if _credential(name)

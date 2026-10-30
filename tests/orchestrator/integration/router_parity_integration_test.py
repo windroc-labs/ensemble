@@ -280,8 +280,8 @@ class Recover(Parity):
 class Refusals(Parity):
     def assert_nothing_started(self):
         self.assertEqual((self.runs(), agent_calls(self.calls())), ([], []))
-        sessions = self.server.tmux("list-sessions", "-F", "#{session_name}")
-        self.assertEqual(sessions.stdout.split(), [MANAGER], sessions.stderr)
+        self.assertEqual(self.server.sessions(), [MANAGER])
+        self.assertEqual(self.server.worker_panes(dead=True), [])
 
     def test_a_new_run_whose_target_check_fails_is_bounced_and_starts_no_agent_run(self):
         """`target.check` Invalid → bounce, as the role's app."""

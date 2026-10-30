@@ -39,7 +39,6 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.harness import channel
 from ensemble.session.harness.channel import Channel
-from ensemble.session.harness.types import Op
 from ensemble.session.hosts.base import worker_state
 from ensemble.session.modes.tui import TuiMode, TuiStore
 from ensemble.utils import (
@@ -375,30 +374,23 @@ class Worker:
         return True, channel.running(self.state.name, snapshot)
 
     def _resume_owned(self, owner: Channel | None) -> Record:
-        """Its running owner's: its Record, stored again, its display reopened by that owner if
-        gone; else a new harness through the gate (it waits out a reaping guard, refuses a live or
-        unknown one).
+        """Its running owner's: its Record, stored again, shown unless hidden; else a new harness
+        through the gate (it waits out a reaping guard, refuses a live or unknown one).
         """
         record = self.state.record()
         if owner is None:
             self.check(prompt="", resume=True)
             return self.start(prompt="", resume=True)
         name = self.state.name
-        try:
-            reopened = owner.ask(Op.DISPLAY, {}).get("reopened") is True
-        except SessionError as error:
-            self.say(f"session {name}: display not reopened: {error}")
-            reopened = False
         with contextlib.suppress(SessionError):
             self._store(record)
-        if reopened:
-            try:
-                session = self.session_cls.attach(name, sid=self.state.sid, host=self.state.host)
-            except SessionError as error:
-                self.say(f"session {name}: not shown: {error}")
-            else:
-                if session.showable and (unshown := self._show(session, hidden=None)):
-                    self.say(unshown)
+        try:
+            session = self.session_cls.attach(name, sid=self.state.sid, host=self.state.host)
+        except SessionError as error:
+            self.say(f"session {name}: not shown: {error}")
+        else:
+            if session.showable and (unshown := self._show(session, hidden=None)):
+                self.say(unshown)
         return record
 
     def _store(self, record: Record) -> None:

@@ -1,7 +1,7 @@
 """attach over the real ensemble-session ls --here --records (tests/manager/live_crew.py) adopts
 only a Record its roster launched: a crew run killed after its starter printed the Record but
 before the commit; never an orphan started by the layer commands themselves, nor a Record an agent
-forged on its own session through its inherited $TMUX.
+forged on the manager's tmux session through an inherited $TMUX.
 """
 
 import json
@@ -40,13 +40,13 @@ class OrphanTest(LiveCrew):
         ):
             with self.subTest(forged=forged):
                 line = json.dumps({**json.loads(agent.to_line()), **forged})
-                self.ok(self.call("tmux", "set-option", "@record", line, inside="agent"))
+                self.ok(self.call("tmux", "set-option", "@record", line))
                 self.ok(self.crew("attach"))
                 self.assertEqual(self.roster(), {})
                 self.ok(self.crew("status"))
                 self.assertFalse(os.path.exists(pwned))
         line = json.dumps({**json.loads(agent.to_line()), "ctl": shell, "resume": shell})
-        self.ok(self.call("tmux", "set-option", "@record", line, inside="agent"))
+        self.ok(self.call("tmux", "set-option", "@record", line))
         self.ok(self.crew("close-all"))
         self.assertFalse(os.path.exists(pwned))
 

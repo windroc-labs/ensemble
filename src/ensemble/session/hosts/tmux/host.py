@@ -103,6 +103,9 @@ class TmuxHost(Host):
     def worker_liveness(self, name: str, generation: str) -> Liveness:
         return managed.liveness(self.name, _session(name), generation)
 
+    def _client_exited(self, name: str, generation: str) -> bool:
+        return managed.exited(self.name, _session(name), generation)
+
     def validate(self, name: str, launch: Launch) -> None:
         super().validate(name, launch)
         _session(name)

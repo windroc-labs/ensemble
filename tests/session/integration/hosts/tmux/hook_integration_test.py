@@ -15,7 +15,7 @@ class HookLifecycleTest(Live):
     def test_tui_without_a_caller_record_publishes_none(self):
         session = self.start("no-record", {"read": True})
         self.assertIsNone(session.record())
-        self.assertEqual(self.server.option("no-record", "@record"), "")
+        self.assertNotIn("no-record", self.server.sessions())
 
     def assert_events(self, path, name, *words):
         lines = Path(path).read_text().splitlines()

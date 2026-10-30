@@ -135,7 +135,6 @@ class LiveCrew(live_tmux.Calls, Case):
         return self.record(self.session(*argv, inside=inside, **self.scene(name)))
 
     def role(self, name: str, *flags: str, mode: str = "tui", **kw):
-        """crew run `name` -- ensemble-delegate run … --detach."""
         return self.launch(name, self.role_argv(name, *flags, mode=mode), **kw)
 
     def role_argv(self, name: str, *flags: str, mode: str = "tui") -> tuple[str, ...]:
@@ -220,15 +219,14 @@ class LiveCrew(live_tmux.Calls, Case):
         drives.stop(self.drive(record))
 
     def killed(self, name: str, record: Record) -> None:
-        """SIGKILLs run `name`'s drive, harness and client; attach: gone."""
+        """SIGKILLs run `name`'s drive, harness and client."""
         (tui,) = record.sessions
         self.wait_event(tui, "done")
         self.kill_drive(record)
-        live_tmux.crash_owner(self.ensemble, tui)  # its display alone ends no worker
+        live_tmux.crash_owner(self.ensemble, tui)  # its guard then ends the worker
         with suppress(ProcessLookupError):
             os.kill(logged(self.log(name))[-1]["pid"], signal.SIGKILL)
-        self.server.tmux("kill-session", "-t", f"={tui}")
-        self.until(lambda: self.gone(tui), f"{tui} gone")
+        self.until(lambda: self.gone(tui) and not self.server.pane_of(tui), f"{tui} gone")
         self.assertEqual(self.words(f"{tui}-drive"), [])
         out = self.ok(self.crew("attach")).stdout.splitlines()
         self.assertIn(f"resume: ensemble-crew resume --manager mgr {name}", out)
@@ -252,13 +250,16 @@ class LiveCrew(live_tmux.Calls, Case):
         return live_tmux.wait(poked, TIMEOUT, what=what)
 
     def live(self, *names: str) -> bool:
-        return all(self.server.tmux("has-session", "-t", f"={n}").returncode == 0 for n in names)
+        """Whether each name is a tmux session or a worker whose guard runs."""
+        return all(
+            self.server.tmux("has-session", "-t", f"={n}").returncode == 0 or live_tmux.running(n)
+            for n in names
+        )
 
     def gone(self, *names: str) -> bool:
         return not any(self.live(n) for n in names)
 
     def kill(self, *names: str) -> None:
         for name in names:
-            live_tmux.crash_owner(self.ensemble, name)
-            self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
+            live_tmux.crash_owner(self.ensemble, name)  # its guard then ends the worker
         self.until(lambda: self.gone(*names), f"{names} gone")

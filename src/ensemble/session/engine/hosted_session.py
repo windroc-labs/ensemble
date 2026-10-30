@@ -841,9 +841,7 @@ class HostedSession(Session):
         cls, viewer: Viewer, name: str, running: BaseMode, on: Host, display: Display
     ) -> None:
         try:
-            viewer.close(name, on)
-            if on.attachable:
-                viewer._prepare(name, on)
+            viewer._unclaimed(name, on)
             displays.started(viewer, name, on, display)
         except SessionError:
             running.close()
@@ -1293,6 +1291,8 @@ class HostedSession(Session):
         from its Viewer.
         """
         liveness, name = self._running.state(), self._tui()
+        if liveness == Liveness.LIVE and self._running.client_exited():
+            liveness = Liveness.ABSENT
         if liveness == Liveness.LIVE and name is not None:
             generation = self._running.generation
             word = None if generation is None else activity(name, generation)
@@ -1356,14 +1356,10 @@ class HostedSession(Session):
         return self._reply
 
     def close(self) -> None:
-        name = self._tui()
         try:
-            try:
-                close_view = None if name is None else self._viewer._capture_close(name, self._host)
-            finally:
-                kept = self._running.close() is False
-            if close_view is not None and not kept:
-                close_view()
+            kept = self._running.close() is False
+            if (name := self._tui()) is not None and not kept:
+                self._viewer.close(name, self._host)
         finally:
             self._release_capacity()
 
@@ -1518,14 +1514,6 @@ class Owned:
 
     def screen(self, lines: int | None = None) -> str:
         return self._session.screen(lines)
-
-    def redisplay(self) -> bool:
-        """Its worker's display opened again where gone; False: none to open."""
-        session = self._session
-        if not isinstance(session._running, tui.TuiMode) or not session._host.attachable:
-            return False
-        viewer, name = session._shown("redisplay")
-        return viewer._prepare(name, session._host)
 
     def view(self, channel: Channel, idle_timeout: float | None = None) -> OwnedSession:
         return type(self._session)._view(

@@ -1,25 +1,23 @@
-"""Tmux display placement and caller context."""
+"""Tmux worker pane placement and caller context."""
 
 from __future__ import annotations
 
 import contextlib
+import itertools
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 
 from ensemble.session.engine.tmux_cli import (
     CLIENTS,
     NAME,
     PANE,
-    PANES,
-    SESSION_ID,
-    SESSIONS,
     TmuxCli,
     TuiError,
-    attach_command,
+    absent,
     error,
     session_name,
 )
@@ -27,18 +25,26 @@ from ensemble.session.viewer.grid import (
     GRID_BUSY,
     GRID_PANES,
     GRID_ROW,
+    HOOK_PATH,
     PER_COLUMN,
     RETILE,
     WINDOW,
+    WORKER,
+    WORKER_ATTACH,
+    WORKER_LABEL,
+    WORKER_OPENER,
     Grid,
     hook_command,
     validate_per_column,
     validate_retile,
+    worker_panes,
 )
 from ensemble.session.viewer.types import (
+    CloseEntry,
     Retile,
     Split,
-    TmuxAnchor,
+    Spot,
+    WorkerPane,
 )
 
 PLACEHOLDERS = {"session"}
@@ -46,20 +52,68 @@ SHOW_TIMEOUT = 30
 
 
 SLOT = re.compile(r"\{\{([^{}]*)\}\}")
-TTY = re.compile(r"/dev/[A-Za-z0-9/]+")
+HOOK_SID = re.compile(r"[A-Za-z0-9_.:-]+")
 LISTED = "#{S:#{W:#{P: #{pane_id} }}}"
+HOOK_ENTRY = re.compile(r"after-kill-pane(?:\[([0-9]+)\](?: (.*))?)?")
+CLOSE_ENTRY = re.compile(  # _close_hook as show-hooks prints it
+    r"if-shell -F .#\{m:\* (%[0-9]+) \*,.* .set-hook -u -w -t @[0-9]+ "
+    r"after-kill-pane\[([0-9]+)\] ; run-shell -b .\S+ hide --if-closed --sid .*"
+)
+SPLIT = "#{pane_id}\t#{window_id}"
+LABEL = f"#{{?#{{{WORKER_LABEL}}},[#{{{WORKER_LABEL}}}],}}"
+BORDERS = {"pane-border-status": "bottom", "pane-border-format": LABEL}
+SAVED = "@worker-saved-"  # +option: its own value under a label border, unset if none
+LABELS = f"#{{window_id}}\t#{{{WORKER_LABEL}}}\t#{{pane-border-format}}"
 
 
 NO_PANE = "no anchor pane: {}"
 
 
-def _layout(split: str | None, split_from: str | None, opener: str | None = None) -> None:
+def _layout(
+    split: str | None, split_from: str | None, opener: str | None, fallbacks: Sequence[str]
+) -> None:
     if split is not None and split not in tuple(Split):
         raise TuiError(f"split must be one of {', '.join(Split)}, not {split!r}")
     if split_from is not None:
         session_name(split_from)
-    if opener is not None and not NAME.fullmatch(opener):
-        raise TuiError(f"invalid opener {opener!r}: want a tmux session name")
+    for who in (opener, *fallbacks):
+        if who is not None and not NAME.fullmatch(who):
+            raise TuiError(f"invalid opener {who!r}: want a tmux session name")
+
+
+def _newest(name: str, workers: Sequence[WorkerPane]) -> str | None:
+    found = [w.pane for w in workers if w.name == name]
+    return max(found, key=lambda p: int(p[1:])) if found else None
+
+
+def _close_hook(
+    command: str,
+    name: str,
+    pane: str,
+    window: str,
+    *,
+    sid: str | None,
+    generation: str | None,
+    index: int,
+) -> str | None:
+    """after-kill-pane[index]'s hide of `name`'s run once pane is gone; None off the allow-lists."""
+    if not (
+        HOOK_PATH.fullmatch(command)
+        and NAME.fullmatch(name)
+        and PANE.fullmatch(pane)
+        and WINDOW.fullmatch(window)
+        and sid is not None
+        and HOOK_SID.fullmatch(sid)
+        and generation is not None
+        and HOOK_SID.fullmatch(generation)
+    ):
+        return None
+    run = (
+        f"run-shell -b '{command} hide --if-closed --sid {sid} --generation {generation} -- "
+        f"{name} >/dev/null 2>&1 || true'"
+    )
+    unset = f"set-hook -u -w -t {window} after-kill-pane[{index}]"
+    return f"if-shell -F '#{{m:* {pane} *,{LISTED}}}' '' \"{unset} ; {run}\""
 
 
 class Placement:
@@ -68,23 +122,25 @@ class Placement:
 
     def open_pane(
         self,
-        session: str,
+        name: str,
+        argv: Sequence[str],
+        printed: str,
         *,
+        sid: str | None = None,
+        generation: str | None = None,
         split: str | None = None,
         split_from: str | None = None,
         opener: str | None = None,
         per_column: int | None = None,
         retile: str | None = None,
+        label: bool = False,
+        fallbacks: Sequence[str] = (),
     ) -> str | None:
-        """Reuses a shown pane, else splits in its grid, stack or explicit anchor; returns failure."""
-        _layout(split, split_from, opener)
+        """Keeps `name`'s worker pane, else splits one running argv at its spot; why it failed."""
+        _layout(split, split_from, opener, fallbacks)
         validate_per_column(per_column)
         validate_retile(retile)
-        tmux = shutil.which("tmux")
-        if tmux is None:
-            return "tmux not found"
-        tmux = os.path.abspath(tmux)
-        own = grid = new = None
+        own = new = window = None
         try:
             if opener is None:
                 try:
@@ -92,250 +148,343 @@ class Placement:
                 except TuiError:
                     if split_from is None:
                         raise
-            sessions = self._sessions() if opener is not None else []
-            if opener is not None and self._open(session, opener, sessions):
-                return None
-            grid = self._grid(opener, sessions, own=own) if opener is not None else None
-            if grid is not None:
-                window, manager, at, side = grid
+            workers = self.workers()
+            if any(w.name == name and w.attach == printed for w in workers):
+                return None  # an earlier run's pane, still closing, is not this run's
+            spot = self._spot(
+                name,
+                opener,
+                own=own,
+                split=split,
+                split_from=split_from,
+                workers=workers,
+                fallbacks=fallbacks,
+            )
+            if spot.grid is not None:
                 if split is not None or split_from is not None:
                     print("tui: show: grid: --split/--split-from ignored", file=sys.stderr)
                 # muted: an old mode's hook tile could land after a later drag; _grid_up unmutes
-                self.tmux.run(["set-option", "-w", "-t", window, GRID_BUSY, window])
-                try:
-                    new, why = self._split(session, side, at, tmux)
-                finally:
-                    if new is None:
-                        with contextlib.suppress(TuiError):
-                            self.tmux.run(["set-option", "-u", "-w", "-t", window, GRID_BUSY])
-            elif split_from is not None:
-                new, why = self._split(session, split or "right", self.anchor(split_from), tmux)
-            elif split is not None:
-                if opener is None:
-                    raise TuiError(NO_PANE.format("not in tmux"))
-                new, why = self._split(session, split, self._opener_pane(opener, own=own), tmux)
-            else:
-                if opener is None:
-                    raise TuiError(NO_PANE.format("not in tmux"))
-                new, why = self._stack(session, opener, sessions, tmux) or self._split(
-                    session, "right", self._opener_pane(opener, own=own), tmux
-                )
+                self.tmux.run(["set-option", "-w", "-t", spot.grid[0], GRID_BUSY, spot.grid[0]])
+            try:
+                new, window, why = self._split(argv, spot.side, spot.pane)
+                if new is not None and window is not None:
+                    # tagged before any tile
+                    self._record(
+                        name,
+                        opener,
+                        new,
+                        window,
+                        printed=printed,
+                        sid=sid,
+                        generation=generation,
+                        label=label,
+                    )
+            finally:
+                if new is None and spot.grid is not None:
+                    with contextlib.suppress(TuiError):
+                        self.tmux.run(["set-option", "-u", "-w", "-t", spot.grid[0], GRID_BUSY])
         except TuiError as e:
-            return f"{e}; watch it with {attach_command(session)}"
-        if new is None:
+            return f"{e}; watch it with {printed}"
+        if new is None or window is None:
             return why
-        self._record(session, opener, new)
-        if grid is None:
+        if spot.grid is None:
             return None
         return self.grid.configure(
-            window,
-            manager,
+            *spot.grid,
             per_column=PER_COLUMN if per_column is None else per_column,
             retile=RETILE if retile is None else Retile(retile),
         )
 
-    def _sessions(self) -> list[list[str]]:
-        res = self.tmux.run(["list-sessions", "-F", SESSIONS])
-        lines = res.stdout.split("\n") if res.returncode == 0 else []
-        return [
-            f
-            for f in (line.split("\t") for line in lines)
-            if len(f) == 5 and SESSION_ID.fullmatch(f[0])
-        ]
+    def workers(self) -> list[WorkerPane]:
+        return worker_panes(self.tmux)
 
-    def _open(self, session: str, opener: str, sessions: list[list[str]]) -> bool:
-        """Whether a pane opener opened still shows session: its @opener and live tmux @pane."""
-        row = next((f for f in sessions if f[1] == session), None)
-        if row is None or row[2] != opener or not PANE.fullmatch(row[3]):
-            return False
+    def panes(self, name: str) -> list[WorkerPane]:
+        """name's live worker panes; TuiError when tmux fails."""
+        return [w for w in self.workers() if w.name == name]
+
+    def close(self, worker: WorkerPane) -> None:
+        """Kills worker's pane, its close hooks unset first; a gone pane is no error."""
+        args = []
         try:
-            panes = self.tmux.checked(["list-panes", "-a", "-F", "#{pane_id}"]).stdout.split()
-            return row[3] in panes
-        except TuiError:
-            return False
+            _, ours, _ = self._entries(worker.window)
+        except TuiError as e:
+            print(f"tui: close: after-kill-pane: {e}", file=sys.stderr)
+            ours = []
+        for entry in ours:
+            if entry.pane == worker.pane:
+                args += ["set-hook", "-u", "-w", "-t", worker.window]
+                args += [f"after-kill-pane[{entry.index}]", ";"]
+        res = self.tmux.run([*args, "kill-pane", "-t", worker.pane])
+        if res.returncode and not absent(res):
+            raise TuiError(f"tmux: {error(res)}")
+        self.unlabel()
 
-    def _grid(
-        self, opener: str, sessions: list[list[str]], *, own: bool | None
-    ) -> tuple[str, str, TmuxAnchor, str] | None:
-        """Grid window, manager, anchor and side; None when no grid is found."""
-        row = next((f for f in sessions if f[1] == opener), None)
-        if row is None:
+    def unlabel(self) -> None:
+        """Gives windows left without a labelled pane their own borders back; failures print."""
+        try:
+            res = self.tmux.run(["list-panes", "-a", "-F", LABELS])
+            if res.returncode:
+                if absent(res):
+                    return
+                raise TuiError(f"tmux: {error(res)}")
+            rows = [line.split("\t", 2) for line in res.stdout.splitlines()]
+            if any(len(row) != 3 or not WINDOW.fullmatch(row[0]) for row in rows):
+                raise TuiError(f"tmux: list-panes printed {res.stdout!r:.80}")
+            labelled = {window for window, label, _ in rows if label}
+        except TuiError as e:
+            print(f"tui: close: label: {e}", file=sys.stderr)
+            return
+        for window in sorted({w for w, _, shown in rows if shown == LABEL} - labelled):
+            try:
+                if self._own(window, "pane-border-format") == LABEL:
+                    args = []
+                    for option in BORDERS:
+                        args += self._set(window, option, self._own(window, SAVED + option))
+                        args += [";", "set-option", "-u", "-w", "-t", window, SAVED + option]
+                    self.tmux.checked(args[1:])
+            except TuiError as e:
+                print(f"tui: close: label: {window}: {e}", file=sys.stderr)
+
+    def _own(self, window: str, option: str) -> str | None:
+        """window's own value of option (None: unset)."""
+        out = self.tmux.checked(["show-options", "-w", "-q", "-v", "-t", window, option]).stdout
+        if not out:
             return None
+        if out.count("\n") != 1 or not out.endswith("\n"):
+            raise TuiError(f"tmux: show-options printed {out!r:.80}")
+        return out[:-1]
+
+    def _set(self, window: str, option: str, value: str | None) -> list[str]:
+        if value is None:
+            return [";", "set-option", "-u", "-w", "-t", window, option]
+        if value.endswith(";"):
+            raise TuiError(f"tmux would misread {value!r:.80}")
+        return [";", "set-option", "-w", "-t", window, option, value]
+
+    def _label_args(self, window: str) -> list[str]:
+        """Calls setting window's label border, saving its own unless already labelled."""
+        args = []
+        own = self._own(window, "pane-border-format")
+        if own != LABEL:
+            for option in BORDERS:
+                value = own if option == "pane-border-format" else self._own(window, option)
+                args += self._set(window, SAVED + option, value)
+        for option, value in BORDERS.items():
+            args += self._set(window, option, value)
+        return args
+
+    def _spot(
+        self,
+        name: str,
+        opener: str | None,
+        *,
+        own: bool | None,
+        split: str | None,
+        split_from: str | None,
+        workers: Sequence[WorkerPane],
+        fallbacks: Sequence[str],
+    ) -> Spot:
+        at: tuple[str, str | None] | None = None
+        failed: TuiError | None = None
+        if opener is not None:
+            try:
+                at = self._opener_at(opener, own=own, workers=workers, fallbacks=fallbacks)
+            except TuiError as e:
+                failed = e
+        if at is not None and (gridded := self._grid(*at)) is not None:
+            return gridded
+        side = Split(split or Split.RIGHT)
+        if split_from is not None:
+            return Spot(self.anchor(split_from, workers), side, None)
+        if opener is None:
+            raise TuiError(NO_PANE.format("not in tmux"))
+        if split is None and (stacked := self._stack(name, opener, workers)) is not None:
+            return Spot(stacked, Split.BELOW, None)
+        if at is None:
+            raise failed or TuiError(NO_PANE.format(f"no terminal shows tmux session {opener}"))
+        return Spot(at[0], side, None)
+
+    def _opener_at(
+        self,
+        opener: str,
+        *,
+        own: bool | None,
+        workers: Sequence[WorkerPane],
+        fallbacks: Sequence[str],
+    ) -> tuple[str, str | None] | None:
+        """The first of opener and fallbacks with a worker pane or a client: (pane, manager)."""
+        for who in (opener, *fallbacks):
+            if (pane := _newest(who, workers)) is not None:
+                return pane, None
+            if (pane := self._shown(who, own=own if who == opener else None)) is not None:
+                return pane, pane
+        return None
+
+    def _grid(self, pane: str, manager: str | None) -> Spot | None:
         try:
-            found = self._window(row[3], None) if PANE.fullmatch(row[3]) else None
-            if found is None:
-                clients = [] if NAME.fullmatch(row[2]) else self._clients(opener)
-                if not clients:
-                    return None
-                if own is None:
-                    own = self.own_session() == opener
-                pane = os.environ["TMUX_PANE"] if own else clients[0][2]
-                found = self._window(pane, pane)
-        except TuiError:
+            found = self._window(pane, manager)
+        except TuiError as e:
+            print(f"tui: show: grid: {e}", file=sys.stderr)
             return None
         if found is None:
             return None
-        window, manager, areas, socket = found
-        workers = [p for p in areas if p != manager]
-        if not workers:
-            return window, manager, TmuxAnchor(manager, socket), "right"
-        return (
-            window,
-            manager,
-            TmuxAnchor(max(workers, key=lambda p: (areas[p], int(p[1:]))), socket),
-            "below",
-        )
+        window, manager, areas = found
+        others = [p for p in areas if p != manager]
+        if not others:
+            return Spot(manager, Split.RIGHT, (window, manager))
+        anchor = max(others, key=lambda p: (areas[p], int(p[1:])))
+        return Spot(anchor, Split.BELOW, (window, manager))
 
-    def _window(
-        self, pane: str, manager: str | None
-    ) -> tuple[str, str, dict[str, int], str] | None:
-        """pane's window id, manager, pane areas and socket; None when tmux fails."""
-        res = self.tmux.run(["list-panes", "-t", pane, "-F", GRID_PANES])
+    def _window(self, pane: str, manager: str | None) -> tuple[str, str, dict[str, int]] | None:
+        """pane's window id, manager and pane areas; None outside a grid."""
+        out = self.tmux.checked(["list-panes", "-t", pane, "-F", GRID_PANES]).stdout
         rows = []
-        if res.returncode:
-            return None
-        for line in res.stdout.splitlines():
+        for line in out.splitlines():
             match = GRID_ROW.fullmatch(line)
             if match is None:
-                return None
+                raise TuiError(f"tmux: list-panes printed {line!r:.80}")
             rows.append(match)
         if not rows:
             return None
         areas = {m[3]: int(m[4]) * int(m[5]) for m in rows}
         window, stored = rows[0].group(1, 2)
         manager = stored if stored in areas else manager
-        return None if manager is None else (window, manager, areas, rows[0][6])
+        return None if manager is None else (window, manager, areas)
 
-    def _stack(
-        self, session: str, opener: str, sessions: list[list[str]], tmux: str
-    ) -> tuple[str | None, str | None] | None:
-        """None when no @pane of the opener's other sessions is open."""
-        rows = [
-            (int(f[0][1:]), f[3], f[4])
-            for f in sessions
-            if f[1] != session and f[2] == opener and PANE.fullmatch(f[3])
-        ]
-        if rows:
-            res = self.tmux.run(["list-panes", "-a", "-F", "#{pane_id}"])
-            live = set(res.stdout.split("\n")) if res.returncode == 0 else set()
-            for _, pane, socket in sorted(rows, reverse=True):
-                if pane in live:
-                    return self._split(session, "below", TmuxAnchor(pane, socket), tmux)
-        return None
+    def _stack(self, name: str, opener: str, workers: Sequence[WorkerPane]) -> str | None:
+        """The newest worker pane opener opened for another worker, if any."""
+        found = [w.pane for w in workers if w.name != name and w.opener == opener]
+        return max(found, key=lambda p: int(p[1:])) if found else None
 
     def _split(
-        self, session: str, side: str, a: TmuxAnchor, tmux: str
-    ) -> tuple[str | None, str | None]:
-        command = [
-            "/usr/bin/env",
-            "-u",
-            "TMUX",
-            tmux,
-            "-S",
-            a.socket,
-            "attach",
-            "-t",
-            f"={session}",
-        ]  # argv: as a sh -c string it died at once (tmux 3.7)
-        for arg in command:
+        self, argv: Sequence[str], side: str, pane: str
+    ) -> tuple[str | None, str | None, str | None]:
+        """(new pane, its window, None), else (None, None, why)."""
+        for arg in argv:
             if "#" in arg or arg.endswith(";"):
                 raise TuiError(f"tmux would misread {arg!r}")
         try:
             res = self.tmux.run(
                 [
-                    "split-window",
-                    "-d",
-                    "-h" if side == "right" else "-v",
-                    "-P",
-                    "-F",
-                    "#{pane_id}",
-                    "-t",
-                    a.pane,
-                    *command,
+                    *("split-window", "-d", "-h" if side == "right" else "-v"),
+                    *("-P", "-F", SPLIT, "-t", pane, "--", *argv),
                 ],
             )
         except TuiError as e:
-            return None, str(e)
-        return (None, f"tmux: {error(res)}") if res.returncode else (res.stdout.strip(), None)
+            return None, None, str(e)
+        if res.returncode:
+            return None, None, f"tmux: {error(res)}"
+        found = res.stdout.strip()
+        new, _, window = found.partition("\t")
+        if not (PANE.fullmatch(new) and WINDOW.fullmatch(window)):
+            return None, None, f"tmux: split-window printed {found!r:.80}"
+        return new, window, None
 
-    def _record(self, session: str, opener: str | None, pane: str) -> None:
-        """For the next placement; a failure is only printed."""
-        if not PANE.fullmatch(pane):
-            print(f"tui: show: @pane: not a pane id: {pane!r}", file=sys.stderr)
+    def _record(
+        self,
+        name: str,
+        opener: str | None,
+        pane: str,
+        window: str,
+        *,
+        printed: str,
+        sid: str | None,
+        generation: str | None,
+        label: bool,
+    ) -> None:
+        """Tags pane as name's worker pane running `printed`; a failure is only printed."""
+        if not (
+            PANE.fullmatch(pane)
+            and WINDOW.fullmatch(window)
+            and NAME.fullmatch(name)
+            and (opener is None or NAME.fullmatch(opener))
+        ):
+            print(
+                f"tui: show: @worker: refused {pane!r:.20} {window!r:.20} {name!r:.80} "
+                f"{opener!r:.80}",
+                file=sys.stderr,
+            )
             return
-        for key, value in (("@opener", opener), ("@pane", pane)):
-            if value is None:
-                continue
+        args = ["set-option", "-p", "-t", pane, WORKER, name]
+        args += [";", "set-option", "-p", "-t", pane, WORKER_ATTACH, printed]
+        if opener is not None:
+            args += [";", "set-option", "-p", "-t", pane, WORKER_OPENER, opener]
+        if label:
+            args += [";", "set-option", "-p", "-t", pane, WORKER_LABEL, name]
             try:
-                self.tmux.checked(["set-option", "-t", f"={session}:", key, value])
+                args += self._label_args(window)
             except TuiError as e:
-                print(f"tui: show: {key}: {e}", file=sys.stderr)
-                return
-
-    def watch(self, session: str) -> None:
-        """Tracks @window and hooks: detach hides a closed view; arrivals forget a gone pane,
-        whose tty may be reused. Failures are printed."""
+                print(f"tui: show: label: {e}", file=sys.stderr)
         command, problem = hook_command()
-        target = f"={session}:"
+        if problem is None:
+            try:
+                args += self._close_args(
+                    command, name, pane, window, sid=sid, generation=generation
+                )
+            except TuiError as e:
+                problem = str(e)
+        if problem is not None:
+            print(f"tui: show: after-kill-pane: {problem}", file=sys.stderr)
         try:
-            pane = self.tmux.option(session, "@pane") or ""
-            if not PANE.fullmatch(pane):
-                return
-            found = self.tmux.checked(
-                ["display-message", "-p", "-t", pane, "#{window_id} #{pane_tty}"]
-            ).stdout.strip()
-            window, _, tty = found.partition(" ")
-            if not (WINDOW.fullmatch(window) and TTY.fullmatch(tty)):
-                raise TuiError(f"not a window id and tty: {found!r:.80}")
-            kept = f"#{{||:#{{!=:#{{@pane}},{pane}}},#{{m:* {pane} *,{LISTED}}}}}"
-            stale = f"if-shell -F -t {target} '{kept}' '' \"{_unset(target)}\""
-            args = ["set-option", "-t", target, "@window", window]
-            for arrived in ("client-attached", "client-session-changed"):
-                args += [";", "set-hook", "-t", target, arrived, stale]
-            if not problem:
-                run = f"run-shell -b '{command} hide --if-closed {session} >/dev/null 2>&1 || true'"
-                # a client's name is its tty: the viewer's is its pane's
-                hook = f"if-shell -F '#{{==:#{{hook_client}},{tty}}}' \"{run}\""
-                args += [";", "set-hook", "-t", target, "client-detached", hook]
             self.tmux.checked(args)
         except TuiError as e:
-            print(f"tui: show: @window: {e}", file=sys.stderr)
-            return
-        if problem:
-            print(f"tui: show: client-detached: {problem}", file=sys.stderr)
+            print(f"tui: show: @worker: {e}", file=sys.stderr)
 
-    def shown(self, session: str) -> str | None:
-        """The live tmux pane that show opened (@pane), if any."""
-        pane = self.tmux.option(session, "@pane")
-        live = pane is not None and PANE.fullmatch(pane) and self.tmux.process(pane) is not None
-        return pane if live else None
+    def _close_args(
+        self,
+        command: str,
+        name: str,
+        pane: str,
+        window: str,
+        *,
+        sid: str | None,
+        generation: str | None,
+    ) -> list[str]:
+        """Calls unsetting window's gone panes' close hooks, setting pane's at a free index."""
+        taken, ours, live = self._entries(window)
+        gone = {entry.index for entry in ours if entry.pane not in live}
+        used = taken - gone
+        index = int(pane[1:])
+        if index in used:
+            index = next(i for i in itertools.count() if i not in used)
+        hook = _close_hook(command, name, pane, window, sid=sid, generation=generation, index=index)
+        if hook is None:
+            raise TuiError(f"refused run {sid!r:.80} {generation!r:.80}")
+        args = []
+        for stale in sorted(gone):
+            args += [";", "set-hook", "-u", "-w", "-t", window, f"after-kill-pane[{stale}]"]
+        return [*args, ";", "set-hook", "-w", "-t", window, f"after-kill-pane[{index}]", hook]
 
-    def closed(self, session: str) -> str | None:
-        """The tmux pane show opened (@pane), once it is gone and the window it was in (@window)
-        remains; else None.
-        """
-        pane, window = self.tmux.option(session, "@pane"), self.tmux.option(session, "@window")
-        if not (PANE.fullmatch(pane or "") and WINDOW.fullmatch(window or "")):
-            return None
-        panes = self.tmux.checked(["list-panes", "-a", "-F", "#{pane_id}"]).stdout.split()
-        windows = self.tmux.checked(["list-windows", "-a", "-F", "#{window_id}"]).stdout.split()
-        return pane if pane not in panes and window in windows else None
-
-    def forget(self, session: str, pane: str | None = None) -> bool:
-        """Atomically unsets @pane and @window only if pane still matches; returns whether unset."""
-        pane = self.tmux.option(session, "@pane") if pane is None else pane
-        if not PANE.fullmatch(pane or ""):
-            return False
-        target = f"={session}:"
-        self.tmux.checked(
-            ["if-shell", "-F", "-t", target, f"#{{==:#{{@pane}},{pane}}}", _unset(target)]
+    def _entries(self, window: str) -> tuple[set[int], list[CloseEntry], set[str]]:
+        """window's after-kill-pane indexes, its close hooks and the live panes."""
+        res = self.tmux.run(
+            [
+                *("show-hooks", "-w", "-t", window, "after-kill-pane"),
+                *(";", "list-panes", "-a", "-F", "#{pane_id}"),
+            ]
         )
-        return self.tmux.option(session, "@pane") is None
+        if res.returncode:
+            if absent(res):
+                return set(), [], set()
+            raise TuiError(f"tmux: {error(res)}")
+        taken, ours, live = set(), [], set()
+        for line in res.stdout.splitlines():
+            if PANE.fullmatch(line):
+                live.add(line)
+                continue
+            entry = HOOK_ENTRY.fullmatch(line)
+            if entry is None:
+                raise TuiError(f"tmux: show-hooks printed {line!r:.80}")
+            if entry[1] is None:
+                continue
+            taken.add(int(entry[1]))
+            hook = CLOSE_ENTRY.fullmatch(entry[2] or "")
+            if hook is not None and hook[2] == entry[1]:
+                ours.append(CloseEntry(int(entry[1]), hook[1]))
+        return taken, ours, live
 
     def run_command(self, session: str, template: str) -> str | None:
-        """Runs template with /bin/sh, each {{session}} the quoted session name; why it failed, else
-        None.
-        """
+        """Runs template with /bin/sh, {{session}} the quoted name; why it failed, else None."""
         unknown = [m.group(0) for m in SLOT.finditer(template) if m.group(1) not in PLACEHOLDERS]
         if unknown:
             return f"unknown placeholder {unknown[0]}"
@@ -372,66 +521,48 @@ class Placement:
             return own
         raise TuiError(NO_PANE.format("not in tmux"))
 
-    def anchor(self, split_from: str | None = None) -> TmuxAnchor:
-        """split_from's shown pane, else the caller's session's; TuiError when none."""
+    def anchor(
+        self, split_from: str | None = None, workers: Sequence[WorkerPane] | None = None
+    ) -> str:
+        """split_from's newest worker pane, else the pane its tmux session shows, else the caller's
+        session's; TuiError when none.
+        """
         if split_from is not None:
-            found = self._shown(split_from, own=False)
+            workers = self.workers() if workers is None else workers
+            found = _newest(split_from, workers) or self._shown(split_from, own=False)
             if found is None:
-                raise TuiError(f"no terminal shows tmux session {split_from}")
+                raise TuiError(f"no terminal shows {split_from}")
             return found
         own = self.own_session()
         if own is None:
             raise TuiError(NO_PANE.format("not in tmux"))
-        return self._opener_pane(own, own=True)
-
-    def _opener_pane(self, opener: str, *, own: bool | None) -> TmuxAnchor:
-        if own is None:
-            own = self.own_session() == opener
-        found = self._shown(opener, own=own)
+        found = self._shown(own, own=True)
         if found is None:
-            raise TuiError(NO_PANE.format(f"no terminal shows tmux session {opener}"))
+            raise TuiError(NO_PANE.format(f"no terminal shows tmux session {own}"))
         return found
 
-    def _shown(self, session: str, *, own: bool) -> TmuxAnchor | None:
-        """The pane the most recent client shows the session in: a nested client's host pane,
-        $TMUX_PANE when own, else the client's; a control-mode client gets its tmux pane only.
-        """
+    def _shown(self, session: str, *, own: bool | None) -> str | None:
+        """The pane the most recent client of tmux session `session` shows; $TMUX_PANE when own."""
         clients = self._clients(session)
         if not clients:
             return None
-        _, tty, pane, control, socket = clients[0]
-        pane = os.environ["TMUX_PANE"] if own else pane
-        if control == "1":
-            return TmuxAnchor(pane, socket)
-        hosts = {
-            f[1]: f[2]
-            for f in (
-                line.split(" ", 2)
-                for line in self.tmux.checked(["list-panes", "-a", "-F", PANES]).stdout.splitlines()
-            )
-            if len(f) == 3 and f[0] != "1"
-        }
-        if PANE.fullmatch(hosts.get(tty, "")):
-            return TmuxAnchor(hosts[tty], socket)
-        return TmuxAnchor(pane, socket)
+        if own is None:
+            own = self.own_session() == session
+        return os.environ["TMUX_PANE"] if own else clients[0][1]
 
     def _clients(self, session: str) -> list[list[str]]:
-        out = self.tmux.checked(["list-clients", "-t", f"={session}", "-F", CLIENTS]).stdout
+        res = self.tmux.run(["list-clients", "-t", f"={session}", "-F", CLIENTS])
+        if res.returncode:
+            if absent(res):
+                return []
+            raise TuiError(f"tmux: {error(res)}")
+        out = res.stdout
         return sorted(
             (
                 c
-                for c in (line.split(" ", 4) for line in out.splitlines())
-                if len(c) == 5
-                and c[0].isdigit()
-                and c[1]
-                and PANE.fullmatch(c[2])
-                and c[3] in ("0", "1")
-                and c[4]
+                for c in (line.split("\t") for line in out.splitlines())
+                if len(c) == 2 and c[0].isdigit() and PANE.fullmatch(c[1])
             ),
             key=lambda c: int(c[0]),
             reverse=True,
         )
-
-
-def _unset(target: str) -> str:
-    return f"set-option -u -t {target} @pane ; set-option -u -t {target} @window"

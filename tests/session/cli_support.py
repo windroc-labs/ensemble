@@ -235,10 +235,14 @@ class WorkerCase(CliCase):
         return "\n".join(found)
 
     def live(self, name: str) -> bool:
-        return self.server.tmux("has-session", "-t", f"={name}").returncode == 0
+        """Whether worker `name`'s guard runs."""
+        return live_tmux.running(name)
 
     def pane(self, name: str, fmt: str) -> str:
-        res = self.server.tmux("display-message", "-p", "-t", f"={name}:", fmt)
+        """fmt of worker `name`'s newest live worker pane."""
+        pane = self.server.pane_of(name)
+        self.assertTrue(pane, f"{name}: no worker pane")
+        res = self.server.tmux("display-message", "-p", "-t", pane, fmt)
         self.assertEqual(res.returncode, 0, res.stderr)
         return res.stdout.removesuffix("\n")
 

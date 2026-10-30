@@ -2484,6 +2484,14 @@ class ReturncodeStateTest(Base):
                 mode._terminal.calls.state.return_value = state
                 self.assertEqual(mode.state(), state)
 
+    def test_client_exited_asks_its_hosts_client_exited_for_its_run(self):
+        mode = self.started()
+        self.assertFalse(mode.client_exited())
+        for exited in (False, True):
+            with mock.patch.object(self.host, "_client_exited", return_value=exited) as asked:
+                self.assertIs(mode.client_exited(), exited)
+            asked.assert_called_once_with(NAME, mode.generation)
+
 
 class PathsTest(Base):
     def test_its_hook_argv_runs_the_plugins_ensemble_session_hook_on_its_dir(self):

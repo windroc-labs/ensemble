@@ -1,6 +1,4 @@
-"""The session harness's shared types: the normalized event-handler call, with its session
-control view; a logged event; a request to its owner.
-"""
+"""The session harness's shared types."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -13,10 +11,7 @@ from ensemble.session.engine.types import ClientBound, SessionEvent, Stderr
 
 @dataclass(frozen=True)
 class EventCall:
-    """A handler's on_event input (FR-6): session, the control view to send, stop or close through;
-    event, the normalized event; event_id and turn, stable ids within the worker generation;
-    state, its HookCallback.state. on_event returns None and never owns the worker lifecycle.
-    """
+    """A handler's on_event input (FR-6); on_event never owns the worker lifecycle."""
 
     session: Session
     event: SessionEvent
@@ -44,7 +39,6 @@ class Op(StrEnum):
     SEND = "send"  # these three: a remote worker's, with data; never end it
     PRESS = "press"
     SCREEN = "screen"
-    DISPLAY = "display"  # any worker's, no data: its display opened again where gone; never ends it
 
 
-SERVED = (Op.SEND, Op.PRESS, Op.SCREEN, Op.DISPLAY)
+SERVED = (Op.SEND, Op.PRESS, Op.SCREEN)

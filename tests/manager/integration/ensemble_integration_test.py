@@ -119,9 +119,12 @@ def held(name: str) -> list[str]:
 
 
 def panes(command: str, name: str = "demo") -> str:
-    """list-panes rows: the hold pane of session `name` running `command`, and a worker's pane."""
+    """list-panes rows: the hold pane of session `name` running `command`, and a worker's pane
+    running its attach command.
+    """
     hold = f'"{REPO}/bin/ensemble-crew" hold --manager={name} --session={name} -- /bin/zsh -l'
-    return f"%3 {command} {hold}\n%4 tmux tmux -S /tmp/s attach -t =w1\n"
+    attach = "/usr/bin/python3 -I /x/guard.py --attach /tmp/eg-501/0123456789abcdef/g1/display"
+    return f"%3 {command} {hold}\n%4 python3 {attach}\n"
 
 
 LIST_PANES = [

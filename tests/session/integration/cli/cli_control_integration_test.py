@@ -1,14 +1,9 @@
-"""ensemble-session's batch commands through bin/ensemble-session on a private tmux server: status
-answers each name or stdin Record in order (Q11), using answer_keys batch rules;
-show, hide and close by name and by stdin Record, show placing a
-session by its own display or by a Record's, close repeatable and only for the named (Q12), show
-and close checking private session identity; on a Host that cannot show
-(tests.session.fakes.host:FakeHost, the module entry) show, hide and tile exit 1
-saying so, while read and status, which read workers through their harness and worker dir, find no
-session in its process outside a harness.
+"""ensemble-session's batch commands (status, show, hide, close) by name and by stdin Record (Q11,
+Q12), and on a Host that cannot show (tests.session.fakes.host:FakeHost).
 """
 
 import dataclasses
+import shlex
 import subprocess
 import sys
 import uuid
@@ -60,9 +55,17 @@ def live(name: str, state: str, *, cwd: str | None = None, hidden: bool = False)
 
 class ControlCase(CliCase):
     def sessions(self) -> list[str]:
+        """The tmux sessions: a worker has none."""
         result = self.server.tmux("list-sessions", "-F", "#{session_name}")
         self.assertEqual(result.returncode, 0, result.stderr)
         return sorted(result.stdout.split())
+
+    def ended(self, *names: str) -> None:
+        """Waits until no guard or worker pane of names is left."""
+        live_tmux.wait(
+            lambda: not any(live_tmux.running(n) or self.server.pane_of(n) for n in names),
+            what=f"{names} ended",
+        )
 
     def tmux(self, *args: str) -> None:
         result = self.server.tmux(*args)
@@ -117,7 +120,8 @@ class StatusTest(ControlCase):
                 self.assertEqual(
                     [Status.parse(line) for line in result.stdout.splitlines()], expected
                 )
-        self.assertEqual(self.sessions(), [MANAGER, "w1"])
+        self.assertEqual(self.sessions(), [MANAGER])
+        self.assertTrue(live_tmux.running("w1"))
         self.assertEqual(len(self.calls("w1")), 1)
 
     def test_a_duplicate_or_a_bad_stdin_line_refuses_the_whole_batch_before_any_action(self):
@@ -136,7 +140,8 @@ class StatusTest(ControlCase):
                     self.assertEqual((result.returncode, result.stdout), (2, ""), result.stderr)
                     self.assertTrue(result.stderr.startswith(stderr), result.stderr)
                     self.assertEqual(len(result.stderr.splitlines()), 1, result.stderr)
-        self.assertEqual(self.sessions(), [MANAGER, "w1"])
+        self.assertEqual(self.sessions(), [MANAGER])
+        self.assertTrue(live_tmux.running("w1"))
         self.assertEqual(self.server.pane_of("w1"), pane)
         self.assertEqual(self.status("w1"), [live("w1", "done", cwd=self.cwd)])
         self.assertEqual(len(self.calls("w1")), 1)
@@ -147,6 +152,7 @@ class StatusTest(ControlCase):
         result = self.session("close", stdin=lines(record, nowhere))
         self.assertEqual((result.returncode, result.stdout), (2, ""))
         self.assertEqual(result.stderr, f"{PROG}: w9: names no session\n")
+        self.ended("w1")
         self.assertEqual(self.sessions(), [MANAGER])
 
     def test_stdin_that_is_not_utf_8_is_a_usage_error(self):
@@ -170,7 +176,9 @@ class ControlTest(ControlCase):
         for _ in range(2):
             self.assert_printed(self.session("close", "w1"), "")
             self.assert_printed(self.session("close", stdin=lines(records["w2"])), "")
-        self.assertEqual(self.sessions(), [MANAGER, "w3"])
+        self.ended("w1", "w2")
+        self.assertEqual(self.sessions(), [MANAGER])
+        self.assertTrue(live_tmux.running("w3"))
         for name in ("w1", "w2"):
             live_tmux.wait(lambda name=name: not pid_alive(pids[name]), what=f"{name} to end")
         self.assertTrue(pid_alive(pids["w3"]))
@@ -183,9 +191,10 @@ class ControlTest(ControlCase):
         w1 = self.done("w1")
         pid = self.calls("w1")[0]["pid"]
         self.tmux("kill-pane", "-t", self.server.pane_of("w1"))
-        # its client-detached hook marks it hidden and drops its @pane
+        # its close hook marks it hidden
         live_tmux.wait(lambda: self.status("w1")[0].hidden, what="w1 hidden")
         pane = self.server.pane_of("w1")
+        self.assertEqual(pane, "")
         reused = dataclasses.replace(w1, sid=str(uuid.uuid4()))
         for verb in ("show", "hide", "content"):
             with self.subTest(verb=verb):
@@ -196,24 +205,20 @@ class ControlTest(ControlCase):
                     f"{PROG}: w1: session w1: expected sid {reused.sid!r}, found {w1.sid!r}\n",
                 )
         self.assert_printed(self.session("close", stdin=lines(reused)), "")
-        self.assertEqual(self.sessions(), [MANAGER, "w1"])
+        self.assertTrue(live_tmux.running("w1"))
         self.assertTrue(pid_alive(pid))
         self.assertEqual(self.server.pane_of("w1"), pane)
-        self.tmux("set-option", "-u", "-t", "=w1:", "@record")
         self.assert_printed(self.session("close", stdin=lines(w1)), "")
+        self.ended("w1")
         self.assertEqual(self.sessions(), [MANAGER])
 
-    def shows(self, name: str, window: str) -> None:
-        """name's @pane is in `window` and runs a client of name."""
-        pane = self.server.pane_of(name)
+    def shows(self, name: str, window: str) -> str:
+        """name's one worker pane, in `window` and running its guard's attach command."""
+        (pane,) = [p.pane for p in self.server.worker_panes(name)]
         self.assertIn(pane, self.server.panes(window))
-        tty = self.server.tmux("display-message", "-p", "-t", pane, "#{pane_tty}").stdout.strip()
-
-        def attached():
-            found = self.server.tmux("list-clients", "-t", f"={name}", "-F", "#{client_tty}")
-            return tty in found.stdout.split()
-
-        live_tmux.wait(attached, what=f"{pane} to attach {name}")
+        started = self.server.tmux("display-message", "-p", "-t", pane, "#{pane_start_command}")
+        self.assertEqual(shlex.split(started.stdout), shlex.split(guard_command(name)))
+        return pane
 
     def test_show_places_a_session_by_its_own_display_or_by_a_records(self):
         self.tmux("new-session", "-d", "-s", OTHER, "-x", "200", "-y", "50", *live_tmux.IDLE)
@@ -224,10 +229,15 @@ class ControlTest(ControlCase):
         self.tmux("kill-pane", "-t", self.server.pane_of("w1"))
         moved = dataclasses.replace(w1, display=OTHER)
         self.assert_printed(self.session("show", stdin=lines(moved)), "")
-        self.assertEqual(self.server.option("w1", "@opener"), OTHER)
-        self.shows("w1", f"={OTHER}:")
+        self.assertEqual(self.server.opener_of("w1"), OTHER)
+        pane = self.shows("w1", f"={OTHER}:")
+        # its pane lives: a show by its own display opens no other
         self.assert_printed(self.session("show", "w1"), "")
-        self.assertEqual(self.server.option("w1", "@opener"), MANAGER)
+        self.assertEqual(self.shows("w1", f"={OTHER}:"), pane)
+        self.assertEqual(self.server.opener_of("w1"), OTHER)
+        self.assert_printed(self.session("hide", "w1"), "")
+        self.assert_printed(self.session("show", "w1"), "")
+        self.assertEqual(self.server.opener_of("w1"), MANAGER)
         self.shows("w1", f"={MANAGER}:")
         self.assertEqual(len(self.calls("w1")), 1)
 
@@ -238,7 +248,9 @@ class ControlTest(ControlCase):
         for names, stdin in ((("w1",), None), ((), lines(w1))):
             self.assert_printed(self.session("hide", *names, stdin=stdin), "")
             self.assertNotIn(pane, self.server.panes(f"={MANAGER}:"))
-            self.assertEqual(self.sessions(), [MANAGER, "w1"])
+            self.assertEqual(self.server.pane_of("w1"), "")
+            self.assertEqual(self.sessions(), [MANAGER])
+            self.assertTrue(live_tmux.running("w1"))
             self.assertEqual(
                 self.status(stdin=lines(w1)), [live("w1", "done", cwd=self.cwd, hidden=True)]
             )

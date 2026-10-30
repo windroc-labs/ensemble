@@ -1,4 +1,4 @@
-"""Private tmux fixtures with checked socket selectors, inherited launchers and cleanup."""
+"""Private tmux fixtures."""
 
 import inspect
 import json
@@ -19,6 +19,7 @@ from unittest import mock
 
 from ensemble.session.harness import guard
 from ensemble.session.hosts import base as host_base
+from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.utils import Record
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN, child_env
@@ -35,6 +36,8 @@ SOCKET_MAX = 100  # sun_path: 104 bytes (macOS), 108 (Linux)
 HEADROOM = 256
 NPROC_PROBE = os.path.join(os.path.dirname(__file__), "nproc_probe.py")
 PANES = "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+WORKER_PANES = "#{pane_id}\t#{@worker}\t#{@worker-opener}\t#{window_id}\t#{pane_dead}"
+GONE = ("no server running", "error connecting")
 
 
 _SOCKETS: set[str] = set()
@@ -87,6 +90,16 @@ def _guard_popen():
             super().__init__(*args, **kwargs)
 
     return mock.patch("subprocess.Popen", new=GuardedPopen)
+
+
+class WorkerPane(NamedTuple):
+    """A pane whose @worker names a worker."""
+
+    pane: str
+    name: str
+    opener: str
+    window: str
+    dead: bool
 
 
 class Client(NamedTuple):
@@ -277,8 +290,32 @@ class Server:
         )
         return {r[0]: (int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in rows}
 
-    def pane_of(self, session: str) -> str:
-        return self.option(session, "@pane")
+    def worker_panes(self, name: str | None = None, *, dead: bool = False) -> list[WorkerPane]:
+        """Worker panes (of worker `name`), lowest first; dead: with dead ones."""
+        res = self.tmux("list-panes", "-a", "-F", WORKER_PANES)
+        if res.returncode:
+            if any(word in res.stderr for word in GONE):
+                return []
+            self.case.fail(f"tmux list-panes -a: exit {res.returncode}: {res.stderr.strip()}")
+        found: dict[str, WorkerPane] = {}
+        for line in res.stdout.splitlines():
+            pane, worker, opener, window, gone = line.split("\t")
+            if worker and (name is None or worker == name) and (dead or gone != "1"):
+                found.setdefault(pane, WorkerPane(pane, worker, opener, window, gone == "1"))
+        return sorted(found.values(), key=lambda p: int(p.pane[1:]))
+
+    def pane_of(self, name: str) -> str:
+        """`name`'s newest live worker pane, "" if none."""
+        found = self.worker_panes(name)
+        return found[-1].pane if found else ""
+
+    def opener_of(self, name: str) -> str:
+        """pane_of's @worker-opener, "" if none."""
+        found = self.worker_panes(name)
+        return found[-1].opener if found else ""
+
+    def sessions(self) -> list[str]:
+        return sorted(self._out("list-sessions", "-F", "#{session_name}").split())
 
     def option(self, session: str, key: str) -> str:
         return self._out("show-options", "-qv", "-t", f"={session}:", key).removesuffix("\n")
@@ -320,7 +357,7 @@ def _drain(master: int, stop: threading.Event) -> None:
 
 
 def crash_owner(ensemble: str, name: str) -> None:
-    """kill -9 of tui session `name`'s owning harness, if any: its guard then ends the worker."""
+    """kill -9 of tui session `name`'s owning harness, if any."""
     try:
         with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
             owner = json.load(f)["owner"]
@@ -335,14 +372,50 @@ def crash_owner(ensemble: str, name: str) -> None:
     wait(lambda: not alive(pid), what=f"session harness {pid} to end")
 
 
+def sized(worker, size, what: str = "the worker's terminal size") -> None:
+    """Waits until `stty size` in worker answers size (WxH or a function)."""
+    asks = [0, -RESEND]  # the latest ask's number and time
+
+    def answered() -> bool:
+        if time.monotonic() - asks[1] >= RESEND:
+            asks[0] += 1
+            worker.write(f"echo ask-{asks[0]} $(stty size)\n".encode())
+            asks[1] = time.monotonic()
+        width, height = (size() if callable(size) else size).split("x")
+        lines = (line.strip() for line in worker.screen().splitlines())
+        return f"ask-{asks[0]} {height} {width}" in lines
+
+    wait(answered, what=f"{what} at {size if isinstance(size, str) else 'its display size'}")
+
+
+def running(name: str, host: str = "tmux") -> bool:
+    """Whether tmux Host `host` lists worker `name`, its guard live."""
+    return name in TmuxHost(host).list()
+
+
+def attached(server: Server, pane: str, command: str, timeout: float = TIMEOUT) -> str:
+    """pane, once live and running `command`; it may show nothing yet."""
+    argv = shlex.split(command)
+
+    def live() -> bool:
+        res = server.tmux(
+            "display-message", "-p", "-t", pane, "#{pane_dead}\t#{pane_start_command}"
+        )
+        dead, _, start = res.stdout.removesuffix("\n").partition("\t")
+        return res.returncode == 0 and dead == "0" and shlex.split(start) == argv
+
+    wait(live, timeout, what=f"{pane} running {command}")
+    return pane
+
+
 def alive(pid: int) -> bool:
-    """Not ended: a zombie has, its parent (e.g. a delegate drive) not reaping it yet."""
+    """Not ended: a zombie has, its parent not reaping it yet."""
     info = guard.process_info(pid)
     return info is not None and not info[2]
 
 
 def activity(name: str, home: str | None = None) -> str | None:
-    """Tui worker `name`'s harness's last mark this generation, or None; home: its HOME."""
+    """Tui worker `name`'s harness's last mark this generation, or None."""
     with mock.patch.dict(os.environ, {} if home is None else {"HOME": home}):
         found = host_base.worker_state(name)
         if found is None or found.generation is None:
@@ -363,7 +436,7 @@ _events = events
 
 
 def wait_events(path: str, expected, timeout: float = TIMEOUT) -> list[str]:
-    """All (session, word) notifications, in either order; retain duplicates for assertions."""
+    """All (session, word) notifications, in either order."""
 
     def complete():
         lines = events(path)
@@ -397,7 +470,7 @@ def wait(check, timeout: float = TIMEOUT, what: str = "check() to hold"):
 def assert_grid(
     case, server: Server, manager: str, columns: list, manager_width: int | None = None
 ) -> bool:
-    """Assert manager's grid matches columns, including cell ownership and geometry."""
+    """Assert manager's grid matches columns."""
     return GridCheck(case, server, manager, columns).check(manager_width)
 
 
@@ -409,7 +482,7 @@ class Calls:
         return ()
 
     def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
-        """A caller's in `inside` (None: outside tmux); an extra None drops its key."""
+        """A caller's env in `inside`; an extra None drops its key."""
         env = self.server.env(**(self.server.inside(inside) if inside else {}))
         env["PATH"] = os.pathsep.join(
             (*self.bins(), self.server.bin, os.path.dirname(sys.executable), env["PATH"])
@@ -434,7 +507,6 @@ class Calls:
         return Record.parse(lines[0])
 
     def scene(self, name: str, steps=None, turns=(), **more) -> dict[str, str]:
-        """`name`'s fake claude scenario, as env."""
         path = os.path.join(self.root, f"{name}.claude.json")
         steps = [f"Hi from {name}."] if steps is None else steps
         scenario = {"steps": steps, "turns": list(turns), "log": self.log(name)}

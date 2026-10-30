@@ -128,6 +128,21 @@ class CodexTest(Conversation, Case):
     def scene(self, turns: list) -> None:
         self.scenario.write_text(json.dumps({"tui_turns": turns}))
 
+    def ok(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def attached(self, session: OwnedSession) -> str:
+        """A pane of mgr running session's attach command, as a user's terminal would."""
+        command = session.attach_command()
+        pane = self.ok(
+            self.server.tmux(
+                *("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=mgr:", "--"),
+                *shlex.split(command),
+            )
+        ).stdout.strip()
+        return live_tmux.attached(self.server, pane, command, WAIT)
+
     def test_two_turns_give_the_shared_sequence(self):
         self.scene([["first"], ["second"]])
         self.assertEqual(self.converse(self.session_cls, self.spec), TWO_TURNS)
@@ -137,8 +152,9 @@ class CodexTest(Conversation, Case):
         self.scene([[failed], [failed], ["recovered"]])
         session = self.owned(self.session_cls, self.spec)
         self.wait_for("TurnFailed")
-        self.server.tmux("send-keys", "-t", "=w1:", "-l", "continue")
-        self.server.tmux("send-keys", "-t", "=w1:", "Enter")
+        pane = self.attached(session)
+        self.ok(self.server.tmux("send-keys", "-t", pane, "-l", "continue"))
+        self.ok(self.server.tmux("send-keys", "-t", pane, "Enter"))
         self.wait_for("TurnFailed", 2)
         self.send(session, "continue again")
         self.wait_for("TurnEnd")

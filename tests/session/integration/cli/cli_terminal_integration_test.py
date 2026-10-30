@@ -1,8 +1,5 @@
 """ensemble-session send, read and tile (FR-31; Q15) through bin/ensemble-session on a private tmux
-server (tests/session/cli_support.py): send's text reaches the fake claude once, then one submission;
-send --key's keys reach a raw-mode client as exactly their bytes, a bad key list sends nothing, a
-session with no terminal takes neither; read prints the screen or its last N lines; tile lays out
-the window it names and no other; bad operands exit 2 before anything is done, an absent session 1.
+server.
 """
 
 import glob
@@ -164,7 +161,7 @@ class KeyTest(Base):
         """
         before = len(raw(log))
         result = self.session("send", name, *argv)
-        self.tmux("send-keys", "-t", f"={name}:", "--", SENTINEL)
+        self.tmux("send-keys", "-t", self.server.pane_of(name), "--", SENTINEL)
 
         def found():
             data = raw(log)[before:]
