@@ -61,6 +61,20 @@ def colors(directory: str) -> None:
         print(f"\x1b[32m{line.strip()}\x1b[0m", flush=True)
 
 
+def history(directory: str, count: int) -> None:
+    """count colored numbered lines, then a prompt; `emit N TAG` prints N lines, others echo."""
+    _publish(Path(directory, "display.pid"), str(os.getpid()))
+    sys.stdout.write("".join(f"\x1b[3{1 + n % 6}mline-{n:04}\x1b[0m\n" for n in range(count)))
+    print("\x1b[36m> \x1b[0m", end="", flush=True)
+    for line in sys.stdin:
+        words = line.split()
+        if words[:1] == ["emit"]:
+            print("".join(f"{words[2]}-{n:04}\n" for n in range(int(words[1]))), end="")
+        else:
+            print(f"\x1b[32m{line.strip()}\x1b[0m")
+        print("\x1b[36m> \x1b[0m", end="", flush=True)
+
+
 def harness(directory: str, *, terminal: bool, daemon: bool) -> None:
     from ensemble.session.engine.types import Launch
     from ensemble.session.hosts.tmux import TmuxHost
@@ -91,10 +105,11 @@ def harness(directory: str, *, terminal: bool, daemon: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("kind", choices=("harness", "client", "child", "colors"))
+    parser.add_argument("kind", choices=("harness", "client", "child", "colors", "history"))
     parser.add_argument("directory")
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--daemon", action="store_true")
+    parser.add_argument("--count", type=int, default=0)
     args = parser.parse_args()
     if args.kind == "harness":
         harness(args.directory, terminal=args.terminal, daemon=args.daemon)
@@ -102,6 +117,8 @@ def main() -> None:
         client(args.directory, daemon=args.daemon)
     elif args.kind == "colors":
         colors(args.directory)
+    elif args.kind == "history":
+        history(args.directory, args.count)
     else:
         child(args.directory, daemon=args.daemon)
 
