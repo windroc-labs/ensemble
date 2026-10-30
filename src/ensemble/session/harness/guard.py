@@ -43,6 +43,7 @@ RUN = "/run/ensemble/guard"  # a --serve guard's run dirs, one per generation
 LAUNCH_WAIT = 60.0  # s from its start a --serve guard waits for its launch handoff
 HEARTBEAT = 5.0  # s a --serve guard runs on with no byte from its harness
 HOOK_ENV = "ENSEMBLE_GUARD_HOOK_SOCKET"
+SNAPSHOT = b"\x1b[?1049l\x1b[r\x1b[2J"
 LINES = 2000  # rows of display history, as tmux's default history-limit
 LINES_SIZE = 8 << 20
 # Modes replayed as last set, after RESET's defaults; none moves the cursor or clears the screen.
@@ -233,17 +234,10 @@ def background(pen: Pen) -> Pen:
 
 
 class Row(list):
-    """One screen line of cells. wrapped: its text runs on into the next row. full: its cells as
-    written while a width change shows them cut or padded; any write drops it and its wrap.
-    """
+    """One screen line of cells. wrapped: it runs on into the next row. used: columns written."""
 
     wrapped = False
-    full: list[Cell] | None = None
-
-    def __setitem__(self, index, value) -> None:
-        if self.full is not None:
-            self.full, self.wrapped = None, False
-        super().__setitem__(index, value)
+    used = 0
 
 
 def sgr_code(pen: Pen) -> str:
@@ -289,13 +283,6 @@ def render(cells, *, wrapped: bool, margin: bool = False) -> str:
     return "".join(out)
 
 
-def cut(line: Row, columns: int) -> Row:
-    """line at another width, keeping its written cells and wrap for history."""
-    row = Row(line[:columns] + [(" ", PLAIN)] * (columns - len(line)))
-    row.wrapped, row.full = line.wrapped, line.full or list(line)
-    return row
-
-
 def blank(columns: int, pen: Pen = PLAIN) -> Row:
     return Row([(" ", pen)] * columns)
 
@@ -311,8 +298,9 @@ class Screen:
         self.limit, self.rows, self.columns = limit, rows, columns
         self.cells = [blank(columns) for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
-        self.lines: deque[str] = deque()  # rendered rows for a new display, oldest first
+        self.lines: deque[tuple[Row, str]] = deque()  # retired rows, rendered for a new display
         self.lines_size = 0  # UTF-8 bytes in lines
+        self.pullable = 0  # rows a taller screen takes back
         self.row, self.column = 0, 0
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = (0, 0)
@@ -326,8 +314,6 @@ class Screen:
     def newline(self, *, wrap: bool = False) -> None:
         line = self.cells[self.row]
         line.wrapped = wrap
-        if wrap:  # the row as shown wraps, not cells a resize cut
-            line.full = None
         if self.row == self.scroll_bottom:
             self._scroll(self.scroll_top, self.scroll_bottom, 1, history=True, bce=not wrap)
         else:
@@ -340,22 +326,86 @@ class Screen:
         if count > 0:
             if history and top == 0 and self.normal is None:
                 self._retire(self.cells, amount)
+                self.pullable += amount
             self.cells[top : bottom + 1] = self.cells[top + amount : bottom + 1] + fill
         else:
             self.cells[top : bottom + 1] = fill + self.cells[top : bottom + 1 - amount]
 
-    def _retire(self, cells: list[Row], count: int, *, read: bool = True) -> None:
-        """The first count rows of cells into both histories (read: the read history too)."""
+    def _retire(self, cells: list[Row], count: int) -> None:
+        """The first count rows of cells into both histories."""
         for index, row in enumerate(cells[:count]):
-            if read:
-                self.history.append(line_text(row))
+            self.history.append(line_text(row))
             after = cells[index + 1] if index + 1 < len(cells) else None
-            margin = after is not None and leads_wide(after.full or after)
-            text = render(row.full or row, wrapped=row.wrapped, margin=margin)
-            self.lines.append(text)
+            margin = after is not None and leads_wide(after)
+            text = render(row, wrapped=row.wrapped, margin=margin)
+            self.lines.append((row, text))
             self.lines_size += len(text.encode())
         while len(self.lines) > LINES or self.lines_size > LINES_SIZE:
-            self.lines_size -= len(self.lines.popleft().encode())
+            self.lines_size -= len(self.lines.popleft()[1].encode())
+
+    def _unwrap(self, row: int) -> None:
+        """Emptied whole, row ends the line above it."""
+        if row:
+            self.cells[row - 1].wrapped = False
+        elif self.normal is None and self.lines and self.lines[-1][0].wrapped:
+            line, text = self.lines.pop()
+            line.wrapped = False
+            self.lines.append((line, render(line, wrapped=False)))
+            self.lines_size += len(self.lines[-1][1].encode()) - len(text.encode())
+
+    def _drop(self, count: int) -> None:
+        """The last count retired rows out of both histories."""
+        for _ in range(count):
+            self.lines_size -= len(self.lines.pop()[1].encode())
+            if self.history:
+                self.history.pop()
+
+    def _regrid(self, cells: list[Row], row: int, column: int, rows: int, columns: int):
+        """Height first (rows below the cursor go, pullable ones return), then width:
+        (taken, retired, cells, row, column, pullable)."""
+        lines, width, taken = self.lines, len(cells[0]), 0
+
+        def line() -> list[Row]:
+            nonlocal taken
+            start = len(lines) - taken - 1
+            while start and lines[start - 1][0].wrapped:
+                start -= 1
+            found = [lines[index][0] for index in range(start, len(lines) - taken)]
+            taken = len(lines) - start
+            return found
+
+        cells = cells[: max(row + 1, rows)]
+        pullable = min(self.pullable, len(lines)) + max(0, len(cells) - rows)
+        back = min(max(0, rows - len(cells)), pullable)
+        pullable -= back
+        cells += [blank(width) for _ in range(rows - len(cells) - back)]
+        if columns != width:
+            head = line() if lines and lines[-1][0].wrapped else []
+            cells, row, column = reflow(head + cells, row + len(head), column, columns)
+        above: list[Row] = []
+        while len(above) < (back if columns == width else rows - len(cells)) and taken < len(lines):
+            found = line()
+            if any(len(part) != columns for part in found):
+                found = reflow(found, -1, 0, columns)[0]
+            above = found + above
+        cells, row = above + cells, row + len(above)
+        cells += [blank(columns) for _ in range(rows - len(cells))]
+        gone = len(cells) - rows
+        if row < gone:
+            row, column = gone, 0
+        pullable = min(pullable, len(lines) - taken + gone)
+        return taken, cells[:gone], cells[gone:], row - gone, min(column, columns), pullable
+
+    def _resize_main(self, cells: list[Row], row: int, column: int) -> None:
+        taken, retired, self.cells, self.row, self.column, self.pullable = self._regrid(
+            cells, row, column, self.rows, self.columns
+        )
+        self._drop(taken)
+        self._retire([*retired, *self.cells], len(retired))
+
+    def _main(self) -> tuple[int, list[Row], list[Row], int, int]:
+        cells, row, column, _ = self.normal or (self.cells, self.row, self.column, [])
+        return self._regrid(cells, row, column, self.rows, self.columns)[:5]
 
     def mode(self, key: str, sequence: str) -> None:
         self.modes.pop(key, None)
@@ -419,8 +469,9 @@ class Screen:
                 self.cells = [blank(self.columns) for _ in range(self.rows)]
                 self.keyboard = []
             elif 1049 in values and command == "l" and self.normal is not None:
-                self.cells, self.row, self.column, self.keyboard = self.normal
+                cells, row, column, self.keyboard = self.normal
                 self.normal = None
+                self._resize_main(cells, row, column)
             return
         if command in "hl":
             return
@@ -449,6 +500,14 @@ class Screen:
                     self.cells[row] = blank(self.columns, fill[1])
             if mode in (0, 1):
                 self.erase_line(mode)
+            if mode in (2, 3) or mode == 1 and self.row:
+                self._unwrap(0)
+            if (
+                mode == 3
+                or self.normal is None
+                and (mode == 2 or mode == 0 and not self.row + self.column)
+            ):
+                self.pullable = 0
             if mode == 3:
                 self.history.clear()
                 self.lines.clear()
@@ -479,6 +538,7 @@ class Screen:
             )
         elif command in "LM" and self.scroll_top <= self.row <= self.scroll_bottom:
             self._scroll(self.row, self.scroll_bottom, value if command == "M" else -value)
+            self._unwrap(self.row)
             self.column = 0
         elif command == "s":
             self.saved = self.row, self.column
@@ -493,6 +553,9 @@ class Screen:
         line[start:end] = [(" ", background(self.pen))] * (end - start)
         if end == self.columns:
             line.wrapped = False
+            line.used = line.used if start else 0
+        if not start and end == self.columns:
+            self._unwrap(self.row)
 
     def append(self, data: bytes) -> None:
         for char in self.decoder.decode(data):
@@ -558,20 +621,19 @@ class Screen:
                     self.newline(wrap=True)
                     line = self.cells[self.row]
                 line[self.column] = char, self.pen
+                line.used = max(line.used, self.column + width)
                 if width == 2 and self.column + 1 < self.columns:
                     line[self.column + 1] = "", self.pen
                 self.column += width
 
     def resize(self, rows: int, columns: int) -> None:
+        """A saved main screen resizes when the alternate one ends."""
+        self.rows, self.columns = rows, columns
         if self.normal is None:
-            self._retire(self.cells, max(0, self.row + 1 - rows))
+            self._resize_main(self.cells, self.row, self.column)
         else:
-            cells, row, column, keyboard = self.normal
-            self._retire(cells, max(0, row + 1 - rows), read=False)
-            cells, row = fit(cells, row, rows, columns)
-            self.normal = cells, row, min(column, columns), keyboard
-        self.cells, self.row = fit(self.cells, self.row, rows, columns)
-        self.rows, self.columns, self.column = rows, columns, min(self.column, columns)
+            self.cells, self.row = fit(self.cells, self.row, rows, columns)
+            self.column = min(self.column, columns)
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = min(self.saved[0], rows - 1), min(self.saved[1], columns - 1)
 
@@ -579,7 +641,14 @@ class Screen:
         rows = [line_text(row) for row in self.cells]
         while rows and not rows[-1]:
             rows.pop()
-        return "\n".join(rows if lines is None else [*self.history, *rows][-lines:])[-self.limit :]
+        if lines is None:
+            return "\n".join(rows)[-self.limit :]
+        taken, retired = self._main()[:2]
+        history = [
+            *list(self.history)[: max(0, len(self.history) - taken)],
+            *map(line_text, retired),
+        ]
+        return "\n".join([*history, *rows][-lines:])[-self.limit :]
 
     def replay(self) -> deque[str]:
         """A new display's replay: history to wrap at its width, the screen row for row, cursor,
@@ -592,7 +661,7 @@ class Screen:
                 after = cells[index + 1] if index + 1 < len(cells) else blank(0)
                 # only a printed character autowraps: a blank next row takes \r\n
                 shown = any(cell != (" ", PLAIN) for cell in after)
-                wrapped = row.wrapped and row.full is None and shown
+                wrapped = row.wrapped and shown
                 margin = leads_wide(after)
                 out.append(render(row, wrapped=wrapped, margin=margin))
             return "".join(out).removesuffix("\r\n")
@@ -621,13 +690,24 @@ class Screen:
             return "".join(f"\x1b[>{flags}u" for flags in stack)
 
         parts = deque([RESET + "\x1b[0m\x1b[?1049l\x1b7\x1b[r\x1b8\r\x1b[J"])
-        parts.extend(self.lines)
-        if self.lines and not self.lines[-1].endswith("\r\n"):
-            parts.append("\r\n")
-        main = self.normal or (self.cells, self.row, self.column, self.keyboard)
-        parts.append(screen(main[0]))
+        taken, retired, cells, row, column = self._main()
+        rest = [*retired, *cells]
+        history = [*list(self.lines)[: len(self.lines) - taken]]
+        history += [
+            (line, render(line, wrapped=line.wrapped, margin=leads_wide(rest[index + 1])))
+            for index, line in enumerate(retired)
+        ]
+        parts.extend(text for _, text in history)
+        if history and not history[-1][1].endswith("\r\n"):
+            last, text, first = *history[-1], cells[0]
+            # a line wrapping onto the screen goes on there
+            if text != render(last, wrapped=True, margin=leads_wide(first)) or all(
+                cell == (" ", PLAIN) for cell in first
+            ):
+                parts.append("\r\n")
+        parts.append(screen(cells))
         if self.normal is not None:
-            parts.append(keys(main[3]) + cursor(*main[:3]) + "\x1b[?1049h")
+            parts.append(keys(self.normal[3]) + cursor(cells, row, column) + "\x1b[?1049h")
             parts.extend(
                 f"\x1b[{row + 1};1H" + render(line, wrapped=False).removesuffix("\r\n")
                 for row, line in enumerate(self.cells)
@@ -645,11 +725,74 @@ class Screen:
         return parts
 
 
+def unwrap(cells: list[Row], row: int, column: int) -> tuple[list[list[Cell]], int, int]:
+    """cells as logical lines, written cells and the cursor kept: (lines, cursor line, offset)."""
+    lines: list[list[Cell]] = []
+    ends: list[int] = []
+    at, joined = (0, 0), False
+    for index, line in enumerate(cells):
+        part = list(line)
+        if line.wrapped and part[-1][0] == "" and not (len(part) > 1 and wide(part[-2][0])):
+            part.pop()
+        if not joined:
+            lines.append([])
+            ends.append(0)
+        if index == row:
+            at = (len(lines) - 1, len(lines[-1]) + column)
+        ends[-1] = len(lines[-1]) + line.used
+        lines[-1] += part
+        joined = line.wrapped
+    for number, line in enumerate(lines):
+        end = max(ends[number], at[1] if number == at[0] else 0)
+        while len(line) > end and line[-1] == (" ", PLAIN):
+            line.pop()
+        line += [(" ", PLAIN)] * (end - len(line))
+    return lines, *at
+
+
+def rewrap(line: list[Cell], columns: int, offset: int) -> tuple[list[Row], int, int]:
+    """line in rows as append wraps it: (rows, cell offset's row and column)."""
+    rows: list[list[Cell]] = [[]]
+    at, index = (0, 0), 0
+    while index < len(line):
+        size = (
+            2 if index + 1 < len(line) and line[index + 1][0] == "" and wide(line[index][0]) else 1
+        )
+        cells = line[index : index + min(size, columns)]
+        if len(rows[-1]) + len(cells) > columns:
+            if len(rows[-1]) < columns:
+                rows[-1].append(("", cells[0][1]))
+            rows.append([])
+        if index <= offset < index + size:
+            at = (len(rows) - 1, len(rows[-1]))
+        rows[-1] += cells
+        index += size
+    if offset >= len(line):
+        at = (len(rows) - 1, len(rows[-1]))
+    found = [Row(cells + [(" ", PLAIN)] * (columns - len(cells))) for cells in rows]
+    for wrapped, cells in zip(found, rows, strict=True):
+        wrapped.wrapped, wrapped.used = wrapped is not found[-1], len(cells)
+    return found, *at
+
+
+def reflow(cells: list[Row], row: int, column: int, columns: int) -> tuple[list[Row], int, int]:
+    """cells rewrapped at columns a whole line at a time: (rows, cursor row, column)."""
+    lines, line, offset = unwrap(cells, row, column)
+    found: list[Row] = []
+    for number, text in enumerate(lines):
+        rows, at_row, at_column = rewrap(text, columns, offset if number == line else -1)
+        if number == line:
+            row, column = len(found) + at_row, at_column
+        found += rows
+    return found, row, column
+
+
 def fit(cells: list[Row], row: int, rows: int, columns: int) -> tuple[list[Row], int]:
     """cells cut or padded to rows x columns, top lines dropped to keep row: (cells, its row)."""
     shift = max(0, row + 1 - rows)
     lines = [
-        line if len(line) == columns else cut(line, columns) for line in cells[shift : shift + rows]
+        line if len(line) == columns else Row(line[:columns] + blank(columns)[len(line) :])
+        for line in cells[shift : shift + rows]
     ]
     return lines + [blank(columns) for _ in range(rows - len(lines))], row - shift
 
@@ -1320,14 +1463,22 @@ class Guard:
                     self.peer_read(peer)
 
 
-def attach(path: str) -> int:
+def connect(path: str) -> socket.socket | None:
     peer = socket.socket(socket.AF_UNIX)
     try:
         peer.connect(path)
     except OSError as error:
         peer.close()
         print(f"guard: display {path}: {error.strerror or error}", file=sys.stderr)
+        return None
+    return peer
+
+
+def attach(path: str) -> int:
+    """Pre-replay guards paint before sizing: show a 2nd connection."""
+    if (first := connect(path)) is None:
         return 1
+    peers = [first]  # the last shows; one closed before the last's size frame resizes the PTY
     previous = termios.tcgetattr(0) if os.isatty(0) else None
     resized, poke = os.pipe()  # SIGWINCH wakes the select through it
     os.set_blocking(poke, False)
@@ -1337,25 +1488,40 @@ def attach(path: str) -> int:
     def send_size() -> None:
         if previous is not None:
             columns, rows = os.get_terminal_size(0)
-            peer.sendall(json_frame(b"w", {"rows": rows, "columns": columns}))
+            peers[-1].sendall(json_frame(b"w", {"rows": rows, "columns": columns}))
 
     try:
         if previous is not None:
             tty.setraw(0, termios.TCSANOW)  # TCSAFLUSH would drop what was typed before it
         send_size()
+        shown = False
         while True:
-            ready, _, _ = select.select([0, peer, resized], [], [])
+            ready, _, _ = select.select([0, resized, *peers], [], [])
             for descriptor in ready:
                 if descriptor == resized:
                     os.read(resized, READ_SIZE)
                     send_size()
+                    continue
+                peer = peers[-1]
+                if descriptor in peers[:-1]:
+                    stale = peers[peers.index(descriptor)]
+                    if not stale.recv(READ_SIZE):
+                        peers.remove(stale)
+                        stale.close()
                     continue
                 data = os.read(0, READ_SIZE) if descriptor == 0 else peer.recv(READ_SIZE)
                 if not data:
                     return 0
                 if descriptor == 0:
                     peer.sendall(frame(b"i", data))
+                elif not shown and previous is not None and data.startswith(SNAPSHOT):
+                    if (second := connect(path)) is None:
+                        return 1
+                    peers.append(second)
+                    shown = True
+                    send_size()
                 else:
+                    shown = True
                     sys.stdout.buffer.write(data)
                     sys.stdout.buffer.flush()
     finally:
@@ -1365,7 +1531,8 @@ def attach(path: str) -> int:
         os.close(poke)
         if previous is not None:
             termios.tcsetattr(0, termios.TCSADRAIN, previous)
-        peer.close()
+        for peer in peers:
+            peer.close()
 
 
 def hold_lease(path: str) -> int | None:

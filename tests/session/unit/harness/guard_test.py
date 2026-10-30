@@ -12,7 +12,7 @@ import struct
 import sys
 import termios
 import tty
-from collections import deque
+from collections import Counter, deque
 from pathlib import Path
 from unittest import mock
 
@@ -56,6 +56,11 @@ def shown(screen, rows=None, columns=None):
     return terminal
 
 
+def repainted(rows, lines) -> bytes:
+    """Claude Code 2.1.314's resize redraw as recorded: home, each row erased, lines from home."""
+    return b"\x1b[H" + b"\x1b[2K\x1b[1B" * rows + b"\x1b[H" + b"\r\r\n".join(lines)
+
+
 def effective(modes) -> dict[str, str]:
     """modes over the defaults RESET sets, as a display holds them."""
     defaults = guard.Screen(rows=1, columns=1)
@@ -63,11 +68,25 @@ def effective(modes) -> dict[str, str]:
     return {**defaults.modes, **modes}
 
 
+def history(screen) -> list[str]:
+    """screen's display history as rendered, oldest first."""
+    return [text for _, text in screen.lines]
+
+
+def text_rows(terminal) -> list[str]:
+    """terminal's history and visible rows as text, without colors or trailing blank rows."""
+    found = [re.sub(r"\x1b\[[0-9;:]*m", "", line).rstrip() for line in history(terminal)]
+    found += [guard.line_text(row) for row in terminal.cells]
+    while found and not found[-1]:
+        found.pop()
+    return found
+
+
 def logical(terminal) -> list[str]:
     """terminal's history and visible rows as logical lines, without colors."""
     found, current = [], ""
     rows = [
-        (re.sub(r"\x1b\[[0-9;:]*m", "", line), line.endswith("\r\n")) for line in terminal.lines
+        (re.sub(r"\x1b\[[0-9;:]*m", "", line), line.endswith("\r\n")) for line in history(terminal)
     ]
     rows += [("".join(text for text, _ in row), not row.wrapped) for row in terminal.cells]
     for text, ended in rows:
@@ -233,7 +252,7 @@ class DisplayTest(Base):
         terminal = guard.Screen(1 << 30, rows=6, columns=30)
         terminal.append(b"".join(sent["second"]))
         self.assertEqual(terminal.text(None), runtime.screen.text(None))
-        self.assertIn("\x1b[0;31mline-1\x1b[0m\r\n", terminal.lines)
+        self.assertIn("\x1b[0;31mline-1\x1b[0m\r\n", history(terminal))
 
     def test_a_display_sized_inside_a_split_character_shows_it_whole(self):
         runtime, sent = self.runtime(terminal=True), []
@@ -254,7 +273,7 @@ class DisplayTest(Base):
         self.output(runtime, b"".join(b"row-%d\r\n" % i for i in range(100)))
         peer = self.connect(runtime, mock.Mock(side_effect=BlockingIOError))
         replay = runtime.displays[peer].replay
-        self.assertTrue(any(part is runtime.screen.lines[0] for part in replay))
+        self.assertTrue(any(part is history(runtime.screen)[0] for part in replay))
         self.output(runtime, b"".join(b"new-%d\r\n" % i for i in range(3000)))
         pinned = sum(len(part.encode()) for part in replay)
         self.assertLessEqual(
@@ -415,31 +434,24 @@ class CellTest(Base):
         self.assertTrue(screen.cells[0].wrapped)
         self.assertEqual(screen.text(None), "abc\n中")
 
-    def test_writing_a_row_drops_its_full_cells_and_their_wrap(self):
-        row = guard.Row([("a", guard.PLAIN)] * 2)
-        row.full, row.wrapped = [("a", guard.PLAIN)] * 4, True
-        row[1:] = [("b", guard.PLAIN)]
-        self.assertEqual((row.full, row.wrapped), (None, False))
-        row.wrapped = True
-        row[0] = ("c", guard.PLAIN)
-        self.assertTrue(row.wrapped)
-
 
 class HistoryTest(Base):
     def test_display_history_keeps_the_last_2000_rows_at_output_width(self):
         screen = guard.Screen(rows=5, columns=10)
         screen.append(b"".join(b"line-%04d\r\n" % i for i in range(3000)))
         self.assertEqual(len(screen.lines), guard.LINES)
-        self.assertEqual((screen.lines[0], screen.lines[-1]), ("line-0996\r\n", "line-2995\r\n"))
+        self.assertEqual(
+            (history(screen)[0], history(screen)[-1]), ("line-0996\r\n", "line-2995\r\n")
+        )
         screen.append(b"x" * 25 + b"\r\n" + b"\r\n" * 5)
-        retired = list(screen.lines)
+        retired = history(screen)
         start = retired.index("x" * 10)
         self.assertEqual(retired[start : start + 3], ["x" * 10, "x" * 10, "xxxxx\r\n"])
 
     def test_rows_render_their_colors(self):
         screen = guard.Screen(rows=2, columns=20)
         screen.append(b"\x1b[1;31mred\x1b[0m plain\x1b[44m\r\n\r\n")
-        self.assertEqual(screen.lines[0], "\x1b[0;1;31mred\x1b[0m plain\r\n")
+        self.assertEqual(history(screen)[0], "\x1b[0;1;31mred\x1b[0m plain\r\n")
 
     def test_the_byte_bound_drops_the_oldest_rows(self):
         screen = guard.Screen(rows=1, columns=4000)
@@ -449,15 +461,15 @@ class HistoryTest(Base):
                 [(str(number % 10), guard.PLAIN)] + [(heavy, guard.PLAIN)] * 3999
             )
             screen.append(b"\n")
-        row = len(screen.lines[-1].encode())
+        row = len(history(screen)[-1].encode())
         self.assertEqual(len(screen.lines), guard.LINES_SIZE // row)
         self.assertEqual(screen.lines_size, len(screen.lines) * row)
-        self.assertTrue(screen.lines[-1].startswith("9"))
+        self.assertTrue(history(screen)[-1].startswith("9"))
 
     def test_display_and_read_histories_are_independent(self):
         screen = guard.Screen(rows=2, columns=10)
         screen.append(b"".join(b"r%d\r\n" % i for i in range(2100)))
-        self.assertEqual((len(screen.lines), screen.lines[0]), (guard.LINES, "r99\r\n"))
+        self.assertEqual((len(screen.lines), history(screen)[0]), (guard.LINES, "r99\r\n"))
         self.assertEqual(screen.text(2100).split("\n")[:2], ["r0", "r1"])
         screen = guard.Screen(20, rows=2, columns=10)
         screen.append(b"".join(b"r%d\r\n" % i for i in range(9)))
@@ -467,29 +479,224 @@ class HistoryTest(Base):
     def test_ed3_clears_both_histories(self):
         screen = guard.Screen(rows=2, columns=10)
         screen.append(b"a\r\nb\r\nc\r\n\x1b[3J")
-        self.assertEqual((list(screen.lines), screen.lines_size, screen.text(5)), ([], 0, ""))
+        self.assertEqual((history(screen), screen.lines_size, screen.text(5)), ([], 0, ""))
 
-    def test_lines_cut_by_a_narrower_width_retire_whole(self):
+    def test_a_narrower_width_rewraps_lines_and_retires_the_rows_above(self):
         screen = guard.Screen(rows=3, columns=12)
         screen.append(b"abcdefghijklmnopqrstu")
         screen.resize(3, 5)
-        self.assertEqual(screen.text(None), "abcde\nmnopq")
+        self.assertEqual(screen.text(None), "pqrst\nu")  # bottom rows shown, its blank one too
+        self.assertEqual((screen.row, screen.column), (1, 1))
         screen.append(b"\r\n\r\n\r\n")
-        self.assertEqual(list(screen.lines), ["abcdefghijkl", "mnopqrstu\r\n"])
+        self.assertEqual(history(screen), ["abcde", "fghij", "klmno", "pqrst", "u\r\n"])
 
-    def test_widening_never_joins_padding_into_a_logical_line(self):
+    def test_widening_rejoins_a_wrapped_line(self):
         screen = guard.Screen(rows=3, columns=4)
         screen.append(b"abcdef")
         screen.resize(3, 8)
+        self.assertEqual((screen.text(None), screen.column), ("abcdef", 6))
         screen.append(b"\r\n\r\n\r\n")
-        self.assertEqual(list(screen.lines), ["abcd", "ef\r\n"])
+        self.assertEqual(history(screen), ["abcdef\r\n"])
 
-    def test_a_write_after_a_width_change_drops_the_cut_cells(self):
-        screen = guard.Screen(rows=3, columns=12)
-        screen.append(b"abcdefghijklmnopqrstu")
-        screen.resize(3, 5)
-        screen.append(b"\x1b[1;1HX\x1b[3;1H\r\n\r\n\r\n")
-        self.assertEqual(list(screen.lines)[:2], ["Xbcde\r\n", "mnopqrstu\r\n"])
+    def test_a_height_change_keeps_the_width_and_retires_above_the_cursor(self):
+        screen = guard.Screen(rows=3, columns=4)
+        screen.append(b"abcdef\r\nX")
+        screen.resize(2, 4)
+        self.assertEqual((screen.text(None), screen.row, history(screen)), ("ef\nX", 1, ["abcd"]))
+
+    def test_rows_below_the_cursor_stay_when_a_narrower_width_overflows(self):
+        screen = guard.Screen(rows=5, columns=80)
+        screen.append("\r\n".join(letter * 80 for letter in "ABCDE").encode() + b"\x1b[H")
+        screen.resize(5, 40)
+        self.assertEqual(logical(shown(screen, 5, 40))[:5], [letter * 80 for letter in "ABCDE"])
+        self.assertEqual((screen.row, screen.column), (0, 0))
+
+    def test_a_reflow_moves_a_wide_character_past_the_margin_and_keeps_a_pending_wrap(self):
+        screen = guard.Screen(rows=3, columns=5)
+        screen.append("ab中中\r\n".encode())
+        screen.resize(3, 3)
+        self.assertEqual((history(screen), screen.row), (["ab"], 2))
+        self.assertEqual(logical(shown(screen, 3, 3))[0], "ab中中")
+        screen = guard.Screen(rows=2, columns=4)
+        screen.append(b"abcd")
+        screen.resize(2, 2)
+        self.assertEqual((screen.text(None), screen.row, screen.column), ("cd", 0, 2))
+        screen.append(b"e")
+        self.assertEqual(screen.text(None), "cd\ne")
+
+    def test_the_main_screen_under_the_alternate_one_reflows(self):
+        screen = guard.Screen(rows=3, columns=4)
+        screen.append(b"abcdef\x1b[?1049hX")
+        screen.resize(3, 8)
+        self.assertEqual(screen.text(None), "\n  X")
+        screen.append(b"\x1b[?1049l")
+        self.assertEqual((screen.text(None), screen.column), ("abcdef", 6))
+
+    def test_a_reflow_keeps_written_blanks_as_tmux_does(self):
+        """tmux 3.3a measured: written spaces and a mid-row erase keep a row's width; an erase
+        from its first column drops it.
+        """
+        screen = guard.Screen(rows=24, columns=80)
+        screen.append(
+            b"x" * 80
+            + b"\r\x1b[Kel\r\n"
+            + b"y" * 80
+            + b"\r\x1b[10C\x1b[K\r\n"
+            + b"z" * 80
+            + b"\r\x1b[2Ktwo\r\n"
+            + b" " * 79
+            + b"s\r\n> "
+        )
+        screen.resize(24, 62)
+        rows = ["el", "y" * 10, "", "two", "", " " * 17 + "s", ">"]
+        self.assertEqual(screen.text(30).split("\n"), rows)
+
+    def test_rows_on_screen_at_a_narrower_width_survive_a_full_repaint(self):
+        """Claude Code redraws a resize as home, every row erased, its tail from the top."""
+        screen = guard.Screen(rows=6, columns=20)
+        screen.append(b"".join(letter * 20 + b"\r\n" for letter in (b"a", b"b", b"c", b"d")))
+        screen.append(b"> \r\nfooter\x1b[1A\r\x1b[2C")
+        screen.resize(6, 10)
+        screen.append(repainted(6, [b"d" * 10, b"d" * 10, b"> ", b"footer"]))
+        lines = logical(shown(screen, 6, 10))
+        self.assertEqual((lines.count("a" * 20), lines.count("b" * 20)), (1, 1))
+
+    def test_a_narrower_show_after_3000_lines_keeps_the_last_2000_rows_whole(self):
+        screen = guard.Screen(rows=24, columns=80)
+        lines = [f"line {n:04} " + "x" * 60 for n in range(1, 3001)]
+        screen.append("".join(f"{line}\r\n" for line in lines).encode() + b"> ")
+        screen.resize(30, 62)
+        layout = [part for line in lines for part in (line[:62], line[62:])] + ["> "]
+        screen.append(repainted(30, [line.encode() for line in layout[-30:]]))
+        self.assertEqual(len(screen.lines), guard.LINES)
+        # 2000 rows held lines 978-2977; the reflow retires 17 rows at 62 columns past them
+        self.assertEqual(logical(screen)[:2], lines[994:996])
+        for found, kept in (("\n".join(logical(screen)), lines[994:]), (screen.text(5000), lines)):
+            counted = Counter(re.findall(r"line \d{4}", found))
+            self.assertEqual(counted, Counter(line[:9] for line in kept))
+
+    def test_a_resized_show_matches_tmux_on_either_screen(self):
+        """tmux 3.3a measured: a pane at 80x24 gets the output, resize-window, then the redraw;
+        its rows are the redraw's layout[:kept] + its last rows, the cursor after `status`.
+        """
+        lines = [f"line {n:04} " + "x" * 60 for n in range(1, 501)]
+        rows = [f"row {n:04}" for n in range(1, 11)]
+
+        def layout(columns):
+            parts = [line[i : i + columns] for line in lines for i in range(0, len(line), columns)]
+            return [*parts, "❯ LINES:10", *rows, "─" * columns, "> ", "─" * columns, "status"]
+
+        names = re.compile(r"line \d{4}|row \d{4}|❯ LINES:10")
+        kept = {(30, 62): 988, (30, 80): 485, (24, 62): 994, (20, 80): 493, (20, 62): 995}
+        for (height, width), count in kept.items():
+            for alternate in (False, True):
+                with self.subTest(size=f"{width}x{height}", alternate=alternate):
+                    screen = guard.Screen(rows=24, columns=80)
+                    output = [*lines, "❯ LINES:10" + " " * 70, *rows]
+                    screen.append("".join(f"{line}\r\n" for line in output).encode())
+                    screen.append("\r\n".join(layout(80)[-4:]).encode() + b"\x1b[2A\r\x1b[2C")
+                    if alternate:
+                        screen.append(b"\x1b[?1049h\x1b[Halt screen\r\n> ")
+                    screen.resize(height, width)
+                    display = shown(screen, height, width)
+                    redraw = repainted(height, [row.encode() for row in layout(width)[-height:]])
+                    if alternate:
+                        redraw = repainted(height, [b"alt screen", b"> "]) + b"\x1b[?1049l" + redraw
+                    display.append(redraw)
+                    screen.append(redraw)
+                    expected = [
+                        row.rstrip() for row in layout(width)[:count] + layout(width)[-height:]
+                    ]
+                    self.assertEqual(text_rows(display), expected)
+                    self.assertEqual((display.row, display.column), (height - 1, 6))
+                    counted = Counter(names.findall("\n".join(expected)))
+                    self.assertEqual(Counter(names.findall(screen.text(5000))), counted)
+
+    def test_a_resize_takes_back_scrolled_rows_and_resizes_a_saved_screen_once(self):
+        """tmux 3.3a measured: the visible rows and cursor after each case."""
+        lines = [b"line %04d" % n for n in range(1, 101)]
+        long = [line + b" " + b"x" * 60 for line in lines]
+        footer = b"> \r\n-----\r\nstatus\x1b[2A\r\x1b[2C"
+        cases = (  # (rows, columns), output, sizes, output after them, visible rows, cursor
+            (
+                (24, 80),
+                b"\r\n".join(lines) + b"\r\n\x1b[2J\x1b[Hprompt",
+                [(30, 80)],
+                b"",
+                [b"prompt"],
+                (0, 6),
+            ),
+            (
+                (24, 62),
+                b"\r\n".join(long) + b"\r\n> ",
+                [(24, 80)],
+                b"",
+                [*long[77:], b">"],
+                (23, 2),
+            ),
+            (
+                (24, 80),
+                b"\r\n".join(lines) + b"\r\n" + footer + b"\x1b[?1049h",
+                [(30, 80), (24, 80)],
+                b"\x1b[?1049l",
+                [*lines[79:], b">", b"-----", b"status"],
+                (21, 2),
+            ),
+        )
+        for size, output, sizes, after, visible, cursor in cases:
+            with self.subTest(sizes=sizes):
+                screen = guard.Screen(rows=size[0], columns=size[1])
+                screen.append(output)
+                for rows, columns in sizes:
+                    screen.resize(rows, columns)
+                screen.append(after)
+                found = [guard.line_text(row).encode() for row in screen.cells]
+                while found and not found[-1]:
+                    found.pop()
+                self.assertEqual((found, (screen.row, screen.column)), (visible, cursor))
+
+    def test_a_row_emptied_whole_ends_the_line_above_it_in_history_too(self):
+        """tmux 3.3a measured (capture-pane -J): only an erase of the whole row unwraps the one above."""
+        cut = ["top", "aaaaaaaaaa", "", "r"]
+        for tail, lines in (
+            (b"\x1b[H\x1b[2K", cut),
+            (b"\x1b[H\x1b[K", cut),
+            (b"\x1b[H\x1b[9C\x1b[1K", cut),
+            (b"\x1b[H\x1b[L", ["top", "aaaaaaaaaa", "", "BBBB", "r"]),
+            (b"\x1b[H\x1b[M", ["top", "aaaaaaaaaa", "r"]),
+            (b"\x1b[H\x1b[5C\x1b[K", ["top", "aaaaaaaaaaBBBB", "r"]),
+            (b"\x1b[H\x1b[1K", ["top", "aaaaaaaaaa BBB", "r"]),
+        ):
+            with self.subTest(tail=tail):
+                screen = guard.Screen(rows=3, columns=10)
+                screen.append(b"top\r\n" + b"a" * 10 + b"B" * 4 + b"\r\nr\r\n" + tail)
+                found = logical(shown(screen))
+                while found and not found[-1]:
+                    found.pop()
+                self.assertEqual(found, lines)
+
+    def test_a_clear_screen_keeps_none_of_its_rows_and_ends_the_line_above(self):
+        """Unlike tmux's scroll-on-clear, the cleared rows never reach history or a display."""
+        screen = guard.Screen(rows=3, columns=10)
+        screen.append(b"top\r\n" + b"a" * 10 + b"B" * 4 + b"\r\nr\r\n\x1b[2J\x1b[Hprompt")
+        self.assertEqual(logical(shown(screen))[:3], ["top", "aaaaaaaaaa", "prompt"])
+        self.assertEqual(screen.text(10), "top\naaaaaaaaaa\nprompt")
+
+    def test_a_wrapped_history_row_joins_the_screen_only_where_it_continues(self):
+        for output, first in (
+            (b"abcdefghij", "abcdefghij"),  # continued
+            (b"abcdefgh\x1b[2K\r\n", "abcd"),  # its continuation erased
+            ("abc中\r\n\x1b[Hxy".encode(), "abc"),  # the wide character it skipped a column for
+        ):
+            with self.subTest(output=output):
+                screen = guard.Screen(rows=2, columns=4)
+                screen.append(output)
+                display = shown(screen)
+                self.assertEqual(
+                    ([guard.line_text(row) for row in display.cells], display.row, display.column),
+                    ([guard.line_text(row) for row in screen.cells], screen.row, screen.column),
+                )
+                self.assertEqual(logical(display)[0], first)
 
     def test_an_unchanged_width_keeps_rows_and_their_flags(self):
         screen = guard.Screen(rows=3, columns=4)
@@ -499,13 +706,37 @@ class HistoryTest(Base):
         self.assertIs(screen.cells[0], row)
         self.assertTrue(row.wrapped)
 
-    def test_an_alternate_screen_resize_retires_main_rows_to_display_history_only(self):
+    def test_an_alternate_screen_resize_retires_main_rows_to_both_histories(self):
         screen = guard.Screen(rows=4, columns=8)
         screen.append(b"a\r\nb\r\nc\r\nd\x1b[?1049h")
         screen.resize(2, 8)
         screen.append(b"\x1b[?1049l")
-        self.assertEqual(list(screen.lines), ["a\r\n", "b\r\n"])
-        self.assertEqual(screen.text(10), "c\nd")
+        self.assertEqual(history(screen), ["a\r\n", "b\r\n"])
+        self.assertEqual(screen.text(10), "a\nb\nc\nd")
+
+    def test_a_narrower_width_under_the_alternate_screen_keeps_main_rows_readable(self):
+        screen = guard.Screen(rows=4, columns=10)
+        screen.append(b"0123456789abc\r\nline 2\r\nline 3\x1b[?1049h\x1b[Halt")
+        screen.resize(4, 5)
+        self.assertEqual(screen.text(20).split("\n"), ["01234", "56789", "abc", "alt"])
+        screen.append(b"\x1b[?1049l")
+        rows = ["01234", "56789", "abc", "line", "2", "line", "3"]
+        self.assertEqual(screen.text(20).split("\n"), rows)
+        self.assertEqual(logical(shown(screen)), ["0123456789abc", "line 2", "line 3"])
+
+    def test_a_narrower_show_keeps_every_line_once_on_either_screen(self):
+        lines = [f"line {n:02} " + "x" * (n % 3 * 30 + 1) for n in range(1, 21)]
+        for alternate in (False, True):
+            with self.subTest(alternate=alternate):
+                screen = guard.Screen(rows=8, columns=80)
+                screen.append("\r\n".join(lines).encode())
+                if alternate:
+                    screen.append(b"\x1b[?1049h\x1b[Hfull screen")
+                screen.resize(8, 62)
+                if alternate:
+                    screen.append(b"\x1b[?1049l")
+                self.assertEqual(logical(shown(screen)), lines)
+                self.assertEqual(screen.text(100).replace("\n", ""), "".join(lines))
 
     def test_a_rendered_row_spans_its_columns(self):
         plain = guard.PLAIN
@@ -526,7 +757,7 @@ class HistoryTest(Base):
     def test_a_wrapped_margin_before_a_wide_character_renders_nothing(self):
         screen = guard.Screen(rows=2, columns=4)
         screen.append("abc中\r\n\r\n".encode())
-        self.assertEqual(list(screen.lines)[:2], ["abc", "中\r\n"])
+        self.assertEqual(history(screen)[:2], ["abc", "中\r\n"])
 
 
 class StateTest(Base):
@@ -641,7 +872,7 @@ class ReplayTest(Base):
         screen.append(b"".join(b"\x1b[31mred-%d\x1b[0m\r\n" % i for i in range(10)))
         screen.append(b"\x1b[42mgreen\x1b[0m\r\n\x1b[36m> \x1b[33m")
         terminal = shown(screen)
-        self.assertEqual(terminal.lines[0], "\x1b[0;31mred-0\x1b[0m\r\n")
+        self.assertEqual(history(terminal)[0], "\x1b[0;31mred-0\x1b[0m\r\n")
         self.assertEqual(terminal.text(None), screen.text(None))
         self.assertEqual(terminal.cells, screen.cells)
         self.assertEqual(
@@ -660,13 +891,14 @@ class ReplayTest(Base):
         self.assertEqual(lines[:4], [*long, "spinner-19"])
         self.assertEqual(sum("spin" in line for line in lines), 1)
 
-    def test_lines_visible_at_a_narrower_attach_retire_whole(self):
+    def test_lines_visible_at_a_narrower_attach_rewrap_whole(self):
         line = "".join(chr(ord("a") + i % 26) for i in range(200))
         screen = guard.Screen(rows=10, columns=120)
         screen.append(line.encode() + "\r\n中文中文\r\n> ".encode())
         screen.resize(10, 50)
         first = shown(screen, 10, 50)
-        self.assertEqual(first.text(None).splitlines()[:2], [line[:50], line[120:170]])
+        self.assertEqual(first.text(None).splitlines()[:3], [line[100:150], line[150:], "中文中文"])
+        self.assertEqual(logical(first)[:1], [line])
         screen.append(b"\r\n" * 12)
         self.assertEqual(logical(shown(screen, 10, 50))[:2], [line, "中文中文"])
         screen.resize(10, 120)
@@ -778,12 +1010,12 @@ class ReplayTest(Base):
                 self.assertEqual((terminal.row, terminal.column), (screen.row, screen.column))
                 self.assertEqual(terminal.text(None).splitlines()[-1], "X")
 
-    def test_autowrap_after_narrowing_drops_the_old_width_cells(self):
+    def test_autowrap_after_narrowing_continues_the_rewrapped_line(self):
         screen = guard.Screen(rows=3, columns=120)
         screen.append(b"a" * 100)
         screen.resize(3, 50)
         screen.append(b"bc\r\n\n\n\n")
-        self.assertEqual(list(screen.lines)[:2], ["a" * 50, "bc\r\n"])
+        self.assertEqual(history(screen)[:3], ["a" * 50, "a" * 50, "bc\r\n"])
 
     def test_the_default_cursor_style_replaces_a_set_one(self):
         screen = guard.Screen(rows=2, columns=8)
@@ -827,7 +1059,7 @@ class ReplayTest(Base):
         screen = guard.Screen(rows=2, columns=8)
         screen.append(b"a\r\nb\r\nc\r\n")
         parts = screen.replay()
-        self.assertTrue(all(any(part is line for part in parts) for line in screen.lines))
+        self.assertTrue(all(any(part is line for part in parts) for line in history(screen)))
 
 
 class GuardTest(Base):
@@ -1166,12 +1398,14 @@ class GuardTest(Base):
         ):
             self.assertFalse(runtime.tick())
 
-    def attached(self, *, terminal, ready, sizes=()):
+    def attached(self, *, terminal, ready, sizes=(), peers=None):
         """guard.main --attach: (what it sent the guard, what it wrote out, restore, raw) with
-        stdin and the SIGWINCH pipe (30) read in ready's order.
+        stdin, the SIGWINCH pipe (30) and peers (by name, connected in order) read in ready's order.
         """
-        peer = mock.Mock()
-        peer.recv.side_effect = [b"terminal output", b""]
+        if peers is None:
+            peer = mock.Mock()
+            peer.recv.side_effect = [b"terminal output", b""]
+            peers = {"peer": peer}
         output = io.BytesIO()
         reads = {0: b"typed", 30: b"\x1c"}
         sizes = iter(sizes)
@@ -1182,7 +1416,7 @@ class GuardTest(Base):
             return next(sizes)
 
         with (
-            mock.patch.object(guard.socket, "socket", return_value=peer),
+            mock.patch.object(guard.socket, "socket", side_effect=list(peers.values())),
             mock.patch.object(os, "isatty", return_value=terminal),
             mock.patch.object(termios, "tcgetattr", return_value=["saved"]),
             mock.patch.object(termios, "tcsetattr") as restore,
@@ -1196,7 +1430,7 @@ class GuardTest(Base):
             mock.patch.object(
                 guard.select,
                 "select",
-                side_effect=[([fd if fd != "peer" else peer], [], []) for fd in ready],
+                side_effect=[([peers.get(fd, fd)], [], []) for fd in ready],
             ),
             mock.patch.object(os, "read", side_effect=lambda fd, _size: reads[fd]),
             mock.patch.object(sys, "stdout", buffer=output),
@@ -1204,9 +1438,12 @@ class GuardTest(Base):
             self.assertEqual(guard.main(["--attach", self.home + "/display"]), 0)
         self.assertEqual(wakeup.call_args_list, [mock.call(31), mock.call(-1)])
         self.assertEqual(handlers.call_args_list[-1], mock.call(signal.SIGWINCH, signal.SIG_DFL))
-        peer.close.assert_called_once()
-        sent = guard.Decoder().feed(b"".join(c.args[0] for c in peer.sendall.call_args_list))
-        return sent, output.getvalue(), restore, raw
+        sent = {}
+        for name, peer in peers.items():
+            peer.close.assert_called_once()
+            wire = b"".join(c.args[0] for c in peer.sendall.call_args_list)
+            sent[name] = guard.Decoder().feed(wire)
+        return sent if len(peers) > 1 else sent["peer"], output.getvalue(), restore, raw
 
     def test_display_attach_sends_its_size_typing_and_each_resize(self):
         sent, output, restore, raw = self.attached(
@@ -1225,6 +1462,32 @@ class GuardTest(Base):
         self.assertEqual(output, b"terminal output")
         raw.assert_called_once_with(0, termios.TCSANOW)  # keeps what was typed before it
         restore.assert_called_once_with(0, termios.TCSADRAIN, ["saved"])
+
+    def test_display_attach_to_a_guard_before_replay_shows_a_second_connection(self):
+        """That guard paints its screen at its own size on connect; a connection made after it
+        took the display's size gets it at that size. The first stays open: its close would size
+        the PTY back.
+        """
+        calls, old, shown = mock.Mock(), mock.Mock(), mock.Mock()
+        calls.attach_mock(old, "old")
+        calls.attach_mock(shown, "shown")
+        old.recv.side_effect = [
+            b"\x1b[?1049l\x1b[r\x1b[2J\x1b[1;1Hat its own size",
+            b"repaint",
+            b"",
+        ]
+        shown.recv.side_effect = [b"terminal output", b" to its end", b""]
+        sent, output, _, _ = self.attached(
+            terminal=True,
+            ready=["old", "shown", 0, "old", 30, "old", "shown", "shown"],
+            sizes=[os.terminal_size((33, 19))] * 2 + [os.terminal_size((80, 24))],
+            peers={"old": old, "shown": shown},
+        )
+        sized, resized = (b"w", b'{"rows":19,"columns":33}'), (b"w", b'{"rows":24,"columns":80}')
+        self.assertEqual(sent, {"old": [sized], "shown": [sized, (b"i", b"typed"), resized]})
+        self.assertEqual(output, b"terminal output to its end")
+        order = [name for name, _, _ in calls.mock_calls]
+        self.assertLess(order.index("old.sendall"), order.index("shown.connect"))
 
     def test_display_attach_without_a_terminal_sends_no_size(self):
         sent, output, restore, raw = self.attached(terminal=False, ready=[0, 30, "peer", "peer"])
@@ -1629,13 +1892,13 @@ class GuardTest(Base):
 
     def test_screen_resize_keeps_lines_and_the_cursor_line(self):
         screen = guard.Screen(rows=3, columns=10)
-        screen.append(b"one\r\ntwo\r\nthree")
+        screen.append(b"one\r\ntwo\r\nabcde")
         screen.resize(2, 4)
-        self.assertEqual((screen.text(None), screen.text(3)), ("two\nthre", "one\ntwo\nthre"))
-        self.assertEqual((screen.row, screen.column), (1, 4))
+        self.assertEqual((screen.text(None), screen.text(3)), ("abcd\ne", "two\nabcd\ne"))
+        self.assertEqual((screen.row, screen.column), (1, 1))
         screen.resize(4, 12)
-        screen.append(b"e!")
-        self.assertEqual(screen.text(None), "two\nthree!")
+        screen.append(b"!")
+        self.assertEqual(screen.text(None), "one\ntwo\nabcde!")
         self.assertEqual([len(line) for line in screen.cells], [12] * 4)
         screen = guard.Screen(rows=3, columns=10)
         screen.append(b"main\x1b[?1049halt")
