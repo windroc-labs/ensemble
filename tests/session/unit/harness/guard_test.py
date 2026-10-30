@@ -168,11 +168,15 @@ class StartupDisplayTest(Base):
             with self.subTest(close=close):
                 self.drain_exit(b"x" * (16 << 20), progressing=True, close=close)
 
+    def test_screen_query_during_exit_grace_keeps_exit_the_last_frame(self):
+        self.drain_exit(b"x" * (16 << 20), progressing=True, close="query")
+
     def drain_exit(self, data, *, progressing=False, stalled=False, close=None):
         runtime = self.runtime(terminal=True, display_grace=True)
         self.addCleanup(self.cleanup, runtime)
         runtime.screen = mock.Mock()
         runtime.screen.snapshot.return_value = b"current screen"
+        runtime.screen.text.return_value = "current screen"
         runtime.args.display_socket = self.home + "/display"
         hook_server, display_server, peer = mock.Mock(), mock.Mock(), mock.Mock()
         hook_server.accept.side_effect = BlockingIOError
@@ -185,10 +189,12 @@ class StartupDisplayTest(Base):
             ]
             + [b""]
         )
-        now, sent, requested = [100.0], [], []
+        now, sent, requested, captured = [100.0], [], [], []
 
         def read(_fd, _size):
             if _fd == 0:
+                if close == "query":
+                    return guard.json_frame(b"q", {"lines": None}) + guard.json_frame(b"c", {})
                 return guard.json_frame(b"c", {}) if close == "command" else b""
             chunk = next(chunks)
             now[0] += 0.2
@@ -220,7 +226,9 @@ class StartupDisplayTest(Base):
             spawned(sockets=[hook_server, display_server], proc=proc),
             mock.patch.object(os, "waitpid", side_effect=ChildProcessError),
             mock.patch.object(os, "read", side_effect=read),
-            mock.patch.object(os, "write", side_effect=lambda _fd, chunk: len(chunk)),
+            mock.patch.object(
+                os, "write", side_effect=lambda _fd, chunk: captured.append(chunk) or len(chunk)
+            ),
             mock.patch.object(guard.time, "monotonic", side_effect=lambda: now[0]),
             mock.patch.object(
                 guard.select,
@@ -236,6 +244,9 @@ class StartupDisplayTest(Base):
         else:
             self.assertEqual(b"".join(sent), b"" if stalled else data)
         self.assertIsNone(runtime.startup)
+        kinds = [kind for kind, _ in guard.Decoder().feed(b"".join(captured))]
+        self.assertEqual(kinds[-1], b"x")
+        self.assertEqual(kinds.count(b"x"), 1)
 
 
 class GuardTest(Base):
