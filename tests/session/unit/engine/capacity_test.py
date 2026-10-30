@@ -47,6 +47,62 @@ class AdmissionTest(Case):
         self.addCleanup(ticket.close)
         return ticket
 
+    def promptly(self, action):
+        """`action`'s SessionError, or None, once it returns on another thread within 2 s."""
+        outcome = []
+
+        def run():
+            try:
+                action()
+                outcome.append(None)
+            except SessionError as error:
+                outcome.append(error)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        thread.join(2)
+        self.assertTrue(outcome, "blocked behind another start of its client")
+        return outcome[0]
+
+    def admitted(self, ticket):
+        def admit():
+            with ticket:
+                pass
+
+        return self.promptly(admit)
+
+    def test_a_start_in_flight_does_not_hold_back_other_starts_of_its_client(self):
+        for limit in (0, 2):
+            with self.subTest(limit=limit):
+                first = self.enter(limit=limit, mode=Mode.TUI)
+                with first:
+                    self.assertIsNone(
+                        self.admitted(self.enter(limit=limit, name="second", sid="s2"))
+                    )
+                    self.assertIsNone(
+                        self.promptly(lambda: Admission.reconcile("fake", {"h": self.host}))
+                    )
+
+    def test_an_in_flight_tui_start_holds_its_slot_before_its_session_exists(self):
+        first = self.enter(mode=Mode.TUI)
+        with first:
+            error = self.admitted(self.enter(name="second", sid="s2"))
+            self.assertRegex(str(error), "limit 1; held by: first")
+            self.assertIsNone(self.promptly(lambda: Admission.reconcile("fake", {"h": self.host})))
+            self.assertTrue(os.path.exists(first.path))
+            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            first.started(lambda: Liveness.LIVE)
+        with self.assertRaisesRegex(SessionError, "held by: first"), self.enter(name="third"):
+            self.fail("admitted")
+
+    def test_an_in_flight_tui_start_and_its_session_count_once(self):
+        first = self.enter(limit=2, mode=Mode.TUI)
+        with first:
+            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            self.assertIsNone(self.admitted(self.enter(limit=2, name="second", sid="s2")))
+            first.started(lambda: Liveness.LIVE)
+
     def test_live_transient_reservation_counts_and_failure_rolls_back(self):
         live = mock.Mock(return_value=Liveness.LIVE)
         first = self.enter()
@@ -255,7 +311,7 @@ class AdmissionTest(Case):
         with self.assertRaisesRegex(SessionError, "no server running"), self.enter():
             pass
 
-    def test_concurrent_admissions_serialize_the_count_and_start(self):
+    def test_concurrent_admissions_serialize_the_count_and_reservation(self):
         barrier = threading.Barrier(2)
         admitted, refused, errors = [], [], []
         tickets = [self.enter(name=f"n{i}", sid=f"s{i}") for i in range(2)]
