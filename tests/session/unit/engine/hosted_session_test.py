@@ -429,14 +429,15 @@ class ConfiguredTest(Case):
             str(caught.exception), "clients: want a mapping of [clients.<name>] tables"
         )
 
-    def test_each_configured_class_has_its_own_setup_and_none_changes_hosted_session(self):
-        first = harnesses.Threaded.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
-        second = harnesses.Threaded.configured(clients={}, hosts=parsed(FAKE_HOSTS, "fake"))
+    def test_each_configured_class_has_its_own_setup_and_none_changes_its_parent(self):
+        parent = type("Parent", (HostedSession,), {})
+        first = parent.configured(clients={}, hosts=parsed(HOSTS, "tmux"))
+        second = parent.configured(clients={}, hosts=parsed(FAKE_HOSTS, "fake"))
         self.assertIsNot(first, second)
         self.assertIsInstance(first.host(), TmuxHost)
         self.assertIsInstance(second.host(), FakeHost)
         with self.assertRaises(ConfigError) as caught:
-            HostedSession.host()
+            parent.host()
         self.assertEqual(str(caught.exception), UNCONFIGURED)
 
     def test_a_subclass_of_a_configured_class_starts_unconfigured(self):
