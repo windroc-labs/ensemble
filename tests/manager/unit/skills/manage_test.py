@@ -126,6 +126,25 @@ class Manage(Case):
             if re.search(r"\b(tier|effort)\b", line):
                 self.assertEqual(runs, line)
 
+    def test_board_run_preconditions_are_said_once_and_pointed_to(self):
+        runs = rule("**Board runs**")
+        for literal in (
+            "only an issue in Todo (`--state ready`)",
+            "assigned to a role (`--role <role>`)",
+            "where the board has projects, in one (`--project`)",
+            "names each unmet one",
+            "Its task (`--task`), if set, is one the board configures for that role",
+            "bounces the issue to In Review",
+        ):
+            self.assertIn(literal, runs)
+            self.assertEqual(body("manage").count(literal), 1, literal)
+        self.assertIn("preconditions: Board runs", rule("**Pipeline**"))
+        self.assertIn("preconditions: Board runs", rule("Create issues when asked"))
+        labels = rule("**Task labels**")
+        self.assertIn("only names Board runs allows", labels)
+        self.assertIn("leave it unset", labels)
+        self.assertEqual(body("manage").count("`ensemble-delegate run --list`"), 1)
+
     def test_approved_board_proposals_run_after_a_state_reread(self):
         board = section("manage", "The task board")
         proposals = rule("**Board proposals**")

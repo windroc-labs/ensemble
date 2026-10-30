@@ -151,7 +151,7 @@ class LocalTracker(Tracker):
         self.files()[key] = found
         role = found.assignee if found.assignee in self.roles else None
         return Recheck(
-            ready=role is not None and found.state == LocalState.READY,
+            ready=found.state == LocalState.READY,
             role=role,
             refused=None,
             assignee=None if found.assignee is None else {"id": found.assignee},

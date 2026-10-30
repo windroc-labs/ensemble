@@ -500,7 +500,7 @@ class Launch(CliCase):
                 self.assertEqual(self.roster.entries(), {})
 
     def test_a_refused_launch_prints_its_layers_reason(self):
-        reason = "router.py: pick-none TASK-12 reason=not a Todo issue delegated to a role app"
+        reason = "router.py: pick-none TASK-12 reason=not in Todo; no configured role delegate"
         for verb, key in (("issue", "TASK-12"), ("role", "pm"), ("worker", "w1")):
             with self.subTest(verb=verb):
                 result, stdout, stderr = self.start(
@@ -522,7 +522,7 @@ class Launch(CliCase):
         native_open = os.open
         ready = False
         removed = []
-        reason = "router.py: pick-none TASK-12 reason=not a Todo issue delegated to a role app"
+        reason = "router.py: pick-none TASK-12 reason=not in Todo; no configured role delegate"
 
         def run(_argv, **_options):
             nonlocal ready
