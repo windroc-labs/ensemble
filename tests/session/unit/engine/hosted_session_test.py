@@ -34,7 +34,6 @@ from ensemble.session.engine import hosted_session
 from ensemble.session.engine import types as engine_types
 from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.records import RunLog
-from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -191,7 +190,7 @@ class ClientCapacityTest(HostedTuiBase):
         for mode, boundary in (
             ("headless", self.host.calls.headless_worker),
             ("tui", self.host.calls.worker),
-            ("tui", self.host.calls.close_view),
+            ("tui", self.host.calls.unclaimed),
         ):
             with self.subTest(mode=mode, boundary=boundary):
                 boundary.side_effect = SessionError("fake launch failure")
@@ -211,7 +210,7 @@ class ClientCapacityTest(HostedTuiBase):
                 self.host.launch_failure = (
                     None if phase == "publication" else SessionError("handoff failed")
                 )
-                self.host.calls.close_view.side_effect = SessionError("publication failed")
+                self.host.calls.unclaimed.side_effect = SessionError("publication failed")
                 with self.assertRaises(SessionError):
                     self.start(mode="tui", name="one", sid="s1")
                 spec = self.spec(client="fake", mode="tui", name="two", sid="s2")
@@ -219,7 +218,7 @@ class ClientCapacityTest(HostedTuiBase):
                     admitted = other.start(spec)
                     self.addCleanup(admitted.close)
                 self.host.calls.list.side_effect = None
-                self.host.calls.close_view.side_effect = None
+                self.host.calls.unclaimed.side_effect = None
                 self.host.processes.pop("one")  # its unowned leftover gone: no retire ends it
                 self.session.retire("one", sid="s1")
                 other.start(spec).close()
@@ -2080,12 +2079,31 @@ class TuiStartTest(HostedTuiBase):
         self.host.calls.reset_mock()
         session.close()
         terminal.calls.close.assert_called_once_with()
-        self.host.calls.close_view.assert_called_once_with("w1")
         self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
 
-    def test_a_start_with_display_none_is_hidden_after_any_leftover_view_closes(self):
+    def test_close_touches_no_tmux_session(self):
+        """AC8: its pane closes with its attach command; close asks the Viewer nothing."""
+        session = self.tui(name="w1")
+        viewer = self.session.viewer()
+        self.host.calls.reset_mock()
+        with mock.patch.object(viewer, "_tmux") as tmux:
+            session.close()
+        self.assertEqual(tmux.mock_calls, [])
+        self.assertEqual(self.host.calls.unclaimed.mock_calls, [])
+
+    def test_start_closes_a_worker_named_like_a_tmux_session(self):
+        """AC17: the Viewer's refusal at start closes the worker it began."""
+        self.host.calls.unclaimed.side_effect = SessionError(
+            "show w1: a host tmux session w1 exists"
+        )
+        with self.assertRaisesRegex(SessionError, "a host tmux session w1 exists"):
+            self.tui(name="w1")
+        self.host.calls.unclaimed.side_effect = None
+        self.assertNotIn("w1", self.host.processes)
+
+    def test_a_start_with_display_none_is_hidden(self):
         session = self.tui(name="w1", sid=SID, display="none")
-        self.assertIn(mock.call.close_view("w1"), self.host.calls.mock_calls)
+        self.assertIn(mock.call.unclaimed("w1"), self.host.calls.mock_calls)
         self.assertTrue(session.status().hidden)
         self.assertFalse(self.tui(name="w2", sid="other").status().hidden)
 
@@ -2689,13 +2707,12 @@ class SessionIdentityTest(HostedTuiBase):
             events = list(session.events())
         self.assertEqual(events[-1], Exited(-signal.SIGHUP))
 
-    def test_retire_of_no_worker_closes_only_the_viewers_view(self):
+    def test_retire_of_no_worker_leaves_a_host_session_of_its_name(self):
         """No worker state: no worker to end; a host session of its name is not its to close."""
         self.host.create("plain", sid=SID)
         self.host.calls.reset_mock()
         self.session.retire("plain", sid=SID)
         self.assertIn("plain", self.host.processes)
-        self.assertEqual(self.host.calls.mock_calls[-1], mock.call.close_view("plain"))
 
     def test_retire_checks_its_worker_states_sid_before_closing(self):
         own(self, name="w1", sid="replacement")
@@ -2734,7 +2751,6 @@ class SessionIdentityTest(HostedTuiBase):
         current.calls.send.assert_not_called()
         current.calls.press.assert_not_called()
         current.calls.close.assert_not_called()
-        self.assertNotIn(mock.call.close_view("w1"), self.host.calls.mock_calls)
         self.assertTrue(current.alive())
         self.assertTrue(os.path.isdir(os.path.join(self.root, "w1")))
 
@@ -2988,20 +3004,16 @@ class OwnedTest(HostedTuiBase):
         owned = self.own()
         terminal = self.host.processes["w1"]
         self.hook("stop", {"last_message": "last"})
-        self.host.calls.close_view.reset_mock()
         final = owned.close()
         self.assertIn(TurnEnd("last", 0), final)
         terminal.calls.close.assert_called_once_with()
-        self.host.calls.close_view.assert_called_once_with("w1")
         self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
         self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
 
-    def test_stop_returns_its_final_read_and_leaves_the_viewer(self):
+    def test_stop_returns_its_final_read(self):
         owned = self.own()
         self.hook("stop", {"last_message": "last"})
-        self.host.calls.close_view.reset_mock()
         self.assertIn(TurnEnd("last", 0), owned.stop())
-        self.host.calls.close_view.assert_not_called()
         self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
 
     def test_confirm_end_is_none_while_the_terminal_lives(self):
@@ -3071,68 +3083,13 @@ class OwnedTest(HostedTuiBase):
         self.host.calls.list.return_value = ["w1"]  # a display of its name still listed
         self.assertEqual(owned.confirm_end(1), 0)
 
-    def test_close_keeps_the_viewer_when_the_record_stays(self):
+    def test_close_keeps_a_record_another_generation_wrote(self):
         owned = self.own()
         state = tui.TuiMode.snapshot("w1")
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump({**state, "generation": "newer"}, f)
-        self.host.calls.close_view.reset_mock()
         owned.close()
-        self.host.calls.close_view.assert_not_called()
         self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
-
-    def test_close_cannot_delete_a_display_replaced_after_the_old_worker_ends(self):
-        self.close_replaced_display()
-
-    def test_close_keeps_a_replacement_after_its_server_reuses_the_session_id(self):
-        self.close_replaced_display(reuse_id=True)
-
-    def close_replaced_display(self, *, reuse_id=False):
-        owned = self.own()
-        old = self.host.processes["w1"]
-        display = {"id": "$0", "token": "a" * 32}
-
-        def run(argv, **_kwargs):
-            if "w1" not in self.host.processes:
-                self.host.create("w1", metadata={"sid": SID, "generation": "newer"})
-                display["id"] = "$0" if reuse_id else "$8"
-                display["token"] = "b" * 32
-            command = argv[1]
-            output = ""
-            if command == "display-message":
-                output = f"{display['id']}\tviewer"
-                if "@view-id" in argv[-1]:
-                    output += f"\t{display['token']}"
-                output += "\n"
-            elif command == "show-options":
-                output = "viewer\n"
-            elif (
-                command == "kill-session"
-                and argv[-1] in ("=w1", display["id"])
-                or command == "if-shell"
-                and display["token"] in argv[-2]
-            ):
-                display["id"] = ""
-            return SimpleNamespace(returncode=0, stdout=output, stderr="")
-
-        owned._session._viewer = Viewer(tmux=TmuxCli(run))
-        owned.close()
-        old.calls.close.assert_called_once()
-        self.assertEqual(display["id"], "$0" if reuse_id else "$8")
-        self.assertEqual(self.host.processes["w1"].metadata["generation"], "newer")
-
-    def test_a_display_capture_error_still_ends_the_worker(self):
-        owned = self.own()
-        terminal = self.host.processes["w1"]
-        owned._session._viewer = Viewer(
-            tmux=TmuxCli(
-                lambda *_args, **_kw: SimpleNamespace(returncode=1, stdout="", stderr="lost socket")
-            )
-        )
-        with self.assertRaisesRegex(SessionError, "lost socket"):
-            owned.close()
-        terminal.calls.close.assert_called_once()
-        self.assertNotIn("w1", self.host.processes)
 
     def test_record_notes_client_sessions_and_stderr(self):
         owned = self.own()
@@ -3141,14 +3098,6 @@ class OwnedTest(HostedTuiBase):
         kinds = [entry["kind"] for entry in self.written()]
         self.assertIn("client_session", kinds)
         self.assertIn("stderr", kinds)
-
-    def test_redisplay_prepares_the_viewer_without_restarting_the_worker(self):
-        owned = self.own()
-        terminal = owned._session._running._terminal
-        with mock.patch.object(owned._session._viewer, "_prepare", return_value=True) as prepare:
-            self.assertTrue(owned.redisplay())
-        prepare.assert_called_once_with("w1", self.host)
-        self.assertIs(owned._session._running._terminal, terminal)
 
     def test_view_is_bound_to_this_worker(self):
         owned = self.own()
@@ -4184,16 +4133,13 @@ class BoundOwnerTest(BoundOwnerBase):
     def test_retire_fallback_takes_the_record_rule(self):
         terminal = self.host.processes["w1"]
         self.host.calls.worker_liveness.return_value = Liveness.UNKNOWN
-        self.host.calls.close_view.reset_mock()
         with self.assertRaisesRegex(engine_types.SessionBusy, "worker generation"):
             self.session.retire("w1", sid=SID)
         terminal.calls.close.assert_not_called()
-        self.host.calls.close_view.assert_not_called()
         self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
         self.host.calls.worker_liveness.return_value = Liveness.ABSENT
         self.session.retire("w1", sid=SID)
         terminal.calls.close.assert_called_once_with()
-        self.host.calls.close_view.assert_called_once_with("w1")
         self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
 
     def test_retire_of_another_generation_asks_no_owner(self):
@@ -4213,9 +4159,7 @@ class BoundOwnerTest(BoundOwnerBase):
         self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump({**self.state, "generation": "newer"}, f)
-        self.host.calls.close_view.reset_mock()
         session.close()  # another generation's record now: left alone, no wait
-        self.host.calls.close_view.assert_not_called()
         self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
 
     def test_retire_with_another_sid_raises_before_any_request(self):
@@ -4341,7 +4285,6 @@ class DeadOwner(HostedTuiBase):
                 self.host.calls.worker_liveness.assert_called_with("w1", self.state["generation"])
                 self.host.calls.release.assert_called_once_with("w1", self.state["generation"])
                 self.display.calls.close.assert_called_once_with()
-                self.host.calls.close_view.assert_called_once_with("w1")
 
     def test_close_live_or_unknown_busy(self):
         self.addCleanup(
@@ -4361,7 +4304,6 @@ class DeadOwner(HostedTuiBase):
                     self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
                     self.host.calls.release.assert_not_called()
                     self.display.calls.close.assert_not_called()
-                    self.host.calls.close_view.assert_not_called()
 
 
 class DockerOwnedTest(Case):

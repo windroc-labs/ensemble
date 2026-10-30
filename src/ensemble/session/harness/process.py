@@ -79,7 +79,6 @@ class Worker(Protocol):
     def try_send(self, text: str, pending: Callable[[], bool]) -> bool | str: ...
     def press(self, keys: Sequence[KeyPress], pending: Callable[[], bool]) -> None: ...
     def screen(self, lines: int | None = None) -> str: ...
-    def redisplay(self) -> bool: ...
 
 
 Begin = Callable[[dict], tuple[Worker, Sequence[Any], Sequence[Mapping[str, object]]]]
@@ -434,8 +433,6 @@ def _send_deadline(data: dict) -> float:
 
 def _served(worker: Worker, op: Op, data: dict, pending: Callable[[], bool]) -> dict | str | None:
     """Its fields checked first (ValueError), then the worker's call."""
-    if op == Op.DISPLAY:
-        return {"reopened": worker.redisplay()}
     if op == Op.SEND:
         text = data.get("text")
         if not isinstance(text, str) or len(text.encode()) > SEND_MAX:

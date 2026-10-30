@@ -371,6 +371,24 @@ class PaneTargetTest(Case):
                 self.assertEqual(fake.calls, [])
 
 
+class HasSessionTest(Case):
+    def test_true_false_without_it_or_a_server_and_a_failure_raises(self):
+        for result, want in (
+            ((0,), True),
+            ((1, "", "can't find session: w1\n"), False),
+            ((1, "", "no server running on /tmp/tmux-501/default\n"), False),
+        ):
+            with self.subTest(result=result):
+                fake = FakeTmux(results={"has-session": result})
+                self.assertIs(tmux_cli.TmuxCli(fake).has_session("w1"), want)
+                self.assertEqual(fake.calls, [["tmux", "has-session", "-t", "=w1"]])
+        fake = FakeTmux(results={"has-session": (1, "", "boom\n")})
+        with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
+            tmux_cli.TmuxCli(fake).has_session("w1")
+        with self.assertRaises(tmux_cli.TuiError):
+            tmux_cli.TmuxCli(fake).has_session("a b")
+
+
 class SessionsTest(Case):
     def test_names_none_without_a_server_and_none_on_failure(self):
         for result, want in (

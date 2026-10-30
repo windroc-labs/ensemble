@@ -9,7 +9,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 
 from ensemble.session.engine import tmux_cli
 from ensemble.session.engine.tmux_cli import NAME, VIEW, TmuxCli, TuiError, display_error
@@ -144,10 +144,6 @@ class Viewer:
         LOG.warning("show %s: %s", name, why)
         return target.printed
 
-    def _prepare(self, name: str, host: Host) -> bool:
-        target, _ = self._viewed(name, host, None)
-        return self._view(name, target, host.tui_settings())
-
     def _viewed(self, name: str, host: Host, display: Display) -> tuple[CommandView, Display]:
         """Retries preparation on Unanswered."""
         for _ in range(SHOW_TRIES - 1):
@@ -198,65 +194,6 @@ class Viewer:
     def attach_command(self, name: str, host: Host) -> str:
         return self._target(name, host).printed
 
-    def close(self, name: str, host: Host) -> None:
-        """Kills only the view session it made for `name`."""
-        if not host.attachable:
-            return
-        try:
-            if self._tmux.option(name, VIEW) == VIEW_TAG:
-                self._tmux.kill(name)
-        except TuiError as error:
-            raise SessionError(f"view {name}: {error}") from None
-
-    def _capture_close(self, name: str, host: Host) -> Callable[[], None] | None:
-        if not host.attachable:
-            return None
-        try:
-            found = self._tmux.run(
-                [
-                    "display-message",
-                    "-p",
-                    "-t",
-                    tmux_cli.address(name),
-                    "#{session_id}\t#{@view}\t#{@view-id}",
-                ]
-            )
-            if found.returncode:
-                if tmux_cli.absent(found):
-                    return None
-                raise TuiError(tmux_cli.error(found))
-            fields = found.stdout.rstrip("\n").split("\t")
-            if fields == [""]:
-                return None
-            if len(fields) != 3:
-                raise TuiError("display identity unknown")
-            ident, tag, token = fields
-            if tag != VIEW_TAG:
-                return None
-            if not tmux_cli.SESSION_ID.fullmatch(ident) or uuid.UUID(token).hex != token:
-                raise TuiError("display identity unknown")
-        except (TuiError, ValueError) as error:
-            raise SessionError(f"view {name}: {error}") from None
-
-        def close() -> None:
-            try:
-                removed = self._tmux.run(
-                    [
-                        "if-shell",
-                        "-F",
-                        "-t",
-                        ident,
-                        f"#{{==:#{{@view-id}},{token}}}",
-                        f"kill-session -t '{ident}'",
-                    ]
-                )
-                if removed.returncode and not tmux_cli.absent(removed):
-                    raise TuiError(tmux_cli.error(removed))
-            except TuiError as error:
-                raise SessionError(f"view {name}: {error}") from None
-
-        return close
-
     def _mark(self, name: str, host: Host, *, hidden: bool) -> None:
         """Only a session whose worker state names a sid keeps it."""
         state = worker_state(name)
@@ -277,6 +214,17 @@ class Viewer:
             return {*found, *host.list()}
         except SessionError:
             return None
+
+    def _unclaimed(self, name: str, host: Host) -> None:
+        """SessionError when an attachable Host's worker `name` is a host tmux session's name."""
+        if not host.attachable:
+            return
+        try:
+            taken = self._tmux.has_session(name)
+        except TuiError as error:
+            raise SessionError(f"show {name}: {error}") from None
+        if taken:
+            raise SessionError(f"show {name}: a host tmux session {name} exists")
 
     def _target(self, name: str, host: Host) -> CommandView:
         target = host.attach_target(name)

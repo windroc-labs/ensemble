@@ -531,11 +531,10 @@ class DisplayGone(ControlBase):
         """The host tmux's calls fail (no pane to show it in)."""
         return mock.patch("subprocess.Popen", side_effect=FileNotFoundError(2, "no tmux", "tmux"))
 
-    def test_show_reopens_through_its_harness_then_shows(self):
-        self.assertFalse(os.path.exists(os.path.join(self.owner, "replies")))
+    def test_show_asks_its_harness_nothing_then_shows(self):
         with self.no_tmux():
             code, out, err = self.invoke("show", "w1")
-        self.assertTrue(os.path.isdir(os.path.join(self.owner, "replies")))  # Op.DISPLAY's
+        self.assertFalse(os.path.exists(os.path.join(self.owner, "replies")))
         self.assertEqual((code, out), (0, ""), err)
         # the Viewer shows its display on the tmux Host: with no pane to open, its attach command
         self.assertIn("session w1: not shown; attach with tmux attach -t '=w1'", err)

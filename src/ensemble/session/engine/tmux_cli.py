@@ -257,6 +257,15 @@ class TmuxCli:
             raise TuiError(f"tmux: {error(res)}")
         return _process_id(res.stdout.removesuffix("\n"))
 
+    def has_session(self, name: str) -> bool:
+        """Whether tmux session `name` exists; False without a server."""
+        res = self.run(["has-session", "-t", f"={session_name(name)}"])
+        if res.returncode == 0:
+            return True
+        if absent(res):
+            return False
+        raise TuiError(f"tmux: {error(res)}")
+
     def sessions(self) -> list[str] | None:
         """Names: [] without a server, None when tmux fails."""
         try:

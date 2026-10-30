@@ -40,7 +40,6 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.engine.worker import Worker, WorkerState
 from ensemble.session.harness.channel import Channel
-from ensemble.session.harness.types import Op
 from ensemble.session.hosts.base import stored_record
 from ensemble.session.modes.tui import TuiStore
 from ensemble.utils import Record, Status, StatusState, file_lock
@@ -141,19 +140,16 @@ class Base(Case):
         status: str | None = "running",
         *,
         sid: str = SID,
-        answer: dict | None = None,
         generation: str = "g1",
     ) -> None:
         """w1's session.json of `sid` naming its owner; its harness held and in `status` (None: no
-        harness holds it); a running one answers each request with `answer` (default: nothing
-        reopened), its ops in self.asked.
+        harness holds it); a running one answers each request ok, its ops in self.asked.
         """
         owner = harnesses.HeldOwner(self, Channel.create())
         if status is not None:
             owner.hold(state=status, name="w1", sid=sid, generation=generation)
         if status == "running":
-            reply = answer or {"ok": True, "data": {"reopened": False}}
-            self.asked = owner.serve(reply, until_cleanup=True)
+            self.asked = owner.serve({"ok": True, "data": {}}, until_cleanup=True)
         self.write_state(sid, generation=generation, owner=owner.channel.directory)
 
     def write_state(self, sid: str, *, generation: str = "g1", owner: str | None = None) -> None:
@@ -990,21 +986,21 @@ class OwnedTest(Base):
 
     def test_owned_resume_with_running_owner_starts_and_closes_nothing(self):
         self.owned()
+        self.session_cls.attach.return_value.showable = False
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.stored(), state().record())
         self.session_cls.retire.assert_not_called()
         self.unstore()
-        self.host.list.return_value = []  # its display killed
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.stored(), state().record())
-        self.assertEqual(self.asked, [Op.DISPLAY, Op.DISPLAY])
-        self.session_cls.attach.assert_not_called()  # nothing reopened: nothing shown
+        self.assertEqual(self.asked, [])
         self.assertEqual(self.said, [])
 
-    def test_owned_resume_reopens_its_killed_display_and_shows_it(self):
-        self.owned(answer={"ok": True, "data": {"reopened": True}})
+    def test_resume_owned_shows_unless_hidden_without_asking_the_harness(self):
+        """AC14: a display lost with its tmux server comes back; the harness is asked nothing."""
+        self.owned()
         view = self.session_cls.attach.return_value
         view.showable = True
         view.attach_command.return_value = "tmux attach -t '=w1'"
@@ -1017,7 +1013,7 @@ class OwnedTest(Base):
             hidden=False,
         )
         self.assertEqual(self.worker().resume(), state().record())
-        self.assertEqual(self.asked, [Op.DISPLAY])
+        self.assertEqual(self.asked, [])
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.stored(), state().record())
         self.session_cls.attach.assert_called_once_with("w1", sid=SID, host="tmux")
@@ -1025,8 +1021,8 @@ class OwnedTest(Base):
         self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
         self.session_cls.retire.assert_not_called()
 
-    def test_owned_resume_keeps_a_reopened_hidden_display_hidden(self):
-        self.owned(answer={"ok": True, "data": {"reopened": True}})
+    def test_owned_resume_keeps_a_hidden_worker_hidden(self):
+        self.owned()
         view = self.session_cls.attach.return_value
         view.showable = True
         view.status.return_value = Status(
@@ -1036,16 +1032,8 @@ class OwnedTest(Base):
         view.show.assert_not_called()
         view.hide.assert_not_called()
 
-    def test_owned_resume_says_a_display_refused_or_unshown_and_returns_its_record(self):
-        self.owned(answer={"ok": False, "error": "worker w1: its name shows another display"})
-        self.assertEqual(self.worker().resume(), state().record())
-        self.assertEqual(
-            self.said,
-            ["session w1: display not reopened: worker w1: its name shows another display"],
-        )
-        self.session_cls.attach.assert_not_called()
-        self.owned(answer={"ok": True, "data": {"reopened": True}})
-        self.said.clear()
+    def test_owned_resume_says_an_unshown_worker_and_returns_its_record(self):
+        self.owned()
         self.session_cls.attach.side_effect = SessionError("no tui session w1")
         self.assertEqual(self.worker().resume(), state().record())
         self.assertEqual(self.said, ["session w1: not shown: no tui session w1"])
@@ -1107,7 +1095,7 @@ class RecordTest(Base):
         with self.assertRaisesRegex(SessionError, "^session w1 is gone$"):
             TuiStore.attach("w1", host=self.host).store_record("g1", found)
         self.assertEqual(self.stored("g1"), found)  # kept, read only as g1's
-        self.owned(sid=OTHER, answer={"ok": True, "data": {"reopened": False}})
+        self.owned(sid=OTHER)
         self.unstore()
         self.worker().resume()  # another sid's session: a resumed start of its own
         self.assertEqual(self.stored(), found)

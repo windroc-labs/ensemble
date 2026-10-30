@@ -441,24 +441,6 @@ class CommandViewTest(Base):
                     ]
                 )
 
-    def test_prepare_creates_the_internal_display_without_opening_an_outer_pane(self):
-        self.tmux.status.return_value = None
-        self.runner.results["new-session"] = (0,)
-        self.assertTrue(self.viewer._prepare("d1", self.docker))
-        self.assertEqual([call[1] for call in self.runner.calls], ["new-session"])
-        self.assertIn(
-            list(self.ARGV),
-            [call[call.index("--") + 1 : call.index(";")] for call in self.runner.calls],
-        )
-
-    def test_prepare_reuses_its_running_display_and_recreates_a_dead_one(self):
-        self.view = VIEW_TAG
-        self.assertFalse(self.viewer._prepare("d1", self.docker))
-        self.tmux.status.return_value = 1
-        self.runner.results["new-session"] = (0,)
-        self.assertTrue(self.viewer._prepare("d1", self.docker))
-        self.tmux.kill.assert_called_once_with("d1")
-
     def test_show_outside_tmux_prints_attach_without_starting_a_view(self):
         self.enterContext(environ(HOME=self.home))
         self.assertEqual(self.viewer.show("d1", self.docker, display="mgr"), self.target.printed)
@@ -501,25 +483,6 @@ class CommandViewTest(Base):
     def test_attach_command_is_the_printed_command(self):
         self.assertEqual(self.viewer.attach_command("d1", self.docker), self.target.printed)
 
-    def test_close_kills_only_its_tagged_view_session(self):
-        for view, killed in ((VIEW_TAG, True), ("docker", False), (None, False)):
-            with self.subTest(view=view):
-                self.tmux.kill.reset_mock()
-                self.view = view
-                self.viewer.close("d1", self.docker)
-                self.assertEqual(self.tmux.kill.call_args_list, [mock.call("d1")] if killed else [])
-
-    def test_close_after_its_session_is_gone_still_kills_its_view(self):
-        self.docker.attach_target.side_effect = SessionError("no docker session d1")
-        self.view = VIEW_TAG
-        self.viewer.close("d1", self.docker)
-        self.tmux.kill.assert_called_once_with("d1")
-
-    def test_close_names_a_failed_tmux_call(self):
-        self.tmux.option.side_effect = TuiError("tmux: boom")
-        with self.assertRaisesRegex(SessionError, "^view d1: tmux: boom$"):
-            self.viewer.close("d1", self.docker)
-
     def retried(self, *targets, **show):
         """show with attach_target answering `targets` in turn; its result and its sleeps."""
         self.tmux.status.return_value = None
@@ -555,7 +518,7 @@ class CommandViewTest(Base):
 
 
 class NotShowableTest(Base):
-    def test_a_host_without_an_attach_target_cannot_show_and_close_is_a_no_op(self):
+    def test_a_host_without_an_attach_target_cannot_show_and_is_never_claimed(self):
         plain = mock.create_autospec(Host, instance=True)
         plain.name, plain.attachable = "plain", False
         plain.attach_target.return_value = None
@@ -569,5 +532,18 @@ class NotShowableTest(Base):
                 self.assertRaisesRegex(NotShowable, "^host plain cannot show$"),
             ):
                 call()
-        self.viewer.close("p1", plain)
-        self.tmux.option.assert_not_called()
+        self.viewer._unclaimed("p1", plain)
+        self.tmux.has_session.assert_not_called()
+
+
+class UnclaimedTest(Base):
+    def test_a_name_a_tmux_session_holds_is_refused(self):
+        """AC17: a worker never shares its name with a host tmux session."""
+        self.tmux.has_session.return_value = True
+        with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
+            self.viewer._unclaimed("w1", self.host)
+        self.tmux.has_session.return_value = False
+        self.viewer._unclaimed("w1", self.host)
+        self.tmux.has_session.side_effect = TuiError("tmux: boom")
+        with self.assertRaisesRegex(SessionError, "^show w1: tmux: boom$"):
+            self.viewer._unclaimed("w1", self.host)

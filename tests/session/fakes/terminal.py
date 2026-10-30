@@ -212,9 +212,6 @@ class MemoryViewer(Viewer):
         super().__init__(settings, tmux=tmux)
         self.placement = self._placement = mock.create_autospec(Placement, instance=True)
 
-    def _prepare(self, name, host):
-        return False
-
     def show(self, name, host, *, display=None, command=None):
         if display is None and (state := worker_state(name)) is not None:
             display = state.display
@@ -226,12 +223,9 @@ class MemoryViewer(Viewer):
     def attach_command(self, name, host):
         return host.calls.attach_command(name)
 
-    def close(self, name, host):
+    def _unclaimed(self, name, host):
         if host.attachable:
-            host.calls.close_view(name)
-
-    def _capture_close(self, name, host):
-        return lambda: self.close(name, host)
+            host.calls.unclaimed(name)
 
 
 class GuardHost(MemoryHost):
