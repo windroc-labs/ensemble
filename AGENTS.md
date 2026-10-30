@@ -28,6 +28,9 @@ The queue tests current `main` plus preceding queued PRs on `merge_group` commit
 squash-merges automatically when required `CI` passes; no manual branch updates are needed.
 `Worker image` also reports on queue groups, building when their combined diff changes image inputs.
 Queue groups run every CI project, including diff coverage against the group's base SHA.
+Every run's `Coverage` job combines all unit shards into artifact `unit-coverage-merged-<run id>-<attempt>` (`coverage-data` for coverage.py 7.10.7, `total.md`; kept 30 days) and writes total line coverage to its job summary.
+Only pull requests and queue groups gate diff coverage; on pushes to `main` a coverage step failure never fails CI.
+Latest `main`: `gh run download "$(gh run list --repo windroc-labs/ensemble --workflow CI --branch main --event push --status success --limit 1 --json databaseId --jq '.[0].databaseId')" --repo windroc-labs/ensemble --pattern 'unit-coverage-merged-*'`.
 
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
 The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`

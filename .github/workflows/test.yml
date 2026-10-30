@@ -216,14 +216,13 @@ jobs:
       - name: Protect shipped source
         run: chmod -R a-w src
       - name: Install pinned coverage
-        if: ${{ github.event_name != 'push' }}
         run: python3 -m pip install coverage=="$COVERAGE_VERSION"
       - name: Install Docker protocol test dependency
         run: python3 -m pip install jsonschema==4.26.0
       - name: Unit tests
         id: unit
         env:
-          RUN_TESTS_COVERAGE: ${{ github.event_name != 'push' && 'collect' || '' }}
+          RUN_TESTS_COVERAGE: collect
           RUN_TESTS_REPORT_DIR: ${{ runner.temp }}/unit
           # As in an ensemble worker: the runner must keep them from the tests.
           ENSEMBLE_CLIENT: claude
@@ -232,7 +231,8 @@ jobs:
           echo "shards=$(( ${{ strategy.job-total }} * 4 ))" >> "$GITHUB_OUTPUT"
           python3 -X faulthandler .github/run_tests.py 'Unit ${{ matrix.job }}' --unit --durations .github/test_durations.json --parallel 4 --shard '${{ matrix.job }}/${{ strategy.job-total }}'
       - name: Preserve unit coverage
-        if: ${{ always() && github.event_name != 'push' }}
+        if: ${{ always() }}
+        continue-on-error: ${{ github.event_name == 'push' }}
         uses: actions/upload-artifact@v7.0.2
         with:
           name: unit-coverage-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.job }}
@@ -251,7 +251,7 @@ jobs:
   coverage:
     name: Coverage
     needs: [changes, unit]
-    if: ${{ github.event_name != 'push' && needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
+    if: ${{ needs.changes.outputs.docs == 'false' && needs.changes.outputs.version == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -265,24 +265,42 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned coverage
+        continue-on-error: ${{ github.event_name == 'push' }}
         run: python3 -m pip install coverage=="$COVERAGE_VERSION"
       - name: Download every unit shard
+        continue-on-error: ${{ github.event_name == 'push' }}
         uses: actions/download-artifact@v8.0.2
         with:
           pattern: unit-coverage-${{ github.run_id }}-${{ github.run_attempt }}-*
           path: ${{ runner.temp }}/unit-coverage
           merge-multiple: true
       - name: Combine coverage from every shard
+        continue-on-error: ${{ github.event_name == 'push' }}
         env:
           EXPECTED_SHARDS: ${{ needs.unit.outputs.shards }}
         run: |
           files=("$RUNNER_TEMP"/unit-coverage/shard-*/coverage-data.*)
           test "${#files[@]}" = "$EXPECTED_SHARDS"
-          python3 -m coverage combine --rcfile=/dev/null --keep --data-file="$RUNNER_TEMP/coverage-data" "${files[@]}"
+          mkdir -p "$RUNNER_TEMP/unit-coverage-merged"
+          python3 -m coverage combine --rcfile=/dev/null --keep --data-file="$RUNNER_TEMP/unit-coverage-merged/coverage-data" "${files[@]}"
+      - name: Total line coverage
+        continue-on-error: ${{ github.event_name == 'push' }}
+        run: |
+          total=$(python3 .github/coverage_gate.py --total "$RUNNER_TEMP/unit-coverage-merged/coverage-data")
+          printf '%s\n' "$total" | tee "$RUNNER_TEMP/unit-coverage-merged/total.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve merged unit coverage
+        continue-on-error: ${{ github.event_name == 'push' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: unit-coverage-merged-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/unit-coverage-merged/
+          if-no-files-found: error
+          retention-days: 30
       - name: Diff coverage of changed src lines
+        if: ${{ github.event_name != 'push' }}
         env:
           BASE_REF: ${{ github.event.merge_group.base_sha || format('origin/{0}', github.base_ref) }}
-        run: python3 .github/coverage_gate.py "$RUNNER_TEMP/coverage-data" "$BASE_REF"
+        run: python3 .github/coverage_gate.py "$RUNNER_TEMP/unit-coverage-merged/coverage-data" "$BASE_REF"
       - name: Require unchanged checkout
         if: ${{ always() }}
         run: |

@@ -232,7 +232,7 @@ def gate(needs: dict, event: str) -> list[str]:
         "lint": "success",
         "repository": "skipped" if "true" in (docs, version) else "success",
         "unit": "skipped" if "true" in (docs, version) else "success",
-        "coverage": "success" if event != "push" and "true" not in (docs, version) else "skipped",
+        "coverage": "skipped" if "true" in (docs, version) else "success",
         "integration": "skipped" if "true" in (docs, version) else "success",
         "mini-op": "success",
         "broker": "success" if broker == "true" else "skipped",
