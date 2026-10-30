@@ -199,19 +199,36 @@ class ClientEnvTest(SessionCliCase):
 class ConfigTest(SessionCliCase):
     ATTACH = False
 
+    def border(self, pane: str) -> str:
+        """pane's evaluated pane-border-format, then its window's pane-border-status."""
+        found = self.server.tmux(
+            "display-message", "-p", "-t", pane, "#{T:pane-border-format}|#{pane-border-status}"
+        )
+        self.assertEqual(found.returncode, 0, found.stderr)
+        return found.stdout.removesuffix("\n")
+
     def test_a_local_overlay_sets_the_tmux_hosts_status_line(self):
+        """AC12: a tmux Host worker pane has a label only with status_line = true."""
+        self.server.attach(MANAGER)
         self.record(self.start("w0"))
-        self.assertEqual(self.server.option("w0", "status"), "off")
+        w0 = self.server.pane_of("w0")
+        self.assertTrue(w0)
+        window = f"={MANAGER}:"
+        self.assertEqual(
+            self.server.tmux("show-options", "-wqv", "-t", w0, "pane-border-status").stdout, ""
+        )
+        self.assertEqual(
+            self.server.tmux("show-options", "-pqv", "-t", w0, "@worker-label").stdout, ""
+        )
         before = self.server.tmux("show-options", "-g").stdout
-        keys = ("status", "status-left", "status-left-length")
-        other = [self.server.option("w0", key) for key in keys]
         self.local_config("[session.hosts.tmux]\nstatus_line = true\n")
         name = "engineer-WDRC-281-502d679e"
         self.record(self.start(name))
-        self.assertEqual(self.server.option(name, "status"), "on")
-        self.assertEqual(self.server.option(name, "status-left-length"), str(len(name) + 3))
+        pane = self.server.pane_of(name)
+        self.assertIn(pane, self.server.panes(window))
+        self.assertEqual(self.border(pane), f"[{name}]|bottom")
+        self.assertEqual(self.border(w0), "|bottom")
         self.assertEqual(self.server.tmux("show-options", "-g").stdout, before)
-        self.assertEqual([self.server.option("w0", key) for key in keys], other)
 
     def test_a_bad_config_or_host_or_client_override_exits_2_with_its_reason_first(self):
         local = "config: ~/.ensemble/config.local.toml"

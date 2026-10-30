@@ -148,12 +148,10 @@ class Attended(Segment):
 
     def test_killing_its_drive_and_tui_interrupts_the_run_and_the_next_router_run_resumes(self):
         def kill(ident, sid):
-            # the TUI outlives the drive's SIGKILL; its kill interrupts the attempt
+            # the TUI outlives the drive's SIGKILL; its owner's kill ends it and interrupts the
+            # attempt
             os.killpg(self.drive_group(ident), signal.SIGKILL)
-            tui = config.tui_name("pm", ident, sid)
-            live_tmux.crash_owner(self.ensemble, tui)
-            res = self.server.tmux("kill-session", "-t", f"={tui}")
-            self.assertEqual(res.returncode, 0, res.stderr)
+            live_tmux.crash_owner(self.ensemble, config.tui_name("pm", ident, sid))
 
         self.interrupted(kill)
 
@@ -170,8 +168,10 @@ class Attended(Segment):
         record, tui = self.printed, config.tui_name("pm", ident, sid)
         self.agent_run()
         self.human_move(ident, "in_progress", "human: retry failed run")
-        live_tmux.crash_owner(self.ensemble, tui)  # its display alone ends no worker
-        self.assertEqual(self.server.tmux("kill-session", "-t", f"={tui}").returncode, 0)
+        live_tmux.crash_owner(self.ensemble, tui)  # its guard then ends the worker
+        live_tmux.wait(
+            lambda: not (self.live(tui) or self.server.pane_of(tui)), TIMEOUT, f"{tui} gone"
+        )
         self.scene(**tui_scene(self.agent_script("pm", "done", ident)), usage=USAGE)
         seen = len(agent_calls(self.calls()))
         res = self.script(ENTRY, "resume", ident)
@@ -230,8 +230,8 @@ class Refused(TmuxFlow):
                 self.assertTrue(res.stderr.startswith(f"router.py: {said}"), res.stderr)
                 self.assertEqual(len(res.stderr.splitlines()), 1, res.stderr)
         self.assertEqual(self.requests(), [])
-        listed = self.server.tmux("list-sessions", "-F", "#{session_name}")
-        self.assertEqual(listed.stdout.split(), [MANAGER], listed.stderr)
+        self.assertEqual(self.server.sessions(), [MANAGER])
+        self.assertEqual(self.server.worker_panes(dead=True), [])
         self.assertEqual(
             (self.runs(), self.state(ID), os.path.exists(self.events)), ([], "todo", False)
         )

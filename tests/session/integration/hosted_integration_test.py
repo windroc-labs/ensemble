@@ -76,7 +76,7 @@ class DisplayTest(Live):
             self.addCleanup(configured.start(spec, display=display).stop)
         for name, display in DISPLAYS.items():
             with self.subTest(name=name):
-                self.assertEqual(self.server.option(name, "@display"), "")
+                self.assertNotIn(name, self.server.sessions())
                 self.assertEqual(worker_state(name).display, display)
                 self.assertEqual([row.name for row in configured.list(display=display)], [name])
 

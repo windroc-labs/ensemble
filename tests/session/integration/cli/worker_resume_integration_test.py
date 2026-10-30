@@ -120,9 +120,12 @@ class Base(CliCase):
         return os.pathsep.join((directory, self.env()["PATH"]))
 
     def pane(self, name: str) -> str:
-        """Its pane's id and process."""
+        """Its newest worker pane's id and process, "" when none."""
+        pane = self.server.pane_of(name)
+        if not pane:
+            return ""
         return self.ok(
-            self.server.tmux("display-message", "-p", "-t", f"={name}:", "#{pane_id} #{pane_pid}")
+            self.server.tmux("display-message", "-p", "-t", pane, "#{pane_id} #{pane_pid}")
         ).stdout.strip()
 
     def state_file(self, sid: str) -> str:
@@ -132,8 +135,9 @@ class Base(CliCase):
         with open(path, "rb") as f:
             return f.read()
 
-    def kill_session(self, name: str) -> None:
-        self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
+    def unshown(self, name: str) -> None:
+        """Waits until `name`'s worker panes closed, their attach commands ended with it."""
+        live_tmux.wait(lambda: not self.server.pane_of(name), what=f"{name}'s worker pane closed")
 
     def dead(self, name: str) -> None:
         """Kills `name`'s client; waits until its session harness took the exit."""
@@ -152,7 +156,8 @@ class ResumeTest(Base):
         pane, state = self.pane("w1"), self.read_bytes(self.state_file(record.sid))
         self.assertEqual(self.dir_record("w1"), record)
         res = self.again("resume", "w1", inside=None, cwd=self.root)
-        self.assertEqual((self.record(res), res.stderr), (record, ""))
+        shown = f"session w1: {guard_command('w1')}\n"  # shown unless hidden: outside tmux, printed
+        self.assertEqual((self.record(res), res.stderr), (record, shown))
         self.assertEqual(self.calls("w1"), [call])
         self.assertTrue(running(call["pid"]))
         self.assertEqual(self.pane("w1"), pane)
@@ -169,7 +174,7 @@ class ResumeTest(Base):
         record = self.record(self.start("w1", "--env", "K=v", "--", *FLAGS, PATH=path))
         self.wait_event("w1", "done")
         self.dead("w1")
-        self.kill_session("w1")
+        self.unshown("w1")
         res = self.again("resume", "w1", inside=None, cwd=self.root, PATH=path)
         self.assertEqual(self.record(res), record)
         self.assertEqual(res.stderr, f"session w1: {guard_command('w1')}\n")
@@ -206,8 +211,7 @@ class ResumeTest(Base):
         self.assertEqual(self.dir_record("w1"), record)
         calls = live_tmux.wait(lambda: self.calls("w1")[1:] or None, what="w1's resumed client")
         self.assertTrue(has_pair(calls[-1]["argv"], "--resume", record.sid), calls[-1]["argv"])
-        dead = self.server.tmux("display-message", "-p", "-t", "=w1:", "#{pane_dead}")
-        self.assertEqual(self.ok(dead).stdout, "0\n")
+        self.assertTrue(live_tmux.running("w1"))
 
     def test_restart_of_a_live_worker_resumes_its_sid_in_a_new_client_without_its_prompt(self):
         record = self.record(self.start("w1", "--", *FLAGS))
@@ -234,7 +238,7 @@ class ResumeTest(Base):
         record = self.record(self.start("w1"))
         self.wait_event("w1", "done")
         self.dead("w1")
-        self.kill_session("w1")
+        self.unshown("w1")
         env = self.env(inside=None, **self.scene("w1"))
         procs = []
         with self.poking():
@@ -311,7 +315,7 @@ class ColorTest(Base):
         self.record(self.again("restart", "w1"))
         starts.append(self.session_start("w1"))
         self.dead("w1")
-        self.kill_session("w1")
+        self.unshown("w1")
         self.record(self.again("resume", "w1", inside=None, cwd=self.root))
         starts.append(self.session_start("w1"))
         pids = [call["pid"] for call in self.calls("w1")]

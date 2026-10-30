@@ -342,9 +342,8 @@ class TmuxFlow(Flow):
         return self.server.inside(MANAGER)
 
     def live(self, session):
-        # tmux 3.4 reaps an exited pane only when another child exits
-        self.server.tmux("run-shell", "-b", "true")
-        return self.server.tmux("has-session", "-t", f"={session}").returncode == 0
+        """Whether tui worker `session`'s guard runs."""
+        return live_tmux.running(session)
 
     def wait_end(self, sid, ident, ends=1, role="engineer", timeout=TIMEOUT):
         """Until `ends` write-back ends of sid and the drive ended; else fails with the log tails."""

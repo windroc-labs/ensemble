@@ -152,7 +152,7 @@ class Detach(RunReads, Case):
         self.assertTrue(drive or ended, self.metadata())
         self.assertEqual(self.metadata()["detached"], True)
         if tui:
-            self.assertFalse(self.live(DRIVE))
+            self.assertFalse(self.session(DRIVE))
         log = os.lstat(Layout(self.work).drive_log)
         self.assertEqual((stat.S_ISREG(log.st_mode), stat.S_IMODE(log.st_mode)), (True, 0o600))
         self.assertIn(f"delegate: session {SID}\n", res.stderr)
@@ -207,6 +207,11 @@ class Detach(RunReads, Case):
             self.server.tmux("run-shell", "-b", "true")
 
     def live(self, name: str) -> bool:
+        """Whether worker `name`'s guard runs."""
+        return live_tmux.running(name)
+
+    def session(self, name: str) -> bool:
+        """Whether the tmux server has a session `name`."""
         return self.server.tmux("has-session", "-t", f"={name}").returncode == 0
 
     def until(self, check, what: str, *, diagnostics=None):
@@ -307,9 +312,8 @@ class Tui(Detach):
         self.assertCountEqual(self.drive_lines(shaped), ["outcome done", "exited 0"])
         self.assertEqual(self.read(self.out), DONE["deliverable"])
         self.assertTrue(self.live(TUI))
-        clients = self.server.tmux("list-clients", "-t", f"={TUI}")
-        self.assertEqual((clients.returncode, clients.stdout), (0, ""), clients.stderr)
-        self.assertEqual(self.server.option(TUI, "@pane"), "")
+        self.assertEqual(self.server.worker_panes(TUI, dead=True), [])
+        self.assertEqual(self.server.sessions(), [MANAGER])
         self.assertEqual(len(self.server.panes(f"={MANAGER}:")), 1)
 
     def test_a_policy_env_secret_reaches_the_client_but_no_argv_record_or_printed_command(self):
@@ -346,10 +350,10 @@ class Tui(Detach):
             out = self.cli([*PY, "-m", f"ensemble.{layer}.cli", "status", name])
             self.assertEqual(out.returncode, 0, out.stderr)
             printed += [out.stdout, out.stderr]
-        options = self.server.tmux("show-options", "-t", f"={TUI}:")
-        self.assertIn("@view viewer", options.stdout)
-        self.assertNotIn("@kind", options.stdout)
-        printed += [options.stdout, self.read(os.path.join(Layout(self.work).run, "run.jsonl"))]
+        self.assertFalse(self.session(TUI))
+        panes = self.server.tmux("list-panes", "-a", "-F", "#{pane_start_command}\t#{@worker}")
+        self.assertEqual(panes.returncode, 0, panes.stderr)
+        printed += [panes.stdout, self.read(os.path.join(Layout(self.work).run, "run.jsonl"))]
         for text in printed:
             self.assertNotIn(SECRET, text)
         resume = self.last("session")["resume"]

@@ -95,18 +95,19 @@ class ListingTest(ListingCase):
         self.assertEqual(self.ls("--here", "--records", "--descendants", inside=None), "")
         self.assertEqual(self.ls("--here", inside=None), table())
 
-    def test_here_descendants_adds_the_workers_opened_from_inside_a_listed_one(self):
+    def test_here_descendants_adds_the_workers_a_listed_one_opened(self):
         w1 = self.done("w1")
-        w2 = self.done("w2", inside="w1")
+        w2 = self.done("w2", "--display", "w1")
         self.assertEqual((w1.display, w2.display), (MANAGER, "w1"))
+        self.assertEqual(self.server.opener_of("w2"), "w1")
         self.assertEqual(self.ls("--here", "--records"), lines(w1))
         self.assertEqual(self.ls("--here", "--records", "--descendants"), lines(w1, w2))
-        self.assertEqual(self.ls("--here", "--records", inside="w1"), lines(w2))
+        self.assertEqual(self.ls("--display", "w1", "--records"), lines(w2))
 
     def test_a_worker_whose_display_was_killed_is_still_listed(self):
         w1 = self.done("w1")
-        w2 = self.done("w2", inside="w1")
-        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
+        w2 = self.done("w2", "--display", "w1")
+        self.ok(self.server.tmux("kill-pane", "-t", self.server.pane_of("w1")))
         (found,) = self.status("w1")
         self.assertTrue(found.alive)
         self.assertEqual(self.ls(), table(row(w1), row(w2)))

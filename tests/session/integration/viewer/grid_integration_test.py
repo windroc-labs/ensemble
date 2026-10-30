@@ -27,6 +27,8 @@ COMMAND = os.path.join(PLUGIN_BIN, "ensemble-session")
 
 IGNORED = "tui: show: grid: --split/--split-from ignored"
 
+OTHER = "other"
+
 STEADY = 1  # seconds a check that nothing re-tiles holds
 
 BREAKER_TIMEOUT = 30
@@ -63,12 +65,14 @@ class Live(Case):
         with mock.patch.dict(os.environ, self.server.inside(session) if session else {}):
             yield
 
-    def show(self, name: str, inside: str | None = MANAGER, split=None, split_from=None) -> str:
-        """The Viewer's show(name) on the default Host at split and split_from from inside `inside`, a pane then
-        showing it; its stderr.
+    def show(
+        self, name: str, inside: str | None = MANAGER, split=None, split_from=None, opener=None
+    ) -> str:
+        """The Viewer's show(name) on the default Host at opener, split and split_from from inside
+        `inside`, a worker pane then showing it; its stderr.
         """
         err = io.StringIO()
-        display = fold(None, split, split_from)
+        display = fold(opener, split, split_from)
         host = self.session_cls.host()
         if not host.attachable:
             self.fail(f"host {host.name} cannot show")
@@ -77,7 +81,7 @@ class Live(Case):
         return err.getvalue()
 
     def started(self, name: str, inside: str | None = MANAGER, **kwargs) -> str:
-        """tmux session `name` started with no pane, then show()n; show's stderr."""
+        """Worker `name` started with no pane, then show()n; show's stderr."""
         self.worker(name)
         return self.show(name, inside, **kwargs)
 
@@ -87,7 +91,6 @@ class Live(Case):
         )
         self.workers[name] = handle
         self.addCleanup(self.cleanup_worker, name, handle)
-        self.session_cls.viewer()._prepare(name, self.host)
         return handle
 
     def cleanup_worker(self, name, handle):
@@ -95,13 +98,10 @@ class Live(Case):
             handle.close()
         if self.workers.get(name) is handle:
             self.workers.pop(name)
-            self.session_cls.viewer().close(name, self.host)
 
     def close(self, name: str) -> None:
-        if name in self.workers:
-            self.cleanup_worker(name, self.workers[name])
-        else:
-            TmuxCli().kill(name)
+        """Ends worker `name`: its attach command ends, which closes its worker pane."""
+        self.cleanup_worker(name, self.workers[name])
 
     def tmux(self, *args: str) -> str:
         res = self.server.tmux(*args)
@@ -155,31 +155,6 @@ class Live(Case):
         panes = self.tmux("list-panes", "-t", self.window_of(name), "-F", "#{pane_id}").split()
         return " ".join(sorted(panes, key=lambda p: int(p[1:])))
 
-    def viewer_settled(self, name: str) -> None:
-        """Waits until name's viewer client, the tmux client in its grid pane, has the pane's size.
-        Its resize lands after a re-tile and makes it the window's latest client: with tmux's
-        window-size latest, a client attached earlier then no longer sizes the window.
-        """
-        pane = self.tmux(
-            "display-message",
-            "-p",
-            "-t",
-            self.server.pane_of(name),
-            "#{pane_tty} #{pane_width}x#{pane_height}",
-        )
-        clients = functools.partial(
-            self.tmux,
-            "list-clients",
-            "-t",
-            f"={name}",
-            "-F",
-            "#{client_tty} #{client_width}x#{client_height}",
-        )
-        live_tmux.wait(
-            lambda: pane in clients().splitlines(),
-            what=f"{name}'s viewer client at its pane's size ({pane})",
-        )
-
     def holds(self, read, value, what: str):
         end = time.monotonic() + STEADY
         while time.monotonic() < end:
@@ -208,34 +183,68 @@ class GridTest(Live):
         self.close("w2")
         self.grid([["w1", "w3"]], width)
 
+    def shown(self) -> dict[str, tuple[str | None, str | None]]:
+        """Each listed worker's (shown, its pane's @worker-opener or None)."""
+        return {
+            row.name: (row.shown, self.server.opener_of(row.name) or None)
+            for row in self.session_cls.list()
+        }
+
     def test_sub_sessions(self):
+        """AC10: the manager shows m1..m3; a show with opener m2 (display `m2`) nests in m2's
+        cell; listed, each is shown in the manager's tmux session, its opener its pane's
+        @worker-opener; a worker with no worker pane is shown nowhere.
+        """
         for i, name in enumerate(("m1", "m2", "m3"), 1):
             self.started(name)
             self.grid([[f"m{k}" for k in range(1, i + 1)]])
-        self.started("z1", inside="m2")
+        self.started("z1", opener="m2")
         self.grid([["m1", ("m2", ["z1"]), "m3"]])
-        self.started("z2", inside="m2")
+        self.assertEqual(
+            self.shown(),
+            {
+                "m1": (MANAGER, MANAGER),
+                "m2": (MANAGER, MANAGER),
+                "m3": (MANAGER, MANAGER),
+                "z1": (MANAGER, "m2"),
+            },
+        )
+        self.started("z2", opener="m2")
         self.grid([["m1", ("m2", ["z1", "z2"]), "m3"]])
         self.close("z1")
         self.close("z2")
         self.grid([["m1", "m2", "m3"]])
-        self.started("z3", inside="m2")
+        self.started("z3", opener="m2")
         self.grid([["m1", ("m2", ["z3"]), "m3"]])
+        self.session_cls.viewer().hide("m3", self.host)
+        self.grid([["m1", ("m2", ["z3"])]])
+        self.assertEqual(self.shown()["m3"], (None, None))
         self.close("m2")
-        self.grid([["m1", ["z3"], "m3"]])
+        self.grid([["m1", ["z3"]]])
+
+    def test_showing_twice_keeps_one_pane(self):
+        """AC9: a show of a worker with a live worker pane opens nothing, whatever its opener."""
+        self.started("w1")
+        self.started("w2")
+        self.grid([["w1", "w2"]])
+        pane, panes = self.server.pane_of("w1"), self.server.panes(f"={MANAGER}:")
+        self.assertEqual(self.show("w1"), "")
+        self.assertEqual(self.show("w1", opener="w2"), "")
+        self.assertEqual([p.pane for p in self.server.worker_panes("w1")], [pane])
+        self.assertEqual(set(self.server.panes(f"={MANAGER}:")), set(panes))
+        self.assertEqual(self.server.opener_of("w1"), MANAGER)
+        self.grid([["w1", "w2"]])
 
     def test_an_unshown_session_reopens_in_the_grid(self):
         self.started("w1")
         self.grid([["w1"]])
         closed = self.server.pane_of("w1")
         self.tmux("kill-pane", "-t", closed)
-        live_tmux.wait(
-            lambda: not self.tmux("list-clients", "-t", "=w1"), what="w1 shown by no client"
-        )
+        self.assertEqual(self.server.pane_of("w1"), "")
         self.assertEqual(self.show("w1"), "")
         self.assertNotEqual(self.server.pane_of("w1"), closed)
         self.grid([["w1"]])
-        self.assertEqual(self.server.option("w1", "@opener"), MANAGER)
+        self.assertEqual(self.server.opener_of("w1"), MANAGER)
 
 
 class SplitsTest(Live):
@@ -257,7 +266,7 @@ class SplitsTest(Live):
             self.host.attach_target("w1").printed,
         )
         self.assertEqual(self.server.panes(f"={MANAGER}:"), before)
-        self.assertEqual(self.server.option("w1", "@pane"), "")
+        self.assertEqual(self.server.pane_of("w1"), "")
         self.assertEqual(
             [self.window_option(MANAGER, k) for k in ("@grid-manager", "@grid-per-column")],
             ["", ""],
@@ -338,10 +347,10 @@ class RetileTest(Live):
         for name in ("w1", "w2", "w3"):
             self.started(name)
         self.grid([["w1", "w2", "w3"]], width)
-        # the most recently active client shows w1's session, not mgr's: tmux 3.4 then skips the
-        # window's pane-exited hook, so window-layout-changed (a new pane set) re-tiles
-        self.viewer_settled("w1")
-        self.server.attach("w1")
+        # the most recently active client shows another session, not mgr's: tmux 3.4 then skips
+        # the window's pane-exited hook, so window-layout-changed (a new pane set) re-tiles
+        self.tmux("new-session", "-d", "-s", OTHER, *live_tmux.IDLE)
+        self.server.attach(OTHER)
         self.close("w2")
         self.grid([["w1", "w3"]], width)
         self.open_close_hooks(MANAGER)
@@ -370,7 +379,7 @@ class RetileTest(Live):
             key=lambda p: (before[p][2] * before[p][3], int(p[1:])),
         )
         self.assertEqual(largest, self.server.pane_of("w2"))
-        self.started("z1", inside="w1")
+        self.started("z1", opener="w1")
         self.split_of(before, "z1", largest, "below")
         self.holds(self.panes, self.panes(), "the panes as placed")
         self.assertEqual(self.hooks(MANAGER), [])
@@ -428,7 +437,10 @@ class BoundaryTest(Live):
             "-c",
             "exit 7",
         )
-        live_tmux.wait(lambda: TmuxCli().status(dead) == 7, what="retained terminal exit")
+        live_tmux.wait(
+            lambda: self.tmux("display-message", "-p", "-t", dead, "#{pane_dead_status}") == "7",
+            what="retained terminal exit",
+        )
         manual = self.tmux(
             "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", self.window, *live_tmux.IDLE
         )
@@ -448,10 +460,19 @@ class BoundaryTest(Live):
         self.assertEqual(self.tmux("display-message", "-p", "-t", dead, "#{pane_dead}"), "1")
 
     def test_duplicate_and_invalid_claims_do_not_drop_or_duplicate_real_panes(self):
-        for name, pane in (("duplicate", self.server.pane_of("w1")), ("invalid", "%999999")):
-            self.tmux("new-session", "-d", "-s", name, *live_tmux.IDLE)
-            self.tmux("set-option", "-t", f"={name}:", "@opener", MANAGER)
-            self.tmux("set-option", "-t", f"={name}:", "@pane", pane)
+        # a session grouped with the manager's lists every pane of its window twice
+        self.tmux("new-session", "-d", "-s", "duplicate", "-t", MANAGER)
+        # a pane elsewhere claiming w1 again, and one with an invalid @worker
+        self.tmux("new-session", "-d", "-s", "elsewhere", *live_tmux.IDLE)
+        again = self.server.inside("elsewhere")["TMUX_PANE"]
+        invalid = self.tmux(
+            "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", again, *live_tmux.IDLE
+        )
+        for pane, name in ((again, "w1"), (invalid, "bad name")):
+            self.tmux(
+                *("set-option", "-p", "-t", pane, "@worker", name),
+                *(";", "set-option", "-p", "-t", pane, "@worker-opener", MANAGER),
+            )
         self.tui("tile", self.window)
         self.assert_complete()
         self.grid([["w1", "w2"]])
@@ -499,20 +520,11 @@ class SettleTest(Live):
             "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", self.manager, *live_tmux.IDLE
         )
         w2 = self.tmux("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", w1, *live_tmux.IDLE)
+        # worker panes whose openers are neither tmux sessions nor workers: orphan groups
         for name, opener, pane in (("w1", "old1", w1), ("w2", "old2", w2)):
-            self.tmux("new-session", "-d", "-s", name, *live_tmux.IDLE)
             self.tmux(
-                "set-option",
-                "-t",
-                f"={name}:",
-                "@opener",
-                opener,
-                ";",
-                "set-option",
-                "-t",
-                f"={name}:",
-                "@pane",
-                pane,
+                *("set-option", "-p", "-t", pane, "@worker", name),
+                *(";", "set-option", "-p", "-t", pane, "@worker-opener", opener),
             )
         self.tmux("swap-pane", "-d", "-s", self.manager, "-t", w2)
         self.assertEqual(

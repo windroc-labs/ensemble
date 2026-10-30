@@ -164,7 +164,7 @@ class KeyTest(Base):
         """
         before = len(raw(log))
         result = self.session("send", name, *argv)
-        self.tmux("send-keys", "-t", f"={name}:", "--", SENTINEL)
+        self.tmux("send-keys", "-t", self.server.pane_of(name), "--", SENTINEL)
 
         def found():
             data = raw(log)[before:]

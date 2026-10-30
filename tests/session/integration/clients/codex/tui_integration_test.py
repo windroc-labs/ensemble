@@ -7,6 +7,7 @@ import functools
 import json
 import os
 import select as select_module
+import shlex
 import signal
 import stat
 import subprocess
@@ -135,6 +136,33 @@ class Live(Case):
         self.addCleanup(handle.stop)
         return handle
 
+    def watched(self, handle) -> str:
+        """A new window of mgr whose pane runs handle's attach command, as a user's terminal would
+        show it; remain-on-exit keeps that pane once the worker ends. Its pane.
+        """
+        self.assertEqual(
+            self.server.tmux("set-option", "-wg", "remain-on-exit", "on").returncode, 0
+        )
+        res = self.server.tmux(
+            *("new-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=mgr", "--"),
+            *shlex.split(handle.attach_command()),
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res.stdout.strip()
+
+    def capture(self, pane: str, *options: str) -> str:
+        return self.server.tmux("capture-pane", "-p", *options, "-t", pane).stdout
+
+    def typed(self, handle, *keys: tuple[str, ...]) -> None:
+        """Each of keys (send-keys arguments) sent to a pane running handle's attach command, once it
+        shows the worker's screen.
+        """
+        pane = self.watched(handle)
+        live_tmux.wait(lambda: self.capture(pane).strip(), WAIT, what="the worker shown")
+        for each in keys:
+            res = self.server.tmux("send-keys", "-t", pane, *each)
+            self.assertEqual(res.returncode, 0, res.stderr)
+
     def logged(self):
         return read_jsonl(self.log, missing_ok=True)
 
@@ -261,15 +289,11 @@ class HookTrustIntegrationTest(Live):
                 handle = self.start(
                     f"bad{index}", sid=f"bad-{index}", events=str(self.root / f"events-{index}")
                 )
+                pane = self.watched(handle)
                 stream = Stream(self, handle)
                 self.server.tmux("run-shell", "-b", "true")
                 live_tmux.wait(
-                    lambda *, index=index: (
-                        "codex tui:"
-                        in self.server.tmux(
-                            "capture-pane", "-p", "-J", "-S", "-1000", "-t", f"=bad{index}:"
-                        ).stdout
-                    ),
+                    lambda pane=pane: "codex tui:" in self.capture(pane, "-J", "-S", "-1000"),
                     WAIT,
                     what="preflight diagnostic",
                 )
@@ -287,17 +311,11 @@ class HookTrustIntegrationTest(Live):
                 self.scene(user_hook=status)
                 before = len(self.calls())
                 handle = self.start(f"u{index}", sid=f"user-{index}")
+                watched = self.watched(handle) if status in ("untrusted", "modified") else None
                 stream = Stream(self, handle)
-                if status in ("untrusted", "modified"):
+                if watched is not None:
                     pane = functools.partial(
-                        self.server.tmux,
-                        "capture-pane",
-                        "-p",
-                        "-J",
-                        "-S",
-                        "-1000",
-                        "-t",
-                        f"=u{index}:",
+                        self.server.tmux, "capture-pane", "-p", "-J", "-S", "-1000", "-t", watched
                     )
                     try:
                         live_tmux.wait(
@@ -331,11 +349,9 @@ class HookTrustIntegrationTest(Live):
     def test_appserver_exit_is_retried_once_then_cleaned_up(self):
         self.scene(catalog_case="exit")
         handle = self.start()
+        pane = self.watched(handle)
         live_tmux.wait(
-            lambda: (
-                "app-server exited"
-                in self.server.tmux("capture-pane", "-p", "-J", "-S", "-1000", "-t", "=w1:").stdout
-            ),
+            lambda: "app-server exited" in self.capture(pane, "-J", "-S", "-1000"),
             WAIT,
             what="bounded retry diagnostic",
         )
@@ -474,7 +490,7 @@ class TuiLaunchIntegrationTest(Live):
         self.assertEqual(handle.reply, raw)
         self.assertEqual(len(self.server.panes("=mgr:")), 1)
         self.assertEqual([r.name for r in self.session_cls.list("w1")], ["w1"])
-        self.assertEqual(self.server.option("w1", "@sid"), "")
+        self.assertEqual(self.server.sessions(), ["mgr"])
         self.assertEqual(self.session_cls.list("w1")[0].sid, self.sid)
         self.assertEqual(stat.S_IMODE(self.record().stat().st_mode), 0o600)
         hook_store = self.home / ".ensemble" / "tui" / "w1" / "hooks.jsonl"
@@ -694,9 +710,14 @@ class TuiLaunchIntegrationTest(Live):
                 self.session_cls = configured(self.clients)
                 handle = self.start(f"color{index}", sid=f"color-{index}")
                 self.assertEqual(Stream(self, handle).until(TurnEnd)[-1], TurnEnd("first"))
-                screen = self.server.tmux(
-                    "capture-pane", "-p", "-e", "-t", f"=color{index}:"
-                ).stdout
+                pane = self.watched(handle)
+                screen = live_tmux.wait(
+                    lambda pane=pane: (
+                        found if "first" in (found := self.capture(pane, "-e")) else ""
+                    ),
+                    WAIT,
+                    what=f"color{index}'s screen shown",
+                )
                 self.assertEqual("\x1b[36mfirst" in screen, value in (None, "0"))
                 self.assertEqual(self.calls()[-1]["env"]["NO_COLOR"], value)
                 handle.stop()
@@ -823,14 +844,19 @@ class TuiLaunchIntegrationTest(Live):
             first.stop()
             second = self.start(resume=True)
             self.assertEqual(Stream(self, second).until(TurnEnd)[-1], TurnEnd("first"))
-            with mock.patch.dict(os.environ, self.server.inside("w1")):
-                nested = self.start("z1", sid="nested", events=str(self.root / "nested.events"))
-                self.assertEqual(Stream(self, nested).until(TurnEnd)[-1], TurnEnd("first"))
+            # a worker's own process runs outside tmux (its guard drops TMUX): so does this start
+            nested = self.start("z1", sid="nested", events=str(self.root / "nested.events"))
+            self.assertEqual(Stream(self, nested).until(TurnEnd)[-1], TurnEnd("first"))
+            pane = self.watched(nested)
         for call in self.calls():
             self.assertEqual({key: call["env"][key] for key in inherited}, expected)
             self.assertEqual(call["env"]["CODEX_HOME"], str(self.codex_home))
         self.assertNotEqual(self.bound().native_id, self.bound("nested").native_id)
-        screen = self.server.tmux("capture-pane", "-p", "-e", "-t", "=z1:").stdout
+        screen = live_tmux.wait(
+            lambda: found if "first" in (found := self.capture(pane, "-e")) else "",
+            WAIT,
+            what="z1's screen shown",
+        )
         self.assertRegex(screen, r"\x1b\[[0-9;]*36mfirst")
 
 
@@ -915,8 +941,7 @@ class TuiRecoveryIntegrationTest(Live):
         first = stream.until(TurnFailed)
         self.assertEqual(first.count(TurnStarted()), 1)
         self.assertEqual(first[-1], TurnFailed("server_overloaded", "try again later"))
-        self.server.tmux("send-keys", "-t", "=w1:", "-l", "continue")
-        self.server.tmux("send-keys", "-t", "=w1:", "Enter")
+        self.typed(handle, ("-l", "continue"), ("Enter",))
         second = stream.until(TurnFailed)
         self.assertEqual(
             second, [TurnStarted(), TurnFailed("server_overloaded", "try again later")]

@@ -6,6 +6,7 @@ inventory with tmux unavailable, name reuse, racing starts and closes.
 import contextlib
 import json
 import os
+import shlex
 import signal
 import subprocess
 import tempfile
@@ -68,7 +69,7 @@ class TuiTest(Live):
             idle_timeout=IDLE,
         )
         self.assertEqual(len(self.server.panes(f"={MANAGER}:")), 1)
-        self.assertEqual(self.server.option("w1", "@sid"), "")
+        self.assertEqual(self.server.sessions(), [MANAGER])
         self.assertEqual(self.session_cls.list("w1")[0].sid, SID)
         first = RunLog(self.workdir).read()[0]  # its harness may have bound the client since
         self.assertEqual((first["kind"], first["sid"]), ("session", SID))
@@ -179,20 +180,25 @@ class TuiTest(Live):
 
 
 class SplitTest(Live):
-    def test_a_split_and_refocused_session_keeps_its_client_pane(self):
-        self.start(
+    def test_a_send_reaches_the_worker_not_the_active_pane_beside_its_display(self):
+        handle = self.start(
             "w5",
             {"read": True},
             {"hook": "stop", "payload": {"last_message": "r1"}},
             {"read": True},
             sid=SID,
         )
+        shown = self.server.tmux(
+            *("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", f"={MANAGER}:", "--"),
+            *shlex.split(handle.attach_command()),
+        )
+        self.assertEqual(shown.returncode, 0, shown.stderr)
         added = self.server.tmux(
-            "split-window", "-P", "-F", "#{pane_id}", "-t", "=w5:", *live_tmux.IDLE
+            "split-window", "-P", "-F", "#{pane_id}", "-t", shown.stdout.strip(), *live_tmux.IDLE
         )
         self.assertEqual(added.returncode, 0, added.stderr)
         other = added.stdout.strip()
-        self.assertEqual(self.active("w5"), other)  # its client's pane no longer active
+        self.assertEqual(self.active(MANAGER), other)  # the pane showing w5 no longer active
 
         attached = self.session_cls.attach("w5")
         attached.send("ping")

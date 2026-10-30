@@ -19,6 +19,7 @@ from unittest import mock
 
 from ensemble.session.harness import guard
 from ensemble.session.hosts import base as host_base
+from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.utils import Record
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN, child_env
@@ -35,6 +36,8 @@ SOCKET_MAX = 100  # sun_path: 104 bytes (macOS), 108 (Linux)
 HEADROOM = 256
 NPROC_PROBE = os.path.join(os.path.dirname(__file__), "nproc_probe.py")
 PANES = "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height}"
+WORKER_PANES = "#{pane_id}\t#{@worker}\t#{@worker-opener}\t#{window_id}\t#{pane_dead}"
+GONE = ("no server running", "error connecting")
 
 
 _SOCKETS: set[str] = set()
@@ -87,6 +90,16 @@ def _guard_popen():
             super().__init__(*args, **kwargs)
 
     return mock.patch("subprocess.Popen", new=GuardedPopen)
+
+
+class WorkerPane(NamedTuple):
+    """A pane whose @worker names a worker; opener its @worker-opener, "" when unset."""
+
+    pane: str
+    name: str
+    opener: str
+    window: str
+    dead: bool
 
 
 class Client(NamedTuple):
@@ -277,8 +290,35 @@ class Server:
         )
         return {r[0]: (int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in rows}
 
-    def pane_of(self, session: str) -> str:
-        return self.option(session, "@pane")
+    def worker_panes(self, name: str | None = None, *, dead: bool = False) -> list[WorkerPane]:
+        """The worker panes (name: of worker `name`), once each, lowest pane number first; dead:
+        with dead ones; none without a server.
+        """
+        res = self.tmux("list-panes", "-a", "-F", WORKER_PANES)
+        if res.returncode:
+            if any(word in res.stderr for word in GONE):
+                return []
+            self.case.fail(f"tmux list-panes -a: exit {res.returncode}: {res.stderr.strip()}")
+        found: dict[str, WorkerPane] = {}
+        for line in res.stdout.splitlines():
+            pane, worker, opener, window, gone = line.split("\t")
+            if worker and (name is None or worker == name) and (dead or gone != "1"):
+                found.setdefault(pane, WorkerPane(pane, worker, opener, window, gone == "1"))
+        return sorted(found.values(), key=lambda p: int(p.pane[1:]))
+
+    def pane_of(self, name: str) -> str:
+        """Worker `name`'s newest live worker pane, "" if none."""
+        found = self.worker_panes(name)
+        return found[-1].pane if found else ""
+
+    def opener_of(self, name: str) -> str:
+        """The @worker-opener of worker `name`'s newest live worker pane, "" if none."""
+        found = self.worker_panes(name)
+        return found[-1].opener if found else ""
+
+    def sessions(self) -> list[str]:
+        """The server's tmux session names, sorted."""
+        return sorted(self._out("list-sessions", "-F", "#{session_name}").split())
 
     def option(self, session: str, key: str) -> str:
         return self._out("show-options", "-qv", "-t", f"={session}:", key).removesuffix("\n")
@@ -333,6 +373,29 @@ def crash_owner(ensemble: str, name: str) -> None:
     except ProcessLookupError:
         return
     wait(lambda: not alive(pid), what=f"session harness {pid} to end")
+
+
+def sized(worker, size, what: str = "the worker's terminal size") -> None:
+    """Waits until `stty size` in worker, a shell asked anew each RESEND s, answers size: WxH, or a
+    function giving it.
+    """
+    asks = [0, -RESEND]  # the latest ask's number and time
+
+    def answered() -> bool:
+        if time.monotonic() - asks[1] >= RESEND:
+            asks[0] += 1
+            worker.write(f"echo ask-{asks[0]} $(stty size)\n".encode())
+            asks[1] = time.monotonic()
+        width, height = (size() if callable(size) else size).split("x")
+        lines = (line.strip() for line in worker.screen().splitlines())
+        return f"ask-{asks[0]} {height} {width}" in lines
+
+    wait(answered, what=f"{what} at {size if isinstance(size, str) else 'its display size'}")
+
+
+def running(name: str, host: str = "tmux") -> bool:
+    """Whether tmux Host `host` lists worker `name`, its guard live (this process's control root)."""
+    return name in TmuxHost(host).list()
 
 
 def alive(pid: int) -> bool:
