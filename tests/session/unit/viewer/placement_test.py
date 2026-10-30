@@ -176,12 +176,19 @@ class RecordTest(Case):
         fake = fake or FakeTmux()
         self.stderr = io.StringIO()
         with which(kw.pop("command", COMMAND)), redirect_stderr(self.stderr):
-            placed(fake)._record(name, opener, pane, window, **{"sid": None, "label": False, **kw})
+            placed(fake)._record(
+                name,
+                opener,
+                pane,
+                window,
+                **{"printed": PRINTED, "sid": None, "label": False, **kw},
+            )
         return fake.calls
 
     def test_record_sets_pane_options_and_close_hook(self):
-        """AC6: one call sets @worker, @worker-opener and the window's after-kill-pane[N] hook,
-        which once %20 is gone unsets itself and hides run S of w1 as closed by hand.
+        """AC6: one call sets @worker, @worker-attach, @worker-opener and the window's
+        after-kill-pane[N] hook, which once %20 is gone unsets itself and hides run S of w1 as
+        closed by hand.
         """
         hook = (
             "if-shell -F '#{m:* %20 *,#{S:#{W:#{P: #{pane_id} }}}}' '' "
@@ -194,6 +201,7 @@ class RecordTest(Case):
             [
                 [
                     *("tmux", "set-option", "-p", "-t", "%20", "@worker", "w1"),
+                    *(";", "set-option", "-p", "-t", "%20", "@worker-attach", PRINTED),
                     *(";", "set-option", "-p", "-t", "%20", "@worker-opener", "mgr"),
                     *(";", "set-hook", "-w", "-t", "@1", "after-kill-pane[20]", hook),
                 ]
@@ -296,7 +304,7 @@ class WorkersTest(Case):
         rows = worker_rows(
             ("%5", "s", "mgr", "@1", "mgr"),
             ("%6", "t", "s"),
-            "1\t%7\ts\tmgr\t@1\tmgr",
+            "1\t%7\ts\tmgr\t@1\tmgr\t",
             ("%8", "s", "a b", "@2", "other"),
             ("%5", "s", "mgr", "@1", "linked"),
         )
@@ -304,8 +312,8 @@ class WorkersTest(Case):
         self.assertEqual(
             placed(fake).panes("s"),
             [
-                types.WorkerPane("%5", "s", "mgr", "@1", "mgr"),
-                types.WorkerPane("%8", "s", "", "@2", "other"),
+                types.WorkerPane("%5", "s", "mgr", "@1", "mgr", PRINTED),
+                types.WorkerPane("%8", "s", "", "@2", "other", PRINTED),
             ],
         )
         self.assertEqual(fake.calls, [WORKERS])
@@ -365,9 +373,29 @@ class ReuseTest(PaneFixture):
         self.assertEqual(fake.commands().count("split-window"), 1)
         self.assertEqual(fake.calls[-2:], [OWN, WORKERS])
 
+    def test_an_earlier_runs_pane_is_not_reused(self):
+        """AC9: a pane of s running another attach command (an earlier run's, still closing) is not
+        this run's: a new pane opens, tagged with this run's attach command.
+        """
+        fake = FakeTmux(
+            results={
+                "display-message": (0, "own\n"),
+                "list-panes": lambda argv: (
+                    worker_rows(("%5", "s", "own", "@1", "mgr", "/fake/attach old"))
+                    if "-a" in argv
+                    else (1,)
+                ),
+                "list-clients": clients((5, "%9")),
+                "split-window": split(),
+            }
+        )
+        self.assertIsNone(self.open(fake, INSIDE))
+        self.assertEqual(fake.commands().count("split-window"), 1)
+        self.assertEqual(fake.calls[-1:], record("own", "%20"))
+
     def test_a_dead_pane_or_another_workers_does_not_count(self):
         for rows in (
-            ["1\t%5\ts\town\t@1\tmgr"],
+            ["1\t%5\ts\town\t@1\tmgr\t"],
             [("%5", "t", "own")],
             [("%5", "s;", "own")],
         ):

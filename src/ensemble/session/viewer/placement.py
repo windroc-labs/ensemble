@@ -28,6 +28,7 @@ from ensemble.session.viewer.grid import (
     RETILE,
     WINDOW,
     WORKER,
+    WORKER_ATTACH,
     WORKER_LABEL,
     WORKER_OPENER,
     Grid,
@@ -117,8 +118,8 @@ class Placement:
                 workers = self.workers()
             except TuiError:
                 workers = []
-            if _newest(name, workers) is not None:
-                return None
+            if any(w.name == name and w.attach == printed for w in workers):
+                return None  # an earlier run's pane, still closing, is not this run's
             grid = self._grid(opener, workers, own=own) if opener is not None else None
             if grid is not None:
                 grid_window, manager, at, side = grid
@@ -129,9 +130,10 @@ class Placement:
                 try:
                     new, window, why = self._split(argv, side, at)
                     if new is not None and window is not None:
+                        # tagged before any tile
                         self._record(
-                            name, opener, new, window, sid=sid, label=label
-                        )  # before any tile
+                            name, opener, new, window, printed=printed, sid=sid, label=label
+                        )
                 finally:
                     if new is None:
                         with contextlib.suppress(TuiError):
@@ -160,7 +162,7 @@ class Placement:
         if new is None or window is None:
             return why
         if grid is None:
-            self._record(name, opener, new, window, sid=sid, label=label)
+            self._record(name, opener, new, window, printed=printed, sid=sid, label=label)
             return None
         return self.grid.configure(
             grid_window,
@@ -262,10 +264,18 @@ class Placement:
         return new, window, None
 
     def _record(
-        self, name: str, opener: str | None, pane: str, window: str, *, sid: str | None, label: bool
+        self,
+        name: str,
+        opener: str | None,
+        pane: str,
+        window: str,
+        *,
+        printed: str,
+        sid: str | None,
+        label: bool,
     ) -> None:
-        """Tags pane as name's worker pane, with its close hook and (label) its name in its window's
-        bottom pane border; a failure is only printed.
+        """Tags pane as name's worker pane running `printed`, with its close hook and (label) its
+        name in its window's bottom pane border; a failure is only printed.
         """
         if not (
             PANE.fullmatch(pane)
@@ -280,6 +290,7 @@ class Placement:
             )
             return
         args = ["set-option", "-p", "-t", pane, WORKER, name]
+        args += [";", "set-option", "-p", "-t", pane, WORKER_ATTACH, printed]
         if opener is not None:
             args += [";", "set-option", "-p", "-t", pane, WORKER_OPENER, opener]
         if label:

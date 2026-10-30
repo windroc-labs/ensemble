@@ -621,7 +621,7 @@ class TileApplicationTest(TileFixture):
         # w1 (%1) closed; w2's attach command exited where remain-on-exit kept its pane %2 dead:
         # no worker pane, so a manual pane, last
         layout = dump("160x48,0,0{79x48,0,0,0,80x48,80,0[80x32,80,0,2,80x15,80,33,3]}")
-        dead = "1\t%2\tw2\tmgr\t@3\tmgr"
+        dead = "1\t%2\tw2\tmgr\t@3\tmgr\t"
         for rows, swaps, cells in (
             (self.W3[1:], [], [slot("%2"), slot("%3")]),
             (
@@ -741,18 +741,17 @@ class TileApplicationTest(TileFixture):
         )
 
     def test_worker_pane_fields_read_back_only_after_a_fullmatch(self):
-        # a dead pane, a bad pane id, name or window, or a row of another width: skipped (its pane
-        # a manual pane); an @worker-opener that is no name: unset
+        # a dead pane, a bad pane id, name or window, or a short row: skipped (its pane a manual
+        # pane); an @worker-opener that is no name: unset
         rows = [
             ("%1", "w1", "mgr"),
-            "1\t%2\tw2\tmgr\t@3\tmgr",
+            "1\t%2\tw2\tmgr\t@3\tmgr\t",
             ("%4", "w 4", "mgr"),
             ("%3", "w5", "w1"),
             ("%5", "w6", "%1"),
-            "0\t%2;\tw7\tmgr\t@3\tmgr",
-            "0\t%2\tw8\tmgr\t@3;\tmgr",
-            "0\t%4\tw9\tmgr\t@3",
-            "0\t%4\tw10\tmgr\t@3\tmgr\tx",
+            "0\t%2;\tw7\tmgr\t@3\tmgr\t",
+            "0\t%2\tw8\tmgr\t@3;\tmgr\t",
+            "0\t%4\tw9\tmgr\t@3\tmgr",
         ]
         panes = ["%0", "%1", "%2", "%3", "%4", "%5"]
         fake = self.tile(

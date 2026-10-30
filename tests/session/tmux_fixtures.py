@@ -87,9 +87,12 @@ def close_hook(name, pane, window, sid=None, command=COMMAND):
     )
 
 
-def record(opener, pane, *, window="@1", name="s", sid=None, label=False, hook=True):
+def record(
+    opener, pane, *, window="@1", name="s", sid=None, label=False, hook=True, printed=PRINTED
+):
     """_record's one call tagging `pane`, as a list of calls."""
     args = ["tmux", "set-option", "-p", "-t", pane, "@worker", name]
+    args += [";", "set-option", "-p", "-t", pane, "@worker-attach", printed]
     if opener:
         args += [";", "set-option", "-p", "-t", pane, "@worker-opener", opener]
     if label:
@@ -116,16 +119,19 @@ def split(pane="%20", window="@1"):
 
 
 def worker_rows(*rows):
-    """A list-panes -a WORKER_PANES result: rows of (pane, name[, opener, window, session]) live,
-    or a raw line.
+    """A list-panes -a WORKER_PANES result: rows of (pane, name[, opener, window, session, attach])
+    live (attach: PRINTED unless given), or a raw line.
     """
     lines = []
     for row in rows:
         if isinstance(row, str):
             lines.append(row)
             continue
-        pane, name, opener, window, session = (*row, *("", "@1", "mgr")[len(row) - 2 :])
-        lines.append("\t".join(("0", pane, name, opener, window, session)))
+        pane, name, opener, window, session, attach = (
+            *row,
+            *("", "@1", "mgr", PRINTED)[len(row) - 2 :],
+        )
+        lines.append("\t".join(("0", pane, name, opener, window, session, attach)))
     return 0, "".join(line + "\n" for line in lines)
 
 

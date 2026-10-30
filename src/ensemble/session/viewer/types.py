@@ -19,7 +19,8 @@ class Retile(StrEnum):
 
 class WorkerPane(NamedTuple):
     """A pane showing worker `name` (@worker); opener: its @worker-opener, "" when unset; session:
-    the tmux session listing its window first.
+    the tmux session listing its window first; attach: the printed attach command it runs
+    (@worker-attach), which tells a run's pane from an earlier run's.
     """
 
     pane: str
@@ -27,6 +28,7 @@ class WorkerPane(NamedTuple):
     opener: str
     window: str
     session: str
+    attach: str = ""
 
 
 class Cell(NamedTuple):

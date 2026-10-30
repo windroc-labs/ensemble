@@ -419,7 +419,9 @@ class CommandViewTest(Base):
         self.tmux.checked.assert_not_called()
 
     def test_show_reuses_a_live_worker_pane_and_refuses_a_tmux_session_of_the_name(self):
-        self.runner.results["list-panes"] = worker_rows(("%7", "d1", "other"))
+        self.runner.results["list-panes"] = worker_rows(
+            ("%7", "d1", "other", "@1", "mgr", self.target.printed)
+        )
         self.assertIsNone(self.viewer.show("d1", self.docker, display="mgr"))
         self.assertNotIn("split-window", [c[1] for c in self.runner.calls])
         self.tmux.has_session.return_value = True

@@ -93,7 +93,13 @@ WORKER_OPENER = "@worker-opener"
 WORKER_LABEL = "@worker-label"
 
 
-WORKER_PANES = f"#{{pane_dead}}\t#{{pane_id}}\t#{{{WORKER}}}\t#{{{WORKER_OPENER}}}\t#{{window_id}}\t#{{session_name}}"
+WORKER_ATTACH = "@worker-attach"
+
+
+WORKER_PANES = (
+    f"#{{pane_dead}}\t#{{pane_id}}\t#{{{WORKER}}}\t#{{{WORKER_OPENER}}}\t#{{window_id}}\t#{{session_name}}"
+    f"\t#{{{WORKER_ATTACH}}}"
+)
 
 
 HOOK_PATH = re.compile(r"[A-Za-z0-9_./@+-]+")
@@ -159,10 +165,10 @@ def worker_panes(tmux: TmuxCli) -> list[WorkerPane]:
         raise TuiError(f"tmux: {error(res)}")
     found: dict[str, WorkerPane] = {}
     for line in res.stdout.splitlines():
-        fields = line.split("\t")
-        if len(fields) != 6:
+        fields = line.split("\t", 6)
+        if len(fields) != 7:
             continue
-        dead, pane, name, opener, window, session = fields
+        dead, pane, name, opener, window, session, attach = fields
         if (
             dead != "1"
             and PANE.fullmatch(pane)
@@ -171,7 +177,7 @@ def worker_panes(tmux: TmuxCli) -> list[WorkerPane]:
             and pane not in found
         ):
             found[pane] = WorkerPane(
-                pane, name, opener if NAME.fullmatch(opener) else "", window, session
+                pane, name, opener if NAME.fullmatch(opener) else "", window, session, attach
             )
     return list(found.values())
 
