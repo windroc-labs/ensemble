@@ -548,6 +548,7 @@ def execution_argv(plan: LaunchPlan, snapshot: Snapshot, trusted_state: str) -> 
         plan.executable,
         *plan.selection,
         "--no-daemon",
+        "--no-alt-screen",
         "-C",
         snapshot.cwd,
         "-c",

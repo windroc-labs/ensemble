@@ -20,15 +20,6 @@ class Retile(StrEnum):
 class TmuxAnchor(NamedTuple):
     pane: str
     socket: str
-    session: str | None = None
-
-
-class ItermAnchor(NamedTuple):
-    iterm: tuple[str, list[str]]
-    tmux: TmuxAnchor | None = None
-
-
-Anchor = TmuxAnchor | ItermAnchor
 
 
 class Cell(NamedTuple):

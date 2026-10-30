@@ -34,7 +34,6 @@ class ShowTest(Case):
             ),
         )
         self.environment = self.server.env(**self.server.inside("mgr"))
-        self.environment.update(ITERM_SESSION_ID="w0t0p0:ABC", TERM_PROGRAM="iTerm.app")
         self.calls = []
         self.fail_metadata = False
         self.new_pane = None
@@ -42,10 +41,6 @@ class ShowTest(Case):
 
     def transport(self, argv, **kwargs):
         self.calls.append(argv)
-        if argv[0] == "pgrep":
-            raise FileNotFoundError("pgrep unavailable")
-        if argv[0] == "osascript":
-            self.fail("a private-server test must not address iTerm2")
         if self.fail_metadata and argv[1:4] == ["set-option", "-t", "=worker:"]:
             return subprocess.CompletedProcess(argv, 1, "", "metadata refused")
         response = subprocess.run(argv, **kwargs)

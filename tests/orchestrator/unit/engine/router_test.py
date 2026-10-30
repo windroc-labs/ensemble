@@ -1314,7 +1314,7 @@ class AttendedEntry(OuterBase):
 
     def test_a_display_or_events_the_delegate_refuses_exits_2_before_any_linear_call(self):
         for error in (
-            "no pane to show the TUI beside (not in tmux): run from tmux or iTerm2, or pass split_from",
+            "no pane to show the TUI beside (no anchor pane: not in tmux): run from tmux, or pass split_from",
             "display 'x/sideways': not <opener>[/<split>[/<split_from>]]",
             "no tmux session gone",
             f"events file {self.events}: Permission denied",

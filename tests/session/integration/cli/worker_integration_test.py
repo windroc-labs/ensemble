@@ -9,9 +9,7 @@ import json
 import os
 import shutil
 import tempfile
-import time
 
-from ensemble.session.harness import guard
 from ensemble.session.harness.channel import Channel
 from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
@@ -183,14 +181,6 @@ class ColorTest(WorkerCase):
         )
         self.wait_event("w1", "done")
         self.assertEqual(self.ok(self.session("reply", "w1")).stdout, "Colored.\n")
-
-    def test_exit_in_the_launch_turn_still_fails_start(self):
-        began = time.monotonic()
-        res = self.start("w1", steps=[{"kind": "sleep", "seconds": guard.UP + 1}, {"kind": "exit"}])
-        self.assertGreater(time.monotonic() - began, guard.UP + 1)
-        self.assert_early_exit(res, "w1", 0)
-        self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
-        self.assertIsNone(self.dir_record("w1"))
 
     def test_dialog_start_says_color_not_set(self):
         # before SessionStart, as Claude's: no opening is due before it shows

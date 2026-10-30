@@ -1,6 +1,6 @@
 ---
 name: manage
-description: "Coordinate workers, role runs and pipelines through Crew, in tmux/iTerm2 panes."
+description: "Coordinate workers, role runs and pipelines through Crew, in tmux panes."
 disable-model-invocation: true
 allowed-tools:
   - Bash(ensemble-crew attach)
@@ -80,7 +80,7 @@ Placement: `--display D`, `D` in the format of the Host the session runs on; `en
 
 ## Grid
 
-In tmux, with a tmux client showing your session, the panes you launch form a grid in your window: the first takes its right half; the rest, in name order (numbers as numbers), fill columns of `workers_per_column` top to bottom, then a new column to the right; `grid_retile` sets when it re-tiles by itself. Both are `[viewer]` keys, their values and meaning in `src/ensemble/session/config.toml`'s comments, set locally in `~/.ensemble/config.local.toml`'s `[session.viewer]`. A session's own launches stack in its cell. Re-tile by hand: `ensemble-session tile <window>` (`<window>` its tmux id, `@N`). A grid gone wrong: re-tile it so, or launch the next session, which rebuilds it. Rename no session and fix no grid by hand: a session's name is its identity in its Record, the Roster and the events. Outside tmux and iTerm2, or when the split fails, a session gets no pane: `ensemble-crew attach`'s `attach` column shows it.
+In tmux, with a tmux client showing your session, the panes you launch form a grid in your window: the first takes its right half; the rest, in name order (numbers as numbers), fill columns of `workers_per_column` top to bottom, then a new column to the right; `grid_retile` sets when it re-tiles by itself. Both are `[viewer]` keys, their values and meaning in `src/ensemble/session/config.toml`'s comments, set locally in `~/.ensemble/config.local.toml`'s `[session.viewer]`. A session's own launches stack in its cell. Re-tile by hand: `ensemble-session tile <window>` (`<window>` its tmux id, `@N`). A grid gone wrong: re-tile it so, or launch the next session, which rebuilds it. Rename no session and fix no grid by hand: a session's name is its identity in its Record, the Roster and the events. Outside tmux, `show` prints the attach command. When a split fails, a session gets no pane: `ensemble-crew attach`'s `attach` column shows it.
 
 ## Direct
 
@@ -172,7 +172,7 @@ In tmux, with a tmux client showing your session, the panes you launch form a gr
 - New requirements, decisions or a gap for a finished run: append them to the description of the issue that owns them, as "Additional requirements (round N)" (your comments count as the user's too, but the description keeps them in one place; no new issue), and rerun it as a fresh board run (Board runs), which closes the old pane; never send them as a follow-up into that pane: an old session keeps the team text it started with. Only a `needs_input` answer (Recover), or the user naming the original worker, goes into the old pane.
 - Ad-hoc role runs only when one run covers several issues: name it and its entry `<role>-<ISSUE>` (`--name`), and move each issue's state, post each step as a comment and attach the deliverable yourself.
 - The user naming a worker with a task assigns it that task; it never means close the worker.
-- Once a worker's work is done and nothing in its main view awaits the user's review or answer (including an open PR the user hasn't reviewed), the user's standing permission authorizes closing its Crew entry. Close through Crew (Direct); tmux only for sessions outside the Roster, never an iTerm2 pane through AppleScript.
+- Once a worker's work is done and nothing in its main view awaits the user's review or answer (including an open PR the user hasn't reviewed), the user's standing permission authorizes closing its Crew entry. Close through Crew (Direct); tmux only for sessions outside the Roster.
 - Keep a role run on an issue open until its PR merges or the issue is otherwise finished (report or PRD accepted, Done, Canceled), not just In Review: your PR gate may still send it fixes. Then close it, unless the user said to keep it; resume it when the user asks (closed: `reopen`, Recover).
 - Close your own live-test sessions right after the test.
 - An issue for Codex: write its role's prompt with the issue's input as the router renders it (`ensemble-delegate prompt … --out <work dir>/agent/prompt.md`), then launch a Codex worker in the issue's work dir: `ensemble-crew worker <name> --client codex --cwd <work dir>/agent --prompt 'Read <work dir>/agent/prompt.md whole and follow it.'`. When the user asks, run it without approvals (client flags `-- --ask-for-approval never`; it already runs without sandbox): you may not approve its prompts. It writes nothing back: move the issue and relay its PR yourself. Close it as a role run on an issue (once its PR merges), not by the worker rule.

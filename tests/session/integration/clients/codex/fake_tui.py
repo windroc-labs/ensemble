@@ -261,6 +261,7 @@ def interactive_arguments(args):
         resumed, args = args[1], args[2:]
     options = parser()
     options.add_argument("--no-daemon", action="store_true", required=True)
+    options.add_argument("--no-alt-screen", action="store_true", required=True)
     options.add_argument("-C", required=True)
     options.add_argument("-s", choices=("danger-full-access", "workspace-write"))
     options.add_argument("-m")

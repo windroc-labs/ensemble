@@ -191,3 +191,89 @@ class LaunchTest(Case):
             old.send(Paste("old input"))
         self.assertEqual(old.state(), Liveness.ABSENT)
         self.assertEqual(new.state(), Liveness.LIVE)
+
+    def screen_worker(self, name):
+        self.host = TmuxHost("tmux", {"hidden_size": "12x5"})
+        worker = self.worker(
+            name,
+            Launch(
+                (sys.executable, "-I", str(Path(__file__).with_name("screen_client.py"))),
+                cwd=self.home,
+            ),
+        )
+        live_tmux.wait(lambda: worker.screen() == "READY", what="screen client ready")
+        live_tmux.wait(lambda: self.displayed(name) == "READY", what="screen display attached")
+        return worker
+
+    def displayed(self, name, *options):
+        result = self.server.tmux("capture-pane", "-p", *options, "-t", f"={name}:")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.rstrip()
+
+    def test_guard_reconnect_preserves_active_buffer_region_and_following_output(self):
+        for mode in ("inline", "alt"):
+            with self.subTest(mode=mode):
+                worker = self.screen_worker(mode)
+                worker.write(mode.encode() + b"\n")
+                expected = "top\na\nb\nc\nfooter"
+                live_tmux.wait(
+                    lambda mode=mode, expected=expected: self.displayed(mode) == expected,
+                    what=f"{mode} initial screen",
+                )
+                self.assertEqual(worker.screen(), expected)
+                worker.close_display()
+                self.assertTrue(worker.redisplay())
+                live_tmux.wait(
+                    lambda mode=mode, expected=expected: self.displayed(mode) == expected,
+                    what=f"{mode} reconnected screen",
+                )
+                alternate = self.server.tmux(
+                    "display-message", "-p", "-t", f"={mode}:", "#{alternate_on}"
+                )
+                self.assertEqual(alternate.stdout.strip(), "1" if mode == "alt" else "0")
+                worker.write(b"scroll\n")
+                expected = "top\nb\nc\nnew\nfooter"
+                live_tmux.wait(
+                    lambda mode=mode, expected=expected: self.displayed(mode) == expected,
+                    what=f"{mode} resumed scrolling",
+                )
+                self.assertEqual(worker.screen(10), expected)
+                if mode == "alt":
+                    worker.write(b"normal\n")
+                    live_tmux.wait(
+                        lambda mode=mode: self.displayed(mode) == "main\n  X",
+                        what="primary screen restored",
+                    )
+                    self.assertEqual(worker.screen(), "main\n  X")
+
+    def test_inline_worker_display_keeps_complete_scrollback_without_resize(self):
+        worker = self.screen_worker("history")
+        before = self.server.tmux(
+            "display-message",
+            "-p",
+            "-t",
+            "=history:",
+            "#{history_size} #{pane_width}x#{pane_height}",
+        ).stdout.split()
+        worker.write(b"history\n")
+        live_tmux.wait(lambda: "done" in self.displayed("history"), what="numbered output done")
+        after = self.server.tmux(
+            "display-message",
+            "-p",
+            "-t",
+            "=history:",
+            "#{history_size} #{pane_width}x#{pane_height}",
+        ).stdout.split()
+        self.assertGreater(int(after[0]), int(before[0]))
+        self.assertEqual(after[1], before[1])
+        self.assertEqual(after[1], "12x5")
+        self.assertEqual(self.server.tmux("copy-mode", "-u", "-t", "=history:").returncode, 0)
+        earlier = self.displayed("history", "-S", "-").splitlines()
+        self.assertEqual(
+            [line for line in earlier if line.startswith("PROOF-")],
+            [f"PROOF-{number:03}" for number in range(1, 121)],
+        )
+        self.assertEqual(
+            worker.screen(121),
+            "\n".join([f"PROOF-{number:03}" for number in range(1, 121)] + ["done"]),
+        )

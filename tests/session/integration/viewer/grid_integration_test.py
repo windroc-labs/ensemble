@@ -18,7 +18,6 @@ from ensemble.session.viewer import layout
 from ensemble.session.viewer.viewer import fold
 from tests.session import live_tmux
 from tests.session.case import PLUGIN_BIN, Case, configured
-from tests.session.processes import reject_command
 from tests.utils.sandbox import scratch
 
 MANAGER = "mgr"
@@ -40,9 +39,6 @@ class Live(Case):
         self.server.start(MANAGER)
         self.server.attach(MANAGER)
         patch = mock.patch.dict(os.environ, self.server.env(), clear=True)
-        patch.start()
-        self.addCleanup(patch.stop)
-        patch = reject_command("osascript")
         patch.start()
         self.addCleanup(patch.stop)
         self.cwd = scratch(self)
@@ -225,8 +221,7 @@ class GridTest(Live):
 
 
 class SplitsTest(Live):
-    def test_split_outside_grid(self):
-        manager = self.server.inside(MANAGER)["TMUX_PANE"]
+    def test_show_outside_tmux_returns_attach_even_with_an_anchor(self):
         with self.inside(MANAGER):
             self.assertEqual(self.session_cls.layout(), MANAGER)
         beside = f"/below/{MANAGER}"
@@ -234,16 +229,17 @@ class SplitsTest(Live):
         with self.assertRaises(SessionError) as caught:
             self.session_cls.layout(display="/below")
         self.assertTrue(
-            str(caught.exception).endswith(": run from tmux or iTerm2, or pass split_from"),
+            str(caught.exception).endswith(": run from tmux, or pass split_from"),
             caught.exception,
         )
-        self.assertEqual(self.started("w1", inside=None, split="below", split_from=MANAGER), "")
-        pane = self.server.pane_of("w1")
-        panes = self.server.panes(f"={MANAGER}:")
-        self.assertIn(pane, panes)
-        (mx, my, _, _), (x, y, _, _) = panes[manager], panes[pane]
-        self.assertEqual(x, mx)
-        self.assertGreater(y, my)
+        before = self.server.panes(f"={MANAGER}:")
+        TmuxCli().start("w1", Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd))
+        self.assertEqual(
+            self.session_cls.viewer().show("w1", self.host, display=beside),
+            "tmux attach -t '=w1'",
+        )
+        self.assertEqual(self.server.panes(f"={MANAGER}:"), before)
+        self.assertEqual(self.server.option("w1", "@pane"), "")
         self.assertEqual(
             [self.window_option(MANAGER, k) for k in ("@grid-manager", "@grid-per-column")],
             ["", ""],
@@ -425,7 +421,8 @@ class BoundaryTest(Live):
             "dead", Launch(("/bin/sh", "-c", "exit 7"), self.server.env(), cwd=self.cwd)
         )
         live_tmux.wait(lambda: TmuxCli().status("dead") == 7, what="retained terminal exit")
-        self.assertIsNone(Viewer().show("dead", self.host, display=MANAGER))
+        with self.inside(MANAGER):
+            self.assertIsNone(Viewer().show("dead", self.host, display=MANAGER))
         manual = self.tmux(
             "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", self.window, *live_tmux.IDLE
         )
