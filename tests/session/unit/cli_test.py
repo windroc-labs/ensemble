@@ -4,7 +4,6 @@ import io
 import json
 import os
 import shutil
-import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -184,8 +183,8 @@ class ControlBase(HostedTuiBase):
     def setUp(self):
         super().setUp()
         transport = mock.Mock(
-            side_effect=lambda argv, **_kw: subprocess.CompletedProcess(
-                argv, 1, "", "no server running"
+            side_effect=lambda _argv, **_kw: argparse.Namespace(
+                returncode=1, stdout="", stderr="no server running"
             )
         )
         self.cli_viewer = Viewer(tmux=TmuxCli(transport))

@@ -1,6 +1,4 @@
-"""Host, InteractiveProcess and Viewer doubles with configurable boundary calls; only GuardHost
-spawns (a real local guard for headless runs).
-"""
+"""Session boundary doubles; GuardHost alone spawns real guards."""
 
 import os
 import signal
@@ -59,7 +57,6 @@ class MemoryTerminal(InteractiveProcess):
             self.calls.activity.return_value = word
 
     def read(self, timeout):
-        """A managed worker's channel messages: calls.read's, none unless a test sets them."""
         return self.calls.read(timeout)
 
     def send(self, action):
@@ -146,7 +143,6 @@ class MemoryHost(Host):
         super().validate(name, launch)
 
     def worker(self, name, launch: Launch, *, terminal, display=None, events=None, metadata=None):
-        """A managed worker: one MemoryTerminal is both its owner handle and its display."""
         self.calls.worker(
             name, launch, terminal=terminal, display=display, events=events, metadata=metadata
         )
@@ -158,15 +154,12 @@ class MemoryHost(Host):
         return self.create(name, metadata=metadata, display=display)
 
     def headless_worker(self, name, launch: Launch, metadata) -> InteractiveProcess:
-        """A headless run's worker: scripted, no process (GuardHost's: a real local guard)."""
         return ScriptedWorker(name, (metadata or {}).get("generation") or "g" * 32)
 
     def worker_liveness(self, name, generation):
-        """calls.worker_liveness's answer: ABSENT unless a test sets it."""
         return self.calls.worker_liveness(name, generation)
 
     def _release(self, name, generation):
-        """calls.release; its session of `name` closed while it is `generation`'s (a display)."""
         self.calls.release(name, generation)
         process = self.processes.get(name)
         if process is not None and process.session_identity()[1] == generation:
@@ -210,10 +203,7 @@ class ScreenHost(MemoryHost):
 
 
 class MemoryViewer(Viewer):
-    """A Viewer on a mock TmuxCli and Placement whose show, hide, attach_command and close ask a
-    ScreenHost's calls (close: `close_view`); a non-attachable Host's close does nothing, as the
-    Viewer's.
-    """
+    """Viewer boundary double recording Host calls."""
 
     def __init__(self, settings=None):
         tmux = mock.create_autospec(TmuxCli, instance=True)

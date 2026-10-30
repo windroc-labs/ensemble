@@ -44,7 +44,7 @@ class CheckedClient(fake_client.InProcessFakeClient):
 
 
 class CheckedRun(fake_client.FakeInProcess):
-    """check: refuses tier 4, records preflight, and retains the request for execution."""
+    """Records preflight and rejects tier 4."""
 
     def __init__(self, client):
         super().__init__(client)
@@ -161,7 +161,7 @@ PACKAGES = {
 
 
 class Base(Case):
-    """Caller-owned HostedSession fixtures; self.session: the class."""
+    """Configured fake clients."""
 
     def setUp(self):
         self.probe_dir = os.path.join(self.ensemble, "probe")

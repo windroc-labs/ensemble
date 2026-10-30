@@ -1,4 +1,4 @@
-"""The Viewer's functions the session layer calls. FORMAT applies only on an attachable Host; on
+"""Display functions for the session layer. FORMAT applies only on an attachable Host; on
 another, a display is kept as given and matched exactly.
 """
 
