@@ -609,12 +609,12 @@ class Screen:
             return f"\x1b[{row + 1};{column + 1}H{sgr_code(pen)}{text}"
 
         def unfinished(escape):
-            """A half-sent sequence's safe start: a CSI prefix or a string's introducer."""
+            """A half-sent sequence's safe start; a string gets an unknown command."""
             if escape.startswith("\x1b[") and all(" " <= char <= "?" for char in escape[2:]):
                 return escape
             if escape[1:2] in tuple("]P_^X"):
-                return escape[:2] + ("\x1b" if escape.endswith("\x1b") else "")
-            return escape if escape == "\x1b" else ""
+                return escape[:2] + "x" + ("\x1b" if escape.endswith("\x1b") else "")
+            return escape if escape in ("\x1b", "\x1b(", "\x1b)") else ""
 
         def keys(stack):
             return "".join(f"\x1b[>{flags}u" for flags in stack)

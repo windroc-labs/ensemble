@@ -706,6 +706,8 @@ class ReplayTest(Base):
         for start, rest in (
             (b"ok\x1bPtmux;", b"\x1b\x1b[6n\x1b\\done"),
             (b"ok\x1b[?20", b"04hdone"),
+            (b"ok\x1b(", b"B\x1b[mdone"),
+            (b"ok\x1b]2;abc", b"10;?\x07done"),
         ):
             with self.subTest(start=start):
                 screen = guard.Screen(rows=3, columns=20)
@@ -769,7 +771,9 @@ class ReplayTest(Base):
             ("\x1b[\x9d11;?\x07", ""),
             ("\x1b[\x1b#8", ""),
             ("\x1b[?20", "\x1b[?20"),
-            ("\x1b]52;c;eA", "\x1b]"),
+            ("\x1b]2;ab", "\x1b]x"),
+            ("\x1b]2;ab\x1b", "\x1b]x\x1b"),
+            ("\x1b(", "\x1b("),
             ("\x1b", "\x1b"),
         ):
             with self.subTest(wire=wire):
