@@ -15,12 +15,11 @@ from ensemble.session.harness import guard
 from ensemble.session.harness.channel import Channel
 from tests.session import harnesses, live_tmux
 from tests.session.case import REPO
-from tests.session.cli_support import MANAGER, WorkerCase, logged
+from tests.session.cli_support import MANAGER, WorkerCase, guard_command, logged
 from tests.session.integration.clients.codex import fake_tui
 
 PERMISSION = {"kind": "hook", "event": "PermissionRequest", "tool_name": "Edit"}
 TRUST = "Quick safety check: Is this a project you created or one you trust?\n1. Yes, I trust this folder\n2. No, exit"
-ATTACH = "session w1: tmux attach -t '=w1'"
 
 
 class StartArgvTest(WorkerCase):
@@ -175,7 +174,9 @@ class ColorTest(WorkerCase):
     def test_a_launch_turn_that_starts_first_still_colors_quietly(self):
         # its launch turn ends only once input arrives: /color, typed into that turn
         res = self.start("w1", steps=[{"kind": "input"}, "Colored."])
-        self.assertEqual((self.record(res).name, res.stderr), ("w1", ATTACH + "\n"))
+        self.assertEqual(
+            (self.record(res).name, res.stderr), ("w1", f"session w1: {guard_command('w1')}\n")
+        )
         (call,) = self.calls("w1")
         colored = live_tmux.wait(lambda: self.commands("w1"), what="w1's /color")
         self.assertEqual(
@@ -199,7 +200,7 @@ class ColorTest(WorkerCase):
         self.assertEqual(
             res.stderr.splitlines(),
             [
-                ATTACH,
+                f"session w1: {guard_command('w1')}",
                 "session w1: waits on a dialog: Quick safety check",
                 "session w1: color not set: waits on a dialog; ensemble-session send w1 '/color'",
             ],

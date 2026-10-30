@@ -348,7 +348,8 @@ class Tui(Detach):
                 self.assertEqual(out.returncode, 0, out.stderr)
                 printed += [out.stdout, out.stderr]
         options = self.server.tmux("show-options", "-t", f"={TUI}:")
-        self.assertIn("@kind guard", options.stdout)
+        self.assertIn("@view viewer", options.stdout)
+        self.assertNotIn("@kind", options.stdout)
         printed += [options.stdout, self.read(os.path.join(Layout(self.work).run, "run.jsonl"))]
         for text in printed:
             self.assertNotIn(SECRET, text)

@@ -1,10 +1,5 @@
-"""ensemble-session ls through bin/ensemble-session on a private tmux server (Q13): plain ls is its
-header and Session.list's rows; --match fullmatches, a bad RE exits 2; --display D lists the
-sessions opened from D's opener whatever their placement, --here the caller's, nothing outside
-tmux; --records prints the Records stored in worker dirs alone; --descendants adds the workers
-opened from inside a listed one; a live worker whose display was killed is still listed (A5); a
-second, non-default Host's sessions are listed too (the module entry), a Record only its Host holds
-never.
+"""CLI inventory comes from Hosts, including workers whose display was deleted.
+Display and descendant filters preserve caller ownership; records come from worker storage.
 """
 
 import os
@@ -61,8 +56,7 @@ class ListingCase(CliCase):
 class ListingTest(ListingCase):
     def test_plain_ls_is_the_header_and_session_lists_rows_match_fullmatching(self):
         w1, w12 = self.done("w1"), self.done("w12")
-        manager = f"{MANAGER}\tworking\t-\t-\t-"
-        self.assertEqual(self.ls(), table(manager, row(w1), row(w12)))
+        self.assertEqual(self.ls(), table(row(w1), row(w12)))
         self.assertEqual(self.ls(), self.session_list())
         self.assertEqual(self.ls("--match", "w1"), table(row(w1)))
         self.assertEqual(self.ls("--match", "w1"), self.session_list("w1"))
@@ -115,8 +109,7 @@ class ListingTest(ListingCase):
         self.ok(self.server.tmux("kill-session", "-t", "=w1"))
         (found,) = self.status("w1")
         self.assertTrue(found.alive)
-        manager = f"{MANAGER}\tworking\t-\t-\t-"
-        self.assertEqual(self.ls(), table(manager, row(w1), row(w2)))
+        self.assertEqual(self.ls(), table(row(w1), row(w2)))
         self.assertEqual(self.ls(), self.session_list())
         self.assertEqual(self.ls("--records"), lines(w1, w2))
         self.assertEqual(self.ls("--here", "--records", "--descendants"), lines(w1, w2))
@@ -158,10 +151,10 @@ class SecondHostTest(ListingCase):
         listed = self.ls(module=True)
         self.assertEqual(listed, self.session_list())
         rows = [line.split("\t") for line in listed.splitlines()]
-        self.assertEqual([r[0] for r in rows], ["name", "f1", "f2", MANAGER, "w1"])
+        self.assertEqual([r[0] for r in rows], ["name", "f1", "f2", "w1"])
         self.assertEqual([rows[1][i] for i in (1, 3, 4)], ["working", f1.sid, MANAGER])
         self.assertEqual([rows[2][i] for i in (1, 3, 4)], ["working", "-", MANAGER])
-        self.assertEqual(rows[4], row(w1).split("\t"))
+        self.assertEqual(rows[3], row(w1).split("\t"))
         self.assertEqual(self.ls("--records", module=True), lines(w1))
         self.assertEqual(self.ls("--display", MANAGER, "--records", module=True), lines(w1))
         self.assertEqual(self.ls("--match", "f.*", "--records", module=True), "")

@@ -16,9 +16,8 @@ from unittest import mock
 
 from ensemble.session import Session
 from ensemble.session.clients.claude.tui import ClaudeTui
-from ensemble.session.engine import tmux_cli as tmux_model
 from ensemble.session.engine.records import RunLog
-from ensemble.session.engine.tmux_cli import TmuxCli, attach_command
+from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -38,6 +37,7 @@ from ensemble.session.modes import tui
 from tests.session import live_tmux
 from tests.session import tui_support as tui_live
 from tests.session.case import PY
+from tests.session.cli_support import guard_command
 from tests.session.integration.clients.claude import fake_claude
 
 MANAGER, SID, IDLE, WAIT, Stream = (
@@ -234,7 +234,7 @@ class TurnsTest(Live):
         self.assertEqual((live_tmux.activity("w1"), handle.reply), ("done", "Second."))
         self.assertEqual(self.users(handle.info().transcript), ["hello", "more"])
         border = self.server.tmux("show-options", "-wqv", "-t", "=w1:", "pane-border-format").stdout
-        self.assertEqual(border, tmux_model.BORDER + "\n")
+        self.assertEqual(border, "\n")
         self.assertEqual(
             (handle.alive(), [r.name for r in self.session_cls.list("w1")], self.panes()),
             (True, ["w1"], 1),
@@ -394,7 +394,7 @@ class LimitTest(Live):
 
 
 class DeadTest(Live):
-    def test_a_sigterm_ends_with_its_signal_and_a_dead_line_the_session_kept_till_close(self):
+    def test_a_sigterm_ends_with_its_signal_and_a_dead_line_leaving_inventory(self):
         handle = self.start("w1", scenario={"steps": ["Hi."]})
         stream = self.stream(handle)
         self.assertEqual(
@@ -405,25 +405,29 @@ class DeadTest(Live):
         os.kill(self.calls()[0]["pid"], signal.SIGTERM)
         self.assertEqual(stream.next(poke=self.poke), Exited(-signal.SIGTERM))
         self.lines("w1 done", "w1 dead")
-        self.assertEqual(self.server.option("w1", "@state"), "dead")
-        self.assertEqual(
-            (handle.alive(), [r.state for r in self.session_cls.list("w1")]), (False, ["dead"])
+        self.assertEqual(self.server.option("w1", "@state"), "")
+        live_tmux.wait(
+            lambda: not self.session_cls.list("w1"), what="exited guard leaves inventory"
         )
+        self.assertEqual((handle.alive(), self.session_cls.list("w1")), (False, []))
         for call in (lambda: handle.send("more"), handle.screen):
             with self.assertRaises(SessionError):
                 call()
         tui.TuiStore.attach("w1", host=self.session_cls.host()).close()
         self.closed(handle)
 
-    def test_an_early_death_ends_with_its_exit_code_and_a_dead_line_its_pane_kept(self):
+    def test_an_early_death_ends_with_its_exit_code_and_a_dead_line_its_display_kept(self):
         self.configure(flags=["--bogus"])
         handle = self.start("w2", scenario={})
         self.assertEqual(self.stream(handle).next(poke=self.poke), Exited(2))
         self.lines("w2 dead")
-        self.assertEqual(self.server.option("w2", "@state"), "dead")
+        self.assertEqual(self.server.option("w2", "@state"), "")
         pane = self.server.tmux("capture-pane", "-p", "-J", "-t", "=w2:").stdout
         self.assertIn("claude: error: unrecognized arguments: --bogus", pane)
-        self.assertEqual([r.state for r in self.session_cls.list("w2")], ["dead"])
+        live_tmux.wait(
+            lambda: not self.session_cls.list("w2"), what="exited guard leaves inventory"
+        )
+        self.assertEqual(self.session_cls.list("w2"), [])
         with self.assertRaises(SessionError):
             handle.screen()
         tui.TuiStore.attach("w2", host=self.session_cls.host()).close()
@@ -504,12 +508,12 @@ class ShowTest(Live):
             [TurnStarted(), TurnEnd("Hi.", 0)],
         )
         with self.assertNoLogs("session", "WARNING"):
-            self.assertEqual(self.show("w1"), attach_command("w1"))
+            self.assertEqual(self.show("w1"), guard_command("w1"))
         with (
             mock.patch.dict(os.environ, self.server.inside(MANAGER)),
             self.assertLogs("session", "WARNING") as logs,
         ):
-            self.assertEqual(self.show("w1"), attach_command("w1"))
+            self.assertEqual(self.show("w1"), guard_command("w1"))
         self.assertIn(f"no terminal shows tmux session {MANAGER}", logs.output[0])
         self.assertEqual((self.panes(), self.server.pane_of("w1")), (1, ""))
         self.session_cls.retire("w1")

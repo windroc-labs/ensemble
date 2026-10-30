@@ -75,7 +75,7 @@ class Preflight(Case):
     def unchanged(self, before):
         self.assertEqual(self.tree(), before)
         self.assertEqual((PreflightClient.committed, PreflightClient.ran), ([], []))
-        self.tmux.start.assert_not_called()
+        self.tmux.checked.assert_not_called()
 
     def refusal(self, spec, message, **placement):
         before = self.tree()
@@ -355,9 +355,7 @@ print(json.dumps(result))
             self.assertRaises(ConfigError) as refusal,
         ):  # LIVE past the guard's reaping wait
             self.session.preflight(spec)
-        self.assertEqual(
-            str(refusal.exception), "tui session worker is running; tmux attach -t '=worker'"
-        )
+        self.assertEqual(str(refusal.exception), "tui session worker is running")
         self.unchanged(before)
         liveness[0] = Liveness.ABSENT
         with self.no_client():
