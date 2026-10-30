@@ -267,6 +267,105 @@ class CellTest(Base):
         self.assertTrue(row.wrapped)
 
 
+class HistoryTest(Base):
+    def test_display_history_keeps_the_last_2000_rows_at_output_width(self):
+        screen = guard.Screen(rows=5, columns=10)
+        screen.append(b"".join(b"line-%04d\r\n" % i for i in range(3000)))
+        self.assertEqual(len(screen.lines), guard.LINES)
+        self.assertEqual((screen.lines[0], screen.lines[-1]), ("line-0996\r\n", "line-2995\r\n"))
+        screen.append(b"x" * 25 + b"\r\n" + b"\r\n" * 5)
+        retired = list(screen.lines)
+        start = retired.index("x" * 10)
+        self.assertEqual(retired[start : start + 3], ["x" * 10, "x" * 10, "xxxxx\r\n"])
+
+    def test_rows_render_their_colors(self):
+        screen = guard.Screen(rows=2, columns=20)
+        screen.append(b"\x1b[1;31mred\x1b[0m plain\x1b[44m\r\n\r\n")
+        self.assertEqual(screen.lines[0], "\x1b[0;1;31mred\x1b[0m plain\r\n")
+
+    def test_the_byte_bound_drops_the_oldest_rows(self):
+        screen = guard.Screen(rows=2, columns=10)
+        with mock.patch.object(guard, "LINES_SIZE", 30):
+            screen.append(b"".join(b"row-%d\r\n" % i for i in range(9)))
+        self.assertEqual(list(screen.lines), ["row-4\r\n", "row-5\r\n", "row-6\r\n", "row-7\r\n"])
+        self.assertEqual(screen.size, 28)
+
+    def test_display_and_read_histories_are_independent(self):
+        screen = guard.Screen(40, rows=2, columns=10)
+        with mock.patch.object(guard, "LINES", 3):
+            screen.append(b"".join(b"r%d\r\n" % i for i in range(9)))
+        self.assertEqual(list(screen.lines), ["r5\r\n", "r6\r\n", "r7\r\n"])
+        self.assertEqual(screen.text(5), "r4\nr5\nr6\nr7\nr8")
+        screen = guard.Screen(20, rows=2, columns=10)
+        screen.append(b"".join(b"r%d\r\n" % i for i in range(9)))
+        self.assertEqual(screen.text(9), "r6\nr7\nr8")
+        self.assertEqual(len(screen.lines), 8)
+
+    def test_ed3_clears_both_histories(self):
+        screen = guard.Screen(rows=2, columns=10)
+        screen.append(b"a\r\nb\r\nc\r\n\x1b[3J")
+        self.assertEqual((list(screen.lines), screen.size, screen.text(5)), ([], 0, ""))
+
+    def test_lines_cut_by_a_narrower_width_retire_whole(self):
+        screen = guard.Screen(rows=3, columns=12)
+        screen.append(b"abcdefghijklmnopqrstu")
+        screen.resize(3, 5)
+        self.assertEqual(screen.text(None), "abcde\nmnopq")
+        screen.append(b"\r\n\r\n\r\n")
+        self.assertEqual(list(screen.lines), ["abcdefghijkl", "mnopqrstu\r\n"])
+
+    def test_widening_never_joins_padding_into_a_logical_line(self):
+        screen = guard.Screen(rows=3, columns=4)
+        screen.append(b"abcdef")
+        screen.resize(3, 8)
+        screen.append(b"\r\n\r\n\r\n")
+        self.assertEqual(list(screen.lines), ["abcd", "ef\r\n"])
+
+    def test_a_write_after_a_width_change_drops_the_cut_cells(self):
+        screen = guard.Screen(rows=3, columns=12)
+        screen.append(b"abcdefghijklmnopqrstu")
+        screen.resize(3, 5)
+        screen.append(b"\x1b[1;1HX\x1b[3;1H\r\n\r\n\r\n")
+        self.assertEqual(list(screen.lines)[:2], ["Xbcde\r\n", "mnopqrstu\r\n"])
+
+    def test_an_unchanged_width_keeps_rows_and_their_flags(self):
+        screen = guard.Screen(rows=3, columns=4)
+        screen.append(b"abcdef")
+        row = screen.cells[0]
+        screen.resize(4, 4)
+        self.assertIs(screen.cells[0], row)
+        self.assertTrue(row.wrapped)
+
+    def test_an_alternate_screen_resize_retires_main_rows_to_display_history_only(self):
+        screen = guard.Screen(rows=4, columns=8)
+        screen.append(b"a\r\nb\r\nc\r\nd\x1b[?1049h")
+        screen.resize(2, 8)
+        screen.append(b"\x1b[?1049l")
+        self.assertEqual(list(screen.lines), ["a\r\n", "b\r\n"])
+        self.assertEqual(screen.text(10), "c\nd")
+
+    def test_a_rendered_row_spans_its_columns(self):
+        plain = guard.PLAIN
+        cases = (
+            ([("中", plain), ("", plain), ("x", plain)], False, False, "中x\r\n"),
+            ([("中", plain), ("x", plain)], False, False, " x\r\n"),
+            ([("a", plain), ("", plain), ("b", plain)], False, False, "a b\r\n"),
+            ([("a", plain), ("中", plain)], False, False, "a \r\n"),
+            ([("a", plain), ("", plain)], True, True, "a"),
+            ([("a", plain), ("", plain)], True, False, "a "),
+            ([("a", plain), (" ", plain), (" ", plain)], False, False, "a\r\n"),
+            ([("a", plain), (" ", plain)], True, False, "a "),
+        )
+        for cells, wrapped, margin, expected in cases:
+            with self.subTest(cells=cells, wrapped=wrapped, margin=margin):
+                self.assertEqual(guard.render(cells, wrapped=wrapped, margin=margin), expected)
+
+    def test_a_wrapped_margin_before_a_wide_character_renders_nothing(self):
+        screen = guard.Screen(rows=2, columns=4)
+        screen.append("abc中\r\n\r\n".encode())
+        self.assertEqual(list(screen.lines)[:2], ["abc", "中\r\n"])
+
+
 class GuardTest(Base):
     def test_private_csi_queries_do_not_execute_normal_screen_commands(self):
         for query in (b"\x1b[?1;1;0S", b"\x1b[?1T", b"\x1b[?1L", b"\x1b[?1M", b"\x1b[?2J"):

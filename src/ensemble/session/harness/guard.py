@@ -41,6 +41,8 @@ RUN = "/run/ensemble/guard"  # a --serve guard's run dirs, one per generation
 LAUNCH_WAIT = 60.0  # s from its start a --serve guard waits for its launch handoff
 HEARTBEAT = 5.0  # s a --serve guard runs on with no byte from its harness
 HOOK_ENV = "ENSEMBLE_GUARD_HOOK_SOCKET"
+LINES = 2000  # rows of display history, as tmux's default history-limit
+LINES_SIZE = 8 << 20
 
 
 def frame(kind: bytes, payload: bytes) -> bytes:
@@ -219,6 +221,52 @@ class Row(list):
         super().__setitem__(index, value)
 
 
+def sgr_code(pen: Pen) -> str:
+    return "\x1b[0m" if pen == PLAIN else "\x1b[0;" + ";".join(filter(None, pen)) + "m"
+
+
+def wide(text: str) -> bool:
+    return bool(text) and unicodedata.east_asian_width(text[0]) in ("W", "F")
+
+
+def render(cells, *, wrapped: bool, margin: bool = False) -> str:
+    """cells with their colors, spanning exactly len(cells) columns: a wide character without
+    its right half, or a half without its character, is a blank. margin: the last cell is the
+    column a wrapping wide character skipped, so it stays out of the logical line.
+    """
+    cells = list(cells)
+    while not wrapped and cells and cells[-1] == (" ", PLAIN):
+        cells.pop()
+    out, last, skip = [], PLAIN, False
+    for index, (text, pen) in enumerate(cells):
+        if skip:
+            skip = False
+            continue
+        if not text:
+            if wrapped and margin and index == len(cells) - 1:
+                continue
+            text = " "
+        elif wide(text):
+            skip = index + 1 < len(cells) and cells[index + 1][0] == ""
+            text = text if skip else " "
+        if pen != last:
+            out.append(sgr_code(pen))
+            last = pen
+        out.append(text)
+    if last != PLAIN:
+        out.append("\x1b[0m")
+    if not wrapped:
+        out.append("\r\n")
+    return "".join(out)
+
+
+def cut(line: Row, columns: int) -> Row:
+    """line at another width; its written cells and wrap kept for history."""
+    row = Row(line[:columns] + [(" ", PLAIN)] * (columns - len(line)))
+    row.wrapped, row.full = line.wrapped, line.full or list(line)
+    return row
+
+
 def blank(columns: int, pen: Pen = PLAIN) -> Row:
     return Row([(" ", pen)] * columns)
 
@@ -234,6 +282,8 @@ class Screen:
         self.limit, self.rows, self.columns = limit, rows, columns
         self.cells = [blank(columns) for _ in range(rows)]
         self.history = deque(maxlen=max(1, limit // columns))
+        self.lines: deque[str] = deque()  # rendered rows for a new display, oldest first
+        self.size = 0  # UTF-8 bytes in lines
         self.row, self.column = 0, 0
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = (0, 0)
@@ -254,10 +304,23 @@ class Screen:
         fill = [blank(self.columns, background(self.pen)) for _ in range(amount)]
         if count > 0:
             if history and top == 0 and self.normal is None:
-                self.history.extend(line_text(line) for line in self.cells[:amount])
+                self._retire(self.cells, amount)
             self.cells[top : bottom + 1] = self.cells[top + amount : bottom + 1] + fill
         else:
             self.cells[top : bottom + 1] = fill + self.cells[top : bottom + 1 - amount]
+
+    def _retire(self, cells: list[Row], count: int, *, read: bool = True) -> None:
+        """The first count rows of cells into both histories (read: the read history too)."""
+        for index, row in enumerate(cells[:count]):
+            if read:
+                self.history.append(line_text(row))
+            after = cells[index + 1] if index + 1 < len(cells) else None
+            margin = after is not None and wide((after.full or after)[0][0])
+            text = render(row.full or row, wrapped=row.wrapped, margin=margin)
+            self.lines.append(text)
+            self.size += len(text.encode())
+        while len(self.lines) > LINES or self.size > LINES_SIZE:
+            self.size -= len(self.lines.popleft().encode())
 
     def csi(self, sequence: str) -> None:
         command, raw = sequence[-1], sequence[:-1]
@@ -305,6 +368,8 @@ class Screen:
                 self.erase_line(mode)
             if mode == 3:
                 self.history.clear()
+                self.lines.clear()
+                self.size = 0
         elif command == "K":
             self.erase_line(values[0])
         elif command == "P":
@@ -414,10 +479,10 @@ class Screen:
 
     def resize(self, rows: int, columns: int) -> None:
         if self.normal is None:
-            for line in self.cells[: max(0, self.row + 1 - rows)]:
-                self.history.append(line_text(line))
+            self._retire(self.cells, max(0, self.row + 1 - rows))
         else:
             cells, row, column = self.normal
+            self._retire(cells, max(0, row + 1 - rows), read=False)
             cells, row = fit(cells, row, rows, columns)
             self.normal = cells, row, min(column, columns)
         self.cells, self.row = fit(self.cells, self.row, rows, columns)
@@ -459,8 +524,7 @@ def fit(cells: list[Row], row: int, rows: int, columns: int) -> tuple[list[Row],
     """cells cut or padded to rows x columns, top lines dropped to keep row: (cells, its row)."""
     shift = max(0, row + 1 - rows)
     lines = [
-        Row(line[:columns] + [(" ", PLAIN)] * (columns - len(line)))
-        for line in cells[shift : shift + rows]
+        line if len(line) == columns else cut(line, columns) for line in cells[shift : shift + rows]
     ]
     return lines + [blank(columns) for _ in range(rows - len(lines))], row - shift
 
