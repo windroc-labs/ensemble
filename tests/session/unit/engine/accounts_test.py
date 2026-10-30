@@ -8,10 +8,12 @@ import threading
 from contextlib import redirect_stderr
 from unittest import mock
 
+from ensemble.session.clients.claude.usage import parse
 from ensemble.session.engine import accounts
 from ensemble.session.engine.types import Launch, Usage, Window
 from ensemble.utils import exhausted
 from tests.session.case import Case
+from tests.session.unit.clients.claude.support import epoch, fixture
 
 NOW = 1_000_000.0
 
@@ -79,6 +81,34 @@ class ReadingsCase(Case):
 
 
 class ReadingsTest(ReadingsCase):
+    def test_a_recorded_panel_is_refreshed_at_either_reset_boundary(self):
+        text = fixture("usage-config-dir.txt")
+        for reset in ("2026-10-17 14:40", "2026-10-24 01:00"):
+            boundary = epoch(reset, "America/New_York")
+            with self.subTest(reset=reset):
+                self.answers["/w"] = parse(text, boundary - 1)
+                self.readings(boundary - 1)
+                self.read.clear()
+                self.answers["/w"] = usage(0, 0)
+                self.assertEqual(self.readings(boundary)["work"], usage(0, 0))
+                self.assertEqual([launch.env["DIR"] for launch in self.read], ["/w"])
+
+    def test_a_past_reset_does_not_make_an_exhausted_reading_available(self):
+        text = fixture("usage-config-dir.txt").replace("13% used", "100% used")
+        boundary = epoch("2026-10-17 14:40", "America/New_York")
+        self.answers["/w"] = parse(text, boundary - 1)
+        self.readings(boundary - 1)
+        self.read.clear()
+        self.answers["/w"] = parse(text, boundary)
+        self.assertTrue(exhausted(self.readings(boundary)["work"]))
+        self.assertEqual([launch.env["DIR"] for launch in self.read], ["/w"])
+        self.read.clear()
+        self.readings(boundary + accounts.UNKNOWN_TTL - 1)
+        self.assertEqual(self.read, [])
+        self.answers["/w"] = usage(0, 0)
+        self.assertEqual(self.readings(boundary + accounts.UNKNOWN_TTL)["work"], usage(0, 0))
+        self.assertEqual([launch.env["DIR"] for launch in self.read], ["/w"])
+
     def test_each_account_is_read_once_and_cached(self):
         self.assertEqual(self.readings(), {"default": usage(70, 10), "work": usage(20, 30)})
         self.assertEqual(sorted(launch.env["DIR"] for launch in self.read), ["/d", "/w"])

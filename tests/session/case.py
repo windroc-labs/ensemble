@@ -63,6 +63,10 @@ def harnessed(clients) -> type[HostedSession]:
     return harnesses.Threaded.configured(clients=clients, hosts=hosts)
 
 
+def preserve_configuration(case) -> None:
+    case.addCleanup(setattr, HostedSession, "_setup", HostedSession._setup)
+
+
 class Case(TreeCase):
     """Also self.session_cls, of self.session_dependencies; starts run their harness on a thread
     (harnesses.Threaded), joined at the end.
@@ -82,6 +86,7 @@ class Case(TreeCase):
         }
 
     def _case_enter(self, stack) -> None:
+        preserve_configuration(self)
         stack.enter_context(harnesses.joined())
         self.configure_session({})
         self.addCleanup(harnesses.end, self.home)
