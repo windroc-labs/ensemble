@@ -399,13 +399,17 @@ class HideTest(Base):
             self.assertEqual(self.viewer.show("w1", self.host, display="mgr"), "/fake/attach w1")
         self.assertEqual(logs.output, ["WARNING:session:show w1: tmux: boom"])
 
-    def test_a_failed_show_clears_hidden_while_a_worker_pane_still_shows_it(self):
-        """A pane of this run's attach command that came up meanwhile counts as shown."""
-        later = iter(
-            (worker_rows(), worker_rows(("%9", "w1", "mgr", "@1", "mgr", "/fake/attach w1")))
-        )
+    def worker_reads(self, *results):
+        """Each worker pane read's result in turn; other list-panes calls list nothing."""
+        later = iter(results)
         self.runner.results["list-panes"] = lambda argv: (
             next(later) if argv[1:3] == ["list-panes", "-a"] and WORKERS[-1] in argv else (0, "")
+        )
+
+    def test_a_failed_show_clears_hidden_while_a_worker_pane_still_shows_it(self):
+        """A pane of this run's attach command that came up meanwhile counts as shown."""
+        self.worker_reads(
+            worker_rows(), worker_rows(("%9", "w1", "mgr", "@1", "mgr", "/fake/attach w1"))
         )
         self.failed_show()
         self.assertFalse(hidden.read("w1", SID))
@@ -418,7 +422,7 @@ class HideTest(Base):
             (1, "", "boom\n"),
         ):
             with self.subTest(rows=rows):
-                self.runner.results["list-panes"] = rows
+                self.worker_reads(worker_rows(), rows)
                 self.failed_show()
                 self.assertTrue(hidden.read("w1", SID))
 

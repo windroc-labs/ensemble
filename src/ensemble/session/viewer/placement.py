@@ -132,10 +132,7 @@ class Placement:
                 except TuiError:
                     if split_from is None:
                         raise
-            try:
-                workers = self.workers()
-            except TuiError:
-                workers = []
+            workers = self.workers()
             if any(w.name == name and w.attach == printed for w in workers):
                 return None  # an earlier run's pane, still closing, is not this run's
             spot = self._spot(
@@ -223,7 +220,7 @@ class Placement:
             return gridded
         side = Split(split or Split.RIGHT)
         if split_from is not None:
-            return Spot(self.anchor(split_from), side, None)
+            return Spot(self.anchor(split_from, workers), side, None)
         if opener is None:
             raise TuiError(NO_PANE.format("not in tmux"))
         if split is None and (stacked := self._stack(name, opener, workers)) is not None:
@@ -418,12 +415,15 @@ class Placement:
             return own
         raise TuiError(NO_PANE.format("not in tmux"))
 
-    def anchor(self, split_from: str | None = None) -> str:
-        """split_from's newest worker pane, else the pane its tmux session shows, else the caller's
-        session's; TuiError when none.
+    def anchor(
+        self, split_from: str | None = None, workers: Sequence[WorkerPane] | None = None
+    ) -> str:
+        """split_from's newest worker pane (in workers, else read), else the pane its tmux session
+        shows, else the caller's session's; TuiError when none.
         """
         if split_from is not None:
-            found = _newest(split_from, self.workers()) or self._shown(split_from, own=False)
+            workers = self.workers() if workers is None else workers
+            found = _newest(split_from, workers) or self._shown(split_from, own=False)
             if found is None:
                 raise TuiError(f"no terminal shows {split_from}")
             return found

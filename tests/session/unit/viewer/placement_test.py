@@ -74,8 +74,7 @@ class PaneAnchorTest(PaneFixture):
                 fake = FakeTmux(results={"list-panes": rows, "split-window": split()})
                 self.assertIsNone(self.open(fake, {}, split_from="b", **split_kw))
                 self.assertEqual(
-                    fake.calls,
-                    [WORKERS, WORKERS, split_window(flag, "%12"), *record(None, "%20")],
+                    fake.calls, [WORKERS, split_window(flag, "%12"), *record(None, "%20")]
                 )
                 self.assertNotIn("list-clients", fake.commands())
 
@@ -480,11 +479,11 @@ class PanePlacementTest(PaneFixture):
         for kw, rows, then in (
             ({"split": "right"}, (), [split_window("-h", "%3")]),
             ({"split": "below"}, (), [split_window("-v", "%3")]),
-            ({"split_from": "b"}, (), [WORKERS, clients_of("b"), split_window("-h", "%9")]),
+            ({"split_from": "b"}, (), [clients_of("b"), split_window("-h", "%9")]),
             (
                 {"split_from": "b", "split": "below"},
                 (),
-                [WORKERS, clients_of("b"), split_window("-v", "%9")],
+                [clients_of("b"), split_window("-v", "%9")],
             ),
             ({}, [("%7", "a", "own")], [split_window("-v", "%7")]),
         ):
@@ -541,6 +540,15 @@ class PanePlacementTest(PaneFixture):
             why = placed(fake).open_pane("s", ("/a#b",), "docker exec -it c1 x", split_from="b")
         self.assertEqual(why, "tmux would misread '/a#b'; watch it with docker exec -it c1 x")
         self.assertNotIn("split-window", fake.commands())
+
+    def test_a_failed_worker_pane_read_opens_nothing(self):
+        """FR-12: an unread pane list may hold this run's pane; no second pane opens."""
+        for env, kw in ((INSIDE, {}), ({}, {"split_from": "b"})):
+            with self.subTest(**kw):
+                fake = self.fake(**{"list-panes": (1, "", "boom\n")})
+                self.assertEqual(self.open(fake, env, **kw), "tmux: boom" + WATCH)
+                self.assertNotIn("split-window", fake.commands())
+                self.assertNotIn("set-option", fake.commands())
 
     def test_tmux_split_failures(self):
         fake = self.fake(**{"split-window": (1, "", "no space for new pane\n")})
