@@ -43,6 +43,19 @@ HEARTBEAT = 5.0  # s a --serve guard runs on with no byte from its harness
 HOOK_ENV = "ENSEMBLE_GUARD_HOOK_SOCKET"
 LINES = 2000  # rows of display history, as tmux's default history-limit
 LINES_SIZE = 8 << 20
+# Modes a display gets back as last set: none moves the cursor or clears the screen.
+PRIVATE_MODES = frozenset(
+    {1, 5, 7, 12, 25, 66, 1000, 1002, 1003, 1004, 1005, 1006, 1007, 1015, 1016, 2004}
+)
+ANSI_MODES = frozenset({4, 20})
+MODIFY_KEYS = frozenset({0, 1, 2, 4})  # XTMODKEYS resources
+KEYBOARD_DEPTH = 16  # kitty keyboard flags per screen
+RESET = (
+    "".join(f"\x1b[?{n}{'h' if n in (7, 25) else 'l'}" for n in sorted(PRIVATE_MODES))
+    + "\x1b[4l\x1b[20l\x1b[0 q\x1b>"
+    + "".join(f"\x1b[>{n}n" for n in sorted(MODIFY_KEYS))
+    + "\x1b[<99u"
+)
 
 
 def frame(kind: bytes, payload: bytes) -> bytes:
@@ -287,8 +300,10 @@ class Screen:
         self.row, self.column = 0, 0
         self.scroll_top, self.scroll_bottom = 0, rows - 1
         self.saved = (0, 0)
-        self.normal: tuple[list[Row], int, int] | None = None
+        self.normal: tuple[list[Row], int, int, list[int]] | None = None
         self.pen = PLAIN
+        self.modes: dict[str, str] = {}  # replayed mode -> its sequence as last set, latest last
+        self.keyboard: list[int] = []  # the active screen's kitty keyboard flags stack
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.escape = ""
 
@@ -322,24 +337,73 @@ class Screen:
         while len(self.lines) > LINES or self.size > LINES_SIZE:
             self.size -= len(self.lines.popleft().encode())
 
+    def mode(self, key: str, sequence: str) -> None:
+        self.modes.pop(key, None)
+        self.modes[key] = sequence
+
+    def reset(self) -> None:
+        self.modes.clear()
+        self.keyboard = []
+        if self.normal is not None:
+            self.normal = (*self.normal[:3], [])
+        self.pen = PLAIN
+
+    def setting(self, raw: str, command: str) -> None:
+        """A CSI with a <=> prefix or an intermediate: the replayed keyboard and cursor settings."""
+        prefix, body = (raw[0], raw[1:]) if raw.startswith(("<", "=", ">")) else ("", raw)
+        try:
+            values = [int(value or 0) for value in body.rstrip(" !").split(";")]
+        except ValueError:
+            return
+        first = values[0]
+        if raw == "!" and command == "p":
+            self.reset()
+        elif raw == f"{first} " and command == "q" and first <= 6:
+            self.mode(" q", f"\x1b[{first} q")
+        elif prefix == ">" and command in "mn" and first in MODIFY_KEYS:
+            if command == "m" and len(values) > 1:
+                self.mode(f">{first}", f"\x1b[>{first};{values[1]}m")
+            else:
+                self.modes.pop(f">{first}", None)
+        elif prefix == ">" and command == "u":
+            self.keyboard = [*self.keyboard, first][-KEYBOARD_DEPTH:]
+        elif prefix == "<" and command == "u":
+            del self.keyboard[max(0, len(self.keyboard) - max(1, first)) :]
+        elif prefix == "=" and command == "u":
+            how = values[1] if len(values) > 1 else 1
+            top = self.keyboard[-1] if self.keyboard else 0
+            flags = {1: first, 2: top | first, 3: top & ~first}.get(how)
+            if flags is not None:
+                self.keyboard = [*self.keyboard[:-1], flags] if self.keyboard else [flags]
+
     def csi(self, sequence: str) -> None:
         command, raw = sequence[-1], sequence[:-1]
-        if command == "m":
-            if set(raw) <= set("0123456789;:"):
-                self.pen = sgr(self.pen, raw)
+        if command == "m" and set(raw) <= set("0123456789;:"):
+            self.pen = sgr(self.pen, raw)
+            return
+        if raw.startswith(("<", "=", ">")) or raw.endswith((" ", "!")):
+            self.setting(raw, command)
             return
         private = raw.startswith("?")
         try:
             values = [int(value or 0) for value in raw.lstrip("?").split(";")]
         except ValueError:
             return
+        if command in "hl":
+            allowed, mark = (PRIVATE_MODES, "?") if private else (ANSI_MODES, "")
+            for number in values:
+                if number in allowed:
+                    self.mode(f"{mark}{number}", f"\x1b[{mark}{number}{command}")
         if private:
             if 1049 in values and command == "h" and self.normal is None:
-                self.normal = self.cells, self.row, self.column
+                self.normal = self.cells, self.row, self.column, self.keyboard
                 self.cells = [blank(self.columns) for _ in range(self.rows)]
+                self.keyboard = []
             elif 1049 in values and command == "l" and self.normal is not None:
-                self.cells, self.row, self.column = self.normal
+                self.cells, self.row, self.column, self.keyboard = self.normal
                 self.normal = None
+            return
+        if command in "hl":
             return
         value = values[0] or 1
         fill = (" ", background(self.pen))
@@ -424,7 +488,11 @@ class Screen:
                     else:
                         self.escape = self.escape[:2] + char  # enough to see ST
                 elif len(self.escape) == 2 and char not in "[]()":
-                    if char == "7":
+                    if char in "=>":
+                        self.mode("keypad", self.escape)
+                    elif char == "c":
+                        self.reset()
+                    elif char == "7":
                         self.saved = self.row, self.column
                     elif char == "8":
                         self.row, self.column = self.saved
@@ -481,10 +549,10 @@ class Screen:
         if self.normal is None:
             self._retire(self.cells, max(0, self.row + 1 - rows))
         else:
-            cells, row, column = self.normal
+            cells, row, column, keyboard = self.normal
             self._retire(cells, max(0, row + 1 - rows), read=False)
             cells, row = fit(cells, row, rows, columns)
-            self.normal = cells, row, min(column, columns)
+            self.normal = cells, row, min(column, columns), keyboard
         self.cells, self.row = fit(self.cells, self.row, rows, columns)
         self.rows, self.columns, self.column = rows, columns, min(self.column, columns)
         self.scroll_top, self.scroll_bottom = 0, rows - 1
@@ -512,7 +580,7 @@ class Screen:
                 column -= 1
             return f"\x1b[{row + 1};{column + 1}H{cells[row][column][0]}"
 
-        primary = self.normal or (self.cells, self.row, self.column)
+        primary = self.normal[:3] if self.normal else (self.cells, self.row, self.column)
         text = "\x1b[?1049l\x1b[r" + paint(primary[0])
         if self.normal is not None:
             text += cursor(*primary) + "\x1b[?1049h" + paint(self.cells)

@@ -366,6 +366,113 @@ class HistoryTest(Base):
         self.assertEqual(list(screen.lines)[:2], ["abc", "中\r\n"])
 
 
+class StateTest(Base):
+    def modes(self, wire, screen=None):
+        screen = screen or guard.Screen(rows=2, columns=8)
+        screen.append(wire)
+        return screen.modes
+
+    def test_replayed_modes_keep_their_last_value_in_the_order_last_set(self):
+        modes = self.modes(b"\x1b[?2004h\x1b[?25l\x1b[?2004l\x1b[?1000;1006;9999h")
+        self.assertEqual(
+            list(modes.items()),
+            [
+                ("?25", "\x1b[?25l"),
+                ("?2004", "\x1b[?2004l"),
+                ("?1000", "\x1b[?1000h"),
+                ("?1006", "\x1b[?1006h"),
+            ],
+        )
+        self.assertEqual(
+            self.modes(b"\x1b[4h\x1b[20l\x1b[2h\x1b[5 q\x1b=\x1b[>4;2m"),
+            {
+                "4": "\x1b[4h",
+                "20": "\x1b[20l",
+                " q": "\x1b[5 q",
+                "keypad": "\x1b=",
+                ">4": "\x1b[>4;2m",
+            },
+        )
+        self.assertEqual(self.modes(b"\x1b=\x1b>\x1b[>4;2m\x1b[>4n"), {"keypad": "\x1b>"})
+
+    def test_queries_side_effects_and_unlisted_modes_are_never_kept(self):
+        for wire in (
+            b"\x1b[?2026h",
+            b"\x1b[?6h",
+            b"\x1b[?3h",
+            b"\x1b[?69h",
+            b"\x1b[?47h",
+            b"\x1b[?1047h",
+            b"\x1b[?1048h",
+            b"\x1b[?9999h",
+            b"\x1b[?2004$p",
+            b"\x1b[c",
+            b"\x1b[>c",
+            b"\x1b[6n",
+            b"\x1b[>q",
+            b"\x1b[?u",
+            b"\x1b[9 q",
+            b"\x1b[>7;1m",
+            b"\x1b[18t",
+            b"\x1b]52;c;eA==\x07",
+            b"\x1b]0;title\x07",
+            b"\x07",
+            "\x9b6n".encode(),
+        ):
+            with self.subTest(wire=wire):
+                screen = guard.Screen(rows=2, columns=8)
+                screen.append(wire)
+                self.assertEqual((screen.modes, screen.keyboard), ({}, []))
+
+    def test_the_kitty_keyboard_stack(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(b"\x1b[>1u\x1b[>3u\x1b[=4;2u")
+        self.assertEqual(screen.keyboard, [1, 7])
+        screen.append(b"\x1b[=2;3u\x1b[<u")
+        self.assertEqual(screen.keyboard, [1])
+        screen.append(b"\x1b[<5u\x1b[=2u")
+        self.assertEqual(screen.keyboard, [2])
+        screen.append(b"\x1b[=9u")
+        self.assertEqual(screen.keyboard, [9])
+
+    def test_keyboard_stack_is_per_screen(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(b"\x1b[>1u\x1b[?1049h")
+        self.assertEqual(screen.keyboard, [])
+        screen.append(b"\x1b[>8u")
+        screen.resize(3, 8)
+        screen.append(b"\x1b[?1049l")
+        self.assertEqual(screen.keyboard, [1])
+
+    def test_resets_clear_modes_keyboards_and_pen_but_not_cells(self):
+        for reset in (b"\x1bc", b"\x1b[!p"):
+            with self.subTest(reset=reset):
+                screen = guard.Screen(rows=2, columns=8)
+                screen.append(b"\x1b[>1u\x1b[?1049h\x1b[>2u\x1b[?2004h\x1b[31mx" + reset)
+                self.assertEqual((screen.modes, screen.keyboard, screen.pen), ({}, [], guard.PLAIN))
+                self.assertEqual(screen.text(None), "x")
+                screen.append(b"\x1b[?1049l")
+                self.assertEqual(screen.keyboard, [])
+
+    def test_state_is_bounded(self):
+        screen = guard.Screen(rows=2, columns=8)
+        for number in range(0, 70000, 7):
+            screen.append(b"\x1b[?%dh\x1b[%dh\x1b[>%d;1m" % (number, number, number))
+        screen.append(b"\x1b[>1u" * 50 + b"\x1b[>2u" * 50)
+        allowed = {f"?{n}" for n in guard.PRIVATE_MODES} | {str(n) for n in guard.ANSI_MODES}
+        allowed |= {f">{n}" for n in guard.MODIFY_KEYS}
+        self.assertLessEqual(set(screen.modes), allowed)
+        self.assertEqual(screen.keyboard, [2] * guard.KEYBOARD_DEPTH)
+
+    def test_reset_restores_every_allowlisted_default(self):
+        screen = guard.Screen(rows=2, columns=8)
+        screen.append(guard.RESET.encode())
+        self.assertEqual(screen.keyboard, [])
+        for number in guard.PRIVATE_MODES:
+            self.assertIn(f"\x1b[?{number}", guard.RESET)
+        self.assertTrue(guard.RESET.endswith("\x1b[<99u"))
+
+
 class GuardTest(Base):
     def test_private_csi_queries_do_not_execute_normal_screen_commands(self):
         for query in (b"\x1b[?1;1;0S", b"\x1b[?1T", b"\x1b[?1L", b"\x1b[?1M", b"\x1b[?2J"):
