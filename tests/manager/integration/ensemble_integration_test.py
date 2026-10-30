@@ -31,7 +31,6 @@ COMMANDS = (
     "ensemble-delegate",
     "ensemble-orchestrator",
 )
-LAUNCHERS = (*COMMANDS, "codex")
 USAGE = "usage: ensemble <session-name> | ensemble list | ensemble --install"
 FAKE = """#!{python} -I
 import json, os, sys
@@ -173,9 +172,6 @@ def record(home: str, *roots: str | dict) -> None:
 
 
 def executable(path: str, text: str) -> str:
-    relative = os.path.relpath(os.path.realpath(path), os.path.realpath(REPO))
-    if relative.split(os.sep, 1)[0] in {"src", "skills", "bin"}:
-        raise AssertionError("fixture executable must not rewrite shipped source")
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     os.chmod(path, 0o755)
@@ -511,7 +507,7 @@ class FakeTmux(Case):
 
     def install(self, script=ENSEMBLE):
         process, out, err, calls = self.run_ensemble("--install", script=script)
-        paths = [os.path.join(self.installed, name) for name in LAUNCHERS]
+        paths = [os.path.join(self.installed, name) for name in COMMANDS]
         self.assertEqual(
             (process.returncode, out, err, calls), (0, "".join(f"{p}\n" for p in paths), "", [])
         )
@@ -691,8 +687,8 @@ class FakeTmux(Case):
         with open(os.path.join(self.installed, "ensemble-crew"), "w", encoding="utf-8") as f:
             f.write("stale")
         self.install(script=self.dst)
-        self.assertEqual(sorted(os.listdir(self.installed)), sorted(LAUNCHERS))
-        for name in LAUNCHERS:
+        self.assertEqual(sorted(os.listdir(self.installed)), sorted(COMMANDS))
+        for name in COMMANDS:
             path = os.path.join(self.installed, name)
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o755, name)
             with open(path, "rb") as f:

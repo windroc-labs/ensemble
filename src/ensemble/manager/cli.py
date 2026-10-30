@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from ensemble.manager import Crew, Roster, RosterError, Spec, State, rearm
+from ensemble.manager import Crew, Roster, RosterError, Spec, State
 from ensemble.manager.engine import managers
 from ensemble.manager.engine.holder import Holder
 from ensemble.manager.engine.types import (
@@ -216,7 +216,7 @@ def _select(manager: Manager | Unreadable) -> int:
 
 def _list(args) -> int:
     out = sys.stderr if args.select else sys.stdout
-    found = managers.managers(os.path.expanduser(managers.ROOT), running=rearm.client_running)
+    found = managers.managers(os.path.expanduser(managers.ROOT))
     if not found:
         print("no managers yet; start one: ensemble <name>", file=out)
         return 0

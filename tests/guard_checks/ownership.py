@@ -15,7 +15,6 @@ from tests.guard_checks.common import (
     _strings,
 )
 from tests.guard_data.delegate import CONFIG_FILE, DELEGATE_SRC
-from tests.guard_data.manager import CLIENT_ENTRY_FILES
 from tests.guard_data.orchestrator import (
     CLIENT_LIMIT_TABLES,
     HANDOFF_HOME,
@@ -295,8 +294,6 @@ def _without_help_text(rel, text):
 def client_names(repo: str) -> list[str]:
     found = set()
     for rel, text in _lower_files(repo, (".py", ".toml"), skip=f"{SESSION_SRC}clients/"):
-        if rel in CLIENT_ENTRY_FILES:
-            continue
         text = _without_help_text(rel, text)
         for number, line in enumerate(text.splitlines(), 1):
             if rel.endswith(".toml"):
