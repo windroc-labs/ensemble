@@ -18,6 +18,7 @@ import shlex
 import shutil
 import signal
 import stat
+import subprocess
 import tempfile
 import threading
 import time
@@ -1549,6 +1550,8 @@ class UsageTest(Base):
             "ANTHROPIC_API_KEY=sk-ant-api03-private\n"
             '{"access_token":"private-access", "refresh_token": "private-refresh"}\n'
             "PASSWORD=private-password\nhttps://user:password@service.test\nopaque-env-secret"
+            "\nAuthorization: Basic dXNlcjpwYXNz\nPASSWORD=my private password"
+            '\nPASSWORD=one; comma,secret-tail\n{"refresh_token":\n"newline-private"}'
         )
         with (
             mock.patch.dict(os.environ, {"OTHER_SECRET": "opaque-env-secret"}),
@@ -1566,8 +1569,52 @@ class UsageTest(Base):
             "private-password",
             "user:password",
             "opaque-env-secret",
+            "dXNlcjpwYXNz",
+            "private password",
+            "secret-tail",
+            "newline-private",
         ):
             self.assertNotIn(secret, json.dumps(record))
+
+    def test_default_probe_keeps_stderr_and_nonzero_exit_without_parsing_it(self):
+        self.configure("probe", probe={"argv": ("probe-cmd",)})
+        proc = mock.Mock(returncode=1)
+        proc.communicate.return_value = ("", "authentication_error: Bearer private-bearer")
+        with mock.patch("subprocess.Popen", return_value=proc):
+            self.assertIsNone(self.session.usage("probe"))
+        (record,) = self.recorded_probes()
+        self.assertEqual(record["returncode"], 1)
+        self.assertIn("authentication_error", record["stderr"])
+        self.assertNotIn("private-bearer", record["stderr"])
+        proc.stderr.close.assert_called_once()
+
+    def test_timeout_preserves_partial_streams_but_is_not_a_reading(self):
+        self.configure("probe", probe={"argv": ("probe-cmd",)})
+        proc = mock.Mock(returncode=-9)
+        proc.communicate.side_effect = [
+            subprocess.TimeoutExpired("probe-cmd", 120, output=b"42.5", stderr=b"partial error"),
+            AssertionError("an escaped descendant can keep the pipe open"),
+        ]
+        with mock.patch("subprocess.Popen", return_value=proc), mock.patch("os.killpg"):
+            self.assertIsNone(self.session.usage("probe"))
+        (record,) = self.recorded_probes()
+        self.assertEqual(
+            (record["output"], record["stderr"], record["returncode"]),
+            ("42.5", "partial error", 124),
+        )
+        proc.stdout.close.assert_called_once()
+        proc.stderr.close.assert_called_once()
+
+    def test_default_successful_probe_parses_stdout_and_keeps_stderr(self):
+        self.configure("probe", probe={"argv": ("probe-cmd",)})
+        proc = mock.Mock(returncode=0)
+        proc.communicate.return_value = ("42.5", "warning")
+        with mock.patch("subprocess.Popen", return_value=proc):
+            self.assertEqual(self.session.usage("probe"), Usage(Window(42.5, None), None))
+        (record,) = self.recorded_probes()
+        self.assertEqual(
+            (record["output"], record["stderr"], record["returncode"]), ("42.5", "warning", 0)
+        )
 
     def test_a_probe_record_write_failure_is_visible_without_losing_the_reading(self):
         with (

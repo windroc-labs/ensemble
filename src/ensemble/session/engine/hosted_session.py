@@ -79,10 +79,11 @@ from ensemble.utils import (
     Display,
     Record,
     Status,
+    kill_group,
     load_class,
     module_roots,
+    piped_popen,
     printable_abs,
-    probe,
     redact,
     save,
     sid_error,
@@ -146,7 +147,7 @@ class _Setup:
     registry: Registry
     hosts: Hosts
     class_loader: Callable[..., Any]
-    probe: Callable[..., str | None]
+    probe: Callable[..., str | subprocess.CompletedProcess[str] | None]
     clock: Callable[[], float]
     host_factory: HostFactory
     viewer: Mapping
@@ -194,6 +195,38 @@ def _probe_dir() -> str | None:
     return path
 
 
+def _usage_probe(
+    argv, *, cwd: str, env: Mapping[str, str], timeout: float
+) -> subprocess.CompletedProcess[str]:
+    try:
+        proc = piped_popen(argv, cwd=cwd, env=env)
+    except (OSError, ValueError) as error:
+        return subprocess.CompletedProcess(argv, 127, "", str(error))
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            kill_group(proc)
+            stdout, stderr = error.output, error.stderr
+            stdout = (
+                stdout.decode("utf-8", errors="replace")
+                if isinstance(stdout, bytes)
+                else stdout or ""
+            )
+            stderr = (
+                stderr.decode("utf-8", errors="replace")
+                if isinstance(stderr, bytes)
+                else stderr or ""
+            )
+            return subprocess.CompletedProcess(argv, 124, stdout, stderr)
+        assert proc.returncode is not None
+        return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+    finally:
+        assert proc.stdout is not None and proc.stderr is not None
+        proc.stdout.close()
+        proc.stderr.close()
+
+
 def _read_usage(
     setup: _Setup,
     client: Client,
@@ -215,8 +248,22 @@ def _read_usage(
             raise ConfigError(
                 f"client executable {executable!r} is missing or not executable; install or configure this client"
             )
-    output = setup.probe(launch.argv, cwd=cwd, env=env, timeout=PROBE_TIMEOUT)
-    _record_probe(type(client).__name__, probe_accounts, identity, output, env)
+    result = setup.probe(launch.argv, cwd=cwd, env=env, timeout=PROBE_TIMEOUT)
+    stderr, returncode = "", None
+    if isinstance(result, subprocess.CompletedProcess):
+        raw, stderr, returncode = result.stdout, result.stderr, result.returncode
+        output = raw if returncode == 0 else None
+    else:
+        output = raw = result
+    _record_probe(
+        type(client).__name__,
+        probe_accounts,
+        identity,
+        raw,
+        env,
+        stderr=stderr,
+        returncode=returncode,
+    )
     if output is None:
         return None
     try:
@@ -231,26 +278,18 @@ def _record_probe(
     identity: str,
     output: str | None,
     env: Mapping[str, str],
+    *,
+    stderr: str = "",
+    returncode: int | None = None,
 ) -> None:
-    if output is not None:
-        output = redact(output)
-        for key, value in {**os.environ, **env}.items():
-            if value and re.search(r"TOKEN|KEY|SECRET|PASSWORD|AUTH", key, re.I):
-                output = output.replace(value, "[REDACTED]")
-        output = re.sub(r"\bsk-[A-Za-z0-9_-]+", "[REDACTED]", output)
-        output = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", output)
-        output = re.sub(
-            r"""(?i)(\b[\w-]*(?:token|key|secret|password|authorization)[\w-]*["']?\s*[:=]\s*)"""
-            r"""("[^"\n]*"|'[^'\n]*'|[^\s,;}]+)""",
-            r"\1[REDACTED]",
-            output,
-        )
     record = {
         "at": time.time(),
         "client": client,
         "accounts": probe_accounts,
         "identity": identity,
-        "output": output,
+        "output": _probe_text(output, env),
+        "stderr": _probe_text(stderr, env),
+        "returncode": returncode,
     }
     folder = os.path.expanduser(PROBE_RECORDS)
     path = os.path.join(folder, f"{time.time_ns()}-{uuid.uuid4().hex}.json")
@@ -259,6 +298,23 @@ def _record_probe(
         save(path, json.dumps(record, sort_keys=True))
     except OSError as error:
         print(f"usage probe: could not record: {error}", file=sys.stderr)
+
+
+def _probe_text(text: str | None, env: Mapping[str, str]) -> str | None:
+    if text is None:
+        return None
+    text = redact(text)
+    for key, value in {**os.environ, **env}.items():
+        if value and re.search(r"TOKEN|KEY|SECRET|PASSWORD|AUTH", key, re.I):
+            text = text.replace(value, "[REDACTED]")
+    text = re.sub(r"\bsk-[A-Za-z0-9_-]+", "[REDACTED]", text)
+    text = re.sub(r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+", "[REDACTED]", text)
+    return re.sub(
+        r"""(?i)(\b[\w-]*(?:token|key|secret|password|authorization)[\w-]*["']?[ \t]*[:=]\s*)"""
+        r"""("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n]*)""",
+        r"\1[REDACTED]",
+        text,
+    )
 
 
 def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, Usage | None] | None:
@@ -331,7 +387,7 @@ def _reconstructible(setup: _Setup) -> bool:
     """Every callable the default, so a harness can rebuild it."""
     return (
         setup.class_loader is load_class
-        and setup.probe is probe
+        and setup.probe is _usage_probe
         and setup.host_factory is _built
         and setup.viewer_factory is Viewer
     )
@@ -508,7 +564,7 @@ class HostedSession(Session):
         clients: Mapping,
         hosts: Hosts,
         class_loader=load_class,
-        probe=probe,
+        probe=_usage_probe,
         clock: Callable[[], float] = time.monotonic,
         host_factory: HostFactory | None = None,
         viewer: Mapping | None = None,

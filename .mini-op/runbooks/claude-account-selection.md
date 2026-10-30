@@ -32,7 +32,7 @@ flowchart TD
 
 ## 用例
 
-每次实际探测在 mini 的 `~/.ensemble/usage/probes/` 留下一份 JSON（JavaScript 对象表示法）记录，字段为 `at`、`client`、`accounts`、`identity` 和 `output`。`identity` 为探测目录；`accounts` 可包含共享该目录的多个别名。非池探测的这两个字段为空。文件权限为 `0600`，目录为 `0700`，见 [hosted_session.py](../../src/ensemble/session/engine/hosted_session.py)。
+每次实际探测在 mini 的 `~/.ensemble/usage/probes/` 留下一份 JSON（JavaScript 对象表示法）记录，字段为 `at`、`client`、`accounts`、`identity`、`output`、`stderr` 和 `returncode`。`identity` 为探测目录；`accounts` 可包含共享该目录的多个别名。非池探测的这两个字段为空。超时的 `returncode` 为 `124`，无法启动为 `127`；仅返回文本的注入探测器不提供退出码。文件权限为 `0600`，目录为 `0700`，见 [hosted_session.py](../../src/ensemble/session/engine/hosted_session.py)。
 
 | 用例 | 操作 | 通过标准 |
 |---|---|---|
@@ -41,13 +41,13 @@ flowchart TD
 | 恢复后仍耗尽 | 服务端面板仍显示耗尽时观察自动选择，30 秒后重试 | 不推断可用；耗尽账号不被自动选中；短缓存后重新探测 |
 | 全部不可用 | 专用测试池全部达到阈值后，以空 `account` 启动 | 明确显示 `no available account`；无新 worker |
 | hold | 测试 run 真正触发 usage limit 后，再自动启动 | hold 有效期间跳过该账号；全部 hold 时明确拒绝 |
-| 原始记录 | 比较探测面板、记录与 `~/.ensemble/usage/claude.json` | 百分比与恢复时间一致；未知面板也保存；执行失败的 `output` 为 `null` |
+| 原始记录 | 比较探测面板、记录与 `~/.ensemble/usage/claude.json` | 百分比与恢复时间一致；未知面板也保存；stderr、退出码与超时前部分输出保留；失败结果不用于选账号 |
 | 凭据脱敏 | 在 mini 私下检查记录与权限 | 无 token、API key、Bearer 凭据或密码；不把未审核记录上传 |
 
 不要人为耗尽付费配额；不具备真实耗尽条件的用例标记“未运行”，使用单元测试证据。记录只在实际执行探测时产生，缓存命中和 hold 跳过不产生新记录。自动选择使用五小时低于 90%、周用量低于 100% 的阈值；显式选择仍保留操作者的决定。
 
 ## 诊断与报告
 
-先保留 mini 上同一时刻的探测记录、用量缓存和 hold 截止时间。对比 `output` 与缓存的百分比，核对 `at` 是否早于窗口恢复时刻。若原始百分比正确但运行身份不同，归因于账号配对；若身份一致且新面板仍耗尽，报告服务端读数滞后，不假定可用。解析不一致时，去除敏感字段后把该面板作为新的回归 fixture（测试样本）。
+先保留 mini 上同一时刻的探测记录、用量缓存和 hold 截止时间。对比 `output` 与缓存的百分比，核对 `at` 是否早于窗口恢复时刻。若原始百分比正确但运行身份不同，归因于账号配对；若身份一致且新面板仍耗尽，继续保持不可用。核对主机时钟、恢复时间和百分比解析后，服务端读数滞后仍只是假设，需后续面板与实际运行结果佐证。解析不一致时，去除敏感字段后把该面板作为新的回归 fixture（测试样本）。
 
 报告包含提交、Claude 版本、身份核对结果、每个用例的通过／失败／未运行、对应记录时间和脱敏摘要。不要报告秘密值。历史 frank 事件只有获得当时证据才能作确定归因。
