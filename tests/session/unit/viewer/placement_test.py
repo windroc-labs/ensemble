@@ -1,65 +1,63 @@
-"""Tmux placement context through recorded command transport."""
+"""Tmux worker pane placement."""
 
 import io
-import os
 import re
-import tempfile
 from contextlib import redirect_stderr
 
 from ensemble.session.engine import tmux_cli
-from ensemble.session.viewer import types
-from tests.session.case import Case
+from ensemble.session.viewer import placement, types
+from tests.session.case import SID, Case
 from tests.session.tmux_fixtures import (
+    ARGV,
     COMMAND,
-    HOSTS,
+    GENERATION,
     INSIDE,
-    LIVE,
+    LABEL,
+    LABELS,
     OWN,
-    PREFIXES,
-    SESSIONS,
+    PRINTED,
     SH_KW,
-    SOCK,
     WATCH,
+    WORKERS,
     FakeTmux,
+    GridFixture,
     PaneFixture,
+    clients,
     clients_of,
+    close_hook,
     environ,
-    expected_panes,
     grid_read,
+    grid_set,
+    mute,
+    opening_commands,
+    own,
     placed,
     record,
+    shown_hook,
+    split,
     split_window,
     which,
+    worker_rows,
 )
 from tests.utils.process_fixtures import TimeoutExpired
 
 
 class PaneAnchorTest(PaneFixture):
     def test_anchor(self):
-        shown = self.clients((5, "/dev/ttys004", "%9"))
-        nested = expected_panes(("0", "/dev/ttys004", "%5"))
-        for env, split_from, pane, hosts in (
-            (INSIDE, None, "%3", (0, "")),
-            (INSIDE, None, "%5", nested),
-            ({}, "b", "%9", (0, "")),
-            ({}, "b", "%5", nested),
+        # the most recently active client's pane; rows tmux could not have printed are skipped
+        shown = (0, "5\t%8\n9\t%9\nx\t%1\n12\t%2;\n15\n7\t%7\n")
+        for env, split_from, pane, calls in (
+            (INSIDE, None, "%3", [OWN, clients_of("own")]),
+            ({}, "b", "%9", [WORKERS, clients_of("b")]),
         ):
-            with self.subTest(env=env, split_from=split_from, pane=pane), environ(**env):
-                fake = FakeTmux(
-                    results={
-                        "display-message": (0, "own\n"),
-                        "list-clients": shown,
-                        "list-panes": hosts,
-                    }
-                )
-                self.assertEqual(
-                    placed(fake).anchor(split_from),
-                    types.TmuxAnchor(pane, SOCK),
-                )
+            with self.subTest(env=env, split_from=split_from), environ(**env):
+                fake = FakeTmux(results={"display-message": (0, "own\n"), "list-clients": shown})
+                self.assertEqual(placed(fake).anchor(split_from), pane)
+                self.assertEqual(fake.calls, calls)
         for env, split_from, message in (
-            ({}, None, "no anchor pane: not in tmux"),
-            (INSIDE, None, "no terminal shows tmux session own"),
-            ({}, "b", "no terminal shows tmux session b"),
+            ({}, None, "^no anchor pane: not in tmux$"),
+            (INSIDE, None, "^no anchor pane: no terminal shows tmux session own$"),
+            ({}, "b", "^no terminal shows b$"),
         ):
             with (
                 self.subTest(env=env),
@@ -68,19 +66,21 @@ class PaneAnchorTest(PaneFixture):
             ):
                 placed(FakeTmux(results={"display-message": (0, "own\n")})).anchor(split_from)
 
-    def test_a_dead_pane_sharing_the_clients_tty_is_skipped(self):
-        # a dead worker pane keeps its tty, which a later terminal may get
-        shown = self.clients((5, "/dev/ttys004", "%9"))
-        live, dead = ("0", "/dev/ttys004", "%5"), ("1", "/dev/ttys004", "%6")
-        for rows, want in (
-            ([live, dead], types.TmuxAnchor("%5", SOCK)),
-            ([dead], types.TmuxAnchor("%9", SOCK)),
-        ):
-            with self.subTest(rows=rows), environ():
-                fake = FakeTmux(
-                    results={"list-clients": shown, "list-panes": expected_panes(*rows)}
+    def test_split_from_a_worker_anchors_at_its_pane(self):
+        """AC3: --split-from X anchors at X's newest worker pane."""
+        rows = worker_rows(("%5", "b", "mgr"), ("%12", "b", "mgr"), ("%30", "c", "b"))
+        fake = FakeTmux(results={"list-panes": rows})
+        with environ():
+            self.assertEqual(placed(fake).anchor("b"), "%12")
+        self.assertEqual(fake.calls, [WORKERS])
+        for split_kw, flag in (({}, "-h"), ({"split": "below"}, "-v")):
+            with self.subTest(**split_kw):
+                fake = FakeTmux(results={"list-panes": rows, "split-window": split()})
+                self.assertIsNone(self.open(fake, {}, split_from="b", **split_kw))
+                self.assertEqual(
+                    fake.calls, [WORKERS, split_window(flag, "%12"), *record(None, "%20")]
                 )
-                self.assertEqual(placed(fake).anchor("b"), want)
+                self.assertNotIn("list-clients", fake.commands())
 
     def test_own_session(self):
         fake = FakeTmux(results={"display-message": (0, "own\n")})
@@ -126,10 +126,10 @@ class OpenerTest(Case):
 class SplitTest(Case):
     def test_sides(self):
         self.assertEqual(list(types.Split), ["right", "below"])
-        for split in (None, *types.Split, "below"):
-            with self.subTest(split=split), environ(), which():
+        for split_ in (None, *types.Split, "below"):
+            with self.subTest(split=split_), environ(), which():
                 self.assertEqual(
-                    placed(FakeTmux()).open_pane("s", split=split),
+                    placed(FakeTmux()).open_pane("s", ARGV, PRINTED, split=split_),
                     "no anchor pane: not in tmux" + WATCH,
                 )
         for bad in ("up", "", "RIGHT", 1, ["right"]):
@@ -141,7 +141,7 @@ class SplitTest(Case):
                     f"^split must be one of right, below, not {re.escape(repr(bad))}$",
                 ),
             ):
-                placed(fake).open_pane("s", split=bad)
+                placed(fake).open_pane("s", ARGV, PRINTED, split=bad)
             self.assertEqual(fake.calls, [])
 
 
@@ -171,248 +171,632 @@ class RunCommandTest(Case):
                 self.assertEqual(len(fake.calls), 1 if result else 0)
 
 
-class WatchTest(Case):
-    HOOK = (
-        "if-shell -F '#{==:#{hook_client},/dev/pts/4}' "
-        f"\"run-shell -b '{COMMAND} hide --if-closed s >/dev/null 2>&1 || true'\""
-    )
-
-    UNSET = "set-option -u -t =s: @pane ; set-option -u -t =s: @window"
-    STALE = (
-        "if-shell -F -t =s: "
-        "'#{||:#{!=:#{@pane},%10},#{m:* %10 *,#{S:#{W:#{P: #{pane_id} }}}}}' "
-        f"'' \"{UNSET}\""
-    )
-    SET = [
-        *("tmux", "set-option", "-t", "=s:", "@window", "@3"),
-        *(";", "set-hook", "-t", "=s:", "client-attached", STALE),
-        *(";", "set-hook", "-t", "=s:", "client-session-changed", STALE),
-    ]
-
-    def watch(self, pane="%10\n", found="@3 /dev/pts/4\n", **which_kw):
-        fake = FakeTmux(results={"show-options": (0, pane), "display-message": (0, found)})
+class RecordTest(Case):
+    def record(self, *, name="w1", opener="mgr", pane="%20", window="@1", fake=None, **kw):
+        fake = fake or FakeTmux()
         self.stderr = io.StringIO()
-        with environ(), which(**which_kw), redirect_stderr(self.stderr):
-            placed(fake).watch("s")
-        return fake.calls[1:]
+        run = {"printed": PRINTED, "sid": SID, "generation": GENERATION, "label": False}
+        with which(kw.pop("command", COMMAND)), redirect_stderr(self.stderr):
+            placed(fake)._record(name, opener, pane, window, **{**run, **kw})
+        return fake.calls
 
-    def test_records_the_panes_window_and_a_hook_for_its_client_only(self):
+    def test_record_sets_pane_options_and_close_hook(self):
+        """AC6: after a hooks read, one call tags %20 and sets its close hook."""
+        hook = (
+            "if-shell -F '#{m:* %20 *,#{S:#{W:#{P: #{pane_id} }}}}' '' "
+            '"set-hook -u -w -t @1 after-kill-pane[20] ; '
+            "run-shell -b '/opt/a_b.c@1+2-3/bin/ensemble-session hide --if-closed --sid S "
+            "--generation G -- w1 >/dev/null 2>&1 || true'\""
+        )
         self.assertEqual(
-            self.watch(),
+            self.record(sid="S", generation="G"),
             [
-                ["tmux", "display-message", "-p", "-t", "%10", "#{window_id} #{pane_tty}"],
-                [*self.SET, ";", "set-hook", "-t", "=s:", "client-detached", self.HOOK],
+                [
+                    *("tmux", "show-hooks", "-w", "-t", "@1", "after-kill-pane"),
+                    *(";", "list-panes", "-a", "-F", "#{pane_id}"),
+                ],
+                [
+                    *("tmux", "set-option", "-p", "-t", "%20", "@worker", "w1"),
+                    *(";", "set-option", "-p", "-t", "%20", "@worker-attach", PRINTED),
+                    *(";", "set-option", "-p", "-t", "%20", "@worker-opener", "mgr"),
+                    *(";", "set-hook", "-w", "-t", "@1", "after-kill-pane[20]", hook),
+                ],
             ],
         )
         self.assertEqual(self.stderr.getvalue(), "")
+        self.assertEqual(self.record(opener=None), record(None, "%20", name="w1"))
+
+    def test_close_hook_carries_the_run(self):
+        """AC6 (D2): a missing or bad sid or generation: no hook."""
+        for sid, generation in ((SID, "g1"), ("a.b:c_d-1", "0f8f-1:2")):
+            with self.subTest(sid=sid, generation=generation):
+                calls = self.record(sid=sid, generation=generation)
+                self.assertEqual(
+                    calls, record("mgr", "%20", name="w1", sid=sid, generation=generation)
+                )
+                self.assertEqual(self.stderr.getvalue(), "")
+        for bad in (None, "", "a b", "a;b", "a'b", "a$(x)", "#{pane_id}"):
+            for run in ({"sid": bad}, {"generation": bad}):
+                with self.subTest(**run):
+                    self.assertEqual(
+                        self.record(**run), record("mgr", "%20", name="w1", hook=False, read=True)
+                    )
+                    self.assertRegex(
+                        self.stderr.getvalue(), r"^tui: show: after-kill-pane: refused run .*\n$"
+                    )
+
+    def test_close_hook_refuses_any_value_outside_its_allow_list(self):
+        """AC6: a value off its allow-list: no hook."""
+
+        def hook(*values: str, sid: str | None = SID, generation: str | None = GENERATION):
+            return placement._close_hook(*values, sid=sid, generation=generation, index=7)
+
+        self.assertEqual(hook(COMMAND, "w1", "%20", "@1"), close_hook("w1", "%20", "@1", index=7))
+        for at, bad in (
+            (0, "/opt/#{pane_id}/ensemble-session"),
+            (0, "/a b"),
+            (0, "/a';x"),
+            (1, "x';touch p;'"),
+            (1, ""),
+            (2, "20"),
+            (2, "%20;"),
+            (3, "1"),
+            (3, "@1 "),
+        ):
+            with self.subTest(at=at, bad=bad):
+                values = [COMMAND, "w1", "%20", "@1"]
+                values[at] = bad
+                self.assertIsNone(hook(*values))
+        for key, bad in (
+            ("sid", None),
+            ("sid", "a b"),
+            ("generation", None),
+            ("generation", "g'1"),
+        ):
+            with self.subTest(**{key: bad}):
+                self.assertIsNone(hook(COMMAND, "w1", "%20", "@1", **{key: bad}))
+
+    def test_record_prunes_only_its_own_entries_of_gone_panes(self):
+        """AC6."""
+        read = "".join(
+            line + "\n"
+            for line in (
+                "after-kill-pane",
+                shown_hook(5, "w2", "%5"),
+                shown_hook(7, "w3", "%7"),
+                shown_hook(11, "w4", "%11"),
+                shown_hook(12, "w5", "%12").replace("after-kill-pane[12] ;", "x[12] ;"),
+                'after-kill-pane[13] if-shell -F "#{m:* %13 *,x}" \'\' "run-shell true"',
+                "after-kill-pane[14] run-shell true",
+                "after-kill-pane[9]",
+                "%3",
+                "%7",
+                "%20",
+            )
+        )
+        fake = FakeTmux(results={"show-hooks": (0, read)})
+        self.assertEqual(self.record(fake=fake), record("mgr", "%20", name="w1", pruned=(5, 11)))
+        self.assertEqual(self.stderr.getvalue(), "")
+        fake = FakeTmux(results={"show-hooks": (0, "")})
+        self.assertEqual(self.record(fake=fake), record("mgr", "%20", name="w1"))
+
+    def test_a_users_entry_at_the_panes_index_moves_the_hook_to_a_free_one(self):
+        users = "after-kill-pane[20] display-message x\nafter-kill-pane[0] run-shell true\n"
+        stale = shown_hook(0, "w2", "%3") + "\nafter-kill-pane[20] run-shell true\n"
+        for read, index, pruned in (
+            (users, 1, ()),
+            (stale + "%3\n", 1, ()),
+            (stale, 0, (0,)),
+        ):
+            with self.subTest(read=read):
+                fake = FakeTmux(results={"show-hooks": (0, read)})
+                self.assertEqual(
+                    self.record(fake=fake),
+                    record("mgr", "%20", name="w1", index=index, pruned=pruned),
+                )
+
+    def test_an_unread_hook_list_sets_and_unsets_no_hook(self):
+        for result in (
+            (1, "", "boom\n"),
+            (0, "after-kill-pane[1] x\nbad line\n"),
+            OSError(2, "no tmux"),
+        ):
+            with self.subTest(result=result):
+                fake = FakeTmux(results={"show-hooks": result})
+                calls = self.record(fake=fake)
+                self.assertEqual(calls, record("mgr", "%20", name="w1", hook=False, read=True))
+                self.assertNotIn("set-hook", calls[-1])
+                self.assertRegex(
+                    self.stderr.getvalue(), r"^tui: show: after-kill-pane: tmux: .*\n$"
+                )
+
+    def test_record_refuses_invalid_ids_and_sets_nothing(self):
+        """AC6, AC11: a value tmux could misread tags nothing."""
+        for kw in (
+            {"pane": "20"},
+            {"pane": "%x"},
+            {"pane": "%20;"},
+            {"window": "1"},
+            {"window": "@1 "},
+            {"name": "a b"},
+            {"name": "w1;"},
+            {"opener": ""},
+            {"opener": "a:b"},
+        ):
+            with self.subTest(**kw):
+                self.assertEqual(self.record(**kw), [])
+                self.assertRegex(self.stderr.getvalue(), r"^tui: show: @worker: refused .*\n$")
 
     def test_no_hook_without_a_command_tmux_takes_verbatim(self):
-        for session, why in (
+        for command, why in (
             (None, "ensemble-session is not on PATH"),
             ("/a b", "/a b: tmux would misread it"),
         ):
             with self.subTest(why=why):
-                calls = self.watch(session=session)
-                self.assertEqual(calls[-1], self.SET)
-                self.assertEqual(self.stderr.getvalue(), f"tui: show: client-detached: {why}\n")
+                with environ(PATH="/nonexistent"):
+                    calls = self.record(command=command)
+                self.assertEqual(calls, record("mgr", "%20", name="w1", hook=False))
+                self.assertEqual(self.stderr.getvalue(), f"tui: show: after-kill-pane: {why}\n")
 
-    def test_nothing_for_an_invalid_or_unset_pane(self):
-        for pane in ("invalid\n", ""):
-            with self.subTest(pane=pane):
-                self.assertEqual(self.watch(pane=pane), [])
+    def test_a_failure_to_record_is_printed(self):
+        fake = FakeTmux(fail=("set-option",))
+        self.assertEqual(len(self.record(fake=fake)), 2)
+        self.assertEqual(self.stderr.getvalue(), "tui: show: @worker: tmux: boom\n")
+
+    def test_label_sets_the_border_only_when_asked(self):
+        """AC12 (D6): a label goes in @worker-label; unlabeled, no border option."""
+        labeled = self.record(label=True)[-1]
+        self.assertEqual(labeled, record("mgr", "%20", name="w1", label=True)[-1])
+        for option in (
+            "set-option -p -t %20 @worker-label w1 ;",
+            "set-option -w -t @1 pane-border-status bottom ;",
+            "set-option -w -t @1 pane-border-format #{?#{@worker-label},[#{@worker-label}],} ;",
+        ):
+            self.assertIn(option, " ".join(labeled))
+        plain = self.record()[-1]
+        for option in ("@worker-label", "pane-border-status", "pane-border-format"):
+            self.assertNotIn(option, plain)
+
+
+class BorderTest(Case):
+    """FR-14: a label border keeps the window's own border options to give back."""
+
+    def own(self, values):
+        """show-options -w -q -v of the window's own values (None: unset)."""
+        return lambda argv: (0, "" if values.get(argv[-1]) is None else values[argv[-1]] + "\n")
+
+    def label(self, values, **results):
+        fake = FakeTmux(results={"show-options": self.own(values), **results})
+        self.stderr = io.StringIO()
+        with which(), redirect_stderr(self.stderr):
+            placed(fake)._record(
+                "w1",
+                "mgr",
+                "%20",
+                "@1",
+                printed=PRINTED,
+                sid=SID,
+                generation=GENERATION,
+                label=True,
+            )
+        return fake.calls
+
+    def unlabel(self, rows, values):
+        fake = FakeTmux(
+            results={
+                "list-panes": (0, "".join("\t".join(r) + "\n" for r in rows)),
+                "show-options": self.own(values),
+            }
+        )
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).unlabel()
+        return fake.calls
+
+    def test_a_label_saves_the_windows_own_borders_once(self):
+        mine = {"pane-border-status": "top", "pane-border-format": "#{pane_index} ok"}
+        calls = self.label(mine)
+        self.assertEqual(
+            calls[:2], [own("@1", "pane-border-format"), own("@1", "pane-border-status")]
+        )
+        line = " ".join(calls[-1])
+        for set_ in (
+            "set-option -w -t @1 @worker-saved-pane-border-status top ;",
+            "set-option -w -t @1 @worker-saved-pane-border-format #{pane_index} ok ;",
+            "set-option -w -t @1 pane-border-status bottom ;",
+            f"set-option -w -t @1 pane-border-format {LABEL} ;",
+        ):
+            self.assertIn(set_, line)
+        self.assertEqual(self.label({}), record("mgr", "%20", name="w1", label=True))
+        calls = self.label({"pane-border-format": LABEL})
+        self.assertEqual(calls[0], own("@1", "pane-border-format"))
+        self.assertNotIn("@worker-saved-", " ".join(calls[-1]))
+
+    def test_an_unread_border_sets_no_border(self):
+        for result in ((1, "", "boom\n"), (0, "a\nb\n")):
+            with self.subTest(result=result):
+                calls = self.label({}, **{"show-options": result})
+                line = " ".join(calls[-1])
+                self.assertIn("@worker-label w1", line)
+                self.assertNotIn("pane-border", line)
+                self.assertRegex(self.stderr.getvalue(), r"^tui: show: label: tmux: ")
+        calls = self.label({"pane-border-format": "x;"})
+        self.assertNotIn("pane-border", " ".join(calls[-1]))
+        self.assertIn("tui: show: label: tmux would misread 'x;'", self.stderr.getvalue())
+
+    def test_the_last_labelled_pane_gone_gives_the_window_its_own_borders_back(self):
+        rows = [("@1", "", LABEL), ("@2", "", "x")]
+        saved = {
+            "@worker-saved-pane-border-format": "#{pane_index} ok",
+            "pane-border-format": LABEL,
+        }
+        calls = self.unlabel(rows, saved)
+        self.assertEqual(
+            calls,
+            [
+                LABELS,
+                own("@1", "pane-border-format"),
+                own("@1", "@worker-saved-pane-border-status"),
+                own("@1", "@worker-saved-pane-border-format"),
+                [
+                    *("tmux", "set-option", "-u", "-w", "-t", "@1", "pane-border-status"),
+                    *(
+                        ";",
+                        "set-option",
+                        "-u",
+                        "-w",
+                        "-t",
+                        "@1",
+                        "@worker-saved-pane-border-status",
+                    ),
+                    *(
+                        ";",
+                        "set-option",
+                        "-w",
+                        "-t",
+                        "@1",
+                        "pane-border-format",
+                        "#{pane_index} ok",
+                    ),
+                    *(
+                        ";",
+                        "set-option",
+                        "-u",
+                        "-w",
+                        "-t",
+                        "@1",
+                        "@worker-saved-pane-border-format",
+                    ),
+                ],
+            ],
+        )
+
+    def test_a_labelled_pane_left_or_an_unread_window_restores_nothing(self):
+        for rows, values in (
+            ([("@1", "", LABEL), ("@1", "w2", LABEL)], {"pane-border-format": LABEL}),
+            ([("@1", "", LABEL)], {}),  # its own border is not the label's
+        ):
+            with self.subTest(rows=rows):
+                calls = self.unlabel(rows, values)
+                self.assertNotIn("set-option", [c[1] for c in calls])
+        for rows in ([("1", "", LABEL)], [("@1", LABEL)]):
+            with self.subTest(rows=rows):
+                self.assertEqual(self.unlabel(rows, {}), [LABELS])
+                self.assertRegex(
+                    self.stderr.getvalue(), r"^tui: close: label: tmux: list-panes printed"
+                )
+        fake = FakeTmux(results={"list-panes": (1, "", "no server running on /x\n")})
+        placed(fake).unlabel()
+        self.assertEqual(fake.calls, [LABELS])
+        fake = FakeTmux(results={"list-panes": (1, "", "boom\n")})
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).unlabel()
+        self.assertEqual(
+            (fake.calls, self.stderr.getvalue()), ([LABELS], "tui: close: label: tmux: boom\n")
+        )
+
+    def test_a_failed_window_restores_nothing_there_and_the_next_one_still(self):
+        rows = [("@1", "", LABEL), ("@3", "", LABEL)]
+
+        def own_or_fail(argv):
+            if argv[-2] == "@1" and argv[-1].startswith("@worker-saved-"):
+                return 1, "", "boom\n"
+            return 0, LABEL + "\n" if argv[-1] == "pane-border-format" else ""
+
+        fake = FakeTmux(
+            results={
+                "list-panes": (0, "".join("\t".join(r) + "\n" for r in rows)),
+                "show-options": own_or_fail,
+            }
+        )
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).unlabel()
+        writes = [c for c in fake.calls if c[1] == "set-option"]
+        self.assertEqual([c[c.index("-t") + 1] for c in writes], ["@3"])
+        self.assertEqual(self.stderr.getvalue(), "tui: close: label: @1: tmux: boom\n")
+
+
+class CloseTest(Case):
+    PANE = types.WorkerPane("%20", "s", "mgr", "@1", "mgr")
+
+    READ = [
+        *("tmux", "show-hooks", "-w", "-t", "@1", "after-kill-pane"),
+        *(";", "list-panes", "-a", "-F", "#{pane_id}"),
+    ]
+
+    HOOKS = "".join(
+        line + "\n"
+        for line in (
+            shown_hook(3, "s", "%20"),
+            shown_hook(20, "t", "%21"),
+            "after-kill-pane[4] run-shell 'echo %20'",
+            shown_hook(6, "s", "%20").replace("--sid", "--said"),
+        )
+    )
+
+    KILL = ["kill-pane", "-t", "%20"]
+
+    def close(self, **results):
+        fake = FakeTmux(results={"show-hooks": (0, self.HOOKS), **results})
+        self.stderr = io.StringIO()
+        with redirect_stderr(self.stderr):
+            placed(fake).close(self.PANE)
+        return fake.calls
+
+    def test_close_unsets_only_its_panes_close_hooks_then_kills_it_in_one_call(self):
+        unset = ["set-hook", "-u", "-w", "-t", "@1", "after-kill-pane[3]", ";"]
+        self.assertEqual(self.close(), [self.READ, ["tmux", *unset, *self.KILL], LABELS])
+        self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_an_unread_hook_list_unsets_nothing_and_still_kills(self):
+        for result in ((1, "", "boom\n"), (0, "bad line\n")):
+            with self.subTest(result=result):
+                self.assertEqual(
+                    self.close(**{"show-hooks": result}),
+                    [self.READ, ["tmux", *self.KILL], LABELS],
+                )
+                self.assertRegex(self.stderr.getvalue(), r"^tui: close: after-kill-pane: tmux: ")
+
+    def test_a_gone_pane_window_or_server_is_no_error_another_failure_raises(self):
+        for err in ("can't find pane: %20", "can't find window: @1", "no server running on /x"):
+            with self.subTest(err=err):
+                calls = self.close(
+                    **{"show-hooks": (1, "", err + "\n"), "kill-pane": (1, "", err + "\n")}
+                )
+                self.assertEqual(calls, [self.READ, ["tmux", *self.KILL], LABELS])
+                self.assertEqual(self.stderr.getvalue(), "")
+        with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
+            self.close(**{"set-hook": (1, "", "boom\n")})
+
+
+class WorkersTest(Case):
+    def test_panes_are_the_names_live_worker_panes_and_a_tmux_failure_raises(self):
+        rows = worker_rows(
+            ("%5", "s", "mgr", "@1", "mgr"),
+            ("%6", "t", "s"),
+            "1\t%7\ts\tmgr\t@1\tmgr\t",
+            ("%8", "s", "a b", "@2", "other"),
+            ("%5", "s", "mgr", "@1", "linked"),
+        )
+        fake = FakeTmux(results={"list-panes": rows})
+        self.assertEqual(
+            placed(fake).panes("s"),
+            [
+                types.WorkerPane("%5", "s", "mgr", "@1", "mgr", PRINTED),
+                types.WorkerPane("%8", "s", "", "@2", "other", PRINTED),
+            ],
+        )
+        self.assertEqual(fake.calls, [WORKERS])
+        fake = FakeTmux(fail=("list-panes",))
+        with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
+            placed(fake).panes("s")
+
+    def test_no_server_has_no_worker_panes(self):
+        for err in (
+            "no server running on /tmp/tmux-501/default",
+            "error connecting to /x (No such file or directory)",
+        ):
+            with self.subTest(err=err):
+                fake = FakeTmux(results={"list-panes": (1, "", err + "\n")})
+                self.assertEqual(placed(fake).workers(), [])
+
+
+class ReuseTest(PaneFixture):
+    def test_a_live_worker_pane_is_reused_whatever_its_opener(self):
+        """AC9 (D3): any live worker pane of s is the one; nothing opens."""
+        for opener in ("own", "other", ""):
+            with self.subTest(opener=opener):
+                fake = FakeTmux(
+                    results={
+                        "display-message": (0, "own\n"),
+                        "list-panes": worker_rows(("%5", "s", opener)),
+                    }
+                )
+                for _ in range(3):
+                    self.assertIsNone(self.open(fake, INSIDE))
+                    self.assertIsNone(self.open(fake, INSIDE, opener="x", split="below"))
+                self.assertEqual(fake.calls, [OWN, WORKERS, WORKERS] * 3)
                 self.assertEqual(self.stderr.getvalue(), "")
 
-    def test_a_bad_window_id_or_tty_is_printed_and_sets_nothing(self):
-        for found in ("own\n", "@3\n", "@3 /dev/pts/4;x\n", "@3 pts/4\n"):
-            with self.subTest(found=found):
-                self.assertEqual(len(self.watch(found=found)), 1)
-                self.assertEqual(
-                    self.stderr.getvalue(),
-                    f"tui: show: @window: not a window id and tty: {found.strip()!r}\n",
-                )
+    def test_showing_twice_opens_one_pane(self):
+        """AC9: a second show finds the first's pane."""
+        tagged = []
 
-
-class ViewerTest(Case):
-    """closed and forget over a tmux that keeps @pane and @window, its if-shell -F an equality."""
-
-    def fake(self, pane="%8", window="@2", panes="%1\n%9\n", windows="@1\n@2\n"):
-        self.kept = {"@pane": pane, "@window": window}
-
-        def show(argv):
-            value = self.kept.get(argv[-1])
-            return (0, value + "\n") if value else (1, "", f"invalid option: {argv[-1]}\n")
-
-        def if_shell(argv):
-            if argv[5] == f"#{{==:#{{@pane}},{self.kept['@pane']}}}":
-                self.kept.update({"@pane": None, "@window": None})
+        def set_option(argv):
+            if argv[5:7] == ["@worker", "s"]:
+                tagged.append(("%20", "s", "own"))
             return (0,)
 
-        return FakeTmux(
-            results={
-                "show-options": show,
-                "list-panes": (0, panes),
-                "list-windows": (0, windows),
-                "if-shell": if_shell,
-            }
-        )
-
-    def test_closed_is_a_gone_pane_in_a_present_window(self):
-        for pane, window, want in (
-            ("%8", "@2", "%8"),
-            ("%9", "@2", None),
-            ("%8", "@3", None),
-            (None, "@2", None),
-            ("%8", None, None),
-            ("invalid", "@2", None),
-            ("%8", "2", None),
-        ):
-            with self.subTest(pane=pane, window=window):
-                self.assertEqual(placed(self.fake(pane, window)).closed("s"), want)
-
-    def test_forget_unsets_only_while_the_pane_is_still_recorded(self):
-        unset = "set-option -u -t =s: @pane ; set-option -u -t =s: @window"
-        for recorded, given, want in (("%8", "%8", True), ("%10", "%8", False), ("%8", None, True)):
-            with self.subTest(recorded=recorded, given=given):
-                fake = self.fake(pane=recorded)
-                self.assertEqual(placed(fake).forget("s", given), want)
-                self.assertIn(
-                    [
-                        "tmux",
-                        "if-shell",
-                        "-F",
-                        "-t",
-                        "=s:",
-                        f"#{{==:#{{@pane}},{given or recorded}}}",
-                        unset,
-                    ],
-                    fake.calls,
-                )
-                self.assertEqual(self.kept["@pane"], None if want else recorded)
-
-    def test_forget_leaves_an_invalid_or_unset_pane(self):
-        for pane in ("invalid", None):
-            with self.subTest(pane=pane):
-                fake = self.fake(pane=pane)
-                self.assertFalse(placed(fake).forget("s"))
-                self.assertNotIn("if-shell", fake.commands())
-
-
-class ShownOnceTest(PaneFixture):
-    """open_pane opens no second pane while one its opener opened still shows the session."""
-
-    def fake(self, pane, opener="own", live="", clients=(0, "")):
-        return FakeTmux(
+        fake = FakeTmux(
             results={
                 "display-message": (0, "own\n"),
-                "list-sessions": (0, f"$1\ts\t{opener}\t{pane}\t{SOCK}\n"),
-                "list-panes": (0, live),
-                "list-clients": clients,
-                "split-window": (0, "%10\n"),
+                "list-panes": lambda argv: worker_rows(*tagged) if "-a" in argv else (1,),
+                "list-clients": clients((5, "%9")),
+                "split-window": split(),
+                "set-option": set_option,
             }
         )
+        self.assertIsNone(self.open(fake, INSIDE))
+        self.assertIsNone(self.open(fake, INSIDE))
+        self.assertEqual(fake.commands().count("split-window"), 1)
+        self.assertEqual(fake.calls[-2:], [OWN, WORKERS])
 
-    def test_a_session_its_opener_already_shows_gets_no_second_pane(self):
-        fake = self.fake("%5", live="%2\n%5\n")
-        for _ in range(3):
-            self.assertIsNone(self.open(fake, INSIDE))
-            self.assertEqual(self.stderr.getvalue(), "")
-        self.assertEqual(fake.calls, [OWN, SESSIONS, LIVE] * 3)
+    def test_an_earlier_runs_pane_is_not_reused(self):
+        """AC9: a pane of s running an earlier run's attach command is not reused."""
+        fake = FakeTmux(
+            results={
+                "display-message": (0, "own\n"),
+                "list-panes": lambda argv: (
+                    worker_rows(("%5", "s", "own", "@1", "mgr", "/fake/attach old"))
+                    if "-a" in argv
+                    else (1,)
+                ),
+                "list-clients": clients((5, "%9")),
+                "split-window": split(),
+            }
+        )
+        self.assertIsNone(self.open(fake, INSIDE))
+        self.assertEqual(fake.commands().count("split-window"), 1)
+        self.assertEqual(fake.calls[-2:], record("own", "%20"))
 
-    def test_a_pane_opens_once_none_shows_the_session_or_for_another_opener(self):
-        own = self.clients((5, "/dev/ttys004", "%9"))
-        for fake in (
-            self.fake("%5", live="%2\n", clients=own),
-            self.fake("%5", opener="other", live="%5\n", clients=own),
-            self.fake("", live="%5\n", clients=own),
+    def test_a_dead_pane_or_another_workers_does_not_count(self):
+        for rows in (
+            ["1\t%5\ts\town\t@1\tmgr\t"],
+            [("%5", "t", "own")],
+            [("%5", "s;", "own")],
         ):
-            with self.subTest(calls=fake.calls):
-                self.assertIsNone(self.open(fake, INSIDE))
-                self.assertEqual(fake.calls[-3:], [split_window("-h", "%3"), *record("own", "%10")])
+            with self.subTest(rows=rows):
+                fake = FakeTmux(
+                    results={
+                        "display-message": (0, "own\n"),
+                        "list-panes": lambda argv, rows=rows: (
+                            worker_rows(*rows) if "-a" in argv else (1,)
+                        ),
+                        "list-clients": clients((5, "%9")),
+                        "split-window": split(),
+                    }
+                )
+                self.assertIsNone(self.open(fake, INSIDE, split="right"))
+                self.assertIn("split-window", fake.commands())
 
 
 class PanePlacementTest(PaneFixture):
-    def test_tmux_split_split_from(self):
-        clients = self.clients((5, "/dev/ttys004", "%9"), (9, "/dev/ttys005", "%7"))
-        fake = FakeTmux(results={"list-clients": clients, "split-window": (0, "%10\n")})
-        self.assertIsNone(self.open(fake, {}, split_from="b", split="below"))
-        self.assertEqual(fake.calls[-2:], [split_window("-v", "%7"), *record(None, "%10")])
-        nested = FakeTmux(
+    """The caller is in session own, pane %3, outside a grid; b's client shows %9."""
+
+    def fake(self, rows=(), **results):
+        return FakeTmux(
             results={
-                "list-clients": clients,
-                "list-panes": expected_panes(("0", "/dev/ttys005", "%5")),
-                "split-window": (0, "%10\n"),
+                "display-message": (0, "own\n"),
+                "list-panes": lambda argv: worker_rows(*rows) if "-a" in argv else (0, ""),
+                "list-clients": clients((5, "%9")),
+                "split-window": split(),
+                **results,
             }
         )
-        self.assertIsNone(self.open(nested, {}, split_from="b"))
-        self.assertEqual(
-            nested.calls, [clients_of("b"), HOSTS, split_window("-h", "%5"), *record(None, "%10")]
-        )
 
-    def test_control_mode_client_gets_a_tmux_split_of_own_pane(self):
-        # iTerm2's tmux -CC: the control-mode client's tty is the hidden gateway tab's; iTerm2 draws
-        # the tmux split
-        clients = self.clients((300, "/dev/ttys009", "%1", "1"), (100, "/dev/ttys001", "%2"))
-        for split, flag in ((None, "-h"), ("right", "-h"), ("below", "-v")):
-            with self.subTest(split=split):
-                fake = FakeTmux(
-                    results={
-                        "display-message": (0, "own\n"),
-                        "list-clients": clients,
-                        "split-window": (0, "%10\n"),
-                    }
-                )
-                self.assertIsNone(self.open(fake, INSIDE, split=split))
-                self.assertEqual(
-                    fake.calls,
-                    [
-                        OWN,
-                        SESSIONS,
-                        clients_of("own"),
-                        split_window(flag, "%3"),
-                        *record("own", "%10"),
-                    ],
-                )
+    def test_split_stack_and_split_from_run_the_attach_argv(self):
+        """AC3: each placement splits a pane running CommandView.argv."""
+        head = [OWN, WORKERS, clients_of("own"), grid_read("%3")]
+        for kw, rows, then in (
+            ({"split": "right"}, (), [split_window("-h", "%3")]),
+            ({"split": "below"}, (), [split_window("-v", "%3")]),
+            ({"split_from": "b"}, (), [clients_of("b"), split_window("-h", "%9")]),
+            (
+                {"split_from": "b", "split": "below"},
+                (),
+                [clients_of("b"), split_window("-v", "%9")],
+            ),
+            ({}, [("%7", "a", "own")], [split_window("-v", "%7")]),
+        ):
+            with self.subTest(**kw, rows=rows):
+                fake = self.fake(rows)
+                self.assertIsNone(self.open(fake, INSIDE, **kw))
+                self.assertEqual(fake.calls, [*head, *then, *record("own", "%20")])
+                command = next(c for c in fake.calls if c[1] == "split-window")
+                self.assertEqual(command[command.index("--") + 1 :], list(ARGV))
                 self.assertEqual(self.stderr.getvalue(), "")
 
-    def test_split_from_a_session_only_a_control_mode_client_shows(self):
-        clients = self.clients((5, "/dev/ttys009", "%9", "1"))
-        for env, head, opener in (({}, [], None), (INSIDE, [OWN, SESSIONS], "own")):
-            with self.subTest(env=env):
-                fake = FakeTmux(
-                    results={
-                        "display-message": (0, "own\n"),
-                        "list-clients": clients,
-                        "split-window": (0, "%10\n"),
-                    }
-                )
-                self.assertIsNone(self.open(fake, env, split_from="b", split="below"))
+    def test_a_worker_opener_outside_a_grid_anchors_at_its_pane(self):
+        """AC10: a worker's sub-worker opens beside its pane."""
+        for kw, flag in (({}, "-h"), ({"split": "below"}, "-v")):
+            with self.subTest(**kw):
+                fake = self.fake([("%7", "a", "own")])
+                self.assertIsNone(self.open(fake, INSIDE, opener="a", **kw))
                 self.assertEqual(
                     fake.calls,
-                    [*head, clients_of("b"), split_window("-v", "%9"), *record(opener, "%10")],
+                    [WORKERS, grid_read("%7"), split_window(flag, "%7"), *record("a", "%20")],
                 )
 
-    def test_tmux_split_failures(self):
-        clients = self.clients((5, "/dev/ttys004", "%9"))
-        fake = FakeTmux(
-            results={
-                "list-clients": clients,
-                "split-window": (1, "", "no space for new pane\n"),
-            }
-        )
-        self.assertEqual(self.open(fake, {}, split_from="b"), "tmux: no space for new pane")
-        self.assertNotIn("set-option", fake.commands())
-        fake = FakeTmux(results={"list-clients": (0, "5 /dev/ttys004 %9 0 /tmp/#s\n")})
-        self.assertEqual(
-            self.open(fake, {}, split_from="b"), "tmux would misread '/tmp/#s'" + WATCH
-        )
+    def test_failure_names_the_printed_attach_command(self):
+        """AC4: a placement failure ends `; watch it with <CommandView.printed>`."""
+        for env, kw, fake, why in (
+            ({}, {}, self.fake(), "no anchor pane: not in tmux"),
+            ({}, {"split": "right"}, self.fake(), "no anchor pane: not in tmux"),
+            (
+                {},
+                {"split_from": "b"},
+                self.fake(**{"list-clients": (0, "")}),
+                "no terminal shows b",
+            ),
+            (
+                INSIDE,
+                {},
+                self.fake(**{"list-clients": (0, "")}),
+                "no anchor pane: no terminal shows tmux session own",
+            ),
+            (
+                {},
+                {"split_from": "b"},
+                self.fake(**{"list-clients": (1, "", "boom\n")}),
+                "tmux: boom",
+            ),
+        ):
+            with self.subTest(env=env, why=why, **kw):
+                self.assertEqual(self.open(fake, env, **kw), why + WATCH)
+                self.assertNotIn("split-window", fake.commands())
+        self.assertEqual(WATCH, f"; watch it with {PRINTED}")
+        fake = self.fake()
+        self.stderr = io.StringIO()
+        with environ(), which(), redirect_stderr(self.stderr):
+            why = placed(fake).open_pane("s", ("/a#b",), "docker exec -it c1 x", split_from="b")
+        self.assertEqual(why, "tmux would misread '/a#b'; watch it with docker exec -it c1 x")
         self.assertNotIn("split-window", fake.commands())
 
-    def test_split_from_not_shown_anywhere(self):
-        for result in ((0, ""), (1, "", "can't find session: =b\n")):
-            with self.subTest(result=result):
-                fake = FakeTmux(results={"list-clients": result})
-                self.assertTrue(self.open(fake, {}, split_from="b").endswith(WATCH))
-                self.assertEqual(fake.commands(), ["list-clients"])
+    def test_a_failed_worker_pane_read_opens_nothing(self):
+        """FR-12."""
+        for env, kw in ((INSIDE, {}), ({}, {"split_from": "b"})):
+            with self.subTest(**kw):
+                fake = self.fake(**{"list-panes": (1, "", "boom\n")})
+                self.assertEqual(self.open(fake, env, **kw), "tmux: boom" + WATCH)
+                self.assertNotIn("split-window", fake.commands())
+                self.assertNotIn("set-option", fake.commands())
+
+    def test_an_unread_grid_writes_no_grid_option(self):
+        """A failed or misprinted grid read: a plain split, no grid write, a stderr line."""
+        for result, why in (((1, "", "boom\n"), "boom"), ((0, "x\n"), "list-panes printed 'x'")):
+            with self.subTest(why=why):
+                fake = self.fake(
+                    **{"list-panes": lambda argv, r=result: worker_rows() if "-a" in argv else r}
+                )
+                self.assertIsNone(self.open(fake, INSIDE))
+                self.assertIn(split_window("-h", "%3"), fake.calls)
+                self.assertNotIn("@grid-busy", [a for c in fake.calls for a in c])
+                self.assertIn(f"tui: show: grid: tmux: {why}\n", self.stderr.getvalue())
+
+    def test_tmux_split_failures(self):
+        fake = self.fake(**{"split-window": (1, "", "no space for new pane\n")})
+        self.assertEqual(self.open(fake, {}, split_from="b"), "tmux: no space for new pane")
+        self.assertNotIn("set-option", fake.commands())
+        for printed in ("\n", "%20\n", "%20\t1\n", "x\t@1\n", "%20\t@1\tx\n"):
+            with self.subTest(printed=printed):
+                fake = self.fake(**{"split-window": (0, printed)})
+                self.assertEqual(
+                    self.open(fake, {}, split_from="b"),
+                    f"tmux: split-window printed {printed.strip()!r}",
+                )
+                self.assertNotIn("set-option", fake.commands())
 
     def test_bad_arguments_raise(self):
         for kw in (
@@ -430,314 +814,163 @@ class PanePlacementTest(PaneFixture):
                     self.open(fake, {}, **kw)
                 self.assertEqual(fake.calls, [])
 
-    def test_no_anchor_refuses_with_the_attach_command(self):
-        for split in (None, "right"):
-            with self.subTest(split=split):
-                fake = FakeTmux()
-                self.assertEqual(
-                    self.open(fake, {}, split=split), "no anchor pane: not in tmux" + WATCH
-                )
-                self.assertEqual(fake.calls, [])
-                self.assertEqual(self.stderr.getvalue(), "")
 
-    def test_the_watch_command_takes_the_prefix(self):
-        for env, prefix in PREFIXES:
-            with self.subTest(env=env):
-                why = self.open(FakeTmux(), env)
-                self.assertTrue(why.endswith(f"; watch it with {prefix}tmux attach -t '=s'"), why)
+class SpotTest(GridFixture):
+    """_spot for worker s outside tmux; mgr's client shows %9."""
 
-    def test_no_tmux(self):
-        fake = FakeTmux()
-        self.assertEqual(self.open(fake, {}, tmux=None), "tmux not found")
-        self.assertEqual(fake.calls, [])
+    W1 = types.WorkerPane("%10", "w1", "mgr", "@1", "mgr")
+    GRID = [("@1", "%3", "%3", "79", "48"), ("@1", "%3", "%10", "80", "48")]  # w1 in mgr's grid
 
-    def test_tmux_path_made_absolute(self):
-        here = os.getcwd()
-        os.chdir(tempfile.gettempdir())
-        self.addCleanup(os.chdir, here)
-        fake = FakeTmux(
-            results={
-                "list-clients": self.clients((5, "/dev/ttys004", "%9")),
-                "split-window": (0, "%10\n"),
-            }
-        )
-        self.assertIsNone(self.open(fake, {}, split_from="b", tmux="bin/tmux"))
-        command = next(call for call in fake.calls if call[1] == "split-window")
-        self.assertEqual(command[12], os.path.join(os.getcwd(), "bin/tmux"))
+    def tmux(self, windows=None, sessions=("mgr",), rows=(), **results):
+        def listed(argv):
+            if argv[3][1:] not in sessions:
+                return 1, "", f"can't find session: {argv[3][1:]}\n"
+            return clients((5, "%9"))
 
+        return self.fake(windows or {}, rows, clients=listed, **results)
 
-class StackTest(Case):
-    """Panes stack by opener. The caller is in tmux session `own`, pane %3, shown by a terminal
-    client (tty /dev/ttys004) whose pane is %9; list-sessions prints `rows`, list-panes -a the
-    `live` pane ids (`hosts`, pane_ids() rows, for the tty format);
-    a tmux split prints %99.
-    """
+    def spot(self, fake, opener: str | None = "mgr", workers=(), **kw):
+        kw = {"own": None, "split": None, "split_from": None, "fallbacks": (), **kw}
+        with environ():
+            return placed(fake)._spot("s", opener, workers=list(workers), **kw)
 
-    def fake(
-        self,
-        rows=(),
-        live=(),
-        own="cmd",
-        clients=f"5 /dev/ttys004 %9 0 {SOCK}\n",
-        hosts=(),
-        **results,
-    ):
-        def list_panes(argv):
-            if "-a" not in argv:  # a grid read: a window with no grid
-                return 0, f"@1\t\t{argv[3]}\t80\t24\t{SOCK}\n"
-            return (
-                (0, "".join(p + "\n" for p in live))
-                if argv[-1] == "#{pane_id}"
-                else expected_panes(*hosts)(argv)
-            )
-
-        return FakeTmux(
-            results={
-                "display-message": (0, own + "\n"),
-                "list-sessions": (0, "".join("\t".join(r) + "\n" for r in rows)),
-                "list-panes": list_panes,
-                "list-clients": (0, clients),
-                "split-window": (0, "%99\n"),
-                **results,
-            }
-        )
-
-    def open(self, fake, env=INSIDE, **kw):
-        self.stderr = io.StringIO()
-        with environ(**env), which(), redirect_stderr(self.stderr):
-            return placed(fake).open_pane("s", **kw)
-
-    def expected_row(self, number, name, pane, opener="cmd"):
-        return f"${number}", name, opener, pane, SOCK
-
-    def test_first_pane_right_of_the_opener(self):
-        for results in ({}, {"list-sessions": (1, "", "no server running\n")}):
-            with self.subTest(results=results):
-                fake = self.fake(**results)
-                self.assertIsNone(self.open(fake))
-                self.assertEqual(
-                    fake.calls,
-                    [
-                        OWN,
-                        SESSIONS,
-                        clients_of("cmd"),
-                        HOSTS,
-                        split_window("-h", "%3"),
-                        *record("cmd", "%99"),
-                    ],
-                )
-                self.assertEqual(self.stderr.getvalue(), "")
-
-    def test_below_the_newest_live_pane_else_right(self):
-        # the second below the first; the newest closed: below the previous live one; none live:
-        # right
-        three = [
-            self.expected_row(9, "a", "%9"),
-            self.expected_row(11, "c", "%11"),
-            self.expected_row(10, "b", "%10"),
-        ]
-        right = [clients_of("cmd"), HOSTS, split_window("-h", "%3")]
-        for rows, live, then in (
-            ([self.expected_row(1, "a", "%7")], ["%3", "%7", "%9"], [split_window("-v", "%7")]),
-            (three, ["%9", "%10", "%11"], [split_window("-v", "%11")]),
-            (three, ["%9", "%10"], [split_window("-v", "%10")]),
-            (three, ["%9"], [split_window("-v", "%9")]),
-            ([self.expected_row(1, "a", "%7")], ["%3", "%9"], right),
+    def test_each_branch(self):
+        right, below = types.Split.RIGHT, types.Split.BELOW
+        new = {"%9": [("@2", "", "%9", "160", "48")]}
+        stacked = types.WorkerPane("%7", "a", "mgr", "@1", "mgr")
+        for name, windows, opener, workers, kw, spot in (
+            ("grid", new, "mgr", (), {}, ("%9", right, ("@2", "%9"))),
+            ("grid below", {"%10": self.GRID}, "w1", [self.W1], {}, ("%10", below, ("@1", "%3"))),
+            ("split_from", {}, "mgr", (), {"split_from": "b"}, ("%9", right, None)),
+            (
+                "split_from below",
+                {},
+                None,
+                (),
+                {"split_from": "b", "split": "below"},
+                ("%9", below, None),
+            ),
+            ("split", {}, "mgr", [stacked], {"split": "below"}, ("%9", below, None)),
+            ("stack", {}, "mgr", [stacked], {}, ("%7", below, None)),
+            ("opener pane", {}, "mgr", (), {}, ("%9", right, None)),
         ):
-            with self.subTest(rows=rows, live=live):
-                fake = self.fake(rows, live)
-                self.assertIsNone(self.open(fake))
-                self.assertEqual(fake.calls, [OWN, SESSIONS, LIVE, *then, *record("cmd", "%99")])
-
-    def test_tmux_liveness_is_an_exact_line(self):
-        fake = self.fake(
-            [self.expected_row(1, "a", "%1")], live=["%10", " %1", "%1 ", "x%1", "%1\r"]
-        )
-        self.assertIsNone(self.open(fake))
-        self.assertEqual(
-            fake.calls[2:],
-            [
-                LIVE,
-                clients_of("cmd"),
-                HOSTS,
-                split_window("-h", "%3"),
-                *record("cmd", "%99"),
-            ],
-        )
-
-    def test_a_worker_gets_its_own_column(self):
-        stack = [
-            self.expected_row(1, "a", "%7"),
-            self.expected_row(2, "W", "%8"),
-        ]  # the commander's (cmd); W's pane is the newest
-        live = ["%3", "%7", "%8"]
-        fake = self.fake(stack, live, own="W")
-        self.assertIsNone(self.open(fake))
-        self.assertEqual(
-            fake.calls,
-            [
-                OWN,
-                SESSIONS,
-                grid_read("%8"),
-                clients_of("W"),
-                HOSTS,
-                split_window("-h", "%3"),
-                *record("W", "%99"),
-            ],
-        )
-        # W shown by a nested client in the commander's pane %8: that pane splits, never one in W's
-        # window
-        fake = self.fake(
-            stack, live, own="W", hosts=[("0", "/dev/ttys001", "%7"), ("0", "/dev/ttys004", "%8")]
-        )
-        self.assertIsNone(self.open(fake))
-        self.assertEqual(
-            fake.calls,
-            [
-                OWN,
-                SESSIONS,
-                grid_read("%8"),
-                clients_of("W"),
-                HOSTS,
-                split_window("-h", "%8"),
-                *record("W", "%99"),
-            ],
-        )
-        fake = self.fake([*stack, self.expected_row(3, "w2", "%20", "W")], [*live, "%20"], own="W")
-        self.assertIsNone(self.open(fake))
-        self.assertEqual(
-            fake.calls,
-            [OWN, SESSIONS, grid_read("%8"), LIVE, split_window("-v", "%20"), *record("W", "%99")],
-        )
-
-    def test_explicit_split_or_split_from_overrides_the_stack(self):
-        for kw, (session, flag, pane) in (
-            ({"split": "right"}, ("cmd", "-h", "%3")),
-            ({"split": "below"}, ("cmd", "-v", "%3")),
-            ({"split_from": "b"}, ("b", "-h", "%9")),
-            ({"split_from": "b", "split": "below"}, ("b", "-v", "%9")),
+            with self.subTest(name):
+                fake = self.tmux(windows, sessions=("mgr", "b"))
+                found = self.spot(fake, opener, workers, **kw)
+                self.assertEqual(found, types.Spot(*spot))
+        for opener, sessions, why in (
+            (None, (), "no anchor pane: not in tmux"),
+            ("mgr", (), "no anchor pane: no terminal shows tmux session mgr"),
         ):
-            with self.subTest(**kw):
-                fake = self.fake([self.expected_row(1, "a", "%7")], live=["%3", "%7"])
-                self.assertIsNone(self.open(fake, **kw))
-                self.assertEqual(
-                    fake.calls,
-                    [
-                        OWN,
-                        SESSIONS,
-                        clients_of(session),
-                        HOSTS,
-                        split_window(flag, pane),
-                        *record("cmd", "%99"),
-                    ],
-                )
+            with self.subTest(opener=opener), self.assertRaisesRegex(tmux_cli.TuiError, why):
+                self.spot(self.tmux(sessions=sessions), opener)
 
-    def test_options_only_after_a_split(self):
-        fake = self.fake()
-        self.assertIsNone(placed(fake).run_command("s", "open {{session}}"))
-        self.assertEqual(fake.calls, [["/bin/sh", "-c", "open s"]])
-        fake = self.fake(**{"split-window": (1, "", "no space for new pane\n")})
-        self.assertEqual(self.open(fake), "tmux: no space for new pane")
-        self.assertNotIn("set-option", fake.commands())
+    def test_a_fallback_stands_in_for_an_opener_without_a_pane_or_client(self):
+        """D5: hidden a: its first fallback with a worker pane or client gives the grid."""
+        right, below = types.Split.RIGHT, types.Split.BELOW
+        mine = types.WorkerPane("%7", "c", "a", "@1", "mgr")
+        theirs = types.WorkerPane("%8", "d", "mgr", "@1", "mgr")
+        new = {"%9": [("@2", "", "%9", "160", "48")]}
+        for name, windows, workers, fallbacks, spot in (
+            ("grid", new, (), ("x", "mgr"), ("%9", right, ("@2", "%9"))),
+            (
+                "worker pane's grid",
+                {"%10": self.GRID},
+                [self.W1],
+                ("w1",),
+                ("%10", below, ("@1", "%3")),
+            ),
+            ("opener pane", {}, (), ("x", "mgr"), ("%9", right, None)),
+            ("stack", {}, [mine, theirs], ("mgr",), ("%7", below, None)),
+        ):
+            with self.subTest(name):
+                fake = self.tmux(windows)
+                found = self.spot(fake, "a", workers, fallbacks=fallbacks)
+                self.assertEqual(found, types.Spot(*spot))
+        fake = self.tmux(new)
+        self.spot(fake, "a", fallbacks=("x", "mgr", "w1"))
+        self.assertEqual(
+            fake.calls, [clients_of("a"), clients_of("x"), clients_of("mgr"), grid_read("%9")]
+        )
+        with self.assertRaisesRegex(
+            tmux_cli.TuiError, "^no anchor pane: no terminal shows tmux session a$"
+        ):
+            self.spot(self.tmux(), "a", fallbacks=("x",))
 
-    def test_a_failure_to_record_is_printed(self):
-        for fail, calls in (("@opener", 1), ("@pane", 2)):
-            with self.subTest(fail=fail):
-                fake = self.fake(
-                    **{
-                        "set-option": lambda argv, *, fail=fail: (
-                            (1, "", "boom\n") if fail in argv else (0,)
-                        )
-                    }
-                )
-                self.assertIsNone(self.open(fake))
-                self.assertEqual(fake.commands().count("set-option"), calls)
-                self.assertEqual(self.stderr.getvalue(), f"tui: show: {fail}: tmux: boom\n")
-        fake = self.fake(**{"split-window": (0, "\n")})
-        self.assertIsNone(self.open(fake))
-        self.assertNotIn("set-option", fake.commands())
-        self.assertEqual(self.stderr.getvalue(), "tui: show: @pane: not a pane id: ''\n")
-
-    def test_read_back_values_must_fullmatch(self):
-        bad = [
-            ("$9", "a", "cmd", "%5;", SOCK),
-            ("$8", "b", "cmd", "#{x}", SOCK),
-            ("$7", "c", "cmd", "I D", SOCK),
-            ("$7", "d", "cmd", "ID;x", SOCK),
-            ("$6", "e", "cmd ", "%6", SOCK),
-            ("$6", "f", "other", "%6", SOCK),
-            ("$6", "g", "c:md:x", "%6", SOCK),
-            ("5", "h", "cmd", "%5", SOCK),
-            ("$5x", "i", "cmd", "%5", SOCK),
-            ("$4", "j", "cmd", "", SOCK),
-            ("$4", "k", "cmd", "%4"),
-            ("$4", "l", "cmd", "%4", SOCK, "x"),
-        ]
-        live = ["%2", "%4", "%5", "%6"]
-        fake = self.fake(bad, live)
-        self.assertIsNone(self.open(fake))
-        self.assertEqual(
-            fake.calls,
-            [
-                OWN,
-                SESSIONS,
-                clients_of("cmd"),
-                HOSTS,
-                split_window("-h", "%3"),
-                *record("cmd", "%99"),
-            ],
-        )
-        fake = self.fake([*bad, self.expected_row(1, "m", "%2")], live)
-        self.assertIsNone(self.open(fake))
-        self.assertEqual(
-            fake.calls, [OWN, SESSIONS, LIVE, split_window("-v", "%2"), *record("cmd", "%99")]
-        )
-
-    def test_a_passed_opener(self):
-        fake = self.fake(own="drv")
-        self.assertIsNone(self.open(fake, opener="outer"))
-        self.assertEqual(
-            fake.calls,
-            [
-                SESSIONS,
-                OWN,
-                clients_of("outer"),
-                HOSTS,
-                split_window("-h", "%9"),
-                *record("outer", "%99"),
-            ],
-        )
-        fake = self.fake(own="outer")
-        self.assertIsNone(self.open(fake, opener="outer"))
-        self.assertEqual(fake.calls[-3:], [split_window("-h", "%3"), *record("outer", "%99")])
-        fake = self.fake(
-            [self.expected_row(2, "b", "%8"), self.expected_row(1, "a", "%7", "outer")],
-            ["%7", "%8"],
-            own="drv",
-        )
-        self.assertIsNone(self.open(fake, opener="outer"))
-        self.assertEqual(
-            fake.calls, [SESSIONS, LIVE, split_window("-v", "%7"), *record("outer", "%99")]
-        )
-        fake = self.fake(own="drv", clients="")
-        self.assertEqual(
-            self.open(fake, INSIDE, opener="outer"),
-            "no anchor pane: no terminal shows tmux session outer" + WATCH,
-        )
-
-    def test_a_bad_opener_raises(self):
-        for opener in (
-            "",
-            "a b",
-            "a;b",
-            "=a",
-            "%3",
-            "a\n",
-            "a:",
-            ":b",
+    def test_no_fallback_for_an_opener_with_a_pane_or_client_or_a_failed_read(self):
+        """An opener's own pane or client wins over a fallback's grid."""
+        grid = {"%10": self.GRID}
+        for opener, workers, spot in (
+            ("mgr", (), ("%9", types.Split.RIGHT, None)),
+            (
+                "a",
+                [types.WorkerPane("%5", "a", "mgr", "@3", "mgr")],
+                ("%5", types.Split.RIGHT, None),
+            ),
         ):
             with self.subTest(opener=opener):
-                fake = self.fake()
-                with self.assertRaisesRegex(tmux_cli.TuiError, "opener"):
-                    self.open(fake, opener=opener)
-                self.assertEqual(fake.calls, [])
+                fake = self.tmux(grid)
+                found = self.spot(
+                    fake, opener, [*workers, self.W1], split="right", fallbacks=("w1",)
+                )
+                self.assertEqual(found, types.Spot(*spot))
+        fake = self.tmux(grid, **{"list-clients": (1, "", "boom\n")})
+        with self.assertRaisesRegex(tmux_cli.TuiError, "^tmux: boom$"):
+            self.spot(fake, "a", [self.W1], fallbacks=("w1",))
+        self.assertEqual(fake.calls, [clients_of("a")])
+
+    def test_open_pane_records_the_opener_not_its_fallback(self):
+        """AC9: s shown for hidden a lands in mgr's grid; its @worker-opener stays a."""
+        fake = self.tmux(
+            {"%9": [("@2", "", "%9", "160", "48")]}, **{"split-window": split(window="@2")}
+        )
+        self.assertIsNone(self.open(fake, {}, opener="a", fallbacks=("mgr",)))
+        self.assertEqual(
+            fake.calls,
+            [
+                WORKERS,
+                clients_of("a"),
+                clients_of("mgr"),
+                grid_read("%9"),
+                *self.split("-h", "%9", "@2"),
+                *opening_commands(window="@2", manager="%9", opener="a"),
+            ],
+        )
+        for bad in ("a b", "", "a;"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(tmux_cli.TuiError, "invalid opener"):
+                fake = FakeTmux()
+                self.open(fake, {}, opener="a", fallbacks=("mgr", bad))
+            self.assertEqual(fake.calls, [])
+
+
+class GridShowTest(GridFixture):
+    def test_grid_split_runs_the_attach_argv(self):
+        """AC1: a grid show's pane runs CommandView.argv; its close hook names the sid."""
+        fake = self.fake({"%3": self.NEW})
+        self.assertIsNone(self.open(fake, sid=SID))
+        self.assertEqual(
+            fake.calls,
+            [
+                OWN,
+                WORKERS,
+                clients_of("mgr"),
+                grid_read("%3"),
+                *self.split("-h", "%3"),
+                *opening_commands(),
+            ],
+        )
+        command = fake.calls[5]
+        self.assertEqual(command[command.index("--") + 1 :], list(ARGV))
+        self.assertNotIn("attach", " ".join(command[: command.index("--")]))
+
+    def test_grid_show_tags_the_pane_before_unmuting_and_tiling(self):
+        """AC11: tagged before the grid unmutes and tiles, so no tile takes it for a manual pane."""
+        fake = self.fake({"%3": self.NEW})
+        self.assertIsNone(self.open(fake))
+        self.assertEqual(
+            fake.calls[4:9],
+            [mute("@1"), split_window("-h", "%3"), *record("mgr", "%20"), grid_set("@1", "%3")],
+        )
+        self.assertEqual(fake.calls[7][5:7], ["@worker", "s"])
+        self.assertIn("set-option -u -w -t @1 @grid-busy", " ".join(fake.calls[8]))
+        self.assertFalse(any("@grid-busy" in c for c in fake.calls[5:8]))

@@ -1,6 +1,7 @@
 """TmuxHost's workers, under their guard on a private server, get literal launch data and paste
 bytes; a display scrolled into copy-mode takes no input from them; a closed worker's handle never
-reaches a same-name replacement.
+reaches a same-name replacement. A display is a pane running the worker's attach command, here in
+a detached tmux session of the test's at a fixed size.
 """
 
 import contextlib
@@ -11,10 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.session import Launch, SessionError
-from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Key, KeyPress, Liveness, Paste, Unanswered, WorkerExit
 from ensemble.session.hosts.tmux import TmuxHost
-from ensemble.session.viewer.viewer import Viewer
 from tests.session import live_tmux
 from tests.session.case import Case
 
@@ -31,9 +30,24 @@ class LaunchTest(Case):
     def worker(self, name, launch, *, terminal=True):
         handle = self.host.worker(name, launch, terminal=terminal)
         self.addCleanup(self.close, handle)
-        if terminal:
-            Viewer()._prepare(name, self.host)
         return handle
+
+    def display(self, name: str, size: str = "12x5") -> str:
+        """A display of worker `name`, `size` (WxH): tmux session `name`-display, its one pane
+        running name's attach command; that pane.
+        """
+        width, height = size.split("x")
+        argv = self.host.attach_target(name).argv
+        shown = self.server.tmux(
+            *("new-session", "-d", "-s", f"{name}-display", "-x", width, "-y", height),
+            *("-P", "-F", "#{pane_id}", "--", *argv),
+        )
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        return shown.stdout.strip()
+
+    def undisplay(self, name: str) -> None:
+        gone = self.server.tmux("kill-session", "-t", f"={name}-display")
+        self.assertEqual(gone.returncode, 0, gone.stderr)
 
     def close(self, handle):
         with contextlib.suppress(Unanswered):
@@ -91,23 +105,23 @@ class LaunchTest(Case):
                 gate.touch()
                 self.assertEqual(self.exited(handle), [WorkerExit(0)])
 
-    def test_a_hidden_workers_display_pane_and_so_its_pty_take_the_hidden_size(self):
-        """The guard's PTY follows its display's pane: at start and after a hide, hidden_size."""
+    def test_a_workers_pty_follows_its_display_and_takes_the_hidden_size_without_one(self):
+        """The guard's PTY is hidden_size with no display, follows a display's pane while one is
+        attached, and returns to hidden_size once none is.
+        """
         self.host = TmuxHost("tmux", {"hidden_size": "100x30"})
-        self.worker("sized", Launch((sys.executable, "-I", "-c", "input()"), cwd=self.home))
-        tmux = TmuxCli()
-
-        def pane():
-            found = tmux.checked(
-                ["display-message", "-p", "-t", "=sized:", "#{pane_width}x#{pane_height}"]
-            )
-            return found.stdout.strip()
-
-        live_tmux.wait(lambda: pane() == "100x30", what="the display pane at 100x30")
-        tmux.checked(["resize-window", "-t", "=sized:", "-x", "50", "-y", "20"])
-        self.assertEqual(pane(), "50x20")
-        tmux.unview("sized", (100, 30))
-        self.assertEqual(pane(), "100x30")
+        worker = self.worker("sized", Launch(("/bin/sh",), cwd=self.home))
+        live_tmux.sized(worker, "100x30", "the PTY")
+        pane = self.display("sized", "50x20")
+        self.assertEqual(
+            self.server.tmux(
+                "display-message", "-p", "-t", pane, "#{pane_width}x#{pane_height}"
+            ).stdout.strip(),
+            "50x20",
+        )
+        live_tmux.sized(worker, "50x20", "the PTY")
+        self.undisplay("sized")
+        live_tmux.sized(worker, "100x30", "the PTY with no display")
 
     def test_long_unicode_multiline_paste_is_literal_and_does_not_submit(self):
         text = ("雪 a b\n" * 3000) + "literal ; $(echo x)"
@@ -150,9 +164,7 @@ class LaunchTest(Case):
             Launch((sys.executable, "-I", "-c", code, str(ready), str(lines)), cwd=self.home),
         )
         live_tmux.wait(ready.exists, what="line reader")
-        shown = self.server.tmux("display-message", "-p", "-t", "=scrolled:", "#{pane_id}")
-        self.assertEqual(shown.returncode, 0, shown.stderr)
-        pane = shown.stdout.strip()
+        pane = self.display("scrolled")
         res = self.server.tmux("copy-mode", "-u", "-t", pane)
         self.assertEqual(res.returncode, 0, res.stderr)
         mode = self.server.tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}")
@@ -186,11 +198,12 @@ class LaunchTest(Case):
             ),
         )
         live_tmux.wait(lambda: worker.screen() == "READY", what="screen client ready")
+        self.display(name)
         live_tmux.wait(lambda: self.displayed(name) == "READY", what="screen display attached")
         return worker
 
     def displayed(self, name, *options):
-        result = self.server.tmux("capture-pane", "-p", *options, "-t", f"={name}:")
+        result = self.server.tmux("capture-pane", "-p", *options, "-t", f"={name}-display:")
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.rstrip()
 
@@ -205,14 +218,14 @@ class LaunchTest(Case):
                     what=f"{mode} initial screen",
                 )
                 self.assertEqual(worker.screen(), expected)
-                Viewer().close(mode, self.host)
-                self.assertTrue(Viewer()._prepare(mode, self.host))
+                self.undisplay(mode)
+                self.display(mode)
                 live_tmux.wait(
                     lambda mode=mode, expected=expected: self.displayed(mode) == expected,
                     what=f"{mode} reconnected screen",
                 )
                 alternate = self.server.tmux(
-                    "display-message", "-p", "-t", f"={mode}:", "#{alternate_on}"
+                    "display-message", "-p", "-t", f"={mode}-display:", "#{alternate_on}"
                 )
                 self.assertEqual(alternate.stdout.strip(), "1" if mode == "alt" else "0")
                 worker.write(b"scroll\n")
@@ -236,7 +249,7 @@ class LaunchTest(Case):
             "display-message",
             "-p",
             "-t",
-            "=history:",
+            "=history-display:",
             "#{history_size} #{pane_width}x#{pane_height}",
         ).stdout.split()
         worker.write(b"history\n")
@@ -245,13 +258,15 @@ class LaunchTest(Case):
             "display-message",
             "-p",
             "-t",
-            "=history:",
+            "=history-display:",
             "#{history_size} #{pane_width}x#{pane_height}",
         ).stdout.split()
         self.assertGreater(int(after[0]), int(before[0]))
         self.assertEqual(after[1], before[1])
         self.assertEqual(after[1], "12x5")
-        self.assertEqual(self.server.tmux("copy-mode", "-u", "-t", "=history:").returncode, 0)
+        self.assertEqual(
+            self.server.tmux("copy-mode", "-u", "-t", "=history-display:").returncode, 0
+        )
         earlier = self.displayed("history", "-S", "-").splitlines()
         self.assertEqual(
             [line for line in earlier if line.startswith("PROOF-")],

@@ -27,7 +27,6 @@ SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 
 PYTHONPATH = "/child"
 
-TMUX = "/opt/tmux/bin/tmux"
 
 BAD_NAMES = ("../x", "a b", "", "a/b", "w1\n", 5)
 
@@ -278,10 +277,7 @@ class Base(Case):
 def fake_tmux() -> mock.Mock:
     host = mock.create_autospec(TmuxCli, instance=True)
     host.runner = mock.Mock(side_effect=AssertionError("a direct runner call"))
-    host.status.return_value = None
-    host.listing.return_value = []
-    host.option.return_value = None
-    host.process.return_value = "1 $1 %1 4242"
+    host.has_session.return_value = False
     return host
 
 
@@ -293,7 +289,7 @@ class TuiBase(Base):
         self.root = os.path.join(os.path.dirname(self.probe_dir), "tui")
         self.events = os.path.join(self.dir, "events")
         self.host = fake_tmux()
-        self.enterContext(which(TMUX))
+        self.enterContext(which())
         self.session_dependencies = {**self.session_dependencies, "host": self.host}
         self.configure(tui=True)
 

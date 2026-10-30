@@ -1,4 +1,4 @@
-"""Guard lifecycle, conversation recovery and display rebuild on a private tmux server."""
+"""Guard lifecycle, conversation recovery and worker panes shown again."""
 
 import os
 import re
@@ -11,13 +11,12 @@ from unittest import mock
 
 from ensemble.session.engine.types import Access, HookCallback, Liveness, Spec
 from ensemble.session.harness.channel import Channel
-from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession
 from ensemble.session.hosts.base import Host
 from ensemble.session.hosts.tmux import managed
 from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO
-from tests.session.cli_support import COMMAND, TIMEOUT, WorkerCase, logged
+from tests.session.cli_support import COMMAND, MANAGER, TIMEOUT, WorkerCase, logged
 
 FLAGS = ("--model", "m-test")
 REAPED = 10  # FR-13's bound for guard and client to end after kill -9 of the harness
@@ -68,7 +67,7 @@ def holders(link: str) -> set[int]:
 
 class CrashCase(WorkerCase):
     def launched(self, name: str = "w1", *args: str, **kw) -> dict:
-        """The first completed turn's worker identities."""
+        """The first done turn's worker identities."""
         record = self.record(self.start(name, *args, **kw))
         self.wait_event(name, "done")
         channel = self.owner(name)
@@ -83,9 +82,11 @@ class CrashCase(WorkerCase):
             "call": call,
         }
 
-    def resume(self, name: str = "w1", steps=None, **kw) -> subprocess.CompletedProcess:
+    def resume(
+        self, name: str = "w1", steps=None, inside: str | None = None, **kw
+    ) -> subprocess.CompletedProcess:
         return self.session(
-            "resume", name, inside=None, cwd=self.root, **self.scene(name, steps), **kw
+            "resume", name, inside=inside, cwd=self.root, **self.scene(name, steps), **kw
         )
 
     def reaped(self, *pids: int) -> None:
@@ -94,10 +95,16 @@ class CrashCase(WorkerCase):
     def liveness(self, name: str, generation: str) -> Liveness:
         return managed.liveness("tmux", name, generation)
 
-    def display_dead(self, name: str) -> bool:
-        """Its display pane dead, or its session gone (macOS's pane-died hook kills it)."""
-        res = self.server.tmux("display-message", "-p", "-t", f"={name}:", "#{pane_dead}")
-        return res.returncode != 0 or res.stdout.strip() == "1"
+    def unshown(self, name: str) -> bool:
+        self.poke()
+        return not self.server.pane_of(name)
+
+    def shown_again(self, name: str, before: str) -> None:
+        """A new live worker pane of `name`, not `before`, runs its attach."""
+        pane = self.server.pane_of(name)
+        self.assertTrue(pane and pane != before, (pane, before))
+        self.assertIn("--attach", ps(int(self.pane(name, "#{pane_pid}")), "args"))
+        self.assertEqual(self.pane(name, "#{pane_dead}"), "0")
 
     def running_harnesses(self) -> list[Channel]:
         root = os.path.join(self.ensemble, "harness")
@@ -171,7 +178,7 @@ class ResumeTest(CrashCase):
 
     def test_start_with_display_killed_keeps_the_live_worker(self):
         found = self.launched()
-        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
+        self.ok(self.server.tmux("kill-pane", "-t", self.server.pane_of("w1")))
         res = self.start("w1")
         self.assertNotEqual(res.returncode, 0, res.stdout)
         self.assertIn("tui session w1 is running", res.stderr)
@@ -195,28 +202,34 @@ class ResumeTest(CrashCase):
         )
         self.assertEqual(len(self.calls("w1")), 1)
 
-    def test_resume_reopens_the_killed_display_of_the_live_worker(self):
-        """WDRC-300: the same worker (sid, conversation, client process, harness) shows again."""
-        for name, kill in (("w1", "session"), ("w2", "attach")):
+    def test_resume_shows_the_live_worker_again_unless_its_pane_was_closed_by_hand(self):
+        """WDRC-300, AC14: resume asks the live harness nothing; a killed attach is shown again, a
+        killed pane stays hidden; the same worker runs on.
+        """
+        for name, kill in (("w1", "attach"), ("w2", "pane")):
             with self.subTest(kill=kill):
                 fact = f"remember {uuid.uuid4().hex}"
                 # only the live client's second turn can answer with the fact
                 found = self.launched(name, steps=["Noted."], turns=[RECALL], prompt=fact)
-                if kill == "session":
-                    self.ok(self.server.tmux("kill-session", "-t", f"={name}"))
-                else:  # its guard.py --attach killed: the pane dies, the worker runs on
-                    os.kill(int(self.pane(name, "#{pane_pid}")), signal.SIGKILL)
+                before = self.server.pane_of(name)
+                if kill == "pane":  # its close hook marks it hidden
+                    self.ok(self.server.tmux("kill-pane", "-t", before))
                     live_tmux.wait(
-                        lambda name=name: self.display_dead(name),
-                        what="its display's pane to die",
+                        lambda name=name: self.status(name)[0].hidden, what=f"{name} hidden"
                     )
-                self.assertEqual(self.record(self.resume(name, steps=RECALL)), found["record"])
-                display = int(self.pane(name, "#{pane_pid}"))
-                self.assertIn("--attach", ps(display, "args"))
-                self.assertEqual(
-                    self.pane(name, "#{@view} #{pane_dead}"),
-                    "viewer 0",
+                else:  # its guard.py --attach killed: the pane closes, the worker runs on
+                    os.kill(int(self.pane(name, "#{pane_pid}")), signal.SIGKILL)
+                live_tmux.wait(
+                    lambda name=name: self.unshown(name), what=f"{name}'s worker pane to close"
                 )
+                resumed = self.resume(name, steps=RECALL, inside=MANAGER)
+                self.assertEqual(self.record(resumed), found["record"])
+                if kill == "pane":
+                    self.assertEqual(self.server.pane_of(name), "")
+                    self.assertTrue(self.status(name)[0].hidden)
+                else:
+                    self.shown_again(name, before)
+                    self.assertFalse(self.status(name)[0].hidden)
                 self.assertEqual(len(self.calls(name)), 1)
                 self.assertTrue(running(found["call"]["pid"]))
                 self.assertTrue(running(found["guard"]))
@@ -327,8 +340,10 @@ class ApiCase(CrashCase):
 
 
 class DisplayTest(ApiCase):
-    def test_a_handlers_send_reaches_the_reopened_display(self):
-        """WDRC-304: the Dispatch view, holding its attach from before, attaches again."""
+    def test_a_handlers_send_reaches_the_worker_shown_again_after_its_pane_was_killed(self):
+        """WDRC-304, AC14: the Dispatch view keeps its attach while its pane is killed; a show opens
+        a new one.
+        """
         self.sid = str(uuid.uuid4())
         self.scene("w1", turns=[["second"], ["third"], ["fourth"], ["fifth"]])
         send = os.path.join(self.root, "send")
@@ -337,10 +352,15 @@ class DisplayTest(ApiCase):
         Path(send).write_text("from the handler", encoding="utf-8")
         self.ok(self.session("send", "w1", "go"))
         self.assertEqual(self.turn_end("second")["sent"], "from the handler")
-        self.turn_end("third")  # its send reached the display: the view holds that attach
-        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
-        self.assertEqual(self.owner("w1").ask(Op.DISPLAY, {}), {"reopened": True})
-        self.assertEqual(self.pane("w1", "#{@view} #{pane_dead}"), "viewer 0")
+        self.turn_end("third")  # its send reached the worker: the view holds that attach
+        self.ok(self.session("show", "w1"))
+        before = self.server.pane_of("w1")
+        self.assertTrue(before)
+        self.ok(self.server.tmux("kill-pane", "-t", before))
+        live_tmux.wait(lambda: self.status("w1")[0].hidden, what="w1 hidden")
+        self.ok(self.session("show", "w1"))
+        self.shown_again("w1", before)
+        self.assertFalse(self.status("w1")[0].hidden)
         Path(send).write_text("again from the handler", encoding="utf-8")
         self.ok(self.session("send", "w1", "go on"))
         self.assertEqual(self.turn_end("fourth")["sent"], "again from the handler")
@@ -353,13 +373,18 @@ class DisplayTest(ApiCase):
 class GenerationTest(ApiCase):
     """A view's close acts on its own generation, never on the newer one now holding the name."""
 
-    def assert_lives(self, view: OwnedSession) -> None:
+    def resumed(self) -> int:
+        return live_tmux.wait(lambda: self.calls("w1")[1:], what="the resumed client's line")[-1][
+            "pid"
+        ]
+
+    def assert_lives(self, view: OwnedSession, pid: int) -> None:
         channel = self.owner("w1")
         self.assertEqual(channel.status()["state"], "running")
         self.assertEqual(channel.status()["generation"], view.generation)
         self.assertEqual(self.liveness("w1", view.generation), Liveness.LIVE)
         self.assertTrue(self.live("w1"))
-        self.assertTrue(running(self.calls("w1")[-1]["pid"]))
+        self.assertTrue(running(pid))
 
     def test_old_harness_close_in_drain_keeps_the_new_generation(self):
         self.sid = str(uuid.uuid4())
@@ -371,9 +396,10 @@ class GenerationTest(ApiCase):
         self.assertTrue(draining.alive(), draining.status())
         new = self.started(resume=True)
         self.assertNotEqual(new.generation, old.generation)
+        pid = self.resumed()
         old.close()
         old.stop()
-        self.assert_lives(new)
+        self.assert_lives(new, pid)
 
     def test_stale_view_close_keeps_the_new_generation(self):
         self.sid = str(uuid.uuid4())
@@ -383,5 +409,6 @@ class GenerationTest(ApiCase):
         os.kill(first.status()["pid"], signal.SIGKILL)
         live_tmux.wait(lambda: not first.alive(), what="the killed harness to let go")
         new = self.started(resume=True)
+        pid = self.resumed()
         old.close()
-        self.assert_lives(new)
+        self.assert_lives(new, pid)

@@ -361,7 +361,7 @@ print(json.dumps(result))
         with self.no_client():
             self.assertIsNone(self.session.preflight(spec))
         self.unchanged(before)
-        self.tmux.kill.assert_not_called()
+        self.assertEqual(self.tmux.mock_calls, [])
 
     def test_tui_settings_are_validated_before_state(self):
         self.configure(tmux_settings={"status_line": "invalid"})

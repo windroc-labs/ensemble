@@ -1,7 +1,5 @@
-"""HostedSession's tui mode with client claude on a private tmux server: the real ClaudeClient runs
-fake_claude.py (on PATH as `claude`), its hooks from --settings. Turns, Blocked, idle timeouts,
-limits, deaths, resume, attach, show, close and the launch's /color, typed once no turn runs.
-CLAUDE_CONFIG_DIR is a temp dir.
+"""HostedSession's tui mode with the real ClaudeClient running fake_claude.py on a private tmux
+server.
 """
 
 import functools
@@ -17,7 +15,6 @@ from unittest import mock
 from ensemble.session import Session
 from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine.records import RunLog
-from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -151,6 +148,23 @@ class Live(tui_live.Live):
     def panes(self) -> int:
         return len(self.server.panes(f"={MANAGER}:"))
 
+    def typed(self, handle: Session, *keys: str) -> None:
+        """keys typed into a pane of the manager's window running handle's attach command, as a
+        user's terminal would, once it shows the worker's screen.
+        """
+        res = self.server.tmux(
+            *("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", f"={MANAGER}:", "--"),
+            *shlex.split(handle.attach_command()),
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        pane = res.stdout.strip()
+        live_tmux.wait(
+            lambda: self.server.tmux("capture-pane", "-p", "-t", pane).stdout.strip(),
+            what=f"{handle.name} shown in {pane}",
+        )
+        res = self.server.tmux("send-keys", "-t", pane, *keys)
+        self.assertEqual(res.returncode, 0, res.stderr)
+
     def closed(self, handle: Session) -> None:
         self.assertEqual((handle.alive(), self.session_cls.list(handle.name)), (False, []))
         self.assertFalse(
@@ -233,8 +247,11 @@ class TurnsTest(Live):
         self.lines("w1 done", "w1 done")
         self.assertEqual((live_tmux.activity("w1"), handle.reply), ("done", "Second."))
         self.assertEqual(self.users(handle.info().transcript), ["hello", "more"])
-        border = self.server.tmux("show-options", "-wqv", "-t", "=w1:", "pane-border-format").stdout
-        self.assertEqual(border.strip(), "")
+        window = f"={MANAGER}:"  # no pane opened: no label set anywhere
+        for option in ("pane-border-status", "pane-border-format"):
+            found = self.server.tmux("show-options", "-wqv", "-t", window, option)
+            self.assertEqual((found.returncode, found.stdout), (0, ""), found.stderr)
+        self.assertEqual((self.server.sessions(), self.server.pane_of("w1")), ([MANAGER], ""))
         self.assertEqual(
             (handle.alive(), [r.name for r in self.session_cls.list("w1")], self.panes()),
             (True, ["w1"], 1),
@@ -356,7 +373,7 @@ class BlockedTest(Live):
         )
         self.lines("w1 blocked")
         self.assertEqual(live_tmux.activity("w1"), "blocked")
-        TmuxCli().keys("w1", "Enter")
+        self.typed(handle, "Enter")
         self.assertEqual(stream.next(), TurnEnd("Trusted.", 0))
         self.lines("w1 blocked", "w1 done")
 
@@ -405,7 +422,7 @@ class DeadTest(Live):
         os.kill(self.calls()[0]["pid"], signal.SIGTERM)
         self.assertEqual(stream.next(poke=self.poke), Exited(-signal.SIGTERM))
         self.lines("w1 done", "w1 dead")
-        self.assertEqual(self.server.option("w1", "@state"), "")
+        self.assertEqual(self.server.sessions(), [MANAGER])
         live_tmux.wait(
             lambda: not self.session_cls.list("w1"), what="exited guard leaves inventory"
         )
@@ -416,14 +433,27 @@ class DeadTest(Live):
         tui.TuiStore.attach("w1", host=self.session_cls.host()).close()
         self.closed(handle)
 
-    def test_an_early_death_ends_with_its_exit_code_and_a_dead_line_its_display_kept(self):
+    def test_an_early_death_ends_with_its_exit_code_and_a_dead_line_its_screen_shown(self):
+        """A client dead at once lingers in its guard: a show right after start shows its last
+        screen.
+        """
+        self.server.attach(MANAGER)
+        self.server.tmux("set-option", "-w", "-t", f"={MANAGER}:", "remain-on-exit", "on")
         self.configure(flags=["--bogus"])
         handle = self.start("w2", scenario={})
+        with mock.patch.dict(os.environ, self.server.inside(MANAGER)):
+            self.assertIsNone(self.show("w2"))
+        (pane,) = self.server.worker_panes("w2", dead=True)
+        live_tmux.wait(
+            lambda: (
+                "claude: error: unrecognized arguments: --bogus"
+                in self.server.tmux("capture-pane", "-p", "-J", "-t", pane.pane).stdout
+            ),
+            what="w2's last screen in its worker pane",
+        )
         self.assertEqual(self.stream(handle).next(poke=self.poke), Exited(2))
         self.lines("w2 dead")
-        self.assertEqual(self.server.option("w2", "@state"), "")
-        pane = self.server.tmux("capture-pane", "-p", "-J", "-t", "=w2:").stdout
-        self.assertIn("claude: error: unrecognized arguments: --bogus", pane)
+        self.assertEqual(self.server.sessions(), [MANAGER])
         live_tmux.wait(
             lambda: not self.session_cls.list("w2"), what="exited guard leaves inventory"
         )
@@ -490,7 +520,7 @@ class ShowTest(Live):
             functools.partial(live_tmux.assert_grid, self, self.server, MANAGER, [["w1"]]),
             what="the grid [['w1']]",
         )
-        self.assertEqual(self.server.option("w1", "@opener"), MANAGER)
+        self.assertEqual(self.server.opener_of("w1"), MANAGER)
         self.session_cls.retire("w1")
 
         def alone() -> bool:

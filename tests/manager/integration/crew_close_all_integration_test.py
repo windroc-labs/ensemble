@@ -16,7 +16,9 @@ class CloseAllTest(LiveCrew):
         for name in ("w1", "w2"):
             self.record(self.worker(name))
         role = self.record(self.role("r", steps=[START]))
-        self.record(self.worker("w3", inside="w1", manager="w1"))
+        # from a shell in w1's worker pane, w1 its manager
+        w1 = live_tmux.wait(lambda: self.server.pane_of("w1"), what="w1's worker pane")
+        self.record(self.worker("w3", TMUX_PANE=w1, manager="w1"))
         self.orphan("o2", "mgr")
         self.ok(self.server.tmux("new-session", "-d", "-s", OTHER, *live_tmux.IDLE))
         self.server.attach(OTHER)
@@ -40,7 +42,8 @@ class CloseAllTest(LiveCrew):
     def test_close_all_closes_a_worker_whose_display_was_killed(self):
         self.record(self.worker("w1"))
         owner = Owner(self.ensemble, "w1")
-        self.ok(self.server.tmux("kill-session", "-t", "=w1"))
+        pane = live_tmux.wait(lambda: self.server.pane_of("w1"), what="w1's worker pane")
+        self.ok(self.server.tmux("kill-pane", "-t", pane))
         self.assertTrue(owner.alive())
         self.assertEqual(self.ok(self.crew("close-all")).stdout.splitlines(), ["w1"])
         self.until(lambda: not owner.alive(), "w1's harness gone")

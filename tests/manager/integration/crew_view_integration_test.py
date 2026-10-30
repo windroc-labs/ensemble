@@ -14,12 +14,9 @@ START = mark("start", "working")
 
 class ViewTest(LivePipeline):
     def shown(self) -> set[str]:
-        """The sessions whose @pane is a pane of the manager's window."""
+        """The workers with a worker pane in the manager's window."""
         window = self.server.tmux("display-message", "-p", "-t", f"={MANAGER}:", "#{window_id}")
-        panes = self.server.panes(window.stdout.strip())
-        listed = self.server.tmux("list-sessions", "-F", "#{session_name}\t#{@pane}").stdout
-        rows = (line.split("\t", 1) for line in listed.splitlines())
-        return {name for name, pane in rows if pane in panes and name != MANAGER}
+        return {p.name for p in self.server.worker_panes() if p.window == window.stdout.strip()}
 
     def hidden(self) -> dict[str, bool]:
         lines = self.ok(self.crew("status")).stdout.splitlines()

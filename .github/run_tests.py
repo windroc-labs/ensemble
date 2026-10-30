@@ -265,7 +265,6 @@ def supervise(title, *, grace=CONTROL_GRACE):
             HOME=workspace,
             TMPDIR=tmp,
             TMUX_TMPDIR=tmp,
-            TUI_ATTACH_PREFIX="",
             ENSEMBLE_TEST_SANDBOX=tmp,
             ENSEMBLE_CONTROL_ROOT=tmp,
             ENSEMBLE_TEST_TMP=workspace,

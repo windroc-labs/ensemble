@@ -18,16 +18,20 @@ from tests.session.tmux_fixtures import (
 
 
 class GridTreeTest(Case):
-    """Manager %0, its session mgr; rows: (session id, name, @opener, @pane)."""
-
-    MGR = (1, "mgr", "", "")
+    """Manager %0 in session mgr; rows: (order, name, @worker-opener, pane), paneless: known."""
 
     def tree(self, rows, panes, layout=None):
         if layout is None:
             layout = grid([slot(p) for p in panes if p != "%0"], per_column=len(panes))
         else:
             layout = layouts.parse_layout(layout)
-        return layouts.grid_tree("%0", panes, [self.MGR, *rows], layout)
+        workers = [
+            types.WorkerPane(pane, name, opener, "@1", "mgr")
+            for _, name, opener, pane in sorted(rows)
+            if pane
+        ]
+        known = {"mgr", *(name for _, name, _, pane in rows if not pane)}
+        return layouts.grid_tree("%0", panes, workers, known, layout)
 
     def test_cells_by_session_name_sub_workers_in_their_parents_cell(self):
         names = [
@@ -231,6 +235,28 @@ class GridTreeTest(Case):
         ):
             with self.subTest(case):
                 self.assertEqual(self.tree(rows, panes, layout), want)
+
+    def test_an_unknown_opener_without_a_pane_is_an_orphan_group(self):
+        """AC9 (D4): children of unknown w2 form an orphan group; w2 known keeps them main."""
+        layout = (
+            "160x48,0,0{79x48,0,0,0,80x48,80,0[80x16,80,0,1,80x15,80,17[80x7,80,17,4,80x7,80,25,5],"
+            "80x15,80,33,3]}"
+        )
+        rows = [
+            (2, "w1", "mgr", "%1"),
+            (4, "w3", "mgr", "%3"),
+            (5, "a", "w2", "%4"),
+            (6, "b", "w2", "%5"),
+        ]
+        panes = ["%0", "%1", "%3", "%4", "%5"]
+        self.assertEqual(
+            self.tree(rows, panes, layout),
+            [slot("%1"), slot(None, slot("%4"), slot("%5")), slot("%3")],
+        )
+        self.assertEqual(
+            self.tree([*rows, (3, "w2", "", "")], panes, layout),
+            [slot("%4"), slot("%5"), slot("%1"), slot("%3")],
+        )
 
     def test_orphans_beside_a_one_pane_first_column_stay_main(self):
         # P (%2; c1 %3, c2 %4) killed. N=1: main [a, P, b]; N=2: main [a, x, P, b], x and P killed

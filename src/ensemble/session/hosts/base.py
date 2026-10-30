@@ -339,6 +339,9 @@ class Host(ABC):
         """Removes `generation`'s leftovers once worker_liveness is ABSENT; override with worker."""
         return None
 
+    def _client_exited(self, name: str, generation: str) -> bool:
+        return False
+
     @abstractmethod
     def list(self) -> list[str]: ...
 

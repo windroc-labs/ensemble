@@ -752,7 +752,6 @@ class Filesystem(unittest.TestCase):
             "        self.assertNotIn('GIT_CONFIG_COUNT', os.environ)\n"
             "        self.assertEqual(os.environ['GIT_CONFIG_GLOBAL'], os.devnull)\n"
             "        self.assertEqual(os.environ['GIT_CONFIG_NOSYSTEM'], '1')\n"
-            "        self.assertEqual(os.environ['TUI_ATTACH_PREFIX'], '')\n"
             f"        self.assertNotIn({str(ambient)!r}, sys.path)\n"
             "        self.assertTrue(os.environ['PATH'].split(os.pathsep)[0].endswith('blocked-bin'))\n"
             "        self.assertNotEqual(os.environ['HOME'], os.environ['TMPDIR'])\n"
@@ -766,7 +765,6 @@ class Filesystem(unittest.TestCase):
             TMUX=str(marker) + ",1,0",
             GIT_DIR=str(marker),
             GIT_CONFIG_COUNT="1",
-            TUI_ATTACH_PREFIX="ambient",
             RUN_TESTS_DURATIONS=str(root / "durations"),
             GITHUB_STEP_SUMMARY=str(root / "step-summary"),
         )

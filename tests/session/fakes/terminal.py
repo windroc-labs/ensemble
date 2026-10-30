@@ -5,13 +5,15 @@ import signal
 from unittest import mock
 
 from ensemble.session import Host, SessionError, Viewer
-from ensemble.session.engine.tmux_cli import TmuxCli, attach_command
+from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, Liveness, SessionRow, StatusState
 from ensemble.session.hosts.base import InteractiveProcess, worker_state
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import CommandView
-from ensemble.session.viewer.placement import Placement
 from tests.session.fakes.worker import ScriptedWorker
+from tests.session.tmux_fixtures import done
+
+NO_SERVER = (1, "", "no server running on /tmp/x")
 
 
 class MemoryTerminal(InteractiveProcess):
@@ -199,21 +201,28 @@ class ScreenHost(MemoryHost):
         self.calls.attach_command.return_value = None
 
     def attach_target(self, name):
-        return CommandView(attach_command(name), ("/fake/attach", name))
+        return CommandView(f"/fake/attach {name}", ("/fake/attach", name))
 
 
 class MemoryViewer(Viewer):
-    """Viewer boundary double recording Host calls."""
+    """Viewer boundary double recording Host calls. Its tmux answers a subcommand from `answers`
+    ((returncode, stdout[, stderr])), else as a server that is not running.
+    """
 
     def __init__(self, settings=None):
-        tmux = mock.create_autospec(TmuxCli, instance=True)
-        tmux.listing.return_value = []
+        answers = self.answers = {}
+        tmux = self.tmux = mock.create_autospec(TmuxCli, instance=True)
         tmux.runner = mock.Mock(side_effect=AssertionError("no tmux in MemoryViewer"))
+        tmux.run.side_effect = lambda args, *_: done(
+            ["tmux", *args], *answers.get(args[0], NO_SERVER)
+        )
+        tmux.checked.side_effect = lambda args, stdin=None: TmuxCli.checked(tmux, args, stdin)
+        tmux.has_session.side_effect = lambda name: TmuxCli.has_session(tmux, name)
         super().__init__(settings, tmux=tmux)
-        self.placement = self._placement = mock.create_autospec(Placement, instance=True)
 
-    def _prepare(self, name, host):
-        return False
+    def argv(self):
+        """Each tmux call's argv, in order."""
+        return [["tmux", *c.args[0]] for c in self.tmux.run.call_args_list]
 
     def show(self, name, host, *, display=None, command=None):
         if display is None and (state := worker_state(name)) is not None:
@@ -227,11 +236,11 @@ class MemoryViewer(Viewer):
         return host.calls.attach_command(name)
 
     def close(self, name, host):
-        if host.attachable:
-            host.calls.close_view(name)
+        host.calls.close(name)
 
-    def _capture_close(self, name, host):
-        return lambda: self.close(name, host)
+    def _unclaimed(self, name, host):
+        if host.attachable:
+            host.calls.unclaimed(name)
 
 
 class GuardHost(MemoryHost):

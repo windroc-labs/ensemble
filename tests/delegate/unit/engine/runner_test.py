@@ -257,8 +257,6 @@ class Handles(Base):
     def setUp(self):
         super().setUp()
         self.configure_fake(tui=True)
-        self.enterContext(mock.patch.dict(os.environ))
-        os.environ.pop("TUI_ATTACH_PREFIX", None)
 
     def faked(self, *events, fail=None, stop_fail=None, **kw) -> Result:
         self.handle = FakeHandle(events, fail, stop_fail)

@@ -100,14 +100,20 @@ class ReplyTest(WorkerCase):
 
 
 class EarlyDeathTest(WorkerCase):
-    def test_a_client_that_exits_at_once_exits_1_with_its_last_lines_and_keeps_its_pane(self):
+    def test_a_client_that_exits_at_once_exits_1_with_its_last_lines_and_its_pane_closes(self):
+        """AC8: its worker's exit ends the pane's attach command; no tmux session or pane stays."""
         res = self.start("w2", "--", "--bogus")
         lines = self.assert_early_exit(res, "w2", 2)
         self.assertIn("claude: error: unrecognized arguments: --bogus", lines)
-        self.assertTrue(self.live("w2"))
-        self.assertEqual(self.pane("w2", "#{pane_dead}"), "1")
         self.assertEqual(self.ok(self.session("ls", "--records")).stdout, "")
         self.assertIsNone(self.dir_record("w2"))
+
+        def closed():
+            self.poke()
+            return not (self.live("w2") or self.server.worker_panes("w2", dead=True))
+
+        live_tmux.wait(closed, 30, "w2's guard and worker pane gone")
+        self.assertEqual(self.server.sessions(), [MANAGER])
 
 
 class DialogTest(WorkerCase):

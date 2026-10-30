@@ -28,7 +28,18 @@ with no side effect: `ensemble-session status NAME`, `ensemble-delegate status W
 `ensemble-orchestrator status ISSUE`. `ensemble-crew attach` lists it per entry in its `attach` column. Do not use
 `show` for this: inside tmux it opens a pane instead of printing. An attended `ensemble-orchestrator router --tui` run
 prints its `router.py: <ID>: attach: <command>` line on stderr, without the per-session `ensemble-session` line. A
-tmux session whose session state cannot be read has a null `attach` field: attach with `tmux attach -t =NAME`.
+session whose state cannot be read has a null `attach` field: it cannot be attached until its state reads again.
+
+## Worker panes attach directly
+
+Workers no longer get a tmux view session: `tmux ls` lists none, and a grid, split or stack pane runs the Host's
+attach command itself (the `attach` field of `ensemble-session status NAME`). `tmux attach -t =NAME` no longer
+attaches a worker, so a custom delegate `show` command running `tmux attach -t {{session}}` no longer works; run the
+attach command instead: `tmux split-window "$(ensemble-session status {{session}} | jq -r .attach)"`. A worker pane has one
+tmux prefix; scroll back with the manager's copy mode or mouse. Its name shows in the window's bottom pane border
+(Docker Host always, tmux Host with `[hosts.tmux] status_line = true`). A worker started by an earlier version keeps
+its old view session, and `show` refuses it (`a host tmux session NAME exists`) until you run
+`tmux kill-session -t =NAME`; that worker keeps running.
 
 ## ensemble list
 

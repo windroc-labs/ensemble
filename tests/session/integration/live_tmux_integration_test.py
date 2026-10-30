@@ -235,18 +235,26 @@ class Client(Live):
 
 
 class Readers(Live):
-    def test_option_pane_of_panes_events(self):
+    def test_option_worker_panes_panes_events(self):
         self.server.start("mgr")
         pane = self.ok("display-message", "-p", "-t", "=mgr:", "#{pane_id}")
+        window = self.ok("display-message", "-p", "-t", "=mgr:", "#{window_id}")
         self.assertEqual(self.server.panes("=mgr:"), {pane: (0, 0, 200, 50)})
-        self.assertEqual(
-            (self.server.option("mgr", "@state"), self.server.pane_of("mgr")), ("", "")
-        )
+        self.assertEqual((self.server.option("mgr", "@state"), self.server.pane_of("w1")), ("", ""))
+        self.assertEqual(self.server.worker_panes(), [])
         self.ok("set-option", "-t", "=mgr:", "@state", "done")
-        self.ok("set-option", "-t", "=mgr:", "@pane", pane)
+        self.ok("set-option", "-p", "-t", pane, "@worker", "w1")
         self.assertEqual(
-            (self.server.option("mgr", "@state"), self.server.pane_of("mgr")), ("done", pane)
+            (self.server.option("mgr", "@state"), self.server.pane_of("w1")), ("done", pane)
         )
+        self.assertEqual(self.server.opener_of("w1"), "")
+        self.ok("set-option", "-p", "-t", pane, "@worker-opener", "mgr")
+        self.assertEqual(
+            self.server.worker_panes(),
+            [live_tmux.WorkerPane(pane, "w1", "mgr", window, dead=False)],
+        )
+        self.assertEqual((self.server.opener_of("w1"), self.server.pane_of("w2")), ("mgr", ""))
+        self.assertEqual(self.server.sessions(), ["mgr"])
         path = os.path.join(self.server.root, "events")
         self.assertEqual(live_tmux.events(path), [])
         with open(path, "w") as f:
@@ -310,8 +318,7 @@ class Grid(Live):
         panes["z1"] = self.split(col2, "-h", 24)
         panes["z2"] = self.split(panes["z1"], "-v", 25)
         for name, pane in panes.items():
-            self.ok("new-session", "-d", "-s", name, *live_tmux.IDLE)
-            self.ok("set-option", "-t", f"={name}:", "@pane", pane)
+            self.ok("set-option", "-p", "-t", pane, "@worker", name)
         grid = [["w1", ["s1", "s2"]], [("p", ["z1", "z2"])]]
         self.assertTrue(live_tmux.assert_grid(self, self.server, "mgr", grid))
         self.assertTrue(live_tmux.assert_grid(self, self.server, "mgr", grid, manager_width=99))

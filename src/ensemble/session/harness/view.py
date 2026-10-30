@@ -292,7 +292,6 @@ class OwnedSession(Session):
         return self._call(lambda session: session.status())
 
     def content(self) -> str:
-        """Its done turn's reply, else its screen."""
         if self.status().state == StatusState.DONE and (reply := self.reply):
             return reply
         return self.screen()
@@ -304,7 +303,6 @@ class OwnedSession(Session):
         return self._call(lambda session: session.session_status())
 
     def publish(self, record: Record) -> None:
-        """Its Record, stored in its worker dir for its generation (a tui worker's)."""
         if self.mode != Mode.TUI or self.name is None:
             raise SessionError(f"session {self.name or self.sid}: no worker dir for a Record")
         store_record(self.name, self.generation, record)
@@ -319,13 +317,6 @@ class OwnedSession(Session):
         return self._call(lambda session: session.showable)
 
     def show(self, *, display: Display = None, command: str | None = None) -> str | None:
-        """Reopen through a live harness; an exited worker keeps its last display."""
-        if self.mode == Mode.TUI and self._channel.alive():
-            try:
-                self._ask(Op.DISPLAY, {})
-            except SessionError:
-                if self.alive():
-                    raise
         return self._call(lambda session: session.show(display=display, command=command))
 
     def hide(self) -> None:

@@ -1,5 +1,5 @@
-"""Viewer, the one display of every Host's sessions on the host tmux, places a CommandView in a
-view session it makes (tagged VIEW = VIEW_TAG). FORMAT has one encoder (fold), one decoder (unfold).
+"""Viewer, the one display of every Host's sessions on the host tmux, runs a Host's CommandView in
+a worker pane. FORMAT has one encoder (fold), one decoder (unfold).
 """
 
 from __future__ import annotations
@@ -8,18 +8,14 @@ import contextlib
 import logging
 import os
 import time
-import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 
-from ensemble.session.engine import tmux_cli
-from ensemble.session.engine.tmux_cli import NAME, VIEW, TmuxCli, TuiError, display_error
+from ensemble.session.engine.tmux_cli import NAME, TmuxCli, TuiError, display_error
 from ensemble.session.engine.types import (
     NO_DISPLAY,
     ConfigError,
     NotShowable,
-    PaneStatus,
     SessionError,
-    TuiSettings,
     Unanswered,
 )
 from ensemble.session.hosts.base import Host, worker_state
@@ -33,10 +29,10 @@ from ensemble.utils import Display, thaw
 FORMAT = "<opener>[/<split>[/<split_from>[/hidden]]]"
 HIDDEN = "hidden"  # started hidden; only NO_DISPLAY sets it
 NO_PANE_HINT = ": run from tmux, or pass split_from"
-VIEW_TAG = "viewer"
 LOG = logging.getLogger("session")
 SHOW_TRIES = 3
 SHOW_RETRY_WAIT = 1  # seconds
+CHAIN_LINKS = 8
 
 Parts = tuple[str | None, str | None, str | None, bool]
 
@@ -86,6 +82,24 @@ def listed(display: Display, value: Display) -> bool:
     )
 
 
+def _known_opener(name: str) -> bool:
+    return worker_state(name) is not None
+
+
+def _chain(opener: str | None) -> tuple[str, ...]:
+    """The display openers from opener's on, up to an unread one or a repeat."""
+    chain: list[str] = []
+    at = opener
+    while at is not None and len(chain) < CHAIN_LINKS:
+        state = worker_state(at)
+        found = None if state is None else unfold(state.display)
+        at = None if found is None else found[0]
+        if at is None or at == opener or at in chain:
+            break
+        chain.append(at)
+    return tuple(chain)
+
+
 class Viewer:
     """settings: [viewer]'s workers_per_column and grid_retile."""
 
@@ -103,7 +117,7 @@ class Viewer:
             raise ConfigError(f"grid_retile: want one of {', '.join(Retile)}")
         self._per_column, self._retile = per, retile
         self._tmux = TmuxCli() if tmux is None else tmux
-        self._grid = Grid(self._tmux)
+        self._grid = Grid(self._tmux, known=_known_opener)
         self._placement = Placement(tmux=self._tmux, grid=self._grid)
 
     def show(
@@ -115,17 +129,24 @@ class Viewer:
         target, display = self._viewed(name, host, display)
         if command is None and not os.environ.get("TMUX"):
             return target.printed
-        self._view(name, target, host.tui_settings())
+        self._unclaimed(name, host)
         try:
             if command is None:
                 opener, split, split_from, _ = parts(display)
+                state = worker_state(name)
                 why = self._placement.open_pane(
                     name,
+                    target.argv,
+                    target.printed,
+                    sid=None if state is None else state.sid,
+                    generation=None if state is None else state.generation,
                     opener=opener,
                     split=split,
                     split_from=split_from,
                     per_column=self._per_column,
                     retile=self._retile,
+                    label=host.tui_settings().status_line,
+                    fallbacks=_chain(opener),
                 )
             else:
                 why = self._placement.run_command(name, command)
@@ -134,19 +155,13 @@ class Viewer:
         placed = why is None
         if not placed and command is None:
             with contextlib.suppress(TuiError):
-                placed = self._placement.shown(name) is not None
+                placed = any(w.attach == target.printed for w in self._placement.panes(name))
         if placed:
-            if command is None:
-                self._placement.watch(name)
             self._mark(name, host, hidden=False)
         if why is None:
             return None
         LOG.warning("show %s: %s", name, why)
         return target.printed
-
-    def _prepare(self, name: str, host: Host) -> bool:
-        target, _ = self._viewed(name, host, None)
-        return self._view(name, target, host.tui_settings())
 
     def _viewed(self, name: str, host: Host, display: Display) -> tuple[CommandView, Display]:
         """Retries preparation on Unanswered."""
@@ -163,99 +178,41 @@ class Viewer:
         return target, display
 
     def hide(self, name: str, host: Host, *, if_closed: bool = False) -> None:
-        """Undoes show: hidden until a show (if_closed: only once its pane was closed by hand)."""
+        """Undoes show (if_closed: only while no worker pane shows it)."""
         self._target(name, host)
-        size = host.tui_settings().hidden_size
-        if self._tmux.status(name) is None:
-            if not if_closed:
-                self._mark(name, host, hidden=True)
-            return
         try:
-            if if_closed:
-                closed = self._placement.closed(name)
-                if closed is None or not self._placement.forget(name, closed):
-                    return
-            else:
-                pane = self._placement.shown(name)
-                if pane is not None:
-                    self._tmux.kill(pane)
-                self._placement.forget(name)
+            panes = self._placement.panes(name)
+            if if_closed and panes:
+                return
+            for pane in panes:
+                self._placement.close(pane)
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
-        try:
-            self._tmux.unview(name, size)
-        except TuiError as e:
-            LOG.warning("hide %s: hidden size: %s", name, e)
+        if not panes:
+            self._placement.unlabel()
         self._mark(name, host, hidden=True)
         try:
             # a show meanwhile may have written hidden=False before this mark
-            shown = if_closed and self._placement.shown(name) is not None
+            shown = if_closed and bool(self._placement.panes(name))
         except TuiError as e:
             raise SessionError(f"tmux session {name}: {e}") from None
         if shown:
             self._mark(name, host, hidden=False)
 
-    def attach_command(self, name: str, host: Host) -> str:
-        return self._target(name, host).printed
-
     def close(self, name: str, host: Host) -> None:
-        """Kills only the view session it made for `name`."""
         if not host.attachable:
             return
         try:
-            if self._tmux.option(name, VIEW) == VIEW_TAG:
-                self._tmux.kill(name)
+            panes = self._placement.panes(name)
+            for pane in panes:
+                self._placement.close(pane)
         except TuiError as error:
             raise SessionError(f"view {name}: {error}") from None
+        if not panes:
+            self._placement.unlabel()
 
-    def _capture_close(self, name: str, host: Host) -> Callable[[], None] | None:
-        if not host.attachable:
-            return None
-        try:
-            found = self._tmux.run(
-                [
-                    "display-message",
-                    "-p",
-                    "-t",
-                    tmux_cli.address(name),
-                    "#{session_id}\t#{@view}\t#{@view-id}",
-                ]
-            )
-            if found.returncode:
-                if tmux_cli.absent(found):
-                    return None
-                raise TuiError(tmux_cli.error(found))
-            fields = found.stdout.rstrip("\n").split("\t")
-            if fields == [""]:
-                return None
-            if len(fields) != 3:
-                raise TuiError("display identity unknown")
-            ident, tag, token = fields
-            if tag != VIEW_TAG:
-                return None
-            if not tmux_cli.SESSION_ID.fullmatch(ident) or uuid.UUID(token).hex != token:
-                raise TuiError("display identity unknown")
-        except (TuiError, ValueError) as error:
-            raise SessionError(f"view {name}: {error}") from None
-
-        def close() -> None:
-            try:
-                removed = self._tmux.run(
-                    [
-                        "if-shell",
-                        "-F",
-                        "-t",
-                        ident,
-                        f"#{{==:#{{@view-id}},{token}}}",
-                        f"kill-session -t '{ident}'",
-                    ]
-                )
-                if removed.returncode and not tmux_cli.absent(removed):
-                    raise TuiError(tmux_cli.error(removed))
-            except TuiError as error:
-                raise SessionError(f"view {name}: {error}") from None
-
-        return close
+    def attach_command(self, name: str, host: Host) -> str:
+        return self._target(name, host).printed
 
     def _mark(self, name: str, host: Host, *, hidden: bool) -> None:
         """Only a session whose worker state names a sid keeps it."""
@@ -270,41 +227,24 @@ class Viewer:
 
     def _live(self, host: Host) -> set[str] | None:
         """Whose hidden entries a write keeps (None: all)."""
-        found = self._tmux.sessions()
-        if found is None:
-            return None
         try:
-            return {*found, *host.list()}
+            return set(host.list())
         except SessionError:
             return None
+
+    def _unclaimed(self, name: str, host: Host) -> None:
+        """SessionError when an attachable Host's worker `name` is a host tmux session's name."""
+        if not host.attachable:
+            return
+        try:
+            taken = self._tmux.has_session(name)
+        except TuiError as error:
+            raise SessionError(f"show {name}: {error}") from None
+        if taken:
+            raise SessionError(f"show {name}: a host tmux session {name} exists")
 
     def _target(self, name: str, host: Host) -> CommandView:
         target = host.attach_target(name)
         if target is None:
             raise NotShowable(f"host {host.name} cannot show")
         return target
-
-    def _view(self, name: str, target: CommandView, settings: TuiSettings) -> bool:
-        size = tmux_cli.sized(settings.hidden_size)
-        try:
-            state = self._tmux.status(name)
-            if state == PaneStatus.UNKNOWN:
-                raise Unanswered(f"show {name}: display unknown")
-            if state is not None:
-                if self._tmux.option(name, VIEW) != VIEW_TAG:
-                    raise SessionError(f"show {name}: a host tmux session {name} exists")
-                if state == PaneStatus.RUNNING:
-                    return False
-                self._tmux.kill(name)
-            self._tmux.checked(
-                [
-                    *("new-session", "-d", "-s", name, *size, "--", *target.argv),
-                    *(";", "set-option", "-t", f"={name}:", "@view-id", uuid.uuid4().hex),
-                    *(";", "set-option", "-t", f"={name}:", VIEW, VIEW_TAG),
-                    *(";", "set-option", "-w", "-t", f"={name}:", "remain-on-exit", "on"),
-                    *(";", *tmux_cli.status(name, on=settings.status_line)),
-                ]
-            )
-        except TuiError as error:
-            raise SessionError(f"show {name}: {error}") from None
-        return True

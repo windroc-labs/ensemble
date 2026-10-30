@@ -1,6 +1,4 @@
-"""Display functions for the session layer. FORMAT applies only on an attachable Host; on
-another, a display is kept as given and matched exactly.
-"""
+"""Display functions for the session layer; FORMAT applies only on an attachable Host."""
 
 from __future__ import annotations
 
@@ -63,7 +61,7 @@ def display_help(host: Host) -> str:
     return (
         "[OPENER][/SPLIT[/ANCHOR]] or none\n"
         "    OPENER: tmux session name; empty means caller.\n"
-        f"    SPLIT: {' or '.join(Split)}; ANCHOR: tmux session with a visible pane.\n"
+        f"    SPLIT: {' or '.join(Split)}; ANCHOR: tmux session or worker with a visible pane.\n"
         f"    {NO_DISPLAY}: start without a pane, the caller still its opener.\n"
         "    Omitted display uses caller context. Placement can reuse a grid or stack;\n"
         "    a grid overrides split/anchor choices. Outside tmux, show prints the\n"
@@ -75,7 +73,7 @@ def display_help(host: Host) -> str:
         "    Requests placement below commander; an existing grid can control it.\n"
         "      ensemble-session hide helper\n"
         "      ensemble-session show helper\n"
-        "    Hide closes the view while work runs; show uses saved display, with no\n"
+        "    Hide closes the pane while work runs; show uses saved display, with no\n"
         "    new --display option. If show cannot open a view:\n"
         "      ensemble-session status helper\n"
         "    Run the command in its attach field. close terminates the session.\n"
@@ -87,9 +85,7 @@ def display_help(host: Host) -> str:
 
 
 def layout(viewer: Viewer, host: Host, display: Display) -> str | None:
-    """None on a Host that cannot show; else display, its empty opener part the caller's once the
-    pane it goes beside is found. NO_DISPLAY needs no pane, started hidden.
-    """
+    """None on a Host that cannot show; else display, its empty opener part the caller's."""
     validate_display(display, host)
     if not host.attachable:
         return None
@@ -99,7 +95,7 @@ def layout(viewer: Viewer, host: Host, display: Display) -> str | None:
         with contextlib.suppress(TuiError):
             opener = placement.opener()
         return fold(opener, None, None, hidden=True)
-    if split_from is not None and viewer._tmux.status(split_from) is None:
+    if split_from is not None and not _known(viewer, split_from):
         raise ConfigError(f"no tmux session {split_from}")
     try:
         if opener is None or split_from is not None:
@@ -135,12 +131,27 @@ def _matching(host: Host, display: Display) -> list[SessionRow]:
     ]
 
 
-def _placed(viewer: Viewer) -> dict[str, dict]:
+def _known(viewer: Viewer, split_from: str) -> bool:
+    """A tmux session or a worker with a pane; TuiError reads as unknown."""
     try:
-        found = viewer._tmux.listing()
+        return viewer._tmux.has_session(split_from) or bool(viewer._placement.panes(split_from))
+    except TuiError:
+        return False
+
+
+def _placed(viewer: Viewer) -> dict[str, dict]:
+    """Each worker's first worker pane (lowest pane number): its opener and its tmux session."""
+    try:
+        found = viewer._placement.workers()
     except TuiError:
         return {}
-    return {row["name"]: row for row in found}
+    placed: dict[str, dict] = {}
+    for worker in sorted(found, key=lambda w: int(w.pane[1:])):
+        placed.setdefault(
+            worker.name,
+            {"name": worker.name, "opener": worker.opener or None, "shown": worker.session},
+        )
+    return placed
 
 
 def rows(viewer: Viewer, host: Host, display: Display) -> list[SessionRow]:
@@ -209,9 +220,7 @@ def started(viewer: Viewer, name: str, host: Host, display: Display) -> None:
 def status(
     viewer: Viewer, host: Host, name: str, sid: str | None, word: StatusState | None
 ) -> Status:
-    """Live session `name`'s Status: its activity `word` (None: working), hidden by its sid's
-    entry, attach from the Viewer; unknown when its Host fails.
-    """
+    """Live session `name`'s Status (`word` None: working); unknown when its Host fails."""
     try:
         hidden = sid is not None and hidden_store.read(name, sid)
         attach = viewer.attach_command(name, host) if host.attachable else None

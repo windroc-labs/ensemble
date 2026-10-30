@@ -84,7 +84,8 @@ class LinearCtlContract(CtlContract, TmuxFlow):
         return record
 
     def inventory(self):
-        return self.server.tmux("list-sessions", "-F", "#{session_name}").stdout
+        """The tmux sessions and the worker panes."""
+        return self.server.sessions(), self.server.worker_panes(dead=True)
 
     def refuse(self):
         return self.call("router", "--issue", "TASK-9999")

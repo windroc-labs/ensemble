@@ -17,9 +17,30 @@ class Retile(StrEnum):
     OFF = "off"
 
 
-class TmuxAnchor(NamedTuple):
+class WorkerPane(NamedTuple):
+    """A pane showing worker `name`; attach (@worker-attach) tells its run from an older run."""
+
     pane: str
-    socket: str
+    name: str
+    opener: str
+    window: str
+    session: str
+    attach: str = ""
+
+
+class CloseEntry(NamedTuple):
+    """after-kill-pane[index], a close hook ensemble set for worker pane `pane`."""
+
+    index: int
+    pane: str
+
+
+class Spot(NamedTuple):
+    """grid: (window, manager)."""
+
+    pane: str
+    side: Split
+    grid: tuple[str, str] | None
 
 
 class Cell(NamedTuple):

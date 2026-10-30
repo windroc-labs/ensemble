@@ -11,7 +11,6 @@ from unittest import mock
 
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.tmux_cli import attach_command
 from ensemble.session.engine.types import ConfigError, Hosts, Liveness, SessionError
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
@@ -413,6 +412,48 @@ class RecordControl(ControlBase):
         first.calls.close.assert_not_called()
         replacement.calls.close.assert_not_called()
 
+    def test_hide_sid_mismatch_marks_nothing(self):
+        """AC7: a close hook of an earlier run (its --sid) leaves a later run of the name shown;
+        the run's own sid passes through to the hide.
+        """
+        self.tui(name="w1", sid="replacement")
+        code, out, err = self.invoke("hide", "--if-closed", "--sid", SID, "w1")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(f"session w1: expected sid {SID!r}, found 'replacement'", err)
+        self.assertFalse(json.loads(self.invoke("status", "w1")[1])["hidden"])
+        code, out, err = self.invoke("hide", "--if-closed", "--sid", "replacement", "w1")
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertTrue(json.loads(self.invoke("status", "w1")[1])["hidden"])
+
+    def test_hide_if_closed_needs_the_held_generation_of_a_live_run(self):
+        """AC6: a hook's --sid/--generation must be held and live, else exit 1, nothing written."""
+        self.owned("w1", held=False)
+        self.addCleanup(self.ended)
+        generation = json.loads(Path(self.root, "w1", "session.json").read_text())["generation"]
+
+        def hide(sid, run):
+            return self.invoke("hide", "--if-closed", "--sid", sid, "--generation", run, "w1")
+
+        def hidden():
+            return json.loads(self.invoke("status", "w1")[1])["hidden"]
+
+        code, out, err = hide(SID, generation)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(f"session w1: run {generation} is not live", err)
+        self.host.calls.worker_liveness.return_value = Liveness.LIVE
+        self.assertFalse(hidden())
+        for sid, run, why in (
+            (SID, "other", f"expected generation 'other', found {generation!r}"),
+            ("replacement", generation, f"expected sid 'replacement', found {SID!r}"),
+        ):
+            with self.subTest(why=why):
+                code, out, err = hide(sid, run)
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn(f"session w1: {why}", err)
+                self.assertFalse(hidden())
+        self.assertEqual(hide(SID, generation), (0, "", ""))
+        self.assertTrue(hidden())
+
     def test_duplicate_keys_refuse_before_close(self):
         process = self.host.create("w1", sid=SID)
         self.assertEqual(self.invoke("close", "w1", "w1")[:2], (2, ""))
@@ -479,7 +520,7 @@ class RecordControl(ControlBase):
             code, out, err = self.invoke("show", stdin=records)
         self.assertEqual((code, out), (1, ""))
         self.assertIn(SID, err)
-        self.assertIn(f"session w2: not shown; attach with {attach_command('w2')}", err)
+        self.assertIn("session w2: not shown; attach with /fake/attach w2", err)
 
     def ended(self):
         """Its Host's fakes back to every worker ended, closing cleanly."""
@@ -531,14 +572,13 @@ class DisplayGone(ControlBase):
         """The host tmux's calls fail (no pane to show it in)."""
         return mock.patch("subprocess.Popen", side_effect=FileNotFoundError(2, "no tmux", "tmux"))
 
-    def test_show_reopens_through_its_harness_then_shows(self):
-        self.assertFalse(os.path.exists(os.path.join(self.owner, "replies")))
+    def test_show_asks_its_harness_nothing_then_shows(self):
         with self.no_tmux():
             code, out, err = self.invoke("show", "w1")
-        self.assertTrue(os.path.isdir(os.path.join(self.owner, "replies")))  # Op.DISPLAY's
+        self.assertFalse(os.path.exists(os.path.join(self.owner, "replies")))
         self.assertEqual((code, out), (0, ""), err)
         # the Viewer shows its display on the tmux Host: with no pane to open, its attach command
-        self.assertIn("session w1: not shown; attach with tmux attach -t '=w1'", err)
+        self.assertIn("session w1: not shown; attach with /fake/attach w1", err)
         self.assertNotIn("docker", err)
 
     def test_hide_names_no_other_host(self):

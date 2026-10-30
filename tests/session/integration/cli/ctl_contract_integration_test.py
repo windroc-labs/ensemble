@@ -6,6 +6,7 @@ import os
 import signal
 import unittest
 
+from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.utils import Record
 from tests.session import live_tmux
 from tests.session.cli_support import CliCase
@@ -24,7 +25,8 @@ class SessionCtlContract(NamedCtlContract, CliCase):
         return record
 
     def inventory(self):
-        return self.server.tmux("list-sessions", "-F", "#{session_name}").stdout
+        """The tmux Host's live workers and the server's tmux sessions."""
+        return sorted(TmuxHost("tmux").list()), self.server.sessions()
 
     def refuse(self):
         return self.session("start", "refused", "--client", "no-such-client", "--prompt", "hi")
@@ -33,11 +35,8 @@ class SessionCtlContract(NamedCtlContract, CliCase):
         channel = self.owner(name)
         os.kill(channel.status()["pid"], signal.SIGKILL)  # a crash: its guard ends the client
         live_tmux.wait(lambda: not channel.alive(), what="the killed harness to let go")
-        self.server.tmux("kill-session", "-t", f"={name}")
-        live_tmux.wait(
-            lambda: self.server.tmux("has-session", "-t", f"={name}").returncode,
-            what=f"{name} gone",
-        )
+        live_tmux.wait(lambda: not live_tmux.running(name), what=f"{name} gone")
+        live_tmux.wait(lambda: not self.server.pane_of(name), what=f"{name}'s worker pane closed")
 
 
 if __name__ == "__main__":

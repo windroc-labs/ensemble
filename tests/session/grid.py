@@ -2,6 +2,8 @@
 
 from typing import NamedTuple
 
+WORKER = "#{pane_id}\t#{@worker}"
+
 
 class Box(NamedTuple):
     """right and bottom exclusive: a neighbour past the 1-cell border starts at right + 1."""
@@ -29,7 +31,7 @@ def _union(boxes: list[Box]) -> Box:
     )
 
 
-def _sessions(cell) -> list[str]:
+def _workers(cell) -> list[str]:
     return (
         [cell]
         if isinstance(cell, str)
@@ -54,11 +56,12 @@ class GridCheck:
             .split("\t")
         )
         self.panes = server.panes(self.window)
-        self.at = dict(
-            line.split("\t", 1)
-            for line in server._out("list-sessions", "-F", "#{session_name}\t#{@pane}").splitlines()
-        )
-        names = {pane: name for name, pane in self.at.items() if pane in self.panes}
+        self.at: dict[str, str] = {}
+        for line in server._out("list-panes", "-t", self.window, "-F", WORKER).splitlines():
+            pane, name = line.split("\t", 1)
+            if name:
+                self.at.setdefault(name, pane)
+        names = {pane: name for name, pane in self.at.items()}
         names[self.stored] = f"{manager} (manager)"
         self.layout = "\n".join(
             f"  {p} {names.get(p, '?')}: left {x} top {y} {w}x{h}"
@@ -72,7 +75,7 @@ class GridCheck:
 
     def box(self, name):
         if self.at.get(name) not in self.panes:
-            self.fail(f"{name}: @pane {self.at.get(name)!r} is no pane of the window")
+            self.fail(f"{name}: no worker pane (@worker {name}) in the window")
         x, y, w, h = self.panes[self.at[name]]
         return Box(x, y, x + w, y + h)
 
@@ -123,12 +126,12 @@ class GridCheck:
 
     def ownership(self):
         owned = [
-            self.at[name] for column in self.columns for cell in column for name in _sessions(cell)
+            self.at[name] for column in self.columns for cell in column for name in _workers(cell)
         ]
         if len(set(owned)) != len(owned):
-            self.fail("two sessions given share a pane")
+            self.fail("two workers given share a pane")
         if extra := sorted(set(self.panes) - {self.stored, *owned}):
-            self.fail(f"panes of no session given: {extra}")
+            self.fail(f"panes of no worker given: {extra}")
 
     def column_bounds(self, cells, manager):
         boxes = [_union(column) for column in cells]

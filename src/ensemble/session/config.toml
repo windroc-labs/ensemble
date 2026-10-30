@@ -186,7 +186,7 @@ max = "max"
 #   isolated          true → an isolation boundary (a container): its sessions' clients run in yolo mode
 #                     ([clients.<name>.modes]); false → auto mode
 # [hosts.tmux]
-#   status_line       true → tui sessions show tmux's status line
+#   status_line       true → a tui worker's pane shows its name in the window's pane border
 # [hosts.docker]      each tui session in its own container, made by ensemble-broker:
 #   docker            the docker CLI, an absolute path
 #   plugins           pinned sources: name@owner/repo#commit[::marketplace-owner/repo#commit]; []: none
