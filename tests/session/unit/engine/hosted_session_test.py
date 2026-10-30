@@ -1773,6 +1773,33 @@ class AccountPoolTest(Base):
         self.assertEqual(self.started_account(**{ACCOUNT_ENV: "default"}), "default")
         self.probe.assert_not_called()
 
+    def test_structural_preflight_does_not_select_an_account(self):
+        spec = self.spec(client="pool", mode=Mode.HEADLESS, name="w1")
+        self.session.preflight(spec)
+        self.probe.assert_not_called()
+        self.assertFalse(os.path.exists(self.cache))
+
+    def test_an_invalid_launch_is_refused_before_account_selection(self):
+        self.pool({"default": "/d"})
+        for mode in (Mode.HEADLESS, Mode.TUI):
+            with self.subTest(mode=mode), self.assertRaises(ConfigError):
+                own(self, client="pool", mode=mode, name="bad name")
+            self.probe.assert_not_called()
+        self.assertFalse(os.path.exists(self.cache))
+
+    def test_capacity_refusal_does_not_probe_accounts(self):
+        self.configure(
+            "pool", {"implementation": CONTAINER_HOST}, accounts={"default": "/d"}, max_runs=1
+        )
+        row = SessionRow("busy", "other", "pool", StatusState.WORKING, None, None, None, own=False)
+        with (
+            mock.patch.object(self.session.host(), "_capacity_rows", return_value=[row]),
+            self.assertRaisesRegex(SessionError, "max_runs"),
+        ):
+            own(self, client="pool", mode=Mode.HEADLESS, name="next")
+        self.probe.assert_not_called()
+        self.assertFalse(os.path.exists(self.cache))
+
     def usage(self):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             found = self.session.usage("pool")

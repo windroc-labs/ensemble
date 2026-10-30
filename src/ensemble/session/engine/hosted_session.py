@@ -885,7 +885,6 @@ class HostedSession(Session):
         _environment_check(spec, on, mode)
         viewer = cls.viewer()
         displays.validate_display(display, on)
-        spec = _picked(setup, spec, client_name, client, on)
         name = tui.TuiMode.resolve_name(spec) if mode == Mode.TUI else spec.name
 
         def check_name(name: str) -> None:
@@ -915,6 +914,15 @@ class HostedSession(Session):
             hosts=hosts,
             host=_host_key(setup, selected_host),
         ) as capacity:
+            if (
+                not (spec.env.get(ACCOUNT_ENV) or client._account())
+                and client._accounts()
+                and on._client_context().container is not None
+            ):
+                MODES[mode].preflight(
+                    spec, client, registry=setup.registry, host=on, display=display
+                )
+            spec = _picked(setup, spec, client_name, client, on)
             running = MODES[mode].start(
                 spec,
                 client,

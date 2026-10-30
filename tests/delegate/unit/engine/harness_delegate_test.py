@@ -560,6 +560,14 @@ class VerifierDockerTest(HarnessCase):
             return harnesses.Inline(argv)
         program = os.path.basename(argv[0])
         self.programs.append(program)
+        if program == "claude":
+            self.assertEqual(argv[-1], "/usage")
+            process = mock.Mock(stdout=io.StringIO(), stderr=io.StringIO(), returncode=0)
+            process.communicate.return_value = (
+                "Current session\n12% used\nCurrent week (all models)\n20% used\n",
+                "",
+            )
+            return process
         if program == "tmux":  # the packaged tmux Host's listing: no server, no session
             process = mock.MagicMock(returncode=1)
             process.__enter__.return_value = process
