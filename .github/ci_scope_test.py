@@ -513,11 +513,13 @@ class Aggregate(unittest.TestCase):
         self.assertTrue(scope.gate(needs, "merge_group"))
         self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
 
-    def test_push_requires_merged_coverage(self):
-        needs = self.needs(event="push")
-        self.assertEqual(scope.gate(needs, "push"), [])
-        needs["coverage"]["result"] = "skipped"
-        self.assertIn("coverage: expected success, got 'skipped'", scope.gate(needs, "push"))
+    def test_push_passes_whatever_coverage_reports(self):
+        for outcome in ("success", "failure", "cancelled", "skipped"):
+            needs = self.needs(event="push")
+            needs["coverage"]["result"] = outcome
+            with self.subTest(outcome=outcome):
+                self.assertEqual(scope.gate(needs, "push"), [])
+                self.assertEqual(bool(scope.gate(needs, "merge_group")), outcome != "success")
 
     def test_linux_broker_must_run_when_broker_scope_is_selected(self):
         needs = self.needs(full=False)
@@ -674,21 +676,27 @@ class Workflow(unittest.TestCase):
         self.assertIn("github.event.merge_group.head_sha", worker)
         self.assertIn("github.event.merge_group.base_sha", worker)
 
-    def test_every_event_merges_unit_coverage_and_only_push_skips_the_diff_gate(self):
+    def test_every_event_merges_unit_coverage_and_push_coverage_is_advisory(self):
         unit, coverage = job("unit"), job("coverage")
-        self.assertNotIn("'push'", unit.replace(PUSH_ADVISORY, ""))
         self.assertIn("RUN_TESTS_COVERAGE: collect\n", unit)
-        self.assertNotIn("'push'", coverage.split("\n    steps:")[0])
-        steps = re.split(r"(?m)^      - name: ", coverage)[1:]
+        unit_steps = dict(
+            step.split("\n", 1) for step in re.split(r"(?m)^      - name: ", unit)[1:]
+        )
+        for name, step in unit_steps.items():
+            with self.subTest(step=name):
+                coverage_only = name in ("Install pinned coverage", "Preserve unit coverage")
+                self.assertEqual(PUSH_ADVISORY in step, coverage_only)
+                self.assertNotIn("'push'", step.replace(PUSH_ADVISORY, ""))
+        header, steps = coverage.split("\n    steps:\n")
+        self.assertIn(f"\n    {PUSH_ADVISORY}", header)
+        self.assertNotIn("'push'", header.replace(PUSH_ADVISORY, ""))
+        steps = re.split(r"(?m)^      - name: ", steps)[1:]
         names = [step.split("\n", 1)[0] for step in steps]
         self.assertEqual(
             names[-2:], ["Diff coverage of changed src lines", "Require unchanged checkout"]
         )
-        for step in steps[2:-2]:
-            with self.subTest(step=step.split("\n", 1)[0]):
-                self.assertIn(PUSH_ADVISORY, step)
+        self.assertNotIn(PUSH_ADVISORY, "".join(steps))
         self.assertIn("if: ${{ github.event_name != 'push' }}", steps[-2])
-        self.assertNotIn(PUSH_ADVISORY, steps[-2])
         self.assertIn(
             "name: unit-coverage-merged-${{ github.run_id }}-${{ github.run_attempt }}\n"
             "          path: ${{ runner.temp }}/unit-coverage-merged/\n"

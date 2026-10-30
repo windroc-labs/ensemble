@@ -237,6 +237,8 @@ def gate(needs: dict, event: str) -> list[str]:
         "mini-op": "success",
         "broker": "success" if broker == "true" else "skipped",
     }
+    if event == "push":
+        del expected["coverage"]  # advisory on main: its data is a by-product, never a gate
     for job, wanted in expected.items():
         data = needs.get(job)
         actual = data.get("result") if isinstance(data, dict) else None
