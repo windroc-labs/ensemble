@@ -32,7 +32,7 @@ SH_KW = {"stdin": DEVNULL, "timeout": 30}
 
 TMUX = '/opt/a"b\\c/bin/tmux'  # the script text must never carry it
 
-WATCH = "; watch it with tmux attach -t '=s'"
+WATCH = "; watch it with tmux -T sync attach -t '=s'"
 
 ABSENT = (
     "can't find session: =s",
@@ -128,6 +128,8 @@ def split_window(flag, pane, sock=SOCK):
         TMUX,
         "-S",
         sock,
+        "-T",
+        "sync",
         "attach",
         "-t",
         "=s",

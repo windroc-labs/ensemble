@@ -27,7 +27,7 @@ SLEEP = "import time; time.sleep(120)"
 
 
 def attach(name: str) -> str:
-    return f"tmux attach -t '={name}'"
+    return f"tmux -T sync attach -t '={name}'"
 
 
 def absent(name: str) -> Record:

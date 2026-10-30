@@ -18,7 +18,7 @@ from tests.session.integration.clients.codex import fake_tui
 
 PERMISSION = {"kind": "hook", "event": "PermissionRequest", "tool_name": "Edit"}
 TRUST = "Quick safety check: Is this a project you created or one you trust?\n1. Yes, I trust this folder\n2. No, exit"
-ATTACH = "session w1: tmux attach -t '=w1'"
+ATTACH = "session w1: tmux -T sync attach -t '=w1'"
 
 
 class StartArgvTest(WorkerCase):

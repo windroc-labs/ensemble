@@ -388,7 +388,7 @@ class ViewTest(Base):
     def setUp(self):
         super().setUp()
         self.session.showable = True
-        self.session.attach_command.return_value = "tmux attach -t '=w1'"
+        self.session.attach_command.return_value = "tmux -T sync attach -t '=w1'"
 
     def start(self, *, stored: bool, view: bool | None) -> None:
         self.session.reset_mock()
@@ -419,7 +419,7 @@ class ViewTest(Base):
                 if want == "show":
                     self.session.show.assert_called_once_with(display="mgr")
                 self.assertEqual(self.stored(), state().record())
-        self.assertEqual(set(self.said), {"session w1: tmux attach -t '=w1'"})
+        self.assertEqual(set(self.said), {"session w1: tmux -T sync attach -t '=w1'"})
 
     def test_a_failed_hide_is_said_and_the_start_goes_on(self):
         self.session.hide.side_effect = SessionError("boom")
@@ -432,7 +432,7 @@ class ViewTest(Base):
         self.session.events.return_value = iter([Exited(2)])
         with self.assertRaisesRegex(SessionError, "^w1: claude exited 2 while starting"):
             self.worker().start(prompt="", resume=False, hidden=False)
-        self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
+        self.assertEqual(self.said, ["session w1: tmux -T sync attach -t '=w1'"])
 
     def test_a_failed_show_is_said_when_its_watch_fails(self):
         self.session.show.side_effect = SessionError("worker w1: gone")
@@ -441,7 +441,7 @@ class ViewTest(Base):
             self.worker().start(prompt="", resume=False, hidden=False)
         self.assertEqual(
             self.said,
-            ["session w1: tmux attach -t '=w1'", "session w1: not shown: worker w1: gone"],
+            ["session w1: tmux -T sync attach -t '=w1'", "session w1: not shown: worker w1: gone"],
         )
         self.assertIsNone(self.stored())
 
@@ -993,7 +993,7 @@ class OwnedTest(Base):
         self.owned(answer={"ok": True, "data": {"reopened": True}})
         view = self.session_cls.attach.return_value
         view.showable = True
-        view.attach_command.return_value = "tmux attach -t '=w1'"
+        view.attach_command.return_value = "tmux -T sync attach -t '=w1'"
         view.status.return_value = Status(
             name="w1",
             alive=True,
@@ -1008,7 +1008,7 @@ class OwnedTest(Base):
         self.assertEqual(self.stored(), state().record())
         self.session_cls.attach.assert_called_once_with("w1", sid=SID, host="tmux")
         view.show.assert_called_once_with(display="mgr")
-        self.assertEqual(self.said, ["session w1: tmux attach -t '=w1'"])
+        self.assertEqual(self.said, ["session w1: tmux -T sync attach -t '=w1'"])
         self.session_cls.retire.assert_not_called()
 
     def test_owned_resume_keeps_a_reopened_hidden_display_hidden(self):

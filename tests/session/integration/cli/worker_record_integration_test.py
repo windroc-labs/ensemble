@@ -170,7 +170,7 @@ class AdoptionTest(RecordCase):
                 alive=True,
                 state="done",
                 outcome=None,
-                attach="tmux attach -t '=w1'",
+                attach="tmux -T sync attach -t '=w1'",
                 cwd=self.cwd,
                 hidden=False,
             )

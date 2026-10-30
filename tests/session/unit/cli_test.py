@@ -531,7 +531,7 @@ class DisplayGone(ControlBase):
         self.assertTrue(os.path.isdir(os.path.join(self.owner, "replies")))  # Op.DISPLAY's
         self.assertEqual((code, out), (0, ""), err)
         # the Viewer shows its display on the tmux Host: with no pane to open, its attach command
-        self.assertIn("session w1: not shown; attach with tmux attach -t '=w1'", err)
+        self.assertIn("session w1: not shown; attach with tmux -T sync attach -t '=w1'", err)
         self.assertNotIn("docker", err)
 
     def test_hide_names_no_other_host(self):

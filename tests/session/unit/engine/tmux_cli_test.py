@@ -876,7 +876,9 @@ class StartTest(StartFixture):
                 fake = FakeTmux(pane="0  ")
                 with self.assertRaisesRegex(
                     tmux_cli.TuiError,
-                    "^" + re.escape(f"session s is running; {prefix}tmux attach -t '=s'") + "$",
+                    "^"
+                    + re.escape(f"session s is running; {prefix}tmux -T sync attach -t '=s'")
+                    + "$",
                 ):
                     self.start(fake)
                 self.assertEqual(

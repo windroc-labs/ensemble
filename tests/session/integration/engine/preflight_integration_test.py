@@ -357,7 +357,8 @@ print(json.dumps(result))
         ):  # LIVE past the guard's reaping wait
             self.session.preflight(spec)
         self.assertEqual(
-            str(refusal.exception), "tui session worker is running; tmux attach -t '=worker'"
+            str(refusal.exception),
+            "tui session worker is running; tmux -T sync attach -t '=worker'",
         )
         self.unchanged(before)
         liveness[0] = Liveness.ABSENT

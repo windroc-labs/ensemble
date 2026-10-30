@@ -39,7 +39,7 @@ with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
 if sys.argv[1] == "list-panes":
     sys.stdout.write(os.environ.get("PANES", ""))
 rc = {{"has": "HAS_RC", "start-server": "START_RC"}}
-code = rc.get(sys.argv[1], "ATTACH_RC" if sys.argv[1] in ("-CC", "attach", "switch-client") else "")
+code = rc.get(sys.argv[1], "ATTACH_RC" if sys.argv[1] in ("-CC", "-T", "attach", "switch-client") else "")
 sys.exit(int(os.environ.get(code, "0")))
 """
 PROXY = """#!{python} -I
@@ -230,17 +230,18 @@ class FakeTmux(Case):
     def test_an_existing_session_is_only_attached(self):
         _, _, _, calls = self.run_ensemble("s1", has_rc=0)
         self.assertEqual(
-            [call[2:] for call in calls], [["has", "-t", "=s1"], ["-CC", "attach", "-t", "=s1"]]
+            [call[2:] for call in calls],
+            [["has", "-t", "=s1"], ["-CC", "-T", "sync", "attach", "-t", "=s1"]],
         )
 
     def test_the_attach_fits_the_terminal(self):
         del self.env["TERM_PROGRAM"]
         for env, attach in (
             ({"TMUX": "/tmp/t,1,0", "TERM_PROGRAM": "iTerm.app"}, ["switch-client"]),
-            ({"TERM_PROGRAM": "iTerm.app"}, ["-CC", "attach"]),
-            ({"LC_TERMINAL": "iTerm2"}, ["-CC", "attach"]),
-            ({"TERM_PROGRAM": "Apple_Terminal"}, ["attach"]),
-            ({}, ["attach"]),
+            ({"TERM_PROGRAM": "iTerm.app"}, ["-CC", "-T", "sync", "attach"]),
+            ({"LC_TERMINAL": "iTerm2"}, ["-CC", "-T", "sync", "attach"]),
+            ({"TERM_PROGRAM": "Apple_Terminal"}, ["-T", "sync", "attach"]),
+            ({}, ["-T", "sync", "attach"]),
         ):
             with self.subTest(env=env):
                 base = dict(self.env)
@@ -263,7 +264,7 @@ class FakeTmux(Case):
             [
                 ["has", "-t", "=s1"],
                 created("s1", self.cwd, "/bin/zsh"),
-                ["-CC", "attach", "-t", "=s1"],
+                ["-CC", "-T", "sync", "attach", "-t", "=s1"],
             ],
         )
         self.assertEqual(calls[1][0], self.home)
@@ -282,7 +283,7 @@ class FakeTmux(Case):
                     [
                         ["has", "-t", f"={name}"],
                         created(name, self.cwd, "/bin/zsh"),
-                        ["-CC", "attach", "-t", f"={name}"],
+                        ["-CC", "-T", "sync", "attach", "-t", f"={name}"],
                     ],
                 )
 
@@ -411,7 +412,7 @@ class FakeTmux(Case):
             [
                 ["has", "-t", "=demo"],
                 created("demo", self.cwd, "/bin/zsh"),
-                ["-CC", "attach", "-t", "=demo"],
+                ["-CC", "-T", "sync", "attach", "-t", "=demo"],
             ],
         )
 
@@ -424,7 +425,7 @@ class FakeTmux(Case):
             [
                 ["has", "-t", "=demo"],
                 [*START, "demo", "-c", self.cwd, *held("demo")],
-                ["-CC", "attach", "-t", "=demo"],
+                ["-CC", "-T", "sync", "attach", "-t", "=demo"],
             ],
         )
         result, _, calls = self.select(has_rc=0)
@@ -433,7 +434,7 @@ class FakeTmux(Case):
             [
                 ["has", "-t", "=demo"],
                 ["new-window", "-d", "-t", "=demo:", "-c", self.cwd, *held("demo")],
-                ["-CC", "attach", "-t", "=demo"],
+                ["-CC", "-T", "sync", "attach", "-t", "=demo"],
             ],
         )
 
@@ -456,7 +457,9 @@ class FakeTmux(Case):
         roster = self.demo(pid=os.getpid())
         with roster.hold("demo"):
             result, _, calls = self.select(PANES=panes("node"))
-        self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
+        self.assertEqual(
+            (result, calls), (0, [LIST_PANES, ["-CC", "-T", "sync", "attach", "-t", "=demo"]])
+        )
 
     def test_hold_only_types_the_resume_command_into_its_idle_shell(self):
         roster = self.demo(cwd="/home/user/project")
@@ -471,7 +474,7 @@ class FakeTmux(Case):
                     *("send-keys", "-t", "%3", "-l", f"'{CREW}' resume-commander", ";"),
                     *("send-keys", "-t", "%3", "Enter"),
                 ],
-                ["-CC", "attach", "-t", "=demo"],
+                ["-CC", "-T", "sync", "attach", "-t", "=demo"],
             ],
         )
 
@@ -479,7 +482,9 @@ class FakeTmux(Case):
         roster = self.demo(cwd="/home/user/project")
         with roster.hold("demo"):
             result, err, calls = self.select(PANES=panes("vim"))
-        self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
+        self.assertEqual(
+            (result, calls), (0, [LIST_PANES, ["-CC", "-T", "sync", "attach", "-t", "=demo"]])
+        )
         self.assertIn(
             f"ensemble: demo's pane runs vim; resume there with: '{CREW}' resume-commander\n",
             err,
@@ -864,6 +869,45 @@ class PrivateServer(Case):
     def attaches(self):
         return read_jsonl(self.attach_log)
 
+    def test_new_attach_clients_declare_sync(self):
+        self.server.start("s1")
+        self.server.start("runner")
+        for terminal, control in (("", "0"), ("iTerm.app", "1")):
+            with self.subTest(terminal=terminal):
+                env = self.server.env(TERM="xterm-256color", TERM_PROGRAM=terminal, LC_TERMINAL="")
+                result = self.server.tmux(
+                    "new-window",
+                    "-d",
+                    "-t",
+                    "=runner:",
+                    "/usr/bin/env",
+                    "-u",
+                    "TMUX",
+                    "-u",
+                    "TMUX_PANE",
+                    *(f"{key}={value}" for key, value in env.items()),
+                    ENSEMBLE,
+                    "s1",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+                def features(control=control):
+                    result = self.server.tmux(
+                        "list-clients",
+                        "-t",
+                        "=s1",
+                        "-F",
+                        "#{client_control_mode} #{client_termfeatures}",
+                    )
+                    return any(
+                        mode == control and "sync" in flags.split(",")
+                        for mode, _, flags in (
+                            line.partition(" ") for line in result.stdout.splitlines()
+                        )
+                    )
+
+                live_tmux.wait(features, what=f"attach control={control} declares sync")
+
     def shell_report(self):
         try:
             with open(self.shell + ".log", encoding="utf-8") as f:
@@ -885,7 +929,7 @@ class PrivateServer(Case):
     def test_a_new_session_holds_the_lease_for_its_shell_in_the_callers_directory(self):
         done = self.run_ensemble("s1")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
-        self.assertEqual(self.attaches(), [["-CC", "attach", "-t", "=s1"]])
+        self.assertEqual(self.attaches(), [["-CC", "-T", "sync", "attach", "-t", "=s1"]])
         self.assertEqual(
             [self.show(scope, option) for scope, option in OPTIONS[:3]], ["on", "50000", "on"]
         )
@@ -913,12 +957,12 @@ class PrivateServer(Case):
         before = self.state()
         done = self.run_ensemble("s1")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
-        self.assertEqual(self.attaches(), [["-CC", "attach", "-t", "=s1"]])
+        self.assertEqual(self.attaches(), [["-CC", "-T", "sync", "attach", "-t", "=s1"]])
         self.assertEqual(self.state(), before)
         self.assertFalse(os.path.exists(os.path.join(self.ensemble, "managers")))
         done = self.run_ensemble("s1-")
         self.assertEqual((done.returncode, done.stderr), (0, ""))
-        self.assertEqual(self.attaches()[-1], ["-CC", "attach", "-t", "=s1-"])
+        self.assertEqual(self.attaches()[-1], ["-CC", "-T", "sync", "attach", "-t", "=s1-"])
         self.assertEqual(
             live_tmux.wait(self.shell_report, what="the held shell's report")[2], "s1-"
         )
@@ -942,7 +986,9 @@ class PrivateServer(Case):
                     os.unlink(self.shell + ".log")
                 done = self.run_ensemble(name, script=os.path.join(installed, "ensemble"))
                 self.assertEqual((done.returncode, done.stderr), (0, ""))
-                self.assertEqual(self.attaches()[-1], ["-CC", "attach", "-t", f"={name}"])
+                self.assertEqual(
+                    self.attaches()[-1], ["-CC", "-T", "sync", "attach", "-t", f"={name}"]
+                )
                 report = live_tmux.wait(self.shell_report, what="the held shell's report")
                 self.assertEqual((report[2], report[5]), (name, os.path.join(root, "bin")))
                 with self.assertRaisesRegex(Held, f"held by {name}"), self.roster(name).hold(None):

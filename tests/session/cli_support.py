@@ -38,7 +38,9 @@ class CliCase(live_tmux.Calls, Case):
         self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
         lines = result.stderr.splitlines()
         self.assertGreaterEqual(len(lines), 2, result.stderr)
-        self.assertEqual(lines[0], f"session {name}: tmux attach -t '={name}'", result.stderr)
+        self.assertEqual(
+            lines[0], f"session {name}: tmux -T sync attach -t '={name}'", result.stderr
+        )
         head = f"ensemble-session: {name}: claude exited {code} while starting"
         self.assertEqual(lines[1], head + ("; its last lines:" if lines[2:] else ""), result.stderr)
         return lines[2:]

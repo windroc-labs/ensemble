@@ -233,6 +233,8 @@ class Placement:
             tmux,
             "-S",
             a.socket,
+            "-T",
+            "sync",
             "attach",
             "-t",
             f"={session}",

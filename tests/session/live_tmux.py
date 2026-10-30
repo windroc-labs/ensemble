@@ -50,7 +50,7 @@ def _require_socket(argv, env, sockets):
         option = os.fsdecode(argv[index])
         if not option.startswith("-") or option in {"-", "--"}:
             break
-        if option in {"-S", "-f"}:
+        if option in {"-S", "-f", "-T"}:
             index += 1
             if index == len(argv) or not argv[index]:
                 raise RuntimeError("live_tmux: missing " + option + " value")

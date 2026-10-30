@@ -444,7 +444,9 @@ class PanePlacementTest(PaneFixture):
         for env, prefix in PREFIXES:
             with self.subTest(env=env):
                 why = self.open(FakeTmux(), env)
-                self.assertTrue(why.endswith(f"; watch it with {prefix}tmux attach -t '=s'"), why)
+                self.assertTrue(
+                    why.endswith(f"; watch it with {prefix}tmux -T sync attach -t '=s'"), why
+                )
 
     def test_no_tmux(self):
         fake = FakeTmux()

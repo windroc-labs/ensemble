@@ -306,7 +306,7 @@ class SameNameTest(Live):
         handle, error = sorted(results, key=lambda result: isinstance(result, Exception))
         self.addCleanup(handle.stop)
         self.assertEqual(tui.TuiMode.snapshot("w6")["sid"], handle.sid)
-        self.assertEqual(str(error), "tui session w6 is running; tmux attach -t '=w6'")
+        self.assertEqual(str(error), "tui session w6 is running; tmux -T sync attach -t '=w6'")
         self.assertEqual(
             (
                 handle.alive(),

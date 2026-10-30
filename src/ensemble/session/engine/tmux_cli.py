@@ -161,9 +161,10 @@ def _printable(value: str) -> str | None:
 
 
 def attach_command(session: str) -> str:
-    """`tmux attach -t '=<session>'`, after $TUI_ATTACH_PREFIX when not blank."""
+    """`tmux -T sync attach -t '=<session>'`, after $TUI_ATTACH_PREFIX when not blank."""
     prefix = os.environ.get("TUI_ATTACH_PREFIX", "").strip()
-    return f"{prefix} tmux attach -t '={session}'" if prefix else f"tmux attach -t '={session}'"
+    command = f"tmux -T sync attach -t '={session}'"
+    return f"{prefix} {command}" if prefix else command
 
 
 def session_name(session: str) -> str:

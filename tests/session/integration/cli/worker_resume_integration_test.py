@@ -172,7 +172,7 @@ class ResumeTest(Base):
         self.kill_session("w1")
         res = self.again("resume", "w1", inside=None, cwd=self.root, PATH=path)
         self.assertEqual(self.record(res), record)
-        self.assertEqual(res.stderr, "session w1: tmux attach -t '=w1'\n")
+        self.assertEqual(res.stderr, "session w1: tmux -T sync attach -t '=w1'\n")
         first, again = self.calls("w1")
         self.assertEqual(again["cwd"], self.cwd)
         self.assertTrue(has_pair(again["argv"], "--resume", record.sid), again["argv"])
@@ -215,7 +215,7 @@ class ResumeTest(Base):
         pane = self.pane("w1")
         res = self.again("restart", "w1")
         self.assertEqual(self.record(res), record)
-        self.assertEqual(res.stderr, "session w1: tmux attach -t '=w1'\n")
+        self.assertEqual(res.stderr, "session w1: tmux -T sync attach -t '=w1'\n")
         first, again = self.calls("w1")
         self.assertTrue(has_pair(first["argv"], "--session-id", record.sid), first["argv"])
         self.assertTrue(has_pair(again["argv"], "--resume", record.sid), again["argv"])
@@ -306,7 +306,7 @@ class ColorTest(Base):
     def test_each_launch_gets_one_color(self):
         res = self.start("w1")
         self.record(res)
-        self.assertEqual(res.stderr, "session w1: tmux attach -t '=w1'\n")
+        self.assertEqual(res.stderr, "session w1: tmux -T sync attach -t '=w1'\n")
         starts = [self.session_start("w1")]
         self.record(self.again("restart", "w1"))
         starts.append(self.session_start("w1"))

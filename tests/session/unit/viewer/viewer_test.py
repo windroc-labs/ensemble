@@ -69,14 +69,15 @@ class ShowTest(Base):
                 split = next(c for c in self.runner.calls if c[1] == "split-window")
                 self.assertEqual(split[3], "-v")
                 self.assertEqual(split[split.index("-t") + 1], "%9")
-                self.assertEqual(split[-3:], ["attach", "-t", "=w1"])
+                self.assertEqual(split[-5:], ["-T", "sync", "attach", "-t", "=w1"])
 
     def test_show_outside_tmux_returns_the_attach_command(self):
         self.enterContext(environ())
         for display in (None, "mgr", "mgr/below/m1"):
             with self.subTest(display=display):
                 self.assertEqual(
-                    self.viewer.show("w1", self.host, display=display), "tmux attach -t '=w1'"
+                    self.viewer.show("w1", self.host, display=display),
+                    "tmux -T sync attach -t '=w1'",
                 )
         self.assertEqual(self.runner.calls, [])
 
@@ -87,7 +88,7 @@ class ShowTest(Base):
         self.runner.results["/bin/sh"] = (3,)
         with self.assertLogs("session", logging.WARNING) as logs:
             self.assertEqual(
-                self.viewer.show("w1", self.host, command="false"), "tmux attach -t '=w1'"
+                self.viewer.show("w1", self.host, command="false"), "tmux -T sync attach -t '=w1'"
             )
         self.assertEqual(logs.output, ["WARNING:session:show w1: exit status 3"])
         del self.runner.results["/bin/sh"]
@@ -388,7 +389,9 @@ class HideTest(Base):
 
 class AttachCommandTest(Base):
     def test_attach_command_names_the_session_and_refuses_a_bad_name(self):
-        self.assertEqual(self.viewer.attach_command("w1", self.host), "tmux attach -t '=w1'")
+        self.assertEqual(
+            self.viewer.attach_command("w1", self.host), "tmux -T sync attach -t '=w1'"
+        )
         with self.assertRaisesRegex(SessionError, "^no tmux session 'a b'$"):
             self.viewer.attach_command("a b", self.host)
 

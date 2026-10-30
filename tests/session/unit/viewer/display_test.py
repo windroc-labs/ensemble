@@ -396,7 +396,7 @@ class StatusTest(Base):
         hidden.write("w1", SID, hidden=True, live=None)
         self.assertEqual(
             displays.status(self.viewer, self.host, "w1", SID, None),
-            self.status(hidden=True, attach="tmux attach -t '=w1'"),
+            self.status(hidden=True, attach="tmux -T sync attach -t '=w1'"),
         )
         for sid in (OTHER, None):
             self.assertFalse(displays.status(self.viewer, self.host, "w1", sid, None).hidden)

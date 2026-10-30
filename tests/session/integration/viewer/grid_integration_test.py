@@ -236,7 +236,7 @@ class SplitsTest(Live):
         TmuxCli().start("w1", Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd))
         self.assertEqual(
             self.session_cls.viewer().show("w1", self.host, display=beside),
-            "tmux attach -t '=w1'",
+            "tmux -T sync attach -t '=w1'",
         )
         self.assertEqual(self.server.panes(f"={MANAGER}:"), before)
         self.assertEqual(self.server.option("w1", "@pane"), "")

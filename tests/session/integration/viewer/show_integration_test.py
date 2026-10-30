@@ -76,7 +76,10 @@ class ShowTest(Case):
         self.assertIn(
             ["/usr/bin/env", "-u", "TMUX"], [split[i : i + 3] for i in range(len(split) - 2)]
         )
-        self.assertEqual(split[-3:], ["attach", "-t", "=worker"])
+        self.assertEqual(split[-5:], ["-T", "sync", "attach", "-t", "=worker"])
+        features = self.server.tmux("list-clients", "-t", "=worker", "-F", "#{client_termfeatures}")
+        self.assertEqual(features.returncode, 0, features.stderr)
+        self.assertIn("sync", features.stdout.strip().split(","))
         self.assertEqual(self.server.tmux("has-session", "-t", "=mgr").returncode, 0)
 
     def test_nested_display_uses_the_private_socket_with_restricted_path(self):
