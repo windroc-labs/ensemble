@@ -68,19 +68,21 @@ HOME = ClientHome("claude_dir", "claude", "CLAUDE_CONFIG_DIR", "claude-setup-tok
 MODEL_KEYS = ("model", "effortLevel", "modelSettings")
 MODEL_ENTRY_DROP = frozenset({"autoCompactWindow"})  # host-only keys of a modelSettings entry
 ENV_KEYS = ("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",)
-# A container worker runs unattended; fullscreen stops flicker in tmux.
+# A container worker runs unattended.
 UNATTENDED = MappingProxyType(
     {
         "skipWorkflowUsageWarning": True,
         "autoCompactEnabled": True,
         "autoContinueAtUsageLimit": True,
         "promptSuggestionEnabled": False,
-        "tui": "fullscreen",
         "outputStyle": "Concise",
     }
 )
 HOME_READ_MAX = 64 << 20
-TUI_ENV = MappingProxyType({"CLAUDE_CODE_DISABLE_AGENT_VIEW": "1"})
+# Off: the alternate screen keeps a hidden worker's output out of scrollback.
+TUI_ENV = MappingProxyType(
+    {"CLAUDE_CODE_DISABLE_AGENT_VIEW": "1", "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1"}
+)
 
 
 def added_dirs(flags: tuple[str, ...]) -> Iterator[str]:
