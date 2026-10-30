@@ -23,6 +23,20 @@ def exact(stream, size):
 
 
 def receive(stream):
+    chunks = []
+    while True:
+        first, data = read_frame(stream)
+        opcode = first & 15
+        if opcode == 8:
+            raise EOFError
+        if opcode >= 8:
+            continue
+        chunks.append(data)
+        if first & 128:
+            return json.loads(b"".join(chunks))
+
+
+def read_frame(stream):
     first, second = exact(stream, 2)
     size = second & 127
     if size == 126:
@@ -33,9 +47,7 @@ def receive(stream):
     data = exact(stream, size)
     if mask:
         data = bytes(value ^ mask[index % 4] for index, value in enumerate(data))
-    if first & 15 == 8:
-        raise EOFError
-    return json.loads(data)
+    return first, data
 
 
 def send(connection, message, *, masked=False):

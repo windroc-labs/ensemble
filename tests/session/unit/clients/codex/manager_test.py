@@ -4,7 +4,6 @@ import io
 import json
 import os
 import struct
-import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,6 +84,46 @@ class ProtocolTest(Case):
         _, called, _ = self.launch(("--cd", "/chosen", "hello"), {"ENSEMBLE_MANAGER": "m"})
         self.assertEqual(called[1].count("--cd"), 1)
         self.assertEqual(called[1][-3:], ("--cd", "/chosen", "hello"))
+
+    def test_local_choices_keep_native_resolution_without_remote_mode(self):
+        for arguments in (
+            ("--add-dir", "/extra"),
+            ("--worktree",),
+            ("resume", "saved", "--sandbox", "read-only", "--ask-for-approval", "untrusted"),
+            ("resume", "saved", "-sread-only", "-auntrusted"),
+            ("--profile", "restricted"),
+            ("-c", 'sandbox_workspace_write.writable_roots=["/extra"]'),
+            ('--config=approval_policy="untrusted"',),
+            ("--full-auto",),
+            ("--dangerously-bypass-approvals-and-sandbox",),
+            ("--enable", "some_feature"),
+            ("--oss",),
+        ):
+            with self.subTest(arguments=arguments):
+                native, called, count = self.launch(arguments, {"ENSEMBLE_MANAGER": "m"})
+                self.assertEqual(called, (str(native), (str(native), "--no-daemon", *arguments)))
+                self.assertEqual(count, 1)
+
+    def test_native_environment_choices_do_not_get_a_remote_workspace(self):
+        for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"):
+            with self.subTest(name=name):
+                native, called, count = self.launch(
+                    ("hello",), {"ENSEMBLE_MANAGER": "m", name: "chosen"}
+                )
+                self.assertEqual(called, (str(native), (str(native), "--no-daemon", "hello")))
+                self.assertEqual(count, 1)
+
+    def test_supported_options_and_literal_prompt_keep_the_shared_route(self):
+        for arguments in (
+            ("resume", "saved", "--last", "--all"),
+            ("--model", "--sandbox", "hello"),
+            ("--model=chosen", "-C/chosen", "-iimage.png", "--no-alt-screen"),
+            ("--", "--sandbox"),
+        ):
+            with self.subTest(arguments=arguments):
+                _, called, count = self.launch(arguments, {"ENSEMBLE_MANAGER": "m"})
+                self.assertEqual(count, 2)
+                self.assertEqual(called[1][1], "--remote")
 
     def test_stale_holder_passes_through_and_unavailable_server_fails_closed(self):
         native, called, count = self.launch(
@@ -268,7 +307,7 @@ class ProtocolTest(Case):
             SimpleNamespace(returncode=1, stdout=""),
             SimpleNamespace(returncode=0, stdout="{}"),
             SimpleNamespace(returncode=0, stdout=""),
-            subprocess.TimeoutExpired("record", 5),
+            manager.subprocess.TimeoutExpired("record", 5),
         ):
             with self.subTest(result=result):
 
@@ -287,7 +326,7 @@ class ProtocolTest(Case):
                 )
                 with (
                     mock.patch("subprocess.run", **options),
-                    self.assertRaises((ValueError, subprocess.TimeoutExpired)),
+                    self.assertRaises((ValueError, manager.subprocess.TimeoutExpired)),
                 ):
                     manager.relay(source, target, bridge.response, masked=False)
                 target.sendall.assert_not_called()

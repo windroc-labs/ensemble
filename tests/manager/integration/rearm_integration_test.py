@@ -16,8 +16,6 @@ from ensemble.manager import Roster
 from tests.manager import session_records
 from tests.manager.case import PY, REPO, Case, child_env
 
-MANAGER = {"ENSEMBLE_MANAGER": "mgr", "ENSEMBLE_HOLDER_ID": "holder-1"}
-
 
 def _command(*, manual: bool = False) -> str:
     with open(
@@ -35,6 +33,16 @@ def _start(source: object) -> bytes:
 
 
 class RearmHookTest(Case):
+    def setUp(self):
+        super().setUp()
+        roster = Roster(str(Path(self.ensemble, "managers", "mgr")))
+        lease = self.enterContext(roster.hold("mgr"))
+        self.manager = {
+            "ENSEMBLE_MANAGER": "mgr",
+            "ENSEMBLE_HOLDER_ID": lease.id,
+            "ENSEMBLE_HOLDER_GENERATION": str(lease.generation),
+        }
+
     def run_hook(self, extra: dict[str, str], stdin: bytes, prefix: str = "", *, manual=False):
         env = {
             **os.environ,
@@ -61,14 +69,14 @@ class RearmHookTest(Case):
         for source in ("startup", "resume", "compact", "clear"):
             with self.subTest(source):
                 done = self.run_hook(
-                    {**MANAGER, "PLUGIN_ROOT": str(root)}, _start(source), manual=True
+                    {**self.manager, "PLUGIN_ROOT": str(root)}, _start(source), manual=True
                 )
                 self.assertEqual((done.returncode, done.stderr), (0, b""))
                 context = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
                 self.assertIn(f"`{source}` in manager `mgr`", context)
                 self.assertIn("Manual monitoring; no idle notifications", context)
                 self.assertNotIn("Monitor", context)
-        for extra in ({}, {**MANAGER, "ENSEMBLE_HOLDER_PID": "1"}):
+        for extra in ({}, {**self.manager, "ENSEMBLE_HOLDER_PID": "1"}):
             with self.subTest(extra=extra):
                 done = self.run_hook(extra, _start("startup"), manual=True)
                 self.assertEqual((done.returncode, done.stdout, done.stderr), (0, b"", b""))
@@ -76,8 +84,11 @@ class RearmHookTest(Case):
     def test_hooks_json_command(self):
         silent = {
             "no manager": ({"ENSEMBLE_HOLDER_ID": "h"}, _start("startup")),
-            "hold not an ancestor": ({**MANAGER, "ENSEMBLE_HOLDER_PID": "1"}, _start("startup")),
-            "non-JSON": (MANAGER, b"startup"),
+            "hold not an ancestor": (
+                {**self.manager, "ENSEMBLE_HOLDER_PID": "1"},
+                _start("startup"),
+            ),
+            "non-JSON": (self.manager, b"startup"),
         }
         for label, (extra, stdin) in silent.items():
             with self.subTest(label):
@@ -85,23 +96,23 @@ class RearmHookTest(Case):
                 self.assertEqual((done.returncode, done.stdout, done.stderr), (0, b"", b""))
         for source in ("startup", "resume", "compact", "clear"):
             with self.subTest(source):
-                done = self.run_hook(MANAGER, _start(source))
+                done = self.run_hook(self.manager, _start(source))
                 self.assertEqual((done.returncode, done.stderr), (0, b""))
                 context = json.loads(done.stdout)["hookSpecificOutput"]
                 self.assertEqual(context["hookEventName"], "SessionStart")
                 self.assertIn(f"`{source}` in manager `mgr`", context["additionalContext"])
         for label, prefix in (("closed stdout", "exec >&-; "), ("closed stdin", "exec <&-; ")):
             with self.subTest(label):
-                done = self.run_hook(MANAGER, _start("resume"), prefix)
+                done = self.run_hook(self.manager, _start("resume"), prefix)
                 self.assertEqual((done.returncode, done.stdout, done.stderr), (0, b"", b""))
 
     def test_each_hook_command_writes_its_record(self):
         roster = Path(self.ensemble, "managers", "mgr")
-        roster.mkdir(parents=True)
+        before = set(roster.iterdir())
         for client, manual in (("claude", False), ("codex", True)):
             call = session_records.CALLS[client]
             with self.subTest(client):
-                done = self.run_hook(MANAGER, json.dumps(call.stdin).encode(), manual=manual)
+                done = self.run_hook(self.manager, json.dumps(call.stdin).encode(), manual=manual)
                 self.assertEqual((done.returncode, done.stderr), (0, b""))
                 context = json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"]
                 self.assertIn("`startup` in manager `mgr`", context)
@@ -109,10 +120,10 @@ class RearmHookTest(Case):
                 expected = {**session_records.VALID[client], "pid": os.getpid()}
                 self.assertEqual(json.loads((roster / "session.json").read_text()), expected)
         cleared = {**session_records.CALLS["claude"].stdin, "source": "clear", "session_id": "s2"}
-        done = self.run_hook(MANAGER, json.dumps(cleared).encode())
+        done = self.run_hook(self.manager, json.dumps(cleared).encode())
         self.assertEqual((done.returncode, done.stderr), (0, b""))
         self.assertEqual(json.loads((roster / "session.json").read_text())["sid"], "s2")
-        self.assertEqual(os.listdir(roster), ["session.json"])
+        self.assertEqual(set(roster.iterdir()), before | {roster / "session.json"})
 
     def test_broken_pipe(self):
         read, write = os.pipe()
@@ -127,7 +138,7 @@ class RearmHookTest(Case):
                     **os.environ,
                     "CLAUDE_PLUGIN_ROOT": REPO,
                     "ENSEMBLE_HOLDER_PID": str(os.getpid()),
-                    **MANAGER,
+                    **self.manager,
                 },
                 timeout=10,
                 check=False,
@@ -138,13 +149,12 @@ class RearmHookTest(Case):
 
     def test_leaves_state_untouched(self):
         roster = Path(self.ensemble, "managers", "mgr")
-        roster.mkdir(parents=True)
         (roster / "events").write_text("1 12:00:00 w1 done\n")
         (roster / "handled").write_text("0 1\n")
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in roster.iterdir()}
         tree = sorted(Path(self.home).rglob("*"))
         for manual in (False, True):
-            done = self.run_hook(MANAGER, _start("compact"), manual=manual)
+            done = self.run_hook(self.manager, _start("compact"), manual=manual)
             self.assertEqual(done.returncode, 0)
         self.assertEqual(
             {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in roster.iterdir()}, before

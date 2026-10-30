@@ -68,6 +68,27 @@ VALUED = frozenset(
     }
 )
 MAX_MESSAGE = 128 << 20
+REMOTE_VALUES = frozenset({"--model", "-m", "--cd", "-C", "--image", "-i"})
+REMOTE_FLAGS = frozenset({"--last", "--all", "--include-non-interactive", "--no-alt-screen"})
+
+
+def local_launch(argv: tuple[str, ...]) -> bool:
+    """Remote mode discards local permission choices; let native code resolve them."""
+    words = iter(argv)
+    for word in words:
+        if word == "--":
+            break
+        name, equals, _value = word.partition("=")
+        if name in REMOTE_VALUES:
+            if not equals:
+                next(words, None)
+        elif word.startswith(("-m", "-C", "-i")):
+            continue
+        elif word.startswith("-") and name not in REMOTE_FLAGS:
+            return True
+    return any(
+        name in os.environ for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT")
+    )
 
 
 def interactive(argv: tuple[str, ...]) -> bool:
@@ -374,6 +395,8 @@ def main(root: str, argv: tuple[str, ...]) -> int:
     identity = json.loads(context.stdout)
     if any(word == "--remote" or word.startswith("--remote=") for word in argv):
         raise ValueError("manager clients require the local shared server; omit --remote")
+    if local_launch(argv):
+        os.execv(real, (real, "--no-daemon", *argv))
     started = subprocess.run(
         (real, "app-server", "daemon", "start"),
         capture_output=True,

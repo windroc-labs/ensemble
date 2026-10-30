@@ -16,7 +16,7 @@ from unittest import mock
 import jsonschema
 
 from ensemble.manager import Roster, rearm
-from tests.manager import session_records
+from tests.manager import session_records, shared_codex
 from tests.manager.case import REPO, Case
 
 MANAGER = {
@@ -27,6 +27,22 @@ MANAGER = {
 TABLE = b" 100 50\n  50 4242\n4242     1\n 777   1\n"
 SKILL = os.path.join(REPO, "skills", "manage", "SKILL.md")
 MODES = ((), ("--mode", "manual"))
+
+
+class SharedFramesTest(Case):
+    def test_the_daemon_fixture_reassembles_fragmented_requests(self):
+        for masked in (False, True):
+            with self.subTest(masked=masked):
+                wire = bytearray()
+                for first, payload in ((1, b'{"id'), (137, b"p"), (128, b'":1}')):
+                    mask = b"test" if masked else b""
+                    wire.extend(bytes((first, len(payload) | (128 if masked else 0))) + mask)
+                    wire.extend(
+                        bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+                        if masked
+                        else payload
+                    )
+                self.assertEqual(shared_codex.receive(io.BytesIO(wire)), {"id": 1})
 
 
 def _ps(stdout: bytes = TABLE, returncode: int = 0) -> mock.Mock:
@@ -885,3 +901,32 @@ class BindingTest(Case):
         self.assertEqual(self.record("second")["pid"], 80)
         self.second.release()
         self.assertEqual(self.call(argv, event, self.environ("second")), (0, ""))
+
+    def test_native_resume_replaces_a_dead_bridged_client_record(self):
+        self.bind("second", 80, "saved")
+        self.births.pop(80)
+        self.tree[81] = 42
+        self.tree[90] = 81
+        argv = (
+            "--binding",
+            "lookup",
+            "--mode",
+            "manual",
+            "--client",
+            "codex",
+            "--client-pid",
+            "81",
+            "--hook-daemon",
+            "app-server",
+        )
+        code, output = self.call(
+            argv,
+            {"session_id": "saved", "cwd": "/chosen", "source": "resume"},
+            self.environ("second"),
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("`resume` in manager `second`", output)
+        self.assertEqual(
+            self.record("second"),
+            {"client": "codex", "sid": "saved", "pid": 81, "cwd": "/chosen"},
+        )

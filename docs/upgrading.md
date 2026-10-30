@@ -23,7 +23,7 @@ hold. A manager named `list` can no longer be opened with `ensemble list`: attac
 
 After updating the plugin, rerun `scripts/install.sh` or the updated plugin's
 `skills/manage/scripts/ensemble --install`. This installs `~/.ensemble/bin/codex` alongside the Ensemble commands.
-Use that `codex` entry on PATH inside a manager's hold. It binds each native session to its TUI before the first turn,
+Use that `codex` entry on PATH inside a manager's hold. The shared-daemon route binds each native session to its TUI before the first turn,
 including when two managers share a daemon or a resume reuses a daemon left by an exited TUI.
 It does not edit Codex configuration. Outside a manager and in workers it runs the existing Codex executable directly.
 
@@ -31,6 +31,11 @@ Restart existing manager TUIs through this entry after upgrading; the shared dae
 If an older record names another manager's conversation, select the correct conversation once with `codex resume`.
 Absolute paths to a different Codex executable bypass the entry. Explicit `--remote` is refused inside a manager;
 `--no-daemon` retains the direct-client hook path.
+
+Permission, additional-workspace and configuration flags run through Codex's native local client
+with `--no-daemon`, so remote mode cannot discard an explicit resume restriction or reject local workspace options.
+The shared route supports model, cwd, image, resume-picker and display options; other flags use the native local route.
+Explicit executor or workload-identity environments also use the native local route. No setting change is needed.
 
 ## ctmux is now ensemble
 
