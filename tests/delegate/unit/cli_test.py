@@ -1319,9 +1319,6 @@ class View:
     def outcome(self):
         return self.outcome_value
 
-    def attach_command(self):
-        return self.command
-
     def resume(self, *, mode=None, input=None):
         return record(self.name)
 
@@ -1504,7 +1501,7 @@ class Queries(Case):
         )
 
     def test_one_key_commands_refuse_any_other_count(self):
-        for command in ("outcome", "attach-command", "resume", "content"):
+        for command in ("outcome", "resume", "content"):
             with self.subTest(command=command):
                 self.assertEqual(
                     self.query(command), (2, "", "delegate: takes exactly one key, got 0\n")
@@ -1517,16 +1514,6 @@ class Queries(Case):
                 code, out, err = self.query(command, "a", "b", a=View("a"), b=View("b"))
                 self.assertEqual((code, out), (2, ""))
                 self.assertIn("unrecognized arguments: b", err)
-
-    def test_attach_command_prints_one_command_or_exits_1(self):
-        self.assertEqual(
-            self.query("attach-command", "a", a=View("a", command="tmux attach -t =a")),
-            (0, "tmux attach -t =a\n", ""),
-        )
-        self.assertEqual(
-            self.query("attach-command", "a", a=View("a")),
-            (1, "", "delegate: a: no showable session\n"),
-        )
 
     def test_resume_inside_an_agent_session_exits_2_and_status_still_answers(self):
         a = View("a")
@@ -1646,7 +1633,8 @@ class HelpContracts(Case):
                 text = self.help(name)
                 self.assertIn("Record", text)
                 self.assertIn("workdir", text)
-                if name in {"content", "outcome", "resume", "attach-command"}:
+                self.assertIn("No live view: ensemble-delegate status", text)
+                if name in {"content", "outcome", "resume"}:
                     self.assertIn("exactly one", text)
                 else:
                     self.assertIn("batch", text)

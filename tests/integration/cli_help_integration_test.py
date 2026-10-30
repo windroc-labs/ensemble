@@ -63,7 +63,6 @@ SURFACES = {
             "show",
             "hide",
             "close",
-            "attach-command",
             "prompt",
         ],
     ),
