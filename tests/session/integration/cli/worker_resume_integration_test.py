@@ -1,8 +1,5 @@
 """ensemble-session resume and restart of a worker (FR-20, FR-36; Q07, Q08) on a private tmux
-server: resuming a live worker starts nothing; resuming a gone one or restarting replays its saved
-launch without its prompt, once; bad saved state or Host starts nothing; a new generation waits for
-the old one's process group; each launch gets one /color. kill -9 of the harness itself:
-crash_resume_integration_test.py.
+server; kill -9 of the harness itself: crash_resume_integration_test.py.
 """
 
 import contextlib

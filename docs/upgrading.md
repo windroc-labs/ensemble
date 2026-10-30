@@ -26,8 +26,8 @@ session whose state cannot be read has a null `attach` field: it cannot be attac
 
 Workers no longer get a tmux view session: `tmux ls` lists none, and a grid, split or stack pane runs the Host's
 attach command itself (the `attach` field of `ensemble-session status NAME`). `tmux attach -t =NAME` no longer
-attaches a worker. A custom delegate `show` command that ran `tmux attach -t {{session}}` must run that attach
-command instead: `tmux split-window "$(ensemble-session status {{session}} | jq -r .attach)"`. A worker pane has one
+attaches a worker, so a custom delegate `show` command running `tmux attach -t {{session}}` no longer works; run the
+attach command instead: `tmux split-window "$(ensemble-session status {{session}} | jq -r .attach)"`. A worker pane has one
 tmux prefix; scroll back with the manager's copy mode or mouse. Its name shows in the window's bottom pane border
 (Docker Host always, tmux Host with `[hosts.tmux] status_line = true`). A worker started by an earlier version keeps
 its old view session, and `show` refuses it (`a host tmux session NAME exists`) until you run

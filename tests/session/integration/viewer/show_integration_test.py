@@ -1,7 +1,4 @@
-"""Worker panes against a private server: a pane runs the Host's attach command itself, with no
-tmux session or nested client; hide, a manual close and a worker exit; labels; partial-success
-recovery.
-"""
+"""Worker panes running the Host's attach command on a private tmux server."""
 
 import contextlib
 import io
@@ -36,7 +33,6 @@ class LiveCase(Case):
         return self.tmux("display-message", "-p", "-t", pane, fmt)
 
     def started_by(self, pane: str) -> list[str]:
-        """The argv pane was split with."""
         return shlex.split(self.display(pane, "#{pane_start_command}"))
 
     def close_hooks(self, window: str) -> str:
@@ -91,7 +87,7 @@ class GuardDisplayTest(LiveCase):
         return self.tmux("capture-pane", "-p", "-e", "-S", "-", "-t", pane)
 
     def shown(self, name: str | None = None) -> str:
-        """name's (default NAME's) worker pane, once show opens it from the manager's pane."""
+        """name's worker pane, shown from the manager's pane."""
         name = name or self.NAME
         with mock.patch.dict(os.environ, self.server.inside("manager")):
             self.assertIsNone(self.viewer.show(name, self.host, display="manager"))
@@ -121,9 +117,7 @@ class GuardDisplayTest(LiveCase):
         self.assertIn(self.NAME, self.host.list())
 
     def test_pane_runs_the_attach_command_without_a_nested_client(self):
-        """AC1: the worker pane's start command is exactly the Host's CommandView.argv, and no
-        tmux client is attached to a session named after the worker.
-        """
+        """AC1: the pane runs CommandView.argv with no nested tmux client."""
         target = self.host.attach_target(self.NAME)
         pane = self.shown()
         self.assertEqual(self.started_by(pane), list(target.argv))
@@ -136,9 +130,7 @@ class GuardDisplayTest(LiveCase):
         self.assertNotEqual(self.server.tmux("has-session", "-t", f"={self.NAME}").returncode, 0)
 
     def test_start_show_hide_show_makes_no_tmux_session(self):
-        """AC2: a started worker, shown, hidden and shown again, never has a tmux session, and no
-        session carries @view.
-        """
+        """AC2: a worker shown, hidden and shown again never has a tmux session."""
 
         def no_session():
             rows = self.tmux("list-sessions", "-F", "#{session_name}\t#{@view}").splitlines()
@@ -154,9 +146,7 @@ class GuardDisplayTest(LiveCase):
         no_session()
 
     def test_hide_keeps_the_guard_and_show_replays_hidden_output(self):
-        """AC5: with two workers shown, hiding one kills only its worker pane; its guard runs on,
-        listed and hidden; a show opens a new pane whose scrollback holds what it printed hidden.
-        """
+        """AC5: hide kills only its pane; a show replays its scrollback."""
         other = self.host.worker(
             "other", Launch(live_tmux.IDLE, self.server.env(), cwd=self.home), terminal=True
         )
@@ -181,9 +171,7 @@ class GuardDisplayTest(LiveCase):
         self.assert_worker_unchanged()
 
     def test_closing_the_pane_keeps_the_guard_inventory_and_show_reopens(self):
-        """A worker pane killed by hand ends no worker: its guard still claims the name, and a show
-        opens a new pane on the same attach command, its colored scrollback whole.
-        """
+        """A worker pane killed by hand ends no worker; a show opens a new pane."""
         target = self.host.attach_target(self.NAME)
         pane = self.shown()
         self.tmux("kill-pane", "-t", pane)
@@ -200,10 +188,7 @@ class GuardDisplayTest(LiveCase):
         self.assert_worker_unchanged()
 
     def test_worker_exit_closes_its_pane_and_leaves_no_session(self):
-        """AC8: a worker's exit ends its attach command and closes its worker pane, leaving no tmux
-        session or pane of it; its close hook stays until the window's next kill-pane, which
-        removes it.
-        """
+        """AC8: a worker's exit closes its pane; the next kill-pane removes its close hook."""
         pane = self.shown()
         window = self.display(pane, "#{window_id}")
         manager = self.server.inside("manager")["TMUX_PANE"]
@@ -251,7 +236,7 @@ class ShowTest(LiveCase):
         return subprocess.run(argv, **kwargs)
 
     def open(self):
-        """open_pane outside tmux, below the pane mgr's client shows (--split-from mgr)."""
+        """open_pane outside tmux, below mgr's shown pane."""
         self.stderr = io.StringIO()
         with redirect_stderr(self.stderr):
             return placed(self.transport).open_pane(
@@ -268,16 +253,13 @@ class ShowTest(LiveCase):
         return next(argv for argv in self.calls if argv[1:2] == ["split-window"])
 
     def added(self, before) -> str:
-        """The one pane the mgr window gained."""
         after = set(self.server.panes("=mgr:"))
         self.assertLess(set(before), after)
         (new,) = after - set(before)
         return new
 
     def test_split_from_runs_the_attach_command_and_tags_the_pane(self):
-        """AC3: --split-from mgr splits the pane mgr's client shows, running CommandView.argv
-        itself; the pane is tagged @worker and its window holds its close hook.
-        """
+        """AC3: --split-from mgr splits mgr's shown pane, tagged with its close hook."""
         before = self.server.panes("=mgr:")
         self.assertIsNone(self.open())
         new = self.added(before)
@@ -297,9 +279,7 @@ class ShowTest(LiveCase):
         self.assertIn(f" hide --if-closed {run} -- worker ", hooks)
 
     def test_split_right_runs_the_attach_command(self):
-        """AC3: --split right beside --split-from mgr, from a session no client shows (no grid),
-        opens a pane right of mgr's shown pane running CommandView.argv itself.
-        """
+        """AC3: --split right with --split-from mgr and no grid opens right of mgr's pane."""
         self.tmux("new-session", "-d", "-s", "side", *live_tmux.IDLE)
         before = self.server.panes("=mgr:")
         with mock.patch.dict(os.environ, self.server.inside("side")):
@@ -339,7 +319,7 @@ class ShowTest(LiveCase):
 
 
 class LabelTest(LiveCase):
-    """A /bin/sh worker w1, shown from mgr's pane; `stty size` asks its terminal's size."""
+    """A /bin/sh worker w1, shown from mgr's pane."""
 
     def setUp(self):
         self.server = live_tmux.Server(self, self.home)
@@ -360,7 +340,7 @@ class LabelTest(LiveCase):
         return pane
 
     def sized(self, pane: str) -> None:
-        """Waits until w1's terminal has pane's rows and columns."""
+        """Waits until w1's terminal has pane's size."""
         live_tmux.sized(
             self.worker,
             lambda: self.display(pane, "#{pane_width}x#{pane_height}"),
@@ -368,9 +348,7 @@ class LabelTest(LiveCase):
         )
 
     def test_a_docker_tui_pane_shows_its_name_in_the_border(self):
-        """AC12: a Docker worker pane shows [NAME] in its window's bottom pane border; the worker's
-        terminal keeps every row of the pane; no global or manager session option changes.
-        """
+        """AC12: a Docker worker pane's border shows [NAME]; its terminal keeps every row."""
         before = self.tmux("show-options", "-g")
         manager = self.tmux("show-options", "-t", "=mgr:")
         host = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
@@ -387,9 +365,7 @@ class LabelTest(LiveCase):
         self.assertEqual(self.tmux("show-options", "-t", "=mgr:"), manager)
 
     def test_tmux_host_pane_has_no_label_by_default(self):
-        """AC12: with [hosts.tmux] status_line false (the default) the window gets no border status
-        and the pane no label.
-        """
+        """AC12: status_line false (the default): no border status, no label."""
         pane = self.show(self.host)
         window = self.display(pane, "#{window_id}")
         self.assertEqual(self.display(pane, "#{pane-border-status}|#{@worker-label}"), "off|")

@@ -1,7 +1,5 @@
-"""router.py --tui end to end: from MANAGER's pane an --issue claim or a tick prints the run's
-Record; its drive and TUI live, written back as a headless run; a killed or closed run resumes
-on the next --issue, `resume ID` at its display; no place for the TUI, a bad display or events
-file: exit 2 before any Linear request.
+"""router.py --tui end to end: from MANAGER's pane a claim or a tick prints the run's Record; a
+killed or closed run resumes on the next --issue; a bad setup exits 2 before any Linear request.
 """
 
 import functools

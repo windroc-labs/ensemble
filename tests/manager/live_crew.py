@@ -135,7 +135,6 @@ class LiveCrew(live_tmux.Calls, Case):
         return self.record(self.session(*argv, inside=inside, **self.scene(name)))
 
     def role(self, name: str, *flags: str, mode: str = "tui", **kw):
-        """crew run `name` -- ensemble-delegate run … --detach."""
         return self.launch(name, self.role_argv(name, *flags, mode=mode), **kw)
 
     def role_argv(self, name: str, *flags: str, mode: str = "tui") -> tuple[str, ...]:
@@ -220,7 +219,7 @@ class LiveCrew(live_tmux.Calls, Case):
         drives.stop(self.drive(record))
 
     def killed(self, name: str, record: Record) -> None:
-        """SIGKILLs run `name`'s drive, harness and client; attach: gone."""
+        """SIGKILLs run `name`'s drive, harness and client."""
         (tui,) = record.sessions
         self.wait_event(tui, "done")
         self.kill_drive(record)
@@ -251,7 +250,7 @@ class LiveCrew(live_tmux.Calls, Case):
         return live_tmux.wait(poked, TIMEOUT, what=what)
 
     def live(self, *names: str) -> bool:
-        """Whether each name is a tmux session (a manager's) or a worker whose guard runs."""
+        """Whether each name is a tmux session or a worker whose guard runs."""
         return all(
             self.server.tmux("has-session", "-t", f"={n}").returncode == 0 or live_tmux.running(n)
             for n in names

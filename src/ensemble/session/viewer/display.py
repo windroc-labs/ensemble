@@ -1,6 +1,4 @@
-"""Display functions for the session layer. FORMAT applies only on an attachable Host; on
-another, a display is kept as given and matched exactly.
-"""
+"""Display functions for the session layer; FORMAT applies only on an attachable Host."""
 
 from __future__ import annotations
 
@@ -87,9 +85,7 @@ def display_help(host: Host) -> str:
 
 
 def layout(viewer: Viewer, host: Host, display: Display) -> str | None:
-    """None on a Host that cannot show; else display, its empty opener part the caller's once the
-    pane it goes beside is found. NO_DISPLAY needs no pane, started hidden.
-    """
+    """None on a Host that cannot show; else display, its empty opener part the caller's."""
     validate_display(display, host)
     if not host.attachable:
         return None
@@ -224,9 +220,7 @@ def started(viewer: Viewer, name: str, host: Host, display: Display) -> None:
 def status(
     viewer: Viewer, host: Host, name: str, sid: str | None, word: StatusState | None
 ) -> Status:
-    """Live session `name`'s Status: its activity `word` (None: working), hidden by its sid's
-    entry, attach from the Viewer; unknown when its Host fails.
-    """
+    """Live session `name`'s Status (`word` None: working); unknown when its Host fails."""
     try:
         hidden = sid is not None and hidden_store.read(name, sid)
         attach = viewer.attach_command(name, host) if host.attachable else None

@@ -1,4 +1,4 @@
-"""Session behavior tests with caller-owned dependencies."""
+"""Viewer grids on a private tmux server."""
 
 import contextlib
 import functools
@@ -52,7 +52,7 @@ class Live(Case):
         self.configure()
 
     def configure(self, **settings) -> None:
-        """The [viewer] settings show() reads: these, over the earlier ones."""
+        """The [viewer] settings show() reads, over the earlier ones."""
         self.settings.update(settings)
         self.session_cls = configured({}, viewer=self.settings)
 
@@ -71,9 +71,7 @@ class Live(Case):
     def show(
         self, name: str, inside: str | None = MANAGER, split=None, split_from=None, opener=None
     ) -> str:
-        """The Viewer's show(name) on the default Host at opener, split and split_from from inside
-        `inside`, a worker pane then showing it; its stderr.
-        """
+        """The Viewer's show(name) from inside `inside`; its stderr."""
         err = io.StringIO()
         display = fold(opener, split, split_from)
         host = self.session_cls.host()
@@ -84,12 +82,11 @@ class Live(Case):
         return err.getvalue()
 
     def started(self, name: str, inside: str | None = MANAGER, **kwargs) -> str:
-        """Worker `name` started with no pane, then show()n; show's stderr."""
         self.worker(name)
         return self.show(name, inside, **kwargs)
 
     def worker(self, name, display=None):
-        """Worker `name` started, its worker state naming its run and `display`."""
+        """Worker `name` started, its worker state naming `display`."""
         handle = self.host.worker(
             name, Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd), terminal=True
         )
@@ -109,7 +106,7 @@ class Live(Case):
             self.workers.pop(name)
 
     def close(self, name: str) -> None:
-        """Ends worker `name`: its attach command ends, which closes its worker pane."""
+        """Ends worker `name`, which closes its worker pane."""
         self.cleanup_worker(name, self.workers[name])
 
     def tmux(self, *args: str) -> str:
@@ -118,7 +115,7 @@ class Live(Case):
         return res.stdout.removesuffix("\n")
 
     def tui(self, *args: str) -> None:
-        """ensemble-session, run from inside the manager's pane."""
+        """ensemble-session from the manager's pane."""
         res = subprocess.run(
             [COMMAND, *args],
             env=self.server.env(**self.server.inside(MANAGER)),
@@ -193,18 +190,14 @@ class GridTest(Live):
         self.grid([["w1", "w3"]], width)
 
     def shown(self) -> dict[str, tuple[str | None, str | None]]:
-        """Each listed worker's (shown, its pane's @worker-opener or None)."""
+        """Each listed worker's (shown, @worker-opener or None)."""
         return {
             row.name: (row.shown, self.server.opener_of(row.name) or None)
             for row in self.session_cls.list()
         }
 
     def test_sub_sessions(self):
-        """AC10: the manager shows m1..m3; a show with opener m2 (display `m2`) nests in m2's
-        cell; listed, each is shown in the manager's tmux session, its opener its pane's
-        @worker-opener; a worker with no worker pane is shown nowhere. AC9: m2 hidden, z3 sits in
-        main till m2 closes.
-        """
+        """AC10: a show with opener m2 nests in its cell. AC9: m2 hidden, z3 sits in main."""
         for i, name in enumerate(("m1", "m2", "m3"), 1):
             self.started(name)
             self.grid([[f"m{k}" for k in range(1, i + 1)]])
@@ -239,9 +232,7 @@ class GridTest(Live):
         self.grid([["m1", ["z3"]]])
 
     def test_a_show_with_a_hidden_opener_lands_in_its_openers_grid(self):
-        """AC9 (D5): the manager opened a, then a hidden: a show of b with opener a places b in the
-        manager's grid (a's display opener), its opener still a; shown again, a takes b under it.
-        """
+        """AC9 (D5): b opened by hidden a lands in a's opener's grid; a shown again takes b."""
         self.worker("a", display=MANAGER)
         self.show("a")
         self.grid([["a"]])
@@ -255,7 +246,7 @@ class GridTest(Live):
         self.grid([[("a", ["b"])]])
 
     def test_showing_twice_keeps_one_pane(self):
-        """AC9: a show of a worker with a live worker pane opens nothing, whatever its opener."""
+        """AC9: a show of a worker with a live worker pane opens nothing."""
         self.started("w1")
         self.started("w2")
         self.grid([["w1", "w2"]])

@@ -1,7 +1,4 @@
-"""OwnedSession, the control view of an owned worker: never its owner. stop, close, send, press
-and screen are requests to its harness; record reads its worker dir; the rest goes to a read-only
-attach, which holds no handle of the worker.
-"""
+"""OwnedSession, the control view of an owned worker: never its owner."""
 
 from __future__ import annotations
 
@@ -46,9 +43,7 @@ def fold(
     blocked: bool,
     replayed: bool,
 ) -> tuple[str | None, bool]:
-    """reply: the latest Reply or non-empty TurnEnd text (replayed: even ""); blocked from a
-    Blocked until anything but Stderr or Reply.
-    """
+    """reply: the latest Reply or non-empty TurnEnd text (replayed: even "")."""
     if isinstance(event, ClientBound):
         return reply, blocked
     if isinstance(event, Reply):
@@ -60,7 +55,6 @@ def fold(
 
 
 def dialog(current: str | None, event: SessionEvent | Stderr | ClientBound) -> str | None:
-    """The dialog its client waits on: the first Blocked's reason, kept as `fold` keeps blocked."""
     if isinstance(event, Blocked):
         return event.reason if current is None else current
     return current if isinstance(event, Stderr | Reply | ClientBound) else None
@@ -97,13 +91,7 @@ class _Reader:
 
 
 class OwnedSession(Session):
-    """attach: the read-only attach, bound to sid and generation (attached: one made already);
-    retire: its non-owner end of that generation, a tui view's (the record rule) or a named
-    headless one's (confirmed_end); without, the attach's stop or close; replay: start past the log. A headless
-    view's events() stops its worker on an interrupt, as a headless HostedSession does; tie: a
-    headless start's caller pipe, its harness closing the worker once the view is gone; clock: its
-    session class's, timing its idle timeouts.
-    """
+    """retire: its non-owner end of its generation; tie: a headless start's caller pipe."""
 
     def __init__(
         self,
@@ -188,9 +176,7 @@ class OwnedSession(Session):
         self._end(Op.CLOSE)
 
     def _end(self, op: Op) -> None:
-        """With no owner: a view with retire retires, its generation only, for either op; any other
-        headless one ends through the attach, confirmed.
-        """
+        """With no owner: retire, else end through the attach, confirmed."""
         if self._channel.request(op):
             return
         if self._retire is not None:
@@ -208,7 +194,6 @@ class OwnedSession(Session):
             raise Unanswered(f"session {self.name or self.sid}: still running after {op}")
 
     def _held(self) -> tuple[Session, bool]:
-        """Its attach, and whether it was held already."""
         with self._lock:
             if self._attached is not None:
                 return self._attached, True
@@ -224,10 +209,7 @@ class OwnedSession(Session):
                 self._attached = None
 
     def _call(self, call: Callable[[Session], T]) -> T:
-        """call on its attach; a held one's SessionError (its display reopened since, say) drops it
-        for one call on a new attach. Unanswered (a partly sent send, say) is no proof the call
-        failed: raised.
-        """
+        """A held attach's SessionError retries on a new one; Unanswered may have acted: raised."""
         session, held = self._held()
         try:
             return call(session)
@@ -246,12 +228,10 @@ class OwnedSession(Session):
 
     @property
     def client_up(self) -> bool:
-        """Its harness says its guard reported its client up (harness.json `up`)."""
         return self._channel.status().get("up") is True
 
     @property
     def dialog(self) -> str | None:
-        """The dialog its client waits on, by its harness's latest pump (harness.json `dialog`)."""
         found = self._channel.status().get("dialog")
         return found if isinstance(found, str) else None
 
@@ -294,7 +274,6 @@ class OwnedSession(Session):
         return self._call(lambda session: session.status())
 
     def content(self) -> str:
-        """Its done turn's reply, else its screen."""
         if self.status().state == StatusState.DONE and (reply := self.reply):
             return reply
         return self.screen()
@@ -306,13 +285,11 @@ class OwnedSession(Session):
         return self._call(lambda session: session.session_status())
 
     def publish(self, record: Record) -> None:
-        """Its Record, stored in its worker dir for its generation (a tui worker's)."""
         if self.mode != Mode.TUI or self.name is None:
             raise SessionError(f"session {self.name or self.sid}: no worker dir for a Record")
         store_record(self.name, self.generation, record)
 
     def record(self) -> Record | None:
-        """Its crew Record, stored in its worker dir for its generation."""
         if self.mode != Mode.TUI or self.name is None:
             return None
         return stored_record(self.name, self.generation)
@@ -340,9 +317,7 @@ class OwnedSession(Session):
 
 
 def confirmed_end(host: Host, name: str, generation: str) -> Callable[[], None]:
-    """A named headless view's retire: its worker confirmed gone (a reaping guard waited for), then
-    its Host's leftovers of that generation released; else Unanswered, nothing released.
-    """
+    """A named headless view's retire: releases its Host's leftovers once its worker is gone."""
 
     def end() -> None:
         if settled_liveness(host, name, generation) != Liveness.ABSENT:

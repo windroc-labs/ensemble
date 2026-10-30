@@ -1,4 +1,4 @@
-"""Tmux worker pane placement and caller context through recorded command transport."""
+"""Tmux worker pane placement."""
 
 import io
 import re
@@ -63,7 +63,7 @@ class PaneAnchorTest(PaneFixture):
                 placed(FakeTmux(results={"display-message": (0, "own\n")})).anchor(split_from)
 
     def test_split_from_a_worker_anchors_at_its_pane(self):
-        """AC3: --split-from X anchors at X's newest worker pane, asking no client."""
+        """AC3: --split-from X anchors at X's newest worker pane."""
         rows = worker_rows(("%5", "b", "mgr"), ("%12", "b", "mgr"), ("%30", "c", "b"))
         fake = FakeTmux(results={"list-panes": rows})
         with environ():
@@ -169,8 +169,6 @@ class RunCommandTest(Case):
 
 
 class RecordTest(Case):
-    """_record tags a new pane %20 of window @1 as worker w1's."""
-
     def record(self, *, name="w1", opener="mgr", pane="%20", window="@1", fake=None, **kw):
         fake = fake or FakeTmux()
         self.stderr = io.StringIO()
@@ -180,9 +178,7 @@ class RecordTest(Case):
         return fake.calls
 
     def test_record_sets_pane_options_and_close_hook(self):
-        """AC6: after a hooks read, one call sets @worker, @worker-attach, @worker-opener and the
-        after-kill-pane[N] hook hiding run S/G of w1 once %20 is gone.
-        """
+        """AC6: after a hooks read, one call tags %20 and sets its close hook."""
         hook = (
             "if-shell -F '#{m:* %20 *,#{S:#{W:#{P: #{pane_id} }}}}' '' "
             '"set-hook -u -w -t @1 after-kill-pane[20] ; '
@@ -208,7 +204,7 @@ class RecordTest(Case):
         self.assertEqual(self.record(opener=None), record(None, "%20", name="w1"))
 
     def test_close_hook_carries_the_run(self):
-        """AC6 (D2): the hook names the run's sid and generation; either missing or bad: none."""
+        """AC6 (D2): a missing or bad sid or generation: no hook."""
         for sid, generation in ((SID, "g1"), ("a.b:c_d-1", "0f8f-1:2")):
             with self.subTest(sid=sid, generation=generation):
                 calls = self.record(sid=sid, generation=generation)
@@ -227,7 +223,7 @@ class RecordTest(Case):
                     )
 
     def test_close_hook_refuses_any_value_outside_its_allow_list(self):
-        """AC6: every value in the hook passes its allow-list, else no hook."""
+        """AC6: a value off its allow-list: no hook."""
         good = {"sid": SID, "generation": GENERATION}
         self.assertEqual(
             placement._close_hook(COMMAND, "w1", "%20", "@1", **good),
@@ -259,7 +255,7 @@ class RecordTest(Case):
                 self.assertIsNone(hook)
 
     def test_record_prunes_the_entries_of_gone_panes(self):
-        """AC6: the hook's call unsets each after-kill-pane[M] whose %M is gone; nothing else."""
+        """AC6: the hook's call unsets only entries whose pane is gone."""
         read = (
             'after-kill-pane[5] if-shell -F "#{m:* %5 *,x}" \'\' "run-shell true"\n'
             "after-kill-pane[7] run-shell true\n"
@@ -282,7 +278,7 @@ class RecordTest(Case):
         self.assertEqual(self.record(fake=fake)[1:], record("mgr", "%20", name="w1")[1:])
 
     def test_record_refuses_invalid_ids_and_sets_nothing(self):
-        """AC6, AC11: a pane, window, name or opener tmux could misread tags nothing."""
+        """AC6, AC11: a value tmux could misread tags nothing."""
         for kw in (
             {"pane": "20"},
             {"pane": "%x"},
@@ -315,9 +311,7 @@ class RecordTest(Case):
         self.assertEqual(self.stderr.getvalue(), "tui: show: @worker: tmux: boom\n")
 
     def test_label_sets_the_border_only_when_asked(self):
-        """AC12 (D6): a labeled worker's pane holds its name in @worker-label, shown in the
-        window's bottom pane border; unlabeled, no border option is set.
-        """
+        """AC12 (D6): a label goes in @worker-label; unlabeled, no border option."""
         labeled = self.record(label=True)[-1]
         self.assertEqual(labeled, record("mgr", "%20", name="w1", label=True)[-1])
         for option in (
@@ -388,10 +382,8 @@ class WorkersTest(Case):
 
 
 class ReuseTest(PaneFixture):
-    """open_pane opens no second worker pane while one of the worker lives."""
-
     def test_a_live_worker_pane_is_reused_whatever_its_opener(self):
-        """AC9 (D3): any live worker pane of s, whoever opened it, is the one; nothing opens."""
+        """AC9 (D3): any live worker pane of s is the one; nothing opens."""
         for opener in ("own", "other", ""):
             with self.subTest(opener=opener):
                 fake = FakeTmux(
@@ -407,7 +399,7 @@ class ReuseTest(PaneFixture):
                 self.assertEqual(self.stderr.getvalue(), "")
 
     def test_showing_twice_opens_one_pane(self):
-        """AC9: the second show finds the first's worker pane."""
+        """AC9: a second show finds the first's pane."""
         tagged = []
 
         def set_option(argv):
@@ -430,9 +422,7 @@ class ReuseTest(PaneFixture):
         self.assertEqual(fake.calls[-2:], [OWN, WORKERS])
 
     def test_an_earlier_runs_pane_is_not_reused(self):
-        """AC9: a pane of s running another attach command (an earlier run's, still closing) is not
-        this run's: a new pane opens, tagged with this run's attach command.
-        """
+        """AC9: a pane of s running an earlier run's attach command is not reused."""
         fake = FakeTmux(
             results={
                 "display-message": (0, "own\n"),
@@ -471,9 +461,7 @@ class ReuseTest(PaneFixture):
 
 
 class PanePlacementTest(PaneFixture):
-    """The caller is in tmux session own, pane %3, its window's grid read failing; tmux session
-    b's most recent client shows %9; a split prints %20 in @1.
-    """
+    """The caller is in session own, pane %3, its grid read failing; b's client shows %9."""
 
     def fake(self, rows=(), **results):
         return FakeTmux(
@@ -487,7 +475,7 @@ class PanePlacementTest(PaneFixture):
         )
 
     def test_split_stack_and_split_from_run_the_attach_argv(self):
-        """AC3: each placement splits a pane running exactly the Host's CommandView.argv."""
+        """AC3: each placement splits a pane running CommandView.argv."""
         head = [OWN, WORKERS, clients_of("own"), grid_read("%3")]
         for kw, rows, then in (
             ({"split": "right"}, (), [split_window("-h", "%3")]),
@@ -509,7 +497,7 @@ class PanePlacementTest(PaneFixture):
                 self.assertEqual(self.stderr.getvalue(), "")
 
     def test_a_worker_opener_outside_a_grid_anchors_at_its_pane(self):
-        """AC10: a worker's own sub-worker opens beside its pane, asking no client of its name."""
+        """AC10: a worker's sub-worker opens beside its pane."""
         for kw, flag in (({}, "-h"), ({"split": "below"}, "-v")):
             with self.subTest(**kw):
                 fake = self.fake([("%7", "a", "own")])
@@ -585,9 +573,7 @@ class PanePlacementTest(PaneFixture):
 
 
 class SpotTest(GridFixture):
-    """_spot for worker s, outside tmux: tmux session mgr's most recent client shows %9; a tmux
-    session not in `sessions` is gone; `windows` as GridFixture's.
-    """
+    """_spot for worker s outside tmux; mgr's client shows %9."""
 
     W1 = types.WorkerPane("%10", "w1", "mgr", "@1", "mgr")
     GRID = [("@1", "%3", "%3", "79", "48"), ("@1", "%3", "%10", "80", "48")]  # w1 in mgr's grid
@@ -637,9 +623,7 @@ class SpotTest(GridFixture):
                 self.spot(self.tmux(sessions=sessions), opener)
 
     def test_a_fallback_stands_in_for_an_opener_without_a_pane_or_client(self):
-        """D5: hidden a (no worker pane, no tmux session): the first of its fallbacks with a
-        worker pane or a client gives the grid, else the opener pane; the stack still keys on a.
-        """
+        """D5: hidden a: its first fallback with a worker pane or client gives the grid."""
         right, below = types.Split.RIGHT, types.Split.BELOW
         mine = types.WorkerPane("%7", "c", "a", "@1", "mgr")
         theirs = types.WorkerPane("%8", "d", "mgr", "@1", "mgr")
@@ -671,9 +655,7 @@ class SpotTest(GridFixture):
             self.spot(self.tmux(), "a", fallbacks=("x",))
 
     def test_no_fallback_for_an_opener_with_a_pane_or_client_or_a_failed_read(self):
-        """An opener's own pane or client wins over a fallback's grid; a failed client read is
-        that failure, not a fallback.
-        """
+        """An opener's own pane or client wins over a fallback's grid."""
         grid = {"%10": self.GRID}
         for opener, workers, spot in (
             ("mgr", (), ("%9", types.Split.RIGHT, None)),
@@ -720,9 +702,7 @@ class SpotTest(GridFixture):
 
 class GridShowTest(GridFixture):
     def test_grid_split_runs_the_attach_argv(self):
-        """AC1: a grid show splits a pane running exactly the Host's CommandView.argv, tagged
-        with the run's sid in its close hook; no nested tmux client.
-        """
+        """AC1: a grid show's pane runs CommandView.argv; its close hook names the sid."""
         fake = self.fake({"%3": self.NEW})
         self.assertIsNone(self.open(fake, sid=SID))
         self.assertEqual(
@@ -741,9 +721,7 @@ class GridShowTest(GridFixture):
         self.assertNotIn("attach", " ".join(command[: command.index("--")]))
 
     def test_grid_show_tags_the_pane_before_unmuting_and_tiling(self):
-        """AC11: @grid-busy set, the split, the pane's @worker tags, then the grid unmuted and
-        tiled, so no tile places the new pane as a manual pane.
-        """
+        """AC11: tagged before the grid unmutes and tiles, so no tile takes it for a manual pane."""
         fake = self.fake({"%3": self.NEW})
         self.assertIsNone(self.open(fake))
         self.assertEqual(

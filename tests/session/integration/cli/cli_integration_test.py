@@ -1,9 +1,5 @@
-"""bin/ensemble-session as installed, run from an unrelated cwd with no PYTHONPATH (Q01): --help's
-subcommands and each configured Host's display help; usage errors exit 2 on stderr alone and start
-nothing; no default client (D1); the client sees the wrapper's bin dir first on PATH and gets
-arguments with spaces verbatim; inside an agent session every start command exits 2. Its config
-(Q02): a local overlay is honoured; a bad config or an unknown client exits 2 with the reason on
-stderr before anything starts.
+"""bin/ensemble-session as installed, from an unrelated cwd with no PYTHONPATH (Q01): help, usage
+errors, client PATH and arguments, and its config (Q02).
 """
 
 import os

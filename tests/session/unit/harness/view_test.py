@@ -1,4 +1,4 @@
-"""harness/view.py: OwnedSession, the control view of a worker its session harness owns."""
+"""harness/view.py: OwnedSession."""
 
 import fcntl
 import itertools

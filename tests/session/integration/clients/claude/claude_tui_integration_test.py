@@ -1,7 +1,5 @@
-"""HostedSession's tui mode with client claude on a private tmux server: the real ClaudeClient runs
-fake_claude.py (on PATH as `claude`), its hooks from --settings. Turns, Blocked, idle timeouts,
-limits, deaths, resume, attach, show, close and the launch's /color, typed once no turn runs.
-CLAUDE_CONFIG_DIR is a temp dir.
+"""HostedSession's tui mode with the real ClaudeClient running fake_claude.py on a private tmux
+server.
 """
 
 import functools
@@ -437,7 +435,7 @@ class DeadTest(Live):
 
     def test_an_early_death_ends_with_its_exit_code_and_a_dead_line_its_screen_shown(self):
         """A client dead at once lingers in its guard: a show right after start shows its last
-        screen in a worker pane (kept here by remain-on-exit once the attach command ends).
+        screen.
         """
         self.server.attach(MANAGER)
         self.server.tmux("set-option", "-w", "-t", f"={MANAGER}:", "remain-on-exit", "on")

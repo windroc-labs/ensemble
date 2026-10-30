@@ -1,11 +1,5 @@
-"""ensemble-session's batch commands through bin/ensemble-session on a private tmux server: status
-answers each name or stdin Record in order (Q11), using answer_keys batch rules;
-show, hide and close by name and by stdin Record, show placing a
-session by its own display or by a Record's, close repeatable and only for the named (Q12), show
-and close checking private session identity; on a Host that cannot show
-(tests.session.fakes.host:FakeHost, the module entry) show, hide and tile exit 1
-saying so, while read and status, which read workers through their harness and worker dir, find no
-session in its process outside a harness.
+"""ensemble-session's batch commands (status, show, hide, close) by name and by stdin Record (Q11,
+Q12), and on a Host that cannot show (tests.session.fakes.host:FakeHost).
 """
 
 import dataclasses

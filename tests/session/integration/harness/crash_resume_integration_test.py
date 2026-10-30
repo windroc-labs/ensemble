@@ -1,4 +1,4 @@
-"""Guard lifecycle, conversation recovery and worker panes shown again on a private tmux server."""
+"""Guard lifecycle, conversation recovery and worker panes shown again."""
 
 import os
 import re
@@ -67,7 +67,7 @@ def holders(link: str) -> set[int]:
 
 class CrashCase(WorkerCase):
     def launched(self, name: str = "w1", *args: str, **kw) -> dict:
-        """The first completed turn's worker identities."""
+        """The first done turn's worker identities."""
         record = self.record(self.start(name, *args, **kw))
         self.wait_event(name, "done")
         channel = self.owner(name)
@@ -96,12 +96,11 @@ class CrashCase(WorkerCase):
         return managed.liveness("tmux", name, generation)
 
     def unshown(self, name: str) -> bool:
-        """No live worker pane of `name` is left."""
         self.poke()
         return not self.server.pane_of(name)
 
     def shown_again(self, name: str, before: str) -> None:
-        """A new live worker pane of `name`, not `before`, runs its attach command."""
+        """A new live worker pane of `name`, not `before`, runs its attach."""
         pane = self.server.pane_of(name)
         self.assertTrue(pane and pane != before, (pane, before))
         self.assertIn("--attach", ps(int(self.pane(name, "#{pane_pid}")), "args"))
@@ -204,9 +203,8 @@ class ResumeTest(CrashCase):
         self.assertEqual(len(self.calls("w1")), 1)
 
     def test_resume_shows_the_live_worker_again_unless_its_pane_was_closed_by_hand(self):
-        """WDRC-300, AC14: resume asks the live harness nothing; a worker whose attach command was
-        killed is shown again in a new worker pane, one whose pane was killed is hidden and stays
-        so; either way the same worker (sid, conversation, client process, harness) runs on.
+        """WDRC-300, AC14: resume asks the live harness nothing; a killed attach is shown again, a
+        killed pane stays hidden; the same worker runs on.
         """
         for name, kill in (("w1", "attach"), ("w2", "pane")):
             with self.subTest(kill=kill):
@@ -343,8 +341,8 @@ class ApiCase(CrashCase):
 
 class DisplayTest(ApiCase):
     def test_a_handlers_send_reaches_the_worker_shown_again_after_its_pane_was_killed(self):
-        """WDRC-304, AC14: the Dispatch view keeps its attach while the worker's pane is killed;
-        a show opens a new worker pane, the harness asked nothing about its display.
+        """WDRC-304, AC14: the Dispatch view keeps its attach while its pane is killed; a show opens
+        a new one.
         """
         self.sid = str(uuid.uuid4())
         self.scene("w1", turns=[["second"], ["third"], ["fourth"], ["fifth"]])

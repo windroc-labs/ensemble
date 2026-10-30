@@ -1,4 +1,4 @@
-"""Viewer show, hide and attach_command over a TmuxHost on recorded tmux calls."""
+"""Viewer over a TmuxHost on recorded tmux calls."""
 
 import contextlib
 import json
@@ -39,9 +39,7 @@ NO_PANE = "no anchor pane: not in tmux"
 
 @contextlib.contextmanager
 def sleeps() -> Iterator[list[float]]:
-    """time.sleep patched: this thread's calls recorded, not slept; another thread's (a harness an
-    earlier test left running) sleeps as before.
-    """
+    """time.sleep patched for this thread only: an earlier test's harness may still sleep."""
     caller, real, slept = threading.current_thread(), time.sleep, []
 
     def sleep(seconds):
@@ -71,7 +69,7 @@ def closed(pane: str, window: str) -> list[str]:
 
 
 class Base(HostBase):
-    """The tmux Host's attach target for w: CommandView("/fake/attach w", argv of the same)."""
+    """The tmux Host's attach for w: "/fake/attach w"."""
 
     def setUp(self):
         super().setUp()
@@ -99,7 +97,7 @@ class ShowTest(Base):
                 self.assertEqual(command[command.index("--") + 1 :], ["/fake/attach", "w1"])
 
     def test_show_outside_tmux_prints_the_host_command(self):
-        """AC4: outside tmux, show returns the Host's CommandView.printed and runs no tmux."""
+        """AC4: outside tmux, show returns CommandView.printed, no tmux."""
         self.enterContext(environ())
         for display in (None, "mgr", "mgr/below/m1"):
             with self.subTest(display=display):
@@ -119,9 +117,7 @@ class ShowTest(Base):
         self.assertEqual(self.runner.calls, [])
 
     def test_show_passes_the_status_line_as_label_and_the_workers_sid(self):
-        """AC12: the Host's status_line labels the pane; its close hook names the worker's sid and
-        generation, and with no sid it has none.
-        """
+        """AC12: status_line labels the pane; the close hook needs the worker's sid."""
         self.enterContext(environ(HOME=self.home, **INSIDE))
         self.runner.pane = "mgr"
         self.runner.results.update({"list-clients": (0, "5\t%3\n"), "split-window": split()})
@@ -245,9 +241,7 @@ class OpenerChainTest(Base):
                 self.assertEqual(viewers._chain(opener), chain)
 
     def test_a_show_beside_a_hidden_opener_lands_where_its_opener_is(self):
-        """AC9 (D5): w1 shown with opener a, hidden (no pane, no tmux session), opens beside
-        the pane of a's display opener mgr (the caller's, %3), its @worker-opener still a.
-        """
+        """AC9 (D5): w1 with hidden opener a opens beside mgr's pane; its opener stays a."""
         self.enterContext(environ(HOME=self.home, **INSIDE))
         worker("a", SID, "mgr")
         worker("w1", SID, "a")
@@ -275,11 +269,9 @@ class HideTest(Base):
         worker("w1", SID)
 
     def panes(self, *rows):
-        """list-panes -a prints worker panes `rows`."""
         self.runner.results["list-panes"] = worker_rows(*rows)
 
     def listings(self, *results):
-        """list-panes -a answers `results` in turn."""
         results = iter(results)
         self.runner.results["list-panes"] = lambda _argv: next(results)
 
@@ -287,9 +279,7 @@ class HideTest(Base):
         return [c for c in self.runner.calls if "kill-pane" in c]
 
     def test_hide_kills_only_its_worker_panes_and_marks_hidden(self):
-        """AC5: hide closes each worker pane of w1 alone (hook unset first) and marks it hidden;
-        the worker itself is not touched and no window is resized.
-        """
+        """AC5: hide closes w1's worker panes alone and marks it hidden; the worker runs on."""
         self.panes(("%5", "w1", "mgr", "@1"), ("%6", "w2", "mgr", "@1"), ("%8", "w1", "", "@2"))
         self.assertIsNone(self.viewer.hide("w1", self.host))
         self.assertEqual(self.kills(), [closed("%5", "@1"), closed("%8", "@2")])
@@ -460,9 +450,7 @@ class AttachCommandTest(Base):
 
 
 class CommandViewTest(Base):
-    """A Host whose attach target is a CommandView, as the Docker Host's; the caller is in tmux
-    session mgr, pane %3, its window's grid read failing.
-    """
+    """A Host whose attach target is a CommandView, as Docker's; the caller is in mgr, pane %3."""
 
     ARGV = ("/usr/bin/env", "-u", "TMUX", "docker", "exec", "-it", "c1", "guard", "--attach")
 
@@ -486,7 +474,7 @@ class CommandViewTest(Base):
         )
 
     def test_show_runs_the_hosts_argv_in_a_pane_labeled_by_its_status_line(self):
-        """AC1, AC12: the pane runs the Host's argv; a status_line Host's gets its name label."""
+        """AC1, AC12: the pane runs the Host's argv; status_line labels it."""
         for settings, labeled in ((TuiSettings(), False), (TuiSettings(status_line=True), True)):
             with self.subTest(settings=settings):
                 self.runner.calls.clear()
@@ -537,7 +525,7 @@ class CommandViewTest(Base):
         self.assertEqual(self.viewer.attach_command("d1", self.docker), self.target.printed)
 
     def retried(self, *targets, **show):
-        """show with attach_target answering `targets` in turn; its result and its sleeps."""
+        """show with attach_target answering `targets` in turn."""
         self.runner.pane = None
         self.docker.attach_target.side_effect = targets
         with sleeps() as self.slept, self.assertLogs("session", logging.WARNING):

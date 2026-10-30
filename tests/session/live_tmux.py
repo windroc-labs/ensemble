@@ -1,4 +1,4 @@
-"""Private tmux fixtures with checked socket selectors, inherited launchers and cleanup."""
+"""Private tmux fixtures."""
 
 import inspect
 import json
@@ -93,7 +93,7 @@ def _guard_popen():
 
 
 class WorkerPane(NamedTuple):
-    """A pane whose @worker names a worker; opener its @worker-opener, "" when unset."""
+    """A pane whose @worker names a worker."""
 
     pane: str
     name: str
@@ -291,9 +291,7 @@ class Server:
         return {r[0]: (int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in rows}
 
     def worker_panes(self, name: str | None = None, *, dead: bool = False) -> list[WorkerPane]:
-        """The worker panes (name: of worker `name`), once each, lowest pane number first; dead:
-        with dead ones; none without a server.
-        """
+        """Worker panes (of worker `name`), lowest first; dead: with dead ones."""
         res = self.tmux("list-panes", "-a", "-F", WORKER_PANES)
         if res.returncode:
             if any(word in res.stderr for word in GONE):
@@ -307,17 +305,16 @@ class Server:
         return sorted(found.values(), key=lambda p: int(p.pane[1:]))
 
     def pane_of(self, name: str) -> str:
-        """Worker `name`'s newest live worker pane, "" if none."""
+        """`name`'s newest live worker pane, "" if none."""
         found = self.worker_panes(name)
         return found[-1].pane if found else ""
 
     def opener_of(self, name: str) -> str:
-        """The @worker-opener of worker `name`'s newest live worker pane, "" if none."""
+        """pane_of's @worker-opener, "" if none."""
         found = self.worker_panes(name)
         return found[-1].opener if found else ""
 
     def sessions(self) -> list[str]:
-        """The server's tmux session names, sorted."""
         return sorted(self._out("list-sessions", "-F", "#{session_name}").split())
 
     def option(self, session: str, key: str) -> str:
@@ -360,7 +357,7 @@ def _drain(master: int, stop: threading.Event) -> None:
 
 
 def crash_owner(ensemble: str, name: str) -> None:
-    """kill -9 of tui session `name`'s owning harness, if any: its guard then ends the worker."""
+    """kill -9 of tui session `name`'s owning harness, if any."""
     try:
         with open(os.path.join(ensemble, "tui", name, "session.json"), encoding="utf-8") as f:
             owner = json.load(f)["owner"]
@@ -376,9 +373,7 @@ def crash_owner(ensemble: str, name: str) -> None:
 
 
 def sized(worker, size, what: str = "the worker's terminal size") -> None:
-    """Waits until `stty size` in worker, a shell asked anew each RESEND s, answers size: WxH, or a
-    function giving it.
-    """
+    """Waits until `stty size` in worker answers size (WxH or a function)."""
     asks = [0, -RESEND]  # the latest ask's number and time
 
     def answered() -> bool:
@@ -394,12 +389,12 @@ def sized(worker, size, what: str = "the worker's terminal size") -> None:
 
 
 def running(name: str, host: str = "tmux") -> bool:
-    """Whether tmux Host `host` lists worker `name`, its guard live (this process's control root)."""
+    """Whether tmux Host `host` lists worker `name`, its guard live."""
     return name in TmuxHost(host).list()
 
 
 def attached(server: Server, pane: str, command: str, timeout: float = TIMEOUT) -> str:
-    """pane, once live and running attach command `command`; it may show nothing yet."""
+    """pane, once live and running `command`; it may show nothing yet."""
     argv = shlex.split(command)
 
     def live() -> bool:
@@ -414,13 +409,13 @@ def attached(server: Server, pane: str, command: str, timeout: float = TIMEOUT) 
 
 
 def alive(pid: int) -> bool:
-    """Not ended: a zombie has, its parent (e.g. a delegate drive) not reaping it yet."""
+    """Not ended: a zombie has, its parent not reaping it yet."""
     info = guard.process_info(pid)
     return info is not None and not info[2]
 
 
 def activity(name: str, home: str | None = None) -> str | None:
-    """Tui worker `name`'s harness's last mark this generation, or None; home: its HOME."""
+    """Tui worker `name`'s harness's last mark this generation, or None."""
     with mock.patch.dict(os.environ, {} if home is None else {"HOME": home}):
         found = host_base.worker_state(name)
         if found is None or found.generation is None:
@@ -441,7 +436,7 @@ _events = events
 
 
 def wait_events(path: str, expected, timeout: float = TIMEOUT) -> list[str]:
-    """All (session, word) notifications, in either order; retain duplicates for assertions."""
+    """All (session, word) notifications, in either order."""
 
     def complete():
         lines = events(path)
@@ -475,7 +470,7 @@ def wait(check, timeout: float = TIMEOUT, what: str = "check() to hold"):
 def assert_grid(
     case, server: Server, manager: str, columns: list, manager_width: int | None = None
 ) -> bool:
-    """Assert manager's grid matches columns, including cell ownership and geometry."""
+    """Assert manager's grid matches columns."""
     return GridCheck(case, server, manager, columns).check(manager_width)
 
 
@@ -487,7 +482,7 @@ class Calls:
         return ()
 
     def env(self, *, inside: str | None = MANAGER, **extra: str | None) -> dict[str, str]:
-        """A caller's in `inside` (None: outside tmux); an extra None drops its key."""
+        """A caller's env in `inside`; an extra None drops its key."""
         env = self.server.env(**(self.server.inside(inside) if inside else {}))
         env["PATH"] = os.pathsep.join(
             (*self.bins(), self.server.bin, os.path.dirname(sys.executable), env["PATH"])
@@ -512,7 +507,6 @@ class Calls:
         return Record.parse(lines[0])
 
     def scene(self, name: str, steps=None, turns=(), **more) -> dict[str, str]:
-        """`name`'s fake claude scenario, as env."""
         path = os.path.join(self.root, f"{name}.claude.json")
         steps = [f"Hi from {name}."] if steps is None else steps
         scenario = {"steps": steps, "turns": list(turns), "log": self.log(name)}

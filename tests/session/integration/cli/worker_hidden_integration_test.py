@@ -1,9 +1,4 @@
-"""A worker's worker pane through bin/ensemble-session on a private tmux server: `start --display
-none` opens no pane and is hidden; show clears hidden; restart and resume keep it; a new start of
-the same sid takes its own pane; a given hidden part is refused; Codex the same. A worker pane
-killed by hand marks it hidden through its close hook, and a resume keeps it hidden; losing the
-manager's window does not; a close hook its pane outlived acts on no other run.
-"""
+"""A worker's worker pane and hidden state through bin/ensemble-session on a private tmux server."""
 
 import os
 import re
@@ -37,9 +32,7 @@ class HiddenCase(CliCase):
         return self.server.pane_of(name)
 
     def shows(self, name: str = "w1", window: str = WINDOW) -> str:
-        """Its worker pane, once one in window runs its current guard's attach command (a pane of
-        its previous run may still be closing).
-        """
+        """Its worker pane, once one in window runs its current guard's attach command."""
 
         def found():
             pane = self.pane(name)
@@ -139,10 +132,7 @@ class HookTest(HiddenCase):
         self.assertEqual(self.session("hide", "--if-closed", "w9").returncode, 1)
 
     def test_kill_pane_marks_hidden_and_resume_keeps_it_hidden(self):
-        """AC6: kill-pane of w1's worker pane marks it hidden through its close hook (run from
-        PATH's bin/ensemble-session); w1 keeps running, the grid retiles, and a resume of its live
-        harness does not show it.
-        """
+        """AC6: kill-pane of w1's worker pane marks it hidden; a resume of it keeps it hidden."""
         self.record(self.start("w1"))
         self.record(self.start("w2"))
         self.wait_event("w1", "done")
@@ -165,7 +155,6 @@ class HookTest(HiddenCase):
         self.assertTrue(pid_alive(pid))
 
     def entries(self) -> set[str]:
-        """Panes the after-kill-pane entries name."""
         out = self.ok(self.server.tmux("show-hooks", "-w", "-t", WINDOW, "after-kill-pane")).stdout
         return {f"%{m[1]}" for m in re.finditer(r"^after-kill-pane\[([0-9]+)\] ", out, re.M)}
 

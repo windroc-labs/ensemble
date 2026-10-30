@@ -1,6 +1,4 @@
-"""`delegate run --detach` over fake_claude: a tui run on a private tmux server, a headless one
-with none; the drive is a ProcessControl process, never a tmux session.
-"""
+"""`delegate run --detach` over fake_claude; the drive is a ProcessControl process."""
 
 import contextlib
 import glob

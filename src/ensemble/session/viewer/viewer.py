@@ -178,9 +178,7 @@ class Viewer:
         return target, display
 
     def hide(self, name: str, host: Host, *, if_closed: bool = False) -> None:
-        """Undoes show: hidden until a show (if_closed: only while no worker pane shows it, its
-        pane closed by hand).
-        """
+        """Undoes show (if_closed: only while no worker pane shows it)."""
         self._target(name, host)
         try:
             panes = self._placement.panes(name)

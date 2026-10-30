@@ -73,7 +73,6 @@ def _layout(
 
 
 def _newest(name: str, workers: Sequence[WorkerPane]) -> str | None:
-    """The highest-numbered worker pane of `name`, if any."""
     found = [w.pane for w in workers if w.name == name]
     return max(found, key=lambda p: int(p[1:])) if found else None
 
@@ -81,9 +80,7 @@ def _newest(name: str, workers: Sequence[WorkerPane]) -> str | None:
 def _close_hook(
     command: str, name: str, pane: str, window: str, *, sid: str | None, generation: str | None
 ) -> str | None:
-    """after-kill-pane[N]'s: once pane is gone, unsets itself and hides run sid/generation of
-    `name`; None when a value fails its allow-list.
-    """
+    """after-kill-pane[N]'s hide of `name`'s run once pane is gone; None off the allow-lists."""
     if not (
         HOOK_PATH.fullmatch(command)
         and NAME.fullmatch(name)
@@ -123,9 +120,7 @@ class Placement:
         label: bool = False,
         fallbacks: Sequence[str] = (),
     ) -> str | None:
-        """Keeps a worker pane of `name`, else splits one running argv at its spot (label: its name
-        in the window's pane border); returns failure. fallbacks: openers to try for opener.
-        """
+        """Keeps `name`'s worker pane, else splits one running argv at its spot; why it failed."""
         _layout(split, split_from, opener, fallbacks)
         validate_per_column(per_column)
         validate_retile(retile)
@@ -217,9 +212,6 @@ class Placement:
         workers: Sequence[WorkerPane],
         fallbacks: Sequence[str],
     ) -> Spot:
-        """opener's grid, else split_from's anchor, else opener's pane (split), else opener's stack,
-        else opener's pane.
-        """
         at: tuple[str, str | None] | None = None
         failed: TuiError | None = None
         if opener is not None:
@@ -248,9 +240,7 @@ class Placement:
         workers: Sequence[WorkerPane],
         fallbacks: Sequence[str],
     ) -> tuple[str, str | None] | None:
-        """The first of opener and fallbacks with a worker pane (manager None: the stored one) or
-        a tmux client: that pane and manager.
-        """
+        """The first of opener and fallbacks with a worker pane or a client: (pane, manager)."""
         for who in (opener, *fallbacks):
             if (pane := _newest(who, workers)) is not None:
                 return pane, None
@@ -331,9 +321,7 @@ class Placement:
         generation: str | None,
         label: bool,
     ) -> None:
-        """Tags pane as name's worker pane running `printed`, with its close hook and (label) its
-        name in its window's bottom pane border; a failure is only printed.
-        """
+        """Tags pane as name's worker pane running `printed`; a failure is only printed."""
         if not (
             PANE.fullmatch(pane)
             and WINDOW.fullmatch(window)
@@ -393,9 +381,7 @@ class Placement:
         return [m[1] for m in found if m is not None and f"%{m[1]}" not in live]
 
     def run_command(self, session: str, template: str) -> str | None:
-        """Runs template with /bin/sh, each {{session}} the quoted session name; why it failed, else
-        None.
-        """
+        """Runs template with /bin/sh, {{session}} the quoted name; why it failed, else None."""
         unknown = [m.group(0) for m in SLOT.finditer(template) if m.group(1) not in PLACEHOLDERS]
         if unknown:
             return f"unknown placeholder {unknown[0]}"

@@ -1,4 +1,4 @@
-"""Recorded tmux transport and shared launch, placement and grid fixtures."""
+"""Recorded tmux transport and fixtures."""
 
 import fcntl
 import io
@@ -70,7 +70,7 @@ MODE_HOOKS = {
     "all": GRID_HOOKS,
     "open-close": ("pane-exited", "window-layout-changed"),
     "off": (),
-}  # each mode's
+}
 
 RETILE_ERROR = "^retile must be one of all, open-close, off, not {}$"
 
@@ -80,7 +80,6 @@ def done(argv, rc=0, out="", err=""):
 
 
 def close_hook(name, pane, window, *, sid=SID, generation=GENERATION, command=COMMAND):
-    """after-kill-pane[N]'s value for `pane` of run sid/generation of `name`."""
     return (
         f"if-shell -F '#{{m:* {pane} *,#{{S:#{{W:#{{P: #{{pane_id}} }}}}}}}}' '' "
         f'"set-hook -u -w -t {window} after-kill-pane[{pane[1:]}] ; '
@@ -102,7 +101,7 @@ def record(
     printed=PRINTED,
     pruned=(),
 ):
-    """_record's calls tagging `pane` (hook: after its hooks read)."""
+    """_record's calls tagging `pane`."""
     args = ["tmux", "set-option", "-p", "-t", pane, "@worker", name]
     args += [";", "set-option", "-p", "-t", pane, "@worker-attach", printed]
     if opener:
@@ -130,14 +129,11 @@ def split_window(flag, pane, argv=ARGV):
 
 
 def split(pane="%20", window="@1"):
-    """split-window's printed new pane and window."""
     return 0, f"{pane}\t{window}\n"
 
 
 def worker_rows(*rows):
-    """A list-panes -a WORKER_PANES result: rows of (pane, name[, opener, window, session, attach])
-    live (attach: PRINTED unless given), or a raw line.
-    """
+    """A list-panes -a result: rows of (pane, name[, opener, window, session, attach]) or lines."""
     lines = []
     for row in rows:
         if isinstance(row, str):
@@ -152,7 +148,6 @@ def worker_rows(*rows):
 
 
 def clients(*rows):
-    """A list-clients result: rows of (activity, pane)."""
     return 0, "".join(f"{at}\t{pane}\n" for at, pane in rows)
 
 
@@ -219,7 +214,7 @@ def environ(**values):
 
 
 def clock(test, on_sleep=lambda _n: None):
-    """Starts at 1000 s; each sleep advances time and calls on_sleep(count)."""
+    """Starts at 1000 s; sleeps advance it."""
     now, slept = [1000.0], []
 
     def sleep(seconds):
@@ -233,7 +228,6 @@ def clock(test, on_sleep=lambda _n: None):
 
 
 def hold(test, path):
-    """Holds path flock until cleanup; returns an early release."""
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     test.addCleanup(os.close, fd)
     fcntl.flock(fd, fcntl.LOCK_EX)
@@ -269,7 +263,7 @@ def which(session=COMMAND):
 
 
 class FakeTmux:
-    """Records tmux/sh calls; results maps commands to outcomes, exceptions or argv functions."""
+    """Records tmux/sh calls; results maps commands to outcomes."""
 
     def __init__(self, pane=None, fail=(), *, results=None):
         self.pane, self.fail, self.results = pane, fail, results or {}
@@ -341,7 +335,7 @@ def tiled(window):
 
 
 def opening_commands(*, window="@1", manager="%3", opener="mgr", n=3, retile="all", hooks=True):
-    """A grid show's calls after its split: the pane tagged, then the grid set and tiled."""
+    """A grid show's calls after its split."""
     return [
         *record(opener, "%20", window=window, hook=hooks),
         grid_set(window, manager, n, hooks=hooks, retile=retile),
@@ -360,7 +354,7 @@ def placed(fake) -> placement.Placement:
 
 class PaneFixture(Case):
     def open(self, fake, env, command=COMMAND, **kw):
-        """open_pane s running ARGV; ensemble-session at `command` (None: on PATH)."""
+        """open_pane s; ensemble-session at `command` (None: on PATH)."""
         self.stderr = io.StringIO()
         kw = {"sid": SID, "generation": GENERATION, **kw}
         with environ(**env), which(command), redirect_stderr(self.stderr):
@@ -368,11 +362,7 @@ class PaneFixture(Case):
 
 
 class GridFixture(Case):
-    """The caller is in tmux session mgr, pane %3, whose most recent client shows pane %9;
-    `windows` maps a pane to its window's list-panes rows (window, @grid-manager, pane, width,
-    height), a pane not in it is gone; list-panes -a prints `rows` (worker_rows'); a split prints
-    %20 in @1.
-    """
+    """The caller is in tmux session mgr, pane %3, whose most recent client shows pane %9."""
 
     NEW = [("@1", "", "%3", "160", "48")]  # mgr's window, no grid yet
 
@@ -409,7 +399,7 @@ class GridFixture(Case):
         )
 
     def open(self, fake, env=INSIDE, retile="all", command=COMMAND, argv=ARGV, **kw):
-        """open_pane s running argv; ensemble-session at `command` (None: on PATH)."""
+        """open_pane s; ensemble-session at `command` (None: on PATH)."""
         self.stderr = io.StringIO()
         kw = {"sid": SID, "generation": GENERATION, **kw}
         with environ(**env), which(command), redirect_stderr(self.stderr):
@@ -543,7 +533,7 @@ class TileFixture(Case):
         message=(0,),
         **results,
     ):
-        """rows: worker_rows' (pane, name, opener) in window @3; sessions: the tmux sessions."""
+        """rows: worker_rows' rows, in window @3."""
         self.set = " ".join(sorted(panes, key=lambda p: int(p[1:])))
         recorded = self.set if recorded is None else recorded
         printed = {
@@ -586,7 +576,6 @@ class TileFixture(Case):
         return fake
 
     def applied(self, send, times="1000000"):
-        """Mutes hooks and records time/panes with the layout change, then unmutes."""
         return [
             [
                 "tmux",
