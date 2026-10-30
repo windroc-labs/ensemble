@@ -81,7 +81,8 @@ def _retained(record: dict, known: dict) -> bool:
 def _holders(directory: str, known: dict, holders: dict) -> list[str]:
     """Each counted reservation claims one host row of its run, else counts alone.
 
-    Its own row (its name, with its sid or none) goes first: none takes another run's row by sid.
+    A row with its name (its sid or none) is its run's; only one with no such row, as an
+    unnamed run's, claims by sid a row no reservation names.
     """
     reservations = []
     for entry in os.scandir(directory):
@@ -108,17 +109,22 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
                 os.unlink(entry.path)
         finally:
             os.close(fd)
-    rows = set(holders)
-    unmatched = []
-    for entry, namespace, name, sid in reservations:
-        own = [(namespace, name, sid), (namespace, name, None), (namespace, name, "")]
-        if row := next((key for key in own if key in rows), None):
-            rows.remove(row)
-        else:
-            unmatched.append((entry, namespace, name, sid))
-    for entry, namespace, name, sid in unmatched:
-        if row := next((key for key in rows if key[0] == namespace and key[2] == sid), None):
-            rows.remove(row)
+    found, unclaimed = set(holders), set(holders)
+
+    def named(namespace, name: str, sid: str) -> list[tuple]:
+        return [
+            key
+            for key in ((namespace, name, sid), (namespace, name, None), (namespace, name, ""))
+            if key in found
+        ]
+
+    owned = {key for _, *run in reservations for key in named(*run)}
+    for entry, namespace, name, sid in sorted(reservations):
+        rows = named(namespace, name, sid) or [
+            key for key in found - owned if key[0] == namespace and key[2] == sid
+        ]
+        if row := next((key for key in rows if key in unclaimed), None):
+            unclaimed.remove(row)
         else:
             holders[(entry,)] = name
     return sorted(holders.values())

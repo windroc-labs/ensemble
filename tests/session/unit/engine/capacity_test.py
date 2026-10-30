@@ -263,30 +263,39 @@ class AdmissionTest(Case):
         ):
             self.fail("two runs must fill two slots")
 
-    def test_a_reservation_claims_its_own_row_before_another_sharing_its_sid(self):
-        self.host.create("a", metadata={"client": "fake", "sid": "s1"})
-        self.host.create("b", metadata={"client": "fake"})
-        records = {}
-        for name in ("a", "b"):
-            ticket = self.enter(limit=0, name=name, mode=Mode.TUI)
+    def assert_counted_in_any_scan_order(self, runs, held_by):
+        """runs: (name, sid) of live TUI starts; a fourth start sees held_by whatever scans first."""
+        paths = []
+        for name, sid in runs:
+            ticket = self.enter(limit=0, name=name, sid=sid, mode=Mode.TUI)
             with ticket:
                 ticket.started(lambda: Liveness.LIVE)
-            records[name] = ticket.path
+            paths.append(ticket.path)
         scandir = os.scandir
-        for first in ("a", "b"):
+        for first in paths:
             with (
-                self.subTest(scanned_first=first),
+                self.subTest(scanned_first=paths.index(first)),
                 mock.patch.object(
                     os,
                     "scandir",
                     lambda path, first=first: sorted(
-                        scandir(path), key=lambda entry: entry.path != records[first]
+                        scandir(path), key=lambda entry: entry.path != first
                     ),
                 ),
-                self.assertRaisesRegex(SessionError, "held by: a, b$"),
-                self.enter(limit=2, name="third", sid="s3"),
+                self.assertRaisesRegex(SessionError, f"held by: {held_by}$"),
+                self.enter(limit=len(held_by.split(", ")), name="fourth", sid="s4"),
             ):
-                self.fail("two runs must fill two slots")
+                self.fail("the live runs must fill every slot")
+
+    def test_a_reservation_claims_its_own_row_before_another_sharing_its_sid(self):
+        self.host.create("a", metadata={"client": "fake", "sid": "s1"})
+        self.host.create("b", metadata={"client": "fake"})
+        self.assert_counted_in_any_scan_order([("a", "s1"), ("b", "s1")], "a, b")
+
+    def test_a_reservation_sharing_its_row_never_claims_another_by_sid(self):
+        self.host.create("a", metadata={"client": "fake"})
+        self.host.create("b", metadata={"client": "fake", "sid": "s1"})
+        self.assert_counted_in_any_scan_order([("a", "s1"), ("a", "s2")], "a, a, b")
 
     def test_a_row_without_a_sid_is_not_another_runs_reservation(self):
         self.host.create("other", metadata={"client": "fake", "sid": ""})
