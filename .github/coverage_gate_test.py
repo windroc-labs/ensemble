@@ -1,6 +1,8 @@
 """.github/coverage_gate.py: changed lines, the 85% verdict and the coverage report it reads."""
 
+import contextlib
 import importlib.util
+import io
 import os
 import tempfile
 import unittest
@@ -127,7 +129,7 @@ class Verdict(unittest.TestCase):
 
 
 class Report(unittest.TestCase):
-    """The report the gate reads: only registered `no cover` pragmas exclude code."""
+    """The reports read from coverage data: only registered `no cover` pragmas exclude code."""
 
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
@@ -140,16 +142,20 @@ class Report(unittest.TestCase):
         (self.root / "src/never.py").write_text("A = 1\nB = 2\n")
         (self.root / "src/call.py").write_text("x = max(\n    1,\n    2,\n)\n")
 
-    def report(self, arcs):
+    def data(self, arcs, touched=()):
         try:
             import coverage
         except ImportError:
-            self.skipTest("coverage.py is unavailable; CI's Unit job installs it on pull requests")
+            self.skipTest("coverage.py is unavailable; CI's Unit job installs it")
         data = coverage.CoverageData(basename=str(self.root / "data"))
         data.add_arcs({str(self.root / path): set(pairs) for path, pairs in arcs.items()})
+        data.touch_files([str(self.root / path) for path in touched])
         data.write()
+        return str(self.root / "data")
+
+    def report(self, arcs):
         return gate.load_report(
-            str(self.root / "data"),
+            self.data(arcs),
             ["src/m.py", "src/never.py", "src/call.py"],
             self.root,
         )
@@ -177,3 +183,22 @@ class Report(unittest.TestCase):
         report = self.report({"src/m.py": [(-1, 1)]})
         self.assertEqual(report["src/call.py"]["multiline"], {2: 1, 3: 1, 4: 1})
         self.assertEqual(report["src/m.py"]["multiline"], {})
+
+    def test_line_total_counts_every_measured_files_statements(self):
+        arcs = {"src/m.py": [(-1, 1), (1, 7), (7, -1), (-1, 2), (2, 3), (3, -1)]}
+        self.assertEqual(gate.line_total(self.data(arcs, touched=["src/never.py"])), (3, 6))
+
+    def test_cli_total_prints_line_coverage_rounded_down(self):
+        data = self.data({"src/m.py": [(-1, 1), (1, -1)]}, touched=["src/never.py"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(gate.main(["--total", data]), 0)
+        self.assertEqual(out.getvalue(), "unit line coverage: 16.6% (1/6 src statements)\n")
+
+
+class Usage(unittest.TestCase):
+    def test_wrong_arguments_exit_with_usage(self):
+        for argv in ([], ["--total"], ["a", "b", "c"]):
+            with self.subTest(argv=argv), self.assertRaises(SystemExit) as raised:
+                gate.main(argv)
+            self.assertIn("usage:", str(raised.exception.code))
