@@ -1,7 +1,8 @@
 """Fail a PR whose added and changed src lines have under THRESHOLD % unit coverage (lines and
-branches combined).
+branches combined), or print the total unit line coverage.
 
 Usage: coverage_gate.py <data file from RUN_TESTS_COVERAGE> <base ref>
+       coverage_gate.py --total <data file from RUN_TESTS_COVERAGE>
 """
 
 import json
@@ -82,13 +83,9 @@ def _ranges(numbers):
     return ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
 
 
-def load_report(data_file, paths, root):
-    """The JSON report of `paths` (relative to `root`), keyed by those paths, each file's
-    `multiline` mapping a multi-line statement's other lines to its first; only `no cover`
-    pragmas, `...` stubs and `if TYPE_CHECKING:` exclude code.
-    """
+def _json_report(data_file, morfs=None):
+    """The JSON report; only `no cover` pragmas, `...` stubs and `if TYPE_CHECKING:` exclude code."""
     import coverage
-    from coverage.parser import PythonParser
 
     cov = coverage.Coverage(data_file=data_file, config_file=False)
     cov.clear_exclude("exclude")
@@ -98,9 +95,24 @@ def load_report(data_file, paths, root):
     cov.load()
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "report.json")
-        cov.json_report(morfs=[str(Path(root, path)) for path in paths], outfile=out)
+        cov.json_report(morfs=morfs, outfile=out)
         with open(out, encoding="utf-8") as file:
-            files = json.load(file)["files"]
+            return json.load(file)
+
+
+def line_total(data_file):
+    """(covered, total) statements of every file in the data."""
+    totals = _json_report(data_file)["totals"]
+    return totals["covered_lines"], totals["num_statements"]
+
+
+def load_report(data_file, paths, root):
+    """The JSON report of `paths` (relative to `root`), keyed by those paths, each file's
+    `multiline` mapping a multi-line statement's other lines to its first.
+    """
+    from coverage.parser import PythonParser
+
+    files = _json_report(data_file, [str(Path(root, path)) for path in paths])["files"]
     report = {os.path.relpath(os.path.abspath(name), root): file for name, file in files.items()}
     for path, file in report.items():
         parser = PythonParser(filename=str(Path(root, path)))
@@ -115,7 +127,12 @@ def load_report(data_file, paths, root):
 
 def main(argv):
     if len(argv) != 2:
-        sys.exit("usage: coverage_gate.py <data file> <base ref>")
+        sys.exit("usage: coverage_gate.py <data file> <base ref> | --total <data file>")
+    if argv[0] == "--total":
+        covered, total = line_total(argv[1])
+        percent = math.floor(1000 * covered / total) / 10 if total else 100.0
+        print(f"unit line coverage: {percent}% ({covered}/{total} src statements)")
+        return 0
     data_file, base = argv
     repo = Path(__file__).resolve().parents[1]
     git = ["git", "-C", str(repo)]

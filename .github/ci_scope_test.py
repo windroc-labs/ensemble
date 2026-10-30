@@ -494,8 +494,7 @@ class Aggregate(unittest.TestCase):
         }
         result["repository"]["result"] = "skipped" if docs or version else "success"
         result["unit"]["result"] = "skipped" if docs or version else "success"
-        coverage = event == "pull_request" and not (docs or version)
-        result["coverage"]["result"] = "success" if coverage else "skipped"
+        result["coverage"]["result"] = "skipped" if docs or version else "success"
         result["integration"]["result"] = "skipped" if docs or version else "success"
         result["broker"]["result"] = "success" if full else "skipped"
         return result
@@ -513,6 +512,14 @@ class Aggregate(unittest.TestCase):
         needs["coverage"]["result"] = "skipped"
         self.assertTrue(scope.gate(needs, "merge_group"))
         self.assertTrue(scope.gate(self.needs(full=False), "merge_group"))
+
+    def test_push_passes_whatever_coverage_reports(self):
+        for outcome in ("success", "failure", "cancelled", "skipped"):
+            needs = self.needs(event="push")
+            needs["coverage"]["result"] = outcome
+            with self.subTest(outcome=outcome):
+                self.assertEqual(scope.gate(needs, "push"), [])
+                self.assertEqual(bool(scope.gate(needs, "merge_group")), outcome != "success")
 
     def test_linux_broker_must_run_when_broker_scope_is_selected(self):
         needs = self.needs(full=False)
@@ -538,7 +545,6 @@ class Aggregate(unittest.TestCase):
             ("broker", {"full": False}),
             ("broker", {"full": False, "docs": True}),
             ("broker", {"full": False, "version": True}),
-            ("coverage", {"event": "push"}),
             ("integration", {"full": False, "docs": True}),
             ("unit", {"full": False, "docs": True}),
             ("coverage", {"full": False, "docs": True}),
@@ -639,6 +645,9 @@ class Aggregate(unittest.TestCase):
             self.assertEqual(scope.main(["--gate"]), 1)
 
 
+PUSH_ADVISORY = "continue-on-error: ${{ github.event_name == 'push' }}\n"
+
+
 def job(name):
     found = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  \S|\Z)", WORKFLOW.read_text())
     assert found, f"test.yml has no job {name}"
@@ -661,12 +670,41 @@ class Workflow(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", ci)
         self.assertNotIn("actions: write", ci)
         self.assertIn("run: python3 .github/ci_scope.py --gate", ci)
-        self.assertIn("github.event_name != 'push'", job("unit"))
         self.assertIn("github.event.merge_group.base_sha", job("coverage"))
         worker = WORKFLOW.with_name("worker-image.yml").read_text()
         self.assertIn("  merge_group:\n    types: [checks_requested]", worker)
         self.assertIn("github.event.merge_group.head_sha", worker)
         self.assertIn("github.event.merge_group.base_sha", worker)
+
+    def test_every_event_merges_unit_coverage_and_push_coverage_is_advisory(self):
+        unit, coverage = job("unit"), job("coverage")
+        self.assertIn("RUN_TESTS_COVERAGE: collect\n", unit)
+        unit_steps = dict(
+            step.split("\n", 1) for step in re.split(r"(?m)^      - name: ", unit)[1:]
+        )
+        for name, step in unit_steps.items():
+            with self.subTest(step=name):
+                coverage_only = name in ("Install pinned coverage", "Preserve unit coverage")
+                self.assertEqual(PUSH_ADVISORY in step, coverage_only)
+                self.assertNotIn("'push'", step.replace(PUSH_ADVISORY, ""))
+        header, steps = coverage.split("\n    steps:\n")
+        self.assertIn(f"\n    {PUSH_ADVISORY}", header)
+        self.assertNotIn("'push'", header.replace(PUSH_ADVISORY, ""))
+        steps = re.split(r"(?m)^      - name: ", steps)[1:]
+        names = [step.split("\n", 1)[0] for step in steps]
+        self.assertEqual(
+            names[-2:], ["Diff coverage of changed src lines", "Require unchanged checkout"]
+        )
+        self.assertNotIn(PUSH_ADVISORY, "".join(steps))
+        self.assertIn("if: ${{ github.event_name != 'push' }}", steps[-2])
+        self.assertIn(
+            "name: unit-coverage-merged-${{ github.run_id }}-${{ github.run_attempt }}\n"
+            "          path: ${{ runner.temp }}/unit-coverage-merged/\n"
+            "          if-no-files-found: error\n"
+            "          retention-days: 30\n",
+            coverage,
+        )
+        self.assertIn('>> "$GITHUB_STEP_SUMMARY"', coverage)
 
     def test_pr_edits_start_no_ci_run(self):
         text = WORKFLOW.read_text()
