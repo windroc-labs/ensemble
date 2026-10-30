@@ -1,10 +1,8 @@
 """TmuxCli against a recorded tmux: run and checked, has_session, and display_error."""
 
-import subprocess
-
 from ensemble.session.engine import tmux_cli
 from tests.session.case import Case
-from tests.session.tmux_fixtures import ABSENT, TMUX_KW, FakeTmux
+from tests.session.tmux_fixtures import ABSENT, TMUX_KW, FakeTmux, done
 
 
 class DisplayErrorTest(Case):
@@ -43,10 +41,10 @@ class RunTest(Case):
     def test_absent_is_a_missing_session_window_pane_or_server(self):
         for err in ABSENT:
             with self.subTest(err=err):
-                self.assertTrue(tmux_cli.absent(subprocess.CompletedProcess([], 1, "", err)))
+                self.assertTrue(tmux_cli.absent(done([], 1, err=err)))
         for err in ("boom", "", "error connecting to /tmp/x (Permission denied)"):
             with self.subTest(err=err):
-                self.assertFalse(tmux_cli.absent(subprocess.CompletedProcess([], 1, "", err)))
+                self.assertFalse(tmux_cli.absent(done([], 1, err=err)))
 
 
 class HasSessionTest(Case):

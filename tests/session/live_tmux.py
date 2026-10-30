@@ -398,6 +398,21 @@ def running(name: str, host: str = "tmux") -> bool:
     return name in TmuxHost(host).list()
 
 
+def attached(server: Server, pane: str, command: str, timeout: float = TIMEOUT) -> str:
+    """pane, once live and running attach command `command`; it may show nothing yet."""
+    argv = shlex.split(command)
+
+    def live() -> bool:
+        res = server.tmux(
+            "display-message", "-p", "-t", pane, "#{pane_dead}\t#{pane_start_command}"
+        )
+        dead, _, start = res.stdout.removesuffix("\n").partition("\t")
+        return res.returncode == 0 and dead == "0" and shlex.split(start) == argv
+
+    wait(live, timeout, what=f"{pane} running {command}")
+    return pane
+
+
 def alive(pid: int) -> bool:
     """Not ended: a zombie has, its parent (e.g. a delegate drive) not reaping it yet."""
     info = guard.process_info(pid)

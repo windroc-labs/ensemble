@@ -133,21 +133,15 @@ class CodexTest(Conversation, Case):
         return result
 
     def attached(self, session: OwnedSession) -> str:
-        """A pane of mgr running session's attach command, as a user's terminal would, once it
-        shows the worker's screen.
-        """
-        argv = shlex.split(session.attach_command())
+        """A pane of mgr running session's attach command, as a user's terminal would."""
+        command = session.attach_command()
         pane = self.ok(
             self.server.tmux(
-                "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=mgr:", "--", *argv
+                *("split-window", "-d", "-P", "-F", "#{pane_id}", "-t", "=mgr:", "--"),
+                *shlex.split(command),
             )
         ).stdout.strip()
-        live_tmux.wait(
-            lambda: self.ok(self.server.tmux("capture-pane", "-p", "-t", pane)).stdout.strip(),
-            WAIT,
-            what="the attach command showing w1",
-        )
-        return pane
+        return live_tmux.attached(self.server, pane, command, WAIT)
 
     def test_two_turns_give_the_shared_sequence(self):
         self.scene([["first"], ["second"]])

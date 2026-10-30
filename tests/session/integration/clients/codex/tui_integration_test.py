@@ -154,11 +154,8 @@ class Live(Case):
         return self.server.tmux("capture-pane", "-p", *options, "-t", pane).stdout
 
     def typed(self, handle, *keys: tuple[str, ...]) -> None:
-        """Each of keys (send-keys arguments) sent to a pane running handle's attach command, once it
-        shows the worker's screen.
-        """
-        pane = self.watched(handle)
-        live_tmux.wait(lambda: self.capture(pane).strip(), WAIT, what="the worker shown")
+        """Each of keys (send-keys arguments) sent to a pane running handle's attach command."""
+        pane = live_tmux.attached(self.server, self.watched(handle), handle.attach_command(), WAIT)
         for each in keys:
             res = self.server.tmux("send-keys", "-t", pane, *each)
             self.assertEqual(res.returncode, 0, res.stderr)

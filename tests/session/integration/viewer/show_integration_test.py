@@ -5,6 +5,7 @@ recovery.
 
 import contextlib
 import io
+import json
 import os
 import shlex
 import subprocess
@@ -15,6 +16,7 @@ from unittest import mock
 
 from ensemble.session import Viewer
 from ensemble.session.engine.types import Launch, Liveness, SessionBusy, SessionError
+from ensemble.session.hosts.base import worker_dir
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.viewer import display as displays
@@ -63,6 +65,9 @@ class GuardDisplayTest(LiveCase):
             metadata={"sid": SID, "client": "fake"},
         )
         self.addCleanup(self.cleanup, self.worker)
+        state = Path(worker_dir(self.NAME), "session.json")
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"sid": SID, "client": "fake", "display": "manager"}))
         live_tmux.wait(
             lambda: "startup-079" in self.worker.screen(lines=200),
             what="startup output collected before the first display",
