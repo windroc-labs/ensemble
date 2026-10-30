@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.clients.codex import manager
-from tests.session.case import REPO, Case
+from tests.session.case import Case
 
 
 class Executed(BaseException):
@@ -18,6 +18,26 @@ class Executed(BaseException):
 
 
 class ProtocolTest(Case):
+    def test_local_launch_classification_is_independent_of_environment(self):
+        for environ in (
+            {},
+            {"CODEX_EXEC_SERVER_URL": "chosen"},
+            {"OPENAI_WORKLOAD_IDENTITY_CONTEXT": "chosen"},
+        ):
+            with self.subTest(environ=environ), mock.patch.dict(os.environ, environ, clear=True):
+                self.assertFalse(manager.Arguments(("hello",)).local_launch())
+                self.assertTrue(manager.Arguments(("--sandbox", "read-only")).local_launch())
+
+    def test_recorder_command_is_opaque_and_receives_only_pid_and_event(self):
+        command = ("/custom/recorder", "--owner", "caller", "--pid")
+        event = {"session_id": "native", "cwd": "/chosen"}
+        with mock.patch(
+            "subprocess.run", return_value=SimpleNamespace(returncode=0, stdout='{"recorded":true}')
+        ) as run:
+            manager.recording(command, 70, event)
+        self.assertEqual(run.call_args.args[0], (*command, "70"))
+        self.assertEqual(json.loads(run.call_args.kwargs["input"]), event)
+
     def test_both_routes_register_the_launcher_before_exec(self):
         for argv in (
             ("hello",),
@@ -28,7 +48,7 @@ class ProtocolTest(Case):
                 calls = [call for call in self.runs if "launch" in call.args[0]]
                 self.assertEqual(len(calls), 1, "every managed TUI must register before exec")
                 command = calls[0].args[0]
-                self.assertEqual(command[-2:], ("--client-pid", str(os.getpid())))
+                self.assertEqual(command[-2:], ("--pid", str(os.getpid())))
                 event = json.loads(calls[0].kwargs["input"])
                 self.assertEqual(
                     event["session_id"],
@@ -47,7 +67,7 @@ class ProtocolTest(Case):
         self.assertTrue(manager.Arguments(("--no-daemon", "hello")).interactive())
         _, called, count = self.launch(("--no-daemon", "hello"), {"ENSEMBLE_MANAGER": "m"})
         self.assertEqual(called[1].count("--no-daemon"), 1)
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 1)
 
     def test_named_and_picker_resumes_do_not_guess_a_native_sid(self):
         for argv in (("resume", "named"), ("resume", "--last"), ("--", "resume")):
@@ -86,7 +106,9 @@ class ProtocolTest(Case):
                 actual = result["params"]["config"]["shell_environment_policy"]
                 self.assertEqual({k: v for k, v in actual.items() if k != "set"}, policy)
 
-    def launch(self, argv, environ=None, *, context=None, server=None, expected=Executed):
+    def launch(
+        self, argv, environ=None, *, tracked=True, local=False, server=None, expected=Executed
+    ):
         make_directory = tempfile.mkdtemp
         directory = Path(self.home, "native")
         directory.mkdir(exist_ok=True)
@@ -97,14 +119,12 @@ class ProtocolTest(Case):
         settings.parent.mkdir(exist_ok=True)
         settings.write_bytes(b"user_setting = true\n")
         env = {"HOME": self.home, "PATH": str(directory), **(environ or {})}
-        context = context or SimpleNamespace(returncode=0, stdout='{"holder_pid":41}')
         started = server or SimpleNamespace(returncode=0, stdout='{"socketPath":"/shared"}')
         with (
             mock.patch.dict(os.environ, env, clear=True),
             mock.patch(
                 "subprocess.run",
                 side_effect=[
-                    context,
                     SimpleNamespace(returncode=0, stdout='{"recorded":true}'),
                     started,
                 ],
@@ -121,7 +141,15 @@ class ProtocolTest(Case):
             mock.patch("os.execv", side_effect=Executed) as execute,
             self.assertRaises(expected),
         ):
-            manager.main(REPO, argv)
+            manager.main(
+                argv,
+                excluded=(str(Path(self.home, ".ensemble", "bin", "codex")),),
+                recorder=("/custom/recorder", "record", "--pid"),
+                launch_recorder=("/custom/recorder", "launch", "--pid"),
+                environ={"CALLER_CONTEXT": "chosen"},
+                ancestor=41 if tracked else None,
+                local=local,
+            )
         self.assertEqual(settings.read_bytes(), b"user_setting = true\n")
         self.runs = run.call_args_list
         return native, execute.call_args.args if execute.called else None, run.call_count
@@ -130,13 +158,13 @@ class ProtocolTest(Case):
         arguments = ("--model", "model with spaces", "a'b$c", "--", "tail")
         for env in ({}, {"ENSEMBLE_MANAGER": "m", "ENSEMBLE_AGENT_SESSION": "1"}):
             with self.subTest(env=env):
-                native, called, count = self.launch(arguments, env)
+                native, called, count = self.launch(arguments, env, tracked=False)
                 self.assertEqual(called, (str(native), (str(native), *arguments)))
                 self.assertEqual(count, 0)
 
     def test_manager_launch_preserves_default_and_explicit_cwd(self):
         _, called, count = self.launch(("hello",), {"ENSEMBLE_MANAGER": "m"})
-        self.assertEqual(count, 3)
+        self.assertEqual(count, 2)
         args = called[1]
         self.assertIn("--cd", args)
         self.assertEqual(args[args.index("--cd") + 1], os.getcwd())
@@ -161,16 +189,12 @@ class ProtocolTest(Case):
             with self.subTest(arguments=arguments):
                 native, called, count = self.launch(arguments, {"ENSEMBLE_MANAGER": "m"})
                 self.assertEqual(called, (str(native), (str(native), "--no-daemon", *arguments)))
-                self.assertEqual(count, 2)
+                self.assertEqual(count, 1)
 
-    def test_native_environment_choices_do_not_get_a_remote_workspace(self):
-        for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT"):
-            with self.subTest(name=name):
-                native, called, count = self.launch(
-                    ("hello",), {"ENSEMBLE_MANAGER": "m", name: "chosen"}
-                )
-                self.assertEqual(called, (str(native), (str(native), "--no-daemon", "hello")))
-                self.assertEqual(count, 2)
+    def test_caller_can_select_local_mode_without_changing_argv(self):
+        native, called, count = self.launch(("hello",), local=True)
+        self.assertEqual(called, (str(native), (str(native), "--no-daemon", "hello")))
+        self.assertEqual(count, 1)
 
     def test_supported_options_and_literal_prompt_keep_the_shared_route(self):
         for arguments in (
@@ -181,15 +205,13 @@ class ProtocolTest(Case):
         ):
             with self.subTest(arguments=arguments):
                 _, called, count = self.launch(arguments, {"ENSEMBLE_MANAGER": "m"})
-                self.assertEqual(count, 3)
+                self.assertEqual(count, 2)
                 self.assertEqual(called[1][1], "--remote")
 
     def test_stale_holder_passes_through_and_unavailable_server_fails_closed(self):
-        native, called, count = self.launch(
-            ("hello",), {"ENSEMBLE_MANAGER": "m"}, context=SimpleNamespace(returncode=0, stdout="")
-        )
+        native, called, count = self.launch(("hello",), tracked=False)
         self.assertEqual(called, (str(native), (str(native), "hello")))
-        self.assertEqual(count, 1)
+        self.assertEqual(count, 0)
         _, called, count = self.launch(
             ("hello",),
             {"ENSEMBLE_MANAGER": "m"},
@@ -197,12 +219,12 @@ class ProtocolTest(Case):
             expected=ValueError,
         )
         self.assertIsNone(called)
-        self.assertEqual(count, 3)
+        self.assertEqual(count, 2)
         _, called, count = self.launch(
             ("--remote", "unix:///elsewhere"), {"ENSEMBLE_MANAGER": "m"}, expected=ValueError
         )
         self.assertIsNone(called)
-        self.assertEqual(count, 1)
+        self.assertEqual(count, 0)
 
     def test_executable_skips_ensemble_entries_and_fails_without_native(self):
         installed = Path(self.home, ".ensemble", "bin")
@@ -214,14 +236,12 @@ class ProtocolTest(Case):
         (native / "codex").write_text("#!/bin/sh\n")
         (native / "codex").chmod(0o755)
         with mock.patch.dict(os.environ, {"PATH": str(installed) + os.pathsep + str(native)}):
-            self.assertEqual(
-                manager.executable(REPO, str(installed / "codex")), str(native / "codex")
-            )
+            self.assertEqual(manager.executable((str(installed / "codex"),)), str(native / "codex"))
         with (
             mock.patch.dict(os.environ, {"PATH": str(installed)}),
             self.assertRaisesRegex(ValueError, "no Codex executable"),
         ):
-            manager.executable(REPO, None)
+            manager.executable((str(installed / "codex"),))
 
     def test_null_config_is_a_valid_native_default(self):
         bridge = manager.ThreadBridge({"ENSEMBLE_MANAGER": "m"}, lambda _record: None)
@@ -403,13 +423,13 @@ class ProtocolTest(Case):
     def test_unauthorized_peers_are_rejected(self):
         parents = {70: 50, 50: 41, 80: 42, 42: 1, 41: 1}
         self.assertTrue(
-            manager.authorized(70, 1000, 1000, launch=50, hold=41, get_parent=parents.get)
+            manager.authorized(70, 1000, 1000, launch=50, ancestor=41, get_parent=parents.get)
         )
         self.assertFalse(
-            manager.authorized(70, 1001, 1000, launch=50, hold=41, get_parent=parents.get)
+            manager.authorized(70, 1001, 1000, launch=50, ancestor=41, get_parent=parents.get)
         )
         self.assertFalse(
-            manager.authorized(80, 1000, 1000, launch=50, hold=41, get_parent=parents.get)
+            manager.authorized(80, 1000, 1000, launch=50, ancestor=41, get_parent=parents.get)
         )
 
     def test_unauthorized_connection_never_connects_upstream(self):
@@ -424,7 +444,7 @@ class ProtocolTest(Case):
             mock.patch("socket.socket") as upstream,
             self.assertRaisesRegex(ValueError, "unauthorized"),
         ):
-            manager.serve(listener, "/unused", 50, 41, ("recorder",))
+            manager.serve(listener, "/unused", 50, 41, ("recorder",), environ={})
         upstream.assert_not_called()
         client.sendall.assert_not_called()
 
@@ -477,6 +497,7 @@ class ProtocolTest(Case):
 
         with (
             mock.patch("sys.platform", "linux"),
+            mock.patch.dict(os.environ, {"UNRELATED": "not forwarded"}, clear=True),
             mock.patch("os.getuid", return_value=1000),
             mock.patch("os.kill"),
             mock.patch("builtins.open", side_effect=proc),
@@ -487,9 +508,21 @@ class ProtocolTest(Case):
                 return_value=SimpleNamespace(returncode=0, stdout='{"recorded":true}'),
             ) as record,
         ):
-            manager.serve(listener, "/shared", 50, 41, ("recorder",))
+            manager.serve(
+                listener, "/shared", 50, 41, ("recorder",), environ={"CALLER_CONTEXT": "chosen"}
+            )
         server.connect.assert_called_once_with("/shared")
         self.assertEqual(server.sendall.call_args_list[0].args[0], b"GET /rpc HTTP/1.1\r\n\r\n")
+        frames = [
+            manager.read_frame(io.BytesIO(call.args[0]))
+            for call in server.sendall.call_args_list[1:]
+        ]
+        forwarded = b"".join(data for _final, opcode, data in frames if opcode in (0, 1))
+        self.assertEqual(
+            json.loads(forwarded)["params"]["config"]["shell_environment_policy"]["set"],
+            {"CALLER_CONTEXT": "chosen"},
+        )
+        self.assertEqual(record.call_args.args[0], ("recorder", "70"))
         self.assertEqual(
             json.loads(record.call_args.kwargs["input"]), {"session_id": "native", "cwd": "/same"}
         )

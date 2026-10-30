@@ -1,4 +1,8 @@
-"""A manager TUI's private connection to the shared server. Standalone, stdlib only."""
+"""A TUI's private connection to the shared server. Standalone, stdlib only.
+
+The caller supplies recorder command prefixes (pid appended, event JSON on stdin,
+acknowledged by {"recorded": true}), the environment overlay and an authorized ancestor.
+"""
 
 import contextlib
 import json
@@ -120,10 +124,7 @@ class Arguments:
 
     def local_launch(self) -> bool:
         """Remote mode discards local permission choices; preserve native resolution."""
-        return bool(self.options.keys() - REMOTE_VALUES - REMOTE_FLAGS) or any(
-            name in os.environ
-            for name in ("CODEX_EXEC_SERVER_URL", "OPENAI_WORKLOAD_IDENTITY_CONTEXT")
-        )
+        return bool(self.options.keys() - REMOTE_VALUES - REMOTE_FLAGS)
 
     def resume_sid(self) -> str | None:
         if self.command != "resume" or "--last" in self.options or len(self.positionals) < 2:
@@ -302,13 +303,13 @@ def parent(pid: int) -> int | None:
         return None
 
 
-def authorized(pid: int, uid: int, own_uid: int, *, launch: int, hold: int, get_parent) -> bool:
+def authorized(pid: int, uid: int, own_uid: int, *, launch: int, ancestor: int, get_parent) -> bool:
     if uid != own_uid:
         return False
     ancestors = {pid}
     while (pid := get_parent(pid) or 0) > 1 and pid not in ancestors:
         ancestors.add(pid)
-    return launch in ancestors and hold in ancestors
+    return launch in ancestors and ancestor in ancestors
 
 
 def peer(connection: socket.socket) -> tuple[int, int]:
@@ -323,9 +324,9 @@ def peer(connection: socket.socket) -> tuple[int, int]:
     return pid, uid
 
 
-def recording(command: tuple[str, ...], pid: int, event: dict, action: str = "record") -> None:
+def recording(command: tuple[str, ...], pid: int, event: dict) -> None:
     done = subprocess.run(
-        (*command, "--binding", action, "--client", "codex", "--client-pid", str(pid)),
+        (*command, str(pid)),
         input=json.dumps(event),
         text=True,
         capture_output=True,
@@ -333,11 +334,17 @@ def recording(command: tuple[str, ...], pid: int, event: dict, action: str = "re
         check=False,
     )
     if done.returncode != 0 or not done.stdout or json.loads(done.stdout) != {"recorded": True}:
-        raise ValueError("manager refused the client session binding")
+        raise ValueError("recorder refused the client session binding")
 
 
 def serve(
-    listener: socket.socket, upstream: str, launch: int, hold: int, recorder: tuple[str, ...]
+    listener: socket.socket,
+    upstream: str,
+    launch: int,
+    ancestor: int,
+    recorder: tuple[str, ...],
+    *,
+    environ: Mapping[str, str],
 ) -> None:
     listener.settimeout(1)
     while True:
@@ -348,8 +355,10 @@ def serve(
             os.kill(launch, 0)
     with client:
         pid, uid = peer(client)
-        if not authorized(pid, uid, os.getuid(), launch=launch, hold=hold, get_parent=parent):
-            raise ValueError("unauthorized manager client")
+        if not authorized(
+            pid, uid, os.getuid(), launch=launch, ancestor=ancestor, get_parent=parent
+        ):
+            raise ValueError("unauthorized client")
         listener.close()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
             client.settimeout(10)
@@ -363,11 +372,6 @@ def serve(
                 return
             client.settimeout(None)
             server.settimeout(None)
-            environ = {
-                key: value
-                for key, value in os.environ.items()
-                if key.startswith("ENSEMBLE_HOLDER_") or key == "ENSEMBLE_MANAGER"
-            }
             bridge = ThreadBridge(environ, lambda event: recording(recorder, pid, event))
 
             def forward():
@@ -389,17 +393,12 @@ def serve(
                 worker.join()
 
 
-def executable(root: str, launcher: str | None) -> str:
-    excluded = {
-        os.path.realpath(os.path.join(root, "skills", "manage", "scripts", "codex")),
-        os.path.realpath(os.path.expanduser("~/.ensemble/bin/codex")),
-    }
-    if launcher:
-        excluded.add(os.path.realpath(launcher))
+def executable(excluded: tuple[str, ...]) -> str:
+    paths = {os.path.realpath(path) for path in excluded}
     for directory in os.environ.get("PATH", os.defpath).split(os.pathsep):
         candidate = os.path.abspath(os.path.join(directory, "codex"))
         if (
-            os.path.realpath(candidate) not in excluded
+            os.path.realpath(candidate) not in paths
             and os.path.isfile(candidate)
             and os.access(candidate, os.X_OK)
         ):
@@ -407,35 +406,29 @@ def executable(root: str, launcher: str | None) -> str:
     raise ValueError("no Codex executable on PATH beyond the Ensemble launcher")
 
 
-def main(root: str, argv: tuple[str, ...]) -> int:
-    launcher = None
-    if argv[:1] == ("--ensemble-launcher",):
-        launcher, argv = argv[1], argv[2:]
-    real = executable(root, launcher)
+def main(
+    argv: tuple[str, ...],
+    *,
+    excluded: tuple[str, ...] = (),
+    recorder: tuple[str, ...] = (),
+    launch_recorder: tuple[str, ...] = (),
+    environ: Mapping[str, str] | None = None,
+    ancestor: int | None = None,
+    local: bool = False,
+) -> int:
+    real = executable(excluded)
     arguments = Arguments(argv)
-    if (
-        "ENSEMBLE_AGENT_SESSION" in os.environ
-        or not os.environ.get("ENSEMBLE_MANAGER")
-        or not arguments.interactive()
-    ):
+    if ancestor is None or not arguments.interactive():
         os.execv(real, (real, *argv))
-    recorder = (sys.executable, "-I", os.path.join(root, "src", "ensemble", "manager", "rearm.py"))
-    context = subprocess.run(
-        (*recorder, "--binding", "context"), capture_output=True, text=True, timeout=5, check=False
-    )
-    if context.returncode != 0 or not context.stdout:
-        os.execv(real, (real, *argv))
-    identity = json.loads(context.stdout)
     if "--remote" in arguments.options:
-        raise ValueError("manager clients require the local shared server; omit --remote")
+        raise ValueError("tracked clients require the local shared server; omit --remote")
     cwd = arguments.options.get("--cd") or os.getcwd()
     recording(
-        recorder,
+        launch_recorder,
         os.getpid(),
         {"session_id": arguments.resume_sid(), "cwd": os.path.abspath(cwd)},
-        "launch",
     )
-    if arguments.local_launch():
+    if local or arguments.local_launch():
         flags = () if "--no-daemon" in arguments.options else ("--no-daemon",)
         os.execv(real, (real, *flags, *argv))
     started = subprocess.run(
@@ -465,7 +458,7 @@ def main(root: str, argv: tuple[str, ...]) -> int:
             signal.signal(signal.SIGINT, signal.SIG_IGN)
             signal.signal(signal.SIGTERM, stop)
             try:
-                serve(listener, upstream, launch, identity["holder_pid"], recorder)
+                serve(listener, upstream, launch, ancestor, recorder, environ=environ or {})
             except (EOFError, InterruptedError, BrokenPipeError, ConnectionResetError):
                 pass
             except (
@@ -475,7 +468,7 @@ def main(root: str, argv: tuple[str, ...]) -> int:
                 TypeError,
                 subprocess.SubprocessError,
             ) as error:
-                print(f"codex: manager connection ended: {error}", file=sys.stderr)
+                print(f"codex: connection ended: {error}", file=sys.stderr)
             finally:
                 listener.close()
                 shutil.rmtree(directory)
@@ -492,6 +485,6 @@ def main(root: str, argv: tuple[str, ...]) -> int:
 
 if __name__ == "__main__":
     try:
-        sys.exit(main(sys.argv[1], tuple(sys.argv[2:])))
+        sys.exit(main(tuple(sys.argv[2:]), **json.loads(sys.argv[1])))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         sys.exit(f"codex: {error}")
