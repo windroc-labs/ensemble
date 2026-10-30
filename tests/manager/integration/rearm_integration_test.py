@@ -42,7 +42,7 @@ class RearmHookTest(Case):
         started = time.monotonic()
         with terminal.process(
             ("sh", "-c", prefix + _command(manual=manual)),
-            holder="inherit" if "ENSEMBLE_HOLDER_PID" in extra else "parent",
+            holder="shell" if "ENSEMBLE_HOLDER_PID" in extra else "parent",
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -230,6 +230,7 @@ class HoldTreeTest(Case):
                 with self.subTest(manual=manual, source=source):
                     with terminal.process(
                         ("sh", "-c", _command(manual=manual)),
+                        holder="shell",
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,

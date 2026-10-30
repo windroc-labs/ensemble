@@ -28,9 +28,9 @@ def main():
     fd, holder, *argv = sys.argv[1:]
     fcntl.ioctl(int(fd), termios.TIOCSCTTY, 0)
     os.close(int(fd))
-    if holder != "inherit":
+    if holder in {"parent", "client"}:
         os.environ["ENSEMBLE_HOLDER_PID"] = str(os.getpid())
-    if holder == "parent":
+    if holder in {"parent", "shell"}:
         return subprocess.call(argv)
     os.execvpe(argv[0], argv, os.environ)
 
