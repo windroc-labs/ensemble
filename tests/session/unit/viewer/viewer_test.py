@@ -19,10 +19,11 @@ from ensemble.session.viewer import hidden
 from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import STALE_AGE
 from tests.session.hosted_support import SID
-from tests.session.tmux_fixtures import INSIDE, environ, split, worker_rows
+from tests.session.tmux_fixtures import INSIDE, environ, record, split, split_window, worker_rows
 from tests.session.tmux_host_support import Base as HostBase
 
 TuiError = tmux_cli.TuiError
+PRINTED = "/fake/attach w1"
 NO_PANE = "no anchor pane: not in tmux"
 
 
@@ -110,31 +111,19 @@ class ShowTest(Base):
     def test_show_passes_the_status_line_as_label_and_the_workers_sid(self):
         """AC12: the Host's status_line labels the pane; its close hook names the worker's sid."""
         self.enterContext(environ(HOME=self.home, **INSIDE))
-        worker("w1", SID)
-        opened = self.enterContext(
-            mock.patch.object(self.viewer._placement, "open_pane", return_value=None)
-        )
-        for line in (False, True):
-            with self.subTest(status_line=line):
-                opened.reset_mock()
+        self.runner.pane = "mgr"
+        self.runner.results.update({"list-clients": (0, "5\t%3\n"), "split-window": split()})
+        for sid, line in ((SID, False), (SID, True), (None, False)):
+            with self.subTest(sid=sid, status_line=line):
+                worker("w1", sid)
+                self.runner.calls.clear()
                 self.host.settings = {"status_line": line}
                 self.assertIsNone(self.viewer.show("w1", self.host, display="mgr/right"))
-                opened.assert_called_once_with(
-                    "w1",
-                    ("/fake/attach", "w1"),
-                    "/fake/attach w1",
-                    sid=SID,
-                    opener="mgr",
-                    split="right",
-                    split_from=None,
-                    per_column=2,
-                    retile=None,
-                    label=line,
+                self.assertIn(split_window("-h", "%3", ("/fake/attach", "w1")), self.runner.calls)
+                tagged = [c for c in self.runner.calls if c[1] == "set-option" and "-p" in c]
+                self.assertEqual(
+                    tagged, record("mgr", "%20", name="w1", sid=sid, label=line, printed=PRINTED)
                 )
-        worker("w1", None)
-        opened.reset_mock()
-        self.viewer.show("w1", self.host, display="mgr")
-        self.assertIsNone(opened.call_args.kwargs["sid"])
 
     def test_show_with_a_command_runs_it_instead_of_opening_a_pane(self):
         sh = ["/bin/sh", "-c"]
@@ -343,12 +332,14 @@ class HideTest(Base):
 
     def failed_show(self):
         self.enterContext(environ(HOME=self.home, **INSIDE))
-        self.enterContext(
-            mock.patch.object(self.viewer._placement, "open_pane", return_value="tmux: boom")
+        self.runner.pane = "mgr"
+        self.runner.results.update(
+            {"list-clients": (0, "5\t%3\n"), "split-window": (1, "", "boom\n")}
         )
         hidden.write("w1", SID, hidden=True, live=None)
-        with self.assertLogs("session", logging.WARNING):
+        with self.assertLogs("session", logging.WARNING) as logs:
             self.assertEqual(self.viewer.show("w1", self.host, display="mgr"), "/fake/attach w1")
+        self.assertEqual(logs.output, ["WARNING:session:show w1: tmux: boom"])
 
     def test_a_failed_show_clears_hidden_while_a_worker_pane_still_shows_it(self):
         self.panes(("%9", "w1", "mgr"))

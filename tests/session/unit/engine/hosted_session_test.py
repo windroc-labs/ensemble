@@ -70,7 +70,6 @@ from ensemble.session.hosts.docker.worker import DockerWorker
 from ensemble.session.hosts.tmux import TmuxHost, managed
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
-from ensemble.session.viewer.types import WorkerPane
 from ensemble.utils import ACCOUNT_ENV, Record, StatusState, exhausted, inode_lock, load_class
 from tests.session import fake_client, harnesses
 from tests.session.case import HOSTS, REPO, SRC, Case, no_spawn
@@ -94,6 +93,7 @@ from tests.session.hosted_support import (
     fake_tmux,
 )
 from tests.session.threads import capture_errors
+from tests.session.tmux_fixtures import INSIDE, clients_of, worker_rows
 from tests.utils.clock import FakeClock
 from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import owned_directory, scratch
@@ -838,8 +838,15 @@ class DisplayTest(HostedTuiBase):
         self.assertEqual(self.host.calls.worker.call_args.kwargs["display"], "opaque;")
         self.assertEqual(session.name, "w1")
 
+    def inside(self):
+        """The caller is in tmux session mgr, pane %3, which a client shows."""
+        self.enterContext(mock.patch.dict(os.environ, INSIDE))
+        self.session.viewer().answers.update(
+            {"display-message": (0, "mgr\n"), "list-clients": (0, "5\t%3\n")}
+        )
+
     def test_display_is_completed_by_the_viewer_for_its_host(self):
-        self.session.viewer().placement.opener.return_value = "mgr"
+        self.inside()
         for value, completed in (
             ("/below", "mgr/below"),
             (None, "mgr"),
@@ -877,10 +884,10 @@ class DisplayTest(HostedTuiBase):
         self.assertFalse(os.path.lexists(self.root))
 
     def test_layout_is_the_default_hosts_completed_display(self):
-        placement = self.session.viewer().placement
-        placement.opener.return_value = "mgr"
+        self.inside()
         self.assertEqual(self.session.layout(display="/below"), "mgr/below")
-        placement.anchor.assert_called_once_with(None)
+        own = ["tmux", "display-message", "-p", "-t", "%3", "#{session_name}"]
+        self.assertEqual(self.session.viewer().argv(), [own, clients_of("mgr"), own])
         self.assertEqual(self.host.calls.mock_calls, [])
 
     def test_layout_without_a_showable_default_host_is_none(self):
@@ -1822,9 +1829,7 @@ class WritableDirsTest(Base):
 
 class ListTest(HostedTuiBase):
     def test_a_row_per_listed_session_in_its_order_shown_where_the_viewer_placed_it(self):
-        self.session.viewer()._placement.workers.return_value = [
-            WorkerPane("%5", "w2", "", "@1", "shown")
-        ]
+        self.session.viewer().answers["list-panes"] = worker_rows(("%5", "w2", "", "@1", "shown"))
         first = self.host.create("w2", SID)
         second = self.host.create("w1", "other")
         first.calls.row.return_value = SessionRow(
