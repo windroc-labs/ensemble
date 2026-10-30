@@ -60,7 +60,7 @@ def _read(fd: int) -> dict:
         not isinstance(value, dict)
         or value.get("kind") not in tuple(Mode)
         or not all(isinstance(value.get(k), str) and value[k] for k in ("name", "sid"))
-        or value["kind"] == Mode.TUI
+        or (value["kind"] == Mode.TUI or "host" in value)
         and not isinstance(value.get("host"), str)
     ):
         raise ValueError("invalid reservation")
@@ -93,15 +93,13 @@ def _holders(directory: str, known: dict, holders: dict) -> list[str]:
                 held = False
             except BlockingIOError:
                 held = True
-            if record["kind"] == Mode.TUI:
-                if _retained(record, known):
-                    host = record["host"]
+            if held or record["kind"] == Mode.TUI and _retained(record, known):
+                key: tuple = (entry.name,)
+                if (host := record.get("host")) is not None:
                     namespace = known[host][0] if host in known else ("configuration", host)
                     holders.pop((namespace, record["name"], None), None)
-                    holders[(namespace, record["name"], record["sid"])] = record["name"]
-                    continue
-            elif held:
-                holders[(entry.name,)] = record["name"]
+                    key = (namespace, record["name"], record["sid"])
+                holders[key] = record["name"]
                 continue
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(entry.path)
@@ -148,7 +146,7 @@ class Admission(AbstractContextManager):
         self.directory = os.path.join(os.path.expanduser(ROOT), client)
         self.path = os.path.join(self.directory, f"{uuid.uuid4().hex}.run")
         self.record = {"kind": mode, "name": name or sid, "sid": sid}
-        if mode == Mode.TUI:
+        if mode == Mode.TUI or host or hosts:
             self.record["host"] = host or next(iter(hosts))
         self._fd: int | None = None
         self._committed = False

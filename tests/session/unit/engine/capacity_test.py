@@ -1,5 +1,6 @@
 """Client admission across configurations; filesystem locks, no processes or credentials."""
 
+import fcntl
 import json
 import os
 import threading
@@ -115,6 +116,38 @@ class AdmissionTest(Case):
             self.enter(limit=2, name="third", sid="s3", hosts=hosts),
         ):
             self.fail("two real sessions must fill two slots")
+
+    def test_a_named_headless_run_and_its_held_reservation_count_once(self):
+        first = self.enter(limit=2)
+        with first:
+            self.host.create("first", metadata={"client": "fake", "sid": "s1"})
+            first.started(lambda: Liveness.LIVE)
+        second = self.enter(limit=2, name="second", sid="s2")
+        with second:
+            second.started(lambda: Liveness.LIVE)
+        with (
+            self.assertRaisesRegex(SessionError, "held by: first, second"),
+            self.enter(limit=2, name="third", sid="s3"),
+        ):
+            self.fail("two runs must fill two slots")
+
+    def test_a_held_reservation_without_a_host_counts_until_released(self):
+        ticket = self.enter(limit=0)
+        with ticket:
+            pass
+        legacy = Path(ticket.directory) / "legacy.run"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text('{"kind":"headless","name":"old","sid":"old"}')
+        fd = os.open(legacy, os.O_RDONLY)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            with self.assertRaisesRegex(SessionError, "held by: old"), self.enter():
+                self.fail("admitted")
+        finally:
+            os.close(fd)
+        with self.enter():
+            pass
+        self.assertFalse(legacy.exists())
 
     def test_independent_backends_with_equal_name_and_sid_count_separately(self):
         other = MemoryHost("other")
