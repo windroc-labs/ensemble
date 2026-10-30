@@ -64,7 +64,6 @@ def harnessed(clients) -> type[HostedSession]:
 
 
 def preserve_configuration(case) -> None:
-    """Restore the process-wide session configuration after an in-process test."""
     case.addCleanup(setattr, HostedSession, "_setup", HostedSession._setup)
 
 
