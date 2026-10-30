@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -85,6 +86,37 @@ class Run(unittest.TestCase):
     def test_annotation_text_is_escaped(self):
         self.assertEqual(runner.escape("a%\r\n:,"), "a%25%0D%0A:,")
         self.assertEqual(runner.escape("a%\r\n:,", prop=True), "a%25%0D%0A%3A%2C")
+
+
+class Coverage(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.out = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
+        self.enterContext(warnings.catch_warnings())
+        warnings.simplefilter("ignore")
+
+    def test_collected_data_is_saved(self):
+        cov = runner.start_coverage("Unit x", str(self.tmp), self.tmp)
+        self.assertIsNotNone(cov)
+        runner.save_coverage("Unit x", cov)
+        self.assertTrue((self.tmp / runner.COVERAGE_DATA).is_file())
+        self.assertEqual(self.out.getvalue(), "")
+
+    def test_missing_coverage_warns_and_collects_nothing(self):
+        with mock.patch.dict("sys.modules", {"coverage": None}):
+            self.assertIsNone(runner.start_coverage("Unit x", str(self.tmp), self.tmp))
+        self.assertRegex(
+            self.out.getvalue(), r"^::warning title=Unit x::unit coverage not collected: .+\n$"
+        )
+        runner.save_coverage("Unit x", None)
+
+    def test_failed_save_warns_instead_of_raising(self):
+        cov = runner.start_coverage("Unit x", str(self.tmp), self.tmp)
+        with mock.patch.object(cov, "save", side_effect=OSError("disk full")):
+            runner.save_coverage("Unit x", cov)
+        self.assertEqual(
+            self.out.getvalue(), "::warning title=Unit x::unit coverage not collected: disk full\n"
+        )
 
 
 class Discovery(unittest.TestCase):

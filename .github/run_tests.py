@@ -40,8 +40,8 @@ def escape(text, *, prop=False):
     return text.replace(":", "%3A").replace(",", "%2C") if prop else text
 
 
-def annotate(title, message):
-    print(f"::error title={escape(title, prop=True)}::{escape(message)}", flush=True)
+def annotate(title, message, level="error"):
+    print(f"::{level} title={escape(title, prop=True)}::{escape(message)}", flush=True)
 
 
 def append(variable, text):
@@ -151,18 +151,40 @@ def src_trees(repo):
     return [repo / "src"]
 
 
-def start_coverage(sandbox, repo):
+def coverage_lost(title, error):
+    # The tests' result stands: the Coverage job fails a PR whose shard lost its data.
+    annotate(title, f"unit coverage not collected: {error}", level="warning")
+
+
+def start_coverage(title, sandbox, repo):
+    try:
+        import coverage
+    except ImportError as error:
+        return coverage_lost(title, error)
+    try:
+        cov = coverage.Coverage(
+            data_file=os.path.join(sandbox, COVERAGE_DATA),
+            branch=True,
+            source=[str(tree) for tree in src_trees(repo)],
+            config_file=False,
+        )
+        cov.set_option("report:include_namespace_packages", value=True)
+        cov.start()
+    except (OSError, coverage.CoverageException) as error:
+        return coverage_lost(title, error)
+    return cov
+
+
+def save_coverage(title, cov):
+    if cov is None:
+        return
     import coverage
 
-    cov = coverage.Coverage(
-        data_file=os.path.join(sandbox, COVERAGE_DATA),
-        branch=True,
-        source=[str(tree) for tree in src_trees(repo)],
-        config_file=False,
-    )
-    cov.set_option("report:include_namespace_packages", value=True)
-    cov.start()
-    return cov
+    try:
+        cov.stop()
+        cov.save()
+    except (OSError, coverage.CoverageException) as error:
+        coverage_lost(title, error)
 
 
 def supervised_child():
@@ -293,7 +315,10 @@ def supervise(title, *, grace=CONTROL_GRACE):
             lines = file.read().splitlines()
         data = os.path.join(tmp, COVERAGE_DATA)
         if os.environ.get(COVERAGE) and os.path.exists(data):
-            shutil.copyfile(data, os.environ[COVERAGE])
+            try:
+                shutil.copyfile(data, os.environ[COVERAGE])
+            except OSError as error:
+                coverage_lost(title, error)
     code = 128 - child.returncode if child.returncode < 0 else child.returncode
     if code and not (code == 1 and lines[-1:] == ["failed"]):
         message = crash(code, lines)
@@ -445,7 +470,9 @@ def main(argv):
         return code
     root = Path.cwd()
     cov = (
-        start_coverage(os.environ["ENSEMBLE_TEST_SANDBOX"], Path(__file__).resolve().parents[1])
+        start_coverage(
+            title, os.environ["ENSEMBLE_TEST_SANDBOX"], Path(__file__).resolve().parents[1]
+        )
         if os.environ.get(COVERAGE)
         else None
     )
@@ -469,9 +496,7 @@ def main(argv):
     if part is not None:
         suite = shard(suite, part, durations)
     code = run(suite, title)
-    if cov:
-        cov.stop()
-        cov.save()
+    save_coverage(title, cov)
     return code
 
 
