@@ -178,6 +178,15 @@ class Viewer:
         if shown:
             self._mark(name, host, hidden=False)
 
+    def close(self, name: str, host: Host) -> None:
+        if not host.attachable:
+            return
+        try:
+            for pane in self._placement.panes(name):
+                self._placement.close(pane)
+        except TuiError as error:
+            raise SessionError(f"view {name}: {error}") from None
+
     def attach_command(self, name: str, host: Host) -> str:
         return self._target(name, host).printed
 

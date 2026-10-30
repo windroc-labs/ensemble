@@ -166,6 +166,7 @@
  "ensemble.session.Usage.weekly": "attribute",
  "ensemble.session.Viewer": "class(builtins.object)(settings:POSITIONAL_OR_KEYWORD=None, tmux:KEYWORD_ONLY=None)",
  "ensemble.session.Viewer.attach_command": "def(self:POSITIONAL_OR_KEYWORD, name:POSITIONAL_OR_KEYWORD, host:POSITIONAL_OR_KEYWORD)",
+ "ensemble.session.Viewer.close": "def(self:POSITIONAL_OR_KEYWORD, name:POSITIONAL_OR_KEYWORD, host:POSITIONAL_OR_KEYWORD)",
  "ensemble.session.Viewer.hide": "def(self:POSITIONAL_OR_KEYWORD, name:POSITIONAL_OR_KEYWORD, host:POSITIONAL_OR_KEYWORD, if_closed:KEYWORD_ONLY=False)",
  "ensemble.session.Viewer.show": "def(self:POSITIONAL_OR_KEYWORD, name:POSITIONAL_OR_KEYWORD, host:POSITIONAL_OR_KEYWORD, display:KEYWORD_ONLY=None, command:KEYWORD_ONLY=None)",
  "ensemble.session.Window": "class(builtins.object)(used_percent:POSITIONAL_OR_KEYWORD, resets_at:POSITIONAL_OR_KEYWORD)",

@@ -1042,7 +1042,8 @@ class HostedSession(Session):
         except SessionError:
             clients = setup.registry.configured()
         try:
-            store.close(generation=generation)
+            if store.close(generation=generation):
+                cls.viewer().close(name, on)
         finally:
             for client in clients:
                 cls._reconcile_capacity(client, {_host_key(setup, host or setup.hosts.default): on})
@@ -1355,7 +1356,9 @@ class HostedSession(Session):
 
     def close(self) -> None:
         try:
-            self._running.close()
+            kept = self._running.close() is False
+            if (name := self._tui()) is not None and not kept:
+                self._viewer.close(name, self._host)
         finally:
             self._release_capacity()
 

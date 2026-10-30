@@ -354,6 +354,37 @@ class HideTest(Base):
                 self.assertTrue(hidden.read("w1", SID))
 
 
+class CloseTest(Base):
+    def setUp(self):
+        super().setUp()
+        worker("w1", SID)
+
+    def test_close_kills_every_worker_pane_of_the_name_and_leaves_hidden(self):
+        hidden.write("w1", SID, hidden=False, live=None)
+        self.runner.results["list-panes"] = worker_rows(
+            ("%5", "w1", "mgr", "@1"), ("%6", "w2", "mgr", "@1"), ("%8", "w1", "", "@2")
+        )
+        self.assertIsNone(self.viewer.close("w1", self.host))
+        kills = [c for c in self.runner.calls if "kill-pane" in c]
+        self.assertEqual(kills, [closed("%5", "@1"), closed("%8", "@2")])
+        self.assertFalse(hidden.read("w1", SID))
+
+    def test_close_on_a_host_that_cannot_attach_calls_no_tmux(self):
+        plain = mock.create_autospec(Host, instance=True)
+        plain.name, plain.attachable = "plain", False
+        self.viewer.close("w1", plain)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_close_names_a_failed_tmux_call(self):
+        for results in ({"list-panes": (1, "", "boom\n")}, {"set-hook": (1, "", "boom\n")}):
+            with self.subTest(results=results):
+                self.runner.results["list-panes"] = worker_rows(("%9", "w1", "mgr"))
+                self.runner.results.update(results)
+                with self.assertRaisesRegex(SessionError, "^view w1: tmux: boom$"):
+                    self.viewer.close("w1", self.host)
+                self.runner.results.pop("set-hook", None)
+
+
 class AttachCommandTest(Base):
     def test_attach_command_names_the_session_and_refuses_a_bad_name(self):
         self.assertEqual(self.viewer.attach_command("w1", self.host), "/fake/attach w1")

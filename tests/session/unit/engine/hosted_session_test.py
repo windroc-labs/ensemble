@@ -2096,17 +2096,8 @@ class TuiStartTest(HostedTuiBase):
         self.host.calls.reset_mock()
         session.close()
         terminal.calls.close.assert_called_once_with()
+        self.host.calls.close.assert_called_once_with("w1")
         self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
-
-    def test_close_touches_no_tmux_session(self):
-        """AC8: its pane closes with its attach command; close asks the Viewer nothing."""
-        session = self.tui(name="w1")
-        viewer = self.session.viewer()
-        self.host.calls.reset_mock()
-        with mock.patch.object(viewer, "_tmux") as tmux:
-            session.close()
-        self.assertEqual(tmux.mock_calls, [])
-        self.assertEqual(self.host.calls.unclaimed.mock_calls, [])
 
     def test_start_closes_a_worker_named_like_a_tmux_session(self):
         """AC17: the Viewer's refusal at start closes the worker it began."""
@@ -2724,12 +2715,13 @@ class SessionIdentityTest(HostedTuiBase):
             events = list(session.events())
         self.assertEqual(events[-1], Exited(-signal.SIGHUP))
 
-    def test_retire_of_no_worker_leaves_a_host_session_of_its_name(self):
+    def test_retire_of_no_worker_closes_only_its_worker_panes(self):
         """No worker state: no worker to end; a host session of its name is not its to close."""
         self.host.create("plain", sid=SID)
         self.host.calls.reset_mock()
         self.session.retire("plain", sid=SID)
         self.assertIn("plain", self.host.processes)
+        self.assertEqual(self.host.calls.mock_calls[-1], mock.call.close("plain"))
 
     def test_retire_checks_its_worker_states_sid_before_closing(self):
         own(self, name="w1", sid="replacement")
@@ -2768,6 +2760,7 @@ class SessionIdentityTest(HostedTuiBase):
         current.calls.send.assert_not_called()
         current.calls.press.assert_not_called()
         current.calls.close.assert_not_called()
+        self.assertNotIn(mock.call.close("w1"), self.host.calls.mock_calls)
         self.assertTrue(current.alive())
         self.assertTrue(os.path.isdir(os.path.join(self.root, "w1")))
 
@@ -3021,16 +3014,20 @@ class OwnedTest(HostedTuiBase):
         owned = self.own()
         terminal = self.host.processes["w1"]
         self.hook("stop", {"last_message": "last"})
+        self.host.calls.close.reset_mock()
         final = owned.close()
         self.assertIn(TurnEnd("last", 0), final)
         terminal.calls.close.assert_called_once_with()
+        self.host.calls.close.assert_called_once_with("w1")
         self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
         self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
 
-    def test_stop_returns_its_final_read(self):
+    def test_stop_returns_its_final_read_and_leaves_its_panes(self):
         owned = self.own()
         self.hook("stop", {"last_message": "last"})
+        self.host.calls.close.reset_mock()
         self.assertIn(TurnEnd("last", 0), owned.stop())
+        self.host.calls.close.assert_not_called()
         self.assertEqual(owned.confirm_end(1), -signal.SIGHUP)
 
     def test_confirm_end_is_none_while_the_terminal_lives(self):
@@ -3105,7 +3102,9 @@ class OwnedTest(HostedTuiBase):
         state = tui.TuiMode.snapshot("w1")
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump({**state, "generation": "newer"}, f)
+        self.host.calls.close.reset_mock()
         owned.close()
+        self.host.calls.close.assert_not_called()
         self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
 
     def test_record_notes_client_sessions_and_stderr(self):
@@ -4150,13 +4149,16 @@ class BoundOwnerTest(BoundOwnerBase):
     def test_retire_fallback_takes_the_record_rule(self):
         terminal = self.host.processes["w1"]
         self.host.calls.worker_liveness.return_value = Liveness.UNKNOWN
+        self.host.calls.close.reset_mock()
         with self.assertRaisesRegex(engine_types.SessionBusy, "worker generation"):
             self.session.retire("w1", sid=SID)
         terminal.calls.close.assert_not_called()
+        self.host.calls.close.assert_not_called()
         self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
         self.host.calls.worker_liveness.return_value = Liveness.ABSENT
         self.session.retire("w1", sid=SID)
         terminal.calls.close.assert_called_once_with()
+        self.host.calls.close.assert_called_once_with("w1")
         self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
 
     def test_retire_of_another_generation_asks_no_owner(self):
@@ -4176,7 +4178,9 @@ class BoundOwnerTest(BoundOwnerBase):
         self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
         with open(os.path.join(self.root, "w1", "session.json"), "w") as f:
             json.dump({**self.state, "generation": "newer"}, f)
+        self.host.calls.close.reset_mock()
         session.close()  # another generation's record now: left alone, no wait
+        self.host.calls.close.assert_not_called()
         self.assertEqual(tui.TuiMode.snapshot("w1")["generation"], "newer")
 
     def test_retire_with_another_sid_raises_before_any_request(self):
@@ -4302,6 +4306,7 @@ class DeadOwner(HostedTuiBase):
                 self.host.calls.worker_liveness.assert_called_with("w1", self.state["generation"])
                 self.host.calls.release.assert_called_once_with("w1", self.state["generation"])
                 self.display.calls.close.assert_called_once_with()
+                self.host.calls.close.assert_called_once_with("w1")
 
     def test_close_live_or_unknown_busy(self):
         self.addCleanup(
@@ -4321,6 +4326,7 @@ class DeadOwner(HostedTuiBase):
                     self.assertEqual(tui.TuiMode.snapshot("w1"), self.state)
                     self.host.calls.release.assert_not_called()
                     self.display.calls.close.assert_not_called()
+                    self.host.calls.close.assert_not_called()
 
 
 class DockerOwnedTest(Case):
