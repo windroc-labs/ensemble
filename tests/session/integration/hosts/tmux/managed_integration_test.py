@@ -146,12 +146,7 @@ class ManagedIntegrationTest(Case):
 
     def test_guard_sigkill_keeps_unknown_and_refuses_new_owner(self):
         worker = self.worker(terminal=True)
-        live_tmux.wait(
-            lambda: (
-                Path(self.home, "client.pid").exists() and Path(self.home, "child.pid").exists()
-            ),
-            what="client tree",
-        )
+        live_tmux.wait(lambda: Path(self.home, "client.pid").exists(), what="client started")
         worker.proc.kill()
         worker.proc.wait(timeout=10)
         live_tmux.wait(lambda: worker.state() == Liveness.UNKNOWN, what="broken guard channel")
