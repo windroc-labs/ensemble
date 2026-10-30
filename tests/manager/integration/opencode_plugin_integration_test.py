@@ -45,10 +45,10 @@ class OpenCodePluginTest(Case):
         os.symlink(sys.executable, os.path.join(self.bin, "python3"))
         self.path = f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}"
 
-    def play(self, steps, plugin=PLUGIN, **extra):
+    def play(self, steps, plugin=PLUGIN, args=(), **extra):
         env = {"PATH": self.path, "HOME": self.home, **extra}
         with subprocess.Popen(
-            (NODE, HOST, plugin),
+            (NODE, HOST, plugin, *args),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -73,8 +73,8 @@ class OpenCodePluginTest(Case):
         with open(path, encoding="utf-8") as f:
             return json.load(f)
 
-    def manager(self, steps):
-        return self.play(steps, **MANAGER, ENSEMBLE_HOLDER_PID=str(os.getpid()))
+    def manager(self, steps, args=()):
+        return self.play(steps, args=args, **MANAGER, ENSEMBLE_HOLDER_PID=str(os.getpid()))
 
     def test_a_session_ensemble_starts_gets_no_hooks(self):
         hooks = ["config", "event", "experimental.chat.system.transform", "shell.env"]
@@ -171,6 +171,57 @@ class OpenCodePluginTest(Case):
         )
         self.assertIn("SessionStart `startup`", played[3][0])
         self.assertEqual(self.record(), {**expected, "sid": "ses_2", "pid": self.node})
+
+    def test_a_resumed_session_records_itself_at_start_before_any_turn(self):
+        """The plugin's process.argv is OpenCode's TUI worker's: the session flag is on its own
+        command line only."""
+        os.makedirs(os.path.join(self.ensemble, "managers", "mgr"))
+        old = {"client": "opencode", "sid": "ses_old", "pid": 1, "cwd": self.project}
+        with open(os.path.join(self.ensemble, "managers", "mgr", "session.json"), "w") as f:
+            json.dump(old, f)
+        self.manager([], args=("--session", "ses_old"))
+        self.assertEqual(self.record(), {**old, "pid": self.node})
+        for args in (("-s", "ses_a"), ("--session", "ses_a"), ("--session=ses_a",)):
+            with self.subTest(args=args):
+                self.manager([], args=args)
+                self.assertEqual(self.record(), {**old, "sid": "ses_a", "pid": self.node})
+
+    def test_a_session_flag_inside_free_text_is_not_a_resumed_session(self):
+        """`ps` joins argv unquoted, so a free-text value's words read as flags."""
+        os.makedirs(os.path.join(self.ensemble, "managers", "mgr"))
+        old = {"client": "opencode", "sid": "ses_old", "pid": 1, "cwd": self.project}
+        with open(os.path.join(self.ensemble, "managers", "mgr", "session.json"), "w") as f:
+            json.dump(old, f)
+        for args in (
+            ("--prompt", "hi -s ses_x"),
+            ("--prompt=hi -s ses_x",),
+            ("--title", "t --session ses_x"),
+            ("--title=t --session=ses_x",),
+        ):
+            with self.subTest(args=args):
+                self.manager([], args=args)
+                self.assertEqual(self.record(), old)
+        self.manager([], args=("-s", "ses_a", "--prompt", "hi -s ses_x"))
+        self.assertEqual(self.record(), {**old, "sid": "ses_a", "pid": self.node})
+
+    def test_a_resumed_sessions_first_turn_carries_its_start_rearm_once(self):
+        played = self.manager(
+            [system("ses_old"), system("ses_old"), event("session.idle", "ses_old")]
+            + [system("ses_old")],
+            args=("--session", "ses_old"),
+        )
+        (first,), again, after = played[0], played[1], played[3]
+        self.assertIn("SessionStart `resume` in manager `mgr`", first)
+        self.assertEqual((again, after), ([first], []))
+
+    def test_a_resumed_child_session_records_nothing_at_start(self):
+        os.makedirs(os.path.join(self.ensemble, "managers", "mgr"))
+        saved = {"saved": {"ses_c": {"id": "ses_c", "parentID": "ses_1"}}}
+        played = self.manager([saved, system("ses_c")], args=("--session", "ses_c"))
+        self.assertEqual(played[1], [])
+        self.assertIsNone(self.record())
+        self.manager([])
+        self.assertIsNone(self.record())
 
     def test_an_idle_before_the_turn_got_it_keeps_the_rearm(self):
         played = self.manager([created("ses_1"), event("session.idle", "ses_1"), system("ses_1")])
