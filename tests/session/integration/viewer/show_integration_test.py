@@ -211,6 +211,67 @@ class GuardDisplayTest(LiveCase):
             lambda: hook not in self.close_hooks(window), what=f"{hook} removed by its own run"
         )
 
+    def old_view(self) -> str:
+        """NAME's old view session; its nested pane."""
+        manager = self.server.inside("manager")["TMUX_PANE"]
+        self.tmux(
+            "new-session", "-d", "-s", self.NAME, "--", *self.host.attach_target(self.NAME).argv
+        )
+        nested = ("/usr/bin/env", "-u", "TMUX", self.server.program, "-S", self.server.socket)
+        pane = self.tmux(
+            *("split-window", "-d", "-h", "-P", "-F", "#{pane_id}", "-t", manager),
+            *(*nested, "attach", "-t", f"={self.NAME}"),
+        )
+        target = f"={self.NAME}:"
+        ran = f"run-shell {shlex.quote('touch ' + shlex.quote(str(self.old_hook)))}"
+        self.tmux(
+            *("set-option", "-t", target, "@view", "viewer", ";"),
+            *("set-option", "-t", target, "@pane", pane, ";"),
+            *("set-option", "-t", target, "@opener", "manager", ";"),
+            *("set-option", "-w", "-t", target, "remain-on-exit", "on", ";"),
+            *("set-hook", "-t", target, "client-detached", ran),
+        )
+        live_tmux.wait(
+            lambda: self.NAME in self.tmux("list-clients", "-F", "#{session_name}").split(),
+            what=f"the nested client attached to {self.NAME}'s view session",
+        )
+        return pane
+
+    @property
+    def old_hook(self) -> Path:
+        return Path(self.home, "old-hook")
+
+    def assert_old_view_gone(self, old: str) -> None:
+        self.assertNotIn(old, self.server.panes("=manager:"))
+        self.assertEqual(self.server.sessions(), ["manager"])
+        self.assertFalse(self.old_hook.exists())
+        self.assert_worker_unchanged()
+
+    def test_show_replaces_an_old_view_session_with_a_direct_pane(self):
+        """FR-19: one direct pane; the worker runs on."""
+        old = self.old_view()
+        manager = self.server.inside("manager")["TMUX_PANE"]
+        pane = self.shown()
+        self.assert_old_view_gone(old)
+        self.assertEqual([w.pane for w in self.server.worker_panes(self.NAME)], [pane])
+        self.assertEqual(set(self.server.panes("=manager:")), {manager, pane})
+        self.assertEqual(self.started_by(pane), list(self.host.attach_target(self.NAME).argv))
+        self.replayed(pane, "startup-079")
+        self.assertFalse(self.hidden())
+        self.assertEqual(self.shown(), pane)
+
+    def test_hide_or_close_removes_an_old_view_session(self):
+        """FR-19: hide and close too."""
+        for verb in ("hide", "close"):
+            with self.subTest(verb=verb):
+                old = self.old_view()
+                getattr(self.viewer, verb)(self.NAME, self.host)
+                self.assert_old_view_gone(old)
+                self.assertTrue(self.hidden())
+        pane = self.shown()
+        self.assertEqual(self.started_by(pane), list(self.host.attach_target(self.NAME).argv))
+        self.assert_worker_unchanged()
+
 
 class ShowTest(LiveCase):
     def setUp(self):

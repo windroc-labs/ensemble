@@ -10,7 +10,16 @@ import os
 import time
 from collections.abc import Mapping
 
-from ensemble.session.engine.tmux_cli import NAME, TmuxCli, TuiError, display_error
+from ensemble.session.engine.tmux_cli import (
+    NAME,
+    PANE,
+    TmuxCli,
+    TuiError,
+    absent,
+    display_error,
+    error,
+    session_name,
+)
 from ensemble.session.engine.types import (
     NO_DISPLAY,
     ConfigError,
@@ -33,6 +42,8 @@ LOG = logging.getLogger("session")
 SHOW_TRIES = 3
 SHOW_RETRY_WAIT = 1  # seconds
 CHAIN_LINKS = 8
+OLD_VIEW = "#{session_name}\t#{@view}\t#{@pane}"
+OLD_VIEW_TAG = "viewer"
 
 Parts = tuple[str | None, str | None, str | None, bool]
 
@@ -181,6 +192,7 @@ class Viewer:
         """Undoes show (if_closed: only while no worker pane shows it)."""
         self._target(name, host)
         try:
+            self._unviewed(name)
             panes = self._placement.panes(name)
             if if_closed and panes:
                 return
@@ -203,11 +215,12 @@ class Viewer:
         if not host.attachable:
             return
         try:
+            self._unviewed(name)
             panes = self._placement.panes(name)
             for pane in panes:
                 self._placement.close(pane)
-        except TuiError as error:
-            raise SessionError(f"view {name}: {error}") from None
+        except TuiError as e:
+            raise SessionError(f"view {name}: {e}") from None
         if not panes:
             self._placement.unlabel()
 
@@ -237,11 +250,38 @@ class Viewer:
         if not host.attachable:
             return
         try:
-            taken = self._tmux.has_session(name)
-        except TuiError as error:
-            raise SessionError(f"show {name}: {error}") from None
+            taken = self._unviewed(name)
+        except TuiError as e:
+            raise SessionError(f"show {name}: {e}") from None
         if taken:
             raise SessionError(f"show {name}: a host tmux session {name} exists")
+
+    def _unviewed(self, name: str) -> bool:
+        """Whether a tmux session holds `name` once its old view session (@pane: its grid pane) is
+        gone, hooks unset first."""
+        session_name(name)
+        res = self._tmux.run(["list-sessions", "-F", OLD_VIEW])
+        if res.returncode:
+            if absent(res):
+                return False
+            raise TuiError(f"tmux: {error(res)}")
+        rows = [line.split("\t") for line in res.stdout.splitlines()]
+        found = next((row[1:] for row in rows if row[0] == name), None)
+        if found is None:
+            return False
+        tag, pane = (*found, "", "")[:2]
+        if tag != OLD_VIEW_TAG:
+            return True
+        target = f"={name}:"
+        unset = ["set-hook", "-u", "-t", target, "client-attached", ";"]
+        unset += ["set-hook", "-u", "-t", target, "client-session-changed", ";"]
+        unset += ["set-hook", "-u", "-t", target, "client-detached"]
+        kills = [["kill-pane", "-t", pane]] if PANE.fullmatch(pane) else []
+        for args in (unset, *kills, ["kill-session", "-t", f"={name}"]):
+            res = self._tmux.run(args)
+            if res.returncode and not absent(res):
+                raise TuiError(f"tmux: {error(res)}")
+        return False
 
     def _target(self, name: str, host: Host) -> CommandView:
         target = host.attach_target(name)
