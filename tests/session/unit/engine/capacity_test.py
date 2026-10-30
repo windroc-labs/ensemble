@@ -7,7 +7,6 @@ import threading
 from pathlib import Path
 from unittest import mock
 
-from ensemble.session.engine import capacity
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.types import Liveness, Mode, SessionError, SessionRow
 from tests.session.case import Case
@@ -28,6 +27,21 @@ class EndingHost(MemoryHost):
         for terminal in list(self.processes.values()):
             terminal.close()
         raise SessionError("no server running")
+
+
+class SettlingHost(MemoryHost):
+    """Runs `settle` on a thread once its rows are read, before the count's file scan."""
+
+    settle = None
+
+    def _capacity_rows(self):
+        rows = super()._capacity_rows()
+        if self.settle is not None:
+            thread, self.settle = threading.Thread(target=self.settle, daemon=True), None
+            thread.start()
+            thread.join(0.5)
+            self.settled = thread
+        return rows
 
 
 class AdmissionTest(Case):
@@ -105,30 +119,21 @@ class AdmissionTest(Case):
             first.started(lambda: Liveness.LIVE)
 
     def test_a_tui_start_settling_during_a_count_is_still_counted(self):
+        self.host = SettlingHost()
         first = self.enter(mode=Mode.TUI)
-        inventory, settling = capacity._inventory, []
 
         def settle():
             self.host.create("first", metadata={"client": "fake", "sid": "s1"})
             first.started(lambda: Liveness.LIVE)
 
-        def snapshot(*args, **kwargs):
-            found = inventory(*args, **kwargs)
-            if not settling:
-                settling.append(threading.Thread(target=settle, daemon=True))
-                settling[0].start()
-                self.addCleanup(settling[0].join, 5)
-                settling[0].join(0.5)
-            return found
-
         with first:
+            self.host.settle = settle
             with (
-                mock.patch.object(capacity, "_inventory", side_effect=snapshot),
                 self.assertRaisesRegex(SessionError, "held by: first"),
                 self.enter(name="second", sid="s2"),
             ):
                 self.fail("admitted beside a live first")
-            settling[0].join(5)
+            self.host.settled.join(5)
         self.assertTrue(os.path.exists(first.path))
 
     def test_ended_reservations_leave_no_client_directory(self):

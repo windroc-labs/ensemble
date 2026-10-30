@@ -244,9 +244,9 @@ class Admission(AbstractContextManager):
             if not keep:
                 with contextlib.suppress(FileNotFoundError):
                     os.unlink(self.path)
-            if self._fd is not None:
-                os.close(self._fd)
-                self._fd = None
+            fd, self._fd = self._fd, None
+            if fd is not None:
+                os.close(fd)
 
         try:
             with _locked(self.directory, self.client):
