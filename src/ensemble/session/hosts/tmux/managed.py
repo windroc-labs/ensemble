@@ -94,7 +94,7 @@ def one_shot(host: str, generation: str) -> str:
 
 def load_json(path: str, *, limit: int = 4096) -> dict:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    with os.fdopen(descriptor) as stream:
+    with os.fdopen(descriptor, encoding="utf-8") as stream:
         info = os.fstat(stream.fileno())
         if (
             not stat.S_ISREG(info.st_mode)

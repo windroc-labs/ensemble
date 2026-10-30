@@ -847,7 +847,6 @@ class Guard:
         if status != "exited" and (self.client is not None or self.proc is None):
             value["client"] = self.client  # None: it started no client
         if error is not None:
-            # a surrogate-escaped byte has no UTF-8: escaped, it cannot stop the record
             value["error"] = error.encode("utf-8", "backslashreplace").decode()[:ERROR_CHARS]
         self._save("state.json", value)
 
@@ -856,7 +855,7 @@ class Guard:
         descriptor = os.open(
             path + ".new", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
         )
-        with os.fdopen(descriptor, "w") as stream:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False)
             stream.flush()
             os.fsync(stream.fileno())

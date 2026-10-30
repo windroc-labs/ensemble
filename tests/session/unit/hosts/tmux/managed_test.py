@@ -1,6 +1,7 @@
 """Managed channel and conservative crash admission, without real processes."""
 
 import contextlib
+import json
 import os
 import sys
 import tempfile
@@ -336,6 +337,25 @@ class ManagedTest(Case):
         free_lease(directory, generation)
         self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
         self.assertTrue(managed.exited("tmux", "worker", generation))
+
+    def test_a_guard_record_reads_as_utf_8_in_an_ascii_locale(self):
+        generation, error = "a" * 32, "OSError: cannot run /opt/中/client"
+        directory = guard_dir(generation, "failed")
+        Path(directory, generation, "state.json").write_text(
+            json.dumps(
+                {"generation": generation, "state": "failed", "client": None, "error": error},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        free_lease(directory, generation)
+        real = os.fdopen
+
+        def fdopen(descriptor, mode="r", *args, encoding=None, **kwargs):
+            return real(descriptor, mode, *args, encoding=encoding or "ascii", **kwargs)
+
+        with mock.patch.object(os, "fdopen", fdopen):
+            self.assertEqual(managed.liveness("tmux", "worker", generation), Liveness.ABSENT)
 
     def test_a_concurrent_probe_is_no_live_guard(self):
         """Probes take the lease shared: one probing (as ls or a tmux hook does) while another asks

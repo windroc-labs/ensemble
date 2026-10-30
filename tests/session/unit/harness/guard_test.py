@@ -2096,6 +2096,26 @@ class EndTest(Base):
                 self.assertEqual(self.record(), self.expected("failed", error, client=None))
                 self.assertLessEqual(os.stat(self.home + "/state.json").st_size, 4096)
 
+    def test_a_non_ascii_error_is_recorded_as_utf_8_in_an_ascii_locale(self):
+        real = os.fdopen
+
+        def fdopen(descriptor, mode="r", *args, encoding=None, **kwargs):
+            return real(descriptor, mode, *args, encoding=encoding or "ascii", **kwargs)
+
+        runtime = self.runtime(lease="9")
+        with (
+            self.world(lambda _: []) as popen,
+            mock.patch.object(os, "fdopen", fdopen),
+            self.assertRaises(OSError),
+        ):
+            popen.side_effect = OSError("cannot run /opt/中/client")
+            runtime.run()
+        with open(self.home + "/state.json", encoding="utf-8") as stream:
+            self.assertEqual(
+                json.load(stream),
+                self.expected("failed", "OSError: cannot run /opt/中/client", client=None),
+            )
+
 
 class LeaseTest(Case):
     def setUp(self):
