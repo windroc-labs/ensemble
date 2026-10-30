@@ -1115,7 +1115,7 @@ class RouterEntry(OuterBase):
         for change, said, state in (
             (
                 {"state": "In Review"},
-                "pick-none TASK-7 reason=not a Todo issue delegated to a role app",
+                "pick-none TASK-7 reason=not in Todo",
                 "In Review",
             ),
             (
@@ -1161,7 +1161,7 @@ class RouterEntry(OuterBase):
         self.assertEqual(self.entry("--issue", ID), 2)
         self.assertEqual(
             self.err,
-            "router.py: pick-none TASK-7 reason=not a Todo issue delegated to a role app\n",
+            "router.py: pick-none TASK-7 reason=not in Todo\n",
         )
         self.todo["state"] = "Todo"
         self.assertEqual(self.entry("--issue", ID), 0)
@@ -2508,7 +2508,17 @@ class LocalBoard(TickBase):
         with open(os.path.join(folder, "LOC-1 One.md"), "w", encoding="utf-8") as file:
             file.write("---\nid: LOC-1\ntitle: One\ncreated: 2026-09-01T00:00:00Z\n---\n")
         self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", "LOC-1"), 0)
-        self.assertIn("pick-none LOC-1 reason=not a ready/ issue assigned to a role", self.said())
+        self.assertIn("pick-none LOC-1 reason=not in ready/", self.said())
+
+    def test_unqueued_diagnostic_names_a_missing_role_or_issue(self):
+        folder = os.path.join(self.tmp, "board", "me", "ready")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "LOC-1 One.md"), "w", encoding="utf-8") as file:
+            file.write("---\nid: LOC-1\ntitle: One\ncreated: 2026-09-01T00:00:00Z\n---\n")
+        for ident, reason in (("LOC-1", "not assigned to a role"), ("LOC-9", "no such issue")):
+            with self.subTest(ident=ident):
+                self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", ident), 0)
+                self.assertIn(f"pick-none {ident} reason={reason}", self.said())
 
     def test_brake_on_local(self):
         self.api.usages = {"a": reading(70)}
@@ -4172,7 +4182,7 @@ class ExplicitIssueRuns(TickBase):
                     )
                     self.assertEqual(len(fake.reads()), 1)
 
-    def test_another_state_or_not_a_role_app_starts_nothing(self):
+    def test_another_state_or_not_a_role_app_names_what_is_missing_and_starts_nothing(self):
         fake = FakeLinear(
             [
                 issue("TASK-1", "In Review", "researcher"),
@@ -4181,7 +4191,13 @@ class ExplicitIssueRuns(TickBase):
                 issue("TASK-4", "In Progress", "someone"),
             ]
         )
-        for ident in ("TASK-1", "TASK-2", "TASK-3", "TASK-4", "TASK-9"):
+        for ident, reason in (
+            ("TASK-1", "not in Todo"),
+            ("TASK-2", "no configured role delegate"),
+            ("TASK-3", "no configured role delegate"),
+            ("TASK-4", "not in Todo; no configured role delegate"),
+            ("TASK-9", "no such issue"),
+        ):
             with self.subTest(ident=ident):
                 self.assertEqual(self.tick(fake, "--issue", ident), 2)
                 self.assertEqual(
@@ -4189,7 +4205,7 @@ class ExplicitIssueRuns(TickBase):
                     [
                         "claim-skip TASK-2 reason=no configured role delegate",
                         "claim-skip TASK-3 reason=no configured role delegate",
-                        f"pick-none {ident} reason=not a Todo issue delegated to a role app",
+                        f"pick-none {ident} reason={reason}",
                     ],
                 )
                 self.unchanged(fake)
@@ -4236,7 +4252,7 @@ class ExplicitIssueRuns(TickBase):
         for ident, dry, reason in (
             ("TASK-5", False, "no project"),
             ("TASK-5", True, "no project"),
-            ("TASK-6", False, "not a Todo issue delegated to a role app; no project"),
+            ("TASK-6", False, "not in Todo; no project"),
         ):
             with self.subTest(ident=ident, dry=dry):
                 code = self.tick(fake, "--issue", ident, *["--dry-run"] * dry)

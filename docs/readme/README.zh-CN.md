@@ -96,7 +96,7 @@ ensemble work
 claude
 ```
 
-如果你使用的客户端是 `codex` 或 `opencode`，请用它替换 `claude`。在该对话中调用：
+如果你使用的客户端是 `codex --no-daemon` 或 `opencode`，请用它替换 `claude`。在该对话中调用：
 
 ```text
 /ensemble:manage

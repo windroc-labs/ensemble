@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -23,7 +24,9 @@ MANAGER = {
     "ENSEMBLE_HOLDER_ID": "holder-1",
     "ENSEMBLE_HOLDER_PID": "4242",
 }
-TABLE = b" 100 50\n  50 4242\n4242     1\n 777   1\n"
+TABLE = b" 100 50 ttys001\n  50 4242 ttys001\n4242 1 ttys001\n777 1 ttys002\n" + b"".join(
+    b"%d 4242 ttys001\n" % entry["pid"] for entry in session_records.VALID.values()
+)
 SKILL = os.path.join(REPO, "skills", "manage", "SKILL.md")
 MODES = ((), ("--mode", "manual"))
 
@@ -87,6 +90,9 @@ class MainTest(Case):
             ("--client", "claude", "--client", "codex"),
             ("--mode", "manual", "--mode", "manual"),
             ("--other", "x"),
+            ("--require-terminal", "hint"),
+            ("--client", "codex", "--client-pid", "x", "--require-terminal", "hint"),
+            (*_hinted(60), "--require-terminal", "hint"),
         ):
             with self.subTest(argv):
                 self.assertEqual(_run(MANAGER, _start("startup"), argv=argv), (0, "", ""))
@@ -197,7 +203,7 @@ class MainTest(Case):
         ps.assert_called_once()
         self.assertEqual(
             ps.call_args.args[0],
-            ("ps", "-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "args="),
+            ("ps", "-A", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "tty="),
         )
         self.assertTrue(ps.call_args.kwargs["capture_output"])
         self.assertGreater(ps.call_args.kwargs["timeout"], 0)
@@ -212,8 +218,8 @@ class MainTest(Case):
             "pid not a number": _ps(b"100 50 x\nx 4242 y\n"),
             "not UTF-8": _ps(b"100 50\xff\n50 4242\n"),
             "empty": _ps(b""),
-            "cycle": _ps(b"100 50\n50 60\n60 50\n"),
-            "own entry missing": _ps(b"50 4242\n4242 1\n"),
+            "cycle": _ps(b"100 50 ttys001\n50 60 ttys001\n60 50 ttys001\n"),
+            "own entry missing": _ps(b"50 4242 ttys001\n4242 1 ttys001\n"),
         }
         for label, ps in cases.items():
             with self.subTest(label):
@@ -226,7 +232,7 @@ class MainTest(Case):
         self.assertIn("compact", json.loads(out)["hookSpecificOutput"]["additionalContext"])
 
 
-def _with_pid(argv: tuple[str, ...], pid: int) -> tuple[str, ...]:
+def _with_pid(argv: tuple[str, ...], pid: int | str) -> tuple[str, ...]:
     at = argv.index("--client-pid") + 1
     return (*argv[:at], str(pid), *argv[at + 1 :])
 
@@ -234,12 +240,8 @@ def _with_pid(argv: tuple[str, ...], pid: int) -> tuple[str, ...]:
 def _bare(argv: tuple[str, ...]) -> tuple[str, ...]:
     """argv without the record options."""
     pairs = zip(argv[::2], argv[1::2], strict=True)
-    return tuple(
-        word
-        for pair in pairs
-        if pair[0] not in {"--client", "--client-pid", "--hook-daemon"}
-        for word in pair
-    )
+    record = {"--client", "--client-pid", "--require-terminal"}
+    return tuple(word for pair in pairs if pair[0] not in record for word in pair)
 
 
 class RecordTest(Case):
@@ -324,121 +326,149 @@ class RecordTest(Case):
         self.assertEqual(os.listdir(directory), [])
 
 
-DAEMON = b"/home/u/.codex/packages/app-server-daemon/releases/0.165.0/bin/codex app-server"
-TUI = b"/usr/lib/node_modules/@openai/codex/vendor/bin/codex"
-
-# pid → (its parent, its command line): a hook (100) under sh (90) under a Codex daemon (60).
+# pid → (parent, controlling terminal); hook 100 runs under client 60 and hold 4242.
 TREE = {
-    100: (90, b"python3 -I rearm.py"),
-    90: (60, b"/bin/sh -c python3 -I rearm.py"),
-    60: (70, DAEMON + b" --managed-daemon"),
-    61: (60, DAEMON + b" daemon pid-update-loop"),
-    70: (69, TUI),
-    69: (4242, b"node /usr/local/bin/codex"),
-    4242: (1, b"python3 ensemble-crew hold --manager=mgr -- zsh -l"),
-    80: (1, DAEMON + b" --listen unix://"),
-    81: (91, b"codex app-server"),
-    82: (82, b"codex app-server"),
-    83: (69, TUI + b" exec app-server"),
+    100: (90, 123),
+    90: (60, 123),
+    60: (4242, 123),
+    4242: (1, 123),
+    70: (4242, 0),
+    71: (4242, 124),
 }
+HINT = "restart this client on its manager's terminal"
 
 
-class CodexDaemonTest(Case):
-    """Codex runs SessionStart hooks from its app-server daemon, a child of the TUI that started
-    it: the hook's $PPID is the daemon, and `--hook-daemon app-server` records the TUI instead.
-    """
+def _hinted(pid: int, hint: str = HINT, client: str = "other") -> tuple[str, ...]:
+    return ("--client", client, "--client-pid", str(pid), "--require-terminal", hint)
 
-    def run_with(self, opened, client: str, pid: int) -> tuple[tuple[int, str, str], dict | None]:
-        """rearm.py's call for client with --client-pid pid, over TREE read by `ps` (opened
-        None) or by /proc through the given open fake; its result and the record it wrote.
-        """
-        call = session_records.CALLS[client]
-        argv = _with_pid(call.argv, pid)
+
+class TerminalTest(Case):
+    def run_with(
+        self, argv, *, proc=False, tree=None, no_tty="??", previous=None, environ=None, stdin=None
+    ):
+        tree = TREE if tree is None else tree
+        stdin = session_records.CALLS["codex"].stdin if stdin is None else stdin
         directory = Path(self.ensemble, "managers", "mgr")
         directory.mkdir(parents=True, exist_ok=True)
-        Path(directory, "session.json").unlink(missing_ok=True)
-        environ, event = {**MANAGER, "HOME": self.home}, json.dumps(call.stdin).encode()
-        if opened is None:
-            rows = b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items())
-            result = _run(environ, event, argv=argv, ps=_ps(rows))
-        else:
-            result = _run(
-                environ, event, argv=argv, ps=mock.Mock(side_effect=AssertionError), opened=opened
-            )
-        path = Path(directory, "session.json")
-        return result, json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        path = directory / "session.json"
+        path.unlink(missing_ok=True)
+        if previous is not None:
+            path.write_text(json.dumps(previous), encoding="utf-8")
 
-    def each_table(self):
-        for label, opened in (("ps", None), ("proc", self.proc)):
-            with self.subTest(label):
-                yield opened
+        def opened(filename, mode):
+            self.assertEqual(mode, "rb")
+            match = re.fullmatch(r"/proc/(\d+)/stat", filename)
+            assert match is not None, filename
+            if int(match[1]) not in tree:
+                raise FileNotFoundError(filename)
+            parent, tty = tree[int(match[1])]
+            return io.BytesIO(f"{match[1]} (a) b) (c) S {parent} 1 1 {tty}".encode())
 
-    def proc(self, path, mode="r"):
-        self.assertEqual(mode, "rb")
-        match = re.fullmatch(r"/proc/(\d+)/(stat|cmdline)", path)
-        assert match is not None, path
-        if int(match[1]) not in TREE:
-            raise FileNotFoundError(path)
-        ppid, args = TREE[int(match[1])]
-        if match[2] == "stat":
-            return io.BytesIO(b"%s (x) S %d 1 1" % (match[1].encode(), ppid))
-        return io.BytesIO(args.replace(b" ", b"\0") + b"\0")
-
-    def expected(self, client: str, pid: int) -> dict:
-        return {**session_records.VALID[client], "pid": pid}
-
-    def test_a_daemon_hook_records_the_tui(self):
-        for table in self.each_table():
-            result, saved = self.run_with(table, "codex", 60)
-            self.assertTrue(result[1])
-            self.assertEqual(saved, self.expected("codex", 70))
-
-    def test_a_daemon_under_a_daemon_records_the_tui(self):
-        for table in self.each_table():
-            self.assertEqual(self.run_with(table, "codex", 61)[1], self.expected("codex", 70))
-
-    def test_a_codex_parent_that_is_no_daemon_is_recorded_as_given(self):
-        for table in self.each_table():
-            for pid in (70, 69, 83, 4999):  # 4999: no such process, so no daemon either
-                with self.subTest(pid):
-                    self.assertEqual(
-                        self.run_with(table, "codex", pid)[1], self.expected("codex", pid)
-                    )
-
-    def test_other_clients_are_recorded_as_given(self):
-        for table in self.each_table():
-            for client in ("claude", "opencode"):
-                with self.subTest(client):
-                    self.assertEqual(self.run_with(table, client, 60)[1], self.expected(client, 60))
-
-    def test_a_daemon_without_a_tui_parent_writes_no_record_and_keeps_the_prompt(self):
-        call = session_records.CALLS["codex"]
-        prompt = _run(
-            {**MANAGER, "HOME": self.home}, json.dumps(call.stdin).encode(), argv=_bare(call.argv)
+        rows = "".join(
+            f"{pid} {parent} {f'ttys{tty}' if tty else no_tty}\n"
+            for pid, (parent, tty) in tree.items()
+        ).encode()
+        result = _run(
+            {**(MANAGER if environ is None else environ), "HOME": self.home},
+            json.dumps(stdin).encode(),
+            argv=argv,
+            ps=mock.Mock(side_effect=AssertionError) if proc else _ps(rows),
+            opened=opened if proc else None,
         )
-        for table in self.each_table():
-            for label, pid in (("orphaned", 80), ("parent unreadable", 81), ("own parent", 82)):
-                with self.subTest(label):
-                    result, saved = self.run_with(table, "codex", pid)
-                    self.assertEqual((result, saved), (prompt, None))
+        saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+        return result, saved
 
-    def test_a_command_line_that_is_not_utf_8_keeps_the_ps_table(self):
-        rows = b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items())
-        call = session_records.CALLS["codex"]
-        event = json.dumps(call.stdin).encode()
-        directory = Path(self.ensemble, "managers", "mgr")
-        directory.mkdir(parents=True)
-        argv = _with_pid(call.argv, 60)
-        _run({**MANAGER, "HOME": self.home}, event, argv=argv, ps=_ps(rows + b"5 1 vim \xff\n"))
-        saved = json.loads(Path(directory, "session.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved, self.expected("codex", 70))
+    def context(self, out: str) -> str:
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"]
 
-    def test_ps_is_read_once(self):
-        ps = _ps(b"".join(b"%d %d %s\n" % (k, ppid, args) for k, (ppid, args) in TREE.items()))
-        call = session_records.CALLS["codex"]
-        event = json.dumps(call.stdin).encode()
-        _run({**MANAGER, "HOME": self.home}, event, argv=_with_pid(call.argv, 61), ps=ps)
-        ps.assert_called_once()
+    def test_same_terminal_records_the_supplied_pid_for_each_client(self):
+        for proc in (False, True):
+            for client, call in session_records.CALLS.items():
+                with self.subTest(proc=proc, client=client):
+                    (code, out, err), saved = self.run_with(
+                        _with_pid(call.argv, 60), proc=proc, stdin=call.stdin
+                    )
+                    self.assertEqual((code, err), (0, ""))
+                    self.assertIn("Re-arm it now", out)
+                    self.assertEqual(saved, {**session_records.VALID[client], "pid": 60})
+
+    def test_codex_hook_on_no_or_another_terminal_prints_its_hint_only(self):
+        argv = session_records.CALLS["codex"].argv
+        for proc in (False, True):
+            for pid in (70, 71, 4999):
+                with self.subTest(proc=proc, pid=pid):
+                    (code, out, err), saved = self.run_with(_with_pid(argv, pid), proc=proc)
+                    self.assertEqual((code, err, saved), (0, "", None))
+                    self.assertEqual(self.context(out), session_records.CODEX_HINT)
+                    self.assertNotIn("Re-arm", out)
+
+    def test_any_client_takes_its_check_and_hint_from_the_arguments(self):
+        hint = 'custom `hint`; with "quotes" and ünïcode'
+        for proc in (False, True):
+            with self.subTest(proc=proc):
+                (code, out, err), saved = self.run_with(_hinted(71, hint), proc=proc)
+                self.assertEqual((code, err, saved), (0, "", None))
+                self.assertEqual(self.context(out), hint)
+                (code, out, err), saved = self.run_with(_hinted(60, hint), proc=proc)
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn("Re-arm it now", out)
+                self.assertEqual(saved["client"], "other")
+
+    def test_without_the_check_any_terminal_records(self):
+        for proc in (False, True):
+            for client in ("claude", "opencode"):
+                for pid in (70, 71):
+                    with self.subTest(proc=proc, client=client, pid=pid):
+                        call = session_records.CALLS[client]
+                        (code, out, err), saved = self.run_with(
+                            _with_pid(call.argv, pid), proc=proc, stdin=call.stdin
+                        )
+                        self.assertEqual((code, err), (0, ""))
+                        self.assertIn("Re-arm it now", out)
+                        self.assertEqual(saved, {**session_records.VALID[client], "pid": pid})
+
+    def test_rejected_client_preserves_the_existing_record(self):
+        previous = session_records.VALID["codex"]
+        for proc in (False, True):
+            with self.subTest(proc=proc):
+                _, saved = self.run_with(_hinted(70), proc=proc, previous=previous)
+                self.assertEqual(saved, previous)
+
+    def test_hold_without_a_terminal_does_not_match_a_detached_client(self):
+        tree = {**TREE, 4242: (1, 0)}
+        for proc in (False, True):
+            with self.subTest(proc=proc):
+                (code, out, err), saved = self.run_with(_hinted(70), proc=proc, tree=tree)
+                self.assertEqual((code, err, saved), (0, "", None))
+                self.assertEqual(self.context(out), HINT)
+
+    def test_ps_question_mark_means_no_terminal(self):
+        (code, out, err), saved = self.run_with(_hinted(70), no_tty="?")
+        self.assertEqual((code, err, saved), (0, "", None))
+        self.assertEqual(self.context(out), HINT)
+
+    def test_detached_client_gets_the_hint_without_manager_identity(self):
+        tree = {**TREE, 90: (70, 0), 70: (1, 0)}
+        for proc in (False, True):
+            for environ in ({}, MANAGER):
+                with self.subTest(proc=proc, environ=environ):
+                    (code, out, err), saved = self.run_with(
+                        _hinted(70), proc=proc, tree=tree, environ=environ
+                    )
+                    self.assertEqual((code, err, saved), (0, "", None))
+                    self.assertEqual(self.context(out), HINT)
+
+    def test_without_manager_terminal_clients_unchecked_hooks_and_workers_stay_silent(self):
+        for proc in (False, True):
+            for environ, argv in (
+                ({}, _hinted(60)),
+                ({}, ("--client", "other", "--client-pid", "70")),
+                ({**MANAGER, "ENSEMBLE_AGENT_SESSION": "1"}, _hinted(70)),
+            ):
+                with self.subTest(proc=proc, environ=environ, argv=argv):
+                    self.assertEqual(
+                        self.run_with(argv, proc=proc, environ=environ), ((0, "", ""), None)
+                    )
 
 
 class AncestorsTest(Case):
@@ -595,11 +625,12 @@ class HooksJsonTest(Case):
         self.assertEqual(set(entry["matcher"].split("|")), rearm.SOURCES)
         (command,) = entry["hooks"]
         self.assertEqual(command["type"], "command")
+        python, isolated, script, *argv = shlex.split(command["command"])
         self.assertEqual(
-            command["command"],
-            'python3 -I "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py" --mode manual'
-            ' --client codex --client-pid "$PPID" --hook-daemon app-server',
+            (python, isolated, script),
+            ("python3", "-I", "${PLUGIN_ROOT}/src/ensemble/manager/rearm.py"),
         )
+        self.assertEqual(tuple(argv), _with_pid(session_records.CALLS["codex"].argv, "$PPID"))
         self.assertEqual(command["timeout"], 5)
 
     def test_session_start_entry(self):

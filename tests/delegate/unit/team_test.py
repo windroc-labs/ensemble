@@ -72,28 +72,11 @@ class Acceptance(Packaged):
         self.assertIn(
             "python3 -P {{team}}/tools/report_check.py *", composed("researcher")[1].commands
         )
-        self.assertIn(
-            "python3 -P {{team}}/tools/scope_check.py *",
-            composed("engineer", "decompose")[1].commands,
-        )
-        engineer = composed("engineer", "decompose")[0]
-        self.assertIn(
-            "Its **scope check**: `python3 -P <team>/tools/scope_check.py --base ", engineer
-        )
-        self.assertNotIn("saved as `<Workdir>/tmp/prd.md`", engineer)
         decompose = task_text("decompose")
         read = re.search(r"^1\. \*\*Read\*\*.*$", decompose, re.M)[0]
-        # the decompose input's section that holds the PRD's requirement tables; a document
-        # over its inline budget is only a link there, which scope_check would pass as `ok`
-        self.assertIn(
-            "save the input's **PRD and linked documents** as `<Workdir>/tmp/prd.md`, "
-            "first fetching in full each document it did not inline",
-            read,
-        )
-        self.assertIn(
-            "**Scope check** ([Engineer › Input processing](#input-processing)) on the drafts",
-            decompose,
-        )
+        # a document over the input's inline budget is only a link there, but tickets quote
+        # its acceptance cells verbatim
+        self.assertIn("fetch in full each document the input links but did not inline", read)
         # write-back's DECOMPOSED pattern reads this summary
         self.assertIn("`summary`: `Created <identifiers>; reused none`", decompose)
 
@@ -105,6 +88,7 @@ class Acceptance(Packaged):
             draft,
         )
         self.assertIn("Verifier tickets list the requirement identifiers and link the PRD", draft)
+        self.assertIn("at most 8 requirement identifiers on an engineer ticket", draft)
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]

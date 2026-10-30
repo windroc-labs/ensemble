@@ -29,6 +29,7 @@ from ensemble.orchestrator.engine import log as event_log
 from ensemble.orchestrator.engine.flow import workflow
 from ensemble.orchestrator.engine.flow.types import (
     ISSUE_ID,
+    NO_ISSUE,
     IssueState,
 )
 from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
@@ -154,7 +155,8 @@ Recovery and next help:
 STALE = timedelta(hours=2)
 LIVE = timedelta(minutes=30)
 CAP = 4
-NOT_QUEUED = "not a {state} issue {ownership}"
+NOT_QUEUED = "not in {state}"
+NO_SUCH_ISSUE = "no such issue"
 NOT_LISTED = "a {state} issue {ownership}, yet not in the {state} list (it can lag a change: retry)"
 SKEW = timedelta(minutes=5)
 CAP_COMMENT = "Tried 4 times without finishing; needs a look."
@@ -621,15 +623,15 @@ class Board:
         return None
 
     def unqueued(self, ident):
-        """Why ident is not queued, with the tracker's refusal."""
+        """Why ident is not queued: each unmet precondition, then the tracker's refusal."""
         current = self.tracker.recheck(ident)
-        if self.cfg.tracker is TrackerKind.LINEAR and current.ready and current.role is None:
-            self.say("claim-skip", ident, once=True, reason=UNOWNED[TrackerKind.LINEAR])
+        if current is NO_ISSUE:
+            return NO_SUCH_ISSUE
         state = self.tracker.state_name(IssueState.READY)
-        ownership = OWNERSHIP[self.cfg.tracker]
-        reason = NOT_QUEUED.format(state=state, ownership=ownership)
-        reasons = [] if current.ready and current.role else [reason]
+        reasons = [] if current.ready else [NOT_QUEUED.format(state=state)]
+        reasons += [] if current.role else [UNOWNED[self.cfg.tracker]]
         reasons += [current.refused] if current.refused else []
+        ownership = OWNERSHIP[self.cfg.tracker]
         return "; ".join(reasons) or NOT_LISTED.format(state=state, ownership=ownership)
 
     def claim(self, issue, full):

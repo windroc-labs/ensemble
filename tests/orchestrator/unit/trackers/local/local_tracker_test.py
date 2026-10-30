@@ -194,7 +194,7 @@ class Recheck_(Board):
         os.rename(moved, os.path.join(self.board, "me/ready/LOC-1.md"))
         self.assertEqual(
             self.tracker.recheck("LOC-1"),
-            checked(None, {"id": "me"}, Pick("build"), Pick(), ready=False),
+            checked(None, {"id": "me"}, Pick("build"), Pick(), ready=True),
         )
         os.remove(os.path.join(self.board, "me/ready/LOC-1.md"))
         self.assertFalse(self.tracker.recheck("LOC-1").ready)

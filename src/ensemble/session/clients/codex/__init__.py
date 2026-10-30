@@ -38,7 +38,8 @@ class CodexClient(Client):
 
     def __init__(self, config):
         super().__init__(config)
-        self.common = CodexCommon(self.config, selector=self.select_session)
+        # Worker launchers add --no-daemon; their selection contains only the subcommand and id.
+        self.common = CodexCommon(self.config, selector=super().select_session)
 
     def headless(self):
         return CodexHeadless(self.common)
@@ -51,6 +52,10 @@ class CodexClient(Client):
 
     def _executable(self, *, container=False):
         return "codex"
+
+    def select_session(self, native: str, *, resume: bool) -> tuple[str, ...]:
+        selected = super().select_session(native, resume=resume)
+        return (*selected, "--no-daemon") if resume else selected
 
     def usage(self, output):
         return self.common.parse_usage(output)
