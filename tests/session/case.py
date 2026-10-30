@@ -81,7 +81,6 @@ class Case(TreeCase):
         return {
             **clean_env(None, *ROOTS),
             **super()._case_env(),
-            "TUI_ATTACH_PREFIX": "",
             "PATH": os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath))),
         }
 

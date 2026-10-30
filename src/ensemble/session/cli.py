@@ -290,7 +290,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             "  its attach field: the command attaching to a live session on a showable Host.",
             "content": "Exactly one key; prints content from its first carried session.",
             "show": "Uses saved display; no new --display option. Work already exists.",
-            "hide": "Closes only the view while work continues; requires a showable Host.",
+            "hide": "Closes only what show opened while work continues; requires a showable Host.",
             "close": "Terminates sessions; absent or replaced Record targets are harmless. A "
             "crashed worker's record stays while its generation is live or unknown (busy).",
         }
@@ -327,8 +327,9 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
             p.add_argument(
                 "--if-closed",
                 action="store_true",
-                help="only after the view was closed by hand (automation); default: hide now",
+                help="only once nothing shows it, closed by hand (automation); default: hide now",
             )
+            p.add_argument("--sid", help="require this session id (default: no identity guard)")
     p = sub.add_parser(
         "ls",
         help="list sessions",
@@ -632,7 +633,7 @@ def _holds(session: str, sid: str | None) -> bool:
 
 
 def _show(name: str, record: Record | None, hosts: Hosts) -> None:
-    """Through each session's view: its harness reopens a gone display first."""
+    """Through each session's view."""
     for session in _carried(name, record):
         _shown(session, hosts)
         host = _host_of(session, hosts)
@@ -642,8 +643,16 @@ def _show(name: str, record: Record | None, hosts: Hosts) -> None:
             _say(f"session {session}: not shown; attach with {command}")
 
 
-def _hide(name: str, record: Record | None, hosts: Hosts, *, if_closed: bool = False) -> None:
+def _hide(
+    name: str,
+    record: Record | None,
+    hosts: Hosts,
+    *,
+    if_closed: bool = False,
+    sid: str | None = None,
+) -> None:
     for session in _carried(name, record):
+        _check_held(session, sid)
         hosted_viewer().hide(session, _shown(session, hosts), if_closed=if_closed)
 
 
@@ -692,7 +701,7 @@ BATCH = {
 def _answers(args, hosts: Hosts) -> int:
     act = BATCH[args.cmd]
     if args.cmd == "hide":
-        act = functools.partial(_hide, if_closed=args.if_closed)
+        act = functools.partial(_hide, if_closed=args.if_closed, sid=args.sid)
     if not args.names and (sys.stdin is None or sys.stdin.isatty()):
         raise UsageError(f"{args.cmd}: give session names or Records on stdin")
     failed: list[Exception] = []

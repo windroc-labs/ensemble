@@ -70,6 +70,7 @@ from ensemble.session.hosts.docker.worker import DockerWorker
 from ensemble.session.hosts.tmux import TmuxHost, managed
 from ensemble.session.modes import tui
 from ensemble.session.viewer import hidden as hidden_store
+from ensemble.session.viewer.types import WorkerPane
 from ensemble.utils import ACCOUNT_ENV, Record, StatusState, exhausted, inode_lock, load_class
 from tests.session import fake_client, harnesses
 from tests.session.case import HOSTS, REPO, SRC, Case, no_spawn
@@ -1821,9 +1822,9 @@ class WritableDirsTest(Base):
 
 class ListTest(HostedTuiBase):
     def test_a_row_per_listed_session_in_its_order_shown_where_the_viewer_placed_it(self):
-        self.session.viewer()._tmux.listing.side_effect = lambda _match=None, *, views=False: (
-            [] if views else [{"name": "w2", "shown": "shown"}]
-        )
+        self.session.viewer()._placement.workers.return_value = [
+            WorkerPane("%5", "w2", "", "@1", "shown")
+        ]
         first = self.host.create("w2", SID)
         second = self.host.create("w1", "other")
         first.calls.row.return_value = SessionRow(

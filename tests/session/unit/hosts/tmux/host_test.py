@@ -62,7 +62,9 @@ class GuardInventoryTest(Case):
     def setUp(self):
         super().setUp()
         self.tmux = mock.create_autospec(TmuxCli, instance=True)
-        self.tmux.listing.side_effect = AssertionError("inventory reached display server")
+        reached = AssertionError("inventory reached display server")
+        self.tmux.run.side_effect = self.tmux.checked.side_effect = reached
+        self.tmux.has_session.side_effect = reached
         self.host = TmuxHost("tmux", tmux=self.tmux)
 
     def test_guard_workers_are_listed_without_a_display_or_harness_record(self):

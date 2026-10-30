@@ -13,10 +13,10 @@ import time
 from ensemble.session.engine.tmux_cli import (
     NAME,
     PANE,
-    SESSION_ID,
-    SESSIONS,
     TmuxCli,
     TuiError,
+    absent,
+    error,
 )
 from ensemble.session.engine.types import COMMAND
 from ensemble.session.viewer.layout import (
@@ -31,6 +31,7 @@ from ensemble.session.viewer.layout import (
 from ensemble.session.viewer.types import (
     Cell,
     Retile,
+    WorkerPane,
 )
 from ensemble.utils import command_path
 
@@ -77,10 +78,22 @@ GRID_WINDOW = (
 )
 
 
-GRID_PANES = f"#{{window_id}}\t#{{{GRID_MANAGER}}}\t#{{pane_id}}\t#{{pane_width}}\t#{{pane_height}}\t#{{socket_path}}"
+GRID_PANES = f"#{{window_id}}\t#{{{GRID_MANAGER}}}\t#{{pane_id}}\t#{{pane_width}}\t#{{pane_height}}"
 
 
-GRID_ROW = re.compile(r"(@[0-9]+)\t([^\t]*)\t(%[0-9]+)\t([0-9]+)\t([0-9]+)\t([^\t]+)")
+GRID_ROW = re.compile(r"(@[0-9]+)\t([^\t]*)\t(%[0-9]+)\t([0-9]+)\t([0-9]+)")
+
+
+WORKER = "@worker"
+
+
+WORKER_OPENER = "@worker-opener"
+
+
+WORKER_LABEL = "@worker-label"
+
+
+WORKER_PANES = f"#{{pane_dead}}\t#{{pane_id}}\t#{{{WORKER}}}\t#{{{WORKER_OPENER}}}\t#{{window_id}}\t#{{session_name}}"
 
 
 HOOK_PATH = re.compile(r"[A-Za-z0-9_./@+-]+")
@@ -133,6 +146,34 @@ def _grid_lock(socket: str, window: str, *, wait: bool):
         yield held
     finally:
         os.close(fd)
+
+
+def worker_panes(tmux: TmuxCli) -> list[WorkerPane]:
+    """Every live pane with a valid @worker, once each; none without a server; TuiError when tmux
+    fails otherwise.
+    """
+    res = tmux.run(["list-panes", "-a", "-F", WORKER_PANES])
+    if res.returncode:
+        if absent(res):
+            return []
+        raise TuiError(f"tmux: {error(res)}")
+    found: dict[str, WorkerPane] = {}
+    for line in res.stdout.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 6:
+            continue
+        dead, pane, name, opener, window, session = fields
+        if (
+            dead != "1"
+            and PANE.fullmatch(pane)
+            and NAME.fullmatch(name)
+            and WINDOW.fullmatch(window)
+            and pane not in found
+        ):
+            found[pane] = WorkerPane(
+                pane, name, opener if NAME.fullmatch(opener) else "", window, session
+            )
+    return list(found.values())
 
 
 def validate_per_column(per_column: int | None) -> None:
@@ -347,26 +388,18 @@ class Grid:
         recorded = recorded if PANE_SET.fullmatch(recorded) else ""
         if if_panes_changed and recorded == pane_set:
             return None
-        sessions = []
-        for f in (
-            line.split("\t")
-            for line in self.tmux.checked(["list-sessions", "-F", SESSIONS]).stdout.split("\n")
-        ):
-            if len(f) == 5 and SESSION_ID.fullmatch(f[0]) and NAME.fullmatch(f[1]):
-                sessions.append(
-                    (
-                        int(f[0][1:]),
-                        f[1],
-                        f[2] if NAME.fullmatch(f[2]) else "",
-                        f[3] if PANE.fullmatch(f[3]) else "",
-                    )
-                )
+        workers = worker_panes(self.tmux)
+        sessions = {
+            name
+            for name in self.tmux.checked(["list-sessions", "-F", "#{session_name}"]).stdout.split()
+            if NAME.fullmatch(name)
+        }
         if per_column is None:
             per_column = int(n) if re.fullmatch(r"[1-9][0-9]{0,3}", n) else PER_COLUMN
         order, at = panes, current
         for _ in range(1 + SETTLE_ITERATIONS):
             want = grid_layout(
-                grid_tree(manager, order, sessions, at),
+                grid_tree(manager, order, workers, sessions, at),
                 manager,
                 width=int(width),
                 height=int(height),

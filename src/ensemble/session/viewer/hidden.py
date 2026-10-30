@@ -1,6 +1,7 @@
-"""Whether a tmux session is hidden, kept per session name as {sid, hidden} in DIR so it outlives
-the tmux session a restart or resume rebuilds; an entry of another sid is another run's. Each write
-drops the entries unwritten for STALE_AGE but those of `live` tmux sessions (None: drops none).
+"""Whether a worker is hidden, kept per session name as {sid, hidden} in DIR so it outlives the
+worker pane a hide, a manual close or a server restart removes; an entry of another sid is another
+run's. Each write drops the entries unwritten for STALE_AGE but those of `live` sessions (None:
+drops none).
 """
 
 from __future__ import annotations

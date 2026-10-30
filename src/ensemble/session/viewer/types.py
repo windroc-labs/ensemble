@@ -17,9 +17,16 @@ class Retile(StrEnum):
     OFF = "off"
 
 
-class TmuxAnchor(NamedTuple):
+class WorkerPane(NamedTuple):
+    """A pane showing worker `name` (@worker); opener: its @worker-opener, "" when unset; session:
+    the tmux session listing its window first.
+    """
+
     pane: str
-    socket: str
+    name: str
+    opener: str
+    window: str
+    session: str
 
 
 class Cell(NamedTuple):
