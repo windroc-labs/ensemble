@@ -31,6 +31,7 @@ function delimiterFree(root) {
 const ROOT = delimiterFree(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const REARM = path.join(ROOT, "src", "ensemble", "manager", "rearm.py");
 const REARM_WAIT = 5000; // ms, the SessionStart hooks' timeout
+const FREE_TEXT = ["--prompt", "--title"]; // OpenCode options whose value is free text
 
 const created = new Set(); // root sessions created in this process
 const children = new Set();
@@ -115,11 +116,14 @@ function arm(session, source, directory) {
 
 // The session this process resumes: its `-s`/`--session` value. OpenCode's TUI worker's
 // process.argv lacks it; only the process's own command line has it. Null without one.
+// `ps` joins argv unquoted, so the scan stops at the first option whose value is free text.
 function resumed() {
   return new Promise((resolve) => {
     const argv = ["-ww", "-o", "args=", "-p", String(process.pid)];
     execFile("ps", argv, { timeout: REARM_WAIT }, (error, stdout) => {
-      const words = error ? [] : String(stdout).trim().split(/\s+/);
+      const all = error ? [] : String(stdout).trim().split(/\s+/);
+      const text = all.findIndex((w) => FREE_TEXT.some((o) => w === o || w.startsWith(`${o}=`)));
+      const words = text < 0 ? all : all.slice(0, text);
       const at = words.findIndex((w) => w === "-s" || w === "--session" || w.startsWith("--session="));
       const id = at < 0 ? "" : words[at].startsWith("--session=") ? words[at].slice(10) : words[at + 1] ?? "";
       resolve(id && !id.startsWith("-") ? id : null);

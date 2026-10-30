@@ -186,6 +186,24 @@ class OpenCodePluginTest(Case):
                 self.manager([], args=args)
                 self.assertEqual(self.record(), {**old, "sid": "ses_a", "pid": self.node})
 
+    def test_a_session_flag_inside_free_text_is_not_a_resumed_session(self):
+        """`ps` joins argv unquoted, so a free-text value's words read as flags."""
+        os.makedirs(os.path.join(self.ensemble, "managers", "mgr"))
+        old = {"client": "opencode", "sid": "ses_old", "pid": 1, "cwd": self.project}
+        with open(os.path.join(self.ensemble, "managers", "mgr", "session.json"), "w") as f:
+            json.dump(old, f)
+        for args in (
+            ("--prompt", "hi -s ses_x"),
+            ("--prompt=hi -s ses_x",),
+            ("--title", "t --session ses_x"),
+            ("--title=t --session=ses_x",),
+        ):
+            with self.subTest(args=args):
+                self.manager([], args=args)
+                self.assertEqual(self.record(), old)
+        self.manager([], args=("-s", "ses_a", "--prompt", "hi -s ses_x"))
+        self.assertEqual(self.record(), {**old, "sid": "ses_a", "pid": self.node})
+
     def test_a_resumed_sessions_first_turn_carries_its_start_rearm_once(self):
         played = self.manager(
             [system("ses_old"), system("ses_old"), event("session.idle", "ses_old")]
