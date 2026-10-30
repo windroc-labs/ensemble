@@ -44,6 +44,7 @@ WAIT = 20  # s, bound on any wait
 IDLE = 0.3  # s, idle_timeout
 SILENCE = 0.9  # 3 × IDLE
 GAP = 0.2  # s between stderr lines, under a 3 × GAP idle_timeout
+MARK = {"run": [sys.executable, "-I", "-c", ""]}  # logs {"ran": ...} after the steps before it
 STAMP = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}[+-]\d\d:\d\d\Z")
 
 
@@ -163,6 +164,19 @@ class Base(Case):
     def logged(self) -> list[dict]:
         return read_jsonl(self.log)
 
+    def until(self, check):
+        """Up to WAIT s: drained once its first line is out, start-up stays out of the idle window."""
+        began = time.monotonic()
+        while not check():
+            self.assertLess(time.monotonic() - began, WAIT)
+            time.sleep(0.01)
+
+    def logged_if_any(self) -> list[dict]:
+        return read_jsonl(self.log, missing_ok=True)
+
+    def marked(self) -> bool:
+        return any("ran" in entry for entry in self.logged_if_any())
+
     def forget(self):
         """Drops the client log."""
         if os.path.exists(self.log):
@@ -240,8 +254,9 @@ class AcceptanceTest(Base):
 class IdleTest(Base):
     def test_silence_yields_idle_timeouts_while_the_process_lives_then_exited(self):
         release = os.path.join(self.dir, "release")
-        self.steps(out("activity", name="Read"), {"until": release})
+        self.steps(out("activity", name="Read"), MARK, {"until": release})
         handle = self.start(idle_timeout=IDLE)
+        self.until(self.marked)
         marks, alive = [], []
 
         def on(event):
@@ -270,10 +285,8 @@ class IdleTest(Base):
         )
         began = time.monotonic()
         handle = self.start(idle_timeout=IDLE)
-        # its harness ends the client only after logging the failure: start-up stays out of IDLE
-        while not (client := read_jsonl(self.log, missing_ok=True)) or running(client[0]["pid"]):
-            self.assertLess(time.monotonic() - began, WAIT)
-            time.sleep(0.01)
+        # its harness ends the client only after logging the failure
+        self.until(lambda: (client := self.logged_if_any()) and not running(client[0]["pid"]))
         found = drain(self, handle)
         self.assertLess(time.monotonic() - began, WAIT)
         self.assertEqual(found[0], TurnFailed("permission_required", "approve"))
@@ -284,6 +297,7 @@ class IdleTest(Base):
     def test_no_idle_timeout_without_one_or_while_stderr_restarts_it(self):
         restarting = (
             {"err": "1"},
+            MARK,
             {"sleep": GAP},
             {"err": "2"},
             {"sleep": GAP},
@@ -313,8 +327,12 @@ class IdleTest(Base):
             ),
         ):
             with self.subTest(case=case):
+                self.forget()
                 self.steps(*steps)
-                self.assertEqual(drain(self, self.start(idle_timeout=idle)), want)
+                handle = self.start(idle_timeout=idle)
+                if MARK in steps:
+                    self.until(self.marked)
+                self.assertEqual(drain(self, handle), want)
 
 
 class ExitTest(Base):
