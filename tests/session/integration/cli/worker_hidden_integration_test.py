@@ -159,7 +159,7 @@ class HookTest(HiddenCase):
         return {f"%{m[1]}" for m in re.finditer(r"^after-kill-pane\[([0-9]+)\] ", out, re.M)}
 
     def exited(self) -> tuple[str, str]:
-        """w1's pane and generation once its run ends and its pane exits, leaving its hook."""
+        """w1's pane and generation once its run ends and pane exits, its hook left."""
         pane, generation = self.shows(), worker_state("w1").generation
         self.crash()
         live_tmux.wait(lambda: pane not in self.server.panes(WINDOW), what="w1's pane to exit")
@@ -186,9 +186,7 @@ class HookTest(HiddenCase):
         self.assertLessEqual(self.entries(), set(self.server.panes(WINDOW)))
 
     def test_an_ended_run_reads_gone_once_its_pane_exits(self):
-        """AC6: right after its pane exits, with no wait for its run to end, w1 reads gone, its
-        close hook exits 1 and another pane's kill-pane marks it nothing.
-        """
+        """AC6, not waiting for its run to end."""
         record = self.record(self.start("w1"))
         self.record(self.start("w2"))
         self.wait_event("w1", "done")
