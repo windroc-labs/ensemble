@@ -1,20 +1,20 @@
-"""SessionStart hook: in a manager session under `ensemble-crew hold`, for the
-startup, resume, compact and clear sources, prints the re-arm prompt as
-additionalContext and, given `--client KIND --client-pid PID` and stdin `session_id` and `cwd`,
-replaces the manager's ~/.ensemble/managers/NAME/session.json (a bad field or write skips only
-that). `--hook-daemon WORD`: while PID's argv[1] is WORD, its parent replaces it (none: no
-record).
-Anything else prints nothing. Always exits 0.
-A manager session: a valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and
-ENSEMBLE_HOLDER_PID (the hold) among this process's ancestors: the variables alone leak to
-later tmux windows. Standalone: the standard library only.
-`--mode manual` replaces the monitoring tail with turn-based reads and a notifying-tool fallback.
+"""SessionStart re-arm and manager session recording. Standalone, stdlib only.
+Direct clients use the current hold's environment and ancestry. `--binding lookup` resolves
+stdin session_id through live-client.json, independently of a shared server's environment.
+`--hook-daemon WORD` distinguishes a direct client from the server by argv[1].
+`--binding context` returns the caller's live hold. `--binding launch` registers its TUI
+before exec; `--binding record` binds a native session to that TUI (failure: exit 2).
+Hooks print additionalContext for startup, resume, compact and clear; otherwise nothing.
+Hooks always exit 0. `--mode manual` selects turn-based monitoring.
 """
 
 import contextlib
+import fcntl
+import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,8 +25,9 @@ SOURCES = frozenset({"startup", "resume", "compact", "clear"})
 MANAGER_NAME = re.compile(r"[A-Za-z0-9_-]+")  # ensemble-crew's own rule (cli.py _roster)
 PID = re.compile(r"[1-9][0-9]*")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
-OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--hook-daemon"})
+OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--hook-daemon", "--binding"})
 MANAGERS = "~/.ensemble/managers"
+BINDING = "live-client.json"
 PS = (
     "ps",
     "-A",
@@ -123,14 +124,22 @@ class Processes:
             found.add(pid)
         return found
 
-    def client(self, pid: int, daemon: str | None) -> int | None:
-        seen: set[int] = set()
-        while daemon is not None and (self.argv(pid) or [])[1:2] == [daemon]:
-            seen.add(pid)
-            pid = self.parent(pid) or 0
-            if pid <= 1 or pid in seen or self.argv(pid) is None:
-                return None
-        return pid
+    def birth(self, pid: int) -> str | None:
+        try:
+            if self.proc:
+                with open(f"/proc/{pid}/stat", "rb") as f:
+                    fields = f.read().rpartition(b")")[2].split()
+                return None if fields[0] == b"Z" else fields[19].decode()
+            done = subprocess.run(
+                ("ps", "-p", str(pid), "-o", "lstart="),
+                capture_output=True,
+                timeout=2,
+                check=False,
+                env={**os.environ, "LC_ALL": "C"},
+            )
+            return done.stdout.decode().strip() or None if done.returncode == 0 else None
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            return None
 
 
 def manager(environ: Mapping[str, str], processes: Processes) -> str | None:
@@ -152,32 +161,247 @@ def options(argv: tuple[str, ...]) -> dict[str, str] | None:
     if len(argv) % 2 or len(set(keys)) != len(keys) or not OPTIONS.issuperset(keys):
         return None
     found = dict(zip(keys, argv[1::2], strict=True))
-    return found if found.get("--mode", "manual") == "manual" else None
+    if found.get("--mode", "manual") != "manual":
+        return None
+    return (
+        found
+        if found.get("--binding", "lookup") in {"lookup", "context", "launch", "record"}
+        else None
+    )
 
 
-def record(found: Mapping[str, str], event: Mapping[str, object]) -> dict[str, object] | None:
+def record(
+    found: Mapping[str, str], event: Mapping[str, object], *, pending: bool = False
+) -> dict[str, object] | None:
     client, pid = found.get("--client", ""), found.get("--client-pid", "")
     sid, cwd = event.get("session_id"), event.get("cwd")
     if not (CLIENT.fullmatch(client) and PID.fullmatch(pid)):
         return None
-    if not (isinstance(sid, str) and sid and isinstance(cwd, str) and cwd.startswith("/")):
+    if not (
+        ((pending and sid is None) or (isinstance(sid, str) and sid))
+        and isinstance(cwd, str)
+        and cwd.startswith("/")
+    ):
         return None
     return {"client": client, "sid": sid, "pid": int(pid), "cwd": cwd}
 
 
-def save(name: str, entry: Mapping[str, object]) -> None:
+def save(name: str, entry: Mapping[str, object], filename: str = "session.json") -> bool:
     directory = os.path.join(os.path.expanduser(MANAGERS), name)
     try:
         fd, temp = tempfile.mkstemp(dir=directory, prefix=".session.", suffix=".tmp")
     except OSError:
-        return
+        return False
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
-        os.replace(temp, os.path.join(directory, "session.json"))
+        os.replace(temp, os.path.join(directory, filename))
     except OSError:
         with contextlib.suppress(OSError):
             os.unlink(temp)
+        return False
+    else:
+        return True
+
+
+def read_object(path: str) -> dict:
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise ValueError("not a regular file")
+        data = json.loads(f.read(65537))
+    if not isinstance(data, dict):
+        raise ValueError("not an object")
+    return data
+
+
+@contextlib.contextmanager
+def lease_guard(
+    name: str,
+    binding: Mapping[str, object],
+    *,
+    exclusive: bool = False,
+    directory: str | None = None,
+):
+    directory = directory or os.path.join(os.path.expanduser(MANAGERS), name)
+    with contextlib.ExitStack() as stack:
+        valid = False
+        try:
+            lock = stack.enter_context(open(os.path.join(directory, "roster.lock"), "rb"))
+            fcntl.flock(lock, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+            data = read_object(os.path.join(directory, "roster.json"))
+            holder = data.get("holder")
+            if (
+                isinstance(holder, dict)
+                and type(binding.get("holder_generation")) is int
+                and holder.get("id") == binding.get("holder_id")
+                and data.get("lease_gen") == binding.get("holder_generation")
+            ):
+                held = stack.enter_context(open(os.path.join(directory, "holder.lock"), "rb"))
+                try:
+                    fcntl.flock(held, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    valid = True
+        except (OSError, ValueError, RecursionError):
+            pass
+        yield valid
+
+
+def live(binding: dict, processes: Processes) -> bool:
+    pid, hold, birth = binding.get("pid"), binding.get("holder_pid"), binding.get("birth")
+    return (
+        type(pid) is int
+        and pid > 1
+        and type(hold) is int
+        and hold > 1
+        and isinstance(birth, str)
+        and bool(birth)
+        and processes.birth(pid) == birth
+        and hold in processes.ancestors(pid)
+    )
+
+
+def client_running(directory: str, client: str | None = None) -> bool | None:
+    path = os.path.join(directory, BINDING)
+    if not os.path.lexists(path):
+        return None
+    try:
+        binding = read_object(path)
+        kind = binding.get("client")
+        if not isinstance(kind, str) or not CLIENT.fullmatch(kind):
+            return False
+        if not live(binding, Processes()):
+            return None if client and client != kind else False
+        with lease_guard(os.path.basename(directory), binding, directory=directory) as valid:
+            return valid if valid or not client or client == kind else None
+    except (OSError, ValueError, RecursionError):
+        return False
+
+
+def bindings(client: str, sid: str, processes: Processes) -> list[tuple[str, dict]]:
+    matches = []
+    try:
+        with os.scandir(os.path.expanduser(MANAGERS)) as directories:
+            names = [
+                d.name
+                for d in directories
+                if MANAGER_NAME.fullmatch(d.name) and d.is_dir(follow_symlinks=False)
+            ]
+    except OSError:
+        return []
+    for name in names:
+        try:
+            binding = read_object(os.path.join(os.path.expanduser(MANAGERS), name, BINDING))
+            if (
+                binding.get("client") != client
+                or binding.get("sid") != sid
+                or not live(binding, processes)
+            ):
+                continue
+            with lease_guard(name, binding) as valid:
+                if valid:
+                    matches.append((name, binding))
+        except (OSError, ValueError, RecursionError):
+            continue
+    return matches
+
+
+@contextlib.contextmanager
+def session_guard(client: str, sid: str):
+    directory = os.path.join(os.path.expanduser(MANAGERS), ".session-locks")
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    key = hashlib.sha256((client + "\0" + sid).encode()).hexdigest()
+    fd = os.open(os.path.join(directory, key), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("not a regular session lock")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def identity(environ: Mapping[str, str]) -> dict:
+    generation = environ.get("ENSEMBLE_HOLDER_GENERATION", "")
+    if not PID.fullmatch(generation):
+        return {}
+    return {
+        "holder_pid": int(environ["ENSEMBLE_HOLDER_PID"]),
+        "holder_id": environ["ENSEMBLE_HOLDER_ID"],
+        "holder_generation": int(generation),
+    }
+
+
+def same_client(previous: dict, binding: dict, processes: Processes) -> bool:
+    return (previous["pid"], previous["birth"]) == (binding["pid"], binding["birth"]) or (
+        previous.get("phase") == "launch" and previous["pid"] in processes.ancestors(binding["pid"])
+    )
+
+
+def claim(name: str, entry: dict, processes: Processes, *, launch: bool = False) -> dict | None:
+    binding = {
+        **entry,
+        **identity(os.environ),
+        "birth": processes.birth(entry["pid"]),
+        "phase": "launch" if launch else "bound",
+    }
+    if not live(binding, processes):
+        return None
+    sid = entry["sid"]
+    guard = session_guard(entry["client"], sid) if sid else contextlib.nullcontext()
+    with guard:
+        owners = bindings(entry["client"], sid, processes) if sid else []
+        if len(owners) > 1 or any(
+            owner != name or not same_client(previous, binding, processes)
+            for owner, previous in owners
+        ):
+            return None
+        with lease_guard(name, binding, exclusive=True) as valid:
+            if not valid:
+                return None
+            try:
+                previous = read_object(os.path.join(os.path.expanduser(MANAGERS), name, BINDING))
+            except FileNotFoundError:
+                previous = {}
+            except (OSError, ValueError, RecursionError):
+                return None
+            previous_live = (
+                previous.get("holder_id") == binding["holder_id"]
+                and previous.get("holder_generation") == binding["holder_generation"]
+                and live(previous, processes)
+            )
+            if previous_live and not same_client(previous, binding, processes):
+                return None
+            origin = {"pid": entry["pid"], "birth": binding["birth"]}
+            caller = processes.ancestors(os.getpid())
+            if previous_live:
+                candidate = previous.get(
+                    "launcher", {"pid": previous["pid"], "birth": previous["birth"]}
+                )
+                if (
+                    isinstance(candidate, dict)
+                    and type(candidate.get("pid")) is int
+                    and isinstance(candidate.get("birth"), str)
+                    and bool(candidate["birth"])
+                    and candidate["pid"] in caller
+                    and processes.birth(candidate["pid"]) == candidate.get("birth")
+                    and (
+                        candidate["pid"] == entry["pid"]
+                        or candidate["pid"] in processes.ancestors(entry["pid"])
+                    )
+                ):
+                    origin = candidate
+            if entry["pid"] not in caller and origin["pid"] not in caller:
+                return None
+            binding["launcher"] = origin
+            if not save(name, binding, BINDING) or (sid and not save(name, entry)):
+                return None
+    return binding
+
+
+def emit(value: object) -> None:
+    data = (json.dumps(value) + "\n").encode()
+    while data:
+        data = data[os.write(1, data) :]
 
 
 def main(argv: tuple[str, ...] = ()) -> int:
@@ -185,31 +409,91 @@ def main(argv: tuple[str, ...] = ()) -> int:
     if found is None:
         return 0
     processes = Processes()
-    name = manager(os.environ, processes)
-    if name is None:
+    action = found.get("--binding") or ("lookup" if "--hook-daemon" in found else None)
+    name = None if action == "lookup" else manager(os.environ, processes)
+    if action != "lookup" and name is None:
         return 0
     # Raw fds: a closed or broken stdout then fails here, not in a flush at exit.
     try:
+        if action == "context":
+            assert name is not None
+            binding = identity(os.environ)
+            with lease_guard(name, binding) as valid:
+                if valid:
+                    emit({"name": name, **binding})
+            return 0
         chunks = []
         while chunk := os.read(0, 65536):
             chunks.append(chunk)
         event = json.loads(b"".join(chunks).decode("utf-8"))
+        if action in {"launch", "record"}:
+            assert name is not None
+            entry = (
+                record(found, event, pending=action == "launch")
+                if isinstance(event, dict)
+                else None
+            )
+            if entry is None:
+                return 2
+            if claim(name, entry, processes, launch=action == "launch") is None:
+                return 2
+            emit({"recorded": True})
+            return 0
         source = event.get("source") if isinstance(event, dict) else None
         if not isinstance(source, str) or source not in SOURCES:
             return 0
-        if (entry := record(found, event)) is not None:
-            pid = processes.client(int(found["--client-pid"]), found.get("--hook-daemon"))
-            if pid is not None:
-                save(name, {**entry, "pid": pid})
-        context = {
-            "hookEventName": "SessionStart",
-            "additionalContext": prompt(name, source, manual="--mode" in found),
-        }
-        data = (json.dumps({"hookSpecificOutput": context}) + "\n").encode()
-        while data:
-            data = data[os.write(1, data) :]
+        guard: contextlib.AbstractContextManager[bool] = contextlib.nullcontext(enter_result=True)
+        bound = None
+        entry = record(found, event)
+        if action == "lookup":
+            pid = found.get("--client-pid", "")
+            args = processes.argv(int(pid)) if PID.fullmatch(pid) else None
+            daemon = found.get("--hook-daemon")
+            if pid and not args:
+                return 0
+            direct = args and daemon and args[1:2] != [daemon]
+            if direct:
+                name = manager(os.environ, processes)
+                if name is None or int(pid) not in processes.ancestors(os.getpid()):
+                    return 0
+                if entry is not None:
+                    bound = claim(name, entry, processes)
+                    if bound is None:
+                        return 0
+                    entry = None
+                    guard = lease_guard(name, bound)
+                else:
+                    guard = lease_guard(name, identity(os.environ))
+            else:
+                sid = event.get("session_id")
+                owners = (
+                    bindings(found.get("--client", ""), sid, processes)
+                    if isinstance(sid, str)
+                    else []
+                )
+                if len(owners) != 1:
+                    return 0
+                name, bound = owners[0]
+                guard = lease_guard(name, bound)
+                entry = None
+        with guard as valid:
+            if not valid:
+                return 0
+            assert name is not None
+            if (
+                bound is not None
+                and read_object(os.path.join(os.path.expanduser(MANAGERS), name, BINDING)) != bound
+            ):
+                return 0
+            if entry is not None:
+                save(name, entry)
+            context = {
+                "hookEventName": "SessionStart",
+                "additionalContext": prompt(name, source, manual="--mode" in found),
+            }
+            emit({"hookSpecificOutput": context})
     except (OSError, ValueError, RecursionError):
-        pass
+        return 2 if action in {"launch", "record"} else 0
     return 0
 
 

@@ -1,11 +1,16 @@
 """The manager layer's guard data (tests/guard_data/__init__.py)."""
 
 ENTRY_MODULES = {
-    "manager": {"rearm.py"},
+    "manager": {"rearm.py", "codex.py"},
 }
 
 
-STANDALONE = frozenset({"src/ensemble/manager/rearm.py"})
+STANDALONE = frozenset({"src/ensemble/manager/rearm.py", "src/ensemble/manager/codex.py"})
+
+
+CLIENT_ENTRY_FILES = {
+    "src/ensemble/manager/codex.py": "The manager-owned launch entry configures the client connection through a command, never an internal import.",
+}
 
 
 NO_COVER_ALLOWED = {

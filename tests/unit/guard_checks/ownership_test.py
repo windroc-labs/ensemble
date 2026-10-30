@@ -255,6 +255,15 @@ class ClientNames(Sample):
             [f"{outside}:1: client name opencode"],
         )
 
+    def test_only_the_manager_client_entry_may_name_its_client(self):
+        entry = "src/ensemble/manager/codex.py"
+        sibling = "src/ensemble/manager/engine/other.py"
+        text = 'CLIENT = "codex"\n'
+        self.assertEqual(
+            ownership.client_names(self.tree({entry: text, sibling: text})),
+            [f"{sibling}:1: client name codex"],
+        )
+
     def test_help_exemptions_preserve_same_line_code_and_interpolated_expressions(self):
         path = "src/ensemble/manager/cli.py"
         for text in (
