@@ -7,6 +7,7 @@ import os
 import shlex
 import subprocess
 import sys
+import uuid
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
@@ -58,7 +59,7 @@ class GuardDisplayTest(LiveCase):
             self.launch,
             terminal=True,
             display="manager",
-            metadata={"sid": SID, "client": "fake"},
+            metadata={"generation": uuid.uuid4().hex, "sid": SID, "client": "fake"},
         )
         self.addCleanup(self.cleanup, self.worker)
         state = Path(worker_dir(self.NAME), "session.json")
@@ -148,7 +149,10 @@ class GuardDisplayTest(LiveCase):
     def test_hide_keeps_the_guard_and_show_replays_hidden_output(self):
         """AC5: hide kills only its pane; a show replays its scrollback."""
         other = self.host.worker(
-            "other", Launch(live_tmux.IDLE, self.server.env(), cwd=self.home), terminal=True
+            "other",
+            Launch(live_tmux.IDLE, self.server.env(), cwd=self.home),
+            terminal=True,
+            metadata={"generation": uuid.uuid4().hex},
         )
         self.addCleanup(self.cleanup, other)
         pane, beside = self.shown(), self.shown("other")
@@ -178,7 +182,9 @@ class GuardDisplayTest(LiveCase):
         self.assertEqual(self.server.pane_of(self.NAME), "")
         self.assert_worker_unchanged()
         with self.assertRaises(SessionBusy):
-            self.host.worker(self.NAME, self.launch, terminal=True)
+            self.host.worker(
+                self.NAME, self.launch, terminal=True, metadata={"generation": uuid.uuid4().hex}
+            )
         self.output("manual-output")
         shown = self.shown()
         self.assertNotEqual(shown, pane)
@@ -283,7 +289,10 @@ class ShowTest(LiveCase):
         self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
         self.host = TmuxHost("tmux")
         self.worker = self.host.worker(
-            "worker", Launch(live_tmux.IDLE, self.server.env(), cwd=self.home), terminal=True
+            "worker",
+            Launch(live_tmux.IDLE, self.server.env(), cwd=self.home),
+            terminal=True,
+            metadata={"generation": uuid.uuid4().hex},
         )
         self.addCleanup(self.worker.close)
         self.target = self.host.attach_target("worker")
@@ -412,7 +421,10 @@ class LabelTest(LiveCase):
         self.enterContext(mock.patch.dict(os.environ, self.server.env(), clear=True))
         self.host = TmuxHost("tmux")
         self.worker = self.host.worker(
-            "w1", Launch(("/bin/sh",), self.server.env(), cwd=self.home), terminal=True
+            "w1",
+            Launch(("/bin/sh",), self.server.env(), cwd=self.home),
+            terminal=True,
+            metadata={"generation": uuid.uuid4().hex},
         )
         self.addCleanup(self.worker.close)
 

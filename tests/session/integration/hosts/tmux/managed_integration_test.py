@@ -7,6 +7,7 @@ import signal
 import socket
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -50,7 +51,7 @@ class ManagedIntegrationTest(Case):
                 (sys.executable, "-I", guard_fixture.__file__, "client", self.home), cwd=self.home
             ),
             terminal=terminal,
-            metadata={"sid": "same-conversation"},
+            metadata={"generation": uuid.uuid4().hex, "sid": "same-conversation"},
         )
         self.addCleanup(self.cleanup_worker, handle)
         return handle
