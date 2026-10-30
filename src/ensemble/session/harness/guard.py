@@ -847,7 +847,8 @@ class Guard:
         if status != "exited" and (self.client is not None or self.proc is None):
             value["client"] = self.client  # None: it started no client
         if error is not None:
-            value["error"] = error[:ERROR_CHARS]
+            # a surrogate-escaped byte has no UTF-8: escaped, it cannot stop the record
+            value["error"] = error.encode("utf-8", "backslashreplace").decode()[:ERROR_CHARS]
         self._save("state.json", value)
 
     def _save(self, name: str, value: dict) -> None:

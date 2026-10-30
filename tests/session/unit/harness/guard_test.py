@@ -2082,6 +2082,20 @@ class EndTest(Base):
         self.assertEqual(len(self.record()["error"]), guard.ERROR_CHARS)
         self.assertLessEqual(os.stat(self.home + "/state.json").st_size, 4096)
 
+    def test_an_error_carrying_undecodable_bytes_is_recorded_escaped(self):
+        """A surrogate-escaped byte (os.fsdecode's) is no UTF-8: the record shows it escaped."""
+        for message, error in (
+            ("cannot run fake\udcff", "OSError: cannot run fake\\udcff"),
+            ("\udcff" * 5000, ("OSError: " + "\\udcff" * 5000)[: guard.ERROR_CHARS]),
+        ):
+            with self.subTest(message=message[:20]):
+                runtime = self.runtime(lease="9")
+                with self.world(lambda _: []) as popen, self.assertRaises(OSError):
+                    popen.side_effect = OSError(message)
+                    runtime.run()
+                self.assertEqual(self.record(), self.expected("failed", error, client=None))
+                self.assertLessEqual(os.stat(self.home + "/state.json").st_size, 4096)
+
 
 class LeaseTest(Case):
     def setUp(self):
