@@ -140,7 +140,7 @@ commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *"
 # ── Engineer ────────────────────────────────────────────
 [roles.engineer]
 effort = "xhigh"
-commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *", "python3 -P {{team}}/tools/repo.py status --dir {{workdir}}/src *", "python3 -P {{team}}/tools/scope_check.py *"]
+commands = ["python3 -P {{team}}/tools/repo.py worktree --dir {{workdir}}/src *", "python3 -P {{team}}/tools/repo.py status --dir {{workdir}}/src *"]
 
 [roles.engineer.output]
 type = "pull-request"
