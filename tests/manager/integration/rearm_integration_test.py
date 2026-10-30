@@ -1,5 +1,5 @@
 """The SessionStart hook run as hooks/hooks.json runs it: real sh and python3, a temp HOME.
-RearmHookTest's hook runs under this test process, its stand-in hold; HoldTreeTest's under a real
+RearmHookTest's client is this process, its hold the supervising parent; HoldTreeTest uses a real
 ensemble-crew hold.
 """
 
@@ -48,7 +48,7 @@ class RearmHookTest(Case):
             **os.environ,
             "CLAUDE_PLUGIN_ROOT": REPO,
             "PLUGIN_ROOT": REPO,
-            "ENSEMBLE_HOLDER_PID": str(os.getpid()),
+            "ENSEMBLE_HOLDER_PID": str(os.getppid()),
             **extra,
         }
         started = time.monotonic()
@@ -295,7 +295,7 @@ class SharedCodexTest(Case):
     def saved(self, name):
         return json.loads(Path(self.ensemble, "managers", name, "session.json").read_text())
 
-    def environment(self):
+    def environment(self, *, wrapped=False):
         fake = os.path.join(REPO, "tests", "manager", "shared_codex.py")
         binary = Path(self.home, "bin")
         binary.mkdir()
@@ -306,8 +306,11 @@ class SharedCodexTest(Case):
         entry.write_text(f'#!/bin/sh\nexec {shlex.quote(script)} --ensemble-launcher "$0" "$@"\n')
         entry.chmod(0o755)
         native = binary / "codex"
+        invocation = f'{shlex.quote(sys.executable)} -I {shlex.quote(fake)} "$@"'
         native.write_text(
-            f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -I {shlex.quote(fake)} "$@"\n'
+            f'#!/bin/sh\n{invocation}\nresult=$?\nexit "$result"\n'
+            if wrapped
+            else f"#!/bin/sh\nexec {invocation}\n"
         )
         native.chmod(0o755)
         path = str(Path(self.home, "daemon.sock"))
@@ -355,8 +358,8 @@ class SharedCodexTest(Case):
         self.assertEqual(self.line(daemon), b"ready\n")
         return daemon
 
-    def shared(self, *, different_cwd=False):
-        env = self.environment()
+    def shared(self, *, different_cwd=False, wrapped=False):
+        env = self.environment(wrapped=wrapped)
         other = Path(self.home, "other") if different_cwd else Path(self.home)
         other.mkdir(exist_ok=True)
         first, second = self.start("first", env), self.start("second", env, cwd=str(other))
@@ -415,6 +418,9 @@ class SharedCodexTest(Case):
     def test_two_holds_and_resume_share_the_same_detached_daemon(self):
         self.shared()
 
+    def test_native_children_of_wrappers_share_and_resume_the_detached_daemon(self):
+        self.shared(wrapped=True)
+
     def test_local_launch_and_manual_resume_are_running_before_the_first_turn(self):
         env = self.environment()
         process = self.start("local", env)
@@ -439,6 +445,20 @@ class SharedCodexTest(Case):
             "in manager `local`", answer["hook"]["hookSpecificOutput"]["additionalContext"]
         )
         self.send(process, "quit")
+        deadline = time.monotonic() + 10
+        while True:
+            listing = subprocess.run(
+                (os.path.join(REPO, "bin", "ensemble-crew"), "list"),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            if "local\thold-only" in listing.stdout:
+                break
+            self.assertLess(time.monotonic(), deadline, listing.stdout)
+            time.sleep(0.01)
         self.send(process, f"codex resume {client['sid']} --sandbox read-only")
         resumed = json.loads(self.line(process))
         self.assertNotEqual(client["pid"], resumed["pid"])

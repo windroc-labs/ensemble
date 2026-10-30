@@ -625,6 +625,27 @@ class ManualPromptTest(PromptTest):
 
 
 class BindingTest(Case):
+    def test_shared_recorder_binds_and_clears_a_native_sibling(self):
+        self.tree[100] = 80
+        code, _output = self.call(
+            ("--binding", "launch", "--client", "codex", "--client-pid", "80"),
+            {"session_id": None, "cwd": "/same/project"},
+            self.environ("second"),
+        )
+        self.assertEqual(code, 0)
+        self.tree[81], self.births[81] = 80, "native-child"
+        self.tree[90], self.tree[100] = 80, 90
+        for sid in ("native", "cleared"):
+            with self.subTest(sid=sid):
+                result = self.call(
+                    ("--binding", "record", "--client", "codex", "--client-pid", "81"),
+                    {"session_id": sid, "cwd": "/same/project"},
+                    self.environ("second"),
+                )
+                self.assertEqual(result, (0, '{"recorded": true}\n'))
+                self.assertEqual(self.record("second")["pid"], 81)
+                self.assertEqual(self.record("second")["sid"], sid)
+
     def test_registered_launcher_hands_off_only_to_its_native_tui_child(self):
         self.tree[100] = 80
         self.assertEqual(

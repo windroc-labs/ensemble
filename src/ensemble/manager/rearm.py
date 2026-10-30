@@ -344,7 +344,7 @@ def claim(name: str, entry: dict, processes: Processes, *, launch: bool = False)
         "birth": processes.birth(entry["pid"]),
         "phase": "launch" if launch else "bound",
     }
-    if not live(binding, processes) or entry["pid"] not in processes.ancestors(os.getpid()):
+    if not live(binding, processes):
         return None
     sid = entry["sid"]
     guard = session_guard(entry["client"], sid) if sid else contextlib.nullcontext()
@@ -364,13 +364,35 @@ def claim(name: str, entry: dict, processes: Processes, *, launch: bool = False)
                 previous = {}
             except (OSError, ValueError, RecursionError):
                 return None
-            if (
+            previous_live = (
                 previous.get("holder_id") == binding["holder_id"]
                 and previous.get("holder_generation") == binding["holder_generation"]
                 and live(previous, processes)
-                and not same_client(previous, binding, processes)
-            ):
+            )
+            if previous_live and not same_client(previous, binding, processes):
                 return None
+            origin = {"pid": entry["pid"], "birth": binding["birth"]}
+            caller = processes.ancestors(os.getpid())
+            if previous_live:
+                candidate = previous.get(
+                    "launcher", {"pid": previous["pid"], "birth": previous["birth"]}
+                )
+                if (
+                    isinstance(candidate, dict)
+                    and type(candidate.get("pid")) is int
+                    and isinstance(candidate.get("birth"), str)
+                    and bool(candidate["birth"])
+                    and candidate["pid"] in caller
+                    and processes.birth(candidate["pid"]) == candidate.get("birth")
+                    and (
+                        candidate["pid"] == entry["pid"]
+                        or candidate["pid"] in processes.ancestors(entry["pid"])
+                    )
+                ):
+                    origin = candidate
+            if entry["pid"] not in caller and origin["pid"] not in caller:
+                return None
+            binding["launcher"] = origin
             if not save(name, binding, BINDING) or (sid and not save(name, entry)):
                 return None
     return binding
