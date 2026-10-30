@@ -1530,6 +1530,54 @@ class UsageTest(Base):
         self.assertIsNone(found)
         self.assertEqual(probe.call_args.kwargs["timeout"], 120)
 
+    def recorded_probes(self):
+        folder = os.path.join(self.ensemble, "usage", "probes")
+        records = []
+        for name in os.listdir(folder):
+            with open(os.path.join(folder, name), encoding="utf-8") as stream:
+                records.append(json.load(stream))
+        return records
+
+    def test_unknown_and_failed_probes_are_recorded(self):
+        for output in ("garbage", "", None):
+            self.usage(output)
+        self.assertCountEqual([r["output"] for r in self.recorded_probes()], ["garbage", "", None])
+
+    def test_recorded_output_masks_credentials_but_the_parser_gets_the_original(self):
+        output = (
+            "Current session: 10% used\nAuthorization: Bearer private-bearer\n"
+            "ANTHROPIC_API_KEY=sk-ant-api03-private\n"
+            '{"access_token":"private-access", "refresh_token": "private-refresh"}\n'
+            "PASSWORD=private-password\nhttps://user:password@service.test\nopaque-env-secret"
+        )
+        with (
+            mock.patch.dict(os.environ, {"OTHER_SECRET": "opaque-env-secret"}),
+            mock.patch.object(ProbeClient, "usage", return_value=None) as parser,
+        ):
+            self.usage(output)
+        parser.assert_called_once_with(output)
+        (record,) = self.recorded_probes()
+        self.assertIn("Current session: 10% used", record["output"])
+        for secret in (
+            "private-bearer",
+            "sk-ant-api03-private",
+            "private-access",
+            "private-refresh",
+            "private-password",
+            "user:password",
+            "opaque-env-secret",
+        ):
+            self.assertNotIn(secret, json.dumps(record))
+
+    def test_a_probe_record_write_failure_is_visible_without_losing_the_reading(self):
+        with (
+            mock.patch("os.replace", side_effect=OSError("read only")),
+            contextlib.redirect_stderr(io.StringIO()) as err,
+        ):
+            found, _ = self.usage()
+        self.assertEqual(found, Usage(Window(42.5, None), None))
+        self.assertIn("usage probe: could not record", err.getvalue())
+
     def test_a_reading_without_windows_is_a_usage(self):
         with mock.patch.object(ProbeClient, "usage", return_value=engine_types.Usage(None, None)):
             found, probe = self.usage()
@@ -1681,6 +1729,25 @@ class AccountPoolTest(Base):
         self.assertEqual(self.usage(), Usage(Window(20, None), Window(30, None)))
         self.assertEqual(self.probed(), ["/d", "/w"])
         self.assertTrue(os.path.isfile(self.cache))
+
+    def test_each_actual_probe_records_its_account_identity_and_raw_output(self):
+        with mock.patch("time.time", return_value=1_000_000.0):
+            self.usage()
+        folder = os.path.join(self.ensemble, "usage", "probes")
+        records = []
+        for name in os.listdir(folder):
+            with open(os.path.join(folder, name), encoding="utf-8") as stream:
+                records.append(json.load(stream))
+            self.assertEqual(stat.S_IMODE(os.stat(os.path.join(folder, name)).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(folder).st_mode), 0o700)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(
+            sorted((r["accounts"], r["identity"], r["output"], r["at"]) for r in records),
+            [(["default"], "/d", "70,10", 1_000_000.0), (["work"], "/w", "20,30", 1_000_000.0)],
+        )
+        with mock.patch("time.time", return_value=1_000_001.0):
+            self.usage()
+        self.assertEqual(len(os.listdir(folder)), 2)
 
     def test_a_second_reading_within_the_ttl_probes_nothing(self):
         first = self.usage()

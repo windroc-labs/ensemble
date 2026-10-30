@@ -83,6 +83,8 @@ from ensemble.utils import (
     module_roots,
     printable_abs,
     probe,
+    redact,
+    save,
     sid_error,
     source_path,
     summary,
@@ -107,6 +109,7 @@ HARNESS = "ensemble.session.harness.process"
 LOG = logging.getLogger("session")
 PROBE_DIR = f"{STATE}/probe"
 PROBE_TIMEOUT = 120
+PROBE_RECORDS = f"{STATE}/usage/probes"
 UNCONFIGURED = "session not configured: call Session.configure first"
 MODES: dict[Mode, type[BaseMode]] = {
     mode.kind: mode for mode in (headless.HeadlessMode, tui.TuiMode, in_process.InProcessMode)
@@ -192,7 +195,13 @@ def _probe_dir() -> str | None:
 
 
 def _read_usage(
-    setup: _Setup, client: Client, launch: Launch | None, *, container: bool = False
+    setup: _Setup,
+    client: Client,
+    launch: Launch | None,
+    *,
+    container: bool = False,
+    probe_accounts: tuple[str, ...] = (),
+    identity: str = "",
 ) -> Usage | None:
     if launch is None or not launch.argv:
         return None
@@ -207,6 +216,7 @@ def _read_usage(
                 f"client executable {executable!r} is missing or not executable; install or configure this client"
             )
     output = setup.probe(launch.argv, cwd=cwd, env=env, timeout=PROBE_TIMEOUT)
+    _record_probe(type(client).__name__, probe_accounts, identity, output, env)
     if output is None:
         return None
     try:
@@ -215,11 +225,53 @@ def _read_usage(
         return None
 
 
+def _record_probe(
+    client: str,
+    probe_accounts: tuple[str, ...],
+    identity: str,
+    output: str | None,
+    env: Mapping[str, str],
+) -> None:
+    if output is not None:
+        output = redact(output)
+        for key, value in {**os.environ, **env}.items():
+            if value and re.search(r"TOKEN|KEY|SECRET|PASSWORD|AUTH", key, re.I):
+                output = output.replace(value, "[REDACTED]")
+        output = re.sub(r"\bsk-[A-Za-z0-9_-]+", "[REDACTED]", output)
+        output = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", output)
+        output = re.sub(
+            r"""(?i)(\b[\w-]*(?:token|key|secret|password|authorization)[\w-]*["']?\s*[:=]\s*)"""
+            r"""("[^"\n]*"|'[^'\n]*'|[^\s,;}]+)""",
+            r"\1[REDACTED]",
+            output,
+        )
+    record = {
+        "at": time.time(),
+        "client": client,
+        "accounts": probe_accounts,
+        "identity": identity,
+        "output": output,
+    }
+    folder = os.path.expanduser(PROBE_RECORDS)
+    path = os.path.join(folder, f"{time.time_ns()}-{uuid.uuid4().hex}.json")
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        save(path, json.dumps(record, sort_keys=True))
+    except OSError as error:
+        print(f"usage probe: could not record: {error}", file=sys.stderr)
+
+
 def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, Usage | None] | None:
     probes = client._usage_probes()
     if probes is None or len(probes) < 2 or host._client_context().container is None:
         return None
-    return accounts.readings(name, probes, lambda launch: _read_usage(setup, client, launch))
+
+    def read(launch: Launch) -> Usage | None:
+        identity = next(identity for identity, probe in probes.values() if probe is launch)
+        names = tuple(account for account, (source, _) in probes.items() if source == identity)
+        return _read_usage(setup, client, launch, probe_accounts=names, identity=identity)
+
+    return accounts.readings(name, probes, read)
 
 
 def _pool_account(spec: Spec, client: Client, host: Host) -> str | None:
