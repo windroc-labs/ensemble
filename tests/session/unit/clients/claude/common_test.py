@@ -257,6 +257,7 @@ class HomeFilesTest(Base):
         "autoCompactEnabled": True,
         "autoContinueAtUsageLimit": True,
         "promptSuggestionEnabled": False,
+        "tui": "fullscreen",
         "outputStyle": "Concise",
     }
     SEARCHES = {"CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "50"}
