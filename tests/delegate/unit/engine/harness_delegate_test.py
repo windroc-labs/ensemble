@@ -50,7 +50,6 @@ from ensemble.session import (
 )
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
-from ensemble.session.engine.hosted_session import HostedSession
 from ensemble.session.engine.types import Liveness, SessionRow
 from ensemble.utils import OutcomeStatus, StatusState, Stopped
 from tests.delegate.fakes.callback_child import CallbackChild
@@ -443,7 +442,6 @@ class DockerPreflightTest(HarnessCase):
 
     def setUp(self):
         super().setUp()
-        self.enterContext(mock.patch.object(HostedSession, "_setup", None))
         self.settings(client="claude")
         docker_box(self)
         self.calls, self.failing = [], False
@@ -542,7 +540,6 @@ class VerifierDockerTest(HarnessCase):
 
     def setUp(self):
         super().setUp()
-        self.enterContext(mock.patch.object(HostedSession, "_setup", None))
         self.settings(default="docker")
         with open(self.local, "a", encoding="utf-8") as file:
             file.write(
@@ -698,13 +695,11 @@ class RunDirTest(HarnessCase):
                 self.assertEqual(again._state.plan.session, view._state.plan.session)
 
     def test_the_default_session_class_is_null(self):
-        self.enterContext(mock.patch.object(HostedSession, "_setup", None))
         self.make(session_cls=Session, driver=AgentDriver(HarnessSession))
         self.assertIsNone(self.stored()["session_cls"])
         self.assertIs(DrivenDelegate.attach(self.work).session_cls, Session)
 
     def test_a_historical_default_class_path_still_loads(self):
-        self.enterContext(mock.patch.object(HostedSession, "_setup", None))
         self.make(session_cls=Session, driver=AgentDriver(HarnessSession))
         data = self.stored()
         data["session_cls"] = f"{Session.__module__}:{Session.__qualname__}"
@@ -987,7 +982,6 @@ class CleanTest(HarnessCase):
         self.assertFalse(os.path.lexists(self.agent()))
 
     def test_clean_with_an_unknown_recorded_host_refuses(self):
-        self.enterContext(mock.patch.object(HostedSession, "_setup", None))
         self.make()
         self.rewrite(host="gone")
         files = tree(self.work)
