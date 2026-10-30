@@ -21,6 +21,7 @@ from ensemble.session.engine.types import (
     StatusState,
     Stderr,
     TurnEnd,
+    TurnFailed,
     TurnStarted,
     Unanswered,
 )
@@ -35,6 +36,7 @@ from tests.session.harnesses import serve
 from tests.session.hosted_support import HostedTuiBase
 
 GEN = "g1"
+FAILED = TurnFailed("permission_required", "approve")
 
 
 class Base(Case):
@@ -163,6 +165,37 @@ class EventsTest(Base):
         self.log(Reply("x"), Exited(0))
         thread.join(5)
         self.assertEqual(result, [Reply("x")])
+
+    def test_no_idle_timeout_after_a_headless_runs_terminal_event(self):
+        self.hold()
+        events = self.view(idle=0.05, mode=Mode.HEADLESS).events()
+        self.log(TurnStarted(), FAILED)
+        self.assertEqual([next(events), next(events)], [TurnStarted(), FAILED])
+        self.assert_quiet_until_exited(events)
+
+    def test_a_headless_view_attached_after_its_terminal_event_times_no_idleness(self):
+        self.hold()
+        self.log(TurnStarted(), FAILED)
+        self.assert_quiet_until_exited(
+            self.view(idle=0.05, replay=True, mode=Mode.HEADLESS).events()
+        )
+
+    def assert_quiet_until_exited(self, events):
+        result = []
+        thread = threading.Thread(target=lambda: result.append(next(events)), daemon=True)
+        thread.start()
+        thread.join(0.3)
+        self.assertTrue(thread.is_alive())
+        self.log(Exited(-1))
+        thread.join(5)
+        self.assertEqual(result, [Exited(-1)])
+
+    def test_a_tui_view_times_idleness_between_turns(self):
+        self.hold()
+        self.log(TurnStarted(), TurnEnd("done", 0))
+        events = self.view(idle=0.05).events()
+        self.assertEqual([next(events), next(events)], [TurnStarted(), TurnEnd("done", 0)])
+        self.assertEqual(next(events), IdleTimeout(0.05))
 
     def test_closing_the_iterator_asks_nothing(self):
         self.hold()
