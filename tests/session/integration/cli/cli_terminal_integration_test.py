@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import sys
+import uuid
 from unittest import mock
 
 from ensemble.session.engine.types import Launch
@@ -201,7 +202,12 @@ class KeyTest(Base):
         log = os.path.join(self.root, "h1.keys")
         argv = (sys.executable, "-I", "-c", LOGGED, log)
         with mock.patch.dict(os.environ, self.server.env(), clear=True):
-            worker = TmuxHost("tmux").worker("h1", Launch(argv, cwd=self.cwd), terminal=False)
+            worker = TmuxHost("tmux").worker(
+                "h1",
+                Launch(argv, cwd=self.cwd),
+                terminal=False,
+                metadata={"generation": uuid.uuid4().hex},
+            )
         self.addCleanup(self.under_server_env, worker.close)
         live_tmux.wait(lambda: os.path.exists(log), what="h1's key log")
         for argv in (["--key", "Escape"], ["text"]):

@@ -40,6 +40,7 @@ class CloseTest(Case):
             registry=self.session_cls._config().registry,
             record=lambda _info: None,
             host=host,
+            generation="f" * 32,
         )
         remove, hooks = os.rmdir, []
 
@@ -107,6 +108,7 @@ class PollCostTest(Live):
             registry=self.session_cls._config().registry,
             record=lambda _info: None,
             host=host,
+            generation="f" * 32,
         )
         self.addCleanup(tui.TuiStore.attach(NAME, host=host).close)
         while mode.poll(0)[0]:
@@ -138,6 +140,7 @@ class LongPromptTest(Live):
             registry=self.session_cls._config().registry,
             record=lambda _info: None,
             host=host,
+            generation="f" * 32,
         )
         self.addCleanup(tui.TuiStore.attach(NAME, host=host).close)
         log, path = self.clients["fake"]["log"], os.path.join(self.ensemble, "tui", NAME, "prompt")

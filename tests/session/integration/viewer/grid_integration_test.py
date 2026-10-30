@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import time
+import uuid
 from unittest import mock
 
 from ensemble.session.engine.tmux_cli import TmuxCli
@@ -88,7 +89,10 @@ class Live(Case):
     def worker(self, name, display=None):
         """Worker `name` started, its worker state naming `display`."""
         handle = self.host.worker(
-            name, Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd), terminal=True
+            name,
+            Launch(live_tmux.IDLE, self.server.env(), cwd=self.cwd),
+            terminal=True,
+            metadata={"generation": uuid.uuid4().hex},
         )
         self.workers[name] = handle
         self.addCleanup(self.cleanup_worker, name, handle)

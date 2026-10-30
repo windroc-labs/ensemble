@@ -176,6 +176,7 @@ class GuardedDockerTest(Case):
             registry=self.session_cls._config().registry,
             record=lambda _line: None,
             host=Host(),
+            generation=docker_attach_fixture.GEN,
         )
         pid = Path(self.home, "client.pid")
         live_tmux.wait(lambda: pid.exists() and pid.read_text(), what="guarded client start")

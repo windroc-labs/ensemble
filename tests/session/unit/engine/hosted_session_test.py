@@ -159,6 +159,40 @@ class ClientCapacityTest(HostedTuiBase):
             viewer_factory=MemoryViewer,
         )
 
+    def test_admission_generation_reaches_the_reservation_mode_and_host(self):
+        for mode, name in (("tui", "one"), ("headless", "one"), ("headless", None)):
+            with self.subTest(mode=mode, name=name):
+                self.host.calls.reset_mock()
+                session = own(self, mode=mode, name=name, sid="s1")
+                generation = session._capacity.generation
+                self.assertEqual(os.path.basename(session._capacity.path), f"{generation}.run")
+                self.assertEqual(session._running.generation, generation)
+                if mode == "tui":
+                    metadata = self.host.calls.worker.call_args.kwargs["metadata"]
+                else:
+                    (worker, _), kwargs = self.host.calls.headless_worker.call_args
+                    metadata = kwargs["metadata"]
+                    self.assertEqual(worker, name or f"headless-{generation}")
+                self.assertEqual(metadata["generation"], generation)
+                session.close()
+        self.configure(client="checked", max_runs=1)
+        self.steps({})
+        session = own(self, client="checked", mode="in_process", sid="a")
+        self.assertEqual(session._running.generation, session._capacity.generation)
+
+    def test_an_unnamed_headless_run_takes_one_slot(self):
+        self.configure(tui=True, max_runs=2)
+
+        def listed(name, _launch, metadata):  # a Host that lists it, as its client's
+            self.host.create(name, metadata={**metadata, "client": "fake", "sid": "s1"})
+
+        self.host.calls.headless_worker.side_effect = listed
+        first = own(self, mode="headless", sid="s1")
+        self.assertEqual(self.host.list(), [f"headless-{first._capacity.generation}"])
+        own(self, mode="headless", sid="s2")
+        with self.assertRaisesRegex(SessionError, "limit 2; held by: s1, s2$"):
+            own(self, mode="headless", sid="s3")
+
     def test_independent_configurations_share_capacity_and_attached_closes_release_it(self):
         for action in ("original", "attached-close", "attached-stop", "retire"):
             with self.subTest(action=action):
@@ -328,16 +362,13 @@ def parsed(tables, default) -> Hosts:
 
 class AliasHost(ScreenHost):
     """A Host table of one shared backend (two tmux Host tables on one tmux server, say): of
-    `original`, its sessions and calls; every one, its capacity namespace.
+    `original`, its sessions and calls.
     """
 
     def __init__(self, name, original=None):
         super().__init__(name)
         if original is not None:
             self.processes, self.calls = original.processes, original.calls
-
-    def _capacity_namespace(self):
-        return "shared"
 
 
 class AliasedClientCapacityTest(TuiBase):

@@ -795,8 +795,7 @@ class HostedSession(Session):
         with Admission(
             client_name,
             limit,
-            name=name,
-            sid=spec.sid,
+            label=name or spec.sid,
             mode=mode,
             hosts=hosts,
             host=_host_key(setup, selected_host),
@@ -810,6 +809,7 @@ class HostedSession(Session):
                 display=display,
                 check_name=check_name,
                 owner=owner,
+                generation=capacity.generation,
             )
             try:
                 capacity.started(running.state)

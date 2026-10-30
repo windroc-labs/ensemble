@@ -8,6 +8,7 @@ import contextlib
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -28,7 +29,9 @@ class LaunchTest(Case):
         self.host = TmuxHost("tmux")
 
     def worker(self, name, launch, *, terminal=True):
-        handle = self.host.worker(name, launch, terminal=terminal)
+        handle = self.host.worker(
+            name, launch, terminal=terminal, metadata={"generation": uuid.uuid4().hex}
+        )
         self.addCleanup(self.close, handle)
         return handle
 

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 
@@ -108,7 +109,7 @@ def harness(directory: str, *, terminal: bool, daemon: bool) -> None:
             cwd=directory,
         ),
         terminal=terminal,
-        metadata={"sid": "same-conversation"},
+        metadata={"generation": uuid.uuid4().hex, "sid": "same-conversation"},
     )
     _publish(
         Path(directory, "harness.json"),

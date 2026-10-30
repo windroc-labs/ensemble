@@ -9,7 +9,6 @@ import queue
 import signal
 import threading
 import traceback
-import uuid
 from collections.abc import Callable
 from typing import Self
 
@@ -39,11 +38,11 @@ RUN_THREAD = "in_process run"
 class InProcessMode(BaseMode):
     kind = Mode.IN_PROCESS
 
-    def __init__(self, prepared: Prepared):
+    def __init__(self, prepared: Prepared, generation: str):
         super().__init__(prepared)
         self.stopped, self.code = False, None
         self.items, self.lock, self.over = queue.Queue(), threading.Lock(), threading.Event()
-        self._generation = uuid.uuid4().hex
+        self._generation = generation
 
     @property
     def generation(self) -> str:
@@ -95,10 +94,11 @@ class InProcessMode(BaseMode):
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
         owner: str | None = None,
+        generation: str,
     ) -> Self:
         prepared, run = cls._prepare(spec, client, display=display)
         record(prepared.info)
-        mode = cls(prepared)
+        mode = cls(prepared, generation)
         try:
             threading.Thread(
                 target=mode._pump, args=(run, prepared.spec), name=RUN_THREAD, daemon=True

@@ -6,7 +6,7 @@ import os
 import shlex
 import shutil
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
 from ensemble.session.engine.tmux_cli import (
@@ -14,6 +14,7 @@ from ensemble.session.engine.tmux_cli import (
     TmuxCli,
 )
 from ensemble.session.engine.types import (
+    CapacityRow,
     ConfigError,
     Launch,
     Liveness,
@@ -28,6 +29,7 @@ from ensemble.session.hosts.base import (
     STATE_MAX,
     Host,
     InteractiveProcess,
+    capacity_row,
     worker_row,
 )
 from ensemble.session.hosts.base import activity as worker_activity
@@ -136,8 +138,7 @@ class TmuxHost(Host):
             return ""
         return text if isinstance(text, str) else ""
 
-    def rows(self) -> list[SessionRow]:
-        rows = []
+    def _workers(self) -> Iterator[tuple[SessionRow, str]]:
         for name, state in managed.records(self.name).items():
             assert state.generation is not None
             live = self.worker_liveness(name, state.generation)
@@ -148,8 +149,10 @@ class TmuxHost(Host):
                 if live == Liveness.UNKNOWN
                 else worker_activity(name, state.generation) or StatusState.WORKING
             )
-            rows.append(worker_row(name, state, word))
-        return rows
+            yield worker_row(name, state, word), state.generation
 
-    def _capacity_namespace(self) -> str:
-        return f"guard:{os.path.realpath(managed.control_root())}:{self.name}"
+    def rows(self) -> list[SessionRow]:
+        return [row for row, _ in self._workers()]
+
+    def _capacity_rows(self) -> list[CapacityRow]:
+        return [capacity_row(row, generation) for row, generation in self._workers()]

@@ -265,13 +265,6 @@ class ConfigTest(Base):
         self.assertTrue(host.tui_settings().status_line)
         self.assertEqual(host.tui_settings().hidden_size, (100, 30))
 
-    def test_capacity_namespace_uses_the_fixed_endpoint_across_aliases(self):
-        alias = DockerHost(
-            "alias", {"docker": "/other/docker"}, run=self.docker, broker=self.broker
-        )
-        self.assertEqual(self.host._capacity_namespace(), f"docker:{self.ep}")
-        self.assertEqual(alias._capacity_namespace(), self.host._capacity_namespace())
-
     def test_provider_usage_rejects_broker_18_before_probing_credentials(self):
         request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
         locked = data("error-login_required")
@@ -2099,7 +2092,9 @@ class ListTest(Base):
         self.assertEqual(self.host._capacity_rows(), [])
         self.listed("w")
         self.guarded_record()
-        self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
+        self.assertEqual(
+            [(row.name, row.generation) for row in self.host._capacity_rows()], [("w", GEN)]
+        )
 
     def test_list_and_rows_from_labelled_guarded_containers(self):
         self.listed("w", "v")
@@ -2460,16 +2455,15 @@ class AdmissionTest(StartBase):
         self.guarded_record()
         self.runs = os.path.join(self.home, ".ensemble", "client-runs", "agent")
         os.makedirs(self.runs)
-        self.held_run = os.path.join(self.runs, "w.run")
+        self.held_run = os.path.join(self.runs, f"{GEN}.run")  # its run's, named by generation
         with open(self.held_run, "w") as f:
-            json.dump({"kind": "tui", "name": "w", "sid": "s1", "host": "docker"}, f)
+            json.dump({"kind": "tui", "name": "w", "host": "docker"}, f)
 
     def admit(self):
         with Admission(
             "agent",
             1,
-            name="n",
-            sid="s2",
+            label="n",
             mode=Mode.TUI,
             hosts={"docker": self.host},
             host="docker",

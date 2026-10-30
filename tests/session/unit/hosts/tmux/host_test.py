@@ -1,4 +1,4 @@
-"""TmuxHost over recorded tmux calls: its class and capacity namespace, attach targets, a dead
+"""TmuxHost over recorded tmux calls: its class and capacity rows, attach targets, a dead
 generation's release, a failed listing and its workers whose display is gone (its managed
 workers: managed_test.py).
 """
@@ -82,6 +82,18 @@ class GuardInventoryTest(Case):
         )
         self.assertEqual(self.tmux.mock_calls, [])
 
+    def test_capacity_rows_carry_each_workers_guard_record_generation(self):
+        _worker(self, "live")
+        _worker(self, "unknown", live=False)
+        _worker(self, "ended", state="exited", live=False)
+        self.assertEqual(
+            [(r.name, r.client, r.state, r.generation) for r in self.host._capacity_rows()],
+            [
+                ("live", "claude", StatusState.WORKING, "a" * 32),
+                ("unknown", "claude", StatusState.UNKNOWN, "a" * 32),
+            ],
+        )
+
     def test_an_empty_guard_inventory_never_lists_a_display_session(self):
         self.assertEqual(self.host.list(), [])
         self.assertEqual(self.host.rows(), [])
@@ -130,18 +142,6 @@ class GuardInventoryTest(Case):
 
 
 class ClassTest(Case):
-    def test_capacity_namespace_tracks_guard_location_and_host_not_display_settings(self):
-        tmux = mock.create_autospec(TmuxCli, instance=True)
-        first = TmuxHost("first", {"status_line": False}, tmux=tmux)
-        same = TmuxHost("first", {"status_line": True}, tmux=tmux)
-        other = TmuxHost("other", tmux=tmux)
-        self.assertEqual(first._capacity_namespace(), same._capacity_namespace())
-        self.assertNotEqual(first._capacity_namespace(), other._capacity_namespace())
-        namespace = first._capacity_namespace()
-        with mock.patch.dict(os.environ, {"ENSEMBLE_CONTROL_ROOT": self.home + "/elsewhere"}):
-            self.assertNotEqual(first._capacity_namespace(), namespace)
-        self.assertEqual(tmux.mock_calls, [])
-
     def test_an_attachable_host_loaded_by_its_config_name(self):
         cls = load_class("ensemble.session.hosts.tmux:TmuxHost", Host)
         self.assertIs(cls, TmuxHost)

@@ -450,9 +450,11 @@ class SelectionTest(Case):
         )
         listed = common(providers={"strata": STRATA, "lab": STRATA}).home()
         self.assertEqual(listed.providers, ("lab", "strata"))
-        _, metadata = BaseMode._hosted(self.spec, listed, host, "w")
+        _, metadata = BaseMode._hosted(self.spec, listed, host, "w", generation="f" * 32)
         self.assertEqual(json.loads(metadata["home_providers"]), ["lab", "strata"])
-        spec, metadata = BaseMode._hosted(self.spec, self.common.home(), host, "w")
+        spec, metadata = BaseMode._hosted(
+            self.spec, self.common.home(), host, "w", generation="f" * 32
+        )
         self.assertEqual(spec.env["XDG_DATA_HOME"], data)
         self.assertEqual(
             {k: metadata[k] for k in ("home_field", "home_dir", "credential", "resume")},

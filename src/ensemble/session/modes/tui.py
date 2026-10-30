@@ -9,6 +9,7 @@ import signal
 import stat
 import tempfile
 import time
+import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import BinaryIO, Self
@@ -679,7 +680,9 @@ class TuiMode(BaseMode):
         host: Host,
         display: Display = None,
     ) -> Prepared:
-        pending = cls._prepare(spec, client, registry=registry, host=host, display=display)
+        pending = cls._prepare(
+            spec, client, registry=registry, host=host, display=display, generation=uuid.uuid4().hex
+        )
         try:
             pending.preflight()
             _stale(pending.store)
@@ -698,6 +701,7 @@ class TuiMode(BaseMode):
         registry: Registry,
         host: Host,
         display: Display,
+        generation: str,
         owner: str | None = None,
     ) -> _Start:
         run = client.tui()
@@ -709,7 +713,12 @@ class TuiMode(BaseMode):
         drop = identity_drop(registry)
         store = TuiStore.attach(name, host=host)
         spec, metadata = cls._hosted(
-            replace(spec, name=name, events=events), run._home(), host, name, account
+            replace(spec, name=name, events=events),
+            run._home(),
+            host,
+            name,
+            account,
+            generation=generation,
         )
         spec = cls._noted(spec, client)
         run._context = host._client_context()
@@ -743,10 +752,17 @@ class TuiMode(BaseMode):
         display: Display = None,
         check_name: Callable[[str], None] | None = None,
         owner: str | None = None,
+        generation: str,
     ) -> Self:
         """Its hook journal is committed before execution; owner: its harness's dir."""
         pending = cls._prepare(
-            spec, client, registry=registry, host=host, display=display, owner=owner
+            spec,
+            client,
+            registry=registry,
+            host=host,
+            display=display,
+            generation=generation,
+            owner=owner,
         )
         prepared, run, store = pending.prepared, pending.run, pending.store
         try:
@@ -761,7 +777,7 @@ class TuiMode(BaseMode):
             try:
                 if pending.prompt_file:
                     cls._write_prompt(*pending.prompt_file)
-                return host.worker(
+                worker = host.worker(
                     store.name,
                     pending.launch,
                     terminal=True,
@@ -769,6 +785,7 @@ class TuiMode(BaseMode):
                     events=prepared.spec.events,
                     metadata=pending.metadata,
                 )
+                return cls._adopted(worker, host, generation)
             except SessionBusy:
                 raise
             except SessionError as error:
@@ -780,7 +797,6 @@ class TuiMode(BaseMode):
 
         terminal = store.start(pending.state, commit, launch, check_name=check_name)
         _sweep(store)
-        generation = pending.state["generation"]
         return cls(
             prepared,
             run,

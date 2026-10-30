@@ -7,6 +7,7 @@ import re
 import shlex
 import sys
 import time
+import uuid
 from unittest import mock
 
 from ensemble.session.engine.types import Launch
@@ -44,7 +45,10 @@ class ReplayTest(Case):
             cwd=self.home,
         )
         worker = self.host.worker(
-            self.NAME, launch, terminal=True, metadata={"sid": SID, "client": "fake"}
+            self.NAME,
+            launch,
+            terminal=True,
+            metadata={"generation": uuid.uuid4().hex, "sid": SID, "client": "fake"},
         )
         self.addCleanup(worker.close)
         live_tmux.wait(lambda: worker.screen(lines=1).endswith(">"), what="the worker's prompt")

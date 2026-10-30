@@ -273,7 +273,7 @@ class ContainerLaunch(Base):
                 host, "_client_env", return_value={"CODEX_HOME": str(self.codex_home)}
             ),
             mock.patch.object(
-                host, "headless_worker", side_effect=lambda name, *_: ScriptedWorker(name)
+                host, "headless_worker", side_effect=lambda name, *_: ScriptedWorker(name, "f" * 32)
             ) as worker,
             mock.patch("shutil.which", return_value=None) as which,
             mock.patch.dict(os.environ, {"PERSONAL_CODEX_ENV": "private"}),
@@ -284,6 +284,7 @@ class ContainerLaunch(Base):
                 registry=self.session_cls._config().registry,
                 record=lambda _: None,
                 host=host,
+                generation="f" * 32,
             )
         name, launch, metadata = worker.call_args.args
         self.assertEqual((name, launch.argv[:2]), ("w", ("/image/bin/codex", "exec")))
@@ -380,7 +381,9 @@ class PolicyReplay(Base):
                 )
                 host = MemoryHost()
                 with mock.patch.object(
-                    host, "headless_worker", side_effect=lambda name, *_: ScriptedWorker(name)
+                    host,
+                    "headless_worker",
+                    side_effect=lambda name, *_: ScriptedWorker(name, "f" * 32),
                 ) as worker:
                     HeadlessMode.start(
                         resumed,
@@ -388,6 +391,7 @@ class PolicyReplay(Base):
                         registry=self.session_cls._config().registry,
                         record=lambda _info: None,
                         host=host,
+                        generation="f" * 32,
                     )
                 env = worker.call_args.args[1].env
                 self.assertEqual(env["ENSEMBLE_CLIENT"], "codex")

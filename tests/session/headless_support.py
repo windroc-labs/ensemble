@@ -9,6 +9,7 @@ from tests.session.fakes.terminal import MemoryHost
 from tests.utils.sandbox import scratch
 
 SID = "s1"
+GENERATION = "f" * 32
 NOTHING = (sys.executable, "-I", "-c", "")
 
 
@@ -72,5 +73,6 @@ class HeadlessCase(Case):
             record=self.recorded.append,
             host=self.host(),
             display=display,
+            generation=GENERATION,
         )
         return self.mode.prepared

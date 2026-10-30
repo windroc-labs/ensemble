@@ -2,12 +2,13 @@
 
 import os
 import signal
+import uuid
 from unittest import mock
 
 from ensemble.session import Host, SessionError, Viewer
 from ensemble.session.engine.tmux_cli import TmuxCli
 from ensemble.session.engine.types import Launch, Liveness, SessionRow, StatusState
-from ensemble.session.hosts.base import InteractiveProcess, worker_state
+from ensemble.session.hosts.base import InteractiveProcess, capacity_row, worker_state
 from ensemble.session.hosts.tmux import managed
 from ensemble.session.hosts.types import CommandView
 from tests.session.fakes.worker import ScriptedWorker
@@ -36,6 +37,10 @@ class MemoryTerminal(InteractiveProcess):
 
     @property
     def identity(self):
+        return self._identity
+
+    @property
+    def generation(self):
         return self._identity
 
     def _own(self):
@@ -125,13 +130,11 @@ class MemoryHost(Host):
         super().__init__(name)
         self.calls = mock.Mock()
         self.processes = {}
-        self.serial = 0
         self.calls.list.return_value = None
         self.calls.worker_liveness.return_value = Liveness.ABSENT
 
     def create(self, name, sid=None, *, identity=None, receipt=None, metadata=None, display=None):
-        self.serial += 1
-        generation = identity or f"generation-{self.serial}"
+        generation = identity or (metadata or {}).get("generation") or uuid.uuid4().hex
         if metadata is None:
             metadata = {"sid": sid, "generation": generation}
         process = self.terminal_class(
@@ -156,7 +159,7 @@ class MemoryHost(Host):
         return self.create(name, metadata=metadata, display=display)
 
     def headless_worker(self, name, launch: Launch, metadata) -> InteractiveProcess:
-        return ScriptedWorker(name, (metadata or {}).get("generation") or "g" * 32)
+        return ScriptedWorker(name, metadata["generation"])
 
     def worker_liveness(self, name, generation):
         return self.calls.worker_liveness(name, generation)
@@ -179,14 +182,19 @@ class MemoryHost(Host):
         return sorted(self.processes) if listed is None else listed
 
     def rows(self):
-        rows = []
+        return [row for row, _ in self._workers()]
+
+    def _capacity_rows(self):
+        return [capacity_row(row, generation) for row, generation in self._workers()]
+
+    def _workers(self):
         for name in self.list():
             try:
-                rows.append(self.process(name).row())
+                process = self.process(name)
+                yield process.row(), process.generation
             except SessionError:
                 if name in self.list():
                     raise
-        return rows
 
 
 class ScreenHost(MemoryHost):

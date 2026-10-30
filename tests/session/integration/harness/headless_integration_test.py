@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -237,7 +238,9 @@ class ClaudeKillTest(ClaudeHeadless):
         )
         os.utime(directory, (time.time() - 120,) * 2)
         launch = Launch((sys.executable, "-I", "-c", ""), cwd=str(self.cwd))
-        TmuxHost("tmux").worker("next", launch, terminal=False).close()
+        TmuxHost("tmux").worker(
+            "next", launch, terminal=False, metadata={"generation": uuid.uuid4().hex}
+        ).close()
         self.assertFalse(directory.exists())
 
 
