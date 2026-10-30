@@ -2,10 +2,11 @@
 // `skills` as the command /ensemble:<skill>, this plugin's bin/ on the shell's PATH, and a commander's
 // SessionStart re-arm prompt (src/ensemble/manager/rearm.py --mode manual) in the system prompt
 // of a root session's turn after a start, resume or compaction, that call also recording the root
-// session as the manager's (its id, OpenCode's pid, the instance's directory). A session ensemble
-// starts (ENSEMBLE_AGENT_SESSION) gets none of it. State lives here, not per plugin call: OpenCode calls a
-// plugin again whenever it rebuilds its instance.
-import { spawn } from "node:child_process";
+// session as the manager's (its id, OpenCode's pid, the instance's directory). The session this
+// process resumes (`--session`) is armed, and so recorded, at the plugin's start, before any turn.
+// A session ensemble starts (ENSEMBLE_AGENT_SESSION) gets none of it. State lives here, not per
+// plugin call: OpenCode calls a plugin again whenever it rebuilds its instance.
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -37,6 +38,7 @@ let client = null;
 const seen = new Set();
 const pending = new Map(); // session → its re-arm prompt's promise, until the turn that got it ends
 const reached = new Set();
+let startup = null; // the resumed session's start: system() waits for it
 
 // A SKILL.md's frontmatter fields (top-level `key: value` lines, a quoted value as JSON) and body.
 function split(text) {
@@ -111,6 +113,28 @@ function arm(session, source, directory) {
   reached.delete(session);
 }
 
+// The session this process resumes: its `-s`/`--session` value. OpenCode's TUI worker's
+// process.argv lacks it; only the process's own command line has it. Null without one.
+function resumed() {
+  return new Promise((resolve) => {
+    const argv = ["-ww", "-o", "args=", "-p", String(process.pid)];
+    execFile("ps", argv, { timeout: REARM_WAIT }, (error, stdout) => {
+      const words = error ? [] : String(stdout).trim().split(/\s+/);
+      const at = words.findIndex((w) => w === "-s" || w === "--session" || w.startsWith("--session="));
+      const id = at < 0 ? "" : words[at].startsWith("--session=") ? words[at].slice(10) : words[at + 1] ?? "";
+      resolve(id && !id.startsWith("-") ? id : null);
+    });
+  });
+}
+
+async function start(directory) {
+  const session = await resumed();
+  if (!session) return;
+  seen.add(session);
+  if (await parent(session)) children.add(session);
+  else arm(session, "resume", directory);
+}
+
 function handle(event, directory) {
   const p = event?.properties ?? {};
   if (event?.type === "session.created" && p.info?.id) {
@@ -133,6 +157,7 @@ async function parent(session) {
 }
 
 async function system(session, output, directory) {
+  await startup;
   if (!session || children.has(session)) return;
   if (!seen.has(session)) {
     seen.add(session);
@@ -153,6 +178,7 @@ export const EnsembleCommander = async (input) => {
   if (process.env.ENSEMBLE_AGENT_SESSION !== undefined) return {};
   client = input?.client ?? client;
   const directory = input?.directory; // per instance: OpenCode builds one per project directory
+  startup ??= start(directory);
   const found = commands();
   return {
     config: async (config) => {
