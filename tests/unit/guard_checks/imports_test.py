@@ -87,7 +87,7 @@ class OrchestratorImports(Sample):
                 )
             ),
             *(
-                ({rel: sample}, [f"{rel}: imports {name} (FR-3)"])
+                ({rel: sample}, [f"{rel}: imports {name}"])
                 for sample, name in (
                     (
                         "from ensemble.delegate import HarnessDelegate\n",
@@ -114,7 +114,7 @@ class OrchestratorImports(Sample):
                 )
             ),
             *(
-                ({other: sample}, [f"{other}: imports ensemble.orchestrator (FR-3)"])
+                ({other: sample}, [f"{other}: imports ensemble.orchestrator"])
                 for other in (
                     f"{PKG}/{project}/engine/sample.py"
                     for project in ("manager", "delegate", "session", "utils")

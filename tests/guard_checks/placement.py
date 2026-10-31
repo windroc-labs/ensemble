@@ -20,7 +20,7 @@ def orchestrator_entry(repo: str) -> list[str]:
     if not os.path.isfile(os.path.join(root, "cli.py")):
         found.append(f"{ORCH_SRC}cli.py: missing entry")
     found += [
-        f"{ORCH_SRC}{rel}: no such module: a run is its Delegate's harness (FR-25)"
+        f"{ORCH_SRC}{rel}: no such module: a run is its Delegate's harness"
         for rel in ORCH_ABSENT
         if os.path.lexists(os.path.join(root, rel))
     ]

@@ -269,9 +269,7 @@ def option_tuples(repo: str) -> list[str]:
                     if (rel, name) in OPTION_TUPLES_ALLOWED:
                         seen.add((rel, name))
                     else:
-                        found.add(
-                            f"{rel}:{node.lineno}: {name}: a fixed option set is a StrEnum (FR-49)"
-                        )
+                        found.add(f"{rel}:{node.lineno}: {name}: a fixed option set is a StrEnum")
     found.update(
         f"{rel}: {name}: allowlisted but not an option tuple"
         for rel, name in OPTION_TUPLES_ALLOWED.keys() - seen

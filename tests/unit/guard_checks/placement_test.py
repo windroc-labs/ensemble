@@ -147,7 +147,7 @@ class OrchestratorLayout(Sample):
                     f"{OPKG}/cli.py": "",
                     f"{OPKG}/engine/run.py": "from ensemble import delegate\n",
                 },
-                [f"{OPKG}/engine/run.py: no such module: a run is its Delegate's harness (FR-25)"],
+                [f"{OPKG}/engine/run.py: no such module: a run is its Delegate's harness"],
             ),
             ({}, [f"{OPKG}/cli.py: missing entry"]),
         ):
