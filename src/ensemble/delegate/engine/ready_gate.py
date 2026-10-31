@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -19,13 +20,17 @@ from ensemble.delegate.event.types import Outcome, Updraft, UpdraftStatus
 from ensemble.utils import SHORT, OutcomeStatus, Runner, err_text, one_line, printable, sh
 
 REASON_MAX = 300
+WAIT = 600  # seconds G3 waits for running checks, e.g. rerun by the run's last PR edit
+POLL = 15  # seconds
 GATE = "ready gate: "
+RUNNING = frozenset({"QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "REQUESTED"})
 HOST_KEY = re.compile(r"""["']?([A-Za-z0-9.-]+)["']?:\s*""")
 
 
 class _Check(StrEnum):
     PASS = "pass"
     SKIPPED = "skipped"
+    PENDING = "pending"
     FAIL = "fail"
 
 
@@ -71,7 +76,7 @@ def gate(outcome: Outcome, updraft: Updraft | None, *, run: Runner = sh) -> Gate
     if not done:
         status, error = _undo(url, view, run)
         return Gated(outcome, status, _line(error))
-    reason = _judge(updraft, view, url, run)
+    view, reason = _settle(updraft, view, url, run)
     if reason is not None:
         _, error = _undo(url, view, run)
         return _failed(outcome, f"{reason}; {error}" if error else reason)
@@ -171,24 +176,44 @@ def _draft(url: str, run: Runner) -> str:
     return ""
 
 
-def _judge(updraft: Updraft | None, view: _View, url: str, run: Runner) -> str | None:
-    """The first of G1–G3 that fails, as a reason; None if all pass."""
+def _settle(
+    updraft: Updraft | None, view: _View, url: str, run: Runner
+) -> tuple[_View, str | None]:
+    """The last view read and why it fails, if it does."""
+    deadline = time.monotonic() + WAIT
+    while (judged := _judge(updraft, view, url, run)) is not None:
+        kind, reason = judged
+        if kind != _Check.PENDING or time.monotonic() + POLL > deadline:
+            return view, reason
+        time.sleep(POLL)
+        try:
+            view = _view(url, run)
+        except _GhError as e:
+            return view, str(e)
+    return view, None
+
+
+def _judge(
+    updraft: Updraft | None, view: _View, url: str, run: Runner
+) -> tuple[_Check, str] | None:
+    """The first of G1–G3 that fails, as (FAIL or PENDING, reason); None if all pass."""
     if updraft is None:
-        return "G1: no updraft result"
+        return _Check.FAIL, "G1: no updraft result"
     if updraft.status != UpdraftStatus.CONVERGED:
-        return f"G1: updraft {updraft.status}"
+        return _Check.FAIL, f"G1: updraft {updraft.status}"
     if view.state != "OPEN":
-        return f"G2: PR is {view.state}"
+        return _Check.FAIL, f"G2: PR is {view.state}"
     if updraft.head != view.head:
-        return f"G2: updraft head {updraft.head[:12]} is not PR head {view.head[:12]}"
+        return _Check.FAIL, f"G2: updraft head {updraft.head[:12]} is not PR head {view.head[:12]}"
     checks = [
         _check(item, url, view.head, run) for item in _latest(view.checks, url, view.head, run)
     ]
-    for name, kind, said in checks:
-        if kind == _Check.FAIL:
-            return f"G3: check {name} {said}"
+    for wanted in (_Check.FAIL, _Check.PENDING):
+        for name, kind, said in checks:
+            if kind == wanted:
+                return kind, f"G3: check {name} {said}"
     if checks and all(kind == _Check.SKIPPED for _, kind, _ in checks):
-        return f"G3: CI did not run (CI 未运行): all {len(checks)} checks skipped"
+        return _Check.FAIL, f"G3: CI did not run (CI 未运行): all {len(checks)} checks skipped"
     return None
 
 
@@ -267,14 +292,15 @@ def _check(item: object, url: str, head: str, run: Runner) -> tuple[str, _Check,
     if kind == "CheckRun":
         status, conclusion = str(item.get("status")), str(item.get("conclusion"))
         if status != "COMPLETED":
-            return name, _Check.FAIL, status
+            return name, _Check.PENDING if status in RUNNING else _Check.FAIL, status
         if conclusion == "CANCELLED" and _unstarted(item, url, head, run):
             return name, _Check.SKIPPED, conclusion
         found = {"SUCCESS": _Check.PASS, "NEUTRAL": _Check.PASS, "SKIPPED": _Check.SKIPPED}
         return name, found.get(conclusion, _Check.FAIL), conclusion
     if kind == "StatusContext":
         state = str(item.get("state"))
-        return name, _Check.PASS if state == "SUCCESS" else _Check.FAIL, state
+        found = {"SUCCESS": _Check.PASS, "PENDING": _Check.PENDING, "EXPECTED": _Check.PENDING}
+        return name, found.get(state, _Check.FAIL), state
     return name, _Check.FAIL, f"of unknown type {kind}"
 
 
