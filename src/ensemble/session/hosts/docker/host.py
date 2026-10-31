@@ -105,6 +105,7 @@ RECORD = "host.json"
 OWNER_LOCK = "guard.lock"
 BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
+TOML_MERGE = "/opt/ensemble/src/ensemble/utils/toml_merge.py"
 STATE_ROOT = "/run/ensemble"  # Container.state_root
 _ARG_STRLEN_MAX = 131072  # Linux exec's limit on one argument, its NUL included
 PROMPT_STAGE = """import os, sys
@@ -769,8 +770,9 @@ class DockerHost(Host):
         if resume == "0":
             self._move_workspace(name, volume, cwd)
             _reset_home(name, home, persistent or ())
-            for file, text in json.loads(metadata.get("home_files") or "{}").items():
-                save(os.path.join(home, file), text)
+            if persistent is None:
+                for file, text in json.loads(metadata.get("home_files") or "{}").items():
+                    save(os.path.join(home, file), text)
             for directory in persistent or ():
                 os.makedirs(os.path.join(home, directory), mode=0o700, exist_ok=True)
         clients = client_keys(root)
@@ -947,6 +949,7 @@ class DockerHost(Host):
         handle = proc = None
         try:
             stops.check()
+            self._stage_home(name, container, metadata)
             self._stage_files(container, metadata)
             self._stage_prompt(container, metadata)
             _save_record(
@@ -1111,6 +1114,28 @@ class DockerHost(Host):
         if word in ("exited", "absent"):
             return Liveness.ABSENT
         return Liveness.LIVE if word == "live" else Liveness.UNKNOWN
+
+    def _stage_home(self, name: str, container: str, metadata: Mapping[str, str]) -> None:
+        """A container's own client home: each file merged under the image's, as agent."""
+        if metadata.get("home_persistent") is None:
+            return
+        home = docker_home(name, metadata["home_dir"])
+        for file, text in json.loads(metadata.get("home_files") or "{}").items():
+            argv, env = docker_call(
+                self.docker,
+                *("exec", "-i", "--user", "agent", container),
+                *(IMAGE_PYTHON, "-I", TOML_MERGE, home, file),
+            )
+            try:
+                result = self.run(argv, env, input=text, timeout=RUN_TIMEOUT)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise SessionError(f"staging client config {file}: {error}") from None
+            if result.returncode:
+                why = (result.stderr or "").strip().splitlines()
+                raise SessionError(
+                    f"staging client config {file}:"
+                    f" {why[-1] if why else f'exit status {result.returncode}'}"
+                )
 
     def _stage_files(self, container: str, metadata: Mapping[str, str]) -> None:
         files = metadata.get("runtime_files")

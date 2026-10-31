@@ -34,6 +34,7 @@ from ensemble.session.clients.common import (
     FLAGS,
     MODES,
     check_config,
+    docker_config,
     mode_flags,
     scan,
     split_flags,
@@ -790,6 +791,18 @@ def _config_home(cwd: str, config_home: str | None = None) -> str:
     return os.path.abspath(os.path.join(cwd, os.path.expanduser(config_home or "~/.codex")))
 
 
+def _docker_files() -> dict[str, str]:
+    """config.toml: the Docker config verbatim, once it parses."""
+    path, text = docker_config(
+        "codex", "config.toml", os.path.join(os.path.dirname(__file__), "docker-config.toml")
+    )
+    try:
+        load_config(path)
+    except ValueError as error:
+        raise ConfigError(f"Docker config {path}: invalid TOML: {error}") from None
+    return {"config.toml": text}
+
+
 def _config_layers(snapshot: Snapshot) -> list[str]:
     """The config files Codex may read for `snapshot`, lowest precedence first; a trusted project
     adds each `.codex/config.toml` from / down to the cwd.
@@ -935,7 +948,12 @@ class CodexCommon:
 
     def home(self) -> ClientHome:
         return ClientHome(
-            "codex_dir", "codex", "CODEX_HOME", "codex-access-token", persistent=("sessions",)
+            "codex_dir",
+            "codex",
+            "CODEX_HOME",
+            "codex-access-token",
+            files=_docker_files,
+            persistent=("sessions",),
         )
 
     @cached_property

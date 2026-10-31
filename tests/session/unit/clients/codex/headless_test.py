@@ -3,11 +3,13 @@
 import dataclasses
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from unittest import mock
 
 from ensemble.session.clients.codex import CodexClient
+from ensemble.session.clients.codex import common as codex_common
 from ensemble.session.clients.codex.tui import decode
 from ensemble.session.engine.types import (
     Activity,
@@ -44,6 +46,11 @@ from tests.session.unit.clients.support import holds
 CODEX = ("-s", "danger-full-access", "-c", 'approval_policy="on-request"')
 
 HOOK = (sys.executable, "-I", "/protected/driver_hook.py", "context")
+
+
+def default_config():
+    with open(os.path.join(os.path.dirname(codex_common.__file__), "docker-config.toml")) as f:
+        return f.read()
 
 
 class HeadlessTest(Base):
@@ -293,7 +300,29 @@ class ContainerLaunch(Base):
         self.assertEqual(metadata["home_field"], "codex_dir")
         self.assertNotIn("codex", [call.args[0] for call in which.call_args_list])
         self.assertEqual(json.loads(metadata["home_persistent"]), ["sessions"])
+        self.assertEqual(json.loads(metadata["home_files"]), {"config.toml": default_config()})
         self.assertTrue(all(done.wait(5) for done in mode.done))
+
+    def docker_config(self, text):
+        path = os.path.join(
+            os.environ["HOME"], ".ensemble", "docker-config", "codex", "config.toml"
+        )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_the_docker_config_is_the_codex_home_file_verbatim(self):
+        text = '# mine\nservice_tier = "fast"\n'
+        self.docker_config(text)
+        self.assertEqual(self.client.headless()._home().files(), {"config.toml": text})
+
+    def test_an_invalid_docker_config_fails_naming_it(self):
+        path = self.docker_config("a = = 1")
+        with self.assertRaisesRegex(
+            ConfigError, f"^Docker config {re.escape(path)}: invalid TOML: "
+        ):
+            self.client.headless()._home().files()
 
     def test_headless_native_events_resume_in_a_terminal_and_back(self):
         run = self.client.headless()
