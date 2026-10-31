@@ -141,21 +141,6 @@ class Main(Case):
             ],
         )
 
-    def test_an_edit_that_only_cuts_comments_is_not_judged(self):
-        before = DOC + CODE + "# a long note\n"
-        self.assertEqual(
-            self.run_in({"core/a.py": DOC + CODE}, {"core/a.py": before})[:2],
-            (0, [f"ok {SOURCE_RULE}: 0 checked", f"ok {TESTS_RULE}: 0 checked"]),
-        )
-        for after in (
-            before + "# more\n",
-            before.replace("x * 2", "x * 22"),
-            before.replace("x * 2", "x - 2"),
-            "x = 1\n" + before,
-        ):
-            with self.subTest(after=after[-20:]):
-                self.assertEqual(self.run_in({"core/a.py": after}, {"core/a.py": before})[0], 1)
-
     def test_changes_on_the_base_after_the_fork_are_not_judged(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

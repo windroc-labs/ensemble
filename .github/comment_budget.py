@@ -31,10 +31,6 @@ def bare_string(node):
     )
 
 
-def shebang(token):
-    return token.start[0] == 1 and token.string.startswith("#!")
-
-
 def measure(text):
     tree = ast.parse(text)
     docstring = sum(
@@ -43,25 +39,10 @@ def measure(text):
     comment = sum(
         chars(token.string)
         for token in tokenize.generate_tokens(io.StringIO(text).readline)
-        if token.type == tokenize.COMMENT and not shebang(token)
+        if token.type == tokenize.COMMENT
+        and not (token.start[0] == 1 and token.string.startswith("#!"))
     )
     return comment, docstring, chars(text) - comment - docstring
-
-
-def code(text):
-    """(type, string) of each token but comments, bare strings and line breaks; a shebang stays."""
-    lines = text.splitlines(keepends=True)
-    bare = {
-        (s.lineno, len(lines[s.lineno - 1].encode()[: s.col_offset].decode()))
-        for s in (node.value for node in ast.walk(ast.parse(text)) if bare_string(node))
-    }
-    return [
-        (token.type, token.string)
-        for token in tokenize.generate_tokens(io.StringIO(text).readline)
-        if token.start not in bare
-        and token.type not in (tokenize.NL, tokenize.NEWLINE)
-        and not (token.type == tokenize.COMMENT and not shebang(token))
-    ]
 
 
 def rule(path):
@@ -81,21 +62,10 @@ def git(root, *argv):
 
 
 def changed(root, base):
-    """(path, its text at the merge-base or None when new) of each changed .py file."""
     fork = git(root, "merge-base", base, "HEAD").strip()
     listed = git(root, "diff", "--name-only", "--no-renames", "--diff-filter=d", "-z", fork, "--")
-    existed = set(git(root, "ls-tree", "-r", "--name-only", "-z", fork).split("\0"))
-    for path in sorted(listed.split("\0")):
-        if path.endswith(".py") and (root / path).is_file():
-            yield path, git(root, "show", f"{fork}:{path}") if path in existed else None
-
-
-def cut_only(before, after):
-    """An edit that keeps the code and adds no comment can only shorten comments."""
-    return (
-        before is not None
-        and code(before) == code(after)
-        and sum(measure(after)[:2]) <= sum(measure(before)[:2])
+    return sorted(
+        path for path in listed.split("\0") if path.endswith(".py") and (root / path).is_file()
     )
 
 
@@ -110,16 +80,13 @@ def main(argv=None, root=ROOT):
     root = Path(root)
     files = {SOURCE: [], TESTS: []}
     try:
-        for path, base_text in changed(root, args.base):
+        for path in changed(root, args.base):
             try:
                 with tokenize.open(root / path) as file:
-                    text = file.read()
-                comment, docstring, size = measure(text)
-                judged = not cut_only(base_text, text)
+                    comment, docstring, code = measure(file.read())
             except (OSError, SyntaxError, ValueError, tokenize.TokenError) as error:
                 raise ValueError(f"{path}: {error}") from error
-            if judged:
-                files[rule(path)].append((path, comment + docstring, size))
+            files[rule(path)].append((path, comment + docstring, code))
     except ValueError as error:
         print(f"comment_budget: {error}", file=sys.stderr)
         return 2
