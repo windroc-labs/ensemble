@@ -419,6 +419,12 @@ class Shipped(Packaged):
             )
             self.assertIn("Never change one", rule)
             self.assertIn("One you judge wrong → `needs_input` quoting it and why", rule)
+            # an engineer has no test Mac mini: it neither runs nor vouches for `@ops` scenarios
+            self.assertIn(
+                "An `@ops` one is a verifier's to run on the test Mac mini: never claim it passes, "
+                "and lacking the mini is no reason for `needs_input`.",
+                rule,
+            )
 
     def test_the_engineer_charter_has_six_sections_and_updraft_adds_its_lines_verbatim(self):
         with open(os.path.join(TEAM, "roles", "engineer.md")) as f:
