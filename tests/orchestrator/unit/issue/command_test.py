@@ -761,6 +761,33 @@ class Create(IssueCase):
         self.assertIn("ensemble-orchestrator issue list --query=Fix before", err)
 
 
+class InWorkerContainer(IssueCase):
+    def test_worker_secrets_never_replace_the_injected_board(self):
+        secrets, touched = "/run/ensemble/secrets", []
+        original_stat, original_open = os.stat, open
+
+        def stat(path, *args, **kwargs):
+            if not isinstance(path, int) and os.fsdecode(path).startswith(secrets):
+                touched.append(os.fsdecode(path))
+                return original_stat(self.home)
+            return original_stat(path, *args, **kwargs)
+
+        def opened(path, *args, **kwargs):
+            if not isinstance(path, int) and os.fsdecode(path).startswith(secrets):
+                touched.append(os.fsdecode(path))
+                raise FileNotFoundError(path)
+            return original_open(path, *args, **kwargs)
+
+        gql = create_gql()
+        with mock.patch("os.stat", stat), mock.patch("builtins.open", opened):
+            code, out, err = self.run_main(
+                ["create", "--title", "Fix", "--body-file", "-"], gql, b"body"
+            )
+        self.assertEqual((code, err, touched), (0, "", []))
+        self.assertEqual(json.loads(out)["issue"]["identifier"], "TASK-9")
+        self.assertEqual(len(gql.writes), 1)
+
+
 class Archive(IssueCase):
     def test_prints_the_receipt(self):
         gql = ArchiveGql(tree("TASK-1", "completed", tree("TASK-2", "canceled")))

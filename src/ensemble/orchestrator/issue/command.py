@@ -876,7 +876,16 @@ def _linear(cfg, gql, err):
     return LinearIssues(functools.partial(gql, identity=app), linear)
 
 
-def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=None):
+def main(
+    argv,
+    *,
+    gql=linear_gql,
+    worker=None,
+    config_path=None,
+    out=None,
+    err=None,
+    stdin=None,
+):
     args = _parser().parse_args(argv)
     out = sys.stdout.buffer if out is None else out
     err = sys.stderr if err is None else err
@@ -892,7 +901,7 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
             return USAGE
     request = _request(args, body)
     try:
-        board = worker_backend()
+        board = worker() if worker else None
         if board is None:
             cfg = config.load(path=config_path)
             if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args, request)):
@@ -945,3 +954,8 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
         return FAILED
     out.write(data)
     return OK
+
+
+def entry(argv):
+    """The ensemble-orchestrator issue command: a worker container's mounted board comes first."""
+    return main(argv, worker=worker_backend)

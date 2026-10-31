@@ -1,4 +1,6 @@
-"""Loopback HTTP transport and fake credential process for integration subprocesses."""
+"""Loopback HTTP transport, fake credential process and no worker Linear access for integration
+subprocesses.
+"""
 
 import contextlib
 import json
@@ -8,6 +10,8 @@ import subprocess
 import sys
 import urllib.request
 from unittest import mock
+
+from ensemble.orchestrator.trackers.linear import worker
 
 ENV = "FAKE_LINEAR_TRANSPORT"
 SPAWNS = {"subprocess.Popen", "os.exec", "os.posix_spawn"}
@@ -39,7 +43,7 @@ def refuse_keychain(event, args):
 
 
 def install(path):
-    run = subprocess.run
+    run, stat = subprocess.run, os.stat
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def settings():
@@ -79,7 +83,13 @@ def install(path):
             raise subprocess.CalledProcessError(result.returncode, argv)
         return result
 
+    def unmounted(target, *args, **kwargs):
+        if not isinstance(target, int) and os.fsdecode(target).startswith(worker.DIRECTORY):
+            raise FileNotFoundError(target)
+        return stat(target, *args, **kwargs)
+
     stack = contextlib.ExitStack()
     stack.enter_context(mock.patch.object(urllib.request, "urlopen", send))
     stack.enter_context(mock.patch.object(subprocess, "run", process))
+    stack.enter_context(mock.patch.object(os, "stat", unmounted))
     return stack

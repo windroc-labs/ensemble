@@ -119,7 +119,7 @@ def main(argv=None):
             "close finished issues' runs, delete their agent dirs, then archive",
         ),
         "issue": (
-            issue_command.main,
+            issue_command.entry,
             "read, list, create, edit, move, comment on, archive, relate or relabel issues; "
             "look up Linear references",
         ),
