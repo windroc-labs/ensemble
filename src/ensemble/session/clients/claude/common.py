@@ -69,11 +69,13 @@ MODEL_KEYS = ("model", "effortLevel", "modelSettings")
 MODEL_ENTRY_DROP = frozenset({"autoCompactWindow"})  # host-only keys of a modelSettings entry
 ENV_KEYS = ("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",)
 # A container worker runs unattended: no prompt may stop it, none is suggested, it answers
-# concisely; fullscreen applies only once TUI_ENV's alternate-screen default is overridden.
+# concisely, it compacts near the context limit but never while idle; fullscreen applies only
+# once TUI_ENV's alternate-screen default is overridden.
 UNATTENDED = MappingProxyType(
     {
         "skipWorkflowUsageWarning": True,
         "autoCompactEnabled": True,
+        "idleCompaction": False,
         "autoContinueAtUsageLimit": True,
         "promptSuggestionEnabled": False,
         "tui": "fullscreen",

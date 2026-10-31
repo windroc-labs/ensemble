@@ -255,6 +255,7 @@ class HomeFilesTest(Base):
     UNATTENDED = {
         "skipWorkflowUsageWarning": True,
         "autoCompactEnabled": True,
+        "idleCompaction": False,
         "autoContinueAtUsageLimit": True,
         "promptSuggestionEnabled": False,
         "tui": "fullscreen",
@@ -288,6 +289,7 @@ class HomeFilesTest(Base):
     def test_the_unattended_keys_are_fixed_whatever_the_host_sets(self):
         host = {
             **dict.fromkeys(self.UNATTENDED, False),
+            "idleCompaction": True,
             "promptSuggestionEnabled": True,
             "tui": "default",
             "outputStyle": "Explanatory",
