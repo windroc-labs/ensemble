@@ -1,6 +1,4 @@
-"""Names Vulture cannot see used, one entry each with its reason above it. An interface waiting for
-its caller says which caller; the change adding it deletes the entry.
-"""
+"""Names Vulture cannot see used, each under its reason."""
 
 import urllib.request
 
@@ -16,20 +14,13 @@ from ensemble.session.harness.types import EventCall
 from ensemble.session.viewer.types import Split
 from ensemble.utils import LayerCommand, OutcomeStatus
 
-# Enum members reached only by iteration or by value:
-# teams.py reads each TeamKind dir.
+# Enum members read only by value or iteration.
 _ = TeamKind.ROLES, TeamKind.TEMPLATES
-# outcome.py parses OutcomeStatus(status).
 _ = OutcomeStatus.NEEDS_INPUT, OutcomeStatus.FAILED
-# outcome.py parses UpdraftStatus(status).
 _ = UpdraftStatus.CAPPED, UpdraftStatus.STOPPED
-# Record checks ctl[0] against LayerCommand's values.
 _ = LayerCommand.ORCHESTRATOR, LayerCommand.SESSION
-# Effort(value) parses a run's effort; clients/common.py lists the values.
 _ = Effort.LOW, Effort.MEDIUM, Effort.HIGH, Effort.XHIGH, Effort.MAX
-# Spec checks its tier, and clients/common.py a tiers table's keys, against Tier's values.
 _ = Tier.ONE, Tier.TWO, Tier.THREE, Tier.FOUR
-# Key matches a `send --key` name by value.
 _ = (
     NamedKey.ENTER,
     NamedKey.ESCAPE,
@@ -56,26 +47,23 @@ _ = (
     NamedKey.F11,
     NamedKey.F12,
 )
-# The tmux Host checks a split by value.
 _ = Split.RIGHT, Split.BELOW
 
-# session/config.toml loads each Client by its `implementation` path.
+# session/config.toml's `implementation` paths.
 _ = ClaudeClient, CodexClient, OpenCodeClient
-# The harness sets its PYTHONPATH from Session.class_roots.
+# The harness builds its PYTHONPATH from it.
 _ = Session.class_roots
-# Sid-checked CLI closes are to route through Session.retire; delete this entry then.
+# Waiting for sid-checked CLI closes.
 _ = Session.retire
-# The router calls each Connect: Vulture reads a __call__ whose self is positional-only as a
-# function (this file is never run).
+# Vulture misses a positional-only-self __call__.
 _ = Connect.__call__
-# Only tests read it, but the session interface is frozen (tests/guard_checks/exports.py
-# session_interface_snapshot).
+# Frozen session interface; only tests read it.
 _ = SessionRow.last_lines
-# A handler's EventCall field; the session harness sets it for each dispatched event.
+# The session harness sets it per event.
 _ = EventCall.event_id
-# A Tui's accepted-prompt hook kind; the Claude adapter maps a label to it.
+# The Claude adapter maps a label to it.
 _ = HookKind.TURN_STARTED
-# Channel deduplication consumes the guard's retry-stable hook identity.
+# Channel deduplication reads it.
 _ = WorkerHook.delivery_id
-# urllib calls the redirect hook src/broker/internal/launcher/assets/opencode-install.py's NoRedirect overrides.
+# opencode-install.py's NoRedirect overrides it.
 _ = urllib.request.HTTPRedirectHandler.redirect_request
