@@ -54,9 +54,9 @@ from ensemble.session.engine.types import (
     Window,
 )
 from ensemble.utils import (
+    DOCKER_STATE,
     LOCAL_ENV_VARS,
     STATE,
-    docker_home_of,
     drop_stale,
     environment_ok,
     load_config,
@@ -810,10 +810,11 @@ def _config_layers(snapshot: Snapshot) -> list[str]:
     user layer is its Docker config; a trusted project adds each `.codex/config.toml` from / down to
     the cwd.
     """
-    home = os.path.abspath(snapshot.codex_home)
+    home = os.path.realpath(snapshot.codex_home)
+    docker = os.path.realpath(os.path.expanduser(DOCKER_STATE))
     user = (
         docker_config_path("codex", "config.toml", DOCKER_DEFAULT)
-        if docker_home_of(home, "codex") == home
+        if os.path.dirname(os.path.dirname(home)) == docker and os.path.basename(home) == "codex"
         else os.path.join(home, "config.toml")
     )
     layers = [SYSTEM_CONFIG, user]

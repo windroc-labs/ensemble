@@ -37,6 +37,7 @@ from tests.session.unit.clients.codex.support import (
     committed_headless,
     committed_tui,
 )
+from tests.utils.sandbox import scratch
 
 
 class LaunchLifecycleTest(Base):
@@ -1554,7 +1555,7 @@ class McpOffTest(Base):
         home = docker_home("w", "codex")
         spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
         snapshot = self.common.prepare(spec).snapshot
-        self.assertEqual(snapshot.codex_home, home)
+        self.assertEqual(snapshot.codex_home, os.path.realpath(home))
         self.assertEqual(
             mcp_off(list(OFF), snapshot),
             [
@@ -1563,6 +1564,20 @@ class McpOffTest(Base):
                 "-c",
                 'mcp_servers.github.command="github-mcp"',
             ],
+        )
+
+    def test_a_docker_home_under_a_linked_state_dir_is_still_one(self):
+        state = os.path.join(os.environ["HOME"], ".ensemble")
+        os.makedirs(state, exist_ok=True)
+        os.symlink(scratch(self), os.path.join(state, "docker-state"))
+        docker = Path(state, "docker-config", "codex")
+        self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "g"\n')
+        home = docker_home("w", "codex")
+        spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
+        snapshot = self.common.prepare(spec).snapshot
+        self.assertNotEqual(snapshot.codex_home, home)
+        self.assertEqual(
+            mcp_off(list(OFF), snapshot)[:2], ["-c", "mcp_servers.github.enabled=false"]
         )
 
     def test_a_table_with_no_transport_adds_nothing(self):
