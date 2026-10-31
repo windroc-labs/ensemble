@@ -371,6 +371,28 @@ class Shipped(Packaged):
         self.assertIn("what you can't settle → Open questions", text.split("5. **Self-grill**")[1])
         self.assertIn("never run it again", text.split("## Resume", 1)[1])
 
+    def test_prd_acceptance_is_gherkin_scenarios_the_pm_writes(self):
+        pm = composed("pm", "product-design")[0]
+        requirements = section(pm, "Requirements")
+        # scenarios replace the requirement tables' check cells
+        self.assertNotIn("<Check, translated>", pm)
+        self.assertNotIn("Threshold or check", pm)
+        self.assertIn("(`FR-<n>`, `NFR-<n>`, `S-<n>`) are never renumbered", requirements)
+        scenarios = pm.split("\n### Acceptance scenarios\n", 1)[1].split("\n## ", 1)[0]
+        for literal in (
+            "Each FR's acceptance, and each NFR's with a decidable check, as Gherkin scenarios",
+            "nothing executes",
+            "`@S-<n>`, then each `@FR-<n>` or `@NFR-<n>` it covers",
+            "A scenario may cover several requirements; every FR has at least one.",
+            "quoted in its step, or `<name>` in a `Scenario Outline` filled from its `Examples` table",
+            "`@ops` also tags a scenario that needs a real run on the test Mac mini",
+            "Its Then steps are its pass criteria",
+            "asserts only its result",
+        ):
+            self.assertIn(literal, scenarios)
+        write = re.search(r"^6\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
+        self.assertIn("acceptance as the Template's Acceptance scenarios", write)
+
     def test_the_engineer_charter_has_six_sections_and_updraft_adds_its_lines_verbatim(self):
         with open(os.path.join(TEAM, "roles", "engineer.md")) as f:
             charter = f.read()
@@ -643,9 +665,9 @@ class Real(RealConfig):
         self.assertIn(point, section(pm, "Approach and trade-offs"))
         self.assertIn(point, section(pm, "System diagram"))
         requirements = section(pm, "Requirements")
-        self.assertIn("Each subsection is one table", requirements)
+        self.assertIn("Functional and non-functional requirements are each one table", requirements)
         self.assertIn("fills the Module cell of its first row only", requirements)
-        for row in ("`| FR-<n> | <module> | <the requirement> | ", "`| NFR-<n> | <module> | "):
+        for row in ("`| FR-<n> | <module> | <the requirement> |`", "`| NFR-<n> | <module> | "):
             self.assertIn(row, pm)
         self.assertIn("> **<one-sentence answer>** (<overall confidence>)", light)
         self.assertIn(point, section(light, "Comparison table"))
