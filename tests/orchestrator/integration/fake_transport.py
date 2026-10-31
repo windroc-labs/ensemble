@@ -43,7 +43,7 @@ def refuse_keychain(event, args):
 
 
 def install(path):
-    run = subprocess.run
+    run, stat = subprocess.run, os.stat
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def settings():
@@ -83,9 +83,13 @@ def install(path):
             raise subprocess.CalledProcessError(result.returncode, argv)
         return result
 
+    def unmounted(target, *args, **kwargs):
+        if not isinstance(target, int) and os.fsdecode(target).startswith(worker.DIRECTORY):
+            raise FileNotFoundError(target)
+        return stat(target, *args, **kwargs)
+
     stack = contextlib.ExitStack()
     stack.enter_context(mock.patch.object(urllib.request, "urlopen", send))
     stack.enter_context(mock.patch.object(subprocess, "run", process))
-    worker_access = os.path.join(os.path.dirname(os.path.abspath(path)), "worker", "linear")
-    stack.enter_context(mock.patch.object(worker, "DIRECTORY", worker_access))
+    stack.enter_context(mock.patch.object(os, "stat", unmounted))
     return stack

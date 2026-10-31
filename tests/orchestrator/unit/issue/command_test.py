@@ -767,14 +767,14 @@ class InWorkerContainer(IssueCase):
         original_stat, original_open = os.stat, open
 
         def stat(path, *args, **kwargs):
-            if os.fspath(path).startswith(secrets):
-                touched.append(os.fspath(path))
+            if not isinstance(path, int) and os.fsdecode(path).startswith(secrets):
+                touched.append(os.fsdecode(path))
                 return original_stat(self.home)
             return original_stat(path, *args, **kwargs)
 
         def opened(path, *args, **kwargs):
-            if isinstance(path, str | os.PathLike) and os.fspath(path).startswith(secrets):
-                touched.append(os.fspath(path))
+            if not isinstance(path, int) and os.fsdecode(path).startswith(secrets):
+                touched.append(os.fsdecode(path))
                 raise FileNotFoundError(path)
             return original_open(path, *args, **kwargs)
 

@@ -31,7 +31,7 @@ from ensemble.orchestrator.engine.types import (
     Writers,
 )
 from ensemble.orchestrator.issue import command as issue_command
-from ensemble.orchestrator.trackers.linear import client, ops
+from ensemble.orchestrator.trackers.linear import client, ops, worker
 from ensemble.orchestrator.trackers.linear.linear_tracker import LinearTracker
 from ensemble.orchestrator.trackers.local.board import scan
 from ensemble.orchestrator.trackers.local.local_tracker import LOCAL_STATES, LocalTracker
@@ -119,7 +119,7 @@ def main(argv=None):
             "close finished issues' runs, delete their agent dirs, then archive",
         ),
         "issue": (
-            issue_command.main,
+            partial(issue_command.main, worker_backend=worker.backend),
             "read, list, create, edit, move, comment on, archive, relate or relabel issues; "
             "look up Linear references",
         ),

@@ -1,7 +1,9 @@
 """Worker issue commands consume broker files without host configuration or secrets."""
 
+import builtins
 import io
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +11,6 @@ from unittest import mock
 
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import config
-from ensemble.orchestrator.trackers.linear import worker
 from tests.orchestrator.case import Case
 from tests.orchestrator.unit.issue_fixtures import (
     CONFIG,
@@ -19,8 +20,6 @@ from tests.orchestrator.unit.issue_fixtures import (
     create_gql,
     issue_node,
 )
-
-MOUNT = worker.DIRECTORY  # read at import, before any Case moves it into the test's HOME
 
 
 class Worker(Case):
@@ -44,11 +43,28 @@ class Worker(Case):
         )
         self.board = self.directory / "board.json"
         self.board.write_text(json.dumps(self.grant["board"]))
-        self.enterContext(mock.patch.object(worker, "DIRECTORY", str(self.directory)))
-        Path(self.ensemble, "config.local.toml").write_text("[unconfigured")
+        original_open, original_stat = builtins.open, os.stat
 
-    def test_reads_the_broker_s_linear_mount(self):
-        self.assertEqual(MOUNT, "/run/ensemble/secrets/linear")
+        def translated(path):
+            if isinstance(path, int):
+                return path
+            value = os.fspath(path)
+            prefix = "/run/ensemble/secrets/linear"
+            return str(self.directory) + value[len(prefix) :] if value.startswith(prefix) else path
+
+        self.enterContext(
+            mock.patch(
+                "builtins.open",
+                side_effect=lambda path, *a, **kw: original_open(translated(path), *a, **kw),
+            )
+        )
+        self.enterContext(
+            mock.patch(
+                "os.stat",
+                side_effect=lambda path, *a, **kw: original_stat(translated(path), *a, **kw),
+            )
+        )
+        Path(self.ensemble, "config.local.toml").write_text("[unconfigured")
 
     def run_cli(self, args, gql):
         def endpoint(request, **_kw):
