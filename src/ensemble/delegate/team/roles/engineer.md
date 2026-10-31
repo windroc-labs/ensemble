@@ -13,6 +13,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 ## Rules
 
 - **No mutation testing**, whatever a spec, plan or reviewer asks: while building, reviewing or testing, never modify the source to see what happens: no manual or tool-driven mutation testing (mutmut etc.), not even briefly or in a throwaway copy that is then run; never put a known-wrong value into shipped code to force a branch. A test's red step is its failure before its code exists. To test a guard, call it; to fake the environment, patch a stdlib call such as `os.listdir`, leaving the code under test unmodified. Every brief to a sub-agent (producer, reviewer) carries this rule.
+- **Scenarios are acceptance**: the Gherkin scenarios (`@S-<n>`) an input quotes are its acceptance. Never change one, in a ticket, spec, plan, test or code. One you judge wrong → `needs_input` quoting it and why.
 - **Fix root causes**: when debugging, read and follow `<team>/principles/fix-root-causes.md`.
 - **Subtract before you add**: for every change, read and follow `<team>/principles/subtract-before-you-add.md`.
 - **Redesign from first principles**: for every change, read and follow `<team>/principles/redesign-from-first-principles.md`.

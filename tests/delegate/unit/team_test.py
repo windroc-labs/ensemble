@@ -397,6 +397,15 @@ class Shipped(Packaged):
         write = re.search(r"^6\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
         self.assertIn("acceptance as the Template's Acceptance scenarios", write)
 
+    def test_engineers_take_scenarios_as_acceptance_and_never_change_them(self):
+        for task in ("build", "light-build", "decompose"):
+            rule = item(section(composed("engineer", task)[0], "Rules"), "Scenarios are acceptance")
+            self.assertIn(
+                "the Gherkin scenarios (`@S-<n>`) an input quotes are its acceptance", rule
+            )
+            self.assertIn("Never change one", rule)
+            self.assertIn("One you judge wrong → `needs_input` quoting it and why", rule)
+
     def test_the_engineer_charter_has_six_sections_and_updraft_adds_its_lines_verbatim(self):
         with open(os.path.join(TEAM, "roles", "engineer.md")) as f:
             charter = f.read()
