@@ -51,6 +51,21 @@ class BoardSkill(Case):
         ):
             self.assertIn(phrase, text)
 
+    def test_an_unset_task_lets_the_role_pick_and_examples_name_no_configured_task(self):
+        text = body()
+        for phrase in (
+            "An issue without a task label: its role's run picks a task from its own list",
+            "its default when none fits better (a researcher's: `research`)",
+            "`ensemble-delegate run --list` gives each role's tasks and when each is chosen",
+            "only to force",
+        ):
+            self.assertIn(phrase, text)
+        tasks = [
+            argv[i + 1] for argv in examples() for i, word in enumerate(argv) if word == "--task"
+        ]
+        self.assertTrue(tasks)
+        self.assertEqual(set(tasks), {"<task>"})
+
     def test_only_its_linear_section_names_linear(self):
         general, linear = body().split("\n## Linear\n", 1)
         self.assertNotIn("linear", (front() + general).lower())

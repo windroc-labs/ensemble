@@ -98,6 +98,15 @@ def manager_tokens(days=10.0):
 RAW_BODY = 'say "hi", `ls`, $HOME and ${x} \\n\nline two\n中文正文\n'
 
 
+_UNSET_TASK = (
+    "issue without a task label",
+    "its default when none fits better",
+    "a researcher's: research",
+    "ensemble-delegate run --list gives each role's tasks and when each is chosen",
+    "only to force",
+)
+
+
 class Help(Case):
     def test_each_help_names_its_contract(self):
         shared = ("ensemble-orchestrator issue read TASK-1", "8192", "Exit 0", "--help")
@@ -116,7 +125,7 @@ class Help(Case):
                     "create, edit, move, comment, archive, relation and label write",
                     "ensemble-orchestrator issue label add TASK-1 keep",
                     "ensemble-orchestrator issue label remove --help",
-                    "ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task build",
+                    "ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task <task>",
                     "ensemble-orchestrator issue edit --help",
                     "ensemble-orchestrator issue move TASK-1 done",
                     "ensemble-orchestrator issue create --title 'Split login' --body-file note.md \\\n"
@@ -147,7 +156,7 @@ class Help(Case):
                     "--role SPEC",
                     "unassigned (no delegate; a local board: no assignee), on Linear by the\n  delegate",
                     "ensemble-orchestrator issue list --role me",
-                    "ensemble-orchestrator issue list --state ready --task build --priority high",
+                    "ensemble-orchestrator issue list --state ready --task <task> --priority high",
                     "ensemble-orchestrator issue lookup --help",
                     "8192",
                 ),
@@ -207,6 +216,22 @@ class Help(Case):
             text = help_text(self, cli.main, ["issue", *command.split(), "--help"])
             for phrase in phrases:
                 self.assertIn(phrase, text, command)
+
+    def test_the_unset_task_is_an_issue_without_a_task_label_and_its_default(self):
+        for command in ("", "create", "edit"):
+            with self.subTest(command=command):
+                text = " ".join(
+                    help_text(self, cli.main, ["issue", *command.split(), "--help"]).split()
+                )
+                for phrase in _UNSET_TASK:
+                    self.assertIn(phrase, text)
+                self.assertNotIn("Without a task", text)
+                self.assertEqual(
+                    text.count("run --list"),
+                    text.count("run --list gives each role's tasks and when each is chosen"),
+                )
+        edit = " ".join(help_text(self, cli.main, ["issue", "edit", "--help"]).split())
+        self.assertIn("Leaving --task off keeps the issue's task label", edit)
 
     def test_no_help_names_a_removed_option(self):
         for command in (

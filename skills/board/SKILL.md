@@ -31,13 +31,15 @@ Exit 0: success, or `"result": "unchanged"` (already so; nothing written). Exit 
 
 - **States** (`STATE`, `--state`): `backlog`, `ready`, `running`, `review`, `approved`, `done`, `canceled`. `create` defaults to `backlog`.
 - **Assignment** (`--role`): a role (`researcher`, `pm`, `engineer`), `me` (the identity the commands run as) or `unassigned`; how the board records it: its section below.
-- **Task** (`--task`) and **client** (`--client`): a configured name, such as `build` or `codex`. An unknown one exits 2 listing the configured names.
+- **Task** (`--task`): usually unset. An issue without a task label: its role's run picks a task from its own list by the issue, its default when none fits better (a researcher's: `research`); `ensemble-delegate run --list` gives each role's tasks and when each is chosen. Set it only to force one task: a task name this board configures, which can be fewer than a role's tasks.
+- **Client** (`--client`): a configured name, such as `codex`.
+- An unknown task or client exits 2 listing the configured names.
 - **Priority** (`--priority`): `none`, `urgent`, `high`, `medium`, `low`.
 
 ## Finding issues
 
 ```bash
-ensemble-orchestrator issue list --query 'login' --state ready --task build
+ensemble-orchestrator issue list --query 'login' --state ready --task <task>
 ensemble-orchestrator issue list --role me --include-archived
 ensemble-orchestrator issue list --role unassigned --priority urgent
 ensemble-orchestrator issue list --parent TASK-1 --client codex --limit 50
@@ -65,9 +67,9 @@ ensemble-orchestrator issue comment TASK-1 --body-file note.md
 ensemble-orchestrator issue comment TASK-1 --body-file - < note.md
 ensemble-orchestrator issue move TASK-1 running
 ensemble-orchestrator issue create --title 'Fix login' --body-file note.md
-ensemble-orchestrator issue create --title 'Fix login' --body-file - --parent TASK-1 --role engineer --task build --client codex --priority high --state ready --blocks TASK-2 TASK-3 --blocked-by TASK-4 < note.md
+ensemble-orchestrator issue create --title 'Fix login' --body-file - --parent TASK-1 --role engineer --client codex --priority high --state ready --blocks TASK-2 TASK-3 --blocked-by TASK-4 < note.md
 ensemble-orchestrator issue edit TASK-1 --title 'Fix login on Safari' --body-file note.md
-ensemble-orchestrator issue edit TASK-1 --task light-build --client claude --priority low
+ensemble-orchestrator issue edit TASK-1 --task <task> --client claude --priority low
 ensemble-orchestrator issue edit TASK-1 --role engineer
 ```
 
