@@ -15,6 +15,7 @@ from ensemble.session.clients.common import (
     FLAGS,
     MODES,
     check_config,
+    docker_config,
     mode_flags,
     scan,
     strings,
@@ -51,6 +52,7 @@ TABLE = "[clients.opencode]"
 # opencode.db is under $XDG_DATA_HOME/opencode.
 HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
+DOCKER_CONFIG_FILE = "opencode.json"  # the Docker config's copy in the home, OPENCODE_CONFIG
 STORE = f"{STATE}/sessions/opencode"
 BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
@@ -254,6 +256,14 @@ def refuse(flags: Iterable[str], banned: tuple[str, ...], where: str) -> None:
             raise ConfigError(f"{flag.arg}: set by the opencode client, not {where}")
 
 
+def _docker_files() -> dict[str, str]:
+    """The Docker config verbatim: OpenCode parses its JSONC itself."""
+    _, text = docker_config(
+        "opencode", DOCKER_CONFIG_FILE, os.path.join(HERE, "docker-opencode.json")
+    )
+    return {DOCKER_CONFIG_FILE: text}
+
+
 def refuse_env(env: Mapping[str, str], where: str) -> None:
     if found := sorted(set(env) & set(OVERRIDES)):
         raise ConfigError(f"{where}: {found[0]} would override the opencode client's config")
@@ -333,7 +343,7 @@ class OpenCodeCommon:
         return () if native is None else self.selector(native, resume=True)
 
     def home(self) -> ClientHome:
-        return replace(HOME, providers=tuple(sorted(self.providers)))
+        return replace(HOME, files=_docker_files, providers=tuple(sorted(self.providers)))
 
     def executable_for(self, env: Mapping[str, str], cwd: str, context: ClientContext) -> str:
         """The image's opencode in a container, else program's."""
@@ -461,6 +471,9 @@ class OpenCodeCommon:
         refuse_env(supplied, "a run's env")
         env = {k: v for k, v in {**self.env, **supplied}.items() if k not in LOCAL_ENV_VARS}
         env["OPENCODE_CONFIG_CONTENT"] = json.dumps(self.inline(spec, context, plugin))
+        if context.container is not None and (home := env.get(HOME.env)):
+            # Set before a fresh start writes the copy; OpenCode reads a missing file as empty.
+            env["OPENCODE_CONFIG"] = os.path.join(home, DOCKER_CONFIG_FILE)
         env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
         return env
 

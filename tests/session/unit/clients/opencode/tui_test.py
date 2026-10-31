@@ -187,7 +187,11 @@ class LaunchTest(Base):
                 self.assertEqual(permission["edit"][".opencode/*"], "deny")
 
     def test_both_modes_name_the_docker_home(self):
-        home = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
+        home = self.client.common.home()
+        self.assertEqual(
+            replace(home, files=ClientHome.files),
+            ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none"),
+        )
         self.assertEqual(self.run_tui()._home(), home)
         headless = self.client.headless()
         assert headless is not None
