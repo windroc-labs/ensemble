@@ -26,6 +26,7 @@ from ensemble.session.clients.codex.common import (
     validate_snapshot,
 )
 from ensemble.session.engine.types import Access, ConfigError, SessionInfo, SessionStatus
+from ensemble.utils import docker_home
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -1543,6 +1544,24 @@ class McpOffTest(Base):
             [
                 *("-c", "mcp_servers.p.enabled=false", "-c", 'mcp_servers.p.url="https://p"'),
                 *("-c", "mcp_servers.s.enabled=false", "-c", 'mcp_servers.s.command="user"'),
+            ],
+        )
+
+    def test_a_docker_home_turns_off_the_docker_configs_servers_not_the_hosts(self):
+        self.write(self.codex_home / "config.toml", '[mcp_servers.host]\ncommand = "h"\n')
+        docker = Path(os.environ["HOME"], ".ensemble", "docker-config", "codex")
+        self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "github-mcp"\n')
+        home = docker_home("w", "codex")
+        spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
+        snapshot = self.common.prepare(spec).snapshot
+        self.assertEqual(snapshot.codex_home, home)
+        self.assertEqual(
+            mcp_off(list(OFF), snapshot),
+            [
+                "-c",
+                "mcp_servers.github.enabled=false",
+                "-c",
+                'mcp_servers.github.command="github-mcp"',
             ],
         )
 

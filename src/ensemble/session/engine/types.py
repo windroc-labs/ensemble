@@ -171,13 +171,8 @@ def _no_files() -> Mapping[str, str]:
 
 @dataclass(frozen=True)
 class ClientHome:
-    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable.
-
-    `files`: a new worker's copies by file name, read only for a Docker start or preflight that
-    `delivers` them; ConfigError: an invalid Docker config. `persistent` None: the home is bound
-    from the host, so a fresh start writes the files there and a resume keeps them; else it is the
-    container's own but for these dirs, so every start merges each file, TOML, under the image's
-    file of that name.
+    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable;
+    `files`: read when it `delivers`; `persistent` set: a container-own home, TOML files merged.
     """
 
     field: str

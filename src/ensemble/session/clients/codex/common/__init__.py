@@ -35,6 +35,7 @@ from ensemble.session.clients.common import (
     MODES,
     check_config,
     docker_config,
+    docker_config_path,
     mode_flags,
     scan,
     split_flags,
@@ -55,9 +56,11 @@ from ensemble.session.engine.types import (
 from ensemble.utils import (
     LOCAL_ENV_VARS,
     STATE,
+    docker_home_of,
     drop_stale,
     environment_ok,
     load_config,
+    load_config_text,
     number,
     open_beneath,
     resume_command,
@@ -102,6 +105,7 @@ VALUED = {
 
 MCP_OFF = "mcp_servers={}"
 SYSTEM_CONFIG = "/etc/codex/config.toml"
+DOCKER_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker-config.toml")
 _SERVER_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 _SESSION_VERSION = 1
@@ -793,21 +797,26 @@ def _config_home(cwd: str, config_home: str | None = None) -> str:
 
 def _docker_files() -> dict[str, str]:
     """config.toml: the Docker config verbatim, once it parses."""
-    path, text = docker_config(
-        "codex", "config.toml", os.path.join(os.path.dirname(__file__), "docker-config.toml")
-    )
+    path, text = docker_config("codex", "config.toml", DOCKER_DEFAULT)
     try:
-        load_config(path)
-    except ValueError as error:
+        load_config_text(text)
+    except (ValueError, RecursionError) as error:
         raise ConfigError(f"Docker config {path}: invalid TOML: {error}") from None
     return {"config.toml": text}
 
 
 def _config_layers(snapshot: Snapshot) -> list[str]:
-    """The config files Codex may read for `snapshot`, lowest precedence first; a trusted project
-    adds each `.codex/config.toml` from / down to the cwd.
+    """The config files Codex may read for `snapshot`, lowest precedence first; a Docker home's
+    user layer is its Docker config; a trusted project adds each `.codex/config.toml` from / down to
+    the cwd.
     """
-    layers = [SYSTEM_CONFIG, os.path.join(snapshot.codex_home, "config.toml")]
+    home = os.path.abspath(snapshot.codex_home)
+    user = (
+        docker_config_path("codex", "config.toml", DOCKER_DEFAULT)
+        if docker_home_of(home, "codex") == home
+        else os.path.join(home, "config.toml")
+    )
+    layers = [SYSTEM_CONFIG, user]
     if snapshot.project:
         ancestors = [snapshot.cwd]
         while (parent := os.path.dirname(ancestors[-1])) != ancestors[-1]:

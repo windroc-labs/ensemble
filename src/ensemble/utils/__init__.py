@@ -12,6 +12,7 @@ from ensemble.utils.config_file import (
     unset,
 )
 from ensemble.utils.config_file import load as load_config
+from ensemble.utils.config_file import loads as load_config_text
 from ensemble.utils.environment import (
     ACCOUNT_ENV,
     AGENT_SESSION_ENV,
@@ -61,7 +62,6 @@ from ensemble.utils.git import (
 from ensemble.utils.git import git as run_git
 from ensemble.utils.markdown import fenced, unfenced
 from ensemble.utils.paths import (
-    DOCKER_CONFIG,
     DOCKER_STATE,
     STATE,
     docker_home,
@@ -127,7 +127,6 @@ __all__ = [
     "ConfigFileError",
     "ConfinedFileError",
     "ConfinedReason",
-    "DOCKER_CONFIG",
     "DOCKER_STATE",
     "Display",
     "EVENTS_ENV",
@@ -184,6 +183,7 @@ __all__ = [
     "last_lines",
     "load_class",
     "load_config",
+    "load_config_text",
     "module_roots",
     "nested_start",
     "number",

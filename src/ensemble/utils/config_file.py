@@ -59,6 +59,10 @@ def merge(base: dict, over: dict, *, opaque: tuple[tuple[str, ...], ...] = ()) -
     return out
 
 
+def loads(text: str) -> dict:
+    return tomllib.loads(text)
+
+
 def load(path: str) -> dict:
     with open(path, "rb") as f:
         return tomllib.load(f)

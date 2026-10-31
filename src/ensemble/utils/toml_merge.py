@@ -91,13 +91,13 @@ def main(argv: list[str]) -> int:
         return 2
     path = os.path.join(home, name)
     try:
-        text = dumps(merge(tomllib.loads(sys.stdin.read()), _bootstrap(path)))
-    except tomllib.TOMLDecodeError as error:
+        text = dumps(merge(tomllib.loads(sys.stdin.buffer.read().decode()), _bootstrap(path)))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
         print(f"toml_merge: invalid TOML: {error}", file=sys.stderr)
         return 2
     fd, staged = tempfile.mkstemp(dir=home, prefix=f".{name}.")
     try:
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(text)
         os.replace(staged, path)
     except BaseException:

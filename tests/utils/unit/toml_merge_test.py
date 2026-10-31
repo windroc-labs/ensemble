@@ -4,8 +4,8 @@ import datetime
 import io
 import math
 import os
+import runpy
 import stat
-import subprocess
 import sys
 import tomllib
 from unittest import mock
@@ -54,7 +54,8 @@ class MergeTest(Case):
         self.path = os.path.join(self.home, "config.toml")
 
     def run_main(self, text, argv=None):
-        with mock.patch.object(sys, "stdin", io.StringIO(text)):
+        stdin = io.TextIOWrapper(io.BytesIO(text if isinstance(text, bytes) else text.encode()))
+        with mock.patch.object(sys, "stdin", stdin):
             return toml_merge.main([self.home, "config.toml"] if argv is None else argv)
 
     def bootstrap(self):
@@ -123,19 +124,19 @@ enabled = false
             ([self.home, ".config.toml"], ""),
             (["relative", "config.toml"], ""),
             (None, "not = = toml"),
+            (None, b"a = '\xff'"),
         ):
             with self.subTest(argv=argv, text=text), mock.patch("sys.stderr", io.StringIO()):
                 self.assertEqual(self.run_main(text, argv), 2)
                 self.assertEqual(os.listdir(self.home), [])
 
-    def test_it_runs_as_a_script_on_stdin(self):
-        script = os.path.abspath(toml_merge.__file__)
-        done = subprocess.run(
-            [sys.executable, "-I", script, self.home, "config.toml"],
-            input='a = "雪"\n',
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertEqual((done.returncode, done.stderr), (0, ""))
+    def test_it_runs_as_a_script_on_utf8_stdin_whatever_the_locale(self):
+        stdin = io.TextIOWrapper(io.BytesIO('a = "雪"\n'.encode()), encoding="ascii")
+        with (
+            mock.patch.object(sys, "argv", ["toml_merge.py", self.home, "config.toml"]),
+            mock.patch.object(sys, "stdin", stdin),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            runpy.run_path(toml_merge.__file__, run_name="__main__")
+        self.assertEqual(exited.exception.code, 0)
         self.assertEqual(self.merged(), {"a": "雪"})

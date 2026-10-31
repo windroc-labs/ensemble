@@ -318,6 +318,9 @@ class ContainerLaunch(Base):
         self.assertEqual(self.client.headless()._home().files(), {"config.toml": text})
 
     def test_an_invalid_docker_config_fails_naming_it(self):
+        path = self.docker_config("a = " + "[" * 5000 + "]" * 5000)
+        with self.assertRaisesRegex(ConfigError, f"^Docker config {re.escape(path)}: invalid TOML"):
+            self.client.headless()._home().files()
         path = self.docker_config("a = = 1")
         with self.assertRaisesRegex(
             ConfigError, f"^Docker config {re.escape(path)}: invalid TOML: "

@@ -11,7 +11,6 @@ from types import ModuleType
 
 STATE = "~/.ensemble"
 DOCKER_STATE = f"{STATE}/docker-state"
-DOCKER_CONFIG = f"{STATE}/docker-config"  # the user's Docker config file per client
 
 
 def docker_home(name: str, dir: str) -> str:
