@@ -1,4 +1,6 @@
-"""Loopback HTTP transport and fake credential process for integration subprocesses."""
+"""Loopback HTTP transport, fake credential process and no worker Linear access for integration
+subprocesses.
+"""
 
 import contextlib
 import json
@@ -8,6 +10,8 @@ import subprocess
 import sys
 import urllib.request
 from unittest import mock
+
+from ensemble.orchestrator.trackers.linear import worker
 
 ENV = "FAKE_LINEAR_TRANSPORT"
 SPAWNS = {"subprocess.Popen", "os.exec", "os.posix_spawn"}
@@ -82,4 +86,6 @@ def install(path):
     stack = contextlib.ExitStack()
     stack.enter_context(mock.patch.object(urllib.request, "urlopen", send))
     stack.enter_context(mock.patch.object(subprocess, "run", process))
+    worker_access = os.path.join(os.path.dirname(os.path.abspath(path)), "worker", "linear")
+    stack.enter_context(mock.patch.object(worker, "DIRECTORY", worker_access))
     return stack
