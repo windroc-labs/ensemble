@@ -28,7 +28,7 @@ class Delegate(ABC):
     @classmethod
     @abstractmethod
     def attach(cls, record_or_workdir: Record | str, *, sid: str | None = None) -> Delegate:
-        """ConfigError when the run is not session `sid`'s."""
+        """ConfigError when `sid` is given and the run is another session's."""
 
     @classmethod
     @abstractmethod

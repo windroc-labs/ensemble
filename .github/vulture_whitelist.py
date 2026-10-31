@@ -1,4 +1,6 @@
-"""Names Vulture cannot see used, each under its reason."""
+"""Names Vulture cannot see used, each under its reason. An entry waiting for its caller names
+that caller; the change adding the caller deletes the entry.
+"""
 
 import urllib.request
 
@@ -9,8 +11,7 @@ from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.opencode import OpenCodeClient
 from ensemble.session.engine.base import Session
-from ensemble.session.engine.types import Effort, HookKind, NamedKey, SessionRow, Tier, WorkerHook
-from ensemble.session.harness.types import EventCall
+from ensemble.session.engine.types import Effort, NamedKey, SessionRow, Tier
 from ensemble.session.viewer.types import Split
 from ensemble.utils import LayerCommand, OutcomeStatus
 
@@ -53,17 +54,9 @@ _ = Split.RIGHT, Split.BELOW
 _ = ClaudeClient, CodexClient, OpenCodeClient
 # The harness builds its PYTHONPATH from it.
 _ = Session.class_roots
-# Waiting for sid-checked CLI closes.
-_ = Session.retire
 # Vulture misses a positional-only-self __call__.
 _ = Connect.__call__
 # Frozen session interface; only tests read it.
 _ = SessionRow.last_lines
-# The session harness sets it per event.
-_ = EventCall.event_id
-# The Claude adapter maps a label to it.
-_ = HookKind.TURN_STARTED
-# Channel deduplication reads it.
-_ = WorkerHook.delivery_id
 # opencode-install.py's NoRedirect overrides it.
 _ = urllib.request.HTTPRedirectHandler.redirect_request
