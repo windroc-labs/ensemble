@@ -246,103 +246,74 @@ class AccountsTest(Base):
 
 class HomeFilesTest(Base):
     MODEL = {"model": "opus[1m]", "effortLevel": "xhigh", "modelSettings": {"opus": {"a": 1}}}
-
-    def settings(self, text):
-        os.makedirs(self.config_dir, exist_ok=True)
-        with open(os.path.join(self.config_dir, "settings.json"), "wb") as f:
-            f.write(text if isinstance(text, bytes) else text.encode())
-
     UNATTENDED = {
         "skipWorkflowUsageWarning": True,
         "autoCompactEnabled": True,
-        "idleCompaction": False,
         "autoContinueAtUsageLimit": True,
         "promptSuggestionEnabled": False,
-        "tui": "fullscreen",
-        "outputStyle": "Concise",
     }
-    SEARCHES = {"CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "50"}
+    DEFAULT = {"idleCompaction": False, "tui": "fullscreen", "outputStyle": "Concise"}
+
+    @property
+    def docker_config(self):
+        return os.path.join(
+            os.environ["HOME"], ".ensemble", "docker-config", "claude", "settings.json"
+        )
+
+    def write(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(text if isinstance(text, bytes) else text.encode())
 
     def container_settings(self):
-        ((name, text),) = ClaudeCommon({}).home_files().items()
+        ((name, text),) = ClaudeClient(CONFIG).tui()._home().files().items()
         self.assertEqual(name, "settings.json")
         return json.loads(text)
 
-    def test_only_the_hosts_model_keys_and_search_cap_reach_a_container_home(self):
-        other = {
-            "hooks": {"Stop": []},
-            "permissions": {"allow": ["Bash"]},
-            "statusLine": {"type": "command", "command": "x"},
-            "enabledPlugins": {"p@m": True},
-            "extraKnownMarketplaces": {"m": {}},
-            "theme": "dark",
-            "env": {"K": "v", **self.SEARCHES},
-        }
-        self.settings(json.dumps({**self.MODEL, **other, "apiKeyHelper": "/bin/key"}))
-        ((name, text),) = ClaudeClient(CONFIG).tui()._home().files().items()
+    def test_without_a_docker_config_the_packaged_default_keeps_the_container_settings(self):
+        self.assertEqual(self.container_settings(), {**self.DEFAULT, **self.UNATTENDED})
+
+    def test_a_docker_config_replaces_the_default_under_the_forced_keys(self):
+        self.write(self.docker_config, json.dumps({**self.MODEL, "theme": "dark"}))
         self.assertEqual(
-            (name, json.loads(text)),
-            ("settings.json", {**self.UNATTENDED, **self.MODEL, "env": self.SEARCHES}),
+            self.container_settings(), {**self.MODEL, "theme": "dark", **self.UNATTENDED}
         )
+
+    def test_the_forced_keys_win_over_the_docker_config(self):
+        self.write(self.docker_config, json.dumps({k: not v for k, v in self.UNATTENDED.items()}))
+        self.assertEqual(self.container_settings(), self.UNATTENDED)
+
+    def test_host_settings_never_reach_a_container_home(self):
+        host = {**self.MODEL, "env": {"CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "50"}}
+        self.write(os.path.join(self.config_dir, "settings.json"), json.dumps(host))
+        self.assertEqual(self.container_settings(), {**self.DEFAULT, **self.UNATTENDED})
+
+    def test_an_invalid_docker_config_fails_naming_it(self):
+        for text in ("not json", "[]", "1", "[" * 100_000):
+            with self.subTest(text=text[:10]):
+                self.write(self.docker_config, text)
+                self.refused(
+                    self.container_settings,
+                    f"Docker config {self.docker_config}: want a JSON object",
+                )
+        unreadable = (
+            f"Docker config {self.docker_config}: want a regular UTF-8 file of at most 2 MiB"
+        )
+        for text in (b"\xff", b" " * (2 * 1024 * 1024 + 1)):
+            with self.subTest(size=len(text)):
+                self.write(self.docker_config, text)
+                self.refused(self.container_settings, unreadable)
+        os.remove(self.docker_config)
+        os.mkdir(self.docker_config)
+        self.refused(self.container_settings, unreadable)
+
+    def test_the_home_is_claudes_whatever_the_docker_config(self):
         self.assertEqual(
             dataclasses.replace(ClaudeClient(CONFIG).tui()._home(), files=HOME.files), HOME
         )
 
-    def test_the_unattended_keys_are_fixed_whatever_the_host_sets(self):
-        host = {
-            **dict.fromkeys(self.UNATTENDED, False),
-            "idleCompaction": True,
-            "promptSuggestionEnabled": True,
-            "tui": "default",
-            "outputStyle": "Explanatory",
-        }
-        self.settings(json.dumps(host))
-        self.assertEqual(self.container_settings(), self.UNATTENDED)
-
-    def test_each_models_auto_compact_window_stays_on_the_host(self):
-        models = {
-            "claude-opus-5-5": {"effortLevel": "medium", "autoCompactWindow": 400000},
-            "sonnet": {"autoCompactWindow": 1},
-            "haiku": "x",
-        }
-        self.settings(json.dumps({"modelSettings": models}))
-        self.assertEqual(
-            self.container_settings(),
-            {
-                **self.UNATTENDED,
-                "modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}, "haiku": "x"},
-            },
-        )
-
-    def test_no_model_settings_when_every_entry_is_left_empty(self):
-        for models in ({"opus": {"autoCompactWindow": 1}, "sonnet": {}}, {}):
-            with self.subTest(models=models):
-                self.settings(json.dumps({**self.MODEL, "modelSettings": models}))
-                expected = {k: v for k, v in self.MODEL.items() if k != "modelSettings"}
-                self.assertEqual(self.container_settings(), {**self.UNATTENDED, **expected})
-
-    def test_model_settings_that_are_not_an_object_reach_a_container_home_unchanged(self):
-        self.settings(json.dumps({"modelSettings": "x"}))
-        self.assertEqual(self.container_settings(), {**self.UNATTENDED, "modelSettings": "x"})
-
-    def test_no_env_without_the_hosts_search_cap(self):
-        for env in ({"K": "v"}, {}, ["x"], "x"):
-            with self.subTest(env=env):
-                self.settings(json.dumps({**self.MODEL, "env": env}))
-                self.assertEqual(self.container_settings(), {**self.UNATTENDED, **self.MODEL})
-
-    def test_missing_or_invalid_host_settings_give_only_the_unattended_keys(self):
-        self.assertEqual(self.container_settings(), self.UNATTENDED)
-        for text in ("not json", "[]", '{"theme": "dark"}', b"\xff"):
-            with self.subTest(text=text):
-                self.settings(text)
-                self.assertEqual(self.container_settings(), self.UNATTENDED)
-        os.remove(os.path.join(self.config_dir, "settings.json"))
-        os.mkdir(os.path.join(self.config_dir, "settings.json"))
-        self.assertEqual(self.container_settings(), self.UNATTENDED)
-
     def test_an_explicit_model_or_effort_flag_still_wins(self):
-        self.settings(json.dumps(self.MODEL))
+        self.write(self.docker_config, json.dumps(self.MODEL))
         argv = tui_launch(self.work, tier=1, effort="max").argv
         self.assertEqual(
             (argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]), ("fable", "mx")

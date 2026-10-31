@@ -65,21 +65,15 @@ STATE_MAX = 1 << 20
 SETTINGS_MAX = 2 * 1024 * 1024
 TAIL = 4 << 20
 HOME = ClientHome("claude_dir", "claude", "CLAUDE_CONFIG_DIR", "claude-setup-token")
-MODEL_KEYS = ("model", "effortLevel", "modelSettings")
-MODEL_ENTRY_DROP = frozenset({"autoCompactWindow"})  # host-only keys of a modelSettings entry
-ENV_KEYS = ("CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION",)
-# A container worker runs unattended: no prompt may stop it, none is suggested, it answers
-# concisely, it compacts near the context limit but never while idle; fullscreen applies only
-# once TUI_ENV's alternate-screen default is overridden.
+DOCKER_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker-settings.json")
+# Written over the Docker config: a container worker runs unattended, so no prompt may stop it,
+# none is suggested, and a full context compacts rather than ending the run.
 UNATTENDED = MappingProxyType(
     {
         "skipWorkflowUsageWarning": True,
         "autoCompactEnabled": True,
-        "idleCompaction": False,
         "autoContinueAtUsageLimit": True,
         "promptSuggestionEnabled": False,
-        "tui": "fullscreen",
-        "outputStyle": "Concise",
     }
 )
 HOME_READ_MAX = 64 << 20
@@ -163,25 +157,16 @@ def _merge(base: dict, over: Mapping) -> dict:
     return base
 
 
-def _models(settings: dict) -> dict:
-    """MODEL_KEYS; modelSettings entries lose MODEL_ENTRY_DROP, empty ones dropped."""
-    found = {k: settings[k] for k in MODEL_KEYS if k in settings}
-    entries = found.get("modelSettings")
-    if isinstance(entries, dict):
-        kept = {}
-        for name, entry in entries.items():
-            left = (
-                {k: v for k, v in entry.items() if k not in MODEL_ENTRY_DROP}
-                if isinstance(entry, dict)
-                else entry
-            )
-            if left != {}:
-                kept[name] = left
-        if kept:
-            found["modelSettings"] = kept
-        else:
-            del found["modelSettings"]
-    return found
+def _docker_files() -> dict[str, str]:
+    """settings.json: the Docker config's object with UNATTENDED written over it."""
+    path, text = common.docker_config("claude", "settings.json", DOCKER_DEFAULT)
+    try:
+        settings = json.loads(text)
+    except (ValueError, RecursionError):
+        settings = None
+    if not isinstance(settings, dict):
+        raise ConfigError(f"Docker config {path}: want a JSON object")
+    return {"settings.json": json.dumps({**settings, **UNATTENDED})}
 
 
 def _credential(name: str) -> bool:
@@ -400,24 +385,7 @@ class ClaudeCommon:
         )
 
     def home(self) -> ClientHome:
-        return replace(HOME, files=self.home_files)
-
-    def home_files(self) -> dict[str, str]:
-        """settings.json: UNATTENDED, the host's `_models` and ENV_KEYS env, if readable."""
-        try:
-            settings = json.loads(_read(os.path.join(self.config_dir(), "settings.json")))
-        except (ConfigError, ValueError, RecursionError):
-            settings = {}
-        if not isinstance(settings, dict):
-            settings = {}
-        env = settings.get("env")
-        env = {k: env[k] for k in ENV_KEYS if k in env} if isinstance(env, dict) else {}
-        found = {
-            **UNATTENDED,
-            **_models(settings),
-            **({"env": env} if env else {}),
-        }
-        return {"settings.json": json.dumps(found)}
+        return replace(HOME, files=_docker_files)
 
     def transcript(self, cwd: str, sid: str, env: Mapping[str, str] = MappingProxyType({})) -> str:
         project = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(cwd))

@@ -61,6 +61,7 @@ from ensemble.utils.git import (
 from ensemble.utils.git import git as run_git
 from ensemble.utils.markdown import fenced, unfenced
 from ensemble.utils.paths import (
+    DOCKER_CONFIG,
     DOCKER_STATE,
     STATE,
     docker_home,
@@ -126,6 +127,7 @@ __all__ = [
     "ConfigFileError",
     "ConfinedFileError",
     "ConfinedReason",
+    "DOCKER_CONFIG",
     "DOCKER_STATE",
     "Display",
     "EVENTS_ENV",
