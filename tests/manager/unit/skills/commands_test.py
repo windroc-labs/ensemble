@@ -87,7 +87,7 @@ class Commands(Case):
             self.assertNotIn(f"{command} content *", rules("manage"))
         self.assertIn("owning ctl", section("manage", "Events"))
 
-    def test_fr33_has_no_retired_launch_or_resume_forms(self):
+    def test_has_no_retired_launch_or_resume_forms(self):
         for retired in (
             "ensemble-crew run <name> -- ensemble-session start",
             "--dry-run",

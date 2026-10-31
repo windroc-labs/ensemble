@@ -2948,7 +2948,7 @@ class TaskSelection(TaskLabelsScenario):
             with self.subTest(pick=pick):
                 self.assertEqual(router.client_for(pick, "a"), want)
 
-    def test_fr7_invalid_label_goes_to_review(self):
+    def test_invalid_label_goes_to_review(self):
         fake = FakeLinear(
             [
                 issue(
@@ -3016,7 +3016,7 @@ class TaskSelection(TaskLabelsScenario):
         self.assertEqual([v["i"] for q, v in fake.queries if q == RECHECK], ["TASK-2", "TASK-3"])
         self.assertEqual(fake.issues["TASK-4"]["state"], "Todo")
 
-    def test_fr4_label_read_from_recheck(self):
+    def test_label_read_from_recheck(self):
         class Relabel(FakeLinear):
             def __call__(self, query, **v):
                 out = super().__call__(query, **v)
@@ -3063,7 +3063,7 @@ class TaskSelection(TaskLabelsScenario):
             )
             self.assertIsNone(self.taken)
 
-    def test_nfr1_claim_reads_one_query_per_issue(self):
+    def test_claim_reads_one_query_per_issue(self):
         fake = FakeLinear(
             [
                 issue(
@@ -3081,7 +3081,7 @@ class TaskSelection(TaskLabelsScenario):
         todo = [q for q, _ in fake.queries].index(fake.reads()[0])
         self.assertEqual([q for q, _ in fake.queries[todo + 1 :]], [RECHECK, fake.mutations[0][0]])
 
-    def test_fr22_every_resumable_issue_is_checked(self):
+    def test_every_resumable_issue_is_checked(self):
         fake = FakeLinear(
             [
                 issue("TASK-1", "In Progress", "researcher", priority=1),
@@ -3109,7 +3109,7 @@ class ScheduledTaskSelection(TickBase):
         super().setUp()
         self.write_config(HUMANS + CONFIG + TASK_LABELS)
 
-    def test_fr1_tick_checks_the_task_group_once_and_stops_on_a_bad_one(self):
+    def test_tick_checks_the_task_group_once_and_stops_on_a_bad_one(self):
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
         self.tick(fake)
         self.assertEqual([v for q, v in fake.queries if q == ops.Q_TASK_GROUP], [{"i": TASK_GROUP}])
@@ -3172,7 +3172,7 @@ class ScheduledTaskSelection(TickBase):
                 )
                 self.assertEqual((self.start.launches, self.state), ([], ""))
 
-    def test_fr20_resume_passes_no_task(self):
+    def test_resume_passes_no_task(self):
         fake = self.fake(
             issue(
                 "TASK-1",
@@ -3191,7 +3191,7 @@ class ScheduledTaskSelection(TickBase):
         self.assertEqual(self.launched_run(), ("resume", "TASK-1", "a", "researcher", "a"))
         self.assertIn("plan TASK-1 mode=resume sid=a", self.said())
 
-    def test_fr22_a_logged_role_not_the_assignees_goes_to_review(self):
+    def test_a_logged_role_not_the_assignees_goes_to_review(self):
         fake = self.fake(issue("TASK-1", "In Progress", "engineer", project=PD))
         self.resumable("TASK-1", "a", 60)
         before = self.before()
@@ -3229,7 +3229,7 @@ class ScheduledTaskSelection(TickBase):
         )
         self.assertEqual((self.start.launches, self.state), ([], before))
 
-    def test_fr16_requeued_issue_resolved_again_at_claim(self):
+    def test_requeued_issue_resolved_again_at_claim(self):
         fake = self.fake(
             issue(
                 "TASK-1",

@@ -11,7 +11,7 @@ Test commands and tool pins: [verification workflow](.github/workflows/test.yml)
 - Never name Linear in the team text (`src/ensemble/delegate/team/`), in `/ensemble:act-as` and `/ensemble:manage`, or in `/ensemble:board` (`skills/board/SKILL.md`) outside its `## Linear` section: only that section, the Linear layer's, does.
 - Skills and `config.toml` comments name a file by its path and a skill by its slash command (`/ensemble:act-as`), never "the act-as skill" or `ensemble:act-as`.
 - Code, comments, messages and skills never reference a document: state the fact in place, or drop the pointer. Documents may reference code.
-- Comments, docstrings and schema `$comment`s never cite an internal issue or requirement id (`WDRC-<n>`, `FR-<n>`, `AC<n>` and the like): state the rule itself (`internal_ids`, `tests/guard_checks/comments.py`).
+- Comments, docstrings, schema `$comment`s and test names never cite an internal issue or requirement id (`WDRC-<n>`, `FR-<n>`, `NFR-<n>`, spec `AC<n>`, `Q<nn>`, `D<n>`): state the rule itself (`internal_ids`, `tests/guard_checks/comments.py`).
 - A layer's packaged `config.toml` (`src/ensemble/<package>/config.toml`) holds only its keys, each a real line (a local-only one its empty default, its comment saying what empty means); a `# local:` line only shows a value for `~/.ensemble/config.local.toml` (`tests/guard_checks/configuration.py` `explicit_keys`). Layer sections and merge rules: `src/ensemble/utils/config_file.py`'s docstring.
 - Identify Linear entities by id, never name; role app user ids come from configuration.
 - Linear's lists can lag a just-made state change: re-read an issue's state before acting on it (`src/ensemble/orchestrator/trackers/linear/ops.py:move` does).

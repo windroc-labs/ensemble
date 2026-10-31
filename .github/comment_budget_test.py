@@ -62,17 +62,34 @@ class Rules(unittest.TestCase):
 
 
 class CutOnly(unittest.TestCase):
+    BEFORE = '"""Doc, long."""\ndef f(x):  # a note\n    return x * 2\n'
+
+    def test_code_is_what_measure_counts_as_code(self):
+        for text in (
+            self.BEFORE,
+            '#!/usr/bin/env python3\n# top\nx = ("é")\n"é doc"\nif x:\n    """inner"""\n',
+            "x = 1\n#! not a shebang\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(len(budget.code(text)), budget.measure(text)[2])
+        self.assertEqual(budget.code(self.BEFORE), "deff(x):returnx*2")
+
     def test_same_code_and_no_more_comment_is_a_cut(self):
-        for before, after in (((5, 5, 100), (4, 5, 100)), ((5, 5, 100), (0, 10, 100))):
+        for after in (
+            '"""Doc."""\ndef f(x):  # a note\n    return x * 2\n',
+            "def f(x):\n    return x * 2\n",
+            self.BEFORE,
+        ):
             with self.subTest(after=after):
-                self.assertTrue(budget.cut_only(before, after))
+                self.assertTrue(budget.cut_only(self.BEFORE, after))
 
     def test_new_files_more_comment_or_any_code_change_are_judged(self):
         for before, after in (
-            (None, (0, 0, 100)),
-            ((5, 5, 100), (6, 5, 100)),
-            ((5, 5, 100), (4, 5, 101)),
-            ((5, 5, 100), (4, 5, 99)),
+            (None, self.BEFORE),
+            (self.BEFORE, self.BEFORE.replace("note", "longer note")),
+            (self.BEFORE, self.BEFORE.replace("x * 2", "x - 3")),
+            (self.BEFORE, self.BEFORE.replace("a note", "note").replace("x * 2", "x * 22")),
+            (self.BEFORE, self.BEFORE.replace('"""Doc, long."""', 'D = "Doc, long."')),
         ):
-            with self.subTest(before=before, after=after):
+            with self.subTest(after=after):
                 self.assertFalse(budget.cut_only(before, after))

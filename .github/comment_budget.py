@@ -31,6 +31,10 @@ def bare_string(node):
     )
 
 
+def shebang(token):
+    return token.start[0] == 1 and token.string.startswith("#!")
+
+
 def measure(text):
     tree = ast.parse(text)
     docstring = sum(
@@ -39,10 +43,23 @@ def measure(text):
     comment = sum(
         chars(token.string)
         for token in tokenize.generate_tokens(io.StringIO(text).readline)
-        if token.type == tokenize.COMMENT
-        and not (token.start[0] == 1 and token.string.startswith("#!"))
+        if token.type == tokenize.COMMENT and not shebang(token)
     )
     return comment, docstring, chars(text) - comment - docstring
+
+
+def code(text):
+    """The non-whitespace characters measure counts as code, in order."""
+    lines = text.splitlines(keepends=True)
+    bare = {
+        (s.lineno, len(lines[s.lineno - 1].encode()[: s.col_offset].decode()))
+        for s in (node.value for node in ast.walk(ast.parse(text)) if bare_string(node))
+    }
+    return "".join(
+        "".join(token.string.split())
+        for token in tokenize.generate_tokens(io.StringIO(text).readline)
+        if token.start not in bare and not (token.type == tokenize.COMMENT and not shebang(token))
+    )
 
 
 def rule(path):
@@ -72,8 +89,12 @@ def changed(root, base):
 
 
 def cut_only(before, after):
-    """An edit that keeps every code character and adds no comment can only shorten comments."""
-    return before is not None and before[2] == after[2] and sum(after[:2]) <= sum(before[:2])
+    """An edit that keeps the code and adds no comment can only shorten comments."""
+    return (
+        before is not None
+        and code(before) == code(after)
+        and sum(measure(after)[:2]) <= sum(measure(before)[:2])
+    )
 
 
 def percent(n, code):
@@ -90,12 +111,13 @@ def main(argv=None, root=ROOT):
         for path, base_text in changed(root, args.base):
             try:
                 with tokenize.open(root / path) as file:
-                    comment, docstring, code = measure(file.read())
-                before = None if base_text is None else measure(base_text)
+                    text = file.read()
+                comment, docstring, size = measure(text)
+                judged = not cut_only(base_text, text)
             except (OSError, SyntaxError, ValueError, tokenize.TokenError) as error:
                 raise ValueError(f"{path}: {error}") from error
-            if not cut_only(before, (comment, docstring, code)):
-                files[rule(path)].append((path, comment + docstring, code))
+            if judged:
+                files[rule(path)].append((path, comment + docstring, size))
     except ValueError as error:
         print(f"comment_budget: {error}", file=sys.stderr)
         return 2

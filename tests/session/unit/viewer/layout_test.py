@@ -356,7 +356,7 @@ class GridLayoutTest(Case):
             )
             self.assertLessEqual(max(cell.h for cell in cells) - min(cell.h for cell in cells), 1)
 
-    def test_fr3_layouts(self):
+    def test_column_layouts(self):
         # the root: the manager, then the columns
         for per_column, n, want in (
             (3, 1, "160x48,0,0{79x48,0,0,0,80x48,80,0,1}"),
@@ -390,7 +390,7 @@ class GridLayoutTest(Case):
                 self.assertEqual(body(root), want)
                 self.check(root, n, per_column)
 
-    def test_fr3_any_count(self):
+    def test_columns_hold_any_count(self):
         for per_column in (1, 2, 3, 4):
             for n in range(1, 13):
                 with self.subTest(per_column=per_column, n=n):

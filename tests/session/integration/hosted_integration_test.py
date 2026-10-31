@@ -28,7 +28,7 @@ class CloseTest(Live):
             class_loader=client_loader({"ensemble.session.clients.fake": fake_client}),
         )
 
-    def test_attach_then_close_and_close_by_name_leave_the_same_state_fr_4(self):
+    def test_attach_then_close_and_close_by_name_leave_the_same_state(self):
         self.configure_hosted()
         found = {}
         for name, close_it in (
@@ -59,7 +59,7 @@ class CloseTest(Live):
 
 
 class DisplayTest(Live):
-    def test_a_display_given_to_start_is_stored_read_back_and_listed_fr_48(self):
+    def test_a_display_given_to_start_is_stored_read_back_and_listed(self):
         configured = self.session_cls
         with open(self.clients["fake"]["scenario"], "w") as f:
             json.dump([{"read": True}], f)

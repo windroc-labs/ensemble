@@ -120,7 +120,7 @@ class HelpTest(SessionCliCase):
 class UsageTest(SessionCliCase):
     ATTACH = False
 
-    def test_a_bad_command_line_or_no_client_d1_exits_2_on_stderr_alone_and_starts_nothing(self):
+    def test_a_bad_command_line_or_no_client_exits_2_on_stderr_alone_and_starts_nothing(self):
         for argv, scene, message in (
             (
                 ("bogus", "w1"),

@@ -345,7 +345,7 @@ class Refusals(Parity):
         self.assertIn(HUMAN, self.subscribers(SOURCE))
 
     def test_bad_task_labels_send_their_issues_to_in_review_unclaimed(self):
-        """v1 router_test.test_fr7_invalid_label_goes_to_review."""
+        """v1 router_test.test_invalid_label_goes_to_review."""
         self.fake.label_group(TASK_GROUP, "Tasks", {MYSTERY: "Mystery"})
         self.seed(ID, "ENG: Session registry", labels=[LIGHT_RESEARCH])
         self.seed(OTHER, "ENG: Session index", labels=[MYSTERY])
