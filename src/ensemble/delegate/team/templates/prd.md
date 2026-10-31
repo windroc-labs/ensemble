@@ -36,7 +36,7 @@ Each FR's acceptance, and each NFR's with a decidable check, as Gherkin scenario
 - Each scenario's tag line: `@S-<n>`, then each `@FR-<n>` or `@NFR-<n>` it covers. A scenario may cover several requirements; every FR has at least one.
 - A value that may change is a parameter: quoted in its step, or `<name>` in a `Scenario Outline` filled from its `Examples` table.
 - Then steps state an observable pass condition (an output or state).
-- `@ops` also tags a scenario that needs a real run on the test Mac mini. Its Then steps are its pass criteria. It names no GUI detail: a step whose count or order varies (e.g. how many dialogs appear) asserts only its result.
+- `@ops` also tags a scenario that needs a real run on the test Mac mini. It names no GUI detail: a step whose count or order varies (e.g. how many dialogs appear) asserts only its result.
 
 ## Done
 Optional; omit when the product has nothing built yet. Under `###` copies of the original headings, by id, naming where each is implemented (file or commit).

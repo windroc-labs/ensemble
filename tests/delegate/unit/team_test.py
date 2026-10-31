@@ -401,7 +401,6 @@ class Shipped(Packaged):
             "A scenario may cover several requirements; every FR has at least one.",
             "quoted in its step, or `<name>` in a `Scenario Outline` filled from its `Examples` table",
             "`@ops` also tags a scenario that needs a real run on the test Mac mini",
-            "Its Then steps are its pass criteria",
             "asserts only its result",
         ):
             self.assertIn(literal, scenarios)
