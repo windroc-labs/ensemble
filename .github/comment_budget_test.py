@@ -64,20 +64,20 @@ class Rules(unittest.TestCase):
 class CutOnly(unittest.TestCase):
     BEFORE = '"""Doc, long."""\ndef f(x):  # a note\n    return x * 2\n'
 
-    def test_code_is_what_measure_counts_as_code(self):
-        for text in (
-            self.BEFORE,
-            '#!/usr/bin/env python3\n# top\nx = ("é")\n"é doc"\nif x:\n    """inner"""\n',
-            "x = 1\n#! not a shebang\n",
-        ):
-            with self.subTest(text=text):
-                self.assertEqual(len(budget.code(text)), budget.measure(text)[2])
-        self.assertEqual(budget.code(self.BEFORE), "deff(x):returnx*2")
+    def test_code_leaves_out_comments_bare_strings_and_line_breaks(self):
+        text = (
+            '#!/usr/bin/env python3\n# top\nx = ("é")\n"é doc"\nif x:\n\n    """inner"""\n    y\n'
+        )
+        self.assertEqual(
+            "".join(string for _, string in budget.code(text)),
+            '#!/usr/bin/env python3x=("é")ifx:    y',
+        )
 
     def test_same_code_and_no_more_comment_is_a_cut(self):
         for after in (
             '"""Doc."""\ndef f(x):  # a note\n    return x * 2\n',
             "def f(x):\n    return x * 2\n",
+            '"""Doc, long."""\n\ndef f(x):\n    # a note\n    return x * 2\n',
             self.BEFORE,
         ):
             with self.subTest(after=after):
@@ -90,6 +90,9 @@ class CutOnly(unittest.TestCase):
             (self.BEFORE, self.BEFORE.replace("x * 2", "x - 3")),
             (self.BEFORE, self.BEFORE.replace("a note", "note").replace("x * 2", "x * 22")),
             (self.BEFORE, self.BEFORE.replace('"""Doc, long."""', 'D = "Doc, long."')),
+            ("if a:\n    b()\n    c()  # note\n", "if a:\n    b()\nc()\n"),
+            ('x = "a b"  # note\n', 'x = "ab"\n'),
+            ("if a:\n    b()  # note\n", "if a:\n  b()\n"),
         ):
             with self.subTest(after=after):
                 self.assertFalse(budget.cut_only(before, after))

@@ -49,17 +49,19 @@ def measure(text):
 
 
 def code(text):
-    """The non-whitespace characters measure counts as code, in order."""
+    """(type, string) of each token but comments, bare strings and line breaks; a shebang stays."""
     lines = text.splitlines(keepends=True)
     bare = {
         (s.lineno, len(lines[s.lineno - 1].encode()[: s.col_offset].decode()))
         for s in (node.value for node in ast.walk(ast.parse(text)) if bare_string(node))
     }
-    return "".join(
-        "".join(token.string.split())
+    return [
+        (token.type, token.string)
         for token in tokenize.generate_tokens(io.StringIO(text).readline)
-        if token.start not in bare and not (token.type == tokenize.COMMENT and not shebang(token))
-    )
+        if token.start not in bare
+        and token.type not in (tokenize.NL, tokenize.NEWLINE)
+        and not (token.type == tokenize.COMMENT and not shebang(token))
+    ]
 
 
 def rule(path):

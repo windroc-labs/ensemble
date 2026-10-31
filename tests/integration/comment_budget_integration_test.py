@@ -147,7 +147,12 @@ class Main(Case):
             self.run_in({"core/a.py": DOC + CODE}, {"core/a.py": before})[:2],
             (0, [f"ok {SOURCE_RULE}: 0 checked", f"ok {TESTS_RULE}: 0 checked"]),
         )
-        for after in (before + "# more\n", before.replace("x * 2", "x * 22"), "x = 1\n" + before):
+        for after in (
+            before + "# more\n",
+            before.replace("x * 2", "x * 22"),
+            before.replace("x * 2", "x - 2"),
+            "x = 1\n" + before,
+        ):
             with self.subTest(after=after[-20:]):
                 self.assertEqual(self.run_in({"core/a.py": after}, {"core/a.py": before})[0], 1)
 
