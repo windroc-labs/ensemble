@@ -70,6 +70,11 @@ from tests.utils.sandbox import scratch
 NAME = "w1"
 GENERATION = "f" * 32
 
+
+def _settings_files():
+    return {"settings.json": "{}"}
+
+
 TS = "2026-10-11T12:00:00.000+00:00"
 
 WORDS = {"stop": "done", "ask": "blocked", "tool": "working"}
@@ -719,9 +724,7 @@ class StartTest(Base):
     def test_host_client_env_reaches_launch_and_names_the_home_in_metadata(self):
         class Homed(ScanTui):
             def _home(self):
-                return ClientHome(
-                    "fake_dir", "fake", "FAKE_HOME", "fake-token", (("settings.json", "{}"),)
-                )
+                return ClientHome("fake_dir", "fake", "FAKE_HOME", "fake-token", _settings_files)
 
             def launch(self, spec, hook):
                 self.spec = spec
@@ -759,7 +762,9 @@ class StartTest(Base):
                     ("fake_dir", "fake", flag),
                 )
                 self.assertEqual(metadata["credential"], "fake-token")
-                self.assertEqual(json.loads(metadata["home_files"]), {"settings.json": "{}"})
+                self.assertEqual(
+                    json.loads(metadata["home_files"]), {} if resume else {"settings.json": "{}"}
+                )
                 self.assertNotIn("approval", metadata)
                 self.assertEqual(args[1].transcript, "/home/fake/projects/p/s.jsonl")
 

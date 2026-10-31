@@ -2,7 +2,7 @@
 
 import re
 import signal
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
@@ -165,17 +165,31 @@ class HookCallback:
         return {"module": self.module, "state": dict(self.state), "roots": list(self.roots)}
 
 
+def _no_files() -> Mapping[str, str]:
+    return {}
+
+
 @dataclass(frozen=True)
 class ClientHome:
-    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable."""
+    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable.
+
+    `files`: a new worker's copies by file name, read only for a Docker start or preflight that
+    `delivers` them; ConfigError: an invalid Docker config. `persistent` None: the home is bound
+    from the host, so a fresh start writes the files there and a resume keeps them; else it is the
+    container's own but for these dirs, so every start merges each file, TOML, under the image's
+    file of that name.
+    """
 
     field: str
     dir: str
     env: str
     credential: str
-    files: tuple[tuple[str, str], ...] = ()
+    files: Callable[[], Mapping[str, str]] = _no_files
     persistent: tuple[str, ...] | None = None
     providers: tuple[str, ...] = ()
+
+    def delivers(self, *, resume: bool) -> bool:
+        return not resume or self.persistent is not None
 
 
 class Container(NamedTuple):

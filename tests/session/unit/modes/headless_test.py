@@ -6,12 +6,14 @@ tests/session/integration/modes/headless_integration_test.py.
 
 import contextlib
 import errno
+import json
 import os
 import queue
 import sys
 import threading
 import time
 import unittest
+from typing import ClassVar
 from unittest import mock
 
 from ensemble.session import SESSION_NAME_RULE
@@ -415,8 +417,21 @@ class TerminalEvents(Base):
 
 
 class HomedRun(StubRun):
+    reads: ClassVar[list[str]] = []
+
     def _home(self):
-        return ClientHome("f", "d", "HOME_DIR", "c", (("a", "b"),))
+        return ClientHome("f", "d", "HOME_DIR", "c", self._files, persistent=self.persistent)
+
+    persistent = None
+
+    @classmethod
+    def _files(cls):
+        cls.reads.append("files")
+        return {"a": "b"}
+
+
+class PrivateHomedRun(HomedRun):
+    persistent = ("sessions",)
 
 
 class AccountsClient(StubClient):
@@ -435,6 +450,10 @@ class HomeHost(WorkerHost):
 
 
 class ThroughItsHost(Base):
+    def setUp(self):
+        super().setUp()
+        HomedRun.reads.clear()
+
     def start_on(self, host, client_class=StubRun, owner=None, generation=GENERATION, **fields):
         spec = Spec(workdir=self.dir, access=Access(cwd=self.dir), sid=SID, client="stub", **fields)
         self.mode = HeadlessMode.start(
@@ -637,12 +656,31 @@ class ThroughItsHost(Base):
                 "home_field": "f",
                 "home_dir": "d",
                 "credential": "c",
-                "home_files": '{"a": "b"}',
+                "home_files": "{}",
                 "resume": "1",
             },
         )
+        self.assertEqual(HomedRun.reads, [])
         resume = f"cd {self.dir} && ensemble-session resume w1"
         self.assertEqual((mode.prepared.info.resume, self.recorded[0].resume), (resume, resume))
+
+    def test_a_fresh_start_reads_the_home_files_once(self):
+        host = HomeHost()
+        self.start_on(host, name="w1", client_class=HomedRun)
+        self.assertEqual(json.loads(host.starts[0][2]["home_files"]), {"a": "b"})
+        self.assertEqual(HomedRun.reads, ["files"])
+
+    def test_a_private_home_resume_reads_the_home_files(self):
+        host = HomeHost()
+        self.start_on(host, name="w1", resume=True, client_class=PrivateHomedRun)
+        self.assertEqual(json.loads(host.starts[0][2]["home_files"]), {"a": "b"})
+        self.assertEqual(HomedRun.reads, ["files"])
+
+    def test_a_host_without_client_homes_never_reads_the_home_files(self):
+        host = WorkerHost()
+        self.start_on(host, name="w1", client_class=HomedRun)
+        self.assertNotIn("home_files", host.starts[0][2])
+        self.assertEqual(HomedRun.reads, [])
 
     def test_a_selected_account_names_the_home_in_metadata_and_never_reaches_the_run(self):
         for env, account in (({}, None), ({ACCOUNT: "work"}, "work"), ({ACCOUNT: ""}, None)):

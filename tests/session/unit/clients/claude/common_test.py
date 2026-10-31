@@ -264,7 +264,7 @@ class HomeFilesTest(Base):
     SEARCHES = {"CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION": "50"}
 
     def container_settings(self):
-        ((name, text),) = ClaudeCommon({}).home_files()
+        ((name, text),) = ClaudeCommon({}).home_files().items()
         self.assertEqual(name, "settings.json")
         return json.loads(text)
 
@@ -279,12 +279,14 @@ class HomeFilesTest(Base):
             "env": {"K": "v", **self.SEARCHES},
         }
         self.settings(json.dumps({**self.MODEL, **other, "apiKeyHelper": "/bin/key"}))
-        ((name, text),) = ClaudeClient(CONFIG).tui()._home().files
+        ((name, text),) = ClaudeClient(CONFIG).tui()._home().files().items()
         self.assertEqual(
             (name, json.loads(text)),
             ("settings.json", {**self.UNATTENDED, **self.MODEL, "env": self.SEARCHES}),
         )
-        self.assertEqual(dataclasses.replace(ClaudeClient(CONFIG).tui()._home(), files=()), HOME)
+        self.assertEqual(
+            dataclasses.replace(ClaudeClient(CONFIG).tui()._home(), files=HOME.files), HOME
+        )
 
     def test_the_unattended_keys_are_fixed_whatever_the_host_sets(self):
         host = {

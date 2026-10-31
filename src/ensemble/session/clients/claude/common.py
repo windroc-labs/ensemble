@@ -400,9 +400,9 @@ class ClaudeCommon:
         )
 
     def home(self) -> ClientHome:
-        return replace(HOME, files=self.home_files())
+        return replace(HOME, files=self.home_files)
 
-    def home_files(self) -> tuple[tuple[str, str], ...]:
+    def home_files(self) -> dict[str, str]:
         """settings.json: UNATTENDED, the host's `_models` and ENV_KEYS env, if readable."""
         try:
             settings = json.loads(_read(os.path.join(self.config_dir(), "settings.json")))
@@ -417,7 +417,7 @@ class ClaudeCommon:
             **_models(settings),
             **({"env": env} if env else {}),
         }
-        return (("settings.json", json.dumps(found)),)
+        return {"settings.json": json.dumps(found)}
 
     def transcript(self, cwd: str, sid: str, env: Mapping[str, str] = MappingProxyType({})) -> str:
         project = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(cwd))
