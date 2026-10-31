@@ -1,5 +1,5 @@
-"""HostContract (FR-5) against TmuxHost on a private tmux server (tests/session/live_tmux.py),
-os.environ that server's env.
+"""HostContract against TmuxHost on a private tmux server (tests/session/live_tmux.py), os.environ
+that server's env.
 """
 
 import os

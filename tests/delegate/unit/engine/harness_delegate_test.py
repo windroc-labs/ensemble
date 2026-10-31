@@ -177,7 +177,7 @@ class ReferenceRepoTest(HarnessCase):
 
 
 class Drive(HarnessCase):
-    """The drive: a detached local process through ProcessControl, no Host (AC16, AC17)."""
+    """The drive: a detached local process through ProcessControl, no Host."""
 
     spawned = False
 
@@ -509,7 +509,7 @@ class CallerSessionTest(HarnessCase):
 
 
 class VerifierClientTest(HarnessCase):
-    """verifier uses the router's client overlay and an explicit Spec client (WDRC-196)."""
+    """verifier uses the router's client overlay and an explicit Spec client."""
 
     def test_the_gate_s_overlay_selects_each_client(self):
         for client in ("codex", "opencode", "claude"):
@@ -533,9 +533,9 @@ class VerifierClientTest(HarnessCase):
 
 class VerifierDockerTest(HarnessCase):
     """verifier on the packaged Docker Host, its broker faked: a missing mini-op:env or keychain
-    item fails before any container starts (WDRC-110 FR-50); no keychain, Docker or network. Its
-    session harness's start runs in this process (harnesses.Inline), so the faked broker answers.
-    Its github [output] needs the Docker Host's App (WDRC-338).
+    item fails before any container starts; no keychain, Docker or network. Its session harness's
+    start runs in this process (harnesses.Inline), so the faked broker answers. Its github [output]
+    needs the Docker Host's App.
     """
 
     def setUp(self):
@@ -1834,7 +1834,7 @@ class EndingHarnessTest(HarnessCase):
         return mock.patch.object(RecordingHost, "rows", return_value=[row], create=True)
 
     def test_resume_refuses_busy_while_its_host_lists_its_worker_ownerless(self):
-        """Its harness gone, its container still reaped (WDRC-365): never the dying Record."""
+        """Its harness gone, its container still reaped: never the dying Record."""
         for mode in (Mode.TUI, Mode.HEADLESS):
             with self.subTest(mode=mode):
                 record, view = self.killed(mode)
@@ -2583,9 +2583,7 @@ TARGETED = "Reference: T-1\nRepo: acme/app\nRef: release/1\n\nHello."
 
 
 class EnvironmentTest(HarnessCase):
-    """The delegate config's environments resolved at construction (WDRC-109 FR-57, FR-59, FR-60,
-    FR-62, NFR-2, NFR-4).
-    """
+    """The delegate config's environments resolved at construction."""
 
     def setUp(self):
         super().setUp()

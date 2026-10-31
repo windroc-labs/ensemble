@@ -1,6 +1,6 @@
 """Orchestrator integration flows: Flow (a HOME with both local files, FakeLinear over HTTP,
 fake_claude, router and promote subprocesses, readers); TmuxFlow adds tmux and fake_gh; BinFlow
-runs bin/ensemble-orchestrator as launchd does (FR-25, FR-29).
+runs bin/ensemble-orchestrator as launchd does.
 """
 
 import copy

@@ -1,7 +1,7 @@
 """A claimed run launched by router.outer (entry.py launch), headless: its harness on a private tmux
 server, fake_claude as client `claude`, each event written back by `writeback` over FakeLinear's
-HTTP. Done runs and prune; a run with no outcome; a usage limit (FR-59) and its resume; a resume
-after a lost ledger write (FR-54).
+HTTP. Done runs and prune; a run with no outcome; a usage limit and its resume; a resume after a
+lost ledger write.
 """
 
 import os

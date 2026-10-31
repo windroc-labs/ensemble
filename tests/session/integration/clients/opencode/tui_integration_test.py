@@ -147,8 +147,8 @@ class TuiSessions(Case):
         self.assertEqual(handle.reply, "two")
 
     def test_sends_mid_turn_join_the_running_turn(self):
-        """OpenCode's running loop takes a prompt saved while its turn runs (WDRC-360: each failed
-        the turn as superseded); a send after the turn's idle starts the next one.
+        """OpenCode's running loop takes a prompt saved while its turn runs (each once
+        failed the turn as superseded); a send after the turn's idle starts the next one.
         """
         self.scene([[{"text": "one"}, {"join": 2}, {"text": "two"}], [{"text": "three"}]])
         handle, stream = self.start()
@@ -468,7 +468,7 @@ class TuiSessions(Case):
         self.assertEqual(last["env"]["session"], NATIVE)
 
     def test_a_resume_of_a_run_that_bound_no_session_starts_a_fresh_one(self):
-        """WDRC-366: a run killed before OpenCode saved its session left no binding."""
+        """A run killed before OpenCode saved its session left no binding."""
         handle, stream = self.start()
         stream.until(TurnEnd)
         handle.stop()

@@ -1,4 +1,4 @@
-"""ensemble-session, the session layer's command (FR-31, FR-42; bin/ensemble-session runs it).
+"""ensemble-session, the session layer's command (bin/ensemble-session runs it).
 
 start, restart and resume a worker (engine/worker.py) and print its Record; reply, send (text, or
 keys in KeyPress notation) and read a session; status, show, hide and close for session names, or

@@ -751,7 +751,7 @@ class Reopen(CliCase):
         self.assertEqual(result, 0, stderr)
 
     def test_reopen_leaves_the_account_to_the_session(self):
-        """WDRC-367: a recorded account is never restored; one given is passed on."""
+        """A recorded account is never restored; one given is passed on."""
         self.record(env={"ENSEMBLE_ACCOUNT": "work"})
         result, _, stderr = self.reopen("--display", "none")
         self.assertEqual(result, 0, stderr)

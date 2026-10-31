@@ -1,4 +1,4 @@
-"""DelegateContract, FR-47's Delegate contract (FR-13 to FR-16): a subclass also inherits Case and
+"""DelegateContract, the Delegate contract: a subclass also inherits Case and
 defines delegate_cls, ROLE (a role it runs), SHOWABLE (its sessions can display), make(workdir,
 **kw) (a Delegate of kw's role, else ROLE, and a Spec for workdir with kw's other fields),
 end(record) (its sessions gone, no outcome) and finish(record) (its sessions gone, a valid outcome).

@@ -404,7 +404,7 @@ class Board:
 
     def replay(self, issue, sid):
         """The ended run's outcome its ledger has not completed, written back in process instead of
-        a resume (FR-41): None when there is none; else whether its write-back is now complete.
+        a resume: None when there is none; else whether its write-back is now complete.
         """
         ident = issue["identifier"]
         try:

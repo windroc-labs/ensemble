@@ -1,5 +1,5 @@
-"""bin/ensemble-session as installed, from an unrelated cwd with no PYTHONPATH (Q01): help, usage
-errors, client PATH and arguments, and its config (Q02).
+"""bin/ensemble-session as installed, from an unrelated cwd with no PYTHONPATH: help, usage
+errors, client PATH and arguments, and its config.
 """
 
 import os
@@ -120,7 +120,7 @@ class HelpTest(SessionCliCase):
 class UsageTest(SessionCliCase):
     ATTACH = False
 
-    def test_a_bad_command_line_or_no_client_d1_exits_2_on_stderr_alone_and_starts_nothing(self):
+    def test_a_bad_command_line_or_no_client_exits_2_on_stderr_alone_and_starts_nothing(self):
         for argv, scene, message in (
             (
                 ("bogus", "w1"),
@@ -204,7 +204,7 @@ class ConfigTest(SessionCliCase):
         return found.stdout.removesuffix("\n")
 
     def test_a_local_overlay_sets_the_tmux_hosts_status_line(self):
-        """AC12: a tmux Host worker pane has a label only with status_line = true."""
+        """A tmux Host worker pane has a label only with status_line = true."""
         self.server.attach(MANAGER)
         self.record(self.start("w0"))
         w0 = self.server.pane_of("w0")

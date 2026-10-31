@@ -1,5 +1,5 @@
 """Claude mid-turn replies: queued messages joined to a turn, their answers' reply lines, the
-owning harness's settle; no hook starts a process (FR-38).
+owning harness's settle; no hook starts a process.
 """
 
 import contextlib

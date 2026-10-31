@@ -43,7 +43,7 @@ STEPS = (
     ("wait", {"session_id": "n1", "why": "Bash"}),
     ("end", {"session_id": "n1", "last": "Done.", "tasks": []}),
 )
-REAPED = 10.0  # s from a kill to the client's and the container's end (FR-4)
+REAPED = 10.0  # s from a kill to the client's and the container's end
 
 
 class GuardedDockerTest(Case):
@@ -215,8 +215,8 @@ class GuardedDockerTest(Case):
             mock.patch.dict(os.environ, {"ENSEMBLE_GUARD_HOOK_SOCKET": socket_path}),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            # a Codex tui's turn start, a forged label and an oversize payload (FR-36, its stub
-            # retrying for stub.WAIT until it gives up), then its turn end
+            # a Codex tui's turn start, a forged label and an oversize payload (its stub retrying
+            # for stub.WAIT until it gives up), then its turn end
             for label, body in (
                 ("UserPromptSubmit", payload),
                 ("Stop/../x", payload),

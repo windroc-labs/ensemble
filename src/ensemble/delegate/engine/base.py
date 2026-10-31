@@ -1,5 +1,3 @@
-"""Delegate, the ABC of one role's run and its view."""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -13,10 +11,7 @@ from ensemble.utils import Display, Record, Status
 
 
 class Delegate(ABC):
-    """One role run and its durable view; implementations own placement. Callers
-    know only the run's workdir W; checkouts and clean are its layout's only outside view. An
-    implementation touches only the W entries it creates.
-    """
+    """One role run and its view. It touches only the entries it creates in its workdir W."""
 
     @classmethod
     @abstractmethod
@@ -28,13 +23,12 @@ class Delegate(ABC):
         display: Display = None,
         callback: Sequence[str] | None = None,
         overlays: Sequence[Mapping] = (),
-    ) -> Delegate:
-        """Build and save a run without starting its sessions."""
+    ) -> Delegate: ...
 
     @classmethod
     @abstractmethod
     def attach(cls, record_or_workdir: Record | str, *, sid: str | None = None) -> Delegate:
-        """The run's view; ConfigError when `sid` is given and the run is another session's."""
+        """ConfigError when `sid` is given and the run is another session's."""
 
     @classmethod
     @abstractmethod
@@ -57,43 +51,33 @@ class Delegate(ABC):
     @classmethod
     @abstractmethod
     def checkouts(cls, workdir: str) -> tuple[str, ...] | None:
-        """The repo checkouts W's agent files hold: directories whose last two components are the
-        repo's owner and `<name>-<slug>` (utils.checkout), real paths reached through no symlink;
-        () none; None: W has no agent files. Reads only.
-        """
+        """Real paths; None without agent files."""
 
     @classmethod
     @abstractmethod
     def clean(cls, workdir: str, *, dry: bool = False, scratch: bool = False) -> bool:
-        """Deletes W's agent files, keeping its run records; idempotent; whether it deleted (dry:
-        would delete) any. scratch: only their checkouts and temp files, also refused while the
-        run's agent session is open or, its run recorded, its liveness is unknown. ConfigError,
-        nothing deleted, while the run is live (agent files or not) or its agent files are not a
-        real dir in place; dry: the checks only.
+        """Deletes W's agent files (scratch: checkouts and temp files), keeping run records;
+        idempotent. ConfigError, nothing deleted, while the run may be live.
         """
 
     @classmethod
     @abstractmethod
-    def check_tui(cls, *, display: Display = None, events: str | None = None) -> None:
-        """ConfigError unless a tui run could show at `display` and write `events`: a value its
-        agent's Host refuses or cannot place a TUI by, or an events file its harness's Host cannot
-        write. Creates nothing.
-        """
+    def check_tui(cls, *, display: Display = None, events: str | None = None) -> None: ...
 
     @abstractmethod
     def detach(self, *, outer: Outer | None = None) -> Record: ...
 
     @abstractmethod
     def run(self, on_event: Callable[[Event], None] | None = None) -> Result:
-        """FR-28: attempt Result; handlers stay registered."""
+        """Handlers stay registered."""
 
     @abstractmethod
     def alive(self) -> bool:
-        """FR-28: active attempt, independent of worker liveness."""
+        """Independent of worker liveness."""
 
     @abstractmethod
     def status(self) -> Status:
-        """FR-28: needs_input is waiting, alive=False."""
+        """needs_input: waiting, not alive."""
 
     @abstractmethod
     def content(self) -> str: ...
@@ -112,11 +96,11 @@ class Delegate(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """FR-28: confirmed owner close before lock release; finish an attempt once."""
+        """Owner closed before the lock is released."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...
 
     @abstractmethod
     def resume(self, *, mode: str | None = None, input: str | None = None) -> Record:
-        """FR-28: next attempt/input, even with a living idle owner."""
+        """Even with a living idle owner."""

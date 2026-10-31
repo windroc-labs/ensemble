@@ -1,6 +1,6 @@
 """A tui LinearRun (entry.py tui) through the real harness on a private tmux server (live_tmux)
 whose manager session a client shows, fake_claude interactive as client `claude`: its opaque
-display (FR-48) puts the TUI `<role>-<ID>-<sid8>` beside the display's split_from session; the run
+display puts the TUI `<role>-<ID>-<sid8>` beside the display's split_from session; the run
 writes back through `writeback` and leaves its TUI open.
 """
 

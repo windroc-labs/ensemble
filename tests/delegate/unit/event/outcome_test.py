@@ -1,5 +1,5 @@
 """delegate/event/outcome.py: SCHEMA beside it; main's drive.validate cases with the same results
-(FR-20) and read with deliverable_file (FR-19); main's save cases: unit/utils/files_test.py.
+and read with deliverable_file; main's save cases: unit/utils/files_test.py.
 """
 
 import dataclasses

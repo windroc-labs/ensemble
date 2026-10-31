@@ -124,7 +124,7 @@ class HeadlessSessions(Case):
         self.assertEqual(second["prompt"], "Fix it.")
 
     def test_a_resume_of_a_run_that_bound_no_session_starts_a_fresh_one(self):
-        """WDRC-366: a run killed before OpenCode saved its session left no binding."""
+        """A run killed before OpenCode saved its session left no binding."""
         self.scene(unbound=True)
         failed = TurnFailed("no_session", "opencode ended before it started a session")
         self.assertIn(failed, self.run_session("First."))

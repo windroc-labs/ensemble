@@ -1,8 +1,7 @@
 """ensemble-session's worker lifecycle through bin/ensemble-session on a private tmux server: the
-client's exact cwd, argv and env from start (Q03), reply from another process (Q09), a client
-that exits while starting (Q10, D3), a start whose early watch ends on a dialog (a Claude hook, the
-Codex trust screen), and a Claude start's /color: quiet once sent, into its launch turn too, said
-when a dialog holds it.
+client's exact cwd, argv and env from start, reply from another process, a client that exits
+while starting, a start whose early watch ends on a dialog (a Claude hook, the Codex trust screen),
+and a Claude start's /color: quiet once sent, into its launch turn too, said when a dialog holds it.
 """
 
 import json
@@ -101,7 +100,7 @@ class ReplyTest(WorkerCase):
 
 class EarlyDeathTest(WorkerCase):
     def test_a_client_that_exits_at_once_exits_1_with_its_last_lines_and_its_pane_closes(self):
-        """AC8: its worker's exit ends the pane's attach command; no tmux session or pane stays."""
+        """Its worker's exit ends the pane's attach command; no tmux session or pane stays."""
         res = self.start("w2", "--", "--bogus")
         lines = self.assert_early_exit(res, "w2", 2)
         self.assertIn("claude: error: unrecognized arguments: --bogus", lines)

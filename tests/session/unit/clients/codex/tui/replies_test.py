@@ -1,5 +1,5 @@
 """Codex steer replies: steer detection, session file scans, reply lines and the owning harness's
-settle; no hook starts a process (FR-38).
+settle; no hook starts a process.
 """
 
 import contextlib

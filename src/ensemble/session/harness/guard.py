@@ -1,5 +1,5 @@
 """The guard (stdlib only, run by path): every Host's managed worker runs it as the client's direct
-parent (WDRC-199 FR-13 to FR-15), a Docker worker's as its container's main process (`--serve`).
+parent, a Docker worker's as its container's main process (`--serve`).
 """
 
 import argparse

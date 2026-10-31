@@ -454,7 +454,7 @@ func TestBotUserID(t *testing.T) {
 	}
 }
 
-// AC1: one token per installation, each in its own file, issued and audited, and the Keychain untouched.
+// One token per installation, each in its own file, issued and audited, and the Keychain untouched.
 func TestIssuePreparesEachInstallationAndNoKeychain(t *testing.T) {
 	r := newRig(t, "acme", "Other-Org")
 	commands, revoke, got, err := r.g.Issue(context.Background(), "ensemble-bot", perms, ctr)
@@ -509,7 +509,7 @@ func TestIssueNoInstallations(t *testing.T) {
 	}
 }
 
-// AC5: a failure inside issuance revokes every token issued so far, once, even when the caller's context is gone.
+// A failure inside issuance revokes every token issued so far, once, even when the caller's context is gone.
 func TestIssueFailureRevokesIssued(t *testing.T) {
 	for name, tc := range map[string]struct {
 		setup func(r *rig, cancel func())
@@ -590,7 +590,7 @@ func issued(t *testing.T, r *rig) []credential.Command {
 	return commands
 }
 
-// AC2: a maintain with no record anywhere lists the App's installations now, one token each, over each file.
+// A maintain with no record anywhere lists the App's installations now, one token each, over each file.
 func TestRefreshWithoutAnyRecord(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
@@ -610,7 +610,7 @@ func TestRefreshWithoutAnyRecord(t *testing.T) {
 	r.noKeychain(t)
 }
 
-// AC3: maintain revokes nothing it replaced.
+// Maintain revokes nothing it replaced.
 func TestRefreshRevokesNothingReplaced(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)
@@ -624,7 +624,7 @@ func TestRefreshRevokesNothingReplaced(t *testing.T) {
 	}
 }
 
-// AC3, D10: a renewed token whose write fails never reached the container: it alone is revoked; tokens written stay.
+// A renewed token whose write fails never reached the container: it alone is revoked; tokens written stay.
 func TestRefreshRevokesTokenWhoseWriteFailed(t *testing.T) {
 	r := newRig(t, "acme", "other")
 	issued(t, r)

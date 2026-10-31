@@ -1,8 +1,5 @@
-"""A lost tmux server on the real commands (tests/manager/live_pipeline.py): main's
-test_a_lost_tmux_server_comes_back_by_attach_resume_but_a_closed_worker, for a worker, a role run
-and a Linear pipeline, each back on its sid by its own crew resume (FR-22, FR-39). Their session
-harnesses are lost with it: a lost display alone ends no worker. The runs' drives, local processes,
-outlive the server: each is stopped (SIGTERM to its group) with it, as the server's loss once did.
+"""Session harnesses die with a lost tmux server, but the runs' drives are local processes that
+outlive it, so the test stops each drive as the server's loss once did.
 """
 
 from ensemble.manager import State

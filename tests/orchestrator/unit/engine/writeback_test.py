@@ -2727,7 +2727,7 @@ class FinishedEvents(Events):
 
 
 class FollowUpAttempts(Events):
-    """FR-30 to FR-32: each attempt of one sid gets its own result, steps and moves, once."""
+    """Each attempt of one sid gets its own result, steps and moves, once."""
 
     NEEDS = outcome_data(status="needs_input", questions=["Which?"], url="")
     DONE_BODY = "Build ready:\nAgent report before delivery:\n\n> Ready."
@@ -3057,7 +3057,7 @@ class LimitEvents(Events):
 
 
 class RecoverReplay(Events):
-    """Recover's in-process write-back of an ended run's outcome (FR-41)."""
+    """Recover's in-process write-back of an ended run's outcome."""
 
     def outcome(self):
         data = outcome_data()
@@ -3167,7 +3167,7 @@ REPORT = (
 
 
 class DeliverableReport(Base):
-    """A deliverable stage's done outcome: its summary unquoted, then the saved report (FR-76)."""
+    """A deliverable stage's done outcome: its summary unquoted, then the saved report."""
 
     DONE = Outcome(status="done", title="ENG-7: x", summary="Passed: all checks.", url=PR)
     LEAD = "Build ready: Passed: all checks."

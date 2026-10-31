@@ -225,7 +225,7 @@ class RowsTest(Base):
         )
 
     def test_rows_take_shown_and_opener_from_worker_panes(self):
-        """AC10: a worker's row shows its lowest-numbered worker pane's tmux session, its opener
+        """A worker's row shows its lowest-numbered worker pane's tmux session, its opener
         that pane's @worker-opener; a worker with no worker pane is shown nowhere.
         """
         self.host = _plain_host([_row("a", "mgr"), _row("b", "x"), _row("c", "mgr")])
@@ -255,7 +255,7 @@ class LayoutSplitFromTest(Base):
         self.runner.results["list-clients"] = (0, "5\t%9\n")
 
     def test_a_worker_with_a_pane_or_a_tmux_session_is_a_split_from(self):
-        """AC3: --split-from names a worker with a worker pane or a tmux session."""
+        """--split-from names a worker with a worker pane or a tmux session."""
         self.runner.results["list-panes"] = worker_rows(("%5", "b", "mgr"))
         self.assertEqual(displays.layout(self.viewer, self.host, "//b"), "//b")
         self.tmux.has_session.assert_called_once_with("b")
@@ -264,7 +264,7 @@ class LayoutSplitFromTest(Base):
         self.assertEqual(displays.layout(self.viewer, self.host, "/below/b"), "/below/b")
 
     def test_an_unknown_split_from_is_refused(self):
-        """AC3: neither (a pane-less worker, a tmux failure) is no tmux session."""
+        """Neither (a pane-less worker, a tmux failure) is no tmux session."""
         for rows in (worker_rows(), worker_rows(("%5", "c", "b")), (1, "", "boom\n")):
             with self.subTest(rows=rows), self.assertRaises(ConfigError) as caught:
                 self.runner.results["list-panes"] = rows

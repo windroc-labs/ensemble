@@ -1,4 +1,4 @@
-"""HostContract, FR-47's Host contract on what a Host keeps once every worker start is
+"""HostContract, the Host contract on what a Host keeps once every worker start is
 harness-owned (its managed workers: managed_integration_test): a subclass also inherits Case and
 defines make_host() -> Host. The cannot-display case runs an in_process session on the Host.
 """

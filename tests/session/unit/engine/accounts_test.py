@@ -223,7 +223,7 @@ class ReadingsTest(ReadingsCase):
 
 
 class HoldTest(ReadingsCase):
-    """WDRC-367: a run's usage limit holds its account over, whatever its probe reads."""
+    """A run's usage limit holds its account over, whatever its probe reads."""
 
     def setUp(self):
         super().setUp()

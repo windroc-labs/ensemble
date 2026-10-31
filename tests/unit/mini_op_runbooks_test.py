@@ -1,5 +1,5 @@
-"""The layout of mini-op's project runbooks in .mini-op/runbooks/ (WDRC-108 FR-43, FR-211, FR-213,
-FR-214, FR-218). Failures name path:line only, never the file's text.
+"""The layout of mini-op's project runbooks in .mini-op/runbooks/.
+Failures name path:line only, never the file's text.
 """
 
 import os

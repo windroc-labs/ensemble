@@ -9,7 +9,7 @@ import ensemble.utils as utils
 from ensemble.delegate import config
 
 DOCKER_HOST = "ensemble.session.hosts.docker.host:DockerHost"
-# an environment name follows the lock-name rule (WDRC-109 FR-64)
+# an environment name follows the lock-name rule
 ENVIRONMENT_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}")
 ENVIRONMENT_KEYS = frozenset({"image", "gateway", "plugins", "lock", "prefetch", "credentials"})
 # what a named or role table, checked alone, may leave to its default

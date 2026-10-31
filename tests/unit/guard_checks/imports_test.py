@@ -61,7 +61,7 @@ class OrchestratorSessionImports(Sample):
 
 
 class OrchestratorImports(Sample):
-    """FR-3: orchestrator imports only the standard library, itself, ensemble.utils and the
+    """Orchestrator imports only the standard library, itself, ensemble.utils and the
     names delegate's __all__ exports; no other package imports it.
     """
 
@@ -87,7 +87,7 @@ class OrchestratorImports(Sample):
                 )
             ),
             *(
-                ({rel: sample}, [f"{rel}: imports {name} (FR-3)"])
+                ({rel: sample}, [f"{rel}: imports {name}"])
                 for sample, name in (
                     (
                         "from ensemble.delegate import HarnessDelegate\n",
@@ -114,7 +114,7 @@ class OrchestratorImports(Sample):
                 )
             ),
             *(
-                ({other: sample}, [f"{other}: imports ensemble.orchestrator (FR-3)"])
+                ({other: sample}, [f"{other}: imports ensemble.orchestrator"])
                 for other in (
                     f"{PKG}/{project}/engine/sample.py"
                     for project in ("manager", "delegate", "session", "utils")

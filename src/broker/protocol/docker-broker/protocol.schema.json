@@ -1701,7 +1701,7 @@
       "additionalProperties": false
     },
     "git_ref": {
-      "$comment": "A branch or tag name, ensemble.utils.git.check_ref's rule (WDRC-109 FR-52).",
+      "$comment": "A branch or tag name, ensemble.utils.git.check_ref's rule.",
       "type": "string",
       "pattern": "^[A-Za-z0-9._/-]{1,255}$",
       "not": {

@@ -226,7 +226,7 @@ class ResumeInput(RosterCase):
 
 class ResumeLive(RosterCase):
     """A live entry no attach has reconciled since its attempt ended: resume reads its Status
-    first (FR-22: alive=false, outcome needs_input while its harness and tui live).
+    first (alive=false, outcome needs_input while its harness and tui live).
     """
 
     def setUp(self):

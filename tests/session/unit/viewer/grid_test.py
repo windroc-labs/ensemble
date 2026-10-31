@@ -645,7 +645,7 @@ class TileApplicationTest(TileFixture):
                 )
 
     def test_a_known_opener_without_a_pane_keeps_its_children_main(self):
-        """AC9 (D4): a and b's opener w2 has no pane and no tmux session; known (a hidden worker)
+        """a and b's opener w2 has no pane and no tmux session; known (a hidden worker)
         it keeps them main, unknown they stay an orphan group.
         """
         layout = dump(

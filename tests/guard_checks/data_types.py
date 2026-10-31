@@ -256,7 +256,7 @@ def _type_uses(rel, module, tree, data):
 
 
 def option_tuples(repo: str) -> list[str]:
-    """FR-49: a module-level tuple of option words in shipped code is a StrEnum, unless allowlisted."""
+    """A module-level tuple of option words in shipped code is a StrEnum, unless allowlisted."""
     found, seen = set(), set()
     for project in PROJECTS:
         for rel, text in _source_files(repo, project, ".py"):
@@ -269,9 +269,7 @@ def option_tuples(repo: str) -> list[str]:
                     if (rel, name) in OPTION_TUPLES_ALLOWED:
                         seen.add((rel, name))
                     else:
-                        found.add(
-                            f"{rel}:{node.lineno}: {name}: a fixed option set is a StrEnum (FR-49)"
-                        )
+                        found.add(f"{rel}:{node.lineno}: {name}: a fixed option set is a StrEnum")
     found.update(
         f"{rel}: {name}: allowlisted but not an option tuple"
         for rel, name in OPTION_TUPLES_ALLOWED.keys() - seen

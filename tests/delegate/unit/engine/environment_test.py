@@ -1,5 +1,5 @@
 """src/ensemble/delegate/engine/environment.py: a run's environment from the config layers
-(WDRC-109 FR-57, FR-59, FR-60) and its prefetch target from the input (FR-52).
+and its prefetch target from the input.
 """
 
 import copy

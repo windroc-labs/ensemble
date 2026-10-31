@@ -273,7 +273,7 @@ class RunSpecSerialization(Sample):
 
 
 class OptionTuples(Sample):
-    FAILS = "a fixed option set is a StrEnum (FR-49)"
+    FAILS = "a fixed option set is a StrEnum"
     STALE = "allowlisted but not an option tuple"
 
     def found(self, extra=None, *, instead=None):

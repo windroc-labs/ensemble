@@ -180,7 +180,7 @@ file = "dummy.txt"
 
 
 class EnvironmentCheckTest(Case):
-    """read_config's check_environments: each refusal names its table (WDRC-109 FR-60)."""
+    """read_config's check_environments: each refusal names its table."""
 
     def loaded(self, text: str) -> dict:
         path = os.path.join(self.home, "config.local.toml")

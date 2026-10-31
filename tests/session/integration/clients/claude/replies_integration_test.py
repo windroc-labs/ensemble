@@ -96,7 +96,7 @@ class RepliesTest(Case):
         no_process = glob.glob(
             str(self.home / "**" / "*.watch.lock"), recursive=True, include_hidden=True
         )
-        self.assertEqual(no_process, [])  # no reply watcher ran (FR-38)
+        self.assertEqual(no_process, [])  # no reply watcher ran
         self.release.touch()
         self.until("done")
         words = [w[1] for w in self.words()]

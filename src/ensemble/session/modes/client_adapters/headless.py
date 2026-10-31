@@ -33,7 +33,7 @@ class Headless(ABC):
 
     @abstractmethod
     def events(self, lines: Iterable[str]) -> Iterator[SessionEvent | Stderr | ClientBound]:
-        """FR-26 target: TurnStarted on accepted input, TurnEnd/TurnFailed on terminal records."""
+        """Target: TurnStarted on accepted input, TurnEnd/TurnFailed on terminal records."""
 
 
 class JsonHeadless(Headless):

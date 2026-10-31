@@ -405,7 +405,7 @@ prefetch = true
 
 
 class Environments(Harnessed):
-    """run's environment: resolved from the delegate config only (WDRC-109 FR-57, FR-60)."""
+    """run's environment: resolved from the delegate config only."""
 
     TARGETED = "Reference: T-1\nRepo: acme/app\nRef: release/1\n\nHello."
 
@@ -441,7 +441,7 @@ class Environments(Harnessed):
 
 
 class Verifier(Harnessed):
-    """The built-in verifier on the packaged mini-op environment (WDRC-110 FR-47, FR-50, FR-80)."""
+    """The built-in verifier on the packaged mini-op environment."""
 
     TARGETED = "Repo: windroc-labs/ensemble\nRef: main"
 

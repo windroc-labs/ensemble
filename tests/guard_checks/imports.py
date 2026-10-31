@@ -105,7 +105,7 @@ def orchestrator_session_imports(repo: str) -> list[str]:
 
 
 def orchestrator_imports(repo: str) -> list[str]:
-    """FR-3: orchestrator imports only the standard library, itself, ensemble.utils and the
+    """Orchestrator imports only the standard library, itself, ensemble.utils and the
     names in delegate's literal __all__; no other package imports it.
     """
     exported = _literal_all(os.path.join(repo, DELEGATE_SRC, "__init__.py"))
@@ -116,7 +116,7 @@ def orchestrator_imports(repo: str) -> list[str]:
         modules, names = _imported(tree)
         names += [_dotted(n, bound) for n in ast.walk(tree) if isinstance(n, ast.Attribute)]
         found.update(
-            f"{ORCH_SRC}{rel}: imports {reached} (FR-3)"
+            f"{ORCH_SRC}{rel}: imports {reached}"
             for reached in (
                 *map(_orchestrator_module, modules),
                 *(_orchestrator_name(name, exported) for name in names),
@@ -131,7 +131,7 @@ def orchestrator_imports(repo: str) -> list[str]:
                 modules, names = _imported(tree)
                 names += [_dotted(n, bound) for n in ast.walk(tree) if isinstance(n, ast.Attribute)]
                 if any(_within(name, ORCH_PKG) for name in (*modules, *names)):
-                    found.add(f"src/{rel}: imports {ORCH_PKG} (FR-3)")
+                    found.add(f"src/{rel}: imports {ORCH_PKG}")
     return sorted(found)
 
 

@@ -1,5 +1,5 @@
-"""One resident `<hook> hook --serve <TUI dir>` process journaling a Docker session's hooks on the
-host (WDRC-182: no Python process per hook).
+"""Journals a Docker session's hooks on the host through one resident `hook --serve` process,
+not a Python process per hook.
 """
 
 import contextlib
@@ -13,10 +13,7 @@ HOOK_WAIT = 60
 
 
 class HookWorker:
-    """`argv`, one resident `hook --serve` process of tui dir `folder` (argv's last), started by the
-    first call and by the first after it ends; each call is bounded by `wait` s, and a timeout kills
-    it.
-    """
+    """Started by the first call after its process ends; a call past `wait` s kills it."""
 
     def __init__(self, argv: list[str]) -> None:
         self.argv, self.popen, self.wait = argv, subprocess.Popen, HOOK_WAIT
@@ -54,7 +51,7 @@ class HookWorker:
         return None if reply == b'{"ok": true}\n' else "hook exit 1"
 
     def stop(self) -> None:
-        """Ends its process, if one runs: EOF on its stdin, killed after `wait` s."""
+        """EOF on its stdin, then killed after `wait` s."""
         if (proc := self.proc) is not None:
             if proc.stdin is not None:
                 with contextlib.suppress(OSError):
@@ -62,7 +59,7 @@ class HookWorker:
             self._end(proc, self.wait)
 
     def _end(self, proc: subprocess.Popen, wait: float = 0.0) -> int:
-        """Its exit code, killed unless it exits within `wait` s."""
+        """Killed unless it exits within `wait` s."""
         self.proc = None
         try:
             proc.wait(timeout=max(0.0, wait))

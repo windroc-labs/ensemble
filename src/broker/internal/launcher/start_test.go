@@ -840,7 +840,7 @@ func TestStartMakesNoRevocationBeforeIssue(t *testing.T) {
 	}
 }
 
-// AC5: a start failing after its GitHub tokens were written (here the token schedule record) revokes the set Issue
+// A start failing after its GitHub tokens were written (here the token schedule record) revokes the set Issue
 // returned, once, and removes the container; the revocation adds nothing to the error.
 func TestStartRollbackRevokesIssuedGitHubTokens(t *testing.T) {
 	h, path, parent, tokens, _, d := tokenStartHost(t)

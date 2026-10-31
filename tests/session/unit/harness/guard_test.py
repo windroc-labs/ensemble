@@ -1356,7 +1356,7 @@ class GuardTest(Base):
         self.assertIn("Q", screen.text(None))
 
     def test_screen_swallows_every_string_sequence_however_long(self):
-        """The client's own kitty-graphics query (APC) once showed as prompt text (WDRC-344)."""
+        """The client's own kitty-graphics query (APC) once showed as prompt text."""
         screen = guard.Screen(rows=2, columns=40)
         screen.append(b"> \x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\typed")
         self.assertEqual(screen.text(None), "> typed")
@@ -2123,7 +2123,7 @@ class GuardTest(Base):
         return spawn.call_args.kwargs["env"]
 
     def test_a_pty_client_without_term_gets_a_color_term(self):
-        """A Docker client inherits no TERM: without one it drew no color (WDRC-344)."""
+        """A Docker client inherits no TERM: without one it drew no color."""
         env = self.started_env(terminal=True, KEEP="1")
         self.assertEqual((env["TERM"], env["KEEP"]), ("xterm-256color", "1"))
         self.assertEqual(self.started_env(terminal=True, TERM="screen")["TERM"], "screen")

@@ -126,7 +126,7 @@ func TestRefreshAudit(t *testing.T) {
 // opaque is a token GitHub could issue in another shape: only the bearer redaction keeps it out of the audit.
 func opaque(id string, n int) string { return fmt.Sprintf("opaqueSECRET%s0%d", id, n) }
 
-// AC7: a failed in-command revocation is audited unrevoked with its reason and expiry, without the token, and leaves
+// A failed in-command revocation is audited unrevoked with its reason and expiry, without the token, and leaves
 // the command's result as it was.
 func TestFailedRevocationAuditedUnrevoked(t *testing.T) {
 	const echo = "Bad credentials for %s"

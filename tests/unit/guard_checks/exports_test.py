@@ -35,7 +35,7 @@ class EventObjectExports(Sample):
         no_all = [f"{init}: no literal __all__"]
 
         def function(name):
-            return [f"{init}: __all__ exports function {name} (FR-44)"]
+            return [f"{init}: __all__ exports function {name}"]
 
         writes = (
             "import sys, builtins\nfrom builtins import setattr as write\n"
@@ -208,7 +208,7 @@ class EventObjectExports(Sample):
         )
         self.assertEqual(
             self.exports(root),
-            [self.EVENT + "__init__.py: __all__ exports function geohash (FR-44)"],
+            [self.EVENT + "__init__.py: __all__ exports function geohash"],
         )
         self.assertIs(sys.modules.get("antigravity"), before)
 
@@ -270,12 +270,12 @@ class DelegateObjectExports(Sample):
             rel = "src/" + package.replace(".", "/") + "/__init__.py"
             for source, names, expected in (
                 *(
-                    (source, [name], [f"__all__ exports unrecognised value {name} (FR-44)"])
+                    (source, [name], [f"__all__ exports unrecognised value {name}"])
                     for name, source in self.UNRECOGNISED.items()
                 ),
                 (literals, ["NAME", "LABEL", "TIMEOUT", "TOTAL", "COPY", "SEPARATORS"], []),
                 *(
-                    (bad, ["BAD"], ["__all__ exports function BAD (FR-44)"])
+                    (bad, ["BAD"], ["__all__ exports function BAD"])
                     for bad in (
                         "BAD: str = lambda: 'value'\n",
                         "def helper(): pass\nBAD: str = helper\n",
@@ -311,7 +311,7 @@ class OrchestratorObjectExports(Sample):
                 [],
             ),
             *(
-                (source, [f"{self.INIT}: __all__ exports function launch (FR-44)"])
+                (source, [f"{self.INIT}: __all__ exports function launch"])
                 for source in (
                     "def launch(): pass\n__all__ = ['launch']\n",
                     "from ensemble.orchestrator.engine.run import launch\n__all__ = ['launch']\n",
@@ -401,12 +401,12 @@ class ObjectExports(Sample):
             "Event = Spec | Mode\n"
         )
         utils = f"{PKG}/utils/"
-        stale = "allowlisted but not an exported function or value (FR-44)"
+        stale = "allowlisted but not an exported function or value"
         for files, expected in (
             *(
                 (
                     {rel: text},
-                    sorted(f"{rel}: __all__ exports function {n} (FR-44)" for n in self.BAD),
+                    sorted(f"{rel}: __all__ exports function {n}" for n in self.BAD),
                 )
                 for rel, text in (
                     (self.INIT, self.init(self.BAD_SOURCE, self.BAD)),
@@ -416,9 +416,7 @@ class ObjectExports(Sample):
             *(
                 (
                     {rel: text},
-                    sorted(
-                        f"{rel}: __all__ exports unrecognised value {n} (FR-44)" for n in aliases
-                    ),
+                    sorted(f"{rel}: __all__ exports unrecognised value {n}" for n in aliases),
                 )
                 for rel, text in (
                     (self.INIT, self.init(conditional, aliases)),

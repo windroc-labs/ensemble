@@ -1,4 +1,4 @@
-"""Entry-module export checks and the session's and delegate's frozen interfaces."""
+"""Entry-module exports and the session's and delegate's frozen interfaces."""
 
 import ast
 import builtins
@@ -51,7 +51,7 @@ def manager_exports(repo: str) -> list[str]:
 
 
 def object_exports(repo: str) -> list[str]:
-    """FR-44: entry modules export only classes, constants and type aliases unless allowlisted."""
+    """Entry modules export only classes, constants and type aliases unless allowlisted."""
     found, seen = set(), set()
     for rel in OBJECT_EXPORT_MODULES:
         path = os.path.join(repo, rel)
@@ -75,11 +75,11 @@ def object_exports(repo: str) -> list[str]:
             if (package, name) in OBJECT_EXPORTS_ALLOWED:
                 seen.add((package, name))
             elif kind == "value":
-                found.add(f"{rel}: __all__ exports unrecognised value {name} (FR-44)")
+                found.add(f"{rel}: __all__ exports unrecognised value {name}")
             else:
-                found.add(f"{rel}: __all__ exports function {name} (FR-44)")
+                found.add(f"{rel}: __all__ exports function {name}")
         found.update(
-            f"{pkg}: {name}: allowlisted but not an exported function or value (FR-44)"
+            f"{pkg}: {name}: allowlisted but not an exported function or value"
             for pkg, name in OBJECT_EXPORTS_ALLOWED.keys() - seen
             if pkg == package
         )
@@ -143,9 +143,7 @@ def _is_literal(node):
 
 
 def _export_kinds(repo, package, names):
-    """Each name `package` exports: what it resolves to through re-exports and aliases, and that
-    target's kind (function, class, constant, alias, value, module or None: unresolved).
-    """
+    """Each export of `package`: its target through re-exports and aliases, and its kind or None."""
     modules, definitions, origins = {}, {}, {}
     for name, value in vars(builtins).items():
         definitions[f"builtins.{name}"] = (
@@ -288,7 +286,7 @@ GENERICS = frozenset(
 def _assigned_kind(node, name):
     """Kind of a value _constant_value rejects: function (a lambda); constant (an ALL_CAPS tuple,
     list or set of literals and dotted names); alias (annotated TypeAlias, a union or a subscripted
-    generic); else value, whatever its annotation (a call such as tuple() or os.path.join() too).
+    generic); else value, annotated or not.
     """
     value = node.value
     if isinstance(value, ast.Lambda):
@@ -352,8 +350,7 @@ def _snapshot_drift(repo: str, path: str, modules: tuple[str, ...]) -> list[str]
 
 def _interface(modules: tuple[str, ...]) -> dict[str, str]:
     """Each export of `modules` and its classes' public members: kind, bases, enum values and
-    parameters (name, kind, default); annotations are left out (their text varies by Python
-    version).
+    parameters (name, kind, default), not annotations: their text varies by Python version.
     """
     found = {}
     for name in modules:

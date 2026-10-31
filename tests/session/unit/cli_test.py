@@ -371,7 +371,7 @@ class RecordControl(ControlBase):
         self.assertNotIn("w1", self.host.processes)
 
     def test_a_close_refused_busy_exits_75_unless_another_key_failed_otherwise(self):
-        """Its harness gone, its worker generation live or unknown: SessionBusy (AC14)."""
+        """Its harness gone, its worker generation live or unknown: SessionBusy."""
         self.owned("w1", held=False)
         self.addCleanup(self.ended)
         for liveness in (Liveness.LIVE, Liveness.UNKNOWN):
@@ -413,7 +413,7 @@ class RecordControl(ControlBase):
         replacement.calls.close.assert_not_called()
 
     def test_hide_sid_mismatch_marks_nothing(self):
-        """AC7: a close hook of an earlier run (its --sid) leaves a later run of the name shown;
+        """A close hook of an earlier run (its --sid) leaves a later run of the name shown;
         the run's own sid passes through to the hide.
         """
         self.tui(name="w1", sid="replacement")
@@ -426,7 +426,7 @@ class RecordControl(ControlBase):
         self.assertTrue(json.loads(self.invoke("status", "w1")[1])["hidden"])
 
     def test_hide_if_closed_needs_the_held_generation_of_a_live_run(self):
-        """AC6: a hook's --sid/--generation must be held and live, else exit 1, nothing written."""
+        """A hook's --sid/--generation must be held and live, else exit 1, nothing written."""
         self.owned("w1", held=False)
         self.addCleanup(self.ended)
         generation = json.loads(Path(self.root, "w1", "session.json").read_text())["generation"]

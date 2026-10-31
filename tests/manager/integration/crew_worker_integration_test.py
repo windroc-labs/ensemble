@@ -1,4 +1,4 @@
-"""Workers through `ensemble-crew run -- ensemble-session start` (FR-17, FR-20) on the real
+"""Workers through `ensemble-crew run -- ensemble-session start` on the real
 commands (tests/manager/live_crew.py): the worker's Record and entry, a gone worker's crew resume
 whose /color changes neither its state nor the events file, a live one's no-op, a start's
 permission dialog on crew run's stderr, and one pane per live worker however often crew attach

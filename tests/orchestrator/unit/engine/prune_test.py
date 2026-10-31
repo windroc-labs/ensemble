@@ -920,7 +920,7 @@ class RetentionCleanup(PruneScenario):
 
 
 class WorkdirRetention(PruneScenario):
-    """FR-5: a workdir without agent files goes whole 7 days after its issue finished."""
+    """A workdir without agent files goes whole 7 days after its issue finished."""
 
     def bare(self, ident, sid=SID, *, live=False):
         workdir = self.cfg.issue_workdir(ident)

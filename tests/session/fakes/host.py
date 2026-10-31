@@ -313,7 +313,7 @@ class FakeHost(Host):
             previous.close()
         shutil.rmtree(folder, ignore_errors=True)
         os.makedirs(folder, mode=0o700)
-        if kind == "terminal":  # FR-47: no terminal of its own, so none of the caller's identity
+        if kind == "terminal":  # no terminal of its own, so none of the caller's identity
             env = {k: v for k, v in env.items() if k not in ("TMUX", "TMUX_PANE", "TERM")}
         control = ProcessControl.prepare(argv, cwd, env=env)
         meta = {

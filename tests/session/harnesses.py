@@ -17,7 +17,7 @@ from ensemble.session.harness.dispatch import load_handlers
 from ensemble.session.harness.types import Op
 
 WAIT = 60  # s, past process.DRAIN
-KILL_WAIT = 10  # s, FR-13's reap bound
+KILL_WAIT = 10  # s, the bound for a signalled harness to let go
 ANSWER_WAIT = 10
 _clock, _pause = time.monotonic, time.sleep  # the real ones, past a test's fake clock
 

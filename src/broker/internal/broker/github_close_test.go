@@ -32,7 +32,7 @@ func shortTimeout(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { revocationTimeout = was })
 }
 
-// AC6: close reads the container's token files back and revokes each installation token in them once.
+// Close reads the container's token files back and revokes each installation token in them once.
 func TestRevokeReadsTokenFiles(t *testing.T) {
 	now := clock.Unix()
 	line := func(name, token string) string { return fmt.Sprintf("%s %d %s\n", name, now-60, token) }

@@ -735,7 +735,7 @@ class Client(Fake):
 
 
 class MovedAccounts(Fake):
-    """WDRC-367: account selection is session's; a delegate accounts table names its new key."""
+    """Account selection is session's; a delegate accounts table names its new key."""
 
     def test_every_accounts_table_is_refused_naming_the_session_key(self):
         moved = "; moved to [session.clients.<client>] account"

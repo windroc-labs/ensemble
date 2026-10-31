@@ -80,7 +80,7 @@ func TestCloneScript(t *testing.T) {
 	}
 }
 
-// AC4: the prefetch token is issued, audited, and revoked exactly once when the helper returns, or when the prefetch
+// The prefetch token is issued, audited, and revoked exactly once when the helper returns, or when the prefetch
 // fails before it runs; it never reaches the Keychain.
 func TestPrefetchRevokesOnceOnSuccessAndFailure(t *testing.T) {
 	for name, tc := range map[string]struct {

@@ -318,7 +318,7 @@ class ParseHosts(Case):
 
 
 class ManagedWorkerTest(Case):
-    """The managed worker contract frozen for WDRC-199: no Host runs one yet."""
+    """The managed worker contract's default: a Host without managed workers refuses them."""
 
     def test_a_host_without_managed_workers_refuses_to_start_one(self):
         host = MemoryHost("h1")

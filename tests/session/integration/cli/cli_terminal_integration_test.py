@@ -1,6 +1,4 @@
-"""ensemble-session send, read and tile (FR-31; Q15) through bin/ensemble-session on a private tmux
-server.
-"""
+"""ensemble-session send, read and tile through bin/ensemble-session on a private tmux server."""
 
 import glob
 import json

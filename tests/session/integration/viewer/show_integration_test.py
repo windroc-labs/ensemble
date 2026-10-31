@@ -118,7 +118,7 @@ class GuardDisplayTest(LiveCase):
         self.assertIn(self.NAME, self.host.list())
 
     def test_pane_runs_the_attach_command_without_a_nested_client(self):
-        """AC1: the pane runs CommandView.argv with no nested tmux client."""
+        """The pane runs CommandView.argv with no nested tmux client."""
         target = self.host.attach_target(self.NAME)
         pane = self.shown()
         self.assertEqual(self.started_by(pane), list(target.argv))
@@ -131,7 +131,7 @@ class GuardDisplayTest(LiveCase):
         self.assertNotEqual(self.server.tmux("has-session", "-t", f"={self.NAME}").returncode, 0)
 
     def test_start_show_hide_show_makes_no_tmux_session(self):
-        """AC2: a worker shown, hidden and shown again never has a tmux session."""
+        """A worker shown, hidden and shown again never has a tmux session."""
 
         def no_session():
             rows = self.tmux("list-sessions", "-F", "#{session_name}\t#{@view}").splitlines()
@@ -147,7 +147,7 @@ class GuardDisplayTest(LiveCase):
         no_session()
 
     def test_hide_keeps_the_guard_and_show_replays_hidden_output(self):
-        """AC5: hide kills only its pane; a show replays its scrollback."""
+        """hide kills only its pane; a show replays its scrollback."""
         other = self.host.worker(
             "other",
             Launch(live_tmux.IDLE, self.server.env(), cwd=self.home),
@@ -194,7 +194,7 @@ class GuardDisplayTest(LiveCase):
         self.assert_worker_unchanged()
 
     def test_worker_exit_closes_its_pane_and_leaves_no_session(self):
-        """AC8: a worker's exit closes its pane; the next kill-pane removes its close hook."""
+        """A worker's exit closes its pane; the next kill-pane removes its close hook."""
         pane = self.shown()
         window = self.display(pane, "#{window_id}")
         manager = self.server.inside("manager")["TMUX_PANE"]
@@ -256,7 +256,7 @@ class GuardDisplayTest(LiveCase):
         self.assert_worker_unchanged()
 
     def test_show_replaces_an_old_view_session_with_a_direct_pane(self):
-        """FR-19: one direct pane; the worker runs on."""
+        """One direct pane; the worker runs on."""
         old = self.old_view()
         manager = self.server.inside("manager")["TMUX_PANE"]
         pane = self.shown()
@@ -269,7 +269,7 @@ class GuardDisplayTest(LiveCase):
         self.assertEqual(self.shown(), pane)
 
     def test_hide_or_close_removes_an_old_view_session(self):
-        """FR-19: hide and close too."""
+        """hide and close too."""
         for verb in ("hide", "close"):
             with self.subTest(verb=verb):
                 old = self.old_view()
@@ -331,7 +331,7 @@ class ShowTest(LiveCase):
         return new
 
     def test_split_from_runs_the_attach_command_and_tags_the_pane(self):
-        """AC3: --split-from mgr splits mgr's shown pane, tagged with its close hook."""
+        """--split-from mgr splits mgr's shown pane, tagged with its close hook."""
         before = self.server.panes("=mgr:")
         self.assertIsNone(self.open())
         new = self.added(before)
@@ -372,7 +372,7 @@ class ShowTest(LiveCase):
             self.assertIn(entry, hooks)
 
     def test_split_right_runs_the_attach_command(self):
-        """AC3: --split right with --split-from mgr and no grid opens right of mgr's pane."""
+        """--split right with --split-from mgr and no grid opens right of mgr's pane."""
         self.tmux("new-session", "-d", "-s", "side", *live_tmux.IDLE)
         before = self.server.panes("=mgr:")
         with mock.patch.dict(os.environ, self.server.inside("side")):
@@ -444,9 +444,7 @@ class LabelTest(LiveCase):
         )
 
     def test_a_docker_tui_pane_shows_its_name_in_the_border(self):
-        """AC12, WDRC-519: a Docker worker pane's border shows [🐳 NAME]; its terminal keeps every
-        row.
-        """
+        """A Docker worker pane's border shows [🐳 NAME]; its terminal keeps every row."""
         before = self.tmux("show-options", "-g")
         manager = self.tmux("show-options", "-t", "=mgr:")
         host = DockerHost("docker", {"docker": "/usr/local/bin/docker"})
@@ -463,7 +461,7 @@ class LabelTest(LiveCase):
         self.assertEqual(self.tmux("show-options", "-t", "=mgr:"), manager)
 
     def test_hiding_the_last_labelled_pane_gives_the_window_its_own_borders_back(self):
-        """FR-14: mgr's own pane-border-status top, format unset, as they were after a hide."""
+        """mgr's own pane-border-status top, format unset, as they were after a hide."""
         self.tmux("set-option", "-w", "-t", "=mgr:", "pane-border-status", "top")
         options = (
             *("pane-border-status", "pane-border-format"),
@@ -483,7 +481,7 @@ class LabelTest(LiveCase):
         self.assertEqual(after, mine)
 
     def test_tmux_host_pane_has_no_label_by_default(self):
-        """AC12: status_line false (the default): no border status, no label."""
+        """status_line false (the default): no border status, no label."""
         pane = self.show(self.host)
         window = self.display(pane, "#{window_id}")
         self.assertEqual(self.display(pane, "#{pane-border-status}|#{@worker-label}"), "off|")

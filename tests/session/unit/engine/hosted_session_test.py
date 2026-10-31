@@ -1817,7 +1817,7 @@ class AccountPoolTest(Base):
             self.drain(session)
 
     def test_a_run_at_its_weekly_limit_moves_later_starts_to_another_account(self):
-        """WDRC-367: default is over its weekly limit while its probe reads plenty left."""
+        """default is over its weekly limit while its probe reads plenty left."""
         self.outputs = {"/d": "5,10", "/w": "16,52"}
         self.steps({"out": {"type": "limit", "resets_at": time.time() + 3 * 24 * 3600}})
         self.assertEqual(self.started_env()[ACCOUNT_ENV], "default")
@@ -2167,7 +2167,7 @@ class TuiStartTest(HostedTuiBase):
         self.assertFalse(os.path.lexists(os.path.join(self.root, "w1")))
 
     def test_start_closes_a_worker_named_like_a_tmux_session(self):
-        """AC17: the Viewer's refusal at start closes the worker it began."""
+        """The Viewer's refusal at start closes the worker it began."""
         self.host.calls.unclaimed.side_effect = SessionError(
             "show w1: a host tmux session w1 exists"
         )
@@ -4093,7 +4093,7 @@ class BoundOwnerTest(BoundOwnerBase):
         self.assertEqual((view.generation, view.reply), (self.state["generation"], "r1"))
 
     def test_a_control_views_failed_attach_is_made_again(self):
-        """WDRC-304: its first attach, held from attach, is not handed out again."""
+        """Its first attach, held from attach, is not handed out again."""
         self.owner()
         stale, fresh = mock.Mock(name="stale"), mock.Mock(name="fresh")
         stale.info.side_effect = SessionError("its worker is gone")

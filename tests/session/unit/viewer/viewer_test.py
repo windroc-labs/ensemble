@@ -114,7 +114,7 @@ class ShowTest(Base):
                 self.assertEqual(command[command.index("--") + 1 :], ["/fake/attach", "w1"])
 
     def test_show_outside_tmux_prints_the_host_command(self):
-        """AC4: outside tmux, show returns CommandView.printed, no tmux."""
+        """Outside tmux, show returns CommandView.printed, no tmux."""
         self.enterContext(environ())
         for display in (None, "mgr", "mgr/below/m1"):
             with self.subTest(display=display):
@@ -125,7 +125,7 @@ class ShowTest(Base):
         self.assertEqual(self.viewer.attach_command("w1", self.host), "/fake/attach w1")
 
     def test_show_refuses_a_name_a_tmux_session_holds(self):
-        """AC17: a worker named like a live host tmux session is not shown."""
+        """A worker named like a live host tmux session is not shown."""
         self.enterContext(environ(**INSIDE))
         self.runner.results["list-sessions"] = sessions(("w1", "", ""))
         with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
@@ -133,7 +133,7 @@ class ShowTest(Base):
         self.assertEqual(self.runner.calls, [OLD_VIEW])
 
     def test_show_passes_the_status_line_as_label_and_the_workers_sid(self):
-        """AC12: status_line labels the pane; the close hook needs the worker's sid."""
+        """status_line labels the pane; the close hook needs the worker's sid."""
         self.enterContext(environ(HOME=self.home, **INSIDE))
         self.runner.pane = "mgr"
         self.runner.results.update({"list-clients": (0, "5\t%3\n"), "split-window": split()})
@@ -228,7 +228,7 @@ class ShowTest(Base):
 
 class OpenerChainTest(Base):
     def test_chain_follows_display_openers_to_none_a_bad_state_a_repeat_or_eight_links(self):
-        """AC9 (D5): each worker's display opener from opener's on."""
+        """Each worker's display opener from opener's on."""
         worker("a", SID, "b/below")
         worker("b", SID, "mgr")
         worker("c", SID, "d")
@@ -258,7 +258,7 @@ class OpenerChainTest(Base):
                 self.assertEqual(viewers._chain(opener), chain)
 
     def test_a_show_beside_a_hidden_opener_lands_where_its_opener_is(self):
-        """AC9 (D5): w1 with hidden opener a opens beside mgr's pane; its opener stays a."""
+        """w1 with hidden opener a opens beside mgr's pane; its opener stays a."""
         self.enterContext(environ(HOME=self.home, **INSIDE))
         worker("a", SID, "mgr")
         worker("w1", SID, "a")
@@ -303,7 +303,7 @@ class HideTest(Base):
         return [c for c in self.runner.calls if "kill-pane" in c]
 
     def test_hide_kills_only_its_worker_panes_and_marks_hidden(self):
-        """AC5: hide closes w1's worker panes alone and marks it hidden; the worker runs on."""
+        """hide closes w1's worker panes alone and marks it hidden; the worker runs on."""
         self.panes(("%5", "w1", "mgr", "@1"), ("%6", "w2", "mgr", "@1"), ("%8", "w1", "", "@2"))
         self.assertIsNone(self.viewer.hide("w1", self.host))
         self.assertEqual(self.kills(), [closed("%5"), closed("%8")])
@@ -334,7 +334,7 @@ class HideTest(Base):
         self.assertFalse(os.path.exists(os.path.join(self.ensemble, "hidden")))
 
     def test_hide_if_closed_with_a_live_pane_marks_nothing(self):
-        """AC7: a close hook whose worker still has a pane (another show) changes nothing."""
+        """A close hook whose worker still has a pane (another show) changes nothing."""
         hidden.write("w1", SID, hidden=False, live=None)
         self.panes(("%10", "w1", "mgr"))
         self.assertIsNone(self.viewer.hide("w1", self.host, if_closed=True))
@@ -343,7 +343,7 @@ class HideTest(Base):
         self.assertNotIn("set-hook", [c[1] for c in self.runner.calls])
 
     def test_hide_if_closed_marks_a_worker_left_without_a_pane(self):
-        """AC6: the hook of a pane killed by hand marks its worker hidden, killing nothing."""
+        """The hook of a pane killed by hand marks its worker hidden, killing nothing."""
         hidden.write("w1", SID, hidden=False, live=None)
         self.panes(("%6", "w2", "mgr"))
         self.viewer.hide("w1", self.host, if_closed=True)
@@ -352,7 +352,7 @@ class HideTest(Base):
         self.assertIn(LABELS, self.runner.calls)
 
     def test_hide_if_closed_rechecks_a_racing_show(self):
-        """AC7: a show whose pane lands between the hook's check and its mark leaves w1 shown."""
+        """A show whose pane lands between the hook's check and its mark leaves w1 shown."""
         hidden.write("w1", SID, hidden=False, live=None)
         seen = []
 
@@ -504,7 +504,7 @@ class CommandViewTest(Base):
         )
 
     def test_show_runs_the_hosts_argv_in_a_pane_labeled_by_its_status_line(self):
-        """AC1, AC12: the pane runs the Host's argv; status_line labels it."""
+        """The pane runs the Host's argv; status_line labels it."""
         for settings, labeled in ((TuiSettings(), False), (TuiSettings(status_line=True), True)):
             with self.subTest(settings=settings):
                 self.runner.calls.clear()
@@ -521,7 +521,7 @@ class CommandViewTest(Base):
                 self.assertFalse(hidden.read("d1", SID))
 
     def test_show_badges_the_label_with_the_hosts_badge(self):
-        """WDRC-519: the badge is the Host's, not read from the session name."""
+        """The badge is the Host's, not read from the session name."""
         self.docker.tui_settings.return_value = TuiSettings(status_line=True, badge="🐳")
         self.assertIsNone(self.viewer.show("d1", self.docker, display="mgr/right"))
         tagged = next(c for c in self.runner.calls if "@worker" in c)
@@ -618,7 +618,7 @@ class NotShowableTest(Base):
 
 class UnclaimedTest(Base):
     def test_a_name_a_tmux_session_holds_is_refused(self):
-        """AC17: a worker never shares its name with a host tmux session."""
+        """A worker never shares its name with a host tmux session."""
         self.tmux.has_session.return_value = True
         with self.assertRaisesRegex(SessionError, "^show w1: a host tmux session w1 exists$"):
             self.viewer._unclaimed("w1", self.host)
@@ -675,7 +675,7 @@ class OldViewTest(Base):
         return calls[start : start + len(unviewed("w1", pane)) + 1]
 
     def test_show_removes_the_old_view_session_then_opens_a_direct_pane(self):
-        """FR-19: hooks unset before any kill."""
+        """Hooks unset before any kill."""
         self.enterContext(environ(**INSIDE))
         self.runner.pane = "mgr"
         self.runner.results.update({"list-clients": (0, "5\t%9\n"), "split-window": split()})

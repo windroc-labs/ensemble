@@ -1,4 +1,4 @@
-"""Worker, a plain tui session started by name (FR-20): WorkerState in
+"""Worker, a plain tui session started by name: WorkerState in
 ~/.ensemble/workers/<sid>/worker.json (by-name/<name>: its latest sid); its Record in its worker dir
 (~/.ensemble/tui/<name>/record, for its current generation) once its early watch passes, whatever
 its Host can store. Its session harness owns it. Callers hold locked() around start, resume and

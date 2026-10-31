@@ -1,7 +1,7 @@
-"""close-all on the real commands (FR-35; tests/manager/live_crew.py): main's
+"""close-all on the real commands (tests/manager/live_crew.py): main's
 test_close_all_closes_what_mgr_opened_and_only_that with crew run. What mgr opened, what a manager
 it opened opened, and a matching orphan close; another manager's work stays. A worker whose
-display was killed is still closed (A5).
+display was killed is still closed.
 """
 
 from tests.delegate.replies import mark

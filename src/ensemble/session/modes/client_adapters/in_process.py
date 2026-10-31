@@ -11,7 +11,7 @@ from ensemble.session.engine.types import ClientBound, SessionEvent, Spec, Stder
 class InProcess(ABC):
     @abstractmethod
     def run(self, spec: Spec) -> Iterable[SessionEvent | Stderr | ClientBound]:
-        """FR-26 target: in the harness, TurnStarted on accepted input."""
+        """Target: in the harness, TurnStarted on accepted input."""
 
     def check(self, spec: Spec) -> None:
         return None

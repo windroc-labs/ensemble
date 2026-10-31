@@ -1377,7 +1377,7 @@ LEAD = "Possible earlier work, found by search before this run: context, never i
 
 
 class RelatedSection(Case):
-    """FR-25, FR-35, NFR-5: candidates as the input's last block."""
+    """Candidates as the input's last block."""
 
     SRC = inputs.Sources((), None)
 

@@ -117,7 +117,7 @@ ViewerFactory = Callable[[Mapping], Viewer]
 
 
 def _environment_check(spec: Spec, on: Host, mode: Mode) -> None:
-    """An environment runs only on a Docker-kind Host, in a mode its Host runs (FR-66)."""
+    """An environment runs only on a Docker-kind Host, in a mode its Host runs."""
     if spec.environment is None:
         return
     if not on._environments:
@@ -343,7 +343,7 @@ def _refuse_running(name: str, on: Host) -> None:
 
 def _resume_check(spec: Spec, client: Client, name: str, on: Host) -> None:
     """An owned resume of a conversation its client keeps no transcript of is refused, never
-    started as a new empty one (FR-18); unknown goes on. A container Host checks its own. Its run
+    started as a new empty one; unknown goes on. A container Host checks its own. Its run
     log's record of the conversation is checked, as inspect does, else the spec's cwd.
     """
     if not spec.resume or spec.sid is None or on._client_context().container:
