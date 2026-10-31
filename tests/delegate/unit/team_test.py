@@ -406,8 +406,10 @@ class Shipped(Packaged):
             self.assertIn(literal, scenarios)
         # verify runs `@ops` scenarios, so the template never claims none runs
         self.assertNotIn("nothing executes", pm)
+        # the template is the acceptance rule's one home; the pm's task only points to it
         write = re.search(r"^6\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
-        self.assertIn("acceptance as the Template's Acceptance scenarios", write)
+        self.assertIn("per the Template, its Acceptance scenarios included;", write)
+        self.assertNotIn("acceptance", write)
 
     def test_engineers_take_scenarios_as_acceptance_and_never_change_them(self):
         for task in ("build", "light-build", "decompose"):
