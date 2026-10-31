@@ -298,6 +298,17 @@ class Shipped(Packaged):
             self.assertIn(literal, steps)
         self.assertNotIn("full text", steps)
 
+    def test_verify_runs_ops_scenarios_and_reports_each_then(self):
+        steps = task_text("verify").split("## Steps", 1)[1].split("## Resume", 1)[0]
+        self.assertIn(
+            "`@ops` scenarios, quoted or listed by id (`S-<n>`, then read from the PRD the input "
+            "links)",
+            steps,
+        )
+        self.assertIn("each scenario as written, its Then steps the pass criteria", steps)
+        template = team_texts()["templates/verify-report.md"]
+        self.assertIn("for an `@ops` scenario, one per Then step: `S-<n>` and that Then", template)
+
     def test_the_verify_report_template_is_one_table_with_a_column_per_round(self):
         template = team_texts()["templates/verify-report.md"]
         for text in (
