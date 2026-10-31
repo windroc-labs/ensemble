@@ -1,5 +1,5 @@
 """Readies a done pull-request run's PR only when G1 its updraft converged, G2 at the PR head, G3
-the head's checks pass, waiting for running ones; else the run fails, PR draft. Gotcha: owner/name are the agent's, so it may
+the head's checks pass; else the run fails, PR draft. Gotcha: owner/name are the agent's, so it may
 name another PR on an allowed host; an agent that can run `gh auth login` can add a host.
 """
 
@@ -20,8 +20,8 @@ from ensemble.delegate.event.types import Outcome, Updraft, UpdraftStatus
 from ensemble.utils import SHORT, OutcomeStatus, Runner, err_text, one_line, printable, sh
 
 REASON_MAX = 300
-WAIT = 600  # seconds: checks still running, e.g. rerun by the run's last PR edit, may take
-POLL = 15  # seconds between PR reads while they do
+WAIT = 600  # seconds G3 waits for running checks, e.g. rerun by the run's last PR edit
+POLL = 15  # seconds
 GATE = "ready gate: "
 RUNNING = frozenset({"QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "REQUESTED"})
 HOST_KEY = re.compile(r"""["']?([A-Za-z0-9.-]+)["']?:\s*""")
@@ -76,10 +76,7 @@ def gate(outcome: Outcome, updraft: Updraft | None, *, run: Runner = sh) -> Gate
     if not done:
         status, error = _undo(url, view, run)
         return Gated(outcome, status, _line(error))
-    try:
-        view, reason = _settle(updraft, view, url, run)
-    except _GhError as e:
-        return _failed(outcome, str(e))
+    view, reason = _settle(updraft, view, url, run)
     if reason is not None:
         _, error = _undo(url, view, run)
         return _failed(outcome, f"{reason}; {error}" if error else reason)
@@ -182,25 +179,24 @@ def _draft(url: str, run: Runner) -> str:
 def _settle(
     updraft: Updraft | None, view: _View, url: str, run: Runner
 ) -> tuple[_View, str | None]:
-    """The last view read and its failing gate's reason, re-reading the PR every POLL while only
-    pending checks fail it, up to WAIT.
-    """
+    """The last view read and why it fails, if it does."""
     deadline = time.monotonic() + WAIT
     while (judged := _judge(updraft, view, url, run)) is not None:
         kind, reason = judged
         if kind != _Check.PENDING or time.monotonic() + POLL > deadline:
             return view, reason
         time.sleep(POLL)
-        view = _view(url, run)
+        try:
+            view = _view(url, run)
+        except _GhError as e:
+            return view, str(e)
     return view, None
 
 
 def _judge(
     updraft: Updraft | None, view: _View, url: str, run: Runner
 ) -> tuple[_Check, str] | None:
-    """The first of G1–G3 that fails, as (FAIL or PENDING, reason); None if all pass. G3 is
-    PENDING only when no check fails.
-    """
+    """The first of G1–G3 that fails, as (FAIL or PENDING, reason); None if all pass."""
     if updraft is None:
         return _Check.FAIL, "G1: no updraft result"
     if updraft.status != UpdraftStatus.CONVERGED:

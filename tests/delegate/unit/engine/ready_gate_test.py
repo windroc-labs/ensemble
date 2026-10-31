@@ -268,10 +268,11 @@ class Pending(Base):
         self.assert_failed(self.go(gh), "G2: updraft head")
         self.assertEqual(self.gh.calls, [VIEW, VIEW])
 
-    def test_a_failed_view_during_the_wait_fails_without_touching_the_pr(self):
+    def test_a_failed_view_during_the_wait_fails_and_drafts_the_last_seen_pr(self):
         gh = Gh([view([run_("u", None, "QUEUED")], draft=False), failed("HTTP 502")])
-        self.assert_failed(self.go(gh), "gh pr view: HTTP 502")
-        self.assertEqual(self.gh.calls, [VIEW, VIEW])
+        gated = self.go(gh)
+        self.assert_failed(gated, "gh pr view: HTTP 502")
+        self.assertEqual(self.gh.calls, [VIEW, VIEW, UNDO])
 
     def test_g1_and_g2_failures_never_wait(self):
         pending = [run_("u", None, "QUEUED")]
@@ -516,6 +517,21 @@ class Superseded(Base):
                     f"G3: check Test scope {reason}",
                 )
                 self.assertEqual(self.gh.calls[-1], UNDO)
+                waited = WAIT // POLL + 1 if status != "COMPLETED" else 1
+                self.assertEqual(self.gh.calls.count(VIEW), waited)
+
+    def test_a_rerun_pending_beside_its_older_success_waits_then_passes(self):
+        older, newer = self.check(conclusion="SUCCESS"), self.check(201, 101)
+        api = {path: ok(json.dumps(data)) for path, data in self.evidence().items()}
+        views = [
+            view([older, {**newer, "status": status, "conclusion": None}])
+            for status in ("QUEUED", "IN_PROGRESS")
+        ]
+        gh = Gh([*views, view([older, newer])], api=api)
+        gated = self.go(gh)
+        self.assertEqual((gated.status, gated.outcome), (GateStatus.PASSED, outcome()))
+        self.assertEqual((self.gh.calls.count(VIEW), self.slept), (3, [POLL, POLL]))
+        self.assertEqual(self.gh.calls[-1], READY)
 
     def test_workflow_order_wins_over_job_times_and_workflow_display_names(self):
         checks = [
