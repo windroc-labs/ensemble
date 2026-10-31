@@ -395,8 +395,8 @@ class Shipped(Packaged):
         self.assertIn("(`FR-<n>`, `NFR-<n>`, `S-<n>`) are never renumbered", requirements)
         scenarios = pm.split("\n### Acceptance scenarios\n", 1)[1].split("\n## ", 1)[0]
         for literal in (
-            "Each FR's acceptance, and each NFR's with a decidable check, as Gherkin scenarios",
-            "nothing executes",
+            "Each FR's acceptance, and each NFR's with a decidable check, as Gherkin scenarios: "
+            "a specification, which only a verifier runs, and only `@ops` ones.",
             "`@S-<n>`, then each `@FR-<n>` or `@NFR-<n>` it covers",
             "A scenario may cover several requirements; every FR has at least one.",
             "quoted in its step, or `<name>` in a `Scenario Outline` filled from its `Examples` table",
@@ -404,6 +404,8 @@ class Shipped(Packaged):
             "asserts only its result",
         ):
             self.assertIn(literal, scenarios)
+        # verify runs `@ops` scenarios, so the template never claims none runs
+        self.assertNotIn("nothing executes", pm)
         write = re.search(r"^6\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
         self.assertIn("acceptance as the Template's Acceptance scenarios", write)
 

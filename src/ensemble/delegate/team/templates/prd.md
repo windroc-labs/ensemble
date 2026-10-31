@@ -32,7 +32,7 @@ Header `| ID | <Module, translated> | <Requirement, translated> |`; a row `| FR-
 ### Non-functional requirements
 Optional; omit when none. Header `| ID | <Module, translated> | <Constraint, translated> |`; a row `| NFR-<n> | <module> | <a constraint this product actually has, with its threshold> |`.
 ### Acceptance scenarios
-Each FR's acceptance, and each NFR's with a decidable check, as Gherkin scenarios: a specification, which nothing executes. One `gherkin` code block per functional module, opening `Feature: <module>`; Gherkin keywords stay English, step text is in the PRD's language.
+Each FR's acceptance, and each NFR's with a decidable check, as Gherkin scenarios: a specification, which only a verifier runs, and only `@ops` ones. One `gherkin` code block per functional module, opening `Feature: <module>`; Gherkin keywords stay English, step text is in the PRD's language.
 - Each scenario's tag line: `@S-<n>`, then each `@FR-<n>` or `@NFR-<n>` it covers. A scenario may cover several requirements; every FR has at least one.
 - A value that may change is a parameter: quoted in its step, or `<name>` in a `Scenario Outline` filled from its `Examples` table.
 - Then steps state an observable pass condition (an output or state).
