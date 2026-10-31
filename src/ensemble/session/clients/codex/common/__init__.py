@@ -106,6 +106,7 @@ VALUED = {
 MCP_OFF = "mcp_servers={}"
 SYSTEM_CONFIG = "/etc/codex/config.toml"
 DOCKER_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker-config.toml")
+WORKER_CONFIG = "config/config.toml"  # CODEX_HOME/config.toml links here, in a bind-mounted dir
 _SERVER_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 _SESSION_VERSION = 1
@@ -796,13 +797,13 @@ def _config_home(cwd: str, config_home: str | None = None) -> str:
 
 
 def _docker_files() -> dict[str, str]:
-    """config.toml: the Docker config verbatim, once it parses."""
+    """The worker's own config copy: the Docker config verbatim, once it parses."""
     path, text = docker_config("codex", "config.toml", DOCKER_DEFAULT)
     try:
         load_config_text(text)
     except (ValueError, RecursionError) as error:
         raise ConfigError(f"Docker config {path}: invalid TOML: {error}") from None
-    return {"config.toml": text}
+    return {WORKER_CONFIG: text}
 
 
 def _config_layers(snapshot: Snapshot) -> list[str]:
@@ -990,7 +991,7 @@ class CodexCommon:
             "CODEX_HOME",
             "codex-access-token",
             files=_docker_files,
-            persistent=("sessions",),
+            persistent=("sessions", "config"),
         )
 
     @cached_property

@@ -257,11 +257,7 @@ class BaseMode(ABC):
                     "home_field": client_home.field,
                     "home_dir": client_home.dir,
                     "credential": client_home.credential,
-                    "home_files": json.dumps(
-                        dict(client_home.files())
-                        if client_home.delivers(resume=spec.resume)
-                        else {}
-                    ),
+                    "home_files": json.dumps({} if spec.resume else dict(client_home.files())),
                     **(
                         {"home_providers": json.dumps(client_home.providers)}
                         if client_home.providers

@@ -267,7 +267,7 @@ class ContainerLaunch(Base):
         self.assertEqual(self.client.headless()._home(), home)
         self.assertEqual(
             (home.field, home.dir, home.env, home.credential, home.persistent),
-            ("codex_dir", "codex", "CODEX_HOME", "codex-access-token", ("sessions",)),
+            ("codex_dir", "codex", "CODEX_HOME", "codex-access-token", ("sessions", "config")),
         )
 
     def test_headless_mode_passes_the_image_runtime_and_home_to_its_host_worker(self):
@@ -299,8 +299,10 @@ class ContainerLaunch(Base):
         self.assertNotIn("PERSONAL_CODEX_ENV", launch.env)
         self.assertEqual(metadata["home_field"], "codex_dir")
         self.assertNotIn("codex", [call.args[0] for call in which.call_args_list])
-        self.assertEqual(json.loads(metadata["home_persistent"]), ["sessions"])
-        self.assertEqual(json.loads(metadata["home_files"]), {"config.toml": default_config()})
+        self.assertEqual(json.loads(metadata["home_persistent"]), ["sessions", "config"])
+        self.assertEqual(
+            json.loads(metadata["home_files"]), {"config/config.toml": default_config()}
+        )
         self.assertTrue(all(done.wait(5) for done in mode.done))
 
     def test_unattended_flags_trust_the_real_cwd_whatever_its_name(self):
@@ -347,7 +349,7 @@ class ContainerLaunch(Base):
     def test_the_docker_config_is_the_codex_home_file_verbatim(self):
         text = '# mine\nservice_tier = "fast"\n'
         self.docker_config(text)
-        self.assertEqual(self.client.headless()._home().files(), {"config.toml": text})
+        self.assertEqual(self.client.headless()._home().files(), {"config/config.toml": text})
 
     def test_an_invalid_docker_config_fails_naming_it(self):
         path = self.docker_config("a = " + "[" * 5000 + "]" * 5000)

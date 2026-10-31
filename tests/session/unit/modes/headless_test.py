@@ -670,11 +670,11 @@ class ThroughItsHost(Base):
         self.assertEqual(json.loads(host.starts[0][2]["home_files"]), {"a": "b"})
         self.assertEqual(HomedRun.reads, ["files"])
 
-    def test_a_private_home_resume_reads_the_home_files(self):
+    def test_a_private_home_resume_never_reads_the_home_files(self):
         host = HomeHost()
         self.start_on(host, name="w1", resume=True, client_class=PrivateHomedRun)
-        self.assertEqual(json.loads(host.starts[0][2]["home_files"]), {"a": "b"})
-        self.assertEqual(HomedRun.reads, ["files"])
+        self.assertEqual(json.loads(host.starts[0][2]["home_files"]), {})
+        self.assertEqual(HomedRun.reads, [])
 
     def test_a_host_without_client_homes_never_reads_the_home_files(self):
         host = WorkerHost()

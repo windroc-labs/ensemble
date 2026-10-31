@@ -53,7 +53,6 @@ from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT, docker_ca
 from ensemble.session.hosts.docker.host import (
     KEPT_RETRY,
     PROMPT_STAGE,
-    TOML_MERGE,
     DockerHost,
 )
 from ensemble.session.hosts.docker.types import Maintained, Started
@@ -782,75 +781,64 @@ class StartTest(StartBase):
             with self.subTest(run=run):
                 same = self.used(home, "sessions")
                 self.order.clear()
-                self.start(**self.CODEX, home_files=json.dumps({"config.toml": "x"}))
+                self.start(**self.CODEX, home_files=json.dumps({"sessions/x": "x"}))
                 self.assertEqual(same(), [True, True])
                 self.assertEqual(sorted(os.listdir(home)), ["sessions"])
-                self.assertEqual(os.listdir(sessions), [])
+                self.assertEqual(os.listdir(sessions), ["x"])
+                os.unlink(os.path.join(sessions, "x"))
                 self.assertEqual(stat.S_IMODE(os.lstat(sessions).st_mode), 0o700)
                 self.assertIn(
                     ("start", os.path.join(self.state, f"{GEN}.json")),
                     [o[:2] for o in self.order if isinstance(o, tuple)],
                 )
 
-    def test_a_private_home_is_merged_in_the_container_on_every_start(self):
+    def kept(self, resume="0", files=None):
+        return self.start(
+            **{**self.CODEX, "home_persistent": '["sessions", "config"]'},
+            resume=resume,
+            home_files=json.dumps({} if files is None else files),
+        )
+
+    def resumable(self, home):
+        transcript = os.path.join(home, "sessions", "s1.jsonl")
+        os.makedirs(os.path.dirname(transcript), exist_ok=True)
+        with open(transcript, "w") as f:
+            f.write("{}\n")
+        self.launch = replace(self.launch, transcript=transcript)
+
+    def test_a_private_homes_copy_is_written_on_a_new_start_and_kept_across_resumes(self):
+        copy = os.path.join(self.state, "codex", "config", "config.toml")
+        self.kept(files={"config/config.toml": "a = 1"})
+        with open(copy) as f:
+            self.assertEqual(f.read(), "a = 1")
+        with open(copy, "w") as f:
+            f.write('service_tier = "fast"')
+        self.resumable(os.path.join(self.state, "codex"))
+        self.kept(resume="1")
+        with open(copy) as f:
+            self.assertEqual(f.read(), 'service_tier = "fast"')
+        self.kept(files={"config/config.toml": "b = 2"})
+        with open(copy) as f:
+            self.assertEqual(f.read(), "b = 2")
+
+    def test_a_resume_makes_a_missing_kept_dir_and_writes_nothing_in_it(self):
         home = os.path.join(self.state, "codex")
-        merge = [PYTHON, "-I", TOML_MERGE, home, "config.toml"]
-        for resume in ("0", "1"):
-            with self.subTest(resume=resume):
-                if resume == "1":
-                    transcript = os.path.join(home, "sessions", "s1.jsonl")
-                    with open(transcript, "w") as f:
-                        f.write("{}\n")
-                    self.launch = replace(self.launch, transcript=transcript)
-                self.order.clear()
-                self.docker.inputs.clear()
-                self.start(
-                    **self.CODEX, resume=resume, home_files=json.dumps({"config.toml": "a = 1"})
-                )
-                calls = [call for call in self.order if isinstance(call, list)]
-                staged = [i for i, call in enumerate(calls) if call[-5:] == merge]
-                self.assertEqual(len(staged), 1)
-                self.assertEqual(
-                    calls[staged[0]], ["exec", "-i", "--user", "agent", CONTAINER, *merge]
-                )
-                self.assertEqual(self.docker.inputs[staged[0]], "a = 1")
-                self.assertLess(self.order.index(calls[staged[0]]), self.order.index("guard"))
-                self.assertNotIn("config.toml", os.listdir(home))
+        self.resumable(home)
+        self.kept(resume="1")
+        config = os.path.join(home, "config")
+        self.assertEqual(os.listdir(config), [])
+        self.assertEqual(stat.S_IMODE(os.lstat(config).st_mode), 0o700)
 
-    def test_a_bound_home_runs_no_merge(self):
-        self.start(home_files=json.dumps({"settings.json": "{}"}))
-        self.assertFalse(any(TOML_MERGE in call for call in self.order if isinstance(call, list)))
-
-    def test_client_config_staging_errors_name_the_file(self):
-        metadata = {
-            "home_dir": "codex",
-            "home_persistent": '["sessions"]',
-            "home_files": json.dumps({"config.toml": "private"}),
-        }
-        for result, want in (
-            (
-                done(2, "", "toml_merge: invalid TOML: x\n"),
-                "^staging client config config.toml: toml_merge: invalid TOML: x$",
-            ),
-            (done(1, "", ""), "^staging client config config.toml: exit status 1$"),
-            (OSError("unavailable"), "^staging client config config.toml: unavailable$"),
-            (TimeoutExpired("exec", 1), "^staging client config config.toml: "),
-        ):
+    def test_a_private_home_file_outside_its_kept_dirs_is_refused(self):
+        for key in ("config.toml", "other/config.toml"):
             with (
-                self.subTest(result=type(result).__name__),
-                mock.patch.object(
-                    self.host,
-                    "run",
-                    **(
-                        {"side_effect": result}
-                        if isinstance(result, BaseException)
-                        else {"return_value": result}
-                    ),
+                self.subTest(key=key),
+                self.assertRaisesRegex(
+                    SessionError,
+                    f"^docker session w: home file {re.escape(key)} is outside its kept dirs$",
                 ),
-                self.assertRaisesRegex(SessionError, want) as raised,
             ):
-                self.host._stage_home("w", CONTAINER, metadata)
-            self.assertNotIn("private", str(raised.exception))
+                self.kept(files={key: "x"})
 
     def test_a_reused_name_keeps_a_whole_bound_home_and_empties_it(self):
         same = self.used(self.home_dir)

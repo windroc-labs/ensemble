@@ -172,7 +172,8 @@ def _no_files() -> Mapping[str, str]:
 @dataclass(frozen=True)
 class ClientHome:
     """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable;
-    `files`: read when it `delivers`; `persistent` set: a container-own home, TOML files merged.
+    `files`: read on a new start, written into the home; `persistent` set: a container-own home
+    of which only these dirs are bind-mounted and kept, so its files go under them.
     """
 
     field: str
@@ -182,9 +183,6 @@ class ClientHome:
     files: Callable[[], Mapping[str, str]] = _no_files
     persistent: tuple[str, ...] | None = None
     providers: tuple[str, ...] = ()
-
-    def delivers(self, *, resume: bool) -> bool:
-        return not resume or self.persistent is not None
 
 
 class Container(NamedTuple):
