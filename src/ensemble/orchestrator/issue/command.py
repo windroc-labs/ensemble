@@ -75,6 +75,12 @@ _RULES = (
     "  timeout); 2: usage, configuration, Keychain, a board that cannot be\n"
     "  scanned, or an issue or option value that does not resolve.\n\n"
 )
+_UNSET_TASK = (
+    "  An issue without a task label: its role's run picks a task from its list\n"
+    "  by the issue, its default when none fits better (a researcher's:\n"
+    "  research); ensemble-delegate run --list gives each role's tasks and when\n"
+    "  each is chosen. Set --task only to force one.\n"
+)
 _HELP = (
     _RULES.removesuffix("\n")
     + "  create, edit, move, comment, archive, relation and label write as that\n"
@@ -90,10 +96,9 @@ _HELP = (
     "  assignee; a local board: that directory.\n"
     "  --task NAME / --client NAME: on Linear a key of\n"
     "  [orchestrator.linear.task_labels] / agent_labels; a local board: a\n"
-    "  configured role's task / any client name. Without a task the role's run\n"
-    "  picks a task from its list by the issue (ensemble-delegate run --list\n"
-    "  lists each role's tasks); set --task only to force one.\n"
-    "  --priority NAME: none, urgent, high, medium, low.\n"
+    "  configured role's task / any client name.\n"
+    + _UNSET_TASK
+    + "  --priority NAME: none, urgent, high, medium, low.\n"
     "  Splitting an issue: create --parent ID.\n"
     "  Linear only (a local board exits 2): lookup, label swap, add and remove,\n"
     "  --label, --project, --milestone.\n\n"
@@ -240,10 +245,9 @@ _CREATE_HELP = (
     "--role SPEC: the delegate: a configured role's app, me (the\n"
     "  [linear.manager] OAuth app) or unassigned (as without --role: none); on\n"
     "  Linear the assignee stays empty. A local board: the assignee directory.\n"
-    "--task NAME: unset, the role's run picks a task from its list by the issue\n"
-    "  (ensemble-delegate run --list: each role's tasks and when each is chosen);\n"
-    "  give one only to force that task: a configured task label.\n"
-    "--client NAME: the configured client label.\n"
+    "--task NAME: a configured task label.\n"
+    + _UNSET_TASK
+    + "--client NAME: the configured client label.\n"
     "--priority NAME: none, urgent, high, medium or low.\n"
     "--parent ID: an issue, the new one its sub-issue: this splits an issue.\n"
     "Linear only (a local board exits 2): --label VALUE, repeatable: not a group\n"
@@ -309,10 +313,9 @@ _EDIT_HELP = (
     "  board: a configured role's task / any client name). On Linear its label\n"
     "  replaces the issue's labels of that group: every other label stays, and\n"
     "  only on an issue of the configured team (linear.team): another team's\n"
-    "  exits 2. Without a task the role's run picks a task from its list by the\n"
-    "  issue (ensemble-delegate run --list lists each role's tasks); set --task\n"
-    "  only to force one.\n"
-    "--priority NAME: none, urgent, high, medium or low.\n\n"
+    "  exits 2. Leaving --task off keeps the issue's task label.\n"
+    + _UNSET_TASK
+    + "--priority NAME: none, urgent, high, medium or low.\n\n"
     "Example (a configured board holding TASK-1; the last: Linear):\n"
     "  ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task <task>\n"
     "  ensemble-orchestrator issue edit TASK-1 --body-file note.md --priority high\n"

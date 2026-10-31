@@ -31,7 +31,7 @@ Exit 0: success, or `"result": "unchanged"` (already so; nothing written). Exit 
 
 - **States** (`STATE`, `--state`): `backlog`, `ready`, `running`, `review`, `approved`, `done`, `canceled`. `create` defaults to `backlog`.
 - **Assignment** (`--role`): a role (`researcher`, `pm`, `engineer`), `me` (the identity the commands run as) or `unassigned`; how the board records it: its section below.
-- **Task** (`--task`): usually unset. Without one, the role's run picks a task from its own list by the issue, its default when none fits better (a researcher's: `research`); `ensemble-delegate run --list` lists each role's tasks and when each is chosen. Set it only to force one task: a task name this board configures, which can be fewer than a role's tasks.
+- **Task** (`--task`): usually unset. An issue without a task label: its role's run picks a task from its own list by the issue, its default when none fits better (a researcher's: `research`); `ensemble-delegate run --list` gives each role's tasks and when each is chosen. Set it only to force one task: a task name this board configures, which can be fewer than a role's tasks.
 - **Client** (`--client`): a configured name, such as `codex`.
 - An unknown task or client exits 2 listing the configured names.
 - **Priority** (`--priority`): `none`, `urgent`, `high`, `medium`, `low`.

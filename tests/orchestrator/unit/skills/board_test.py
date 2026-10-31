@@ -54,8 +54,9 @@ class BoardSkill(Case):
     def test_an_unset_task_lets_the_role_pick_and_examples_name_no_configured_task(self):
         text = body()
         for phrase in (
-            "picks a task from its own list",
-            "ensemble-delegate run --list",
+            "An issue without a task label: its role's run picks a task from its own list",
+            "its default when none fits better (a researcher's: `research`)",
+            "`ensemble-delegate run --list` gives each role's tasks and when each is chosen",
             "only to force",
         ):
             self.assertIn(phrase, text)
