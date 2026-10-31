@@ -303,6 +303,38 @@ class ContainerLaunch(Base):
         self.assertEqual(json.loads(metadata["home_files"]), {"config.toml": default_config()})
         self.assertTrue(all(done.wait(5) for done in mode.done))
 
+    def test_unattended_flags_trust_the_real_cwd_whatever_its_name(self):
+        link = self.root / "a.dotted link"
+        link.symlink_to(self.cwd)
+        real = json.dumps(os.path.realpath(self.cwd))
+        self.assertEqual(
+            codex_common.unattended_flags(str(link)),
+            (
+                "-c",
+                'cli_auth_credentials_store="file"',
+                "-c",
+                'forced_login_method="chatgpt"',
+                "-c",
+                "check_for_update_on_startup=false",
+                "-c",
+                f'projects={{{real}={{trust_level="trusted"}}}}',
+            ),
+        )
+
+    def test_a_container_launch_ends_its_flags_with_the_unattended_keys(self):
+        supplied = ("-c", 'cli_auth_credentials_store="keyring"')
+        spec = dataclasses.replace(self.spec, prompt="hi", flags=supplied)
+        run = self.client.headless()
+        run._context = self.runtime
+        argv = list(run.launch(spec).argv)
+        options = argv[: argv.index("--")]
+        forced = list(codex_common.unattended_flags(str(self.cwd)))
+        self.assertEqual(options[-len(forced) :], forced, argv)
+        self.assertLess(options.index("-m"), len(options) - len(forced))
+        self.assertTrue(holds(options[: -len(forced)], supplied), argv)
+        local = committed_headless(self.client, dataclasses.replace(spec, sid="local"))
+        self.assertNotIn('forced_login_method="chatgpt"', local.argv)
+
     def docker_config(self, text):
         path = os.path.join(
             os.environ["HOME"], ".ensemble", "docker-config", "codex", "config.toml"

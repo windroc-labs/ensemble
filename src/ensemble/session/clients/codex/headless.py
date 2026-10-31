@@ -53,7 +53,13 @@ class CodexHeadless(JsonHeadless):
         argv = [
             executable,
             "exec",
-            *launch_flags(snapshot, interactive=False, mode=mode, configured=self.common.flags),
+            *launch_flags(
+                snapshot,
+                interactive=False,
+                mode=mode,
+                configured=self.common.flags,
+                unattended=found is not None,
+            ),
         ]
         if resume:
             argv.extend(self.common.selector(self.state.native_id, resume=True))

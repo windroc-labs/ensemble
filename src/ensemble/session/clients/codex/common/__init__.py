@@ -891,14 +891,41 @@ def launch_options(snapshot: Snapshot) -> list[str]:
     return result
 
 
+def unattended_flags(cwd: str) -> tuple[str, ...]:
+    """What a Docker worker needs whatever its config.toml says: `-c` outranks that file, and
+    Codex applies the last `-c` for a key, so these go after every other flag.
+    """
+    trusted = json.dumps(os.path.realpath(cwd)).replace("\x7f", "\\u007f")
+    return (
+        "-c",
+        'cli_auth_credentials_store="file"',
+        "-c",
+        'forced_login_method="chatgpt"',
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        f'projects={{{trusted}={{trust_level="trusted"}}}}',
+    )
+
+
 def launch_flags(
-    snapshot: Snapshot, *, interactive: bool, mode: Sequence[str], configured: Sequence[str]
+    snapshot: Snapshot,
+    *,
+    interactive: bool,
+    mode: Sequence[str],
+    configured: Sequence[str],
+    unattended: bool = False,
 ) -> list[str]:
     """`mode` and `configured`: the launch's permission mode flags and the config's current
-    flags, never in the snapshot.
+    flags, never in the snapshot; `unattended`: a Docker launch, given unattended_flags last.
     """
     supplied, _ = split_flags(snapshot.flags)
-    result = [*mode, *mcp_off([*configured, *supplied], snapshot), *launch_options(snapshot)]
+    result = [
+        *mode,
+        *mcp_off([*configured, *supplied], snapshot),
+        *launch_options(snapshot),
+        *(unattended_flags(snapshot.cwd) if unattended else ()),
+    ]
     if not interactive:
         result[:0] = ["--json", "--skip-git-repo-check"]
     return result
