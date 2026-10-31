@@ -5,7 +5,7 @@ import os
 import unittest
 import unittest.mock
 
-from ensemble.delegate.engine.ready_gate import gate, hosts
+from ensemble.delegate.engine.ready_gate import POLL, WAIT, gate, hosts
 from ensemble.delegate.engine.types import GateStatus
 from ensemble.delegate.event.types import Outcome, Updraft, UpdraftStatus
 from ensemble.utils import SHORT, OutcomeStatus, one_line
@@ -77,6 +77,16 @@ def outcome(status=OutcomeStatus.DONE, url=URL, summary="Built X.\nVerify: run Y
 
 
 class Base(Case):
+    def setUp(self):
+        super().setUp()
+        self.now, self.slept = 0.0, []
+        self.enterContext(unittest.mock.patch("time.monotonic", lambda: self.now))
+        self.enterContext(unittest.mock.patch("time.sleep", self.sleep))
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
     def go(self, gh, updraft=CONVERGED, out=None):
         self.gh = gh
         return gate(out or outcome(), updraft, run=gh)
@@ -103,7 +113,6 @@ class Done(Base):
             ("no updraft", None, view(), "G1: no updraft result"),
             ("capped", Updraft(UpdraftStatus.CAPPED, HEAD), view(), "G1: updraft capped-without-pass"),
             ("ancestor head", Updraft(UpdraftStatus.CONVERGED, OLDER), view(), "G2: updraft head bbbbbbbbbbbb is not PR head aaaaaaaaaaaa"),
-            ("pending", CONVERGED, view([run_("lint"), run_("unit", None, "IN_PROGRESS")]), "G3: check unit IN_PROGRESS"),
             ("failure", CONVERGED, view([run_("lint"), run_("unit", "FAILURE")]), "G3: check unit FAILURE"),
             ("all skipped", CONVERGED, view([run_("a", "SKIPPED"), run_("b", "SKIPPED")]), "G3: CI did not run (CI 未运行): all 2 checks skipped"),
         )  # fmt: skip
@@ -167,9 +176,9 @@ class Done(Base):
             with self.subTest(check=check):
                 self.assert_failed(self.go(Gh(view([run_("a"), check]))), reason)
 
-    def test_the_first_bad_check_in_rollup_order_is_the_reason(self):
-        checks = [run_("a", "SKIPPED"), run_("b", None, "QUEUED"), run_("c", "FAILURE")]
-        self.assert_failed(self.go(Gh(view(checks))), "G3: check b QUEUED")
+    def test_the_first_failing_check_in_rollup_order_is_the_reason(self):
+        checks = [run_("a", "SKIPPED"), run_("b", "FAILURE"), run_("c", "TIMED_OUT")]
+        self.assert_failed(self.go(Gh(view(checks))), "G3: check b FAILURE")
 
     def test_a_failure_drafts_a_ready_pr(self):
         gated = self.go(Gh(view([run_("unit", "FAILURE")], draft=False)))
@@ -198,6 +207,86 @@ class Done(Base):
         long = self.go(Gh(view([run_("n" * 1000, "FAILURE")])), out=outcome(summary="x" * 300))
         self.assertEqual(long.outcome.summary, f"ready gate: {long.reason}")
         self.assertLessEqual(len(long.outcome.summary), 300)
+
+
+class Pending(Base):
+    """G3 waits up to WAIT for checks still to complete, re-reading the PR every POLL."""
+
+    VIEWS = WAIT // POLL + 1
+
+    def test_a_check_rerun_by_the_last_pr_edit_passes_once_it_completes(self):
+        text = "mini-op PR text"
+        gh = Gh(
+            [
+                view([run_("CI"), run_(text, None, "QUEUED")]),
+                view([run_("CI"), run_(text, None, "IN_PROGRESS")]),
+                view([run_("CI"), run_(text)]),
+            ]
+        )
+        gated = self.go(gh)
+        self.assertEqual((gated.status, gated.outcome), (GateStatus.PASSED, outcome()))
+        self.assertEqual(self.gh.calls, [VIEW, VIEW, VIEW, READY])
+        self.assertEqual(self.slept, [POLL, POLL])
+        self.assert_safe_calls()
+
+    def test_every_pending_state_waits(self):
+        for check in (
+            *(run_("u", None, status) for status in ("QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "REQUESTED")),
+            context("ci/x", "PENDING"),
+            context("ci/x", "EXPECTED"),
+        ):  # fmt: skip
+            with self.subTest(check=check):
+                self.slept.clear()
+                gated = self.go(Gh([view([check]), view([run_("u")])]))
+                self.assertEqual(gated.status, GateStatus.PASSED)
+                self.assertEqual(self.slept, [POLL])
+
+    def test_a_check_pending_past_the_wait_fails_g3_naming_it(self):
+        gated = self.go(Gh(view([run_("lint"), run_("unit", None, "IN_PROGRESS")], draft=False)))
+        self.assert_failed(gated, "G3: check unit IN_PROGRESS")
+        self.assertEqual(self.gh.calls, [VIEW] * self.VIEWS + [UNDO])
+        self.assertLessEqual(sum(self.slept), WAIT)
+        self.assert_safe_calls()
+
+    def test_a_failure_beside_a_pending_check_fails_at_once(self):
+        for checks in (
+            [run_("a", None, "QUEUED"), run_("b", "FAILURE")],
+            [run_("b", "FAILURE"), run_("a", None, "QUEUED")],
+        ):
+            with self.subTest(checks=checks):
+                self.slept.clear()
+                self.assert_failed(self.go(Gh(view(checks))), "G3: check b FAILURE")
+                self.assertEqual((self.gh.calls, self.slept), ([VIEW], []))
+
+    def test_a_check_failing_after_the_wait_began_fails_with_its_conclusion(self):
+        gh = Gh([view([run_("u", None, "QUEUED")]), view([run_("u", "FAILURE")])])
+        self.assert_failed(self.go(gh), "G3: check u FAILURE")
+        self.assertEqual(self.gh.calls, [VIEW, VIEW])
+
+    def test_a_head_moving_during_the_wait_fails_g2(self):
+        gh = Gh([view([run_("u", None, "QUEUED")]), view([run_("u")], head=OLDER)])
+        self.assert_failed(self.go(gh), "G2: updraft head")
+        self.assertEqual(self.gh.calls, [VIEW, VIEW])
+
+    def test_a_failed_view_during_the_wait_fails_without_touching_the_pr(self):
+        gh = Gh([view([run_("u", None, "QUEUED")], draft=False), failed("HTTP 502")])
+        self.assert_failed(self.go(gh), "gh pr view: HTTP 502")
+        self.assertEqual(self.gh.calls, [VIEW, VIEW])
+
+    def test_g1_and_g2_failures_never_wait(self):
+        pending = [run_("u", None, "QUEUED")]
+        for updraft, answer in (
+            (None, view(pending)),
+            (CONVERGED, view(pending, state="CLOSED")),
+            (CONVERGED, view(pending, head=OLDER)),
+        ):
+            with self.subTest(updraft=updraft):
+                self.go(Gh(answer), updraft)
+                self.assertEqual((self.gh.calls, self.slept), ([VIEW], []))
+
+    def test_not_done_outcomes_never_wait(self):
+        self.go(Gh(view([run_("u", None, "QUEUED")])), out=outcome(OutcomeStatus.FAILED))
+        self.assertEqual((self.gh.calls, self.slept), ([VIEW], []))
 
 
 class Cancelled(Base):
@@ -296,7 +385,7 @@ class Cancelled(Base):
                 self.assert_failed(
                     self.go_job(self.job(), checks=[run_("pass"), self.check(**changes)]), said
                 )
-                self.assertEqual(self.gh.calls, [VIEW])
+                self.assertNotIn(JOB_API, self.gh.calls)
 
     def test_g1_g2_fail_without_reading_job_evidence(self):
         for updraft in (None, Updraft(UpdraftStatus.CONVERGED, OLDER)):
