@@ -12,7 +12,7 @@ from unittest import mock
 import ensemble
 from ensemble.orchestrator.engine import log
 from ensemble.orchestrator.engine.flow import workflow
-from ensemble.orchestrator.trackers.linear import client
+from ensemble.orchestrator.trackers.linear import client, worker
 from tests.session import harnesses
 from tests.utils.case import REPO, ROOTS, RUN_WITH, SRC, TreeCase, foreign
 from tests.utils.sandbox import clean_env
@@ -37,6 +37,10 @@ class Case(TreeCase):
             stack.enter_context(mock.patch("subprocess.run", system_probe))
         log.use_logs(None)
         client.use()  # a test's renewal policy and failed renewals must not reach the next
+        # a worker container's mounted Linear access must not replace a test's injected board
+        stack.enter_context(
+            mock.patch.object(worker, "DIRECTORY", os.path.join(self.home, "worker", "linear"))
+        )
         workflow.DEFAULT.load()  # a test's own workflow must not reach the next
         self.addCleanup(harnesses.end, self.home)
 
