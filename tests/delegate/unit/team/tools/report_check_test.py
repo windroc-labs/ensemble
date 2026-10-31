@@ -1,5 +1,6 @@
 import io
 import os
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -11,6 +12,8 @@ from tests.delegate.team_tools import tool
 
 SCRIPT = os.path.join(TEAM, "tools", "report_check.py")
 report_check = tool("report_check")
+LABEL = "Findings: 1 aspects, 1 findings"
+ASPECT = "---\n\n### 1. Aspect\n\n"
 
 
 class ReportCheck(Case):
@@ -18,7 +21,17 @@ class ReportCheck(Case):
         template = Path(TEAM, "templates", "research-report.md").read_text(encoding="utf-8")
         self.assertIn(f"lists/paragraphs {report_check.LINE_LIMIT}", template)
         self.assertIn(f"other cells {report_check.CELL_LIMIT}", template)
-        self.assertIn(f"at most {report_check.FINDINGS_LIMIT} in total", template)
+        self.assertIn(f"this whole block at most {report_check.FINDINGS_LIMIT}", template)
+        for row in (
+            f"| Aspect answer | {report_check.ANSWER_LIMIT} |",
+            f"| Orientation | {report_check.ORIENTATION_LIMIT} |",
+            f"| Claim heading | {report_check.CLAIM_LIMIT} |",
+            f"| Finding body | {report_check.BODY_SENTENCES} sentences, {report_check.BODY_LIMIT} |",
+            f"| One aspect, everything in it | {report_check.ASPECT_LIMIT} |",
+            f"| Code example | {report_check.CODE_LINES} lines (exempt from columns) |",
+            f"| Table cells | {report_check.CELL_LIMIT}; last column {report_check.LINE_LIMIT} |",
+        ):
+            self.assertIn(row, template)
         sample = template.split("## Filled example\n", 1)[1].strip()
         self.assertEqual(self.check(sample), (0, "ok\n"))
         visible = []
@@ -32,7 +45,12 @@ class ReportCheck(Case):
                 hidden = False
         self.assertLessEqual(sum(not c.isspace() for c in "".join(visible)), 1500)
         self.assertEqual(sample.count("<details>"), 1)
-        self.assertEqual(sample.count('<details id="findings">'), 1)
+        self.assertEqual(sample.count('<details id="findings" open>'), 1)
+        self.assertEqual(sample.count("\n\n---\n\n### "), 4)
+        body, sources = sample.split("\n## Sources\n")
+        self.assertNotRegex(body, r"(?<!\[)\[\d+\](?!\])")
+        for number, target in re.findall(r"^(\d+)\. \[[^\]]+\]\(([^)]+)\)", sources, re.M):
+            self.assertIn(f"[[{number}]]({target})", body)
         self.assertIn("## What it means for us", sample)
         self.assertIn("```mermaid", sample)
         self.assertRegex(
@@ -157,25 +175,26 @@ class ReportCheck(Case):
                 self.assertIn(f"line 1: {kind} 81>80:", self.check(text)[1])
         self.assertEqual(self.check("- " + "a" * 80 + "\n- " + "b" * 80), (0, "ok\n"))
 
-    def test_findings_block_has_one_budget_instead_of_line_caps(self):
+    def findings(self, body, tag='<details id="findings" open>'):
+        return f"## Findings\n\n{tag}\n<summary>{LABEL}</summary>\n\n{body}\n\n</details>"
+
+    def test_findings_block_has_one_total_budget(self):
         limit = report_check.FINDINGS_LIMIT
-        label = "Findings (1)"
-
-        def findings(body, tag='<details id="findings">'):
-            return f"## Findings\n\n{tag}\n<summary>{label}</summary>\n\n{body}\n\n</details>"
-
+        findings = self.findings
         self.assertEqual(self.check(findings("**claim**\n\n" + "中" * 250)), (0, "ok\n"))
-        rest = "x" * (limit - len(label) - 10)
+        rest = "x" * (limit - len(LABEL) - 10)
         self.assertEqual(self.check(findings("- " + "y" * 10 + "\n\n" + rest)), (0, "ok\n"))
         code, out = self.check(findings("- " + "y" * 11 + "\n\n" + rest))
         self.assertEqual(code, 1)
-        first = f"{label} {'y' * 11} {'x' * 35}"
+        first = f"{LABEL} {'y' * 11} {rest}"[:60]
         self.assertEqual(out, f"line 3: findings {limit + 1}>{limit}: {first}\n")
-        half = "x" * (limit // 2)
-        table = f"| A | B |\n|---|---|\n| {half} | {half} |"
-        self.assertIn(f"findings {limit + len(label) + 2}>{limit}", self.check(findings(table))[1])
-        exempt = f"### {rest}\n\n```mermaid\n{rest}\n```\n\n<p>\n\nok"
-        self.assertEqual(self.check(findings(exempt)), (0, "ok\n"))
+        table = "x" * (limit - len(LABEL)) + "\n\n| A | B |\n|---|---|\n| y | z |"
+        self.assertIn(f"findings {limit + 4}>{limit}", self.check(findings(table))[1])
+        claim = "x" * (limit - len(LABEL) - 80) + "{}\n\n#### " + "c" * 80
+        self.assertEqual(self.check(findings(claim.format(""))), (0, "ok\n"))
+        self.assertIn(f"findings {limit + 1}>{limit}", self.check(findings(claim.format("x")))[1])
+        exempt = findings(f"```mermaid\n{rest}\n```\n\n<p>\n\n" + "x" * (limit - len(LABEL)))
+        self.assertEqual(self.check(exempt), (0, "ok\n"))
         nested = "<details>\n<summary>More</summary>\n\nok\n\n</details>\n\n" + "x" * 100
         self.assertEqual(self.check(findings(nested)), (0, "ok\n"))
         for after, kind in (("x" * 81, "paragraph"), ("<details>\n\n- " + "x" * 81, "list")):
@@ -183,11 +202,112 @@ class ReportCheck(Case):
                 self.assertIn(f"{kind} 81>80:", self.check(findings("ok") + "\n\n" + after)[1])
         self.assertIn("paragraph 81>80:", self.check(findings("x" * 81, tag="<details>"))[1])
         unclosed = findings("x" * limit).removesuffix("\n\n</details>")
-        self.assertIn(f"findings {limit + len(label)}>{limit}", self.check(unclosed)[1])
+        self.assertIn(f"findings {limit + len(LABEL)}>{limit}", self.check(unclosed)[1])
         for end in ("x</details>", "x"):
             with self.subTest(end=end):
                 text = findings(end).removesuffix("\n\n</details>") + "\n\n## Next\n\n- " + "x" * 81
                 self.assertEqual(self.check(text), (1, "line 10: list 81>80: " + "x" * 60 + "\n"))
+
+    def test_aspect_parts_have_their_own_limits(self):
+        # "Answer: " is 8 columns; "1.1 " is 4
+        cases = (
+            (
+                "> **Answer:** " + "a" * 152,
+                "> **Answer:** " + "a" * 153,
+                "line 10: answer 161>160:",
+            ),
+            (
+                "> **Answer:** " + "a" * 152 + "\n> [[1]](https://example.com/" + "u" * 99 + ")",
+                "",
+                "",
+            ),
+            (
+                "o" * 100 + "\n\n- " + "o" * 60,
+                "o" * 100 + "\n\n- " + "o" * 61,
+                "line 10: orientation 161>160:",
+            ),
+            (
+                "> **Answer:** a\n\n" + "o" * 160,
+                "> **Answer:** a\n\n" + "o" * 161,
+                "line 12: orientation 161>160:",
+            ),
+            (
+                "> **Answer:** a\n\n> " + "o" * 160,
+                "> **Answer:** a\n\n> " + "o" * 161,
+                "line 12: orientation 161>160:",
+            ),
+            ("#### 1.1 " + "c" * 76, "#### 1.1 " + "c" * 77, "line 10: claim 81>80:"),
+            (
+                "#### 1.1 c\n\n" + "b" * 400 + "\n\n- " + "b" * 74 + "\n\n(high)",
+                "#### 1.1 c\n\n" + "b" * 400 + "\n\n- " + "b" * 75 + "\n\n(high)",
+                "line 10: finding 481>480:",
+            ),
+            ("#### 1.1 c\n\n" + "b" * 480 + " [[1]](https://example.com/" + "u" * 99 + ")", "", ""),
+            (
+                "#### 1.1 c\n\n" + "Bb. " * 5 + "(high)",
+                "#### 1.1 c\n\n" + "Bb. " * 6 + "(high)",
+                "line 10: sentences 6>5:",
+            ),
+            (
+                "| A | B |\n|---|---|\n| "
+                + "x" * 30
+                + " [[2]](https://example.com/"
+                + "u" * 99
+                + ") | "
+                + "y" * 80
+                + " |",
+                "| A | B |\n|---|---|\n| " + "x" * 31 + " | y |",
+                "line 12: cell 31>30:",
+            ),
+            (
+                "```python\n" + "x = 1\n" * 15 + "```",
+                "```python\n" + "x = 1\n" * 16 + "```",
+                "line 10: code 16>15: x = 1",
+            ),
+            ("```mermaid\n" + "A --> B\n" * 40 + "```", "", ""),
+        )
+        for good, bad, failure in cases:
+            with self.subTest(good=good[:40]):
+                self.assertEqual(self.check(self.findings(ASPECT + good)), (0, "ok\n"))
+                if bad:
+                    code, out = self.check(self.findings(ASPECT + bad))
+                    self.assertEqual(code, 1)
+                    self.assertEqual(len(out.splitlines()), 1, out)
+                    self.assertTrue(out.startswith(failure), out)
+        self.assertEqual(self.check("```python\n" + "x = 1\n" * 40 + "```"), (0, "ok\n"))
+        self.assertRegex(self.check(self.findings("```\n" + "x\n" * 16))[1], r"code \d+>15:")
+
+    def test_sentences_count_terminators_not_abbreviations(self):
+        body = (
+            "Use e.g. a U.S. vendor, i.e. one vs. two, cf. Smith et al. in v0.4.0 and auth.json; "
+            'see 2.1–2.3 [3]. 甲。乙！丙？ "Quoted." Wait?! (high)'
+        )
+        five = self.findings(ASPECT + "#### 1.1 c\n\n" + body.replace(" Wait?!", ""))
+        self.assertEqual(self.check(five), (0, "ok\n"))
+        self.assertIn(
+            "sentences 6>5:", self.check(self.findings(ASPECT + "#### 1.1 c\n\n" + body))[1]
+        )
+
+    def test_each_aspect_has_one_budget_for_everything_in_it(self):
+        limit = report_check.ASPECT_LIMIT
+
+        def aspect(number, extra):
+            parts = [f"---\n\n### {number}. Aspect\n\n> **Answer:** " + "a" * 92]
+            parts += [f"#### {number}.{n} " + "c" * 46 + "\n\n" + "b" * 400 for n in range(1, 8)]
+            parts.append(f"#### {number}.8 " + "c" * 46 + "\n\n" + "b" * (200 + extra))
+            parts.append("| A | B |\n|---|---|\n| y | z |")
+            return "\n\n".join(parts)
+
+        # answer 100 + 8 claims of 50 + 7 bodies of 400 + last body 200 + 4 cells = 3504 + extra
+        self.assertEqual(
+            self.check(self.findings(aspect(1, -4) + "\n\n" + aspect(2, -4))), (0, "ok\n")
+        )
+        code, out = self.check(self.findings(aspect(1, -4) + "\n\n" + aspect(2, -3)))
+        self.assertEqual(code, 1)
+        self.assertRegex(out, rf"^line \d+: aspect {limit + 1}>{limit}: Answer: a+\n$")
+        self.assertIn(
+            f"line 8: aspect {limit + 1}>{limit}:", self.check(self.findings(aspect(1, -3)))[1]
+        )
 
     def test_usage_read_errors_and_entrypoint(self):
         for args in ([], ["a", "b"], [os.path.join(self.home, "missing")], [self.home]):

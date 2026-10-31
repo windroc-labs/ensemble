@@ -126,16 +126,25 @@ class Acceptance(Packaged):
             "| Research |",
             "| Deep Research |",
             "a figure (Mermaid, or SVG: [Researcher › Standards › Figures](#standards)) or table",
-            "avoid long essay-style paragraphs",
+            "No essay paragraphs.",
+            "`[n]` is source number n in Sources, written as a link to that source, "
+            "`[[n]](<URL or code permalink>)`, the same target as its Sources item",
             "Both have:",
             "A compared project with its own address is a link to it",
             "| [Grok Build](https://github.com/xai-org/grok-build) |",
             "| Impact | Gap |",
-            "<summary>Findings (<count>)</summary>",
+            '<details id="findings" open>',
+            "<summary>Findings: <A> aspects, <F> findings</summary>",
             "<summary>Sources (<count>)</summary>",
             "at most once per section",
             "bold answer",
-            "one **bold claim** line, then 1–3 sentences",
+            "then a blank line (the blank line before `---` is required",
+            "`### <n>. <Aspect name>`",
+            "`> **<Answer, translated>:** <this aspect's answer, 1–2 sentences> (<confidence>)`",
+            "`#### <n.m> <claim>`, the claim one plain sentence; then a body of 2–5 sentences",
+            "that aspect says `see <n.m>` instead of repeating it",
+            "| Practice, pitfalls | Do / avoid table with the reason per row |",
+            "Point to findings by number (`see 2.3`)",
             "## What it means for us",
             "omit when the input asks no decision",
         ):
@@ -584,8 +593,8 @@ class Real(RealConfig):
                 "A research report: its Template's Body rule instead.",
             ):
                 self.assertIn(literal, diagrams, (role, task, literal))
-            for cap in ("3000 words", "5 sentences"):
-                self.assertNotIn(cap, prompt, (role, task, cap))
+            self.assertNotIn("3000 words", prompt, (role, task))
+            self.assertNotIn("5 sentences", writing, (role, task))
 
     def test_every_run_judges_related_work_first_and_only_proposes_board_changes(self):
         for role, task in runs():
@@ -652,7 +661,8 @@ class Real(RealConfig):
         findings = section(light, "Findings")
         self.assertNotIn(point, findings)
         self.assertIn(
-            "`(<confidence: high, medium or low>; [n]…; <single-source or unverified, when so>)`",
+            "`(<confidence: high, medium or low>; <single-source, unverified or sources disagree, "
+            "when so>)`",
             findings,
         )
         self.assertIn(
