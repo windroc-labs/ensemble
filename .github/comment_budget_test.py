@@ -59,3 +59,20 @@ class Rules(unittest.TestCase):
         for path in ("src/e.py", ".github/comment_budget.py", "contests/f.py", "tests.py"):
             with self.subTest(path=path):
                 self.assertIs(budget.rule(path), budget.SOURCE)
+
+
+class CutOnly(unittest.TestCase):
+    def test_same_code_and_no_more_comment_is_a_cut(self):
+        for before, after in (((5, 5, 100), (4, 5, 100)), ((5, 5, 100), (0, 10, 100))):
+            with self.subTest(after=after):
+                self.assertTrue(budget.cut_only(before, after))
+
+    def test_new_files_more_comment_or_any_code_change_are_judged(self):
+        for before, after in (
+            (None, (0, 0, 100)),
+            ((5, 5, 100), (6, 5, 100)),
+            ((5, 5, 100), (4, 5, 101)),
+            ((5, 5, 100), (4, 5, 99)),
+        ):
+            with self.subTest(before=before, after=after):
+                self.assertFalse(budget.cut_only(before, after))

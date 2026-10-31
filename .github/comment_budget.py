@@ -62,11 +62,18 @@ def git(root, *argv):
 
 
 def changed(root, base):
+    """(path, its text at the merge-base or None when new) of each changed .py file."""
     fork = git(root, "merge-base", base, "HEAD").strip()
     listed = git(root, "diff", "--name-only", "--no-renames", "--diff-filter=d", "-z", fork, "--")
-    return sorted(
-        path for path in listed.split("\0") if path.endswith(".py") and (root / path).is_file()
-    )
+    existed = set(git(root, "ls-tree", "-r", "--name-only", "-z", fork).split("\0"))
+    for path in sorted(listed.split("\0")):
+        if path.endswith(".py") and (root / path).is_file():
+            yield path, git(root, "show", f"{fork}:{path}") if path in existed else None
+
+
+def cut_only(before, after):
+    """An edit that keeps every code character and adds no comment can only shorten comments."""
+    return before is not None and before[2] == after[2] and sum(after[:2]) <= sum(before[:2])
 
 
 def percent(n, code):
@@ -80,13 +87,15 @@ def main(argv=None, root=ROOT):
     root = Path(root)
     files = {SOURCE: [], TESTS: []}
     try:
-        for path in changed(root, args.base):
+        for path, base_text in changed(root, args.base):
             try:
                 with tokenize.open(root / path) as file:
                     comment, docstring, code = measure(file.read())
+                before = None if base_text is None else measure(base_text)
             except (OSError, SyntaxError, ValueError, tokenize.TokenError) as error:
                 raise ValueError(f"{path}: {error}") from error
-            files[rule(path)].append((path, comment + docstring, code))
+            if not cut_only(before, (comment, docstring, code)):
+                files[rule(path)].append((path, comment + docstring, code))
     except ValueError as error:
         print(f"comment_budget: {error}", file=sys.stderr)
         return 2
