@@ -98,6 +98,9 @@ def manager_tokens(days=10.0):
 RAW_BODY = 'say "hi", `ls`, $HOME and ${x} \\n\nline two\n中文正文\n'
 
 
+_UNSET_TASK = ("picks a task", "ensemble-delegate run --list", "only to force")
+
+
 class Help(Case):
     def test_each_help_names_its_contract(self):
         shared = ("ensemble-orchestrator issue read TASK-1", "8192", "Exit 0", "--help")
@@ -116,7 +119,8 @@ class Help(Case):
                     "create, edit, move, comment, archive, relation and label write",
                     "ensemble-orchestrator issue label add TASK-1 keep",
                     "ensemble-orchestrator issue label remove --help",
-                    "ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task build",
+                    "ensemble-orchestrator issue edit TASK-1 --title 'Fix login' --task <task>",
+                    *_UNSET_TASK,
                     "ensemble-orchestrator issue edit --help",
                     "ensemble-orchestrator issue move TASK-1 done",
                     "ensemble-orchestrator issue create --title 'Split login' --body-file note.md \\\n"
@@ -147,7 +151,7 @@ class Help(Case):
                     "--role SPEC",
                     "unassigned (no delegate; a local board: no assignee), on Linear by the\n  delegate",
                     "ensemble-orchestrator issue list --role me",
-                    "ensemble-orchestrator issue list --state ready --task build --priority high",
+                    "ensemble-orchestrator issue list --state ready --task <task> --priority high",
                     "ensemble-orchestrator issue lookup --help",
                     "8192",
                 ),
@@ -165,6 +169,7 @@ class Help(Case):
                     "--task NAME",
                     "--client NAME",
                     "--priority NAME",
+                    *_UNSET_TASK,
                     "every other label stays",
                     "at least one",
                     "configured team (linear.team)",
@@ -185,6 +190,7 @@ class Help(Case):
                     "--task NAME",
                     "--client NAME",
                     "--priority NAME",
+                    *_UNSET_TASK,
                     "--parent ID: an issue, the new one its sub-issue",
                     "relation add",
                     "never create again",
