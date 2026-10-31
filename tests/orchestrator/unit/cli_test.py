@@ -219,6 +219,8 @@ class Wirings(run_fixtures.Base):
             "issue relation add",
             "issue relation remove",
             "issue label swap",
+            "issue label add",
+            "issue label remove",
         )
 
         def text_of(name):

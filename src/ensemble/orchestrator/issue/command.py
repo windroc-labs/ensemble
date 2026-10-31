@@ -77,11 +77,11 @@ _RULES = (
 )
 _HELP = (
     _RULES.removesuffix("\n")
-    + "  create, edit, move, comment, archive, relation and label swap write as that\n"
+    + "  create, edit, move, comment, archive, relation and label write as that\n"
     "  app (a local board: other) and print a receipt instead; for them exit\n"
     "  1 also means the write failed or its result is unknown, for create also a\n"
-    "  relation that failed, for archive and label swap also a refusal (their\n"
-    "  --help).\n\n"
+    "  relation that failed, for archive, label swap and label add also a\n"
+    "  refusal (their --help).\n\n"
     "Values: abstract names; on Linear each the configured team's id.\n"
     "  States: backlog, ready, running, review, approved, done, canceled.\n"
     "  --role SPEC: a role of [orchestrator.linear.roles], me (the\n"
@@ -93,9 +93,9 @@ _HELP = (
     "  configured role's task / any client name.\n"
     "  --priority NAME: none, urgent, high, medium, low.\n"
     "  Splitting an issue: create --parent ID.\n"
-    "  Linear only (a local board exits 2): lookup, label swap, --label, --project,\n"
-    "  --milestone.\n\n"
-    "Example (a configured board holding TASK-1; lookup and label swap: Linear):\n"
+    "  Linear only (a local board exits 2): lookup, label swap, add and remove,\n"
+    "  --label, --project, --milestone.\n\n"
+    "Example (a configured board holding TASK-1; lookup and label: Linear):\n"
     "  ensemble-orchestrator issue read TASK-1\n"
     "  ensemble-orchestrator issue list --state running --role me\n"
     "  ensemble-orchestrator issue lookup labels --query bug\n"
@@ -108,14 +108,17 @@ _HELP = (
     "  ensemble-orchestrator issue comment TASK-1 --body-file note.md\n"
     "  ensemble-orchestrator issue archive TASK-1 --dry-run\n"
     "  ensemble-orchestrator issue relation add TASK-1 --blocks TASK-2\n"
-    "  ensemble-orchestrator issue label swap TASK-1 --from todo --to doing\n\n"
+    "  ensemble-orchestrator issue label swap TASK-1 --from todo --to doing\n"
+    "  ensemble-orchestrator issue label add TASK-1 keep\n"
+    "  ensemble-orchestrator issue label remove TASK-1 keep\n\n"
     "Recovery and next help:\n"
     "  Command details: ensemble-orchestrator issue read --help,\n"
     "  ensemble-orchestrator issue list --help, ensemble-orchestrator issue lookup --help,\n"
     "  ensemble-orchestrator issue create --help, ensemble-orchestrator issue edit --help,\n"
     "  ensemble-orchestrator issue move --help, ensemble-orchestrator issue comment --help,\n"
     "  ensemble-orchestrator issue archive --help, ensemble-orchestrator issue relation add --help,\n"
-    "  ensemble-orchestrator issue label swap --help\n"
+    "  ensemble-orchestrator issue label swap --help, ensemble-orchestrator issue label add --help,\n"
+    "  ensemble-orchestrator issue label remove --help\n"
     "  Configuration and command discovery: ensemble-orchestrator --help"
 )
 _PAGES = (
@@ -377,6 +380,12 @@ _RELATION_HELP = (
     "  Configuration and command discovery: ensemble-orchestrator --help"
 )
 
+_LABEL_NEXT = (
+    "Recovery and next help:\n"
+    "  The issue's labels: ensemble-orchestrator issue read TASK-1\n"
+    "  Label names and ids: ensemble-orchestrator issue lookup labels --team TASK\n"
+    "  Configuration and command discovery: ensemble-orchestrator --help"
+)
 _SWAP_HELP = (
     _WRITE_RULES
     % ""
@@ -390,11 +399,30 @@ _SWAP_HELP = (
     "  a label group the issue already holds another label of.\n\n"
     "Example (configured Linear access and TASK-1):\n"
     "  ensemble-orchestrator issue label swap TASK-1 --from todo --to doing\n"
-    "  ensemble-orchestrator issue label swap TASK-1 --from bug --to feature\n\n"
-    "Recovery and next help:\n"
-    "  The issue's labels: ensemble-orchestrator issue read TASK-1\n"
-    "  Label names and ids: ensemble-orchestrator issue lookup labels --team TASK\n"
-    "  Configuration and command discovery: ensemble-orchestrator --help"
+    "  ensemble-orchestrator issue label swap TASK-1 --from bug --to feature\n\n" + _LABEL_NEXT
+)
+_ADD_HELP = (
+    _WRITE_RULES
+    % ""
+    + "Adds the label LABEL names to ID, in one update naming only it: every other\n"
+    "  label stays. LABEL is an id or an exact name (case-sensitive) of a label of\n"
+    "  the issue's team or the workspace, no label group and not retired. Already\n"
+    "  there: result unchanged, nothing written.\n"
+    "  Refused (exit 1, nothing written): LABEL is in a label group the issue\n"
+    "  already holds another label of: swap that one instead.\n\n"
+    "Example (configured Linear access and TASK-1):\n"
+    "  ensemble-orchestrator issue label add TASK-1 keep\n\n" + _LABEL_NEXT
+)
+_REMOVE_HELP = (
+    _WRITE_RULES
+    % ""
+    + "Removes the label LABEL names from ID, in one update naming only it: every\n"
+    "  other label stays. LABEL is an id or an exact name (case-sensitive) of a\n"
+    "  label of the issue's team or the workspace, first looked for among the\n"
+    "  issue's labels, and may be retired. Not there: result unchanged, nothing\n"
+    "  written.\n\n"
+    "Example (configured Linear access and TASK-1):\n"
+    "  ensemble-orchestrator issue label remove TASK-1 keep\n\n" + _LABEL_NEXT
 )
 
 
@@ -604,10 +632,11 @@ def _parser():
             )
     labels = commands.add_parser(
         "label",
-        help="Linear only: replace one label of an issue, keeping the rest",
+        help="Linear only: replace, add or remove one label of an issue, keeping the rest",
         description="Change one issue's labels one at a time.",
     )
-    swap = labels.add_subparsers(dest="op", required=True).add_parser(
+    ops = labels.add_subparsers(dest="op", required=True)
+    swap = ops.add_parser(
         "swap",
         help="replace label OLD by NEW on one issue, keeping every other label",
         description="Replace one label of an issue by another, keeping every other label.",
@@ -621,6 +650,20 @@ def _parser():
     swap.add_argument(
         "--to", dest="new", required=True, action=_Once, metavar="NEW", help="label id or name"
     )
+    for op, dest, unset, verb, epilog in (
+        ("add", "new", "old", "add label LABEL to", _ADD_HELP),
+        ("remove", "old", "new", "remove label LABEL from", _REMOVE_HELP),
+    ):
+        edit = ops.add_parser(
+            op,
+            help=f"{verb} one issue, keeping every other label",
+            description=f"{verb[0].upper()}{verb[1:]} one issue, keeping every other label.",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog=epilog,
+        )
+        edit.add_argument("id", metavar="ID", help="issue identifier (TASK-1) or issue id")
+        edit.add_argument(dest, metavar="LABEL", help="label id or name")
+        edit.set_defaults(**{unset: None})
     return parser
 
 
@@ -804,12 +847,12 @@ def _written(output, payload, summary):
     return encode({**summary, "output": path})
 
 
-def _linear_only(command, request):
-    """What command and its request ask of a local board that only Linear has, or None."""
-    if command == "lookup":
+def _linear_only(args, request):
+    """What args' command and its request ask of a local board that only Linear has, or None."""
+    if args.command == "lookup":
         return "lookup"
-    if command == "label":
-        return "label swap"
+    if args.command == "label":
+        return f"label {args.op}"
     if isinstance(request, ListQuery):
         given = {"--label": request.label is not None, "--project": request.project is not None}
     elif isinstance(request, NewIssue):
@@ -852,7 +895,7 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
         board = worker_backend()
         if board is None:
             cfg = config.load(path=config_path)
-            if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args.command, request)):
+            if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args, request)):
                 diagnose(err, _LINEAR_ONLY.format(what))
                 return USAGE
             board = (
@@ -872,7 +915,7 @@ def main(argv, *, gql=linear_gql, config_path=None, out=None, err=None, stdin=No
         return USAGE
     try:
         if isinstance(board, LinearIssues) and args.command == "label":
-            data = receipt(receipt_payload(board.swap(args.id, args.old, args.new)))
+            data = receipt(receipt_payload(board.label(args.op, args.id, args.old, args.new)))
         elif isinstance(board, LinearIssues) and isinstance(request, LookupQuery):
             data = _listed(board.lookup_page, board.lookup_walk, request, args)
         else:

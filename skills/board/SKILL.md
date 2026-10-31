@@ -102,7 +102,7 @@ Archiving takes every sub-issue with it. `archive` reads all of them, at every d
 
 ## Local board
 
-On a local board (`$ENSEMBLE_BOARD_DIR`), the commands write as `other`, a person, so your comments and moves count as the user's. `me` is the board's `me/` directory and a role its `<role>/` directory; ids are the board's (`LOC-1`); a task or client is the issue file's `task` or `client` (`--client` takes any name without whitespace). `lookup`, `label swap`, `--label`, `--project` and `--milestone` exit 2.
+On a local board (`$ENSEMBLE_BOARD_DIR`), the commands write as `other`, a person, so your comments and moves count as the user's. `me` is the board's `me/` directory and a role its `<role>/` directory; ids are the board's (`LOC-1`); a task or client is the issue file's `task` or `client` (`--client` takes any name without whitespace). `lookup`, `label` (`swap`, `add`, `remove`), `--label`, `--project` and `--milestone` exit 2.
 
 ## Linear
 
@@ -118,11 +118,13 @@ ensemble-orchestrator issue list --label bug --project 'Ensemble'
 ensemble-orchestrator issue create --title 'Fix login' --body-file note.md --label bug --project 'Ensemble' --milestone M1
 ensemble-orchestrator issue edit TASK-1 --project 'Ensemble'
 ensemble-orchestrator issue label swap TASK-1 --from todo --to doing
+ensemble-orchestrator issue label add TASK-1 Keep
+ensemble-orchestrator issue label remove TASK-1 Keep
 ```
 
 - `lookup RESOURCE` lists `teams`, `states`, `labels`, `projects`, `milestones` (`--project`) or `users` with their ids.
 - `--label`, `--project` and `--milestone` take an id or an exact name. No match, several, or one outside the team exits 2 naming the candidates and the `lookup` command that lists them: pick an id from it, never the first match.
 - `edit --project` changes only the issue's project. The router starts only issues with a project: give one to an issue created without `--project`.
 - An archived issue: `move` to any state but `done` or `canceled` unarchives it first, putting it back on the lists (the router's included); `comment` on one exits 2, so move it first.
-- `label swap` replaces one label, keeping the rest; it refuses when the issue carries neither label, or when NEW's group already has another of its labels.
+- `label swap` replaces one label, `label add` adds one and `label remove` removes one, each keeping the rest. A label already there (`add`) or already gone (`remove`) is `unchanged`. `swap` refuses when the issue carries neither label; `swap` and `add` refuse when the new label's group already has another of the issue's labels.
 - An operation no command covers (other Linear entities) falls back to your own Linear tool, such as `/linear`.

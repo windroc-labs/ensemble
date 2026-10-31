@@ -46,7 +46,7 @@ def calls(issues):
         "relation": lambda: issues.relation("add", "TASK-2", "blocks", "TASK-3"),
         "archive_plan": lambda: issues.archive_plan("TASK-2"),
         "archive": lambda: issues.archive("TASK-2"),
-        "swap": lambda: issues.swap("TASK-2", "bug", "chore"),
+        "label": lambda: issues.label("swap", "TASK-2", "bug", "chore"),
     }
 
 
