@@ -130,6 +130,22 @@ failed = "Verification failed:"
 - Leave `next` and `deliverable` unset: the verifier publishes its report itself ([Upgrading](upgrading.md#verifier-reports-on-github-orchestrator-destination-removed) has its setup), and write-back links the report's `url` on the issue.
 - Its issue, delegated to the verifier app: an optional `Repo:` line (the project's mapping), an optional `Ref:` line, then what to test or the steps to run.
 
+## Docker worker client settings
+
+Each client's Docker workers start from a **Docker config**, a file you edit: yours under `~/.ensemble/docker-config/`, else the packaged default. Your file replaces the default whole; start from a copy of it. Your personal client settings (`~/.claude/settings.json`, `~/.codex/config.toml`) never reach a container.
+
+| Client | Your file | Packaged default | Worker copy | Wins over it |
+|---|---|---|---|---|
+| Claude | `claude/settings.json` | [`docker-settings.json`](../src/ensemble/session/clients/claude/docker-settings.json) | `$CLAUDE_CONFIG_DIR/settings.json` | `skipWorkflowUsageWarning`, `autoCompactEnabled`, `autoContinueAtUsageLimit`, `promptSuggestionEnabled`, which an unattended worker needs; run flags; project settings |
+| Codex | `codex/config.toml` | [`docker-config.toml`](../src/ensemble/session/clients/codex/common/docker-config.toml) | `$CODEX_HOME/config.toml` | every key the image's bootstrap writes there (login, project trust, plugins), merged key by key; run flags; project config |
+| OpenCode | `opencode/opencode.json` | [`docker-opencode.json`](../src/ensemble/session/clients/opencode/docker-opencode.json) | `$XDG_DATA_HOME/opencode.json`, named by `OPENCODE_CONFIG` | ensemble's inline config (providers, permissions, plugin); `--model`; project config |
+
+- **When it applies:** each new worker start reads it, so an edit needs no release and reaches later workers only. A Claude or OpenCode resume keeps the worker's copy. A Codex worker's home is its container's own, so each container start, a resume included, merges the Docker config again; comments do not reach the copy.
+- **One worker:** edit its copy in place, e.g. `docker exec -it <container> vi "$CODEX_HOME/config.toml"`. Copies are independent: other workers keep theirs. A Codex worker's edits last until its container restarts or resumes.
+- **Model and effort** come from the run's tier and effort flags (`[clients.<name>.tiers]`, `[clients.<name>.efforts]`); the copy only sets what a run leaves unset. It is a user-level file, never a managed layer.
+- **Trust:** the Docker config applies to every role's Docker workers. Only the keys above are overridden: others, such as Claude `permissions` or `defaultMode` and OpenCode `permission`, can widen a run's Access. Keep credentials out of it; the copy is plaintext in every worker's home.
+- An invalid Claude (not a JSON object) or Codex (not TOML) Docker config fails the Docker start, naming the file; OpenCode reports its own parse errors.
+
 ## OpenCode sessions
 
 OpenCode sessions run on every Host, but outside an `isolated` Host (tmux, or `[hosts.docker] isolated = false`) only in a trusted cwd (a role run's: under `trusted_dirs`, so given by `--cwd`, as its default cwd, the workdir's `agent/`, never is): OpenCode 1.x has no project trust, so in any cwd it runs `.opencode/plugins/*.js` and installs the npm plugins `opencode.json` lists, and `OPENCODE_DISABLE_PROJECT_CONFIG` does not stop it. A start, TUI or headless, and a resume in an untrusted cwd there fail before OpenCode starts: run it on the Docker Host or in a trusted cwd. On the tmux Host both modes run `[clients.opencode] executable` (default `opencode`) and refuse to start when its `--version` is not 1.x: where PATH finds a 2.x (Homebrew's `opencode` is 2.x), set it to a 1.x install's absolute path in `~/.ensemble/config.local.toml`'s `[session.clients.opencode]`. On the Docker Host they run the image's `/opt/ensemble/bin/opencode` instead (`executable` is ignored; the broker checks its version), in yolo mode, with Ollama at `host.docker.internal`. A long message shows as `[Pasted ~N lines]` in the TUI but is sent in full.
