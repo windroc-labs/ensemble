@@ -1,6 +1,8 @@
 """The utils layer's guard data (tests/guard_data/__init__.py)."""
 
-STANDALONE = frozenset({"src/ensemble/utils/process_control.py"})
+STANDALONE = frozenset(
+    {"src/ensemble/utils/process_control.py", "src/ensemble/utils/toml_merge.py"}
+)
 
 
 NO_COVER_ALLOWED = {
