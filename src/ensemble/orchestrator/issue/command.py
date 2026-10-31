@@ -55,6 +55,7 @@ from ensemble.orchestrator.issue.output import (
 )
 from ensemble.orchestrator.trackers.linear.client import linear_gql, messages, use
 from ensemble.orchestrator.trackers.linear.issues import LinearIssues
+from ensemble.orchestrator.trackers.linear.worker import backend as worker_backend
 from ensemble.orchestrator.trackers.local.issues import LocalIssues
 
 STATES = [str(state) for state in IssueState]
@@ -879,7 +880,7 @@ def main(
     argv,
     *,
     gql=linear_gql,
-    worker_backend=None,
+    worker=None,
     config_path=None,
     out=None,
     err=None,
@@ -900,7 +901,7 @@ def main(
             return USAGE
     request = _request(args, body)
     try:
-        board = worker_backend() if worker_backend else None
+        board = worker() if worker else None
         if board is None:
             cfg = config.load(path=config_path)
             if cfg.tracker is TrackerKind.LOCAL and (what := _linear_only(args, request)):
@@ -953,3 +954,8 @@ def main(
         return FAILED
     out.write(data)
     return OK
+
+
+def entry(argv):
+    """The ensemble-orchestrator issue command: a worker container's mounted board comes first."""
+    return main(argv, worker=worker_backend)
