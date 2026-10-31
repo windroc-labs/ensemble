@@ -59,6 +59,7 @@ class CodexHeadless(JsonHeadless):
                 mode=mode,
                 configured=self.common.flags,
                 unattended=found is not None,
+                resume=resume,
             ),
         ]
         if resume:

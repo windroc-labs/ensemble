@@ -31,6 +31,7 @@ from ensemble.session.clients.codex.common.types import (
 )
 from ensemble.session.clients.common import (
     CHECKS,
+    DOCKER_CONFIG_MAX,
     FLAGS,
     MODES,
     check_config,
@@ -63,6 +64,7 @@ from ensemble.utils import (
     load_config_text,
     number,
     open_beneath,
+    read_beneath,
     resume_command,
 )
 
@@ -806,19 +808,25 @@ def _docker_files() -> dict[str, str]:
     return {WORKER_CONFIG: text}
 
 
-def _config_layers(snapshot: Snapshot) -> list[str]:
-    """The config files Codex may read for `snapshot`, lowest precedence first; a Docker home's
-    user layer is its Docker config; a trusted project adds each `.codex/config.toml` from / down to
-    the cwd.
+def _docker_home(home: str) -> bool:
+    """Whether real path `home` is a Docker worker's Codex home, seen from the host."""
+    state = os.path.realpath(os.path.expanduser(DOCKER_STATE))
+    return os.path.dirname(os.path.dirname(home)) == state and os.path.basename(home) == "codex"
+
+
+def _config_layers(snapshot: Snapshot, *, resume: bool = False) -> list[str]:
+    """The config files Codex may read for `snapshot`, lowest precedence first; a trusted project
+    adds each `.codex/config.toml` from / down to the cwd. A Docker home's one user layer is the
+    file Codex will load there: the Docker config a new start copies, else the worker's own copy;
+    the host's system config never reaches it.
     """
     home = os.path.realpath(snapshot.codex_home)
-    docker = os.path.realpath(os.path.expanduser(DOCKER_STATE))
-    user = (
-        docker_config_path("codex", "config.toml", DOCKER_DEFAULT)
-        if os.path.dirname(os.path.dirname(home)) == docker and os.path.basename(home) == "codex"
-        else os.path.join(home, "config.toml")
-    )
-    layers = [SYSTEM_CONFIG, user]
+    if not _docker_home(home):
+        layers = [SYSTEM_CONFIG, os.path.join(home, "config.toml")]
+    elif resume:
+        layers = [os.path.join(home, WORKER_CONFIG)]
+    else:
+        layers = [docker_config_path("codex", "config.toml", DOCKER_DEFAULT)]
     if snapshot.project:
         ancestors = [snapshot.cwd]
         while (parent := os.path.dirname(ancestors[-1])) != ancestors[-1]:
@@ -827,14 +835,31 @@ def _config_layers(snapshot: Snapshot) -> list[str]:
     return layers
 
 
-def _mcp_servers(snapshot: Snapshot) -> dict[str, tuple[str, str]]:
+def _read_layer(path: str, home: str) -> dict:
+    """`path`'s TOML; the worker's own copy, which its agent can write, is read with no link
+    followed and at most DOCKER_CONFIG_MAX bytes. FileNotFoundError: no such layer.
+    """
+    if path != os.path.join(home, WORKER_CONFIG):
+        return load_config(path)
+    data = read_beneath(home, path, limit=DOCKER_CONFIG_MAX + 1)
+    if data is None or len(data) > DOCKER_CONFIG_MAX:
+        if not os.path.lexists(path):
+            raise FileNotFoundError(path)
+        raise ConfigError(f"{path}: want a regular file of at most 2 MiB")
+    return load_config_text(data.decode())
+
+
+def _mcp_servers(snapshot: Snapshot, *, resume: bool = False) -> dict[str, tuple[str, str]]:
     """Each MCP server the layers name: its transport key and value, the later layer's winning."""
     found = {}
-    for path in _config_layers(snapshot):
+    home = os.path.realpath(snapshot.codex_home)
+    for path in _config_layers(snapshot, resume=resume):
         if not os.path.lexists(path):
             continue
         try:
-            servers = load_config(path).get("mcp_servers", {})
+            servers = _read_layer(path, home).get("mcp_servers", {})
+        except FileNotFoundError:
+            continue
         except OSError as error:
             raise ConfigError(f"{path}: {error}") from None
         except ValueError as error:
@@ -857,7 +882,7 @@ def _mcp_servers(snapshot: Snapshot) -> dict[str, tuple[str, str]]:
     return found
 
 
-def mcp_off(flags: Sequence[str], snapshot: Snapshot) -> list[str]:
+def mcp_off(flags: Sequence[str], snapshot: Snapshot, *, resume: bool = False) -> list[str]:
     """`flags` with each `-c mcp_servers={}` (MCP_OFF) replaced by flags turning off every server
     the config layers name: `-c` merges tables, so MCP_OFF alone removes none. Each also gets its
     transport, so a name no layer Codex loads defines (a Docker launch) is still valid.
@@ -869,7 +894,7 @@ def mcp_off(flags: Sequence[str], snapshot: Snapshot) -> list[str]:
             result.extend(flags[flag.start : flag.end])
             continue
         if servers is None:
-            servers = _mcp_servers(snapshot)
+            servers = _mcp_servers(snapshot, resume=resume)
         for name, (key, value) in sorted(servers.items()):
             result += ["-c", f"mcp_servers.{name}.enabled=false"]
             result += ["-c", f"mcp_servers.{name}.{key}={json.dumps(value, ensure_ascii=False)}"]
@@ -916,6 +941,7 @@ def launch_flags(
     mode: Sequence[str],
     configured: Sequence[str],
     unattended: bool = False,
+    resume: bool = False,
 ) -> list[str]:
     """`mode` and `configured`: the launch's permission mode flags and the config's current
     flags, never in the snapshot; `unattended`: a Docker launch, given unattended_flags last.
@@ -923,7 +949,7 @@ def launch_flags(
     supplied, _ = split_flags(snapshot.flags)
     result = [
         *mode,
-        *mcp_off([*configured, *supplied], snapshot),
+        *mcp_off([*configured, *supplied], snapshot, resume=resume),
         *launch_options(snapshot),
         *(unattended_flags(snapshot.cwd) if unattended else ()),
     ]
