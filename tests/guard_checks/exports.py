@@ -51,7 +51,7 @@ def manager_exports(repo: str) -> list[str]:
 
 
 def object_exports(repo: str) -> list[str]:
-    """FR-44: entry modules export only classes, constants and type aliases unless allowlisted."""
+    """Entry modules export only classes, constants and type aliases unless allowlisted."""
     found, seen = set(), set()
     for rel in OBJECT_EXPORT_MODULES:
         path = os.path.join(repo, rel)

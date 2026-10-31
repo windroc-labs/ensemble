@@ -1,5 +1,5 @@
-"""ensemble-session resume and restart of a worker (FR-20, FR-36; Q07, Q08) on a private tmux
-server; kill -9 of the harness itself: crash_resume_integration_test.py.
+"""ensemble-session resume and restart of a worker on a private tmux server; kill -9 of the harness
+itself: crash_resume_integration_test.py.
 """
 
 import contextlib

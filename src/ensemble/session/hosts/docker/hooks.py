@@ -1,5 +1,5 @@
 """One resident `<hook> hook --serve <TUI dir>` process journaling a Docker session's hooks on the
-host (WDRC-182: no Python process per hook).
+host (no Python process per hook).
 """
 
 import contextlib

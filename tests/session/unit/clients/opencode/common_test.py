@@ -404,7 +404,7 @@ class SelectionTest(Case):
         self.assertEqual(resumed, ("--session", SES))
 
     def test_an_unbound_resume_selects_a_fresh_session(self):
-        """A run killed before OpenCode saved its session bound none (WDRC-366)."""
+        """A run killed before OpenCode saved its session bound none."""
         self.assertEqual(self.common.selection(replace(self.spec, resume=True), LOCAL_CONTEXT), ())
         self.assertIsNone(self.common.native(self.cwd, "run-1"))
 

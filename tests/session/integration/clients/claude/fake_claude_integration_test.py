@@ -807,7 +807,7 @@ class Interactive(Case):
         self.assertEqual(proc.returncode, 1)
 
     def test_idle_past_the_hang_cap_it_waits_on(self):
-        # WDRC-306: idle HANG_CAP s, it exited while a slow test still needed it
+        # idle HANG_CAP s, it exited while a slow test still needed it
         self.scene()
         ticks = itertools.count(step=fake_claude.HANG_CAP + 1)
         polls = []

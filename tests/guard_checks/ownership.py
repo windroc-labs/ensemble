@@ -126,7 +126,7 @@ def session_names(repo: str) -> list[str]:
 
 
 def session_roles(repo: str) -> list[str]:
-    """NFR-5: the session names no role (a team/roles/*.md stem) and reads no roles config."""
+    """The session names no role (a team/roles/*.md stem) and reads no roles config."""
     roles_dir = os.path.join(repo, DELEGATE_SRC, "team", "roles")
     roles = {name.removesuffix(".md") for name in os.listdir(roles_dir) if name.endswith(".md")}
     words = {**dict.fromkeys(roles, "names role"), "roles": "reads role config"}

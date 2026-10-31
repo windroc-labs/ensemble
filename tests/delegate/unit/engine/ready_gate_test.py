@@ -101,7 +101,7 @@ class Base(Case):
         self.assertNotIn(READY, self.gh.calls)
 
     def assert_safe_calls(self):
-        """NFR-1/NFR-3: only view and ready [--undo], each on the full PR URL with SHORT."""
+        """Only view and ready [--undo], each on the full PR URL with SHORT."""
         for argv in self.gh.calls:
             self.assertIn(argv, (VIEW, READY, UNDO))
         self.assertEqual(set(self.gh.timeouts), {SHORT} if self.gh.calls else set())

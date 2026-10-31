@@ -1077,7 +1077,7 @@ class HarnessDelegate(Delegate):
         on_event: Callable[[Event], None] | None,
     ) -> Result:
         """Attempt n's Result (a follow-up's `previous`); ends it only while opening past
-        run.idle_timeout or once its worker was gone DRAIN_WAIT s (AC18).
+        run.idle_timeout or once its worker was gone DRAIN_WAIT s.
         """
         p, n = self._state.plan, self._state.attempt
         idle, start = p.run.idle_timeout, time.monotonic()
@@ -1415,7 +1415,7 @@ class HarnessDelegate(Delegate):
                 if outcome is None or outcome.status != OutcomeStatus.NEEDS_INPUT:
                     raise ConfigError(f"{self.workdir}: --input requires a needs_input outcome")
                 if (agent := self._input_agent(state)) is not None:
-                    # its worker's TurnStarted opens the follow-up attempt (D9)
+                    # its worker's TurnStarted opens the follow-up attempt
                     if state.closing:
                         RunRecord(self.layout, self.store).save(replace(state, closing=False))
                     RunLog(state.plan.session.workdir).note("input", text=input)
@@ -1455,7 +1455,7 @@ class HarnessDelegate(Delegate):
                 session=replace(
                     accepted.session,
                     name=named,
-                    # stored, never re-resolved (FR-62)
+                    # stored, never re-resolved
                     environment=state.plan.session.environment,
                     credentials=state.plan.session.credentials,
                     environment_credentials=state.plan.session.environment_credentials,

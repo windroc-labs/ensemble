@@ -1,6 +1,6 @@
 """fake_linear.py, the orchestrator's Linear fake: its op table and seeding, then its answers over HTTP
 through linear_gql (the ENSEMBLE_LINEAR seam): projection, isMe, failures, the router's board reads,
-the promote, prune and write-back ops, comments by client id (FR-54, FR-55), and the issue command's
+the promote, prune and write-back ops, comments by client id, and the issue command's
 queries and mutations, alone and through LinearIssues."""
 
 import functools

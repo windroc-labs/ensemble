@@ -93,8 +93,8 @@ class Headless:
 
 
 class Tui(Headless):
-    """FR-23: a turn end without an outcome gets NUDGE, STOP_LIMIT more give up (a progress mark
-    resets it); FR-24: an IdleTimeout gives up. The session is left open.
+    """A turn end without an outcome gets NUDGE, STOP_LIMIT more give up (a progress mark
+    resets it); an IdleTimeout gives up. The session is left open.
     """
 
     stops_client = False

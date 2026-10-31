@@ -1,8 +1,7 @@
 """A worker's Record and identity through bin/ensemble-session on a private tmux server: the one
 Record line start prints, as its worker dir stores it, `ls --here --records` returns it and
-worker.json backs it (Q05); ENSEMBLE_SID and ENSEMBLE_EVENTS as its session id and events
-file, and their conflicts (Q06); the producer half of a manager's adoption, which sees only its own
-workers (Q14).
+worker.json backs it; ENSEMBLE_SID and ENSEMBLE_EVENTS as its session id and events file, and
+their conflicts; the producer half of a manager's adoption, which sees only its own workers.
 """
 
 import json

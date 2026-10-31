@@ -237,7 +237,7 @@ class GridTreeTest(Case):
                 self.assertEqual(self.tree(rows, panes, layout), want)
 
     def test_an_unknown_opener_without_a_pane_is_an_orphan_group(self):
-        """AC9 (D4): children of unknown w2 form an orphan group; w2 known keeps them main."""
+        """Children of unknown w2 form an orphan group; w2 known keeps them main."""
         layout = (
             "160x48,0,0{79x48,0,0,0,80x48,80,0[80x16,80,0,1,80x15,80,17[80x7,80,17,4,80x7,80,25,5],"
             "80x15,80,33,3]}"
@@ -334,9 +334,7 @@ class GridLayoutTest(Case):
         self.assertEqual(at - 1, cell.x + cell.w if across else cell.y + cell.h)
 
     def check(self, root, n, per_column, width=160, height=48):
-        """FR-3: main cell i (pane %i+1) in column i // N, row i % N; equal widths and heights, each
-        +-1.
-        """
+        """Main cell i (pane %i+1) in column i // N, row i % N; equal widths and heights, each +-1."""
         self.tiles(root)
         self.assertEqual(
             (root.kind, root.w, root.h, root.x, root.y),

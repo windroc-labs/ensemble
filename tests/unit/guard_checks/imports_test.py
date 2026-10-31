@@ -61,7 +61,7 @@ class OrchestratorSessionImports(Sample):
 
 
 class OrchestratorImports(Sample):
-    """FR-3: orchestrator imports only the standard library, itself, ensemble.utils and the
+    """Orchestrator imports only the standard library, itself, ensemble.utils and the
     names delegate's __all__ exports; no other package imports it.
     """
 

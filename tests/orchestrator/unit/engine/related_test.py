@@ -1,4 +1,4 @@
-"""First-claim candidate search at its Linear and gh boundaries (FR-29, FR-21, FR-30, NFR-3)."""
+"""First-claim candidate search at its Linear and gh boundaries."""
 
 import json
 from functools import partial

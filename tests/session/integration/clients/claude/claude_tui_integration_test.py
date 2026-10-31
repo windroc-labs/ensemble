@@ -289,7 +289,7 @@ class MidTurnTest(Live):
         )
 
     def test_background_notices_mid_turn_join_it_no_send(self):
-        """Each of a council's background agents ends with a notice (WDRC-278): each joins."""
+        """Each of a council's background agents ends with a notice: each joins."""
         steps = [
             "Waiting.",
             {"kind": "tool", "name": "Agent"},

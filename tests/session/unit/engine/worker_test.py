@@ -995,7 +995,7 @@ class OwnedTest(Base):
         self.assertEqual(self.said, [])
 
     def test_resume_owned_shows_unless_hidden_without_asking_the_harness(self):
-        """AC14: a display lost with its tmux server comes back; the harness is asked nothing."""
+        """A display lost with its tmux server comes back; the harness is asked nothing."""
         self.owned()
         view = self.session_cls.attach.return_value
         view.showable = True

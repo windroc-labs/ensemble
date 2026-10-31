@@ -85,15 +85,15 @@ class Delegate(ABC):
 
     @abstractmethod
     def run(self, on_event: Callable[[Event], None] | None = None) -> Result:
-        """FR-28: attempt Result; handlers stay registered."""
+        """Attempt Result; handlers stay registered."""
 
     @abstractmethod
     def alive(self) -> bool:
-        """FR-28: active attempt, independent of worker liveness."""
+        """Active attempt, independent of worker liveness."""
 
     @abstractmethod
     def status(self) -> Status:
-        """FR-28: needs_input is waiting, alive=False."""
+        """needs_input is waiting, alive=False."""
 
     @abstractmethod
     def content(self) -> str: ...
@@ -112,11 +112,11 @@ class Delegate(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """FR-28: confirmed owner close before lock release; finish an attempt once."""
+        """Confirmed owner close before lock release; finish an attempt once."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...
 
     @abstractmethod
     def resume(self, *, mode: str | None = None, input: str | None = None) -> Record:
-        """FR-28: next attempt/input, even with a living idle owner."""
+        """Next attempt/input, even with a living idle owner."""

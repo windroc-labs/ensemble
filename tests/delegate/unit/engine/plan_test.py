@@ -562,7 +562,7 @@ class Policy(Base):
 
 
 class SessionEnv(Base):
-    """plan never selects an account (WDRC-367: the session does)."""
+    """plan never selects an account: the session does."""
 
     def test_the_policy_env_and_a_docker_runs_users_only(self):
         self.local('[policy.claude]\nenv = { K = "v" }\n')
@@ -751,7 +751,7 @@ class Docker(DockerCase):
 
 class PrefetchTest(DockerCase):
     """A resolved environment's prefetch target: the Reference block's one Repo: and optional Ref:,
-    syntax-checked before any git call (WDRC-109 FR-52).
+    syntax-checked before any git call.
     """
 
     SPEC = EnvironmentSpec(image="dummy-env:test", gateway="workers", lock="dummy-lock")

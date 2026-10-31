@@ -132,7 +132,7 @@ class HookTest(HiddenCase):
         self.assertEqual(self.session("hide", "--if-closed", "w9").returncode, 1)
 
     def test_kill_pane_marks_hidden_and_resume_keeps_it_hidden(self):
-        """AC6: kill-pane of w1's worker pane marks it hidden; a resume of it keeps it hidden."""
+        """kill-pane of w1's worker pane marks it hidden; a resume of it keeps it hidden."""
         self.record(self.start("w1"))
         self.record(self.start("w2"))
         self.wait_event("w1", "done")
@@ -171,7 +171,7 @@ class HookTest(HiddenCase):
         return self.session("hide", "--if-closed", "--sid", sid, "--generation", generation, "w1")
 
     def test_an_ended_runs_close_hook_leaves_its_resume_shown(self):
-        """AC6: exit, kill-pane of another pane, resume: w1 shown, its stale entry pruned."""
+        """Exit, kill-pane of another pane, resume: w1 shown, its stale entry pruned."""
         record = self.record(self.start("w1"))
         self.record(self.start("w2"))
         self.wait_event("w1", "done")
@@ -186,7 +186,7 @@ class HookTest(HiddenCase):
         self.assertLessEqual(self.entries(), set(self.server.panes(WINDOW)))
 
     def test_an_ended_run_reads_gone_once_its_pane_exits(self):
-        """AC6, not waiting for its run to end."""
+        """Not waiting for its run to end."""
         record = self.record(self.start("w1"))
         self.record(self.start("w2"))
         self.wait_event("w1", "done")
@@ -199,7 +199,7 @@ class HookTest(HiddenCase):
         self.assertFalse(self.hidden())
 
     def test_an_ended_runs_close_hook_leaves_a_resumed_run_unhidden(self):
-        """AC6: exit, resume shown nowhere, kill-pane of another pane: w1 not hidden; another
+        """Exit, resume shown nowhere, kill-pane of another pane: w1 not hidden; another
         run's hide exits 1.
         """
         record = self.record(self.start("w1"))

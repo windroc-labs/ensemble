@@ -201,7 +201,7 @@ class GridTest(Live):
         }
 
     def test_sub_sessions(self):
-        """AC10: a show with opener m2 nests in its cell. AC9: m2 hidden, z3 sits in main."""
+        """A show with opener m2 nests in its cell; m2 hidden, z3 sits in main."""
         for i, name in enumerate(("m1", "m2", "m3"), 1):
             self.started(name)
             self.grid([[f"m{k}" for k in range(1, i + 1)]])
@@ -236,7 +236,7 @@ class GridTest(Live):
         self.grid([["m1", ["z3"]]])
 
     def test_a_show_with_a_hidden_opener_lands_in_its_openers_grid(self):
-        """AC9 (D5): b opened by hidden a lands in a's opener's grid; a shown again takes b."""
+        """b opened by hidden a lands in a's opener's grid; a shown again takes b."""
         self.worker("a", display=MANAGER)
         self.show("a")
         self.grid([["a"]])
@@ -250,7 +250,7 @@ class GridTest(Live):
         self.grid([[("a", ["b"])]])
 
     def test_showing_twice_keeps_one_pane(self):
-        """AC9: a show of a worker with a live worker pane opens nothing."""
+        """A show of a worker with a live worker pane opens nothing."""
         self.started("w1")
         self.started("w2")
         self.grid([["w1", "w2"]])

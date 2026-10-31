@@ -37,7 +37,7 @@ ITEM_ARGS = {
     "importkey": (1, 2),
 }
 # A command name anywhere, then its words; an item name holds a digit or one of -._@:+, so prose
-# after a command name (plain words) passes. A name of letters only is left to FR-212's search.
+# after a command name (plain words) passes, as does a name of letters only.
 COMMANDS = re.compile(
     r"(?<![\w-])("
     + "|".join(re.escape(c) for c in sorted(ITEM_ARGS, key=len, reverse=True))

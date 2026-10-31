@@ -369,7 +369,7 @@ def _held(marker: str) -> bool:
 class DockerHost(Host):
     """settings: docker CLI absolute path and pinned plugin sources installed in its image."""
 
-    _inherit_env = False  # the container gets only the launch's own env (D10)
+    _inherit_env = False  # the container gets only the launch's own env
     attachable = True
     _environments = True
     _remote_tui = True  # as DockerWorker.remote
@@ -644,7 +644,7 @@ class DockerHost(Host):
         return values
 
     def _environment(self, name: str, metadata: Mapping[str, str] | None) -> EnvironmentSpec | None:
-        """A resume's is its stored one (FR-62): taken if none is given, refused if the given one
+        """A resume's is its stored one: taken if none is given, refused if the given one
         differs but in prefetch.
         """
         given = _parsed_environment(name, (metadata or {}).get("environment"))

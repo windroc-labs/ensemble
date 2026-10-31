@@ -1,4 +1,4 @@
-"""FR-32: a session's client runs the running plugin's commands: its PATH starts with the bin/ where
+"""A session's client runs the running plugin's commands: its PATH starts with the bin/ where
 the starter's PATH finds ensemble-session, so ensemble-crew and ensemble-session resolve there and run,
 ahead of a stale ensemble-crew earlier on the starter's PATH. The client carries the agent session
 marker, so its ensemble-session start exits 2.

@@ -1,4 +1,4 @@
-"""NFR-2: the session layer copied alone, ensemble/session and ensemble/utils in an otherwise empty
+"""The session layer copied alone, ensemble/session and ensemble/utils in an otherwise empty
 directory (no ensemble/__init__.py), imports from there and passes its unit tests against it.
 """
 

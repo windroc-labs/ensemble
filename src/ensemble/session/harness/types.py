@@ -11,7 +11,7 @@ from ensemble.session.engine.types import ClientBound, SessionEvent, Stderr
 
 @dataclass(frozen=True)
 class EventCall:
-    """A handler's on_event input (FR-6); on_event never owns the worker lifecycle."""
+    """A handler's on_event input; on_event never owns the worker lifecycle."""
 
     session: Session
     event: SessionEvent

@@ -639,7 +639,7 @@ class Crew:
         entry = entries[name]
         status = None
         if entry.state == State.LIVE and entry.record is not None:
-            # only attach marks the roster; an attempt that ended since still reads live (FR-22)
+            # only attach marks the roster; an attempt that ended since still reads live
             status = self.status((name,))[0]
             entry = self._marked(name, entry, _reconciled(entry, status))
         if input is not None and entry.state != State.WAITING:

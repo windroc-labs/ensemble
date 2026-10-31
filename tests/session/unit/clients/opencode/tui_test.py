@@ -105,7 +105,7 @@ class LaunchTest(Base):
         self.assertEqual(launch.env["ENSEMBLE_OPENCODE_SESSION"], SES)
 
     def test_a_resume_without_a_binding_starts_a_fresh_session_with_its_prompt(self):
-        """A run killed before its session bound resumes as a fresh one (WDRC-366)."""
+        """A run killed before its session bound resumes as a fresh one."""
         run = self.run_tui()
         launch = run.launch(self.spec(resume=True, prompt="Fix it."), HOOK)
         self.assertEqual(launch.argv, ("opencode", *MODEL, "--prompt=Fix it."))

@@ -105,7 +105,7 @@ def orchestrator_session_imports(repo: str) -> list[str]:
 
 
 def orchestrator_imports(repo: str) -> list[str]:
-    """FR-3: orchestrator imports only the standard library, itself, ensemble.utils and the
+    """Orchestrator imports only the standard library, itself, ensemble.utils and the
     names in delegate's literal __all__; no other package imports it.
     """
     exported = _literal_all(os.path.join(repo, DELEGATE_SRC, "__init__.py"))

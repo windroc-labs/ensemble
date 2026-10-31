@@ -393,7 +393,7 @@ class FollowUpTest(HandlerCase):
 
 
 class CloseTest(HandlerCase):
-    """FR-34: a close holds a claim that keeps its worker's input from opening a follow-up, and
+    """A close holds a claim that keeps its worker's input from opening a follow-up, and
     ends the active attempt once, as a stop, only by the exit it causes.
     """
 
@@ -611,7 +611,7 @@ class IgnoredTest(HandlerCase):
 
 
 class LockedTest(HandlerCase):
-    """FR-23: a locked run is its user's to close, as an unlocked one is: no ending closes or stops
+    """A locked run is its user's to close, as an unlocked one is: no ending closes or stops
     it, and only a confirmed close claims its lock released.
     """
 
@@ -790,7 +790,7 @@ class EndingTest(HandlerCase):
 
 
 class OwnedCloseTest(HandlerCase):
-    """FR-34: a close ends the owned run's active attempt once, as a stop; never an ended one."""
+    """A close ends the owned run's active attempt once, as a stop; never an ended one."""
 
     STOPPED = Result(143, None, "stopped: Stopped: 143")
 

@@ -1,5 +1,5 @@
 """Names Vulture cannot see used, one entry each with its reason above it. An interface waiting for
-its caller names the ticket that calls it; that ticket deletes the entry.
+its caller says which caller; the change adding it deletes the entry.
 """
 
 import urllib.request
@@ -61,7 +61,7 @@ _ = Split.RIGHT, Split.BELOW
 
 # session/config.toml loads each Client by its `implementation` path.
 _ = ClaudeClient, CodexClient, OpenCodeClient
-# The harness sets its PYTHONPATH from Session.class_roots (D16).
+# The harness sets its PYTHONPATH from Session.class_roots.
 _ = Session.class_roots
 # Sid-checked CLI closes are to route through Session.retire; delete this entry then.
 _ = Session.retire
@@ -71,11 +71,11 @@ _ = Connect.__call__
 # Only tests read it, but the session interface is frozen (tests/guard_checks/exports.py
 # session_interface_snapshot).
 _ = SessionRow.last_lines
-# A handler's EventCall field; WDRC-204's session harness sets it for each dispatched event.
+# A handler's EventCall field; the session harness sets it for each dispatched event.
 _ = EventCall.event_id
-# A Tui's accepted-prompt hook kind (WDRC-226); WDRC-204's Claude adapter maps a label to it.
+# A Tui's accepted-prompt hook kind; the Claude adapter maps a label to it.
 _ = HookKind.TURN_STARTED
-# WDRC-204/207 consume the guard's retry-stable hook identity during channel deduplication.
+# Channel deduplication consumes the guard's retry-stable hook identity.
 _ = WorkerHook.delivery_id
 # urllib calls the redirect hook src/broker/internal/launcher/assets/opencode-install.py's NoRedirect overrides.
 _ = urllib.request.HTTPRedirectHandler.redirect_request

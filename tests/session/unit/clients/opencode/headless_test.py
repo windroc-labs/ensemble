@@ -598,7 +598,7 @@ class ResumeTest(Base):
         self.assertIsNone(self.client.common.native(self.cwd, "run-1"))
 
     def test_an_unbound_resume_starts_a_fresh_titled_session(self):
-        """A run killed before OpenCode saved its session resumes as a fresh one (WDRC-366)."""
+        """A run killed before OpenCode saved its session resumes as a fresh one."""
         command = self.command(self.launch(self.spec(resume=True)))
         self.assertEqual(command[4:6], ("--title", "ensemble-run-1"))
         self.assertNotIn("--session", command)

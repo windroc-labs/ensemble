@@ -35,7 +35,7 @@ SUBPACKAGES = {
 }
 
 
-# FR-25: the router only triggers a run; its Delegate's harness runs it and calls write-back
+# The router only triggers a run; its Delegate's harness runs it and calls write-back
 ORCH_ABSENT = ("engine/run.py",)
 
 

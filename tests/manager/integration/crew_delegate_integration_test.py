@@ -1,4 +1,4 @@
-"""Role runs through `ensemble-crew run -- ensemble-delegate run … --detach` (FR-18, FR-22, FR-35)
+"""Role runs through `ensemble-crew run -- ensemble-delegate run … --detach`
 on the real commands (tests/manager/live_crew.py). Ports main's
 test_killed_role_run_gone_then_recovered, test_close_a_role_run_by_its_tui_session and
 test_a_role_run_ended_on_needs_input_is_waiting_and_left_alone_by_attach_resume.

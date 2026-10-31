@@ -1,4 +1,4 @@
-"""Local issues from review to archive (spec AC12): bin/ensemble-orchestrator router, promote and prune
+"""Local issues from review to archive: bin/ensemble-orchestrator router, promote and prune
 as real processes with tracker = "local". A pm issue in review is approved, waits out promote's undo
 window, becomes engineer's issue once, and, done, is archived flat by prune, skipped while a
 sub-issue is open. A researcher's issue runs to review through the router first; promoted the same

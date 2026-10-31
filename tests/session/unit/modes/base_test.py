@@ -319,7 +319,7 @@ class ChildEnvTest(Case):
 
 
 class PluginPathTest(ChildEnvTest):
-    """FR-32: a session's PATH starts with the running plugin's bin/, the directory where PATH
+    """A session's PATH starts with the running plugin's bin/, the directory where PATH
     finds ensemble-session (each plugin bin/ script puts its own first).
     """
 

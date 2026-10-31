@@ -1234,7 +1234,7 @@ class RouterEntry(OuterBase):
 
 class AttendedEntry(OuterBase):
     """router.main --tui end to end through its own outer: the up-front display and events check
-    (main's AttendedEntry and run_test's tui cases), the attended launch and its Record (FR-28).
+    (main's AttendedEntry and run_test's tui cases), the attended launch and its Record.
     """
 
     DISPLAY = "mgr/below"
@@ -2084,7 +2084,7 @@ class ClientUsage(Base):
 
 
 class ClaimUsageGates(Base):
-    """FR-48: each candidate gates on its own client's usage."""
+    """Each candidate gates on its own client's usage."""
 
     def test_a_label_selected_client_gates_independently_of_the_role_default(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
@@ -2341,7 +2341,7 @@ class BrokenBoard:
 
 
 class LocalBoard(TickBase):
-    """Spec AC9 and AC11 in the router: the tracker comes from main's Connect map by kind."""
+    """In the router, the tracker comes from main's Connect map by kind."""
 
     def setUp(self):
         super().setUp()
@@ -2539,7 +2539,7 @@ class LocalBoard(TickBase):
                 self.assertEqual(self.connects, [TrackerKind.LOCAL])
 
     def test_local_dry_run_reads_no_linear_settings(self):
-        """Spec AC7: main hands cli's local Connect its transport raw; a dry run never calls it."""
+        """main hands cli's local Connect its transport raw; a dry run never calls it."""
         ready = os.path.join(self.tmp, "board", "researcher", "ready")
         os.makedirs(ready)
         with open(os.path.join(ready, "LOC-1 One.md"), "w", encoding="utf-8") as f:
@@ -2556,9 +2556,7 @@ class LocalBoard(TickBase):
 
 
 class ScheduledUsageGates(TickBase):
-    """FR-46, FR-48, FR-60 over a tick: each candidate gates on its client; a resume keeps its
-    recorded client.
-    """
+    """Over a tick, each candidate gates on its client; a resume keeps its recorded client."""
 
     def test_provider_credential_error_keeps_other_clients_schedulable(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
@@ -3308,8 +3306,8 @@ class RunLaunching(OuterBase):
         self.assertEqual(self.keychain_calls, [TOKEN])
         self.assertEqual(runs.parse_log(self.runs)[-1].role, "engineer")
 
-    """FR-45, FR-47's resume check: the outer reads the issue, checks its repo, renders its input,
-    records the run and detaches its LinearRun (FR-25).
+    """The outer and its resume check: the outer reads the issue, checks its repo, renders its input,
+    records the run and detaches its LinearRun.
     """
 
     def test_enterprise_target_host_reaches_router_checks_and_delegate_input(self):
@@ -3700,7 +3698,7 @@ class RunLaunching(OuterBase):
 
 
 class RelatedWork(OuterBase):
-    """FR-24, NFR-2: only a first claim searches; its candidates end the input; a failed search
+    """Only a first claim searches; its candidates end the input; a failed search
     is skipped.
     """
 
@@ -3777,7 +3775,7 @@ class RelatedWork(OuterBase):
 
 
 class RunStartRecords(Base):
-    """FR-46, FR-25: a start row records the client, the Delegate kind and the claim's context
+    """A start row records the client, the Delegate kind and the claim's context
     (issue uuid, project, target, the role's key); a resume row its sid's recorded kind.
     """
 
@@ -4805,7 +4803,7 @@ class HistoryReads(Base):
 
 
 class StaleRunRecovery(Base):
-    """FR-47: liveness and resumability are the run view's session status; what it cannot say
+    """Liveness and resumability are the run view's session status; what it cannot say
     changes nothing.
     """
 
@@ -4962,7 +4960,7 @@ class StaleByMoveIntoRunning(TickBase):
 
 
 class ClaimRechecks(Base):
-    """FR-56: the claim re-reads delegate and project; the claim is the recheck's."""
+    """The claim re-reads delegate and project; the claim is the recheck's."""
 
     def test_reassigned_to_no_role_app_is_not_claimed(self):
         for assignee in ({"id": USER, "email": "me@x.com"}, who("someone"), None):
@@ -5069,7 +5067,7 @@ class ClaimRechecks(Base):
 
 
 class Picks(Base):
-    """AC8: the recheck's task and client picks choose the run's task and client."""
+    """The recheck's task and client picks choose the run's task and client."""
 
     def test_claim_picks_task_and_client(self):
         self.write_config(AGENT_TOP + CONFIG + TASK_LABELS + AGENT_LABELS)
@@ -5620,7 +5618,7 @@ class ScheduledRuns(TickScenario):
 
 
 class RecoverWriteBack(TickBase):
-    """FR-41: Recover writes back an ended run's outcome its ledger has not completed, in process,
+    """Recover writes back an ended run's outcome its ledger has not completed, in process,
     instead of resuming the run; a run without an outcome resumes as before.
     """
 
@@ -5799,7 +5797,7 @@ class DelegateClaims(TickBase):
 
 
 class RouterLinear(Base):
-    """Spec AC1: the router reads and writes Linear only through the Tracker."""
+    """The router reads and writes Linear only through the Tracker."""
 
     def test_router_reaches_linear_only_through_tracker(self):
         tree = ast.parse(inspect.getsource(router))

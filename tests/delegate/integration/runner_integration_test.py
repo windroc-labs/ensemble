@@ -110,7 +110,7 @@ class Callbacks(Base):
 
 
 class Fix(Base):
-    """FR-21: one fix resume of the same session after an invalid outcome block, only when the
+    """One fix resume of the same session after an invalid outcome block, only when the
     client exited 0.
     """
 

@@ -164,7 +164,7 @@ def check_slug(slug: str | None, branch: str = "") -> str:
 
 
 def check_ref(ref: str) -> str:
-    """ref when it names a branch or tag (WDRC-109 FR-52), else Invalid."""
+    """ref when it names a branch or tag, else Invalid."""
     if not ref:
         why = "empty"
     elif len(ref) > 255:

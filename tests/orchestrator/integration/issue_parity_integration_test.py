@@ -1,4 +1,4 @@
-"""Parity of ensemble-orchestrator issue on a local board and on FakeLinear (spec AC13, AC10):
+"""Parity of ensemble-orchestrator issue on a local board and on FakeLinear:
 bin/ensemble-orchestrator as a real process runs one sequence on each tracker; each step's exit
 code and stdout shape match, and so do its tracker-independent values.
 """

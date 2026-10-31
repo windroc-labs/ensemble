@@ -1,5 +1,5 @@
-"""ensemble-session's batch commands (status, show, hide, close) by name and by stdin Record (Q11,
-Q12), and on a Host that cannot show (tests.session.fakes.host:FakeHost).
+"""ensemble-session's batch commands (status, show, hide, close) by name and by stdin Record,
+and on a Host that cannot show (tests.session.fakes.host:FakeHost).
 """
 
 import dataclasses

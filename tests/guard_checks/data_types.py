@@ -256,7 +256,7 @@ def _type_uses(rel, module, tree, data):
 
 
 def option_tuples(repo: str) -> list[str]:
-    """FR-49: a module-level tuple of option words in shipped code is a StrEnum, unless allowlisted."""
+    """A module-level tuple of option words in shipped code is a StrEnum, unless allowlisted."""
     found, seen = set(), set()
     for project in PROJECTS:
         for rel, text in _source_files(repo, project, ".py"):

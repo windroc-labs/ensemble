@@ -60,7 +60,7 @@ func TestCloseMakesNoCodexCall(t *testing.T) {
 	}
 }
 
-// AC6: close reads the token files as agent through docker exec on the context Revoke gives it, then removes the
+// Close reads the token files as agent through docker exec on the context Revoke gives it, then removes the
 // container.
 func TestCloseRevokesBeforeRemove(t *testing.T) {
 	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
@@ -86,7 +86,7 @@ func TestCloseRevokesBeforeRemove(t *testing.T) {
 	}
 }
 
-// AC6: an absent container's read says so (nothing to revoke), and close succeeds as before.
+// An absent container's read says so (nothing to revoke), and close succeeds as before.
 func TestCloseAbsentContainer(t *testing.T) {
 	absent := &docker.CommandError{Exit: 1, Stderr: "Error response from daemon: No such container: " + container}
 	d := &fakeDocker{respond: func([]string, []byte) ([]byte, error) { return nil, absent }}
@@ -97,7 +97,7 @@ func TestCloseAbsentContainer(t *testing.T) {
 	}
 }
 
-// AC6: a read that fails never keeps the container: close removes it and succeeds.
+// A read that fails never keeps the container: close removes it and succeeds.
 func TestCloseRemovesWhenReadFails(t *testing.T) {
 	for _, readErr := range []error{&docker.CommandError{Exit: 1, Stderr: "container is not running"}, context.DeadlineExceeded} {
 		d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {

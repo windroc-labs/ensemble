@@ -116,7 +116,7 @@ class Resumable(StrEnum):
 
 
 class HookKind(StrEnum):
-    """TURN_STARTED: one TurnStarted per accepted turn, never a replayed record (WDRC-199 FR-10)."""
+    """TURN_STARTED: one TurnStarted per accepted turn, never a replayed record."""
 
     TURN_END = "turn_end"
     TURN_FAILED = "turn_failed"
@@ -385,7 +385,7 @@ class Spec(ProcessOptions):
     environment: EnvironmentSpec | None = None
     credentials: str | None = None
     environment_credentials: str | None = None
-    handlers: tuple[HookCallback, ...] = ()  # ordered on_event modules (FR-5)
+    handlers: tuple[HookCallback, ...] = ()  # ordered on_event modules
 
     def __post_init__(self):
         if not printable_abs(self.workdir):
@@ -593,7 +593,7 @@ SessionEvent = TurnStarted | Activity | Reply | TurnEnd | TurnFailed | Blocked |
 
 @dataclass(frozen=True)
 class WorkerHook:
-    """Relayed by a worker's guard (WDRC-199 FR-15); untrusted (FR-36): check size and shape."""
+    """Relayed by a worker's guard; untrusted: check size and shape."""
 
     label: str
     payload: Mapping[str, object]
@@ -602,7 +602,7 @@ class WorkerHook:
 
 @dataclass(frozen=True)
 class WorkerOutput:
-    """FR-12, FR-15: its reader parses complete lines only."""
+    """Its reader parses complete lines only."""
 
     data: bytes
     stream: str = "stdout"
@@ -610,7 +610,7 @@ class WorkerOutput:
 
 @dataclass(frozen=True)
 class WorkerExit:
-    """returncode -N: signal N ended it (FR-16)."""
+    """returncode -N: signal N ended it."""
 
     returncode: int
 

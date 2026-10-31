@@ -1,4 +1,4 @@
-"""A ready issue on a local board runs to review (spec AC1, AC2): bin/ensemble-orchestrator router
+"""A ready issue on a local board runs to review: bin/ensemble-orchestrator router
 --issue as a real process with tracker = "local", the run's harness calling this installation's
 `writeback` back on each event; replayed events and a lost ledger post nothing twice.
 """

@@ -19,7 +19,7 @@ from tests.session.case import HOSTS, REPO
 from tests.session.cli_support import COMMAND, MANAGER, TIMEOUT, WorkerCase, logged
 
 FLAGS = ("--model", "m-test")
-REAPED = 10  # FR-13's bound for guard and client to end after kill -9 of the harness
+REAPED = 10  # the bound for guard and client to end after kill -9 of the harness
 RECALL = [{"kind": "recall"}]
 HANDLER = "tests.session.integration.harness.recording_handler"
 
@@ -201,8 +201,8 @@ class ResumeTest(CrashCase):
         self.assertEqual(len(self.calls("w1")), 1)
 
     def test_resume_shows_the_live_worker_again_unless_its_pane_was_closed_by_hand(self):
-        """WDRC-300, AC14: resume asks the live harness nothing; a killed attach is shown again, a
-        killed pane stays hidden; the same worker runs on.
+        """Resume asks the live harness nothing; a killed attach is shown again, a killed pane stays
+        hidden; the same worker runs on.
         """
         for name, kill in (("w1", "attach"), ("w2", "pane")):
             with self.subTest(kill=kill):
@@ -339,9 +339,7 @@ class ApiCase(CrashCase):
 
 class DisplayTest(ApiCase):
     def test_a_handlers_send_reaches_the_worker_shown_again_after_its_pane_was_killed(self):
-        """WDRC-304, AC14: the Dispatch view keeps its attach while its pane is killed; a show opens
-        a new one.
-        """
+        """The Dispatch view keeps its attach while its pane is killed; a show opens a new one."""
         self.sid = str(uuid.uuid4())
         self.scene("w1", turns=[["second"], ["third"], ["fourth"], ["fifth"]])
         send = os.path.join(self.root, "send")

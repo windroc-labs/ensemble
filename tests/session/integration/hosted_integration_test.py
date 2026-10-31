@@ -1,7 +1,6 @@
 """HostedSession on a private tmux server (tests/session/live_tmux.py), os.environ that server's env,
 the fake client's Tui: Session.attach(name).close() and the by-name close Session.retire(name) leave
-the same state (FR-4); a display given to start stored in guard and worker state, and
-listed (FR-48).
+the same state; a display given to start stored in guard and worker state, and listed.
 """
 
 import json

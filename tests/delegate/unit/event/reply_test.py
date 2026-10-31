@@ -1,4 +1,4 @@
-"""delegate/event/reply.py: progress mark lines and the outcome block of a reply (FR-18)."""
+"""delegate/event/reply.py: progress mark lines and the outcome block of a reply."""
 
 import unittest
 
