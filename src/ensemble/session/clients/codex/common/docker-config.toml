@@ -1,4 +1,4 @@
-# Docker Codex workers' config.toml: each new worker merges a copy of this file under the
-# settings ensemble writes (login, project trust, plugins), which win. Run flags set the model
-# and reasoning effort. Copy this file to ~/.ensemble/docker-config/codex/config.toml to change it,
-# e.g. to set service_tier.
+# Docker Codex workers' config.toml: each new worker copies this file to $CODEX_HOME/config/config.toml,
+# which keeps that worker's edits across its resumes. Ensemble's login, update-check and project-trust
+# flags win over it; run flags set the model and reasoning effort. Copy this file to
+# ~/.ensemble/docker-config/codex/config.toml to change it, e.g. to set service_tier.
