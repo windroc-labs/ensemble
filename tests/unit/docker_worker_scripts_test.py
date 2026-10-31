@@ -5,6 +5,7 @@ import http.client
 import io
 import json
 import os
+import re
 import runpy
 import shutil
 import stat
@@ -38,7 +39,6 @@ class MiniOpSkill(Case):
         (self.templates / ".claude.json").write_text("{}")
         self.plugins = Path(self.home, "plugins")
         self.plugins.mkdir()
-        (self.plugins / "config.toml").write_text("")
         self.image = Path("/opt/windroc/mini-op/skills/mini-op")
         real_stat = os.stat
 
@@ -83,7 +83,7 @@ class MiniOpSkill(Case):
                     self.code["bootstrap_claude"](self.templates, directory, "/work")
                 else:
                     self.code["bootstrap_codex"](
-                        directory, "/work", Path(self.home, "fake-secrets"), self.plugins
+                        directory, Path(self.home, "fake-secrets"), self.plugins
                     )
                 skill = discovery / "skills/mini-op"
                 self.assertEqual(skill.readlink(), self.image)
@@ -95,9 +95,7 @@ class MiniOpSkill(Case):
                     self.assertFalse((directory / "skills").exists())
 
     def test_codex_creates_the_user_discovery_directory(self):
-        self.code["bootstrap_codex"](
-            self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
-        )
+        self.code["bootstrap_codex"](self.target, Path(self.home, "fake-secrets"), self.plugins)
         skill = Path(self.home, ".agents/skills/mini-op")
         self.assertEqual(skill.readlink(), self.image)
         self.assertEqual((skill / "SKILL.md").read_text(), (self.source / "SKILL.md").read_text())
@@ -107,9 +105,7 @@ class MiniOpSkill(Case):
         elsewhere.mkdir()
         Path(self.home, ".agents").symlink_to(elsewhere)
         with self.assertRaisesRegex(SystemExit, "skill parent must be a directory, not a link"):
-            self.code["bootstrap_codex"](
-                self.target, "/work", Path(self.home, "fake-secrets"), self.plugins
-            )
+            self.code["bootstrap_codex"](self.target, Path(self.home, "fake-secrets"), self.plugins)
         self.assertEqual(list(elsewhere.iterdir()), [])
 
     def test_an_ordinary_image_without_mini_op_adds_no_skill(self):
@@ -201,45 +197,39 @@ class CodexBootstrap(Case):
         self.addCleanup(secrets.stop)
         self.plugins = Path(self.home, "image-plugins")
         (self.plugins / "plugins/cache").mkdir(parents=True)
-        (self.plugins / "config.toml").write_text("")
 
-    def test_codex_home_has_file_auth_trusted_project_and_only_a_secret_link(self):
-        import tomllib
-
-        self.code["bootstrap_codex"](self.target, '/work/"project', self.secrets, self.plugins)
-        config = tomllib.loads((self.target / "config.toml").read_text())
-        self.assertEqual(config["cli_auth_credentials_store"], "file")
-        self.assertEqual(config["forced_login_method"], "chatgpt")
-        self.assertEqual(config["projects"]['/work/"project']["trust_level"], "trusted")
+    def test_codex_home_links_its_config_to_the_kept_copy_and_auth_to_the_secret(self):
+        self.code["bootstrap_codex"](self.target, self.secrets, self.plugins)
+        config = self.target / "config.toml"
+        self.assertEqual(config.readlink(), Path("config/config.toml"))
+        self.assertFalse(os.path.lexists(self.target / "config"))
         self.assertTrue((self.target / "auth.json").is_symlink())
         self.assertEqual((self.target / "auth.json").readlink(), self.secrets / "codex/auth.json")
-        self.assertNotIn("plugins", config)
 
-    def test_codex_plugins_use_the_image_cache_and_enable_the_native_ids(self):
-        import tomllib
-
-        for name in ("beta", "updraft"):
-            (self.plugins / "plugins/cache/windroc" / name / "1.0.0").mkdir(parents=True)
-        (self.plugins / "config.toml").write_text(
-            '[plugins."updraft@windroc"]\nenabled = true\n'
-            '[plugins."beta@windroc"]\nenabled = true\n'
-            '[marketplaces.private]\nsource = "ignored"\n'
-        )
-        self.code["bootstrap_codex"](self.target, "/work/project", self.secrets, self.plugins)
-        config = tomllib.loads((self.target / "config.toml").read_text())
-        self.assertEqual(
-            config["plugins"],
-            {
-                "updraft@windroc": {"enabled": True},
-                "beta@windroc": {"enabled": True},
-            },
-        )
+    def test_codex_plugins_use_the_image_cache(self):
+        (self.plugins / "plugins/cache/windroc/updraft/1.0.0").mkdir(parents=True)
+        self.code["bootstrap_codex"](self.target, self.secrets, self.plugins)
         cache = self.target / "plugins/cache"
         self.assertTrue(cache.is_symlink())
         self.assertEqual(cache.readlink(), self.plugins / "plugins/cache")
         self.assertFalse((cache / "windroc/updraft/1.0.0").is_symlink())
-        self.assertNotIn("marketplaces", config)
         self.assertFalse((self.target / "sessions").exists())
+
+    def test_codex_bootstrap_refuses_a_home_that_already_has_a_config(self):
+        (self.target / "config.toml").write_text("mine")
+        with self.assertRaises(FileExistsError):
+            self.code["bootstrap_codex"](self.target, self.secrets, self.plugins)
+        self.assertEqual((self.target / "config.toml").read_text(), "mine")
+
+    def test_the_broker_binds_exactly_the_dirs_the_codex_home_keeps(self):
+        from ensemble.session.clients.codex import CodexClient
+
+        start = Path(REPO, "src/broker/internal/launcher/start.go").read_text()
+        found = re.search(r"^var codexKept = \[\]string\{(.*)\}$", start, re.MULTILINE)
+        self.assertIsNotNone(found)
+        self.assertEqual(
+            tuple(json.loads(f"[{found[1]}]")), CodexClient({}).headless()._home().persistent
+        )
 
     def carrier(self, access="one", account="account"):
         return json.dumps(
@@ -258,7 +248,7 @@ class CodexBootstrap(Case):
 
     def test_access_document_is_owner_read_only_and_atomically_replaced(self):
         inject = self.code["inject_codex"]
-        self.code["bootstrap_codex"](self.target, "/work/project", self.secrets, self.plugins)
+        self.code["bootstrap_codex"](self.target, self.secrets, self.plugins)
         inject(io.BytesIO(self.carrier()), self.secrets, self.target)
         path = self.target / "auth.json"
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o400)
@@ -283,7 +273,7 @@ class CodexBootstrap(Case):
         self.assertEqual(path.read_bytes(), self.carrier("renewed"))
 
     def managed(self):
-        self.code["bootstrap_codex"](self.target, "/work/project", self.secrets, self.plugins)
+        self.code["bootstrap_codex"](self.target, self.secrets, self.plugins)
         self.code["inject_codex"](io.BytesIO(self.carrier()), self.secrets, self.target)
         return self.target / "auth.json", self.secrets / "codex/auth.json"
 
