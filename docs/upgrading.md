@@ -12,6 +12,10 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## PRD acceptance as Gherkin scenarios
+
+A PRD's acceptance is now its Acceptance scenarios section (`@S-<n>` Gherkin scenarios), not a Check column, and decompose quotes on each engineer ticket the scenarios tagged with a requirement in its `Covers:`. A PRD written before this has no scenarios, so its engineer tickets would get no acceptance: before decomposing it, revise it with the `pm` role's `product-design` task.
+
 ## dummy-tester role and echo task removed
 
 The `dummy-tester` role and its `echo` task are gone. A `[delegate.roles.dummy-tester]` table left in `~/.ensemble/config.local.toml` makes `ensemble-delegate run --list` and every orchestrator config load fail with `roles.dummy-tester: no charter roles/dummy-tester.md in core or team_dirs`: delete the table. A run naming the role now fails with `unknown role 'dummy-tester'`; for a smoke test, run `researcher` with its `light-research` task instead.
