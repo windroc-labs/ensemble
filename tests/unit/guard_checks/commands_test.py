@@ -56,8 +56,8 @@ class PythonCommands(Sample):
         for files, expected in (
             (
                 {
-                    "src/ensemble/delegate/config.toml": 'commands = ["python3 x.py", "python3 -m ensemble.x"]\n# python3 -P {{team}}/tools/repo.py\ngate = "python3 -P {{team}}/x.py"\n',
-                    f"{OPKG}/config.toml": 'gate = "python3 -P -m ensemblex.y"\n',
+                    "src/ensemble/delegate/config.toml": 'commands = ["python3 x.py", "python3 -m ensemble.x",\n# python3 -P {{team}}/tools/repo.py\n"python3 -P {{team}}/x.py"]\n',
+                    f"{OPKG}/config.toml": 'commands = ["python3 -P -m ensemblex.y"]\n',
                     "skills/a/SKILL.md": "Run `python3.11 x.py`.\n- Bash(python -P -m ensemble.delegate.cli --list)\n",
                     "skills/b/SKILL.md": "Run `python3 y.py`.\n",
                     f"{team}/roles/r.md": (
@@ -103,7 +103,7 @@ class BinCommands(Sample):
                 f"{PKG}/delegate/cli.py": "",
                 "skills/a/SKILL.md": self.SKILL.format("ensemble-delegate run --list"),
                 f"{PKG}/delegate/config.toml": 'commands = ["python3 -P {{team}}/tools/repo.py *"]\n',
-                f"{OPKG}/config.toml": '[core.roles.r]\ngate = "ensemble-delegate run --list"\n',
+                f"{OPKG}/config.toml": '[core.roles.r]\ncommands = ["ensemble-delegate run --list"]\n',
                 **dict(files),
             }
         )
@@ -123,12 +123,9 @@ class BinCommands(Sample):
             ),
             (
                 "config",
-                {
-                    config: '[core.roles.r]\ngate = "ensemble-orchestrator router --brake r"\ncommands = ["ensemble-crew x *", "true"]\n'
-                },
+                {config: '[core.roles.r]\ncommands = ["ensemble-crew x *", "true"]\n'},
                 [
                     f'{config}: runs "ensemble-crew x *", not a bin/ command',
-                    f'{config}: runs "ensemble-orchestrator router --brake r", not a bin/ command',
                 ],
             ),
             *(

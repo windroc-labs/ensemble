@@ -135,7 +135,7 @@ def python_commands(repo: str) -> list[str]:
 
 def bin_commands(repo: str) -> list[str]:
     """Each bin/ command runs exactly one module of its own; each command a skill pre-approves, and
-    each config command or gate naming an ensemble- command, is a bin/ command.
+    each config command naming an ensemble- command, is a bin/ command.
     """
     top = os.path.join(repo, BIN)
     names = sorted(os.listdir(top)) if os.path.isdir(top) else []
@@ -177,7 +177,5 @@ def _commands(table):
     for key, value in table.items():
         if isinstance(value, dict):
             yield from _commands(value)
-        elif key == "gate" and isinstance(value, str):
-            yield value
         elif key == "commands" and isinstance(value, list):
             yield from (v for v in value if isinstance(v, str))
