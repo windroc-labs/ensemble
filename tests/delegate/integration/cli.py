@@ -17,7 +17,7 @@ from tests.delegate.plans import TEAM_FILES, write_team
 from tests.delegate.workdir import input_first
 from tests.session import harnesses, live_tmux
 from tests.session.case import claude_account
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.utils.case import local_section
@@ -57,7 +57,8 @@ class Runs(RunReads, Case):
         if not os.path.exists(self.log):
             return []
         with open(self.log) as f:
-            return [json.loads(line) for line in f]
+            calls = [json.loads(line) for line in f]
+        return [c for c in calls if c["argv"][-1:] != ["/usage"]]
 
     def read(self, path: str) -> str:
         with open(path) as f:
@@ -127,7 +128,7 @@ class Integration(Runs):
         self.config = os.path.join(self.root, "config")
         self.env = {
             **child_env({}),
-            "PATH": fake_claude.install(bin_dir),
+            "PATH": fake_usage.install(bin_dir),
             "HOME": self.home,
             "CLAUDE_CONFIG_DIR": self.config,
             "PYTHONUTF8": "1",

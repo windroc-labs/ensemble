@@ -46,8 +46,7 @@ def packaged_hosts() -> dict[str, Permission]:
 
 def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedSession]:
     """A HostedSession class of `clients`, `tmux` in [hosts.tmux]; TmuxHosts and Viewers hold
-    TmuxCli `host` (None: own); dependencies: class_loader, probe (default: fails), clock,
-    viewer_factory.
+    TmuxCli `host` (None: own); dependencies: class_loader, probe, clock, viewer_factory.
     """
     hosts = Host.parse_hosts({"tmux": {**HOSTS["tmux"], **(tmux or {})}, "default": "tmux"})
 
@@ -55,9 +54,8 @@ def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedS
         return kind(name, table, tmux=host) if issubclass(kind, TmuxHost) else kind(name, table)
 
     dependencies.setdefault("viewer_factory", lambda settings: Viewer(settings, tmux=host))
-    dependencies.setdefault("probe", _unexpected_probe)
     return harnesses.Threaded.configured(
-        clients=_with_account(clients), hosts=hosts, host_factory=build, **dependencies
+        clients=clients, hosts=hosts, host_factory=build, **dependencies
     )
 
 
@@ -67,20 +65,11 @@ def _unexpected_probe(argv, **_):
 
 def harnessed(clients) -> type[HostedSession]:
     hosts = Host.parse_hosts({**HOSTS, "default": "tmux"})
-    return harnesses.Threaded.configured(clients=_with_account(clients), hosts=hosts)
+    return harnesses.Threaded.configured(clients=clients, hosts=hosts)
 
 
 def claude_account(config_dir: str) -> str:
     return f"\n[session.clients.claude.accounts.test]\ndir = {json.dumps(config_dir)}\n"
-
-
-def _with_account(clients):
-    """A claude table with no accounts gets `test`, in the inherited config dir."""
-    table = clients.get("claude")
-    if table is None or "accounts" in table:
-        return clients
-    found = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-    return {**clients, "claude": {**table, "accounts": {"test": {"dir": found}}}}
 
 
 def preserve_configuration(case) -> None:
@@ -111,7 +100,10 @@ class Case(TreeCase):
         self.addCleanup(harnesses.end, self.home)
 
     def configure_session(self, clients, tmux=None) -> None:
-        self.session_cls = configured(clients, tmux, **getattr(self, "session_dependencies", {}))
+        dependencies = getattr(self, "session_dependencies", {})
+        if ".integration." not in type(self).__module__:
+            dependencies = {"probe": _unexpected_probe, **dependencies}
+        self.session_cls = configured(clients, tmux, **dependencies)
 
 
 def _foreign(modules=None) -> str | None:

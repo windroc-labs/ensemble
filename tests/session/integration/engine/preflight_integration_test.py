@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 from dataclasses import replace
+from pathlib import Path
 from unittest import mock
 
 from ensemble.session import Access, ConfigError, Effort, Host, Mode, SessionError, Spec
@@ -92,10 +93,20 @@ class Preflight(Case):
         self.assertEqual(diagnostics[0], diagnostics[1])
 
     def test_missing_claude_binary_is_config_error_for_preflight_and_driver_error_for_start(self):
+        clients = dict(read_config(local=os.devnull)["clients"])
+        account = {"test": {"dir": os.path.join(self.home, ".claude")}}
+        clients["claude"] = {**clients["claude"], "accounts": account}
+        probe_bin = os.path.join(self.home, "probe-bin")
+        os.mkdir(probe_bin)
+        Path(probe_bin, "claude").touch(mode=0o755)
+        os.makedirs(os.path.join(self.home, ".ensemble", "probe"), 0o700)
+        path = os.pathsep.join((probe_bin, os.environ.get("PATH", os.defpath)))
+        self.enterContext(mock.patch.dict(os.environ, {"PATH": path}))
         self.session = harnesses.Threaded.configured(
-            clients=read_config(local=os.devnull)["clients"],
+            clients=clients,
             hosts=Host.parse_hosts({"tmux": HOSTS["tmux"], "default": "tmux"}),
             host_factory=self._host_factory,
+            probe=lambda *_, **__: "Total cost: $0.00\n",
         )
         for name in (None, "named-worker"):
             spec = Spec(
