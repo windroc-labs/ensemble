@@ -539,7 +539,8 @@ class TuiTest(Base):
     def test_interrupt_ends_its_turn_without_the_previous_turns_text(self):
         run = self.client.tui()
         self.assertEqual(
-            run.hook_events("Interrupt", self.payload()), [ClientBound(NATIVE), TurnEnd()]
+            run.hook_events("Interrupt", self.payload()),
+            [ClientBound(NATIVE), TurnEnd(interrupted=True)],
         )
         self.assertEqual(
             run.hook_events("Stop", self.payload(last_assistant_message="kept")),
@@ -547,7 +548,7 @@ class TuiTest(Base):
         )
         self.assertEqual(
             run.hook_events("Interrupt", self.payload(last_assistant_message="discard")),
-            [TurnEnd()],
+            [TurnEnd(interrupted=True)],
         )
         self.assertEqual(
             run.hook_events("Stop", self.payload(last_assistant_message="after")),
@@ -562,9 +563,11 @@ class TuiTest(Base):
                     ("Interrupt", self.payload()),
                 ]
             ),
-            [ClientBound(NATIVE), TurnEnd("kept"), TurnEnd()],
+            [ClientBound(NATIVE), TurnEnd("kept"), TurnEnd(interrupted=True)],
         )
-        self.assertEqual(attached.hook_events("Interrupt", self.payload()), [TurnEnd()])
+        self.assertEqual(
+            attached.hook_events("Interrupt", self.payload()), [TurnEnd(interrupted=True)]
+        )
 
     def test_restore_readies_a_fresh_tui_as_the_one_that_launched(self):
         run, _, data = self.launch()
@@ -720,7 +723,7 @@ class TuiTest(Base):
                         },
                     },
                 )
-                self.assertEqual(mode.poll(0), ([TurnEnd()], False))
+                self.assertEqual(mode.poll(0), ([TurnEnd(interrupted=True)], False))
                 self.assertTrue(mode.send(text))
             _append(
                 path,
@@ -770,7 +773,7 @@ class TuiTest(Base):
                 "payload": {"type": "turn_aborted", "turn_id": turn, "reason": "interrupted"},
             }
             _append(path, aborted, aborted)
-            self.assertEqual(run.observe(), [TurnEnd()])
+            self.assertEqual(run.observe(), [TurnEnd(interrupted=True)])
             self.assertEqual(run.hook_events("Interrupt", self.payload(turn_id=turn)), [])
 
     def test_native_abort_without_id_and_after_a_hook_never_repeats_reply(self):
@@ -784,13 +787,14 @@ class TuiTest(Base):
             self.assertEqual(run.observe(), [TurnStarted(), Reply("partial")])
             if turn == "two":
                 self.assertEqual(
-                    run.hook_events("Interrupt", self.payload(turn_id=turn)), [TurnEnd()]
+                    run.hook_events("Interrupt", self.payload(turn_id=turn)),
+                    [TurnEnd(interrupted=True)],
                 )
             _append(
                 path,
                 {"type": "event_msg", "payload": {"type": "turn_aborted", "reason": "interrupted"}},
             )
-            self.assertEqual(run.observe(), [TurnEnd()] if turn == "one" else [])
+            self.assertEqual(run.observe(), [TurnEnd(interrupted=True)] if turn == "one" else [])
 
     def test_native_failure_can_arrive_before_its_accepted_input_hook(self):
         run, path = self.bound()

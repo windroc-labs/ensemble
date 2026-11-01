@@ -335,7 +335,7 @@ class CodexTui(Tui):
             and self._settle_turn(payload.get("turn_id") or self._native_turn, native=True)
         ):
             self.last = self.unseen = ""
-            return [TurnEnd()]
+            return [TurnEnd(interrupted=True)]
         if (
             record.get("type") == "event_msg"
             and isinstance(payload, dict)
@@ -379,7 +379,7 @@ class CodexTui(Tui):
             return []
         if payload.get("hook_event_name", label) != label:
             return []
-        payload = {**payload, "hook_event_name": label}
+        payload = {**payload, "hook_event_name": label, "interrupted": label == "Interrupt"}
         if not self.session_id(payload):
             return []
         early = []

@@ -33,6 +33,7 @@ EVENTS = (
     Activity("Bash"),
     Reply("hi"),
     TurnEnd("full\nreply", 2),
+    TurnEnd(interrupted=True),
     TurnFailed("server_overloaded", "detail"),
     Blocked("Bash"),
     LimitHit(1767225600.0),
@@ -56,6 +57,24 @@ class Base(Case):
 
 
 class CodecTest(Case):
+    def test_a_legacy_turn_end_defaults_to_uninterrupted(self):
+        self.assertEqual(
+            decode({"type": "TurnEnd", "fields": {"reply": "old", "pending": 0}}),
+            TurnEnd("old"),
+        )
+
+    def test_an_interruption_marker_must_be_boolean(self):
+        for value in (None, 0, 1, "true", [], {}):
+            with self.subTest(value=value):
+                self.assertIsNone(
+                    decode(
+                        {
+                            "type": "TurnEnd",
+                            "fields": {"reply": "", "pending": 0, "interrupted": value},
+                        }
+                    )
+                )
+
     def test_every_event_round_trips(self):
         for event in EVENTS:
             with self.subTest(event=event):

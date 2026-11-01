@@ -68,6 +68,7 @@ FIELDS = {
     "text": lambda v: isinstance(v, str),
     "reply": lambda v: isinstance(v, str),
     "pending": lambda v: type(v) is int,
+    "interrupted": lambda v: type(v) is bool,
     "error": lambda v: isinstance(v, str),
     "reason": lambda v: isinstance(v, str),
     "resets_at": lambda v: v is None or type(v) in (int, float),
@@ -88,6 +89,8 @@ def decode(record) -> SessionEvent | Stderr | ClientBound | None:
     kind = TYPES.get(name) if isinstance(name, str) else None
     if kind is None or not isinstance(fields, Mapping):
         return None
+    if kind is TurnEnd and "interrupted" not in fields:
+        fields = {**fields, "interrupted": False}
     names = {field.name for field in dataclasses.fields(kind)}
     if set(fields) != names or not all(FIELDS[name](fields[name]) for name in names):
         return None
