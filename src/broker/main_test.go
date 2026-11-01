@@ -349,27 +349,15 @@ func TestLoginClaudeDispatch(t *testing.T) {
 			t.Fatalf("%q: exit %d account %q %q %q", args, code, got, out, errOut)
 		}
 	}
-	_, _, errOut := invoke(app{}, "login", "claude", "Work")
-	var got struct{ Error struct{ Message string } }
-	if err := json.Unmarshal([]byte(errOut), &got); err != nil || !strings.Contains(got.Error.Message, " | login claude NAME | ") {
-		t.Fatalf("usage %q", errOut)
-	}
-}
-
-// A Claude login without an account name is a usage error, refused before any keychain access.
-func TestLoginClaudeWithoutNameIsUsage(t *testing.T) {
-	for _, args := range [][]string{{"login", "claude"}, {"login", "claude", "--expires", "2027-01-01"}, {"login", "claude", "--fresh-token"}} {
-		var opened, logged int
+	// An invalid or missing name is usage, refused before any keychain access.
+	for _, args := range [][]string{{"Work"}, {}, {"--expires", "2027-01-01"}, {"--fresh-token"}} {
 		var dated []datedCall
 		a := datedApp(&dated)
-		a.keychain = func(bool) (keys, error) { opened++; return keys{Home: "/nonexistent"}, nil }
-		a.login = func(keys, string, io.Writer) error { logged++; return nil }
-		code, out, errOut := invoke(a, args...)
-		var got struct {
-			Error struct{ Code, Message string }
-		}
-		if code != 2 || out != "" || json.Unmarshal([]byte(errOut), &got) != nil || got.Error.Code != "usage" || opened != 0 || logged != 0 || len(dated) != 0 {
-			t.Errorf("%q: exit %d %q %q keychain=%d login=%d dated=%v", args, code, out, errOut, opened, logged, dated)
+		a.keychain = func(bool) (keys, error) { t.Fatalf("%q opened the keychain", args); return keys{}, nil }
+		code, _, errOut := invoke(a, append([]string{"login", "claude"}, args...)...)
+		var got struct{ Error struct{ Message string } }
+		if err := json.Unmarshal([]byte(errOut), &got); code != 2 || err != nil || !strings.Contains(got.Error.Message, " | login claude NAME | ") || len(dated) != 0 {
+			t.Fatalf("%q: exit %d usage %q", args, code, errOut)
 		}
 	}
 }

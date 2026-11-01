@@ -57,10 +57,7 @@ feeder=
 askpass_dir=
 current=
 login_pending=
-login_dir=
-claude_accounts=
 answer=
-token_screen=
 app_pem=
 app_id=
 pkg=
@@ -441,16 +438,11 @@ state_set() {
 on_exit() {
   local rc=$?
   trap '' HUP INT TERM
-  token_screen_leave
   sudo_end
   # A login that failed or was cut short after storing its credential is still the cleanup's to remove. Handled, not
   # ignored, signals reach its probe with their default action: Ctrl-C stops a hung one.
   trap : HUP INT TERM
-  if [ "$login_pending" = claude ]; then
-    if CLAUDE_CONFIG_DIR=$login_dir login_status claude; then ledger_add login claude "$login_dir"; fi
-  elif [ -n "$login_pending" ] && login_status "$login_pending"; then
-    ledger_add login "$login_pending"
-  fi
+  if [ -n "$login_pending" ] && login_status "$login_pending"; then ledger_add login "$login_pending"; fi
   if [ "$rc" -ne 0 ] && [ -n "$current" ]; then
     say "$me: $current failed; rerun the same command to continue"
   fi
@@ -2135,53 +2127,7 @@ store_app_key() {
   ledger_add keychain ensemble-broker-bot "$app_id"
 }
 
-# The Claude accounts the session registers, one "<name>\t<dir>" line each, read by the plugin's own session.
-claude_accounts_of() {
-  "$pkg/bin/ensemble-session" accounts claude </dev/null | python3 -I -c '
-import json, sys
-for name, env in json.load(sys.stdin).items():
-    folder = env["CLAUDE_CONFIG_DIR"]
-    if "\t" in folder or "\n" in folder:
-        sys.exit(f"account {name}: its dir holds a tab or newline")
-    print(f"{name}\t{folder}")' "$@"
-}
-
-# Logs Claude account $1 in on its own dir $2, recording the login for the cleanup only once it succeeded (on_exit
-# records one that stored its credential before failing).
-claude_login() {
-  record_dir "$2"
-  login_pending=claude login_dir=$2
-  CLAUDE_CONFIG_DIR=$2 claude auth login <&3 >&3 2>&3 \
-    || die "Claude account $1 not logged in: run CLAUDE_CONFIG_DIR=$2 claude auth login, then rerun"
-  ledger_add login claude "$2"
-  login_pending= login_dir=
-}
-
-# Each registered Claude account's own login: claude auth status, and claude auth login when it has none, with
-# CLAUDE_CONFIG_DIR its dir. No account registered stops the install.
-claude_logins() {
-  local name dir remedy
-  step "Claude Code login"
-  if ! has claude; then
-    skip "Claude Code not chosen"
-    return
-  fi
-  claude_accounts=$(claude_accounts_of) || die "cannot read the registered Claude accounts: fix ~/.ensemble/config.local.toml, then rerun"
-  if [ -z "$claude_accounts" ]; then
-    remedy="register an account: a [session.clients.claude.accounts.<name>] table with dir = \"<its CLAUDE_CONFIG_DIR>\" in ~/.ensemble/config.local.toml"
-    if [ "$docker" = yes ]; then remedy+=", then ensemble-broker login claude <name>"; fi
-    die "Claude not ready: no account registered; $remedy, then rerun"
-  fi
-  while IFS=$'\t' read -r name dir; do
-    if CLAUDE_CONFIG_DIR=$dir login_status claude; then
-      skip "$name logged in ($dir)"
-    else
-      claude_login "$name" "$dir"
-    fi
-  done <<<"$claude_accounts"
-}
-
-# Claude account $2's named credential or pinned Codex: install, update, login, ready or busy.
+# Pinned Codex: install, update, login, ready or busy.
 broker_need() {
   "$broker" status </dev/null | python3 -I -c '
 import json, sys
@@ -2191,9 +2137,6 @@ if "audit_warning" in data:
         print("audit_write_failed: broker audit persistence failed; the operation result still applies. Do not repeat a successful start.", file=sys.stderr)
     else:
         print("ensemble-broker: invalid audit warning metadata; the operation result still applies.", file=sys.stderr)
-if sys.argv[1] == "claude":
-    print("ready" if (data.get("claude") or {}).get(sys.argv[2]) is True else "login")
-    sys.exit(0)
 codex = data.get("codex") or {}
 state = codex.get("state", "")
 def version(text):
@@ -2220,20 +2163,6 @@ to_terminal() {
   done
 }
 
-# The token screen: the terminal's alternate screen, which keeps no scrollback, cleared on entering and on leaving,
-# for claude setup-token's token and its paste.
-token_screen_enter() {
-  printf '\033[?1049h\033[H\033[2J' >&3
-  token_screen=1
-}
-
-token_screen_leave() {
-  if [ -n "$token_screen" ]; then
-    printf '\033[H\033[2J\033[?1049l' >&3
-    token_screen=
-  fi
-}
-
 # Deletes every item of the services brokers before protocol 33 kept per container, on every run: delete calls only,
 # which decrypt nothing.
 retired_broker_items() {
@@ -2255,7 +2184,7 @@ retired_broker_items() {
 }
 
 broker_logins() {
-  local sha min need said slug refusal name dir
+  local sha min need said slug refusal
   sha=$(shasum -a 256 "$broker" | cut -d' ' -f1)
   retired_broker_items
   # Before any other broker call: a new broker's items from earlier builds trust it, with one keychain password.
@@ -2275,27 +2204,6 @@ broker_logins() {
       die "broker re-trust failed; rerun install.sh, or run $broker retrust"
     fi
     state_set retrust "$sha"
-  fi
-  step "broker login: Claude"
-  if ! has claude; then
-    skip "Claude Code not chosen"
-  else
-    while IFS=$'\t' read -r name dir; do
-      if [ "$(broker_need claude "$name")" = ready ]; then
-        skip "Claude account $name usable by this broker"
-        continue
-      fi
-      say "Claude account $name: create a token with claude setup-token, then paste it at the broker's prompt; both run on a screen cleared afterwards"
-      record_item ensemble-broker-claude "$name"
-      token_screen_enter
-      if ! { CLAUDE_CONFIG_DIR=$dir claude setup-token <&3 >&3 2>&3 && "$broker" login claude "$name" <&3 >&3 2>&3; }; then
-        ask "Press Enter to leave this screen:"
-        die "Claude account $name not ready for Docker: run CLAUDE_CONFIG_DIR=$dir claude setup-token, then ensemble-broker login claude $name"
-      fi
-      token_screen_leave
-      say "    $name setup-token saved in the broker; its screen is cleared"
-    done <<<"$claude_accounts"
-    if [ "$(state_get login_claude)" != "$sha" ]; then state_set login_claude "$sha"; fi
   fi
   step "broker login: GitHub"
   if [ "$(state_get login_github)" = "$sha" ] && [ -n "$(state_get github_app)" ]; then
@@ -3068,7 +2976,6 @@ main() {
   codex_plugins
   if has claude || has codex; then broker_plan; fi
   if has claude || has codex; then plugin_dir; fi
-  claude_logins
   opencode_install
   opencode_plugin
   if ! has claude && ! has codex; then plugin_dir; fi

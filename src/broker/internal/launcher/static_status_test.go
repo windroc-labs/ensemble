@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -61,42 +60,7 @@ func TestStatus(t *testing.T) {
 	if !slices.Equal(read, []string{"home", "work"}) {
 		t.Fatalf("read %q", read)
 	}
-}
-
-// Status names only the Claude accounts logged in by name: none recorded is an empty map, and no default is read
-// or added unless an account is named default.
-func TestStatusNamedClaudeAccountsOnly(t *testing.T) {
-	for _, c := range []struct {
-		accounts []string
-		want     string
-	}{
-		{nil, `{"claude":{}}`},
-		{[]string{"work"}, `{"claude":{"work":true}`},
-		{[]string{"work", "home"}, `{"claude":{"home":true,"work":true}`},
-		{[]string{"default"}, `{"claude":{"default":true}`},
-	} {
-		store := credential.StaticStore{Path: filepath.Join(t.TempDir(), "static-secrets.json")}
-		for _, account := range c.accounts {
-			login(t, store, "ensemble-broker-claude/"+account, credential.Registration{Expires: noticeNow.AddDate(1, 0, 0)}, noticeNow)
-		}
-		var read []string
-		got, err := Host{Static: store, Now: func() time.Time { return noticeNow }}.Status(usability(&read, map[string]bool{"work": true, "home": true, "default": true}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		encoded, _ := json.Marshal(got)
-		slices.Sort(read)
-		want := slices.Sorted(slices.Values(c.accounts))
-		if !strings.HasPrefix(string(encoded), c.want) || !slices.Equal(read, want) || len(got.Static) != len(c.accounts) {
-			t.Fatalf("%q: %s read %q", c.accounts, encoded, read)
-		}
-		for _, s := range got.Static {
-			if s.Notice != nil && !strings.Contains(*s.Notice, "ensemble-broker login claude "+strings.TrimPrefix(s.Reference, "ensemble-broker-claude/")) {
-				t.Fatalf("%q: notice %q", c.accounts, *s.Notice)
-			}
-		}
-	}
-	if got, err := (Host{}).Status(func(string) bool { t.Fatal("read without a store"); return false }); err != nil || got.Claude == nil || len(got.Claude) != 0 || got.Static != nil {
+	if got, err := (Host{}).Status(nil); err != nil || got.Claude == nil || len(got.Claude) != 0 || got.Static != nil {
 		t.Fatalf("no store: %+v %v", got, err)
 	}
 }

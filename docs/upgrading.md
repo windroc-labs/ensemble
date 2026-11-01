@@ -67,9 +67,8 @@ The broker has no implicit `default` Claude account any more:
 - `ensemble-broker status` lists under `claude` each account logged in by name, and only those; the static list and
   its notices name them, and every repair command carries the name.
 - An account you log in as `default` is an ordinary account like any other.
-- `scripts/install.sh` checks each registered account: `claude auth status` with that account's `dir` as
-  `CLAUDE_CONFIG_DIR`, logging in only that `dir` when needed, never `~/.claude` on its own; with Docker, also
-  that name's broker credential. With no account registered it stops and names the table to add.
+- `scripts/install.sh` no longer logs Claude in, natively or to the broker: log each account in yourself (step 4).
+  A start with no account registered, or an unregistered one, fails with a configuration error naming the table.
 
 The plugin and its broker ship as one compatible release: a protocol 37 broker and a protocol 38 client refuse each
 other. Upgrade in this order:
@@ -87,11 +86,10 @@ other. Upgrade in this order:
    dir = "~/.claude-home"
    ```
 
-3. Install the matching plugin and broker: rerun `scripts/install.sh` (with `--docker` on the Docker Host). It logs
-   each registered `dir` in when needed and, with Docker, each name in to the broker.
-4. Check each account by hand if you skipped the installer: `CLAUDE_CONFIG_DIR=<dir> claude auth status` (else
-   `claude auth login`), and on the Docker Host `ensemble-broker login claude work`, then
-   `ensemble-broker login claude home`. Start one worker on each name and close it again:
+3. Install the matching plugin and broker: rerun `scripts/install.sh` (with `--docker` on the Docker Host).
+4. Log each account in: `CLAUDE_CONFIG_DIR=<dir> claude auth login` for each `dir`, and on the Docker Host
+   `ensemble-broker login claude work`, then `ensemble-broker login claude home` (each after
+   `CLAUDE_CONFIG_DIR=<dir> claude setup-token`). Start one worker on each name and close it again:
    `ensemble-crew worker check --client claude --account work`, then `ensemble-crew close check`.
 5. Once a named start works, delete the old unnamed broker item. This does not touch your Claude Code login:
 
@@ -710,9 +708,9 @@ another client's copy, nor an OpenCode copy of another ref (its package's `#<ref
 copy is left, the command keeps the selected-plugin error and the selection: rerun the installer.
 Equal versions use sorted paths to break ties. A ref older than v0.5.0 installs its own launcher, which ignores the selection.
 After plugin refresh, when
-the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing usable Claude and ready Codex
-credentials and requesting any missing logins ([broker command usage](../src/broker/main.go)). Claude credentials are
-each registered account's own: its `dir`'s login and, with Docker, its named broker credential.
+the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing ready Codex
+credentials and requesting any missing logins ([broker command usage](../src/broker/main.go)). It logs no Claude
+account in: see [Broker protocol 38](#broker-protocol-38-named-claude-accounts-only).
 It does not edit config keys a release renames.
 
 For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,

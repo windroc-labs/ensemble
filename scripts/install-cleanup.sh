@@ -103,7 +103,6 @@ ledger_valid() {
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
-    login:3) [ "$2" = claude ] && case $3 in /?*) true ;; *) false ;; esac ;;
     docker-container:2 | docker-image:2) [ "$2" = egress-proxy ] ;;
     launchd:2) case $2 in router | promote) true ;; *) false ;; esac ;;
     keychain:3) [[ $2 =~ $plain ]] && [[ $3 =~ $plain ]] ;;
@@ -248,13 +247,6 @@ parse_args() {
 }
 
 # Removes record $1 (a whole Ledger line) once its action has succeeded.
-# claude_in <dir> <args>: claude with CLAUDE_CONFIG_DIR <dir>, a registered account's own login; "": as inherited.
-claude_in() {
-  local dir=$1
-  shift
-  if [ -n "$dir" ]; then CLAUDE_CONFIG_DIR=$dir claude "$@"; else claude "$@"; fi
-}
-
 drop() {
   grep -vxF -- "$1" "$ledger" >"$ledger.tmp" || true
   mv "$ledger.tmp" "$ledger"
@@ -430,9 +422,9 @@ plugins() {
 }
 
 logins() {
-  local client dir
+  local client
   step logins
-  while IFS=$'\t' read -r _ client dir; do
+  while IFS=$'\t' read -r _ client; do
     [ -n "$client" ] || continue
     need "$client"
     case $client in
@@ -441,8 +433,8 @@ logins() {
         ! gh auth status </dev/null >/dev/null 2>&1 || die "gh is still logged in"
         ;;
       claude)
-        if claude_in "$dir" auth status </dev/null >/dev/null 2>&1; then claude_in "$dir" auth logout <&3 >&3 2>&3 || true; fi
-        ! claude_in "$dir" auth status </dev/null >/dev/null 2>&1 || die "claude is still logged in${dir:+ on $dir}"
+        if claude auth status </dev/null >/dev/null 2>&1; then claude auth logout <&3 >&3 2>&3 || true; fi
+        ! claude auth status </dev/null >/dev/null 2>&1 || die "claude is still logged in"
         while delete_item "Claude Code-credentials"; do :; done
         ;;
       codex)
@@ -450,7 +442,7 @@ logins() {
         ! codex login status </dev/null >/dev/null 2>&1 || die "codex is still logged in"
         ;;
     esac
-    drop "login"$'\t'"$client${dir:+$'\t'$dir}"
+    drop "login"$'\t'"$client"
   done <<<"$(of_kind login)"
 }
 
