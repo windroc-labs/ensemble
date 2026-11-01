@@ -49,7 +49,6 @@ SURFACES = {
             "hook",
             "client-resume",
             "resume-argv",
-            "accounts",
         ],
     ),
     "delegate": (

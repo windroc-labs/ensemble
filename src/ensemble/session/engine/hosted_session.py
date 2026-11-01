@@ -1100,14 +1100,6 @@ class HostedSession(Session):
         return cls._config().registry.client(client).resume_argv(native)
 
     @classmethod
-    def accounts(cls, client: str) -> dict[str, dict[str, str]]:
-        """client's registered accounts, by name, each with the environment that selects it."""
-        found = cls._config().registry.client(client)
-        if (registered := found._accounts()) is None:
-            raise ConfigError(f"client {client} has no accounts")
-        return {name: found._account_env(name) for name in sorted(registered)}
-
-    @classmethod
     def usage(cls, client: str) -> list[Headroom]:
         setup = cls._config()
         found = setup.registry.client(client)

@@ -700,53 +700,6 @@ class ResumeArgv(Case):
             self.assertEqual(self.invoke("resume-argv", "codex", "t-1")[0], 0)
 
 
-class Accounts(Case):
-    def invoke(self, *argv):
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                code = cli.main(list(argv))
-            except SystemExit as error:
-                code = error.code
-        return code, out.getvalue(), err.getvalue()
-
-    def configure(self, text):
-        Path(self.home, ".ensemble").mkdir(exist_ok=True)
-        Path(self.home, ".ensemble", "config.local.toml").write_text(text)
-
-    def test_prints_each_registered_account_and_its_environment(self):
-        self.configure(
-            '[session.clients.claude.accounts.work]\ndir = "~/.claude-work"\nmax_usage = 80\n'
-            '[session.clients.claude.accounts.home]\ndir = "/abs/home"\n'
-        )
-        code, out, err = self.invoke("accounts", "claude")
-        self.assertEqual((code, err), (0, ""))
-        self.assertEqual(
-            json.loads(out),
-            {
-                "home": {"CLAUDE_CONFIG_DIR": "/abs/home"},
-                "work": {"CLAUDE_CONFIG_DIR": os.path.join(self.home, ".claude-work")},
-            },
-        )
-        self.assertEqual(list(json.loads(out)), ["home", "work"])
-
-    def test_no_registered_account_is_an_empty_object(self):
-        self.configure("")
-        self.assertEqual(self.invoke("accounts", "claude"), (0, "{}\n", ""))
-
-    def test_a_bad_account_table_or_a_client_without_accounts_is_a_config_error(self):
-        self.configure("[session.clients.claude.accounts.work]\nmax_usage = 80\n")
-        code, out, err = self.invoke("accounts", "claude")
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("session.clients.claude.accounts.work.dir", err)
-        self.configure("")
-        for client in ("codex", "nobody"):
-            with self.subTest(client=client):
-                code, out, err = self.invoke("accounts", client)
-                self.assertEqual((code, out), (2, ""))
-                self.assertIn("ensemble-session", err)
-
-
 COMMANDS = (
     "start",
     "restart",
@@ -764,7 +717,6 @@ COMMANDS = (
     "hook",
     "client-resume",
     "resume-argv",
-    "accounts",
 )
 
 
@@ -936,7 +888,6 @@ class HelpTest(Case):
             ["hook", "/absolute/session", "stop"],
             ["client-resume", "codex", "resume", "conversation-id"],
             ["resume-argv", "codex", "conversation-id"],
-            ["accounts", "claude"],
         )
         for example in examples:
             with self.subTest(example=example):
