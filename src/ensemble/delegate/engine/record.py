@@ -145,6 +145,13 @@ class RunRecord:
                 raise ValueError("invalid closing")
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))
+            for overlay in overlays:
+                if isinstance(overlay, dict):
+                    overlay.pop("gate", None)
+                    roles = overlay.get("roles", {})
+                    for table in roles.values() if isinstance(roles, dict) else ():
+                        if isinstance(table, dict):
+                            table.pop("gate", None)
             data.pop("harness_host", None)  # older runs
             state = DelegateState(
                 **data,

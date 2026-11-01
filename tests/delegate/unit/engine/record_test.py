@@ -118,15 +118,27 @@ class RunRecordTest(HarnessCase):
         self.assertEqual(self.record().read(), before)
 
     def test_an_older_record_with_an_empty_gate_can_attach_and_resume(self):
-        record = self.make().detach()
-        self.stop(record)
-        data = self.metadata()
-        data["plan"]["run"]["gate"] = ""
-        with open(self.state_record(), "w", encoding="utf-8") as file:
-            json.dump(data, file)
-        resumed = DrivenDelegate.attach(self.work).resume()
-        self.assertNotIn("gate", self.metadata()["plan"]["run"])
-        self.stop(resumed)
+        for overlay, expected in (
+            ({}, {}),
+            ({"gate": ""}, {}),
+            ({"roles": {"researcher": {"gate": ""}}}, {"roles": {"researcher": {}}}),
+            (
+                {"gate": "unused-check", "roles": {"researcher": {"gate": ""}}},
+                {"roles": {"researcher": {}}},
+            ),
+        ):
+            with self.subTest(overlay=overlay):
+                record = self.make().detach()
+                self.stop(record)
+                data = self.metadata()
+                data["plan"]["run"]["gate"] = ""
+                data["overlays"] = [overlay]
+                with open(self.state_record(), "w", encoding="utf-8") as file:
+                    json.dump(data, file)
+                resumed = DrivenDelegate.attach(self.work).resume()
+                self.assertNotIn("gate", self.metadata()["plan"]["run"])
+                self.assertEqual(self.metadata()["overlays"], [expected])
+                self.stop(resumed)
 
     def test_an_older_record_with_a_gate_cannot_replay_its_commands(self):
         self.make()
