@@ -170,22 +170,8 @@ def _docker_files() -> dict[str, str]:
     return {"settings.json": json.dumps({**settings, **UNATTENDED})}
 
 
-PROVIDER_SWITCHES = frozenset(
-    {
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "CLAUDE_CODE_USE_BEDROCK",
-        "CLAUDE_CODE_USE_VERTEX",
-        "CLAUDE_CODE_USE_FOUNDRY",
-        "AWS_BEARER_TOKEN_BEDROCK",
-    }
-)
-
-
 def _credential(name: str) -> bool:
-    """A credential or provider switch: a probe reading one would report that provider, not the
-    account's dir.
-    """
-    return name.startswith("ANTHROPIC_") or name in PROVIDER_SWITCHES
+    return name.startswith("ANTHROPIC_") or name == "CLAUDE_CODE_OAUTH_TOKEN"
 
 
 def _read_dir(path: str) -> str:
@@ -657,7 +643,7 @@ class ClaudeCommon:
         )
 
     def probe(self, account: str) -> Launch:
-        """`account`'s probe: the config's env in its dir; no API credentials or provider switch."""
+        """`account`'s probe: the config's env in its dir; no API credentials."""
         env = {k: v for k, v in self.env().items() if not _credential(k)}
         env["CLAUDE_CONFIG_DIR"] = self.accounts[account].dir
         found = sorted(

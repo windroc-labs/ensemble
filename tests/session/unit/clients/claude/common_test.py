@@ -584,34 +584,14 @@ class UsageProbeTest(Base):
         ambient = {
             "ANTHROPIC_API_KEY": "sk-1",
             "CLAUDE_CODE_OAUTH_TOKEN": "t",
-            "CLAUDE_CODE_USE_BEDROCK": "1",
-            "CLAUDE_CODE_USE_VERTEX": "1",
-            "CLAUDE_CODE_USE_FOUNDRY": "1",
-            "AWS_BEARER_TOKEN_BEDROCK": "b",
             "CLAUDE_CONFIG_DIR": "/inherited",
             "HOME": self.home,
         }
         accounts = {"work": {"dir": "/w"}, "home": {"dir": "~/.claude"}}
-        env = {
-            "K": "v",
-            "ANTHROPIC_BASE_URL": "u",
-            "CLAUDE_CODE_USE_VERTEX": "1",
-            "CLAUDE_CONFIG_DIR": "/acct",
-        }
+        env = {"K": "v", "ANTHROPIC_BASE_URL": "u", "CLAUDE_CONFIG_DIR": "/acct"}
         with mock.patch.dict(os.environ, ambient, clear=True):
             probes = ClaudeClient({"env": env, "accounts": accounts})._usage_probes()
-        credentials = tuple(
-            sorted(
-                (
-                    "ANTHROPIC_API_KEY",
-                    "AWS_BEARER_TOKEN_BEDROCK",
-                    "CLAUDE_CODE_OAUTH_TOKEN",
-                    "CLAUDE_CODE_USE_BEDROCK",
-                    "CLAUDE_CODE_USE_FOUNDRY",
-                    "CLAUDE_CODE_USE_VERTEX",
-                )
-            )
-        )
+        credentials = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
         home = os.path.join(self.home, ".claude")
         self.assertEqual(
             probes,

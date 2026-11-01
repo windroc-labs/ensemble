@@ -1855,16 +1855,7 @@ class AccountPoolTest(Base):
                 self.assertEqual(self.usage(), want)
                 self.assertEqual(self.probed(), sorted(accounts.values()))
                 self.assertFalse(os.path.exists(self.cache))
-        self.assertNotIn(ACCOUNT_ENV, self.started_env())
-
-    def test_one_registered_account_is_selected_unprobed(self):
-        for container in (True, False):
-            with self.subTest(container=container):
-                self.pool({"work": "/w"}, container=container)
-                self.probe.reset_mock()
-                self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
-                self.assertEqual(self.started_env(**{ACCOUNT_ENV: "work"})[ACCOUNT_ENV], "work")
-                self.probe.assert_not_called()
+                self.assertNotIn(ACCOUNT_ENV, self.started_env())
 
 
 CLAUDE = "ensemble.session.clients.claude:ClaudeClient"

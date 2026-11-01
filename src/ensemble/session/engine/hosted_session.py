@@ -237,9 +237,6 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         return spec
     if account := client._account():
         return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
-    if len(registered := client._accounts() or ()) == 1:
-        (account,) = registered
-        return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
     if (pool := _pooled(setup, name, client, host)) is None:
         return spec
     if (account := accounts.best(pool)) is None:
