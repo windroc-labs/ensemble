@@ -775,10 +775,10 @@ class DockerHost(Host):
         if resume == "0":
             self._move_workspace(name, volume, cwd)
             _reset_home(name, home, persistent or ())
-            for file, text in files.items():
-                save(os.path.join(home, file), text)
         for directory in persistent or ():
             os.makedirs(os.path.join(home, directory), mode=0o700, exist_ok=True)
+        for file, text in files.items() if resume == "0" else ():
+            save(os.path.join(home, file), text)
         clients = client_keys(root)
         manifest = os.path.join(state_dir(name), f"{generation}.json")
         write_manifest(

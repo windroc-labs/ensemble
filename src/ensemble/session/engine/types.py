@@ -172,8 +172,7 @@ def _no_files() -> Mapping[str, str]:
 @dataclass(frozen=True)
 class ClientHome:
     """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable;
-    `files`: read on a new start, written into the home; `persistent` set: a container-own home
-    of which only these dirs are bind-mounted and kept, so its files go under them.
+    `files`: a new start's; `persistent` set: only these dirs mounted, files under them.
     """
 
     field: str

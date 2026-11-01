@@ -811,6 +811,7 @@ class StartTest(StartBase):
         self.kept(files={"config/config.toml": "a = 1"})
         with open(copy) as f:
             self.assertEqual(f.read(), "a = 1")
+        self.assertEqual(stat.S_IMODE(os.lstat(os.path.dirname(copy)).st_mode), 0o700)
         with open(copy, "w") as f:
             f.write('service_tier = "fast"')
         self.resumable(os.path.join(self.state, "codex"))

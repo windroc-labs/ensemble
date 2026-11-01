@@ -921,7 +921,7 @@ def unattended_flags(cwd: str) -> tuple[str, ...]:
     """What a Docker worker needs whatever its config.toml says: `-c` outranks that file, and
     Codex applies the last `-c` for a key, so these go after every other flag.
     """
-    trusted = json.dumps(os.path.realpath(cwd)).replace("\x7f", "\\u007f")
+    trusted = json.dumps(os.path.realpath(cwd), ensure_ascii=False).replace("\x7f", "\\u007f")
     return (
         "-c",
         'cli_auth_credentials_store="file"',

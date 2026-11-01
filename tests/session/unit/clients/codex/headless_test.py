@@ -323,6 +323,16 @@ class ContainerLaunch(Base):
             ),
         )
 
+    def test_the_trusted_cwd_is_valid_toml_beyond_the_basic_plane(self):
+        import tomllib
+
+        cwd = self.root / "w\U0001f600\x7f"
+        cwd.mkdir()
+        trust = codex_common.unattended_flags(str(cwd))[-1]
+        self.assertEqual(
+            tomllib.loads(trust)["projects"], {os.path.realpath(cwd): {"trust_level": "trusted"}}
+        )
+
     def test_a_container_launch_ends_its_flags_with_the_unattended_keys(self):
         supplied = ("-c", 'cli_auth_credentials_store="keyring"')
         spec = dataclasses.replace(self.spec, prompt="hi", flags=supplied)

@@ -64,6 +64,7 @@ class ModuleRunTest(Case):
             "store": "/uncreated-ensemble-state/recovery/codex",
             "permission": [],
             "flags": [],
+            "unattended": False,
         }
 
     def run_module(self, command, cwd=None):
