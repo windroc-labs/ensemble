@@ -11,6 +11,7 @@ from tests.delegate.case import Case
 from tests.delegate.team_tools import tool
 
 SCRIPT = os.path.join(TEAM, "tools", "report_check.py")
+SAMPLE = Path(__file__).with_name("fixtures") / "research-report.md"
 report_check = tool("report_check")
 LABEL = "Findings: 1 aspects, 1 findings"
 ASPECT = "---\n\n### 1. Aspect\n\n"
@@ -32,7 +33,8 @@ class ReportCheck(Case):
             f"| Table cells | {report_check.CELL_LIMIT}; last column {report_check.LINE_LIMIT} |",
         ):
             self.assertIn(row, template)
-        sample = template.split("## Filled example\n", 1)[1].strip()
+        self.assertNotIn("Filled example", template)
+        sample = SAMPLE.read_text(encoding="utf-8").strip()
         self.assertEqual(self.check(sample), (0, "ok\n"))
         visible = []
         hidden = False

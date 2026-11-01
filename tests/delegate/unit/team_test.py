@@ -129,9 +129,7 @@ class Acceptance(Packaged):
             "No essay paragraphs.",
             "`[n]` is source number n in Sources, written as a link to that source, "
             "`[[n]](<URL or code permalink>)`, the same target as its Sources item",
-            "Both have:",
             "A compared project with its own address is a link to it",
-            "| [Grok Build](https://github.com/xai-org/grok-build) |",
             "| Impact | Gap |",
             '<details id="findings" open>',
             "<summary>Findings: <A> aspects, <F> findings</summary>",
@@ -363,6 +361,20 @@ class Shipped(Packaged):
         self.assertNotIn("fresh subagent", step)
         self.assertNotRegex(text, r"(?<!/)updraft:")
         self.assertIn("`/updraft:review` again with the same `doc`", text.split("## Resume", 1)[1])
+
+    def test_product_design_self_grills_by_the_grilling_method_for_at_most_3_rounds(self):
+        text = task_text("product-design")
+        step = text.split("5. **Self-grill**", 1)[1].split("\n6.", 1)[0]
+        self.assertTrue(os.path.isfile(os.path.join(TEAM, "methods", "grilling.md")))
+        for literal in (
+            "`<team>/methods/grilling.md`",
+            "at most 3 rounds",
+            "minor details",
+            "what you can't settle → Open questions",
+        ):
+            self.assertIn(literal, step)
+        self.assertNotIn("in one round", step)
+        self.assertIn("never rerun", text.split("## Resume", 1)[1])
 
     def test_product_design_settles_open_questions_with_updraft_council_before_finishing(self):
         text = task_text("product-design")
@@ -970,7 +982,7 @@ class Principles(Packaged):
         leaves = {
             name.removesuffix(".md")
             for name in os.listdir(os.path.join(TEAM, "principles"))
-            if name.endswith(".md") and name != "README.md"
+            if name.endswith(".md")
         }
         self.assertEqual(len(leaves), 24)
         self.assertEqual(set(re.findall(r"<team>/principles/([\w-]+)\.md", index)), leaves)
@@ -1052,3 +1064,23 @@ class Principles(Packaged):
             "subtract-before-you-add",
         ):
             self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", f"{name}.md")))
+
+
+class Sources(Packaged):
+    def test_readme_links_resolve_and_name_every_method_and_license(self):
+        with open(os.path.join(TEAM, "README.md"), encoding="utf-8") as f:
+            readme = f.read()
+        local = [
+            link.split("#", 1)[0]
+            for link in re.findall(r"\]\(([^)\s]+)\)", readme)
+            if not re.match(r"[a-z]+:|#", link)
+        ]
+        self.assertTrue(local)
+        for link in local:
+            self.assertTrue(os.path.isfile(os.path.join(TEAM, link)), link)
+        for name in os.listdir(os.path.join(TEAM, "methods")):
+            self.assertIn(f"methods/{name}", readme)
+        for name in os.listdir(os.path.join(TEAM, "licenses")):
+            self.assertIn(f"licenses/{name}", local)
+        notice = re.findall(r"<team>/(licenses/[\w.-]+)", team_texts()["principles.md"])
+        self.assertEqual(notice, ["licenses/pstack.txt"])
