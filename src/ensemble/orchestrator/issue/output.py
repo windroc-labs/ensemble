@@ -148,8 +148,11 @@ def _texts(node, path):
 
 
 def write_full(path, payload):
-    """payload as normalized JSON in path, through a temp file renamed over it; its absolute path."""
+    """payload as normalized JSON in path, its missing directories created, through a temp file
+    renamed over it; its absolute path.
+    """
     path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".issue-", suffix=".tmp")
     try:
         with open(fd, "w", encoding="utf-8", errors="backslashreplace") as f:
