@@ -86,7 +86,7 @@ webhook を無効にしてください。リポジトリの権限は、インス
 1 つのタスクを実行するには、インストールしたクライアントの会話で次を入力します。
 
 ```text
-/ensemble:act-as dummy-tester:echo hello
+/ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
 チームを使うには、コマンダーのシェルを開き、クライアントを起動します。
