@@ -9,6 +9,7 @@ from typing import Any
 from ensemble.session.engine.types import (
     ACCOUNT_SET_BY,
     ConfigError,
+    Headroom,
     Hosts,
     IdleTimeout,
     KeyPress,
@@ -20,7 +21,6 @@ from ensemble.session.engine.types import (
     SessionStatus,
     Spec,
     Stderr,
-    Usage,
 )
 from ensemble.session.hosts.base import Host
 from ensemble.utils import ACCOUNT_ENV, Display, Record, Status, load_class
@@ -165,7 +165,10 @@ class Session(ABC):
         return cls._hosted("list")(match, display=display)
 
     @classmethod
-    def usage(cls, client: str) -> Usage | None:
+    def usage(cls, client: str) -> list[Headroom]:
+        """Each registered account's Headroom, by name; a client without accounts: one default
+        item; no probe: [].
+        """
         return cls._hosted("usage")(client)
 
     @classmethod

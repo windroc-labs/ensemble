@@ -26,7 +26,7 @@ AGENT_GROUP = "00000000-0000-4000-8000-000000000101"
 CLAUDE = "00000000-0000-4000-8000-000000000102"
 LINEAR_STATES = {"ready": "todo", "review": "in_review", "done": "done"}
 T0 = datetime(2026, 10, 1, 9, tzinfo=UTC)
-USAGE = "five_hour=50% weekly=none"
+USAGE = "work=40"  # the 50% reading under the flow account's max_usage of 90
 BAD_TASK = (
     'Task "light-research" is not one of engineer\'s tasks (build, light-build, decompose). '
     "Fix the task or the assignee, then move the issue back to ready/."

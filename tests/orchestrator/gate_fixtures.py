@@ -3,11 +3,13 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
-from ensemble.session import Usage, Window
+from ensemble.session import Headroom
 from tests.delegate.fakes.delegate import FakeDelegate
 
 
-def quota_provider(client, percent):
+def quota_provider(client, *lefts):
+    """A provider whose usage is one Headroom per `lefts` value, accounts a0, a1, …."""
+
     class QuotaDelegate(FakeDelegate):
         ROLES = {"engineer": {"build": "Build"}, "pm": {"design": "Design"}}
         queried = []
@@ -21,7 +23,7 @@ def quota_provider(client, percent):
         def usage(cls, role, *, overlays=()):
             cls.queried.append(role)
             cls.overlays.append(overlays)
-            return Usage(Window(percent, None), None)
+            return [Headroom(f"a{i}", left) for i, left in enumerate(lefts)]
 
     return QuotaDelegate
 

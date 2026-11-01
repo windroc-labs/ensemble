@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from ensemble.delegate.composer import RunConfig
 from ensemble.delegate.engine.types import Event, Outer, Result, Spec
 from ensemble.delegate.event.outcome import Outcome
-from ensemble.session import SessionStatus, Usage
+from ensemble.session import Headroom, SessionStatus
 from ensemble.utils import Display, Record, Status
 
 
@@ -32,7 +32,7 @@ class Delegate(ABC):
 
     @classmethod
     @abstractmethod
-    def usage(cls, role: str, *, overlays: Sequence[Mapping] = ()) -> Usage | None: ...
+    def usage(cls, role: str, *, overlays: Sequence[Mapping] = ()) -> list[Headroom]: ...
 
     @classmethod
     @abstractmethod

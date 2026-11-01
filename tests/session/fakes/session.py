@@ -31,7 +31,7 @@ class FakeSession(Session):
     started: list[dict] = []
     live: dict[str, FakeSession] = {}
     configured: dict | None = None
-    usage_result = None
+    usage_result = []
 
     def __init_subclass__(cls, **kw):
         super().__init_subclass__(**kw)

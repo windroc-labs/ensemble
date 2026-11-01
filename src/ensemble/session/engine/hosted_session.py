@@ -32,11 +32,14 @@ from ensemble.session.engine.base import Session
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
+    DEFAULT_ACCOUNT,
+    DEFAULT_MAX_USAGE,
     Access,
     ClientBound,
     ConfigError,
     EnvironmentSpec,
     Exited,
+    Headroom,
     HookCallback,
     Hosts,
     IdleTimeout,
@@ -1099,24 +1102,27 @@ class HostedSession(Session):
         return cls._config().registry.client(client).resume_argv(native)
 
     @classmethod
-    def usage(cls, client: str) -> Usage | None:
+    def usage(cls, client: str) -> list[Headroom]:
         setup = cls._config()
         found = setup.registry.client(client)
         host = cls.host()
-        if (
-            request := found._provider_probe()
-        ) is not None and host._client_context().container is not None:
-            return Usage(None, None) if host._provider_usage(request) else None
-        if (pool := _pooled(setup, client, found, host)) is None:
-            return _read_usage(
-                setup,
-                found,
-                found.usage_probe(),
-                container=host._client_context().container is not None,
-            )
-        if account := found._account():
-            return pool[account]
-        return None if (name := accounts.best(pool)) is None else pool[name]
+        container = host._client_context().container is not None
+        if (request := found._provider_probe()) is not None and container:
+            reading = Usage(None, None) if host._provider_usage(request) else None
+            return [Headroom(DEFAULT_ACCOUNT, accounts.left(reading, DEFAULT_MAX_USAGE))]
+        if (probes := found._usage_probes()) is None:
+            if (launch := found.usage_probe()) is None:
+                return []
+            reading = _read_usage(setup, found, launch, container=container)
+            return [Headroom(DEFAULT_ACCOUNT, accounts.left(reading, DEFAULT_MAX_USAGE))]
+        readings = accounts.live(
+            {name: launch for name, (_, launch) in probes.items()},
+            lambda launch: _read_usage(setup, found, launch, container=container),
+        )
+        return [
+            Headroom(name, accounts.left(readings[name], found._max_usage(name)))
+            for name in sorted(probes)
+        ]
 
     @classmethod
     def layout(cls, *, display: Display = None) -> str | None:

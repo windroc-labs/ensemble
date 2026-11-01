@@ -313,7 +313,7 @@ class Router(TmuxFlow):
         self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
         self.assertEqual(
             self.said(),
-            [f"router usage-skip {ID} client=claude reason=usage usage=five_hour=95% weekly=none"],
+            [f"router usage-skip {ID} client=claude reason=usage usage=work=-5"],
         )
         self.assertEqual((self.state(ID), self.runs()), ("todo", []))
         self.assertEqual(len(self.calls()), 1)

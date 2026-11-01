@@ -56,6 +56,7 @@ from ensemble.delegate.event.reply import outcome_only
 from ensemble.delegate.event.types import Outcome
 from ensemble.session import (
     SIGNALS,
+    Headroom,
     HookCallback,
     Host,
     Launch,
@@ -69,7 +70,6 @@ from ensemble.session import (
     SessionError,
     SessionStatus,
     Unanswered,
-    Usage,
     Viewer,
     get_viewer,
 )
@@ -561,7 +561,7 @@ class HarnessDelegate(Delegate):
         *,
         overlays: Sequence[Mapping] = (),
         session_cls: type[Session] = Session,
-    ) -> Usage | None:
+    ) -> list[Headroom]:
         composition = Composer()
         try:
             session_cls.configure_from(thaw(composition.config.values))

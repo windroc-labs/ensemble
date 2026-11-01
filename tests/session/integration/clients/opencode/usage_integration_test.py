@@ -2,13 +2,14 @@
 
 import http.server
 import json
+import math
 import os
 import shlex
 import socket
 import sys
 import threading
 
-from ensemble.session.engine.types import Usage
+from ensemble.session.engine.types import Headroom
 from tests.session.case import Case
 from tests.session.integration.clients.opencode import fake_opencode
 
@@ -34,7 +35,7 @@ def free_port() -> int:
 
 
 class UsageIntegrationTest(Case):
-    def usage(self, port: int) -> Usage | None:
+    def usage(self, port: int) -> list[Headroom]:
         executable = os.path.join(self.home, "opencode")
         with open(executable, "w", encoding="utf-8") as file:
             file.write(
@@ -58,7 +59,7 @@ class UsageIntegrationTest(Case):
         self.addCleanup(server.server_close)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.shutdown)
-        self.assertEqual(self.usage(server.server_address[1]), Usage(None, None))
+        self.assertEqual(self.usage(server.server_address[1]), [Headroom("default", math.inf)])
 
     def test_a_stopped_ollama_is_unknown_usage(self):
-        self.assertIsNone(self.usage(free_port()))
+        self.assertEqual(self.usage(free_port()), [Headroom("default", None)])

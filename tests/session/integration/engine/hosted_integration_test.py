@@ -13,14 +13,13 @@ from ensemble.session.clients.base import Client
 from ensemble.session.engine.types import (
     Access,
     Exited,
+    Headroom,
     Mode,
     SessionError,
     SessionInfo,
     SessionStatus,
     Spec,
     TurnFailed,
-    Usage,
-    Window,
 )
 from tests.session.case import no_spawn
 from tests.session.hosted_support import (
@@ -160,7 +159,7 @@ class SessionEnvTest(EnvBase):
         with open(self.log, encoding="utf-8") as f:
             (entry,) = [json.loads(line) for line in f]
         self.assertEqual(entry["env"]["PYTHONPATH"], PYTHONPATH)
-        self.assertEqual(self.session.usage("env"), Usage(Window(7.0, None), None))
+        self.assertEqual(self.session.usage("env"), [Headroom("default", 93.0)])
         self.assertEqual(self.probe.call_args.kwargs["env"]["PYTHONPATH"], "/parent")
 
 

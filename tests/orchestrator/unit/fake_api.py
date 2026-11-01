@@ -1,13 +1,8 @@
 """A caller-owned fake Session class (and its Host) for orchestrator unit tests."""
 
-from ensemble.session import (
-    NoRecordedSession,
-    SessionStatus,
-    Usage,
-    Window,
-)
+from ensemble.session import Headroom, NoRecordedSession, SessionStatus
 
-LOW = Usage(Window(10.0, None), Window(10.0, None))
+LOW = [Headroom("default", 90.0)]
 
 
 def _answer(value):
