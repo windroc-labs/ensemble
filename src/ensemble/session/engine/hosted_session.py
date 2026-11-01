@@ -254,8 +254,8 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         raise SessionError("usage: no available account")
     print(f"{name} account {account}: picked", file=sys.stderr)
     spec = replace(spec, env={**spec.env, ACCOUNT_ENV: account})
-    if not container and spec.resume:
-        _resume_on(spec, client, account, recorded)
+    if recorded is not None and recorded.transcript:
+        _resume_on(spec, client, account, recorded.transcript)
     return spec
 
 
@@ -266,18 +266,11 @@ def _recorded(spec: Spec) -> SessionInfo | None:
         return None
 
 
-def _resume_on(spec: Spec, client: Client, account: str, recorded: SessionInfo | None) -> None:
-    """A local resume runs in its account's dir, where its conversation must be: refused before
-    any launch when it is recorded elsewhere, or found nowhere in that dir.
+def _resume_on(spec: Spec, client: Client, account: str, transcript: str) -> None:
+    """A local resume runs in its account's dir: refused before any launch when its recorded
+    conversation lies elsewhere.
     """
-    if recorded is not None and recorded.transcript:
-        found = client._account_of(recorded.transcript) == account
-    else:
-        info = SessionInfo(spec.sid or "", spec.access.cwd, spec.access.project, "", "")
-        env = {**spec.env, **client._account_env(account)}
-        status = _resumable(lambda: client, info, replace(spec, env=env))
-        found = status.resumable != Resumable.NO
-    if not found:
+    if client._account_of(transcript) != account:
         raise ConfigError(
             f"session {spec.name or spec.sid}: conversation {spec.sid} has no transcript to resume"
         )

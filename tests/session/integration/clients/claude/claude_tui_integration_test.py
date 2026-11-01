@@ -132,7 +132,8 @@ class Live(tui_live.Live):
 
     def calls(self) -> list[dict]:
         with open(self.log, encoding="utf-8") as f:
-            return [json.loads(line) for line in f]
+            calls = [json.loads(line) for line in f]
+        return [c for c in calls if c["argv"][-1:] != ["/usage"]]
 
     def colored(self) -> list[dict]:
         """The local commands the fake read, once it read one."""

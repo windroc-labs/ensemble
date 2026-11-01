@@ -341,7 +341,8 @@ class OldGenerationTest(Base):
             f.write(GENERATION)
         q = shlex.quote
         self.path = self.first_on_path(
-            f"#!/bin/sh\nexec {q(sys.executable)} -I {q(program)} {q(self.generations)} "
+            f"#!/bin/sh\n{fake_usage.answers_probes()}"
+            f"exec {q(sys.executable)} -I {q(program)} {q(self.generations)} "
             f'{q(fake_usage.__file__)} "$@"\n'
         )
         self.addCleanup(self.kill_generations)

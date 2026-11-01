@@ -7,6 +7,7 @@ import shutil
 import signal
 import threading
 import time
+from collections.abc import Mapping
 
 from ensemble.session.engine import hosted_session
 from ensemble.session.engine.hosted_session import HARNESS, HostedSession
@@ -167,8 +168,8 @@ class Threaded(HostedSession):
 
     @classmethod
     def configure(cls, *, clients, **settings):
-        table = clients.get("claude") if isinstance(clients, dict) else None
-        if isinstance(table, dict) and "accounts" not in table:
+        table = clients.get("claude") if isinstance(clients, Mapping) else None
+        if isinstance(table, Mapping) and "accounts" not in table:
             found = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
             clients = {**clients, "claude": {**table, "accounts": {"test": {"dir": found}}}}
         super().configure(clients=clients, **settings)

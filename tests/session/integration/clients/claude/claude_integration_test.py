@@ -402,6 +402,9 @@ class InterruptTest(Base):
                 self.fail(f"the caller never {what} (rc {caller.poll()}): {self.printed()}")
             time.sleep(0.05)
 
+    def with_account(self, table):
+        return {**table, "accounts": {"test": {"dir": os.path.join(self.dir, "config")}}}
+
     def printed(self) -> list[str]:
         with open(self.out, encoding="utf-8") as f:
             return f.read().split()
@@ -411,7 +414,7 @@ class InterruptTest(Base):
         self.out = os.path.join(self.dir, "caller.out")
         with open(self.out, "w", encoding="utf-8") as f:
             caller = subprocess.Popen(
-                [*PY, "-c", CALLER, json.dumps(TABLE), self.workdir],
+                [*PY, "-c", CALLER, json.dumps(self.with_account(TABLE)), self.workdir],
                 env=child_env(),
                 stdin=subprocess.DEVNULL,
                 stdout=f,

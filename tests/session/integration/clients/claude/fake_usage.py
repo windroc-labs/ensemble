@@ -22,6 +22,15 @@ def install(bin_dir: str, tail: str = "/usr/bin:/bin") -> str:
     return f"{bin_dir}:{tail}"
 
 
+def answers_probes() -> str:
+    """A sh script's lines that hand a usage probe here."""
+    q = shlex.quote
+    return (
+        'for last; do :; done\n[ "$last" = /usage ] && '
+        f'exec {q(sys.executable)} -I {q(os.path.abspath(__file__))} "$@"\n'
+    )
+
+
 def scenario() -> dict:
     try:
         found = json.loads(Path(os.environ[ENV]).read_text(encoding="utf-8"))
