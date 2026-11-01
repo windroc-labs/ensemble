@@ -75,19 +75,23 @@ class Acceptance(Packaged):
         decompose = task_text("decompose")
         read = re.search(r"^1\. \*\*Read\*\*.*$", decompose, re.M)[0]
         # a document over the input's inline budget is only a link there, but tickets quote
-        # its acceptance cells verbatim
+        # its scenarios verbatim
         self.assertIn("fetch in full each document the input links but did not inline", read)
         # write-back's DECOMPOSED pattern reads this summary
         self.assertIn("`summary`: `Created <identifiers>; reused none`", decompose)
 
-    def test_decompose_engineer_tickets_quote_acceptance_and_verifier_tickets_link_the_prd(self):
+    def test_decompose_engineer_tickets_quote_scenarios_and_verifier_tickets_list_ops_ones(self):
         draft = re.search(r"^2\. \*\*Draft\*\*.*$", task_text("decompose"), re.M)[0]
         # the gate and requirement-fidelity review judge an engineer ticket by its text alone
         self.assertIn(
-            "acceptance quoting each covered requirement's PRD acceptance cell verbatim and in full",
+            "acceptance quoting, verbatim and in full, every PRD scenario tagged with a requirement "
+            "in its `Covers:`",
             draft,
         )
-        self.assertIn("Verifier tickets list the requirement identifiers and link the PRD", draft)
+        self.assertIn(
+            "Verifier tickets list the ids of the `@ops` scenarios they run and link the PRD", draft
+        )
+        self.assertNotIn("acceptance cell", draft)
         self.assertIn("at most 8 requirement identifiers on an engineer ticket", draft)
 
     def test_report_delivery_and_figure_checks(self):
@@ -300,6 +304,17 @@ class Shipped(Packaged):
             self.assertIn(literal, steps)
         self.assertNotIn("full text", steps)
 
+    def test_verify_runs_ops_scenarios_and_reports_each_then(self):
+        steps = task_text("verify").split("## Steps", 1)[1].split("## Resume", 1)[0]
+        self.assertIn(
+            "`@ops` scenarios, quoted or listed by id (`S-<n>`, then read from the PRD the input "
+            "links)",
+            steps,
+        )
+        self.assertIn("each scenario as written, its Then steps the pass criteria", steps)
+        template = team_texts()["templates/verify-report.md"]
+        self.assertIn("for an `@ops` scenario, one per Then step: `S-<n>` and that Then", template)
+
     def test_the_verify_report_template_is_one_table_with_a_column_per_round(self):
         template = team_texts()["templates/verify-report.md"]
         for text in (
@@ -390,6 +405,46 @@ class Shipped(Packaged):
             self.assertIn(literal, step)
         self.assertIn("what you can't settle → Open questions", text.split("5. **Self-grill**")[1])
         self.assertIn("never run it again", text.split("## Resume", 1)[1])
+
+    def test_prd_acceptance_is_gherkin_scenarios_the_pm_writes(self):
+        pm = composed("pm", "product-design")[0]
+        requirements = section(pm, "Requirements")
+        # scenarios replace the requirement tables' check cells
+        self.assertNotIn("<Check, translated>", pm)
+        self.assertNotIn("Threshold or check", pm)
+        self.assertIn("(`FR-<n>`, `NFR-<n>`, `S-<n>`) are never renumbered", requirements)
+        scenarios = pm.split("\n### Acceptance scenarios\n", 1)[1].split("\n## ", 1)[0]
+        for literal in (
+            "Each FR's acceptance, and each NFR's with a decidable check, as Gherkin scenarios: "
+            "a specification, which only a verifier runs, and only `@ops` ones.",
+            "`@S-<n>`, then each `@FR-<n>` or `@NFR-<n>` it covers",
+            "A scenario may cover several requirements; every FR has at least one.",
+            "quoted in its step, or `<name>` in a `Scenario Outline` filled from its `Examples` table",
+            "`@ops` also tags a scenario that needs a real run on the test Mac mini",
+            "asserts only its result",
+        ):
+            self.assertIn(literal, scenarios)
+        # verify runs `@ops` scenarios, so the template never claims none runs
+        self.assertNotIn("nothing executes", pm)
+        # the template is the acceptance rule's one home; the pm's task only points to it
+        write = re.search(r"^6\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
+        self.assertIn("per the Template, its Acceptance scenarios included;", write)
+        self.assertNotIn("acceptance", write)
+
+    def test_engineers_take_scenarios_as_acceptance_and_never_change_them(self):
+        for task in ("build", "light-build", "decompose"):
+            rule = item(section(composed("engineer", task)[0], "Rules"), "Scenarios are acceptance")
+            self.assertIn(
+                "the Gherkin scenarios (`@S-<n>`) an input quotes are its acceptance", rule
+            )
+            self.assertIn("Never change one", rule)
+            self.assertIn("One you judge wrong → `needs_input` quoting it and why", rule)
+            # an engineer has no test Mac mini: it neither runs nor vouches for `@ops` scenarios
+            self.assertIn(
+                "An `@ops` one is a verifier's to run on the test Mac mini: never claim it passes, "
+                "and lacking the mini is no reason for `needs_input`.",
+                rule,
+            )
 
     def test_the_engineer_charter_has_six_sections_and_updraft_adds_its_lines_verbatim(self):
         with open(os.path.join(TEAM, "roles", "engineer.md")) as f:
@@ -663,9 +718,9 @@ class Real(RealConfig):
         self.assertIn(point, section(pm, "Approach and trade-offs"))
         self.assertIn(point, section(pm, "System diagram"))
         requirements = section(pm, "Requirements")
-        self.assertIn("Each subsection is one table", requirements)
+        self.assertIn("Functional and non-functional requirements are each one table", requirements)
         self.assertIn("fills the Module cell of its first row only", requirements)
-        for row in ("`| FR-<n> | <module> | <the requirement> | ", "`| NFR-<n> | <module> | "):
+        for row in ("`| FR-<n> | <module> | <the requirement> |`", "`| NFR-<n> | <module> | "):
             self.assertIn(row, pm)
         self.assertIn("> **<one-sentence answer>** (<overall confidence>)", light)
         self.assertIn(point, section(light, "Comparison table"))
