@@ -65,7 +65,6 @@ FAKED += ("xcode-select", "ps", "sw_vers", "lipo", "pgrep", "pkill", "defaults")
 APPS = ("brew", "gh", "tmux", "git", "go", "claude", "codex", "docker", "ensemble-broker")
 APPS += ("npm", "node", "opencode")
 PASSWORD = "pw-SENTINEL-sudo"
-TOKEN = "sk-ant-oat01-SENTINEL-token"
 KEY = "sk-SENTINEL-opencode-key"
 OLD, NEW = "1" * 40, "2" * 40
 LAUNCHER = "skills/manage/scripts/launcher"
@@ -97,11 +96,9 @@ PROVIDER_ANSWERS = (
 )
 SUDO_Q = r"Password:"
 WRITE_Q = r"Write it\? \[y/N\]"
-TOKEN_Q = r"Paste the setup-token \(hidden\):"
-LEAVE_Q = r"Press Enter to leave this screen:"
-SCREEN_ON, SCREEN_OFF = "\x1b[?1049h\x1b[H\x1b[2J", "\x1b[H\x1b[2J\x1b[?1049l"
+GH_LOGIN = "gh auth login --hostname github.com --git-protocol https --web"
 PEM_Q = r"private key \(\.pem; [^)]*\), empty to skip:"
-DOCKER_LOGINS = ((TOKEN_Q, TOKEN), (PEM_Q, ""))
+DOCKER_LOGINS = ((PEM_Q, ""),)
 # Docker's context store directory for context desktop-linux.
 DESKTOP_CONTEXT = hashlib.sha256(b"desktop-linux").hexdigest()
 DOCKER_PRESETS = {"UseVirtualizationFrameworkRosetta": False, "DisplayedOnboarding": True}
@@ -143,7 +140,6 @@ DOCKER_STEPS = (
     "broker",
     "retired broker keychain items",
     "broker re-trust",
-    "broker login: Claude",
     "broker login: GitHub",
     "broker Codex install",
     "broker login: Codex",
@@ -358,7 +354,6 @@ class InstallTest(Case):
         for app in APPS:
             executable(self.fakes / "apps" / app, wrapper.format(sys.executable, FAKE_TOOLS, app))
         (self.fakes / "sudo_password").write_text(PASSWORD)
-        (self.fakes / "claude_token").write_text(TOKEN)
         (self.fakes / "tty_name").write_text("ttys001\n")
         (self.fakes / "commit").write_text(OLD)
         (self.root / "dev").mkdir(parents=True)
@@ -366,6 +361,7 @@ class InstallTest(Case):
         self.tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
         self.tcc.parent.mkdir(parents=True)
         self.tcc.write_text("granted")
+        (self.fakes / "src/broker").mkdir(parents=True)
         self.pkg_src = self.fakes / "pkg-src"
         (self.pkg_src / "scripts").mkdir(parents=True)
         shutil.copyfile(
@@ -528,10 +524,9 @@ class InstallTest(Case):
     def assert_secret_free(self, *secrets, result):
         kept = {
             self.fakes / "keychain",
-            self.fakes / "src/broker/claude_token",
             self.fakes / "linear.json",
         }
-        kept |= {self.fakes / "sudo_password", self.fakes / "claude_token", self.auth_json()}
+        kept |= {self.fakes / "sudo_password", self.auth_json()}
         texts = {"stdout": result.stdout, "stderr": result.stderr}
         for path in Path(self.home).rglob("*"):
             if (
@@ -562,8 +557,7 @@ class InstallTest(Case):
         """
         chosen = args[args.index("--clients") + 1] if "--clients" in args else clients
         if logins is None and (docker == "y" or "--docker" in args):
-            logins = [(TOKEN_Q, TOKEN)] if "claude" in (chosen or "claude") else []
-            logins.append((PEM_Q, ""))
+            logins = [(PEM_Q, "")]
         answers = [(SUDO_Q, PASSWORD), (WRITE_Q, "y")]
         if "--clients" not in args or not {"--docker", "--no-docker"} & set(args):
             on = "--docker" in args or ("--no-docker" not in args and docker == "y")
@@ -761,7 +755,7 @@ class InstallTest(Case):
         self.assertTrue((self.fakes / "askpass_used").exists())
         self.assertNotRegex(result.tty, SUDO_Q)
         self.assertEqual(list(self.tmp.iterdir()), [])
-        self.assert_secret_free(PASSWORD, TOKEN, result=result)
+        self.assert_secret_free(PASSWORD, result=result)
         self.assertNotIn(PASSWORD, self.envlog.read_text())
 
     def test_fresh_install_core(self):
@@ -793,8 +787,6 @@ class InstallTest(Case):
             [
                 "gh auth status",
                 "gh auth login --hostname github.com --git-protocol https --web",
-                "claude auth status",
-                "claude auth login",
                 "codex login status",
                 "codex login",
             ],
@@ -1041,7 +1033,6 @@ class InstallTest(Case):
         ):
             self.assertNotIn(absent, calls)
         self.assertIn("==> broker Codex install\n    skip: Codex not chosen", result.stderr)
-        self.assertIn("ensemble-broker login claude", calls)
         self.assertNotIn("[delegate]", self.config().read_text())
 
     def test_ref_with_claude_or_codex_must_be_the_served_ref(self):
@@ -1179,9 +1170,7 @@ class InstallTest(Case):
         for client in ("claude", "codex"):
             path = Path(self.fakes, client, "plugins.json")
             path.write_text(path.read_text().replace("true", "false"))
-        self.assert_ok(
-            self.again("--docker", answers=[(WRITE_Q, "y"), (TOKEN_Q, TOKEN), (PEM_Q, "")])
-        )
+        self.assert_ok(self.again("--docker", answers=[(WRITE_Q, "y"), (PEM_Q, "")]))
         self.assertNotIn("updraft", "\n".join(self.plugin_calls()))
 
     def test_docker_keeps_an_explicit_image_plugin_list(self):
@@ -1206,17 +1195,12 @@ class InstallTest(Case):
                 "broker-install ",
                 f"sudo mkdir -p {self.root}/usr/local/libexec/ensemble",
                 "ensemble-broker retrust",
-                "ensemble-broker login claude",
                 f"sudo -A {broker} install-codex 0.163.0",
                 "ensemble-broker install-codex 0.163.0",
                 "ensemble-broker login codex",
             ],
         )
         self.assertLess(calls.index("open -a Docker"), calls.index("broker-install "))
-        self.assertLess(
-            calls.index("claude setup-token"), calls.index("ensemble-broker login claude")
-        )
-        self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
         self.assertIn(
             "skip: no GitHub App key: create its private key (the App's settings › Generate a private key),"
             " then rerun",
@@ -1224,9 +1208,8 @@ class InstallTest(Case):
         )
         state = self.state()
         self.assertEqual(state["github_app_key"], "skipped")
-        self.assertEqual(len(state["login_claude"]), 64)
         self.assertNotIn("login_github", state)
-        self.assert_secret_free(PASSWORD, TOKEN, result=result)
+        self.assert_secret_free(PASSWORD, result=result)
 
     def test_no_docker(self):
         result = self.fresh("--no-docker")
@@ -1238,7 +1221,6 @@ class InstallTest(Case):
             "docker-desktop",
             "broker",
             "open -a Docker",
-            "setup-token",
             "brew install go",
         ):
             self.assertNotIn(absent, calls)
@@ -1380,7 +1362,6 @@ class InstallTest(Case):
         result = self.again("--clients", "claude", "--docker")
         self.assertEqual(result.code, 1)
         self.assertIn("not healthy after 120 seconds", result.stderr)
-        self.assertNotIn("ensemble-broker login claude", self.calls())
 
     def test_egress_ready_needs_a_running_healthy_proxy_with_workers_labels(self):
         """egress_ready: 0 ready, 2 a healthy contract-1 proxy without a workers network, else 1."""
@@ -1424,7 +1405,6 @@ class InstallTest(Case):
         self.assertEqual(
             (config.read_bytes(), config.stat().st_mode, config.stat().st_mtime_ns), before
         )
-        self.assertNotIn("ensemble-broker login claude", self.calls())
         self.assertFalse((egress / "current").exists())
 
     def test_egress_download_failure_is_retryable(self):
@@ -1512,7 +1492,6 @@ class InstallTest(Case):
         self.assertFalse(current.is_symlink())
         self.assertEqual((current / "keep").read_text(), "mine\n")
         self.assertNotIn("egress_commit", self.state())
-        self.assertNotIn("ensemble-broker login claude", self.calls())
 
     def test_egress_start_and_health_failures_stop_before_broker_logins(self):
         (self.fakes / "fail").write_text("docker egress-start")
@@ -1520,14 +1499,12 @@ class InstallTest(Case):
         self.assertEqual(result.code, 1)
         self.assertIn("egress-proxy", result.stderr)
         self.assertIn("docker logs egress-proxy", result.stderr)
-        self.assertNotIn("ensemble-broker login claude", self.calls())
         (self.fakes / "egress_unhealthy").touch()
         (self.bin / "sleep").unlink()
         executable(self.bin / "sleep", "#!/bin/sh\n")
         result = self.again("--clients", "claude", "--docker")
         self.assertEqual(result.code, 1)
         self.assertIn("not healthy after 120 seconds", result.stderr)
-        self.assertNotIn("ensemble-broker login claude", self.calls())
 
     def test_branch_broker_is_built(self):
         result = self.fresh(
@@ -1845,7 +1822,6 @@ class InstallTest(Case):
                 docker="y",
                 opencode=PROVIDER_ANSWERS,
                 logins=[
-                    (TOKEN_Q, TOKEN),
                     (PEM_Q, ""),
                     (OPENCODE_LOGIN_Q, "lan"),
                     (r"API key:", KEY),
@@ -1868,7 +1844,6 @@ class InstallTest(Case):
                 docker="y",
                 opencode=PROVIDER_ANSWERS,
                 logins=[
-                    (TOKEN_Q, TOKEN),
                     (PEM_Q, ""),
                     (OPENCODE_LOGIN_Q, "lan"),
                     (r"API key:", KEY),
@@ -2189,7 +2164,7 @@ class InstallTest(Case):
         pem = Path(self.home, "app.pem")
         secret = "-----BEGIN RSA PRIVATE KEY-----SENTINELKEY-----END RSA PRIVATE KEY-----"
         pem.write_text(secret)
-        logins = [(TOKEN_Q, TOKEN), (PEM_Q, str(pem)), (r"App ID \(digits\):", "12 -w x")]
+        logins = [(PEM_Q, str(pem)), (r"App ID \(digits\):", "12 -w x")]
         logins += [(r"App ID \(digits\):", "0123"), (r"App ID \(digits\):", "1234567")]
         result = self.fresh(docker="y", logins=[*logins, (WRITE_Q, "y")])
         self.assert_ok(result)
@@ -2208,28 +2183,7 @@ class InstallTest(Case):
         self.assertIn("keychain\tensemble-broker-bot\t1234567", self.ledger())
         self.assertEqual(self.state()["github_app"], "ensemble-test-bot")
         pem.unlink()
-        self.assert_secret_free("SENTINELKEY", TOKEN, result=result)
-
-    def test_claude_login_follows_broker_credential_usability(self):
-        self.assert_ok(self.fresh(docker="y"))
-        state = Path(self.ensemble, "install/state")
-        state.write_text(re.sub(r"(?m)^login_claude=.*\n", "", state.read_text()))
-        versions = Path(self.fakes, "claude/cache/0/src/broker/internal/codex/versions.go")
-        versions.write_text('package codex\n\nconst MinVersion = "0.170.0"\n')
-        result = self.again()
-        self.assert_ok(result)
-        calls = self.calls()
-        self.assertIn("broker-install ", calls)
-        self.assertIn("skip: default Claude credential usable by this broker", result.stderr)
-        self.assertNotIn("claude setup-token", calls)
-        self.assertNotIn("ensemble-broker login claude", calls)
-        self.assertNotIn("ensemble-broker login codex", calls)
-        self.assertIn(f"sudo -A {self.broker_path()} update-codex 0.170.0", calls)
-        self.assertIn("login_claude", self.state())
-        (self.fakes / "src/broker/claude_unusable").touch()
-        self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
-        self.assertIn("claude setup-token", self.calls())
-        self.assertIn("ensemble-broker login claude", self.calls())
+        self.assert_secret_free("SENTINELKEY", result=result)
 
     def test_codex_install_or_update(self):
         self.assert_ok(self.fresh(docker="y"))
@@ -2274,7 +2228,6 @@ class InstallTest(Case):
             self.assertNotIn("AUDIT_SECRET_SENTINEL", result.stdout + result.stderr + result.tty)
             calls = self.calls()
             self.assertIn("ensemble-broker status", calls)
-            self.assertNotIn("ensemble-broker login claude", calls)
             self.assertNotIn("ensemble-broker login codex", calls)
 
     def test_opencode_config_and_flags(self):
@@ -2411,11 +2364,11 @@ class InstallTest(Case):
             ctty=self.refused_tty(),
         )
         self.assert_ok(result)
-        self.assertIn("claude auth login", self.calls())
+        self.assertIn(GH_LOGIN, self.calls())
         self.assertIn("opencode auth login", self.calls())
 
     def test_broker_retrust_runs_once_per_broker_before_logins(self):
-        result = self.fresh(clients="claude", docker="y")
+        result = self.fresh(clients="claude,codex", docker="y")
         self.assert_ok(result)
         calls = self.calls()
         self.assertEqual(calls.count("ensemble-broker retrust"), 1)
@@ -2423,11 +2376,11 @@ class InstallTest(Case):
             calls.index("ensemble-broker retrust"), calls.index("ensemble-broker status")
         )
         self.assertLess(
-            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker login claude")
+            calls.index("ensemble-broker retrust"), calls.index("ensemble-broker login codex")
         )
         self.assertLess(
             result.stderr.index("==> broker re-trust\n"),
-            result.stderr.index("==> broker login: Claude"),
+            result.stderr.index("==> broker login: GitHub"),
         )
         binary = self.root / "usr/local/libexec/ensemble/ensemble-broker"
         self.assertEqual(self.state()["retrust"], hashlib.sha256(binary.read_bytes()).hexdigest())
@@ -2493,6 +2446,7 @@ class InstallTest(Case):
 
     def test_docker_install_without_retired_items_skips(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
+        (self.fakes / "keychain").mkdir(exist_ok=True)
         keychain = {p.name: p.read_bytes() for p in (self.fakes / "keychain").iterdir()}
         result = self.again()
         self.assert_ok(result)
@@ -2541,49 +2495,14 @@ class InstallTest(Case):
         self.assertEqual(len(self.retired_calls()), 5 + len(RETIRED))
 
     def test_broker_logins_use_the_terminal_device(self):
-        result = self.fresh(clients="claude", docker="y", ctty=self.refused_tty())
+        result = self.fresh(clients="codex", docker="y", ctty=self.refused_tty())
         self.assert_ok(result)
-        self.assertIn("claude setup-token", self.calls())
-        self.assertIn("ensemble-broker login claude", self.calls())
-
-    def test_setup_token_on_a_cleared_alternate_screen(self):
-        """The token setup-token prints and its paste stay on the alternate screen, cleared before leaving it."""
-        result = self.fresh(clients="claude", docker="y")
-        self.assert_ok(result)
-        self.assertEqual((result.tty.count(SCREEN_ON), result.tty.count(SCREEN_OFF)), (1, 1))
-        on = result.tty.index(SCREEN_ON)
-        off = result.tty.index(SCREEN_OFF)
-        self.assertLess(on, off)
-        shown = [m.start() for m in re.finditer(re.escape(TOKEN), result.tty)]
-        self.assertTrue(shown)
-        self.assertTrue(all(on < at < off for at in shown), result.tty)
-        self.assertRegex(result.tty[on:off], TOKEN_Q)
-        self.assertIn("    setup-token saved in the broker; its screen is cleared\n", result.stderr)
-        self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
-        self.assert_secret_free(TOKEN, result=result)
-
-    def test_setup_token_failure_leaves_the_alternate_screen(self):
-        """A failed setup-token or broker login waits for Enter on that screen, then leaves it and stops."""
-        failed = "install.sh: broker login: Claude failed; rerun the same command to continue\n"
-        self.assert_ok(self.fresh("--no-docker", clients="claude"))
-        config = [(WRITE_Q, "y")]
-        for call in ("claude setup-token", "ensemble-broker login claude"):
-            with self.subTest(call=call):
-                (self.fakes / "fail").write_text(call)
-                result = self.again("--docker", answers=[*config, (LEAVE_Q, "")])
-                config = []
-                self.assertEqual(result.code, 1, result.stderr)
-                on = result.tty.index(SCREEN_ON)
-                self.assertGreater(result.tty.index(LEAVE_Q.replace("\\", ""), on), on)
-                self.assertTrue(result.tty.endswith(SCREEN_OFF), result.tty[-200:])
-                self.assertEqual(result.stderr.count(failed), 1, result.stderr)
-                self.assertNotIn("setup-token saved in the broker", result.stderr)
-                self.assertNotIn("login_claude", self.state())
+        self.assertIn("ensemble-broker login codex", self.calls())
 
     def test_terminal_without_a_device_name(self):
         (self.fakes / "tty_name").write_text("??\n")
         self.assert_ok(self.fresh())
-        self.assertIn("claude auth login", self.calls())
+        self.assertIn(GH_LOGIN, self.calls())
 
     def test_opencode_that_does_not_run_stops(self):
         (self.fakes / "postinstall_broken").write_text("")
@@ -3736,7 +3655,6 @@ exec /bin/rm "$@"
             docker="y",
             opencode=PROVIDER_ANSWERS,
             logins=[
-                (TOKEN_Q, TOKEN),
                 (PEM_Q, ""),
                 (OPENCODE_LOGIN_Q, "lan"),
                 (r"API key:", KEY),
@@ -3746,10 +3664,6 @@ exec /bin/rm "$@"
         calls = self.calls()
         login = f"ensemble-broker login opencode lan --auth-file {self.auth_json()}"
         self.assertIn(login, calls)
-        self.assertLess(
-            calls.index("ensemble-broker login claude"),
-            calls.index(login),
-        )
         self.assertEqual(calls.count("opencode auth login"), 1)
         self.assertLess(calls.index("opencode auth login"), calls.index(login))
         self.assertLess(
@@ -3771,7 +3685,7 @@ exec /bin/rm "$@"
         self.assertNotIn(login, self.calls())
         self.assertNotIn("opencode auth login", self.calls())
         self.assertEqual(global_config.read_bytes(), global_before)
-        self.assert_secret_free(KEY, TOKEN, result=result)
+        self.assert_secret_free(KEY, result=result)
         (self.fakes / "keychain/ensemble-broker-opencode").unlink()
         self.assert_ok(self.again())
         self.assertIn(login, self.calls())
@@ -4024,7 +3938,6 @@ exec /bin/rm "$@"
             docker="y",
             opencode=PROVIDER_ANSWERS,
             logins=[
-                (TOKEN_Q, TOKEN),
                 (PEM_Q, ""),
                 (OPENCODE_LOGIN_Q, "lan"),
                 (key_q, ""),
@@ -5064,7 +4977,7 @@ exec /bin/rm "$@"
             clients="claude,codex,opencode",
             docker="y",
             opencode=PROVIDER_ANSWERS,
-            logins=[(TOKEN_Q, TOKEN), (PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
+            logins=[(PEM_Q, ""), (OPENCODE_LOGIN_Q, "lan"), (r"API key:", KEY)],
         )
 
     def test_ledger_of_a_fresh_install(self):
@@ -5103,7 +5016,6 @@ exec /bin/rm "$@"
                 "cask\tclaude-code",
                 "cask\tcodex",
                 "login\tgh",
-                "login\tclaude",
                 "login\tcodex",
                 "claude-marketplace\twindroc",
                 "claude-plugin\tensemble@windroc",
@@ -5162,7 +5074,6 @@ exec /bin/rm "$@"
             "formula\tnode",
             "cask\tdocker-desktop",
             "broker",
-            "keychain\tensemble-broker-claude\tdefault",
             "keychain\tensemble-broker-codex\tauth",
             "keychain\tensemble-broker-opencode\tlan",
         ):
@@ -5185,7 +5096,7 @@ exec /bin/rm "$@"
             "marketplace add",
             "broker-install",
         )
-        changing += ("security add", "launchctl", "npm install", "setup-token", "-codex ")
+        changing += ("security add", "launchctl", "npm install", "-codex ")
         changing += ("auth login", "login codex", "login claude", "login opencode", "codex login")
         changed = [c for c in self.calls() if any(w in c for w in changing)]
         self.assertEqual(
@@ -5242,9 +5153,7 @@ exec /bin/rm "$@"
 
     def test_created_config_is_not_backed_up(self):
         self.assert_ok(self.fresh("--no-docker"))
-        self.assert_ok(
-            self.again("--docker", answers=[(WRITE_Q, "y"), (TOKEN_Q, TOKEN), (PEM_Q, "")])
-        )
+        self.assert_ok(self.again("--docker", answers=[(WRITE_Q, "y"), (PEM_Q, "")]))
         self.assertIn('default = "docker"', self.config().read_text())
         self.assertFalse(Path(self.ensemble, "install/config.local.toml.orig").exists())
         self.assertNotIn("config\tbackup", self.ledger())
@@ -5314,7 +5223,7 @@ exec /bin/rm "$@"
         self.assertEqual(result.code, 1)
         self.assertIn("install-cleanup.sh: nothing removed", result.stderr)
         self.assertIn("  formula gh", result.tty)
-        self.assertIn("  login claude", result.tty)
+        self.assertIn("  login gh", result.tty)
         self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
         self.assertEqual(self.snapshot(), before)
 
@@ -5346,7 +5255,10 @@ exec /bin/rm "$@"
     def test_cleanup_logs_claude_out_on_a_kqueue_refused_tty(self):
         """claude auth logout dies on /dev/tty, as macOS's kqueue refuses it; the terminal's own device works."""
         self.assert_ok(self.fresh("--no-docker", clients="claude"))
-        self.assertTrue((self.fakes / "login/claude").exists())
+        # A login an earlier install made and recorded.
+        (self.fakes / "login/claude").write_text("")
+        with Path(self.ensemble, "install/added").open("a") as ledger:
+            ledger.write("login\tclaude\n")
         result = self.cleanup("--yes", ctty=self.refused_tty())
         self.assert_ok(result)
         self.assertIn("claude auth logout", self.calls())
@@ -5368,7 +5280,7 @@ exec /bin/rm "$@"
         self.assertEqual(list((self.fakes / "login").iterdir()), [])
         self.assertFalse(self.broker_path().parent.exists())
         self.assertFalse(Path(self.root, "opt/homebrew/bin/brew").exists())
-        self.assert_secret_free(PASSWORD, KEY, TOKEN, result=result)
+        self.assert_secret_free(PASSWORD, KEY, result=result)
         second = self.full()
         self.assert_ok(second)
         self.assertEqual(self.run_calls(), calls)
@@ -5380,7 +5292,7 @@ exec /bin/rm "$@"
         """Docker Desktop's and iTerm2's own files go; a shell rc there before keeps its own lines."""
         bashrc = Path(self.home, ".bashrc")
         bashrc.write_text("export EDITOR=vim\n")
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         library = Path(self.home, "Library")
         written = [
             library / "Application Support/Docker Desktop/state.json",
@@ -5406,7 +5318,7 @@ exec /bin/rm "$@"
 
     def test_cl2_cleanup_removes_installed_egress(self):
         """The egress proxy install.sh created goes; worker images and workspace volumes stay."""
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         egress = Path(self.home, ".egress")
         ledger = self.ledger()
         for record in (
@@ -5461,7 +5373,7 @@ exec /bin/rm "$@"
         config.write_text("# mine\nversion: 1\nnetworks:\n  workers:\n    mode: denylist\n")
         (egress / "notes.txt").write_text("mine")
         theirs = {p: p.read_bytes() for p in (config, egress / "notes.txt")}
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         sha = "122d7454d738db4a9b7e0c4a89d2cfa5ff564339"
         ledger = self.ledger()
         for mine in (egress, config, egress / "notes.txt", egress / "versions"):
@@ -5492,7 +5404,7 @@ exec /bin/rm "$@"
         old = egress / "versions/0123456789abcdef0123456789abcdef01234567"
         old.mkdir(parents=True)
         (egress / "current").symlink_to(old)
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         version = egress / "versions/122d7454d738db4a9b7e0c4a89d2cfa5ff564339"
         self.assertEqual((egress / "current").resolve(), version)
         self.assertFalse([r for r in self.ledger() if str(version) in r or r.endswith("/current")])
@@ -5506,7 +5418,7 @@ exec /bin/rm "$@"
     def test_cl2_cleanup_keeps_preexisting_egress_container(self):
         (self.fakes / "egress_container").write_text("")
         (self.fakes / "egress_image").write_text("")
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         self.assertFalse(
             [r for r in self.ledger() if r.startswith(("docker-container", "docker-image"))]
         )
@@ -5522,13 +5434,13 @@ exec /bin/rm "$@"
     def test_cl2_install_records_only_what_docker_reports_missing(self):
         """An inspect failing for another reason than a missing object records nothing."""
         (self.fakes / "fail").write_text("docker container inspect egress-proxy")
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         self.assertNotIn("docker-container\tegress-proxy", self.ledger())
         self.assertIn("docker-image\tegress-proxy", self.ledger())
 
     def test_cl2_cleanup_keeps_a_failed_egress_removal(self):
         """Docker Desktop quits after the preflight: its inspect failing proves nothing is gone."""
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         (self.fakes / "docker_stops_at").write_text("docker rm -f egress-proxy")
         result = self.cleanup("--yes")
         self.assertEqual(result.code, 1)
@@ -5544,7 +5456,7 @@ exec /bin/rm "$@"
         self.assertFalse((self.fakes / "egress_image").exists())
 
     def test_cl2_cleanup_needs_docker_for_egress_records(self):
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         (self.fakes / "docker_running").unlink()
         ledger, before = self.ledger(), self.snapshot()
         result = self.run_install("--yes", script=CLEANUP)
@@ -5812,7 +5724,7 @@ exec /bin/rm "$@"
 
     def test_cleanup_stops_docker_processes(self):
         """What still runs from Docker.app after its cask is gone ends; nothing else is signalled."""
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         agent = (
             f"{self.root}/Applications/Docker.app/Contents/Resources/cli-plugins/docker-agent serve"
         )
@@ -5829,7 +5741,7 @@ exec /bin/rm "$@"
         self.assertNotIn("pkill -KILL", "\n".join(calls))
 
     def test_cleanup_fails_on_an_unkillable_docker_process(self):
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         (self.fakes / "unkillable").write_text((self.fakes / "processes").read_text())
         result = self.cleanup("--yes")
         self.assertEqual(result.code, 1, result.stderr)
@@ -5841,7 +5753,7 @@ exec /bin/rm "$@"
 
     def test_cleanup_needs_full_disk_access_for_a_container(self):
         """macOS lets only Full Disk Access remove an app container: without it --yes removes nothing."""
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         self.tcc.unlink()
         container = Path(self.home, "Library/Containers/com.docker.docker")
         group = Path(self.home, "Library/Group Containers/group.com.docker")
@@ -5886,7 +5798,7 @@ exec /bin/rm "$@"
 
     def test_cleanup_needs_full_disk_access_for_a_group_container(self):
         """macOS 27 denies a terminal Docker's Group Container too: without the access --yes removes nothing."""
-        self.assert_ok(self.fresh("--docker", logins=[(TOKEN_Q, TOKEN), (PEM_Q, "")]))
+        self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
         group = Path(self.home, "Library/Group Containers/group.com.docker")
         self.assertTrue((group / "settings-store.json").exists())
         self.tcc.unlink()
@@ -5959,7 +5871,6 @@ exec /bin/rm "$@"
             "claude plugin uninstall ensemble@windroc",
             "claude plugin marketplace remove windroc",
             "gh auth logout --hostname github.com",
-            "claude auth logout",
             "codex logout",
             "brew uninstall --cask codex",
             "brew uninstall --cask claude-code",
@@ -6479,17 +6390,17 @@ exec /bin/rm "$@"
         """I3a: Ctrl-C during a login leaves no login record, so the cleanup logs nobody out; a login that
         stored its credential before the Ctrl-C is recorded."""
         self.assert_ok(self.fresh("--clients", "claude,codex", "--no-docker", "--no-board"))
-        self.logged_out("claude")
+        self.logged_out("gh")
         self.interrupted()
-        self.assertNotIn("login\tclaude", self.ledger())
-        (self.fakes / "hang/claude").unlink()
+        self.assertNotIn("login\tgh", self.ledger())
+        (self.fakes / "hang/gh").unlink()
         self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n")
-        self.assertNotIn("claude auth logout", self.calls())
+        self.assertFalse([c for c in self.calls() if c.startswith("gh auth logout")])
         self.assert_ok(self.fresh("--clients", "claude,codex", "--no-docker", "--no-board"))
         for client, hang, recorded in (
             ("codex", "", False),
             ("gh", "", False),
-            ("claude", "stored", True),
+            ("gh", "stored", True),
         ):
             with self.subTest(client=client, hang=hang):
                 self.logged_out(client, hang)
@@ -6514,19 +6425,19 @@ exec /bin/rm "$@"
         self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
         for sig, code in ((signal.SIGINT, 130), (signal.SIGHUP, 129), (signal.SIGTERM, 143)):
             with self.subTest(signal=sig.name):
-                self.logged_out("claude")
+                self.logged_out("gh")
                 result = self.interrupted(sig)
                 self.assertEqual(result.code, code, result.stderr)
                 self.assertIn(
-                    "install.sh: Claude Code login failed; rerun the same command to continue",
+                    "install.sh: GitHub CLI login failed; rerun the same command to continue",
                     result.stderr,
                 )
                 calls = self.calls()
-                self.assertIn("sudo -k", calls[calls.index("claude auth login") :])
+                self.assertIn("sudo -k", calls[calls.index(GH_LOGIN) :])
                 self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
                 self.assertTrue(self.group_gone(result.pid))
         with self.subTest("a finished run"):
-            (self.fakes / "hang/claude").unlink()
+            (self.fakes / "hang/gh").unlink()
             result = self.run_install("--password-stdin", stdin=PASSWORD + "\n", group=True)
             self.assert_ok(result)
             self.assertEqual(list(self.tmp.glob("ensemble-sudo.*")), [])
@@ -6535,8 +6446,8 @@ exec /bin/rm "$@"
     def test_i3a_hung_login_probe_stops_on_ctrl_c(self):
         """I3a: on_exit's login probe gets the default signals, so a second Ctrl-C stops a hung one."""
         self.assert_ok(self.fresh("--clients", "claude", "--no-docker", "--no-board"))
-        self.logged_out("claude")
-        (self.fakes / "hang/claude-status").write_text("")
+        self.logged_out("gh")
+        (self.fakes / "hang/gh-status").write_text("")
         result = self.run_install(
             "--password-stdin",
             stdin=PASSWORD + "\n",
@@ -6545,10 +6456,10 @@ exec /bin/rm "$@"
         self.assertTrue((self.fakes / "status-hung").exists(), result.stderr)
         self.assertEqual(result.code, 130, result.stderr)
         self.assertIn(
-            "install.sh: Claude Code login failed; rerun the same command to continue",
+            "install.sh: GitHub CLI login failed; rerun the same command to continue",
             result.stderr,
         )
-        self.assertNotIn("login\tclaude", self.ledger())
+        self.assertNotIn("login\tgh", self.ledger())
 
     def codex_rejects(self, words=""):
         """Codex logged in, its server rejecting the `codex plugin` sub-commands `words` (all when empty)."""

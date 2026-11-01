@@ -424,16 +424,13 @@ def marketplace_name(source):
 
 
 def claude(args):
-    if args in (["auth", "login"], ["auth", "logout"], ["setup-token"]) and bun("claude"):
+    if args in (["auth", "login"], ["auth", "logout"]) and bun("claude"):
         return 1
     if args == ["auth", "login"]:
         store_key("Claude Code-credentials", "oauth")
     done = login("claude", args, ["auth", "status"], ["auth", "login"], ["auth", "logout"])
     if done is not None:
         return done
-    if args == ["setup-token"]:
-        out(f"Your token: {(FAKES / 'claude_token').read_text()}\n")
-        return 0
     markets_file, plugins_file = FAKES / "claude/marketplaces.json", FAKES / "claude/plugins.json"
     markets, plugins = load(markets_file, []), load(plugins_file, [])
     if args == ["plugin", "marketplace", "list", "--json"]:
@@ -799,9 +796,7 @@ def broker(args):
         default["repair"] = (
             "sudo /usr/local/libexec/ensemble/ensemble-broker install-codex <version>"
         )
-        claude = (FAKES / "keychain/ensemble-broker-claude").exists()
-        claude = claude and not (FAKES / "src/broker/claude_unusable").exists()
-        response = {"codex": state or default, "claude": {"default": claude}}
+        response = {"codex": state or default}
         warning = FAKES / "src/broker/audit_warning.json"
         if warning.exists():
             response["audit_warning"] = load(warning, None)
@@ -832,12 +827,6 @@ def broker(args):
         kept = state if args[0] == "update-codex" and state and state.get("version") else {}
         fresh = {"state": "login_unavailable", "repair": "login"}
         save(codex_file, {**fresh, **kept, "version": args[1]})
-        return 0
-    if args == ["login", "claude"]:
-        out("Paste the setup-token (hidden): ")
-        mark(FAKES / "src/broker/claude_token", sys.stdin.readline().rstrip("\n"))
-        store_key("ensemble-broker-claude", "token")
-        (FAKES / "src/broker/claude_unusable").unlink(missing_ok=True)
         return 0
     if args[:3] == ["login", "github", "ensemble-broker-bot"] and args[3:4] == ["--key-file"]:
         if (

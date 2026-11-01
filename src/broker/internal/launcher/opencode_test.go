@@ -23,6 +23,7 @@ func opencodeManifest(t *testing.T, edit func(map[string]any)) string {
 	return editedManifest(t, func(fields map[string]any) {
 		fields["client"], fields["opencode_dir"] = "opencode", opencodeDir
 		delete(fields, "claude_dir")
+		delete(fields, "claude_account")
 		if edit != nil {
 			edit(fields)
 		}

@@ -58,7 +58,6 @@ askpass_dir=
 current=
 login_pending=
 answer=
-token_screen=
 app_pem=
 app_id=
 pkg=
@@ -439,7 +438,6 @@ state_set() {
 on_exit() {
   local rc=$?
   trap '' HUP INT TERM
-  token_screen_leave
   sudo_end
   # A login that failed or was cut short after storing its credential is still the cleanup's to remove. Handled, not
   # ignored, signals reach its probe with their default action: Ctrl-C stops a hung one.
@@ -1097,11 +1095,10 @@ apps() {
   fi
 }
 
-# Exit 0 when client $1 (gh, claude or codex) has a saved login.
+# Exit 0 when client $1 (gh or codex) has a saved login.
 login_status() {
   case $1 in
     gh) gh auth status ;;
-    claude) claude auth status ;;
     codex) codex login status ;;
   esac </dev/null >/dev/null 2>&1
 }
@@ -1123,14 +1120,6 @@ client_logins() {
     skip "logged in"
   else
     client_login gh gh auth login --hostname github.com --git-protocol https --web
-  fi
-  step "Claude Code login"
-  if ! has claude; then
-    skip "Claude Code not chosen"
-  elif login_status claude; then
-    skip "logged in"
-  else
-    client_login claude claude auth login
   fi
   step "Codex login"
   if ! has codex; then
@@ -2137,7 +2126,7 @@ store_app_key() {
   ledger_add keychain ensemble-broker-bot "$app_id"
 }
 
-# Claude's default credential or pinned Codex: install, update, login, ready or busy.
+# Pinned Codex version $1: install, update, login, ready or busy.
 broker_need() {
   "$broker" status </dev/null | python3 -I -c '
 import json, sys
@@ -2147,9 +2136,6 @@ if "audit_warning" in data:
         print("audit_write_failed: broker audit persistence failed; the operation result still applies. Do not repeat a successful start.", file=sys.stderr)
     else:
         print("ensemble-broker: invalid audit warning metadata; the operation result still applies.", file=sys.stderr)
-if sys.argv[1] == "claude":
-    print("ready" if (data.get("claude") or {}).get("default") is True else "login")
-    sys.exit(0)
 codex = data.get("codex") or {}
 state = codex.get("state", "")
 def version(text):
@@ -2161,7 +2147,7 @@ if state == "busy":
     print("busy")
 elif state == "installation_invalid":
     print("install" if "install-codex" in codex.get("repair", "") else "update")
-elif version(codex.get("version", "")) < version(sys.argv[2]):
+elif version(codex.get("version", "")) < version(sys.argv[1]):
     print("update")
 else:
     print("ready" if state == "ready" else "login")' "$@"
@@ -2174,20 +2160,6 @@ to_terminal() {
     printf '%s\n' "$line" >&3
     printf '%s\n' "$line"
   done
-}
-
-# The token screen: the terminal's alternate screen, which keeps no scrollback, cleared on entering and on leaving,
-# for claude setup-token's token and its paste.
-token_screen_enter() {
-  printf '\033[?1049h\033[H\033[2J' >&3
-  token_screen=1
-}
-
-token_screen_leave() {
-  if [ -n "$token_screen" ]; then
-    printf '\033[H\033[2J\033[?1049l' >&3
-    token_screen=
-  fi
 }
 
 # Deletes every item of the services brokers before protocol 33 kept per container, on every run: delete calls only,
@@ -2232,24 +2204,6 @@ broker_logins() {
     fi
     state_set retrust "$sha"
   fi
-  step "broker login: Claude"
-  if ! has claude; then
-    skip "Claude Code not chosen"
-  elif [ "$(broker_need claude)" = ready ]; then
-    skip "default Claude credential usable by this broker"
-    if [ "$(state_get login_claude)" != "$sha" ]; then state_set login_claude "$sha"; fi
-  else
-    say "Create a token with claude setup-token, then paste it at the broker's prompt; both run on a screen cleared afterwards"
-    record_item ensemble-broker-claude default
-    token_screen_enter
-    if ! { claude setup-token <&3 >&3 2>&3 && "$broker" login claude <&3 >&3 2>&3; }; then
-      ask "Press Enter to leave this screen:"
-      exit 1
-    fi
-    token_screen_leave
-    say "    setup-token saved in the broker; its screen is cleared"
-    state_set login_claude "$sha"
-  fi
   step "broker login: GitHub"
   if [ "$(state_get login_github)" = "$sha" ] && [ -n "$(state_get github_app)" ]; then
     skip "done for this broker"
@@ -2275,14 +2229,14 @@ broker_logins() {
     skip "Codex not chosen"
   else
     min=$(go_const src/broker/internal/codex/versions.go MinVersion)
-    need=$(broker_need codex "$min")
+    need=$(broker_need "$min")
     case $need in
       busy) die "broker busy; rerun" ;;
       install | update) sudo -A "$broker" "$need-codex" "$min" </dev/null >&2 ;;
       *) skip "Codex $min or newer installed" ;;
     esac
     step "broker login: Codex"
-    if [ "$(broker_need codex "$min")" = ready ]; then
+    if [ "$(broker_need "$min")" = ready ]; then
       skip "logged in"
     else
       record_item ensemble-broker-codex auth

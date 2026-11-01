@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -30,24 +31,36 @@ func statusHost(t *testing.T) (Host, credential.StaticStore) {
 	return Host{Static: store, Now: func() time.Time { return noticeNow }}, store
 }
 
-func TestStaticStatus(t *testing.T) {
-	h, _ := statusHost(t)
-	got, err := h.StaticStatus(map[string]bool{"ensemble-broker-claude/default": true})
+// usability is a Claude usability check that records each account it reads.
+func usability(read *[]string, usable map[string]bool) func(string) bool {
+	return func(account string) bool {
+		*read = append(*read, account)
+		return usable[account]
+	}
+}
+
+func TestStatus(t *testing.T) {
+	h, store := statusHost(t)
+	login(t, store, "ensemble-broker-claude/home", credential.Registration{}, noticeNow)
+	var read []string
+	got, err := h.Status(usability(&read, map[string]bool{"work": true}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(got)
-	want := `[{"reference":"ensemble-broker-claude/default","version":0,"expires_at":null,"provenance":"unknown","notice":"` + credential.UnknownText("ensemble-broker-claude/default") + `"},` +
+	want := `{"claude":{"home":false,"work":true},"static":[` +
+		`{"reference":"ensemble-broker-claude/home","version":1,"expires_at":null,"provenance":"unknown","notice":"` + credential.UnknownText("ensemble-broker-claude/home") + `"},` +
 		`{"reference":"ensemble-broker-claude/work","version":1,"expires_at":"2026-10-31T12:00:00Z","provenance":"explicit","notice":"ensemble-broker-claude/work expires 2026-10-31 (explicit), in 5 days: run claude setup-token, then ensemble-broker login claude work --fresh-token; running sessions keep their copy until they restart"},` +
 		`{"reference":"ensemble-broker-env/db","version":1,"expires_at":null,"provenance":"unknown","notice":null},` +
-		`{"reference":"ensemble-broker-opencode/strata","version":1,"expires_at":null,"provenance":"unknown","notice":null}]`
+		`{"reference":"ensemble-broker-opencode/strata","version":1,"expires_at":null,"provenance":"unknown","notice":null}]}`
 	if os.Getuid() != 0 && string(encoded) != want {
 		t.Fatalf("%s\nwant\n%s", encoded, want)
 	}
-	if got, err := h.StaticStatus(map[string]bool{"ensemble-broker-claude/default": false}); err != nil || len(got) != 3 {
-		t.Fatalf("an unusable legacy token is not listed: %+v %v", got, err)
+	slices.Sort(read)
+	if !slices.Equal(read, []string{"home", "work"}) {
+		t.Fatalf("read %q", read)
 	}
-	if got, err := (Host{}).StaticStatus(nil); err != nil || got != nil {
+	if got, err := (Host{}).Status(nil); err != nil || got.Claude == nil || len(got.Claude) != 0 || got.Static != nil {
 		t.Fatalf("no store: %+v %v", got, err)
 	}
 }
@@ -56,7 +69,7 @@ func TestStaticStatusReadOnly(t *testing.T) {
 	h, store := statusHost(t)
 	before, _ := os.ReadFile(store.Path)
 	_, logPath := audited(t, &h, "status", "")
-	if _, err := h.StaticStatus(nil); err != nil {
+	if _, err := h.Status(func(string) bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Audit.Flush(nil); err != nil {
@@ -73,7 +86,7 @@ func TestStaticStatusReadOnly(t *testing.T) {
 
 func TestStaticStatusStoreFails(t *testing.T) {
 	h := Host{Static: &fakeStatic{err: &credential.StoreError{Path: "/x/static-secrets.json", Reason: "cannot read"}}}
-	_, err := h.StaticStatus(nil)
+	_, err := h.Status(func(string) bool { return true })
 	if e := protoErr(t, err); e.Code != protocol.InternalError || e.Message != "/x/static-secrets.json: cannot read." {
 		t.Fatalf("%+v", e)
 	}

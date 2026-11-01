@@ -80,9 +80,6 @@ func LoginCommand(ref string) string {
 	k, name, _ := StaticKind(ref)
 	switch k {
 	case Claude:
-		if name == "default" {
-			return "ensemble-broker login claude"
-		}
 		return "ensemble-broker login claude " + name
 	case Opencode:
 		return "ensemble-broker login opencode " + name

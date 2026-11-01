@@ -47,7 +47,7 @@ The mini's own gotchas (its keychain, OpenCLI, the Terminal, screenshots, key ch
 | Step | Expected prompt | Route below |
 | --- | --- | --- |
 | Install, cleanup or broker rebuild at `sudo` | Terminal `Password:` (or sudo's account-qualified password prompt) | Terminal |
-| `ensemble-broker login github …`, `login claude`, `login codex`, `login opencode …`, `login env …` or `retrust` | Terminal `Login keychain password, to make … (hidden):` | Terminal |
+| `ensemble-broker login github …`, `login claude <name>`, `login codex`, `login opencode …`, `login env …` or `retrust` | Terminal `Login keychain password, to make … (hidden):` | Terminal |
 | Install's Linear apps step, `ensemble-broker login linear …` | Terminal `Login keychain password, to make this Linear client secret trust only the broker (hidden):` | Terminal |
 | Those broker login or re-trust steps, when macOS asks to use a Keychain item or change its access | SecurityAgent / Keychain password dialog, sometimes repeated | Dialog |
 

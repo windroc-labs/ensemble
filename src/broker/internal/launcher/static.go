@@ -3,6 +3,7 @@ package launcher
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -141,32 +142,27 @@ type StaticStatus struct {
 	Notice     *string               `json:"notice"` // the most urgent notice reached, or a Claude token's unknown expiry
 }
 
-// StaticStatus lists every recorded static secret, plus each legacy reference that is usable and unrecorded. It changes
-// nothing: login tells the host of a notice due to it.
-func (h Host) StaticStatus(legacy map[string]bool) ([]StaticStatus, error) {
+// Status lists every recorded static secret and, for each Claude account logged in by name, whether usable finds its
+// setup-token usable; no other account is read. It changes nothing: login tells the host of a notice due to it.
+func (h Host) Status(usable func(account string) bool) (StatusResult, error) {
+	result := StatusResult{Claude: map[string]bool{}}
 	if h.Static == nil {
-		return nil, nil
+		return result, nil
 	}
 	records, err := h.Static.Load()
 	if err != nil {
-		return nil, storeFailed(err, protocol.InternalError)
+		return StatusResult{}, storeFailed(err, protocol.InternalError)
 	}
 	now := h.now()
-	refs := make([]string, 0, len(records)+len(legacy))
-	for ref := range records {
-		refs = append(refs, ref)
-	}
-	for ref, usable := range legacy {
-		if _, ok := records[ref]; usable && !ok {
-			refs = append(refs, ref)
-		}
-	}
-	slices.Sort(refs)
+	refs := slices.Sorted(maps.Keys(records))
 	out := make([]StaticStatus, 0, len(refs))
 	for _, ref := range refs {
 		r := records[ref]
 		s := StaticStatus{Reference: ref, Version: r.Version, Provenance: credential.Unknown}
-		kind, _, _ := credential.StaticKind(ref)
+		kind, name, _ := credential.StaticKind(ref)
+		if kind == credential.Claude {
+			result.Claude[name] = usable(name)
+		}
 		if th := credential.Threshold(r, now); th != "" {
 			s.ExpiresAt, s.Provenance = &r.ExpiresAt, r.Provenance
 			text := credential.Text(ref, r, th, now)
@@ -179,5 +175,6 @@ func (h Host) StaticStatus(legacy map[string]bool) ([]StaticStatus, error) {
 		}
 		out = append(out, s)
 	}
-	return out, nil
+	result.Static = out
+	return result, nil
 }

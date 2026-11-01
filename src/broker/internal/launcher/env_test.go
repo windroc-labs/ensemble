@@ -140,7 +140,7 @@ func TestStartEnvSecrets(t *testing.T) {
 	if len(commands) != 3 || commands[0].Argv[0] != "inject" || commands[1].Argv[0] != "inject-env" || commands[2].Argv[1] != "id_ed25519" {
 		t.Fatalf("credential order: %+v", commands)
 	}
-	if string(commands[1].Stdin) != envValue+"-ensemble-broker-env/dummy" || !slices.Equal(creds.calls, []string{"ready default", "inject default"}) {
+	if string(commands[1].Stdin) != envValue+"-ensemble-broker-env/dummy" || !slices.Equal(creds.calls, []string{"ready work", "inject work"}) {
 		t.Fatal("credential bytes or provider calls changed")
 	}
 	if run := detached(d); !slices.Contains(run, "ensemble.secrets=ensemble-broker-env/dummy,ensemble-broker-env/ssh") {

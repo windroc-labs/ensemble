@@ -327,7 +327,8 @@
             }
           },
           "required": [
-            "claude_dir"
+            "claude_dir",
+            "claude_account"
           ],
           "not": {
             "anyOf": [
@@ -445,7 +446,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "37"
+          "const": "38"
         }
       },
       "required": [
@@ -943,15 +944,15 @@
         },
         "claude": {
           "type": "object",
-          "properties": {
-            "default": {
-              "type": "boolean"
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "not": {
+              "const": "setup-token"
             }
           },
-          "required": [
-            "default"
-          ],
-          "additionalProperties": false
+          "additionalProperties": {
+            "type": "boolean"
+          }
         },
         "static": {
           "type": "array",
@@ -1009,6 +1010,9 @@
           "$ref": "#/$defs/audit_warning"
         }
       },
+      "required": [
+        "claude"
+      ],
       "additionalProperties": false
     },
     "error": {

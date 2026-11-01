@@ -48,7 +48,7 @@ func TestManifestDuplicatesTrailingUTF8(t *testing.T) {
 		t.Fatalf("%+v %v", m, err)
 	}
 	base := `"client":"claude","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` +
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","cwd":"/w","workspace":"ensemble-ws-w","claude_dir":"/c","labels":{}`
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","cwd":"/w","workspace":"ensemble-ws-w","claude_dir":"/c","claude_account":"work","labels":{}`
 	if _, err := ParseManifest([]byte(`{"name":"w",` + base + `}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestManifestClaudeAccount(t *testing.T) {
 	parse := func(edit func(map[string]any)) (Manifest, error) {
 		return ParseManifest(fixtureBytes(t, "manifest-valid", edit))
 	}
-	for want, edit := range map[string]func(map[string]any){"default": nil, "work": withClaudeAccount("work"), "a.b-c_d": withClaudeAccount("a.b-c_d")} {
+	for want, edit := range map[string]func(map[string]any){"work": nil, "default": withClaudeAccount("default"), "a.b-c_d": withClaudeAccount("a.b-c_d")} {
 		if m, err := parse(edit); err != nil || m.ClaudeAccount != want {
 			t.Fatalf("%s: %q %v", want, m.ClaudeAccount, err)
 		}
@@ -186,14 +186,19 @@ func TestManifestClaudeAccount(t *testing.T) {
 	}
 	for name, edit := range map[string]func(map[string]any){
 		// uppercase stands for the name rule; TestValidClaudeAccount has its other cases.
-		"uppercase": withClaudeAccount("Work"), "number": withClaudeAccount(1), "null": withClaudeAccount(nil),
-		"array": withClaudeAccount([]string{"work"}), "codex": codex, "opencode": opencode,
+		"uppercase": withClaudeAccount("Work"), "number": withClaudeAccount(1), "null": withClaudeAccount(nil), "empty": withClaudeAccount(""),
+		"missing": func(f map[string]any) { delete(f, "claude_account") },
+		"array":   withClaudeAccount([]string{"work"}), "codex": codex, "opencode": opencode,
 	} {
 		m, err := parse(edit)
 		if code(t, err) != protocol.ManifestRejected {
 			t.Fatalf("%s accepted: %+v", name, m)
 		}
-		if want := map[bool]string{true: "claude_account requires client claude", false: "invalid claude_account"}[name == "codex" || name == "opencode"]; !strings.Contains(err.Error(), want) {
+		want := map[bool]string{true: "claude_account requires client claude", false: "invalid claude_account"}[name == "codex" || name == "opencode"]
+		if name == "missing" {
+			want = "client claude requires claude_account"
+		}
+		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
@@ -258,6 +263,7 @@ func TestParseManifestEnv(t *testing.T) {
 			f["client"], f[client+"_dir"] = client, "/x"
 			withSecrets([]any{secret("ensemble-broker-env/dummy", "dummy.txt")})(f)
 			delete(f, "claude_dir")
+			delete(f, "claude_account")
 		}
 		if m, err := parse(edit); err != nil || len(m.Secrets) != 1 {
 			t.Fatalf("%s: %v", client, err)
