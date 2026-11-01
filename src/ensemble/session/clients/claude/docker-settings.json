@@ -1,4 +1,6 @@
 {
+  "model": "opus",
+  "effortLevel": "medium",
   "idleCompaction": false,
   "outputStyle": "Concise",
   "tui": "fullscreen"

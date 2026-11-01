@@ -252,7 +252,13 @@ class HomeFilesTest(Base):
         "autoContinueAtUsageLimit": True,
         "promptSuggestionEnabled": False,
     }
-    DEFAULT = {"idleCompaction": False, "tui": "fullscreen", "outputStyle": "Concise"}
+    DEFAULT = {
+        "model": "opus",
+        "effortLevel": "medium",
+        "idleCompaction": False,
+        "tui": "fullscreen",
+        "outputStyle": "Concise",
+    }
 
     @property
     def docker_config(self):
