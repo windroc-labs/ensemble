@@ -14,7 +14,8 @@ local_account = "work"
 ```
 
 A tmux resume of a conversation recorded in an account's `dir` still runs on that account, and one
-recorded in `~/.claude` resumes there. If you set `account` for tmux starts, move it to
+recorded in `~/.claude` resumes there with no `CLAUDE_CONFIG_DIR`, even when an account's `dir` is
+`~/.claude`. If you set `account` for tmux starts, move it to
 `local_account`, or keep both for the two Hosts.
 
 ## Register each Claude account explicitly
@@ -60,8 +61,9 @@ registered account's usage once, live, and compares it with that account's `max_
 while that account is below its limit in every window, and is never replaced by another. With
 neither, a Docker start picks the account with the most usage left, a tie by name. With no account
 usable, or every reading failed, the start fails with `usage: no available account` and starts
-nothing. A Docker Host Claude start with no account registered is a configuration error. Nothing is cached or held: a run that hits a usage limit marks nothing, and
-the next start reads again. There are no separate start thresholds besides `max_usage`.
+nothing. A Docker Host Claude start with no account registered is a configuration error. Nothing
+is cached or held: a run that hits a usage limit marks nothing, and the next start reads again.
+There are no separate start thresholds besides `max_usage`.
 
 ## Usage is decided only in the session
 
@@ -94,7 +96,8 @@ The broker has no implicit `default` Claude account any more:
   its notices name them, and every repair command carries the name.
 - An account you log in as `default` is an ordinary account like any other.
 - `scripts/install.sh` no longer logs Claude in, natively or to the broker: log each account in yourself (step 4).
-  A start with no account registered, or an unregistered one, fails with a configuration error naming the table.
+  A Docker start with no account registered, or any start selecting an unregistered one, fails with a configuration
+  error naming the table.
 
 The plugin and its broker ship as one compatible release: a protocol 37 broker and a protocol 38 client refuse each
 other. Upgrade in this order:

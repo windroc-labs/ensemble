@@ -85,6 +85,9 @@ class ClaudeClient(Client):
         if not printable_abs(transcript):
             return ""
         path = os.path.realpath(transcript)
+        default = os.path.realpath(self.common.config_dir())
+        if os.path.commonpath((path, default)) == default:
+            return ""
         for name in sorted(self.common.accounts):
             root = os.path.realpath(self.common.accounts[name].dir)
             if os.path.commonpath((path, root)) == root:

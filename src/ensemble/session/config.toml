@@ -32,7 +32,7 @@
 #                    account with the most usage left, a tie by name. Only --account overrides it
 #   local_account    the same for the tmux Host; empty → a tmux start that selects none runs on the user's own
 #                    config (no CLAUDE_CONFIG_DIR set: ~/.claude and its login), reading no usage, unless it
-#                    resumes a conversation in an account's dir, which runs on that account
+#                    resumes a conversation recorded in an account's dir outside ~/.claude: that runs on the account
 # [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog skipped
 # [clients.claude.tiers]    tier "1".."4" → its --model
 # [clients.claude.efforts]  effort (low, medium, high, xhigh, max) → its --effort

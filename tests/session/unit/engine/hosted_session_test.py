@@ -2003,6 +2003,14 @@ class ResumeCheckTest(ClaudeStartCase):
         self.assertIsInstance(error, ConfigError)
         self.assertIn("has no transcript to resume", str(error))
 
+    def test_a_conversation_in_the_default_dir_resumes_there_though_an_account_shares_it(self):
+        default = os.path.join(self.root, "home")
+        self.enterContext(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": default}))
+        self.claude({"home": {}, "work": {}}, host="tmux")
+        spec = self.conversation(default)
+        self.assertIsNone(self.start(spec=spec)[1])
+        self.probe.assert_not_called()
+
     def test_inspect_finds_the_conversation_in_its_accounts_dir(self):
         self.claude({"home": {}, "work": {}}, host="tmux")
         spec = self.conversation(os.path.join(self.root, "work"))
