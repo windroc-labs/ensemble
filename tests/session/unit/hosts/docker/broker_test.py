@@ -32,10 +32,6 @@ CONTAINER = "ensemble-worker_1-0123456789abcdef0123456789abcdef"
 VOLUME = "ensemble-ws-worker_1"
 KEYS = broker.client_keys(REPO)
 CALLS = {
-    "probe_provider_output": (
-        "probe-provider",
-        lambda b: b.probe_provider("strata", "https://strata.test/v1"),
-    ),
     "version_output": ("version", lambda b: b.version()),
     "build_output": ("build", lambda b: b.build("/opt/ensemble")),
     "start_output": ("start", lambda b: b.start(MANIFEST, clients=KEYS)),
@@ -44,7 +40,6 @@ CALLS = {
     "workspace_rm_output": ("workspace-rm", lambda b: b.workspace_rm(VOLUME)),
 }
 COMMANDS = {
-    "probe-provider": CALLS["probe_provider_output"],
     "version": CALLS["version_output"],
     "build": CALLS["build_output"],
     "start": CALLS["start_output"],
@@ -140,16 +135,6 @@ class ResponseTest(Case):
                 self.assertNotIsInstance(caught.exception, BrokerError)
                 self.assertNotIn("SECRET_AUDIT_SENTINEL", str(caught.exception))
 
-    def test_provider_probe_response_is_only_a_boolean(self):
-        for value in (True, False):
-            runner = FakeBroker((0, json.dumps({"available": value}), ""))
-            self.assertIs(Broker(runner).probe_provider("strata", "https://strata.test/v1"), value)
-        for response in ({}, {"available": 1}, {"available": True, "key": "secret"}):
-            with self.subTest(response=response), self.assertRaises(SessionError):
-                Broker(FakeBroker((0, json.dumps(response), ""))).probe_provider(
-                    "strata", "https://strata.test/v1"
-                )
-
     def test_start_response_carrying_client_update_is_rejected(self):
         update = {"client": "codex", "result": "current"}
         for fixture in ("start-output", "start-output-codex"):
@@ -170,11 +155,12 @@ class ResponseTest(Case):
     def test_every_response_fixture_has_its_outcome(self):
         found = cases()
         self.assertTrue(any(c["definition"] == "error" for c in found))
-        # Session never runs status: users do
+        # Session never runs status or probe-provider: users and the installer do
         for case in (
             c
             for c in found
-            if c["expected"]["stage"] == "response" and c["definition"] != "status_output"
+            if c["expected"]["stage"] == "response"
+            and c["definition"] not in {"status_output", "probe_provider_output"}
         ):
             name, definition, valid = case["name"], case["definition"], case["valid"]
             with self.subTest(name=name):

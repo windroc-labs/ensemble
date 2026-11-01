@@ -5,7 +5,7 @@ Host to display on.
 import inspect
 import unittest
 
-from ensemble.session import Headroom, Mode, NotShowable, Session, SessionError
+from ensemble.session import Mode, NotShowable, Session, SessionError
 from ensemble.session.engine.types import Access, ConfigError, Exited, Hosts, Reply, Spec, TurnEnd
 from tests.session.case import Case
 from tests.session.fakes.host import FakeHost
@@ -34,7 +34,6 @@ class Scripted(Case):
             "start",
             "attach",
             "list",
-            "usage",
             "layout",
             "writable_dirs",
             "display",
@@ -110,7 +109,6 @@ class Scripted(Case):
 
     def test_class_methods_answer_as_a_session_layer_with_one_fake_host(self):
         cls = FakeSession.scripted()
-        self.assertEqual(cls.usage("fake"), [])
         self.assertIsNone(cls.layout())
         self.assertEqual(cls.writable_dirs(self.spec()), ())
         self.assertEqual(cls.display("d"), "d")
@@ -123,12 +121,9 @@ class Scripted(Case):
         first, second = FakeSession.scripted(Reply("a")), FakeSession.scripted()
         self.start(first, name="w1")
         first.configure(clients={}, hosts=Hosts("fake", {}))
-        first.usage_result = [Headroom("default", None)]
         self.assertEqual((second.started, second.live, second.script), ([], {}, ()))
         self.assertIsNone(second.configured)
-        self.assertEqual(second.usage("fake"), [])
         self.assertEqual(first.configured["hosts"].default, "fake")
-        self.assertEqual(first.usage("fake"), [Headroom("default", None)])
         self.assertEqual(len(first.started), 1)
         self.start(second, name="w1")
 

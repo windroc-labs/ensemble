@@ -602,7 +602,7 @@ class UsageTest(Case):
                 }
             )
             with self.subTest(model=model):
-                request = client._provider_probe()
+                request = client.common.usage_provider()
                 if model.startswith("strata/"):
                     assert request is not None
                     self.assertEqual(

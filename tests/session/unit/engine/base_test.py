@@ -90,7 +90,6 @@ class SessionClassMethods(Case):
             "attach": (("w1",), {}),
             "inspect": ((spec,), {}),
             "list": ((), {}),
-            "usage": (("fake",), {}),
             "layout": ((), {}),
             "writable_dirs": ((spec,), {}),
             "display": ((), {}),

@@ -7,6 +7,7 @@ import urllib.request
 from ensemble.delegate.composer.teams import TeamKind
 from ensemble.delegate.event.types import UpdraftStatus
 from ensemble.orchestrator.engine.flow.tracker import Connect
+from ensemble.session.clients.base import Client
 from ensemble.session.clients.claude import ClaudeClient
 from ensemble.session.clients.codex import CodexClient
 from ensemble.session.clients.opencode import OpenCodeClient
@@ -58,5 +59,6 @@ _ = Session.class_roots
 _ = Connect.__call__
 # Frozen session interface; only tests read it.
 _ = SessionRow.last_lines
+_ = Client.usage_probe, CodexClient.usage_probe, OpenCodeClient.usage_probe
 # opencode-install.py's NoRedirect overrides it.
 _ = urllib.request.HTTPRedirectHandler.redirect_request

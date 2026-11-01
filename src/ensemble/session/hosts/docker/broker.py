@@ -324,17 +324,6 @@ class Broker:
                 f" {INSTALL}"
             )
 
-    def probe_provider(self, provider: str, base_url: str) -> bool:
-        found = self._parsed(
-            "probe-provider",
-            lambda d: set(d) == {"available"} and type(d["available"]) is bool,
-            "--provider",
-            provider,
-            "--base-url",
-            base_url,
-        )
-        return found["available"]
-
     def build(
         self,
         package: str,

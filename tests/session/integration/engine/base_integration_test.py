@@ -10,7 +10,7 @@ from tests.session import live_tmux
 from tests.session.case import PY, Case
 
 UNCONFIGURED = "session not configured: call Session.configure first"
-CALLED = ("start", "attach", "list", "usage", "layout", "writable_dirs", "display", "host")
+CALLED = ("start", "attach", "list", "layout", "writable_dirs", "display", "host")
 # A child: each class method on Session unconfigured, then after Session.configure; it prints
 # {"unconfigured": {name: message}, "configured": {name: result or [error type, message]}}.
 DISPATCH = """import json, os
@@ -22,7 +22,6 @@ calls = {
     "start": lambda: Session.start(spec),
     "attach": lambda: Session.attach("w1"),
     "list": lambda: Session.list(display=""),
-    "usage": lambda: Session.usage("fake"),
     "layout": lambda: Session.layout(display="x;"),
     "writable_dirs": lambda: Session.writable_dirs(spec),
     "display": lambda: Session.display("x;"),
@@ -70,7 +69,6 @@ class SessionClassMethods(Case):
                 "start": no_fake,
                 "attach": read_state,
                 "list": [],
-                "usage": no_fake,
                 "layout": bad_display,
                 "writable_dirs": no_fake,
                 "display": bad_display,

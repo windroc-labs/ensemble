@@ -62,7 +62,6 @@ TYPES = {
             "Resumable",
             "Usage",
             "Window",
-            "Headroom",
             "Hosts",
             "ConfigError",
             "SessionError",

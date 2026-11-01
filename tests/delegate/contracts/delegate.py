@@ -11,7 +11,7 @@ import uuid
 
 from ensemble.delegate import ConfigError, Delegate
 from ensemble.delegate.engine.types import Begun, Finished
-from ensemble.session import Headroom, NotShowable
+from ensemble.session import NotShowable
 from ensemble.utils import Record, Status
 
 NO_ROLE = "no-such-role"
@@ -219,9 +219,6 @@ class DelegateContract:
         self.assertIn(self.ROLE, cls.roles())
         self.assertEqual(cls.resolve(self.ROLE).role, self.ROLE)
         self.assertIsInstance(cls.trusted_dirs(), frozenset)
-        usage = cls.usage(self.ROLE)
-        self.assertIsInstance(usage, list)
-        self.assertTrue(all(isinstance(h, Headroom) for h in usage), usage)
-        for method in (cls.resolve, cls.usage):
-            with self.subTest(method=method.__name__), self.assertRaises(ConfigError):
-                method(NO_ROLE)
+        self.assertFalse(hasattr(cls, "usage"))
+        with self.assertRaises(ConfigError):
+            cls.resolve(NO_ROLE)

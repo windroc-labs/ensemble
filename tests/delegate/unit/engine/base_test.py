@@ -13,7 +13,6 @@ from tests.delegate.case import Case
 ABSTRACT = {
     "create",
     "attach",
-    "usage",
     "roles",
     "resolve",
     "trusted_dirs",

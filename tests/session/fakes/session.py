@@ -31,7 +31,6 @@ class FakeSession(Session):
     started: list[dict] = []
     live: dict[str, FakeSession] = {}
     configured: dict | None = None
-    usage_result = []
 
     def __init_subclass__(cls, **kw):
         super().__init_subclass__(**kw)
@@ -174,10 +173,6 @@ class FakeSession(Session):
             if (match is None or re.fullmatch(match, name))
             and (display is None or display != "" and s.display_value == display)
         ]
-
-    @classmethod
-    def usage(cls, client):
-        return cls.usage_result
 
     @classmethod
     def layout(cls, *, display=None) -> None:

@@ -13,7 +13,6 @@ from ensemble.session import (
     EnvironmentSpec,
     EventCall,
     Exited,
-    Headroom,
     HookCallback,
     Host,
     IdleTimeout,
@@ -33,6 +32,7 @@ from ensemble.session import (
     Usage,
     Viewer,
     Window,
+    extension,
 )
 from ensemble.session.engine import types
 from ensemble.session.engine.base import Session
@@ -56,7 +56,6 @@ ALLOWED_CONCRETE = {
     SessionStatusLog,
     Usage,
     Window,
-    Headroom,
     Spec,
     EnvironmentSpec,
     Access,
@@ -93,6 +92,15 @@ class Exports(Case):
             viewer_factory=lambda _settings: mock.sentinel.viewer,
         )
         self.assertIs(session.get_viewer(), mock.sentinel.viewer)
+
+    def test_no_usage_query_or_headroom_list_is_public(self):
+        for cls in (session.Session, HostedSession):
+            with self.subTest(cls=cls.__name__):
+                self.assertFalse(hasattr(cls, "usage"))
+        for module in (session, extension):
+            with self.subTest(module=module.__name__):
+                self.assertNotIn("Headroom", module.__all__)
+                self.assertFalse(hasattr(module, "Headroom"))
 
     def test_the_only_concrete_classes_are_the_helpers_and_exceptions(self):
         concrete = {

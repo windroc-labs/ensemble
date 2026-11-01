@@ -121,7 +121,7 @@ COMMAND_SRC = (SESSION_SRC,)
 PYTHON_CODE_ALLOWED = {
     (
         "tests/session/integration/engine/base_integration_test.py",
-        "908492b62bcf187b5700f3cd85ecff3ff7e9180c6f54358ba8e61c192e13b3f7",
+        "ddd48164cb2c35e94059c814fe31acac475f5d23c1c0618eade7db5e888304f0",
     ): "Session class-method dispatch before and after configuration requires a fresh interpreter; Hosts is imported from its defining module after its public export was removed.",
     (
         "tests/session/integration/extension_client_integration_test.py",

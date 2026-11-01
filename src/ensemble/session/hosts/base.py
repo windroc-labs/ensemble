@@ -31,7 +31,6 @@ from ensemble.session.engine.types import (
     NotShowable,
     Paste,
     Permission,
-    ProviderProbe,
     SessionError,
     SessionRow,
     StatusState,
@@ -268,9 +267,6 @@ class Host(ABC):
         return next(
             (row.last_lines or "" for row in self.rows() if (row.name, row.sid) == (name, sid)), ""
         )
-
-    def _provider_usage(self, request: ProviderProbe) -> bool | None:
-        return None
 
     def _headless_owner(self, name: str) -> Mapping[str, str] | None:
         """The harness dir, sid and generation owning named headless run `name` (Docker)."""

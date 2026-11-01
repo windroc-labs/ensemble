@@ -56,7 +56,6 @@ from ensemble.delegate.event.reply import outcome_only
 from ensemble.delegate.event.types import Outcome
 from ensemble.session import (
     SIGNALS,
-    Headroom,
     HookCallback,
     Host,
     Launch,
@@ -552,22 +551,6 @@ class HarnessDelegate(Delegate):
             if events is not None:
                 validate_events(events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
-            raise ConfigError(str(error)) from None
-
-    @classmethod
-    def usage(
-        cls,
-        role: str,
-        *,
-        overlays: Sequence[Mapping] = (),
-        session_cls: type[Session] = Session,
-    ) -> list[Headroom]:
-        composition = Composer()
-        try:
-            session_cls.configure_from(thaw(composition.config.values))
-            run = composition.resolve(role, overlays=overlays)
-            return session_cls.usage(run.client)
-        except SessionConfigError as error:
             raise ConfigError(str(error)) from None
 
     def _own(self, state: DelegateState) -> Session | None:

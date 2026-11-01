@@ -13,7 +13,6 @@ from ensemble.session.clients.base import Client
 from ensemble.session.engine.types import (
     Access,
     Exited,
-    Headroom,
     Mode,
     SessionError,
     SessionInfo,
@@ -154,13 +153,11 @@ class TuiStartTest(HostedTuiBase):
 
 
 class SessionEnvTest(EnvBase):
-    def test_a_headless_session_gets_it_and_its_usage_probe_does_not(self):
+    def test_a_headless_session_gets_it(self):
         self.run_once(client="env", spec=self.spec(access=self.access))
         with open(self.log, encoding="utf-8") as f:
             (entry,) = [json.loads(line) for line in f]
         self.assertEqual(entry["env"]["PYTHONPATH"], PYTHONPATH)
-        self.assertEqual(self.session.usage("env"), [Headroom("default", 93.0)])
-        self.assertEqual(self.probe.call_args.kwargs["env"]["PYTHONPATH"], "/parent")
 
 
 class ChecksTest(Base):
