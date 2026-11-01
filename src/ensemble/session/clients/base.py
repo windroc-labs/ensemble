@@ -83,10 +83,16 @@ class Client:
     def _account(self) -> str:
         return ""
 
+    def _account_env(self, account: str) -> Mapping[str, str]:
+        return {}
+
+    def _account_of(self, transcript: str) -> str:
+        return ""
+
     def _max_usage(self, account: str) -> float:
         return DEFAULT_MAX_USAGE
 
-    def _usage_probes(self) -> dict[str, tuple[str, Launch]] | None:
+    def _usage_probes(self) -> dict[str, Launch] | None:
         return None
 
     def usage(self, output: str) -> Usage | None:

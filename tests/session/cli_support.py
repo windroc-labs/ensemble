@@ -12,8 +12,8 @@ from ensemble.session.hosts.base import stored_record, worker_state
 from ensemble.session.hosts.tmux import managed
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
-from tests.session.case import REPO, ROOTS, Case
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.case import REPO, ROOTS, Case, claude_account
+from tests.session.integration.clients.claude import fake_usage
 from tests.session.live_tmux import MANAGER, logged
 from tests.utils.sandbox import scratch
 
@@ -71,6 +71,7 @@ class CliCase(live_tmux.Calls, Case):
         self.cwd = os.path.join(self.root, "work")
         os.mkdir(self.cwd)
         self.events = os.path.join(self.root, "events")
+        self.local_config("")
         self.server = live_tmux.Server(self, self.home)
         self.server.start(MANAGER)
         if self.ATTACH:
@@ -162,6 +163,8 @@ class CliCase(live_tmux.Calls, Case):
         return [Status.parse(line) for line in result.stdout.splitlines()]
 
     def local_config(self, text: str) -> None:
+        if "session.clients.claude.accounts" not in text:
+            text += claude_account(os.path.join(self.home, ".claude"))
         with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
             f.write(text)
 
@@ -189,7 +192,7 @@ class WorkerCase(CliCase):
         with open(os.path.join(self.server.bin, "claude"), "w", encoding="utf-8") as f:
             f.write(
                 f'#!/bin/sh\n{q(sys.executable)} -I -c {q(ENV_DUMP)} {q(path)} "$@"\n'
-                f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@"\n'
+                f'exec {q(sys.executable)} -I {q(fake_usage.__file__)} "$@"\n'
             )
         return path
 

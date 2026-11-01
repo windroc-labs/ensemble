@@ -230,7 +230,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         metavar="NAME",
         help=(
             "its [session.clients.CLIENT.accounts.NAME] account (default: [session.clients.CLIENT]"
-            " account, else the one with the most usage left; Docker Host only)"
+            " account, else the one with the most usage left); one at its max_usage fails the start"
         ),
     )
     p.add_argument(

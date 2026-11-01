@@ -567,9 +567,15 @@ class VerifierDockerTest(HarnessCase):
         with open(self.local, "a", encoding="utf-8") as file:
             file.write(
                 '[orchestrator.roles.engineer.credentials.github]\napp = "ensemble-broker-bot"\npermissions = {contents = "write"}\n'
+                f'[session.clients.claude.accounts.work]\ndir = "{self.home}/.claude-work"\n'
             )
         self.calls, self.programs, self.refusals = [], [], {}
-        path = os.pathsep.join((PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
+        fake_bin = os.path.join(self.home, "fake-bin")
+        os.makedirs(fake_bin)
+        with open(os.path.join(fake_bin, "claude"), "w", encoding="utf-8") as file:
+            file.write("#!/bin/sh\nexit 1\n")
+        os.chmod(os.path.join(fake_bin, "claude"), 0o755)
+        path = os.pathsep.join((fake_bin, PLUGIN_BIN, os.environ.get("PATH", os.defpath)))
         for patcher in (
             mock.patch("subprocess.Popen", side_effect=self.broker),
             mock.patch("pwd.getpwuid", return_value=SimpleNamespace(pw_dir=self.home)),
@@ -583,6 +589,10 @@ class VerifierDockerTest(HarnessCase):
             return harnesses.Inline(argv)
         program = os.path.basename(argv[0])
         self.programs.append(program)
+        if program == "claude":  # the start's usage probe: a login with no usage panel
+            process = mock.MagicMock()
+            process.communicate.return_value = ("Total cost: $0.00\n", None)
+            return process
         if program == "tmux":  # the packaged tmux Host's listing: no server, no session
             process = mock.MagicMock(returncode=1)
             process.__enter__.return_value = process

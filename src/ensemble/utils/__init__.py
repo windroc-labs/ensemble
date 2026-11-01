@@ -76,7 +76,7 @@ from ensemble.utils.paths import (
     under,
 )
 from ensemble.utils.process_control import ProcessControl
-from ensemble.utils.quota import exhausted, summary
+from ensemble.utils.quota import summary
 from ensemble.utils.record import (
     EXIT_BUSY,
     Display,
@@ -170,7 +170,6 @@ __all__ = [
     "environment_ok",
     "err_text",
     "events_file",
-    "exhausted",
     "fenced",
     "file_lock",
     "freeze",

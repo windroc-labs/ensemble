@@ -1,6 +1,6 @@
 """modes/base.py: BaseMode, the ABC each Mode's running session implements (a class start
 returning it started, then its session calls), and the start helpers the modes share: child_env,
-identity_drop and _select_account.
+identity_drop and select_account.
 """
 
 import inspect
@@ -222,18 +222,18 @@ class AccountTest(Case):
             (AccountsClient({}), NoModeClient({})), ({}, {ACCOUNT: ""})
         ):
             with self.subTest(client=type(client).__name__, env=env):
-                self.assertEqual(base._select_account(self.spec(**env), client), "")
+                self.assertEqual(base.select_account(self.spec(**env), client), "")
 
     def test_a_registered_name_is_the_selected_account(self):
         for name in ("default", "work"):
             with self.subTest(name=name):
                 spec = self.spec(**{ACCOUNT: name})
-                self.assertEqual(base._select_account(spec, AccountsClient({})), name)
+                self.assertEqual(base.select_account(spec, AccountsClient({})), name)
 
     def test_an_unregistered_name_is_a_config_error_naming_the_typed_clients_table(self):
         for client, name in (("claude", "nope"), ("claude", "Bad!"), ("claude-work", "nope")):
             with self.subTest(client=client, name=name), self.assertRaises(ConfigError) as caught:
-                base._select_account(self.spec(client, **{ACCOUNT: name}), AccountsClient({}))
+                base.select_account(self.spec(client, **{ACCOUNT: name}), AccountsClient({}))
             self.assertEqual(
                 str(caught.exception),
                 f"account {name!r}: not a registered account of client {client}"
@@ -243,7 +243,7 @@ class AccountTest(Case):
     def test_a_client_without_accounts_refuses_any_selection(self):
         for client in ("codex", "opencode"):
             with self.subTest(client=client), self.assertRaises(ConfigError) as caught:
-                base._select_account(self.spec(client, **{ACCOUNT: "work"}), NoModeClient({}))
+                base.select_account(self.spec(client, **{ACCOUNT: "work"}), NoModeClient({}))
             self.assertEqual(
                 str(caught.exception), f"client {client} has no accounts: remove account 'work'"
             )

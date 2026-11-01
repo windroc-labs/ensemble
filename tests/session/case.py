@@ -3,6 +3,7 @@ REPO, SRC, PACKAGE_ROOTS, ROOTS; PLUGIN_BIN; SID; SPAWNS, the process starts; no
 """
 
 import contextlib
+import json
 import os
 import sys
 from unittest import mock
@@ -58,9 +59,17 @@ def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedS
     )
 
 
+def _unexpected_probe(argv, **_):
+    raise AssertionError(f"unexpected usage probe: {' '.join(argv)}")
+
+
 def harnessed(clients) -> type[HostedSession]:
     hosts = Host.parse_hosts({**HOSTS, "default": "tmux"})
     return harnesses.Threaded.configured(clients=clients, hosts=hosts)
+
+
+def claude_account(config_dir: str) -> str:
+    return f"\n[session.clients.claude.accounts.test]\ndir = {json.dumps(config_dir)}\n"
 
 
 def preserve_configuration(case) -> None:
@@ -91,7 +100,10 @@ class Case(TreeCase):
         self.addCleanup(harnesses.end, self.home)
 
     def configure_session(self, clients, tmux=None) -> None:
-        self.session_cls = configured(clients, tmux, **getattr(self, "session_dependencies", {}))
+        dependencies = getattr(self, "session_dependencies", {})
+        if ".integration." not in type(self).__module__:
+            dependencies = {"probe": _unexpected_probe, **dependencies}
+        self.session_cls = configured(clients, tmux, **dependencies)
 
 
 def _foreign(modules=None) -> str | None:

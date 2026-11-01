@@ -11,7 +11,7 @@ from ensemble.session.clients.claude.common import TABLE, ClaudeCommon, added_di
 from ensemble.session.clients.claude.headless import ClaudeHeadless
 from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine.types import ConfigError, SessionInfo, Spec
-from ensemble.utils import LOCAL_ENV_VARS
+from ensemble.utils import LOCAL_ENV_VARS, printable_abs
 
 
 class ClaudeClient(Client):
@@ -65,12 +65,24 @@ class ClaudeClient(Client):
     def _account(self):
         return self.config.get("account", "")
 
+    def _account_env(self, account):
+        return {"CLAUDE_CONFIG_DIR": self.common.accounts[account].dir}
+
+    def _account_of(self, transcript):
+        if not printable_abs(transcript):
+            return ""
+        path = os.path.realpath(transcript)
+        for name in sorted(self.common.accounts):
+            root = os.path.realpath(self.common.accounts[name].dir)
+            if os.path.commonpath((path, root)) == root:
+                return name
+        return ""
+
     def _executable(self, *, container=False):
         return "claude"
 
     def _usage_probes(self):
-        accounts = self.common.accounts
-        return {name: (accounts[name].dir, self.common.probe(name)) for name in accounts}
+        return {name: self.common.probe(name) for name in self.common.accounts}
 
     def _max_usage(self, account):
         return self.common.accounts[account].max_usage

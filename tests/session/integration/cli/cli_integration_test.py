@@ -184,7 +184,7 @@ class ClientEnvTest(SessionCliCase):
         )
         self.assertEqual(record.detail, "claude")
         with open(log, encoding="utf-8") as f:
-            (path,) = f.read().splitlines()
+            path = f.read().splitlines()[-1]
         self.assertEqual(
             path.split(os.pathsep), [os.path.join(REPO, "bin"), *caller.split(os.pathsep)]
         )

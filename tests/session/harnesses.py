@@ -7,6 +7,7 @@ import shutil
 import signal
 import threading
 import time
+from collections.abc import Mapping
 
 from ensemble.session.engine import hosted_session
 from ensemble.session.engine.hosted_session import HARNESS, HostedSession
@@ -164,6 +165,14 @@ def threaded_spawn(cls, spec, mode, *, display, host, idle_timeout):
 
 class Threaded(HostedSession):
     """Injected callables run its harness on a thread (threaded_spawn), else in a process."""
+
+    @classmethod
+    def configure(cls, *, clients, **settings):
+        table = clients.get("claude") if isinstance(clients, Mapping) else None
+        if isinstance(table, Mapping) and "accounts" not in table:
+            found = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+            clients = {**clients, "claude": {**table, "accounts": {"test": {"dir": found}}}}
+        super().configure(clients=clients, **settings)
 
     @classmethod
     def _spawn(cls, spec, mode, **options):

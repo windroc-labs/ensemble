@@ -1,10 +1,9 @@
-"""Usage thresholds every layer's quota check shares."""
+"""A usage reading's one-line summary; no layer shares a usage threshold."""
 
 from types import SimpleNamespace
 
 from ensemble import utils
-from ensemble.utils import exhausted
-from ensemble.utils.quota import MAX_5H, MAX_WEEK
+from ensemble.utils import quota, summary
 from tests.utils.case import Case
 
 
@@ -12,27 +11,13 @@ def window(used):
     return None if used is None else SimpleNamespace(used_percent=used)
 
 
-def reading(five, week):
-    return SimpleNamespace(five_hour=window(five), weekly=window(week))
+class Summary(Case):
+    def test_each_window_or_none_and_no_reading_unknown(self):
+        reading = SimpleNamespace(five_hour=window(20.5), weekly=window(None))
+        self.assertEqual(summary(reading), "five_hour=20.5% weekly=none")
+        self.assertEqual(summary(None), "unknown")
 
-
-class Exhausted(Case):
-    def test_thresholds(self):
-        self.assertEqual((MAX_5H, MAX_WEEK), (90, 100))
-        self.assertFalse({"MAX_5H", "MAX_WEEK"} & set(utils.__all__))
-
-    def test_either_window_at_its_threshold_is_exhausted(self):
-        for five, week, want in (
-            (89.9, 99.9, False),
-            (90, 0, True),
-            (0, 100, True),
-            (None, None, False),
-            (None, 100, True),
-            (95, None, True),
-        ):
-            with self.subTest(five=five, week=week):
-                self.assertIs(exhausted(reading(five, week)), want)
-
-    def test_a_lower_5h_threshold(self):
-        self.assertTrue(exhausted(reading(80, 0), 80))
-        self.assertFalse(exhausted(reading(79, 0), 80))
+    def test_no_shared_usage_threshold(self):
+        for name in ("exhausted", "MAX_5H", "MAX_WEEK"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(utils, name) or hasattr(quota, name))

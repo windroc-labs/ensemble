@@ -94,7 +94,7 @@ def identity_drop(registry: Registry) -> frozenset[str]:
     return frozenset(drop)
 
 
-def _select_account(spec: Spec, client: Client) -> str:
+def select_account(spec: Spec, client: Client) -> str:
     """spec's ACCOUNT_ENV, one of client's registered accounts; "": none selected."""
     account = spec.env.get(ACCOUNT_ENV, "")
     if not account:
@@ -295,12 +295,14 @@ class BaseMode(ABC):
 
     @staticmethod
     def _selected(spec: Spec, client: Client) -> tuple[Spec, str]:
-        """spec less ACCOUNT_ENV, and the account it selects (for the Host only); before any Host
-        call.
+        """spec less ACCOUNT_ENV, its selected account's env over its own, and that account (for
+        the Host); before any Host call.
         """
         check_selection(spec.flags, client.forbidden_selection, client.valued_flags)
-        account = _select_account(spec, client)
+        account = select_account(spec, client)
         env = {k: v for k, v in spec.env.items() if k != ACCOUNT_ENV}
+        if account:
+            env.update(client._account_env(account))
         return replace(spec, env=env), account
 
     @staticmethod

@@ -185,8 +185,7 @@ class AccountsTest(Base):
         accounts = {"a": {"dir": "/abs/a"}, "default": {"dir": "/abs/d"}}
         self.assertEqual(self.found(accounts), {"a": ("/abs/a", ""), "default": ("/abs/d", "")})
         probes = ClaudeClient({"accounts": accounts})._usage_probes()
-        self.assertEqual(probes["default"][0], "/abs/d")
-        self.assertEqual(probes["default"][1].env["CLAUDE_CONFIG_DIR"], "/abs/d")
+        self.assertEqual(probes["default"].env["CLAUDE_CONFIG_DIR"], "/abs/d")
 
     def test_dir_is_required_and_absolute_after_expansion(self):
         self.assertEqual(
@@ -464,10 +463,17 @@ class ReadRulesTest(Base):
                     )
 
         self.session_dependencies = {
-            "host": mock.Mock(tmux_path=mock.Mock(return_value="/protected/tmux"))
+            "host": mock.Mock(tmux_path=mock.Mock(return_value="/protected/tmux")),
+            "probe": mock.Mock(return_value="Total cost: $0.00\n"),
         }
+        self.enterContext(mock.patch("shutil.which", return_value="/bin/claude"))
         self.configure_session(
-            {"claude": {"implementation": "ensemble.session.clients.claude:ClaudeClient"}}
+            {
+                "claude": {
+                    "implementation": "ensemble.session.clients.claude:ClaudeClient",
+                    "accounts": {"work": {"dir": "/acct/work"}},
+                }
+            }
         )
         for read in bad:
             for mode in (Mode.HEADLESS, Mode.TUI):
@@ -518,7 +524,7 @@ class EnvTest(Base):
             for launch in (
                 client.headless().launch(spec),
                 client.tui().launch(spec, HOOK),
-                client._usage_probes()["w"][1],
+                client._usage_probes()["w"],
             ):
                 with self.subTest(resume=resume, argv=launch.argv):
                     self.assertTrue(set(launch.unset) >= LOCAL_ENV_VARS)
@@ -596,13 +602,10 @@ class UsageProbeTest(Base):
         self.assertEqual(
             probes,
             {
-                name: (
-                    path,
-                    Launch(
-                        PROBE,
-                        env={"K": "v", "CLAUDE_CONFIG_DIR": path, "DISABLE_AUTOUPDATER": "1"},
-                        unset=(*UNSET, *credentials),
-                    ),
+                name: Launch(
+                    PROBE,
+                    env={"K": "v", "CLAUDE_CONFIG_DIR": path, "DISABLE_AUTOUPDATER": "1"},
+                    unset=(*UNSET, *credentials),
                 )
                 for name, path in (("work", "/w"), ("home", home))
             },

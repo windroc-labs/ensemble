@@ -16,7 +16,8 @@ from tests.delegate.case import PY, REPO, Case, RunReads, child_env
 from tests.delegate.plans import TEAM_FILES, write_team
 from tests.delegate.workdir import input_first
 from tests.session import harnesses, live_tmux
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.case import claude_account
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.utils.case import local_section
@@ -56,7 +57,8 @@ class Runs(RunReads, Case):
         if not os.path.exists(self.log):
             return []
         with open(self.log) as f:
-            return [json.loads(line) for line in f]
+            calls = [json.loads(line) for line in f]
+        return [c for c in calls if c["argv"][-1:] != ["/usage"]]
 
     def read(self, path: str) -> str:
         with open(path) as f:
@@ -126,7 +128,7 @@ class Integration(Runs):
         self.config = os.path.join(self.root, "config")
         self.env = {
             **child_env({}),
-            "PATH": fake_claude.install(bin_dir),
+            "PATH": fake_usage.install(bin_dir),
             "HOME": self.home,
             "CLAUDE_CONFIG_DIR": self.config,
             "PYTHONUTF8": "1",
@@ -136,6 +138,9 @@ class Integration(Runs):
         self.transcript = os.path.join(
             self.config, "projects", re.sub(r"[^A-Za-z0-9]", "-", self.agent), f"{SID}.jsonl"
         )
+        os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
+        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "a") as f:
+            f.write(claude_account(self.config))
 
     def argv(self, *extra) -> list[str]:
         return [
@@ -316,7 +321,7 @@ class OpenCodeIntegration(CodexIntegration):
         self.proj = os.path.join(self.root, "project")
         os.mkdir(self.proj)
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
-        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
+        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "a") as f:
             f.write(local_section(f"trusted_dirs = [{json.dumps(self.proj)}]\n", "delegate"))
 
     def drive(self, steps, *extra, **scenario) -> subprocess.CompletedProcess:

@@ -22,11 +22,30 @@ reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.tom
 2. A table without `dir` is now a configuration error, one named `default` included. A
    `[session.clients.claude] account = "default"` needs a registered `default`; prefer a real name.
 3. On the Docker Host, log each name in to the broker: `ensemble-broker login claude work`.
-4. On the tmux Host, a start still runs on your local login (its `CLAUDE_CONFIG_DIR`, else
-   `~/.claude`): register that dir as an account, so the usage check reads the login the run
-   uses.
+4. On the tmux Host, a start now runs on its account's login: `CLAUDE_CONFIG_DIR` is that
+   account's `dir`. Log each `dir` in with `CLAUDE_CONFIG_DIR=<dir> claude auth login`. A tmux
+   resume stays on the account whose `dir` holds its conversation; another account chosen by
+   `--account` or `account` refuses the resume.
+5. Delete the old usage readings, holds and their locks; nothing reads them any more:
 
-`Session.usage("claude")` now lists every registered account's points left under its
+   ```sh
+   find ~/.ensemble/usage -maxdepth 1 -type f \( -name '*.json' -o -name '*.json.lock' \) -delete
+   rmdir ~/.ensemble/usage
+   ```
+
+   Either fails harmlessly when the directory is gone or holds anything else. Account dirs,
+   broker credentials and other `~/.ensemble` state are untouched.
+
+Before launching, every Claude start, on either Host, reads each registered account's usage once,
+live, and compares it with that account's `max_usage`. `--account`, else
+`[session.clients.claude] account`, runs only while that account is below its limit in every
+window, and is never replaced by another. With neither, the start picks the account with the most
+usage left, a tie by name. With no account usable, or every reading failed, the start fails with
+`usage: no available account` and starts nothing. A Claude start with no account registered is a
+configuration error. Nothing is cached or held: a run that hits a usage limit marks nothing, and
+the next start reads again. There are no separate start thresholds besides `max_usage`.
+
+`Session.usage("claude")` lists every registered account's points left under its
 `max_usage`, read live on each query, on both Hosts. With the orchestrator's usage check on (its
 default), a start goes ahead while any account has points left; the old 90% five-hour and 100%
 weekly start thresholds no longer apply to it. With no Claude account registered the list is
