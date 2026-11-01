@@ -14,6 +14,7 @@ from tests.case import REPO, Case
 from tests.delegate.unit.composer.prompts import composed
 from tests.delegate.unit.composer.shipped import generic_names, runs, team_texts, words
 from tests.delegate.verifier import VERIFIER
+from tests.guard_data.delegate import TEAM_WORD_EXAMPLES
 from tests.utils.case import local_section
 
 TICKET = re.compile(r"TASK-\d+")
@@ -99,6 +100,9 @@ class DelegatePolicy(Case):
             with open(path) as f:
                 texts[path] = f.read()
         for label, text in texts.items():
+            for example in TEAM_WORD_EXAMPLES.get(label, ()):
+                self.assertEqual(text.count(example), 1, (label, example))
+                text = text.replace(example, "", 1)
             for word in WORDS:
                 self.assertNotIn(word, text, f"{label}: {word}")
 
