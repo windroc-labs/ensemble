@@ -596,9 +596,10 @@ func TestStartUnreadableImage(t *testing.T) {
 	}
 }
 
-// A Claude start checks and injects only the manifest's account's setup-token; without one, the default account's.
+// A Claude start checks and injects only the manifest's account's setup-token; a manifest without a valid account is
+// rejected before any credential read.
 func TestStartClaudeAccount(t *testing.T) {
-	for want, path := range map[string]string{"default": validManifest(t), "work": editedManifest(t, withClaudeAccount("work"))} {
+	for want, path := range map[string]string{"work": validManifest(t), "home": editedManifest(t, withClaudeAccount("home"))} {
 		creds := &fakeCreds{}
 		h, _ := startHost(&world{labels: goodLabels()}, creds)
 		if _, err := h.Start(context.Background(), path); err != nil {
@@ -606,6 +607,16 @@ func TestStartClaudeAccount(t *testing.T) {
 		}
 		if !slices.Equal(creds.calls, []string{"ready " + want, "inject " + want}) {
 			t.Fatalf("%s: %q", want, creds.calls)
+		}
+	}
+	for name, edit := range map[string]func(map[string]any){
+		"missing": func(f map[string]any) { delete(f, "claude_account") }, "empty": withClaudeAccount(""), "invalid": withClaudeAccount("Work"),
+	} {
+		creds := &fakeCreds{}
+		h, _ := startHost(&world{labels: goodLabels()}, creds)
+		_, err := h.Start(context.Background(), editedManifest(t, edit))
+		if protoErr(t, err).Code != protocol.ManifestRejected || len(creds.calls) != 0 {
+			t.Fatalf("%s: %v %q", name, err, creds.calls)
 		}
 	}
 }
@@ -699,7 +710,7 @@ func TestManifestUnreadable(t *testing.T) {
 
 func TestHookUnderUncleanCWD(t *testing.T) {
 	m := `{"client":"claude","name":"worker_1","generation":"0123456789abcdef0123456789abcdef","image":"ensemble-worker:` + imageKey +
-		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","hook_path":"` + home + `/src/project/hook","labels":{}}`
+		`","cwd":"` + home + `/src/project/.","workspace":"ensemble-ws-worker_1","claude_dir":"` + home + `/.ensemble/docker-state/worker_1/claude","claude_account":"work","hook_path":"` + home + `/src/project/hook","labels":{}}`
 	h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 	_, err := h.Start(context.Background(), writeManifest(t, []byte(m)))
 	if protoErr(t, err).Code != protocol.MountRejected || hasCall(d, "run") {

@@ -49,11 +49,12 @@ var staticKinds = []struct {
 	edit  func(map[string]any)
 	setup func(*Host)
 }{
-	{"ensemble-broker-claude/default", nil, func(*Host) {}},
-	{"ensemble-broker-claude/work", withClaudeAccount("work"), func(*Host) {}},
+	{"ensemble-broker-claude/work", nil, func(*Host) {}},
+	{"ensemble-broker-claude/default", withClaudeAccount("default"), func(*Host) {}},
 	{"ensemble-broker-opencode/strata", func(f map[string]any) {
 		f["client"], f["opencode_dir"], f["opencode_providers"] = "opencode", strings.TrimSuffix(f["claude_dir"].(string), "claude")+"opencode", []string{"strata"}
 		delete(f, "claude_dir")
+		delete(f, "claude_account")
 	}, func(h *Host) { h.Opencode = &fakeKeys{} }},
 	{"ensemble-broker-env/dummy", withSecrets([]any{secret("ensemble-broker-env/dummy", "dummy.txt")}), func(h *Host) { h.Env = &fakeEnv{} }},
 }
@@ -119,8 +120,8 @@ func staticStartHost(t *testing.T, static *fakeStatic) (Host, string, string, *f
 func TestStartRecordsInjectedVersions(t *testing.T) {
 	future := credential.Static{Version: 3, ExpiresAt: "2099-01-01T00:00:00Z", Provenance: credential.Assumed, Notified: []string{"30d"}}
 	static := &fakeStatic{loads: []map[string]credential.Static{
-		records("ensemble-broker-claude/default", future),
-		records("ensemble-broker-claude/default", future, "ensemble-broker-env/dummy", credential.Static{Version: 2, Provenance: credential.Unknown},
+		records("ensemble-broker-claude/work", future),
+		records("ensemble-broker-claude/work", future, "ensemble-broker-env/dummy", credential.Static{Version: 2, Provenance: credential.Unknown},
 			"ensemble-broker-env/ssh", credential.Static{Version: 5, Provenance: credential.Unknown, Pending: true}),
 	}}
 	h, path, record, _ := staticStartHost(t, static)
@@ -136,7 +137,7 @@ func TestStartRecordsInjectedVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := injectedRecord{Injected: records(
-		"ensemble-broker-claude/default", credential.Static{Version: 3, ExpiresAt: "2099-01-01T00:00:00Z", Provenance: credential.Assumed},
+		"ensemble-broker-claude/work", credential.Static{Version: 3, ExpiresAt: "2099-01-01T00:00:00Z", Provenance: credential.Assumed},
 		"ensemble-broker-env/dummy", credential.Static{Version: 2, Provenance: credential.Unknown},
 		"ensemble-broker-env/ssh", credential.Static{Version: 5, Provenance: credential.Unknown},
 	), Delivered: []string{}}
@@ -154,7 +155,7 @@ func TestStartUnknownExpiryStarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(record)
-	if err != nil || !strings.Contains(string(raw), `"ensemble-broker-claude/default":{"version":0,"provenance":"unknown"}`) {
+	if err != nil || !strings.Contains(string(raw), `"ensemble-broker-claude/work":{"version":0,"provenance":"unknown"}`) {
 		t.Fatalf("%s %v", raw, err)
 	}
 }

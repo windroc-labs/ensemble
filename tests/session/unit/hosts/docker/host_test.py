@@ -278,7 +278,7 @@ class ConfigTest(Base):
             (5, "", json.dumps(locked)),
         )
         self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '37'") as caught:
+        with self.assertRaisesRegex(SessionError, "protocol '18', want '38'") as caught:
             self.host._provider_usage(request)
         self.assertIn(
             f"gh logged in), then {BROKER} retrust; scripts/install.sh", str(caught.exception)

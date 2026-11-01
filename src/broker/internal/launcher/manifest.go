@@ -113,9 +113,6 @@ func ValidRef(ref string) bool {
 // ValidProvider is whether name can be a listed OpenCode provider; ollama needs no key.
 func ValidProvider(name string) bool { return providerPattern.MatchString(name) && name != "ollama" }
 
-// DefaultClaudeAccount is the Claude account a start without a selection uses.
-const DefaultClaudeAccount = "default"
-
 // ValidClaudeAccount is whether name can be a Claude account; setup-token is the retired single item's account.
 func ValidClaudeAccount(name string) bool {
 	return claudeAccountPattern.MatchString(name) && name != "setup-token"
@@ -216,7 +213,7 @@ func ParseManifest(data []byte) (Manifest, error) {
 		}
 		m.ClaudeAccount = account
 	} else if m.Client == "claude" {
-		m.ClaudeAccount = DefaultClaudeAccount
+		return reject("client claude requires claude_account")
 	}
 
 	request, err := parseCredentials(fields)

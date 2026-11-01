@@ -449,12 +449,12 @@ func system() app {
 		},
 		status: func(ctx context.Context, k keys) (any, error) {
 			codexStatus := broker.NewCodex(k.Home, k, nil).Status(ctx)
-			usable := (broker.Credentials{Keychain: k}).Usable("default")
-			static, err := launcher.Host{Static: staticStore(k.Home)}.StaticStatus(map[string]bool{credential.StaticRef(credential.Claude, "default"): usable})
+			result, err := launcher.Host{Static: staticStore(k.Home)}.Status(broker.Credentials{Keychain: k}.Usable)
 			if err != nil {
 				return nil, err
 			}
-			return launcher.StatusResult{Codex: &codexStatus, Claude: map[string]bool{"default": usable}, Static: static}, nil
+			result.Codex = &codexStatus
+			return result, nil
 		},
 		maintain: func(ctx context.Context, k keys, container, manifest string, delivered []string, renew bool) (any, error) {
 			return withHost("maintain", container, k, nil, func(h launcher.Host) (any, error) {

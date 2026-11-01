@@ -51,21 +51,21 @@ func noticeKeys(r MaintainResult) []string {
 func TestNoticesThirtyDays(t *testing.T) {
 	now := noticeNow
 	h, path, _, _ := noticeHost(t, &now, func(s credential.StaticStore) {
-		login(t, s, "ensemble-broker-claude/default", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
+		login(t, s, "ensemble-broker-claude/work", credential.Registration{Expires: noticeNow.Add(20 * 24 * time.Hour)}, noticeNow)
 	})
 	got, err := h.Maintain(context.Background(), container, path, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude default --fresh-token; running sessions keep their copy until they restart"
-	if len(got.Notices) != 1 || got.Notices[0].Key != "ensemble-broker-claude/default@1:30d" || got.Notices[0].Text != want {
+	want := "ensemble-broker-claude/work expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude work --fresh-token; running sessions keep their copy until they restart"
+	if len(got.Notices) != 1 || got.Notices[0].Key != "ensemble-broker-claude/work@1:30d" || got.Notices[0].Text != want {
 		t.Fatalf("%+v", got)
 	}
 	if got.Container != container || got.NextCheck == nil || *got.NextCheck != "2026-10-26T13:00:00Z" {
 		t.Fatalf("%+v", got)
 	}
 	encoded, _ := json.Marshal(got)
-	if !strings.HasPrefix(string(encoded), `{"container":"`+container+`","next_check":"2026-10-26T13:00:00Z","deadline":null,"results":[],"notices":[{"key":"ensemble-broker-claude/default@1:30d","text":`) {
+	if !strings.HasPrefix(string(encoded), `{"container":"`+container+`","next_check":"2026-10-26T13:00:00Z","deadline":null,"results":[],"notices":[{"key":"ensemble-broker-claude/work@1:30d","text":`) {
 		t.Fatalf("%s", encoded)
 	}
 }
