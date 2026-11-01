@@ -229,8 +229,9 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         "--account",
         metavar="NAME",
         help=(
-            "its [session.clients.CLIENT.accounts.NAME] account (default: [session.clients.CLIENT]"
-            " account, else the one with the most usage left); one at its max_usage fails the start"
+            "its [session.clients.CLIENT.accounts.NAME] account (default in a container: its"
+            " account, else the most usage left; else local_account, else none; a local resume:"
+            " its conversation's); one at its max_usage fails the start"
         ),
     )
     p.add_argument(

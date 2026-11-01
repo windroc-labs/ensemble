@@ -1665,6 +1665,7 @@ class AccountConfigTest(Base):
                 "session.clients.claude.accounts.home.max_usage",
             ),
             ({"home": {}, "work": {}}, {"account": "missing"}, "'missing': not a registered"),
+            ({"home": {}}, {"local_account": "gone"}, "local_account 'gone': not a registered"),
         ):
             with self.subTest(message=message):
                 self.claude(accounts, host=HOMED_HOST, **table)
@@ -1697,6 +1698,8 @@ class ClaudeStartCase(Base):
         which = mock.patch("shutil.which", return_value="/bin/claude")
         which.start()
         self.addCleanup(which.stop)
+        self.enterContext(mock.patch.dict(os.environ))
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
 
     def answer(self, _argv, *, env, **_):
         return self.outputs[env["CLAUDE_CONFIG_DIR"]]
@@ -1720,7 +1723,9 @@ class ClaudeStartCase(Base):
         self.outputs = {f"{self.root}/{name}": out for name, out in outputs.items()}
 
     def start(self, *, spec=None, **env):
-        """The account a headless start's Host got, None when refused before it; the error."""
+        """The account a headless start's Host got ("": none, the user's own config), None when
+        refused before it; the error.
+        """
         host = self.session.host()
         before = len(host.headless)
         spec = spec or self.spec(client="claude", mode=Mode.HEADLESS, name="w1", env=env)
@@ -1734,16 +1739,17 @@ class ClaudeStartCase(Base):
             return None, error
         self.assertEqual(str(error), "refused by the test Host")
         metadata, launch = host.headless[-1], host.launches[-1]
-        account = os.path.basename(launch.env["CLAUDE_CONFIG_DIR"])
+        account = os.path.basename(launch.env.get("CLAUDE_CONFIG_DIR", ""))
         if self.session.host()._client_context().container is not None:
             self.assertEqual(metadata["home_account"], account)
+        self.assertNotIn(ACCOUNT_ENV, launch.env)
         self.assertEqual(
             {
                 text
                 for text in (*launch.env.values(), *metadata.values())
                 if text.startswith(f"{self.root}/")
             },
-            {f"{self.root}/{account}"},
+            {f"{self.root}/{account}"} if account else set(),
         )
         return account, None
 
@@ -1758,21 +1764,50 @@ class ClaudeStartCase(Base):
 
 
 class StartCheckTest(ClaudeStartCase):
-    """Every Claude start, on either Host, reads each registered account live once, then runs on
-    the wanted account while it is usable, else on the usable one with the most left, else fails
-    with the usage error before its Host starts anything.
+    """A Docker Claude start, and a tmux one choosing an account, reads each registered account
+    live once, then runs on the wanted account while it is usable, else (Docker only) on the
+    usable one with the most left, else fails with the usage error before its Host starts
+    anything. A tmux start choosing none runs on the user's own config, reading nothing.
     """
 
     def test_no_registered_account_is_a_config_error_before_any_probe(self):
-        for host in self.HOSTS:
-            with self.subTest(host=host):
-                self.claude({}, host=host)
-                account, error = self.start()
-                self.assertIsNone(account)
-                self.assertIsInstance(error, ConfigError)
-                self.assertIn("session.clients.claude.accounts.<name>", str(error))
-                self.assertIn("required dir", str(error))
+        self.claude({}, host="docker")
+        account, error = self.start()
+        self.assertIsNone(account)
+        self.assertIsInstance(error, ConfigError)
+        self.assertIn("session.clients.claude.accounts.<name>", str(error))
+        self.assertIn("required dir", str(error))
         self.probe.assert_not_called()
+
+    def test_a_tmux_start_choosing_no_account_runs_on_the_users_config_unread(self):
+        for accounts, table in (
+            ({}, {}),
+            ({"home": {}, "work": {}}, {}),
+            ({"home": {}, "work": {}}, {"account": "work"}),
+        ):
+            with self.subTest(accounts=accounts, table=table):
+                self.claude(accounts, host="tmux", **table)
+                self.assertEqual(self.start(), ("", None))
+        self.probe.assert_not_called()
+
+    def test_a_tmux_start_choosing_an_account_is_checked_and_never_switches(self):
+        self.claude({"home": {}, "work": {"max_usage": 80}}, host="tmux", local_account="work")
+        self.read(home=panel(10), work=panel(20))
+        self.assertEqual(self.start(), ("work", None))
+        self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
+        self.read(home=panel(10), work=panel(80))
+        self.assert_usage_error(self.start())
+        self.assertEqual(self.start(**{ACCOUNT_ENV: "home"}), ("home", None))
+        self.claude({"home": {}, "work": {}}, host="tmux")
+        self.read(home=panel(100), work=panel(10))
+        self.probe.reset_mock()
+        self.assert_usage_error(self.start(**{ACCOUNT_ENV: "home"}))
+        self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
+
+    def test_docker_ignores_local_account(self):
+        self.claude({"home": {}, "work": {}}, local_account="work")
+        self.read(home=panel(10), work=panel(50))
+        self.assertEqual(self.start(), ("home", None))
 
     def test_both_windows_share_the_accounts_limit(self):
         for limit, five, week, ok in (
@@ -1879,16 +1914,13 @@ class StartCheckTest(ClaudeStartCase):
         self.assertEqual(self.start(), ("a", None))
 
     def test_picked_then_a_fixed_exhausted_account_reads_every_account_again(self):
-        for host in self.HOSTS:
+        self.claude({"home": {}, "work": {}})
+        self.read(home=panel(80), work=panel(100))
+        self.assertEqual(self.start(), ("home", None))
+        self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
+        for host, key in (("docker", "account"), ("tmux", "local_account")):
             with self.subTest(host=host):
-                self.claude({"home": {}, "work": {}}, host=host)
-                self.read(home=panel(80), work=panel(100))
-                self.probe.reset_mock()
-                account, error = self.start()
-                self.assertIsNone(error)
-                self.assertEqual(account, "home")
-                self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
-                self.claude({"home": {}, "work": {}}, host=host, account="work")
+                self.claude({"home": {}, "work": {}}, host=host, **{key: "work"})
                 self.probe.reset_mock()
                 self.assert_usage_error(self.start())
                 self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
@@ -1914,8 +1946,9 @@ class StartCheckTest(ClaudeStartCase):
 
 
 class ResumeCheckTest(ClaudeStartCase):
-    """A tmux resume runs the start check too, and only on the account whose dir holds its
-    conversation: the automatic choice narrowed to it, a hard choice refused when it is another.
+    """A tmux resume of a conversation in an account's dir runs the start check, narrowed to that
+    account, whatever local_account says; a --account of another is refused. One in no account's
+    dir, choosing none, runs on the user's own config.
     """
 
     def setUp(self):
@@ -1943,29 +1976,49 @@ class ResumeCheckTest(ClaudeStartCase):
         self.read(home=panel(100), work=panel(10))
         self.assert_usage_error(self.start(spec=spec))
 
-    def test_a_hard_choice_of_another_account_is_refused_after_the_check(self):
-        for env, table in (({ACCOUNT_ENV: "work"}, {}), ({}, {"account": "work"})):
-            with self.subTest(env=env, table=table):
-                self.claude({"home": {}, "work": {}}, host="tmux", **table)
-                spec = dataclasses.replace(
-                    self.conversation(os.path.join(self.root, "home")), env=env
-                )
-                self.read(home=panel(10), work=panel(10))
-                self.probe.reset_mock()
-                account, error = self.start(spec=spec)
-                self.assertIsNone(account)
-                self.assertIsInstance(error, ConfigError)
-                self.assertIn(f"conversation {SID} has no transcript to resume", str(error))
-                self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
+    def test_local_account_yields_to_the_conversations_account(self):
+        self.claude({"home": {}, "work": {}}, host="tmux", local_account="work")
+        spec = self.conversation(os.path.join(self.root, "home"))
+        self.read(home=panel(10), work=panel(10))
+        self.assertEqual(self.start(spec=spec), ("home", None))
 
-    def test_a_conversation_in_no_registered_dir_is_refused(self):
+    def test_a_hard_choice_of_another_account_is_refused_after_the_check(self):
         self.claude({"home": {}, "work": {}}, host="tmux")
-        spec = self.conversation(os.path.join(self.home, ".claude"))
+        spec = dataclasses.replace(
+            self.conversation(os.path.join(self.root, "home")), env={ACCOUNT_ENV: "work"}
+        )
         self.read(home=panel(10), work=panel(10))
         account, error = self.start(spec=spec)
         self.assertIsNone(account)
         self.assertIsInstance(error, ConfigError)
-        self.assertIn("has no transcript to resume", str(error))
+        self.assertIn(f"conversation {SID} has no transcript to resume", str(error))
+        self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
+
+    def test_a_conversation_in_no_registered_dir_resumes_on_the_users_config(self):
+        spec = self.conversation(os.path.join(self.home, ".claude"))
+        for key in ("account", "local_account"):
+            with self.subTest(key=key):
+                self.claude({"home": {}, "work": {}}, host="tmux", **{key: "work"})
+                self.assertEqual(self.start(spec=spec), ("", None))
+        self.probe.assert_not_called()
+
+    def test_an_unrecorded_resume_ignores_local_account(self):
+        self.claude({"home": {}, "work": {}}, host="tmux", local_account="work")
+        os.makedirs(self.workdir, exist_ok=True)
+        spec = self.spec(client="claude", mode=Mode.HEADLESS, name="w1", sid=SID, resume=True)
+        self.read(home=panel(10), work=panel(10))
+        self.assertEqual(self.start(spec=spec), ("", None))
+        self.probe.assert_not_called()
+
+    def test_an_account_dir_inside_the_users_config_keeps_its_conversations(self):
+        self.root = os.path.join(self.home, ".claude")
+        self.claude({"home": {}, "work": {}}, host="tmux")
+        self.read(home=panel(10), work=panel(10))
+        self.assertEqual(self.start(spec=self.conversation(f"{self.root}/work")), ("work", None))
+        self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
+        self.probe.reset_mock()
+        self.assertEqual(self.start(spec=self.conversation(self.root)), ("", None))
+        self.probe.assert_not_called()
 
     def test_inspect_finds_the_conversation_in_its_accounts_dir(self):
         self.claude({"home": {}, "work": {}}, host="tmux")

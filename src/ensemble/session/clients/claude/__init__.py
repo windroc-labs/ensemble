@@ -36,7 +36,19 @@ class ClaudeClient(Client):
         "--from-pr",
         "--teleport",
     )
-    keys = frozenset({"flags", "allow", "tiers", "efforts", "env", "modes", "accounts", "account"})
+    keys = frozenset(
+        {
+            "flags",
+            "allow",
+            "tiers",
+            "efforts",
+            "env",
+            "modes",
+            "accounts",
+            "account",
+            "local_account",
+        }
+    )
     client_note = ClaudeCommon.NOTE
     session_env = "CLAUDECODE"
     identity_env = tuple(key for key in ClaudeCommon.UNSET if key not in LOCAL_ENV_VARS)
@@ -44,14 +56,15 @@ class ClaudeClient(Client):
     def __init__(self, config):
         super().__init__(config)
         self.common = ClaudeCommon(self.config, selector=self.select_session)
-        account = self.config.get("account", "")
-        if not isinstance(account, str):
-            raise ConfigError(f"{TABLE}.account must be a string")
-        if account and account not in self.common.accounts:
-            raise ConfigError(
-                f"{TABLE}.account {account!r}: not a registered account"
-                f" ([clients.claude.accounts.{account}])"
-            )
+        for key in ("account", "local_account"):
+            account = self.config.get(key, "")
+            if not isinstance(account, str):
+                raise ConfigError(f"{TABLE}.{key} must be a string")
+            if account and account not in self.common.accounts:
+                raise ConfigError(
+                    f"{TABLE}.{key} {account!r}: not a registered account"
+                    f" ([clients.claude.accounts.{account}])"
+                )
 
     def headless(self):
         return ClaudeHeadless(self.common)
@@ -62,8 +75,8 @@ class ClaudeClient(Client):
     def _accounts(self):
         return frozenset(self.common.accounts)
 
-    def _account(self):
-        return self.config.get("account", "")
+    def _account(self, *, container):
+        return self.config.get("account" if container else "local_account", "")
 
     def _account_env(self, account):
         return {"CLAUDE_CONFIG_DIR": self.common.accounts[account].dir}
