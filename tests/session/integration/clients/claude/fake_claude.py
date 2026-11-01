@@ -87,13 +87,6 @@ def install(bin_dir: str, tail: str = "/usr/bin:/bin") -> str:
     return f"{bin_dir}:{tail}"
 
 
-def account(config_dir: str) -> str:
-    """A local config section registering `config_dir` as Claude account `test`, as every Claude
-    start needs one.
-    """
-    return f"\n[session.clients.claude.accounts.test]\ndir = {json.dumps(config_dir)}\n"
-
-
 def _number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 

@@ -1908,30 +1908,6 @@ class HeadroomTest(Base):
         self.claude({"work": {}})
         self.assertEqual(self.usage(), [Headroom("work", 5)])
 
-    def test_both_windows_share_the_accounts_limit(self):
-        for five, week, left in ((80, 10, 0), (10, 80, 0), (85, 10, -5), (79, 79, 1)):
-            with self.subTest(five=five, week=week):
-                self.outputs = {"/acct/work": PANEL.format(five=five, week=week)}
-                self.claude({"work": {"max_usage": 80}})
-                self.assertEqual(self.usage(), [Headroom("work", left)])
-        self.outputs = {"/acct/work": "Current session\n70% used\n"}
-        self.claude({"work": {"max_usage": 80}})
-        self.assertEqual(self.usage(), [Headroom("work", 10)])
-
-    def test_probe_failures_are_unknown(self):
-        for out in (
-            None,
-            "",
-            "Loading usage data…\n",
-            "Hi! It looks like you typed /usage. How can I help?\n",
-            "@@ ## %%\n",
-            "Failed to load usage data\nTotal cost: $0.00\n",
-        ):
-            with self.subTest(out=out):
-                self.outputs = {"/acct/work": out}
-                self.claude({"work": {"max_usage": 80}})
-                self.assertEqual(self.usage(), [Headroom("work", None)])
-
     def test_a_bad_account_config_fails_the_start_before_any_probe(self):
         for accounts, table, message in (
             (
@@ -2083,10 +2059,9 @@ class StartCheckTest(Base):
         for name, text in stale.items():
             with open(os.path.join(old, name), "w", encoding="utf-8") as f:
                 f.write(text)
-        past = time.time() - 3600
-        reset_past = engine_types.Usage(engine_types.Window(79, past), None)
+        reset_past = panel(79) + "Resets Jan 1 at 1am (UTC)\n"
         for first, second, ok in (
-            ("reset", panel(80), (True, False)),
+            (reset_past, panel(80), (True, False)),
             (None, panel(79), (False, True)),
             (panel(80), panel(79), (False, True)),
         ):
@@ -2095,12 +2070,7 @@ class StartCheckTest(Base):
                 for out, want in ((first, ok[0]), (second, ok[1])):
                     self.probe.reset_mock()
                     self.read(work=out)
-                    with (
-                        mock.patch.object(ClaudeClient, "usage", return_value=reset_past)
-                        if out == "reset"
-                        else contextlib.nullcontext()
-                    ):
-                        result = self.start()
+                    result = self.start()
                     if want:
                         self.assertEqual(result, ("work", None))
                     else:

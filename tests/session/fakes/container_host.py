@@ -1,6 +1,4 @@
-"""A TmuxHost whose clients get a container context, as on the Docker Host; Hosts that record a
-headless start and refuse it.
-"""
+"""A TmuxHost whose clients get a container context, as on the Docker Host; recording Hosts."""
 
 import sys
 from collections.abc import Mapping

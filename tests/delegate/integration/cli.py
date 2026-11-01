@@ -16,6 +16,7 @@ from tests.delegate.case import PY, REPO, Case, RunReads, child_env
 from tests.delegate.plans import TEAM_FILES, write_team
 from tests.delegate.workdir import input_first
 from tests.session import harnesses, live_tmux
+from tests.session.case import claude_account
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
@@ -138,7 +139,7 @@ class Integration(Runs):
         )
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
         with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "a") as f:
-            f.write(fake_claude.account(self.config))
+            f.write(claude_account(self.config))
 
     def argv(self, *extra) -> list[str]:
         return [

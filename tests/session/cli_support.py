@@ -12,7 +12,7 @@ from ensemble.session.hosts.base import stored_record, worker_state
 from ensemble.session.hosts.tmux import managed
 from ensemble.utils import Record, Status
 from tests.session import live_tmux
-from tests.session.case import REPO, ROOTS, Case
+from tests.session.case import REPO, ROOTS, Case, claude_account
 from tests.session.integration.clients.claude import fake_claude
 from tests.session.live_tmux import MANAGER, logged
 from tests.utils.sandbox import scratch
@@ -163,9 +163,8 @@ class CliCase(live_tmux.Calls, Case):
         return [Status.parse(line) for line in result.stdout.splitlines()]
 
     def local_config(self, text: str) -> None:
-        """`text`, plus Claude account `test` in ~/.claude unless `text` registers its own."""
         if "session.clients.claude.accounts" not in text:
-            text += fake_claude.account(os.path.join(self.home, ".claude"))
+            text += claude_account(os.path.join(self.home, ".claude"))
         with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
             f.write(text)
 

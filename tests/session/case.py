@@ -3,6 +3,7 @@ REPO, SRC, PACKAGE_ROOTS, ROOTS; PLUGIN_BIN; SID; SPAWNS, the process starts; no
 """
 
 import contextlib
+import json
 import os
 import sys
 from unittest import mock
@@ -45,8 +46,8 @@ def packaged_hosts() -> dict[str, Permission]:
 
 def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedSession]:
     """A HostedSession class of `clients`, `tmux` in [hosts.tmux]; TmuxHosts and Viewers hold
-    TmuxCli `host` (None: own); dependencies: class_loader, probe (default: fails the test),
-    clock, viewer_factory.
+    TmuxCli `host` (None: own); dependencies: class_loader, probe (default: fails), clock,
+    viewer_factory.
     """
     hosts = Host.parse_hosts({"tmux": {**HOSTS["tmux"], **(tmux or {})}, "default": "tmux"})
 
@@ -69,8 +70,12 @@ def harnessed(clients) -> type[HostedSession]:
     return harnesses.Threaded.configured(clients=_with_account(clients), hosts=hosts)
 
 
+def claude_account(config_dir: str) -> str:
+    return f"\n[session.clients.claude.accounts.test]\ndir = {json.dumps(config_dir)}\n"
+
+
 def _with_account(clients):
-    """A claude table naming no accounts gets one, `test`, in the dir a start used to inherit."""
+    """A claude table with no accounts gets `test`, in the inherited config dir."""
     table = clients.get("claude")
     if table is None or "accounts" in table:
         return clients

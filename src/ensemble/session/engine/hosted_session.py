@@ -71,7 +71,7 @@ from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, confirmed_end, dialog, fold
 from ensemble.session.hosts.base import SIGNALS, Host, activity, host_resume, stored_record
 from ensemble.session.modes import headless, in_process, tui
-from ensemble.session.modes.base import BaseMode, _select_account, child_env
+from ensemble.session.modes.base import BaseMode, child_env, select_account
 from ensemble.session.viewer import display as displays
 from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import (
@@ -230,7 +230,7 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         )
     if wanted := spec.env.get(ACCOUNT_ENV) or client._account():
         spec = replace(spec, env={**spec.env, ACCOUNT_ENV: wanted})
-        _select_account(spec, client)
+        select_account(spec, client)
     container = host._client_context().container is not None
     readings = accounts.live(
         client._usage_probes() or {},

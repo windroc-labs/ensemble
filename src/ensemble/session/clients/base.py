@@ -84,7 +84,7 @@ class Client:
         return ""
 
     def _account_env(self, account: str) -> Mapping[str, str]:
-        """The env a run on registered `account` takes over every other source."""
+        """A run's env on registered `account`."""
         return {}
 
     def _max_usage(self, account: str) -> float:
