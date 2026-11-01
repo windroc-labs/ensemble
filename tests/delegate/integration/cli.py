@@ -136,6 +136,9 @@ class Integration(Runs):
         self.transcript = os.path.join(
             self.config, "projects", re.sub(r"[^A-Za-z0-9]", "-", self.agent), f"{SID}.jsonl"
         )
+        os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
+        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "a") as f:
+            f.write(fake_claude.account(self.config))
 
     def argv(self, *extra) -> list[str]:
         return [
@@ -316,7 +319,7 @@ class OpenCodeIntegration(CodexIntegration):
         self.proj = os.path.join(self.root, "project")
         os.mkdir(self.proj)
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
-        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
+        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "a") as f:
             f.write(local_section(f"trusted_dirs = [{json.dumps(self.proj)}]\n", "delegate"))
 
     def drive(self, steps, *extra, **scenario) -> subprocess.CompletedProcess:

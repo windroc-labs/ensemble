@@ -50,7 +50,6 @@ import os
 import re
 import select
 import shlex
-import shutil
 import subprocess
 import sys
 import termios
@@ -88,16 +87,11 @@ def install(bin_dir: str, tail: str = "/usr/bin:/bin") -> str:
     return f"{bin_dir}:{tail}"
 
 
-def check(path: str) -> None:
-    """AssertionError unless `path` resolves claude to a stand-in install() wrote."""
-    found = shutil.which("claude", path=path)
-    try:
-        with open(found or "", encoding="utf-8") as f:
-            ours = shlex.quote(os.path.abspath(__file__)) in f.read()
-    except OSError:
-        ours = False
-    if not ours:
-        raise AssertionError(f"PATH {path!r} resolves claude to {found!r}, not the stand-in")
+def account(config_dir: str) -> str:
+    """A local config section registering `config_dir` as Claude account `test`, as every Claude
+    start needs one.
+    """
+    return f"\n[session.clients.claude.accounts.test]\ndir = {json.dumps(config_dir)}\n"
 
 
 def _number(value) -> bool:

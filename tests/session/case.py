@@ -56,7 +56,7 @@ def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedS
     dependencies.setdefault("viewer_factory", lambda settings: Viewer(settings, tmux=host))
     dependencies.setdefault("probe", _unexpected_probe)
     return harnesses.Threaded.configured(
-        clients=clients, hosts=hosts, host_factory=build, **dependencies
+        clients=_with_account(clients), hosts=hosts, host_factory=build, **dependencies
     )
 
 
@@ -66,7 +66,16 @@ def _unexpected_probe(argv, **_):
 
 def harnessed(clients) -> type[HostedSession]:
     hosts = Host.parse_hosts({**HOSTS, "default": "tmux"})
-    return harnesses.Threaded.configured(clients=clients, hosts=hosts)
+    return harnesses.Threaded.configured(clients=_with_account(clients), hosts=hosts)
+
+
+def _with_account(clients):
+    """A claude table naming no accounts gets one, `test`, in the dir a start used to inherit."""
+    table = clients.get("claude")
+    if table is None or "accounts" in table:
+        return clients
+    found = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    return {**clients, "claude": {**table, "accounts": {"test": {"dir": found}}}}
 
 
 def preserve_configuration(case) -> None:
