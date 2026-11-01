@@ -188,6 +188,7 @@ class ClientTest(Refusals):
         self.assertEqual(
             (client._account(container=True), client._account(container=False)), ("", "")
         )
+        self.assertFalse(client._in_default("/any/transcript.jsonl"))
         self.assertIsNone(client._usage_probes())
         for output in ("", "garbage", '{"type": "rate_limit_event"}'):
             with self.subTest(output=output):

@@ -2010,6 +2010,11 @@ class ResumeCheckTest(ClaudeStartCase):
         spec = self.conversation(default)
         self.assertIsNone(self.start(spec=spec)[1])
         self.probe.assert_not_called()
+        self.read(home=panel(10), work=panel(10))
+        chosen = dataclasses.replace(spec, env={ACCOUNT_ENV: "home"})
+        self.assertEqual(self.start(spec=chosen), ("home", None))
+        self.claude({"home": {}, "work": {}}, host="tmux", local_account="home")
+        self.assertEqual(self.start(spec=spec), ("home", None))
 
     def test_inspect_finds_the_conversation_in_its_accounts_dir(self):
         self.claude({"home": {}, "work": {}}, host="tmux")

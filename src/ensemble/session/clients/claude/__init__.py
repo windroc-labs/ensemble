@@ -85,14 +85,16 @@ class ClaudeClient(Client):
         if not printable_abs(transcript):
             return ""
         path = os.path.realpath(transcript)
-        default = os.path.realpath(self.common.config_dir())
-        if os.path.commonpath((path, default)) == default:
-            return ""
         for name in sorted(self.common.accounts):
             root = os.path.realpath(self.common.accounts[name].dir)
             if os.path.commonpath((path, root)) == root:
                 return name
         return ""
+
+    def _in_default(self, transcript):
+        root = os.path.realpath(self.common.config_dir())
+        path = os.path.realpath(transcript) if printable_abs(transcript) else ""
+        return bool(path) and os.path.commonpath((path, root)) == root
 
     def _executable(self, *, container=False):
         return "claude"

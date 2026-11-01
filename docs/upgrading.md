@@ -13,9 +13,9 @@ applies to the Docker Host only. A tmux start selects an account with `--account
 local_account = "work"
 ```
 
-A tmux resume of a conversation recorded in an account's `dir` still runs on that account, and one
+A tmux resume choosing no account runs on the account whose `dir` holds its conversation; one
 recorded in `~/.claude` resumes there with no `CLAUDE_CONFIG_DIR`, even when an account's `dir` is
-`~/.claude`. If you set `account` for tmux starts, move it to
+`~/.claude`. A resume choosing another account, by `--account` or `local_account`, is refused. If you set `account` for tmux starts, move it to
 `local_account`, or keep both for the two Hosts.
 
 ## Register each Claude account explicitly
