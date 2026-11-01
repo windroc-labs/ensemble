@@ -279,7 +279,10 @@ class RecordControl(ControlBase):
             "start", "w2", "--client", "fake", "--env", "ENSEMBLE_ACCOUNT=work"
         )
         self.assertEqual((code, out), (2, ""))
-        self.assertIn("ENSEMBLE_ACCOUNT is set by --account or [clients.<client>].account", err)
+        self.assertIn(
+            "ENSEMBLE_ACCOUNT is set by --account or [clients.<client>].account or local_account",
+            err,
+        )
         code, out, err = self.invoke("start", "w2", "--client", "fake", "--account", "nope")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("account 'nope': not a registered account of client fake", err)

@@ -27,35 +27,41 @@
 #   allow            tool rules pre-approved for every session (--allowedTools), after the run's commands and read
 #                    rules; empty → none
 #   env              variables added to every command's environment, over the client's defaults; empty → none
-#   account          the account (a [clients.claude.accounts.<name>]) every start that selects none runs on, only
-#                    while it is under its max_usage, never replaced; empty → each start picks the account with
-#                    the most usage left, a tie by name. Only --account overrides it
+#   account          the account (a [clients.claude.accounts.<name>]) every Docker Host start that selects none runs
+#                    on, only while it is under its max_usage, never replaced; empty → each such start picks the
+#                    account with the most usage left, a tie by name. Only --account overrides it
+#   local_account    the same for the tmux Host; empty → a tmux start that selects none runs on the user's own
+#                    config (no CLAUDE_CONFIG_DIR set: ~/.claude and its login), reading no usage, unless it
+#                    resumes a conversation in an account's dir, which runs on that account
 # [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog skipped
 # [clients.claude.tiers]    tier "1".."4" → its --model
 # [clients.claude.efforts]  effort (low, medium, high, xhigh, max) → its --effort
 #                            starting a run whose tier or effort has no entry here is a config error
-# [clients.claude.accounts.<name>]  a Claude account, selected by account above or a worker's --account
-#                    (ENSEMBLE_ACCOUNT); a Claude start needs at least one. The tmux Host runs the start with
-#                    its dir as CLAUDE_CONFIG_DIR; the Docker Host injects that account's setup-token alone
-#                    (ensemble-broker login claude <name>); <name> 1–64 lowercase letters, digits, ., _ or -, never
-#                    setup-token. Only listed accounts are registered: none is implicit, ~/.claude included;
-#                    selecting an unregistered name is a config error. None packaged; no secret:
+# [clients.claude.accounts.<name>]  a Claude account, selected by account or local_account above or a worker's
+#                    --account (ENSEMBLE_ACCOUNT); a Docker Host Claude start needs at least one. The tmux Host
+#                    runs a start selecting one with its dir as CLAUDE_CONFIG_DIR; the Docker Host injects that
+#                    account's setup-token alone (ensemble-broker login claude <name>); <name> 1–64 lowercase
+#                    letters, digits, ., _ or -, never setup-token. Only listed accounts are registered: none is
+#                    implicit, ~/.claude included; selecting an unregistered name is a config error. None
+#                    packaged; no secret:
 #   dir              required: its CLAUDE_CONFIG_DIR on the host, ~ expanded, absolute. The usage probe reads it, so
 #                    log it in to the account whose setup-token the broker holds
 #   account          a display string, e.g. its login email
 #   max_usage        the percent of each usage window (five-hour and weekly alike) it may reach, 0 < max_usage
-#                    <= 100; absent → 100. Before launching, each start reads every registered account once, live,
-#                    and runs only on one below it in every window, else fails (usage: no available account);
-#                    nothing is cached or held. A /usage probe printing only a cost summary (an API key or gateway
-#                    login) has no limit
+#                    <= 100; absent → 100. Before launching, each start on an account reads every registered one
+#                    once, live, and runs only on one below it in every window, else fails (usage: no available
+#                    account); nothing is cached or held. A /usage probe printing only a cost summary (an API
+#                    key or gateway login) has no limit
 [clients.claude]
 implementation = "ensemble.session.clients.claude:ClaudeClient"
 max_runs = 0
 flags = ["--settings", '{"enabledPlugins": {"ensemble@windroc": false}}']
 allow = []
 account = ""
+local_account = ""
 # local: [session.clients.claude]
 # local: allow = ["<rule>"]
+# local: local_account = "<name>"
 
 [clients.claude.modes]
 auto = ["--permission-mode", "auto"]

@@ -600,6 +600,7 @@ class Committed(Case):
                 "flags": ["--settings", PLUGIN_OFF],
                 "allow": [],
                 "account": "",
+                "local_account": "",
                 "modes": {
                     "auto": ["--permission-mode", "auto"],
                     "yolo": [
