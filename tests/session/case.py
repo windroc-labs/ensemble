@@ -75,7 +75,6 @@ def claude_account(config_dir: str) -> str:
 
 
 def _with_account(clients):
-    """A claude table with no accounts gets `test`, in the inherited config dir."""
     table = clients.get("claude")
     if table is None or "accounts" in table:
         return clients
