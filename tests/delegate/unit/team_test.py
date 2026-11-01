@@ -129,9 +129,7 @@ class Acceptance(Packaged):
             "No essay paragraphs.",
             "`[n]` is source number n in Sources, written as a link to that source, "
             "`[[n]](<URL or code permalink>)`, the same target as its Sources item",
-            "Both have:",
             "A compared project with its own address is a link to it",
-            "| [Grok Build](https://github.com/xai-org/grok-build) |",
             "| Impact | Gap |",
             '<details id="findings" open>',
             "<summary>Findings: <A> aspects, <F> findings</summary>",
