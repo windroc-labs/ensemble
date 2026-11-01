@@ -315,7 +315,7 @@ class BaseMode(ABC):
     def _pointed(
         spec: Spec, context: ClientContext, local_dir: str
     ) -> tuple[Spec, tuple[str, str] | None]:
-        """spec, its prompt over_argv replaced by a POINTER to its prompt file, whose dir it may read,
+        """spec, an over_argv prompt replaced by POINTER to its file, whose dir it may read,
         under its container's state root, else local_dir; that file's path and text.
         """
         if not over_argv(spec.prompt):
