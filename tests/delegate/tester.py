@@ -32,8 +32,7 @@ DELEGATE = re.compile(r"(?m)^\[delegate\]\n")
 @functools.cache
 def team() -> str:
     """The team dir, written once per process outside the temp dirs, which a Codex run can
-    write: a team dir there is refused.
-    """
+    write."""
     root = os.environ.get("ENSEMBLE_TEST_TMP", os.path.join(REPO, "work"))
     os.makedirs(root, exist_ok=True)
     top = os.path.realpath(tempfile.mkdtemp(dir=root, prefix="tester-"))
@@ -48,9 +47,7 @@ def team() -> str:
 
 
 def enabled(local: str) -> str:
-    """The local config text `local` (sectioned), its `[delegate]` table naming the team dir
-    unless it sets team_dirs itself.
-    """
+    """`local`, a sectioned local config, naming the team dir unless it sets team_dirs."""
     if "team_dirs" in local:
         return local
     line = f'team_dirs = ["{team()}"]\n'
