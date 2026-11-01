@@ -1,6 +1,6 @@
 {
   "name": "ensemble",
-  "version": "0.6.21",
+  "version": "0.6.22",
   "description": "Guidelines for your commander session (/ensemble:manage), and ensemble's core roles and tasks, researcher, pm and engineer, run in this conversation (/ensemble:act-as), and fixed board issue commands (/ensemble:board).",
   "author": "Windroc",
   "license": "MIT",
