@@ -5,7 +5,8 @@
 On the tmux Host, a Claude start that selects no account runs on your own `~/.claude` again, with
 its plugins, settings and login, and reads no usage. `[session.clients.claude] account` now applies
 to the Docker Host only. To run tmux starts on a registered account, set `local_account` in
-`~/.ensemble/config.local.toml`, or pass `--account`:
+`~/.ensemble/config.local.toml`, or pass `--account`. A tmux resume keeps the account whose `dir`
+holds its conversation, else `~/.claude`, whatever `local_account` says:
 
 ```toml
 [session.clients.claude]

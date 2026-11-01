@@ -154,10 +154,14 @@ class ResumeTest(CrashCase):
         self.assertTrue(has_pair(again["argv"], "--resume", sid), again["argv"])
         self.assertNotIn("--session-id", again["argv"])
         self.assertTrue(has_pair(again["argv"], *FLAGS), again["argv"])
-        self.assertEqual((again["cwd"], again["config_dir"]), (first["cwd"], first["config_dir"]))
+        default = os.path.join(self.home, ".claude")
+        self.assertEqual(
+            (again["cwd"], again["config_dir"] or default),
+            (first["cwd"], first["config_dir"] or default),
+        )
         envs = [entry["env"] for entry in logged(dump)]
         self.assertEqual([env.get("K") for env in envs], ["v", "v"])
-        self.assertEqual(envs[0].get("CLAUDE_CONFIG_DIR"), envs[1].get("CLAUDE_CONFIG_DIR"))
+        self.assertEqual({env.get("CLAUDE_CONFIG_DIR") or default for env in envs}, {default})
         self.ok(self.session("send", "w1", "what did I ask you to remember?"))
         live_tmux.wait(
             lambda: self.ok(self.session("reply", "w1")).stdout == f"{fact}\n",

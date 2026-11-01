@@ -1947,8 +1947,8 @@ class StartCheckTest(ClaudeStartCase):
 
 class ResumeCheckTest(ClaudeStartCase):
     """A tmux resume of a conversation in an account's dir runs the start check, narrowed to that
-    account; a hard choice of another is refused. One in no account's dir, choosing none, runs on
-    the user's own config.
+    account, whatever local_account says; a --account of another is refused. One in no account's
+    dir, choosing none, runs on the user's own config.
     """
 
     def setUp(self):
@@ -1976,32 +1976,31 @@ class ResumeCheckTest(ClaudeStartCase):
         self.read(home=panel(100), work=panel(10))
         self.assert_usage_error(self.start(spec=spec))
 
-    def test_a_hard_choice_of_another_account_is_refused_after_the_check(self):
-        for env, table in (({ACCOUNT_ENV: "work"}, {}), ({}, {"local_account": "work"})):
-            with self.subTest(env=env, table=table):
-                self.claude({"home": {}, "work": {}}, host="tmux", **table)
-                spec = dataclasses.replace(
-                    self.conversation(os.path.join(self.root, "home")), env=env
-                )
-                self.read(home=panel(10), work=panel(10))
-                self.probe.reset_mock()
-                account, error = self.start(spec=spec)
-                self.assertIsNone(account)
-                self.assertIsInstance(error, ConfigError)
-                self.assertIn(f"conversation {SID} has no transcript to resume", str(error))
-                self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
-
-    def test_a_conversation_in_no_registered_dir_resumes_on_the_users_config(self):
-        self.claude({"home": {}, "work": {}}, host="tmux", account="work")
-        spec = self.conversation(os.path.join(self.home, ".claude"))
-        self.assertEqual(self.start(spec=spec), ("", None))
-        self.probe.assert_not_called()
+    def test_local_account_yields_to_the_conversations_account(self):
         self.claude({"home": {}, "work": {}}, host="tmux", local_account="work")
+        spec = self.conversation(os.path.join(self.root, "home"))
+        self.read(home=panel(10), work=panel(10))
+        self.assertEqual(self.start(spec=spec), ("home", None))
+
+    def test_a_hard_choice_of_another_account_is_refused_after_the_check(self):
+        self.claude({"home": {}, "work": {}}, host="tmux")
+        spec = dataclasses.replace(
+            self.conversation(os.path.join(self.root, "home")), env={ACCOUNT_ENV: "work"}
+        )
         self.read(home=panel(10), work=panel(10))
         account, error = self.start(spec=spec)
         self.assertIsNone(account)
         self.assertIsInstance(error, ConfigError)
-        self.assertIn("has no transcript to resume", str(error))
+        self.assertIn(f"conversation {SID} has no transcript to resume", str(error))
+        self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
+
+    def test_a_conversation_in_no_registered_dir_resumes_on_the_users_config(self):
+        spec = self.conversation(os.path.join(self.home, ".claude"))
+        for key in ("account", "local_account"):
+            with self.subTest(key=key):
+                self.claude({"home": {}, "work": {}}, host="tmux", **{key: "work"})
+                self.assertEqual(self.start(spec=spec), ("", None))
+        self.probe.assert_not_called()
 
     def test_an_account_dir_inside_the_users_config_keeps_its_conversations(self):
         self.root = os.path.join(self.home, ".claude")

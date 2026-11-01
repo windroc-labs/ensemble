@@ -30,8 +30,9 @@
 #   account          the account (a [clients.claude.accounts.<name>]) every Docker Host start that selects none runs
 #                    on, only while it is under its max_usage, never replaced; empty → each such start picks the
 #                    account with the most usage left, a tie by name. Only --account overrides it
-#   local_account    the same for the tmux Host; empty → a tmux start that selects none runs on the user's own
-#                    ~/.claude (no CLAUDE_CONFIG_DIR), unchecked, unless it resumes a conversation in an account's dir
+#   local_account    the same for the tmux Host's new starts; empty → one that selects none runs on the user's own
+#                    ~/.claude (no CLAUDE_CONFIG_DIR), unchecked. A tmux resume runs on the account whose dir holds
+#                    its conversation, else on ~/.claude, whatever local_account says
 # [clients.claude.modes]    auto: Claude's auto mode classifier; yolo: bypassPermissions, its first-start dialog skipped
 # [clients.claude.tiers]    tier "1".."4" → its --model
 # [clients.claude.efforts]  effort (low, medium, high, xhigh, max) → its --effort
