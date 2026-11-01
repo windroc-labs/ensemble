@@ -43,13 +43,21 @@ usage left, a tie by name. With no account usable, or every reading failed, the 
 configuration error. Nothing is cached or held: a run that hits a usage limit marks nothing, and
 the next start reads again. There are no separate start thresholds besides `max_usage`.
 
-`Session.usage("claude")` lists every registered account's points left under its
-`max_usage`, read live on each query, on both Hosts. With the orchestrator's usage check on (its
-default), a start goes ahead while any account has points left; the old 90% five-hour and 100%
-weekly start thresholds no longer apply to it. With no Claude account registered the list is
-empty, so the check skips every Claude start (`usage-skip`): register at least one, or set
-`[orchestrator.usage_limit] claude = "off"`. A login whose `/usage` prints only a cost summary
-(an API key or gateway) has no usage panel and is never blocked by the check.
+## Usage is decided only in the session
+
+The orchestrator's board-start usage gate and its switch are gone. The orchestrator and the
+delegate only request a run: a start the session refuses for usage (`usage: no available account`)
+is an ordinary failed attempt, logged with that text whole, and the issue follows the same recovery
+as any other launch failure. There is no `usage-skip` line, no `resume blocked by usage gate`, and
+no usage-specific rollback, retry or issue state. A login whose `/usage` prints only a cost summary
+(an API key or gateway) has no usage panel and is never refused for usage.
+
+1. Delete `[orchestrator.usage_limit]` from `~/.ensemble/config.local.toml`; do not move it to
+   another layer. A leftover table is a configuration error (`unknown keys: usage_limit`).
+2. `Delegate.usage`, `HarnessDelegate.usage`, `Session.usage` and the `Headroom` type are gone,
+   with no per-account replacement. Remove custom calls and `from ensemble.session import Headroom`:
+   request the run instead and handle its ordinary failure, a `SessionError` whose text is the
+   session's.
 
 This change ships with the other session account and usage changes in one compatible
 release; do not release it separately.
@@ -59,8 +67,7 @@ release; do not release it separately.
 Remove `ensemble-orchestrator router --brake ROLE` from custom callers and remove
 quota commands before the second deep-research round. The old option now exits 2
 without querying usage. The built-in researcher no longer receives a caller-supplied
-quota brake and no longer skips its second round because of usage. Board-start
-usage checks remain in place.
+quota brake and no longer skips its second round because of usage.
 
 Remove `gate` keys from custom delegate overlays and remove `gate=` arguments to
 `RunConfig`. The delegate rejects `gate` overlays and no longer defines the `<gate>`

@@ -46,8 +46,8 @@
 #   max_usage        the percent of each usage window (five-hour and weekly alike) it may reach, 0 < max_usage
 #                    <= 100; absent → 100. Before launching, each start reads every registered account once, live,
 #                    and runs only on one below it in every window, else fails (usage: no available account);
-#                    nothing is cached or held. Session.usage reports its points left under it, read live each
-#                    query; a /usage probe printing only a cost summary (an API key or gateway login) has no limit
+#                    nothing is cached or held. A /usage probe printing only a cost summary (an API key or gateway
+#                    login) has no limit
 [clients.claude]
 implementation = "ensemble.session.clients.claude:ClaudeClient"
 max_runs = 0
