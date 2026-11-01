@@ -2002,6 +2002,14 @@ class ResumeCheckTest(ClaudeStartCase):
                 self.assertEqual(self.start(spec=spec), ("", None))
         self.probe.assert_not_called()
 
+    def test_an_unrecorded_resume_ignores_local_account(self):
+        self.claude({"home": {}, "work": {}}, host="tmux", local_account="work")
+        os.makedirs(self.workdir, exist_ok=True)
+        spec = self.spec(client="claude", mode=Mode.HEADLESS, name="w1", sid=SID, resume=True)
+        self.read(home=panel(10), work=panel(10))
+        self.assertEqual(self.start(spec=spec), ("", None))
+        self.probe.assert_not_called()
+
     def test_an_account_dir_inside_the_users_config_keeps_its_conversations(self):
         self.root = os.path.join(self.home, ".claude")
         self.claude({"home": {}, "work": {}}, host="tmux")

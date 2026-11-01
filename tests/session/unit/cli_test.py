@@ -280,8 +280,8 @@ class RecordControl(ControlBase):
         )
         self.assertEqual((code, out), (2, ""))
         self.assertIn(
-            "ENSEMBLE_ACCOUNT is set by --account, or by [clients.<client>].account on the"
-            " Docker Host and [clients.<client>].local_account on the tmux Host",
+            "ENSEMBLE_ACCOUNT is set by --account, or by [clients.<client>].account in a"
+            " container and [clients.<client>].local_account outside one",
             err,
         )
         code, out, err = self.invoke("start", "w2", "--client", "fake", "--account", "nope")

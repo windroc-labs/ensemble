@@ -240,8 +240,8 @@ SESSION_NAME_RULE = f"{TAG.pattern} but not {NO_DISPLAY}"
 
 COMMAND = "ensemble-session"
 ACCOUNT_SET_BY = (
-    f"{ACCOUNT_ENV} is set by --account, or by [clients.<client>].account on the Docker Host"
-    " and [clients.<client>].local_account on the tmux Host"
+    f"{ACCOUNT_ENV} is set by --account, or by [clients.<client>].account in a container"
+    " and [clients.<client>].local_account outside one"
 )
 DEFAULT_MAX_USAGE = 100
 RESUME = (COMMAND, "resume")

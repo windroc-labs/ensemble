@@ -50,7 +50,7 @@ reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.tom
    broker credentials and other `~/.ensemble` state are untouched.
 
 A tmux Claude start without `--account` runs on `~/.claude` and reads no usage when it is new and
-`local_account` is empty, or resumes a conversation outside every account's `dir`. Before
+`local_account` is empty, or resumes a conversation not recorded in an account's `dir`. Before
 launching, every other Claude start reads each registered account's usage once, live, and compares
 it with that account's `max_usage`. `--account`, else `account` on the Docker Host or
 `local_account` on a new tmux start, runs only while that account is below its limit in every
