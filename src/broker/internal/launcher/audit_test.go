@@ -213,7 +213,7 @@ func TestStartFailureLine(t *testing.T) {
 func TestMaintainRefreshLineCodex(t *testing.T) {
 	h, manifest, _, _ := maintainHost(t, true, nil)
 	rec, path := audited(t, &h, "maintain", container)
-	_, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	_, err := h.Maintain(context.Background(), container, manifest, false)
 	rec.Flush(err)
 	if err != nil {
 		t.Fatal(err)

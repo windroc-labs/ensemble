@@ -71,7 +71,7 @@ func TestAuditWarningKeepsOperationOutcome(t *testing.T) {
 					return map[string]any{"container": container, "removed": true, "count": int64(9007199254740993)}, operationErr
 				}
 				step := func(context.Context, keys, string, io.Writer) (any, error) { return withAudit(rec, f) }
-				a := app{start: step, close: step, maintain: func(ctx context.Context, _ keys, c, _ string, _ []string, _ bool) (any, error) {
+				a := app{start: step, close: step, maintain: func(ctx context.Context, _ keys, c, _ string, _ bool) (any, error) {
 					return step(ctx, keys{}, c, nil)
 				}}
 				args := map[string][]string{"start": {"start", "--manifest", "/manifest"}, "maintain": {"maintain", "--container", container, "--manifest", "/manifest"}, "close": {"close", "--container", container}}[command]

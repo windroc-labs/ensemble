@@ -137,12 +137,12 @@ class FakeBroker:
             raise self.error
         return self.started
 
-    def maintain(self, container, manifest, delivered=(), *, root):
+    def maintain(self, container, manifest):
         self.order.append(("maintain", container, manifest))
         self.refreshed.set()
         if "maintain" in self.failing:
             raise self.failing["maintain"]
-        return Maintained([], [], None, self.started.deadline)
+        return Maintained([], None, self.started.deadline)
 
     def close(self, container):
         self.order.append(("close", container))

@@ -350,7 +350,7 @@ func TestMaintainOpencode(t *testing.T) {
 			}
 		})
 		rec, path := audited(t, &h, "maintain", container)
-		got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+		got, err := h.Maintain(context.Background(), container, manifest, false)
 		rec.Flush(err)
 		if !github {
 			if err != nil || len(got.Results) != 0 || len(tokens.calls) != 0 {

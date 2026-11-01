@@ -64,7 +64,30 @@ no usage-specific rollback, retry or issue state. A login whose `/usage` prints 
 This change ships with the other session account and usage changes in one compatible
 release; do not release it separately.
 
+## Broker protocol 39: static secret metadata removed
+
+Upgrade the plugin and broker together with `scripts/install.sh --docker`; their protocol versions must match.
+Existing Claude, OpenCode and environment secrets keep their Keychain names and remain usable. Codex single-login
+credentials, native refresh, token records and authentication deadlines keep their existing behavior. This change
+does not require logging in again or adding Codex account configuration.
+
+The broker no longer reads or writes `~/.ensemble/docker/static-secrets.json`, its `static-secrets.lock`, or container
+`<generation>.static.json` files. Present, missing or corrupt old files have no effect on login, status, start or
+maintain. Leave them in place; no cleanup or migration is required. Skip the historical static-file cleanup and
+rename instructions below when upgrading to protocol 39. The Keychain old-name guard still applies to old items.
+
+Static expiry, unknown-expiry and rotation notices, their acknowledgements, polling and `credential-notice` audit
+events are removed. Artificially registered dates no longer block starts. `status.static`, `maintain.notices` and
+the `notices` component result are gone; `maintain` no longer accepts `--delivered`. Token renewal still supplies
+`next_check`, provider results and `deadline`.
+
+Remove `--expires`, `--issued` and `--fresh-token` from login calls. They now fail as usage errors (exit 2), before
+Keychain access. `login opencode PROVIDER --auth-file FILE` remains supported. There is no replacement reminder store,
+account inventory, synchronization or compatibility switch.
+
 ## Broker protocol 38: named Claude accounts only
+
+Historical instructions: protocol 39 above removes the static list and notices and requires no static-file cleanup.
 
 The broker has no implicit `default` Claude account any more:
 
@@ -461,7 +484,7 @@ broker, then close and resume every Docker session started under 29: a protocol 
 records. Pending GitHub revocations are kept either way.
 
 Broker protocol 28 adds `notices` and `status`'s `static`, and records each Claude token's, OpenCode key's and
-environment secret's expiry ([static credential registration](../src/broker/internal/credential/static.go)). Upgrade the
+environment secret's expiry. Protocol 39 removes this registration. For older versions, upgrade the
 broker with the plugin. Existing items keep working with an unknown expiry; to record one, rerun the login with
 `--fresh-token` (Claude, after `claude setup-token`), `--issued` or `--expires`.
 

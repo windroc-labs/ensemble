@@ -1,5 +1,5 @@
-// Package audit is the broker's credential lifecycle log: one JSON line per start, refresh and close, and one per
-// static secret notice delivered. No type here holds a token, key or other secret.
+// Package audit is the broker's credential lifecycle log: one JSON line per start, refresh and close.
+// No type here holds a token, key or other secret.
 package audit
 
 import (
@@ -15,20 +15,18 @@ const (
 	GitHubToken       = "github-installation-token"
 	LinearAccessToken = "linear-access-token"
 	EnvSecret         = "env-secret"
-	OpencodeAPIKey    = "opencode-api-key" // notice lines only
+	OpencodeAPIKey    = "opencode-api-key"
 
 	Issued    = "issued"
 	Renewed   = "renewed"
 	Withdrawn = "withdrawn" // deleted with its container, nothing to revoke
 	Revoked   = "revoked"
 	Unrevoked = "unrevoked" // an in-command revocation that failed, with a reason; never retried
-	Notified  = "notified"  // a static secret notice delivered, with its threshold
 
 	// Events: a command line's is its command.
 	startEvent   = "start"
 	refreshEvent = "refresh"
 	closeEvent   = "close"
-	noticeEvent  = "credential-notice"
 
 	maintainCommand = "maintain" // writes a refresh line only when it tried a token provider
 )
@@ -64,8 +62,7 @@ type Credential struct {
 	Reason       string // unrevoked only
 	ExpiresAt    *string
 	Account      string // GitHub only
-	Item         string // environment secrets and notices: the reference, never the value
-	Notice       string // notices only: the threshold or rotated
+	Item         string // environment secrets: the reference, never the value
 	Installation int64  // GitHub; 0 when unknown
 	Repos        *Repositories
 }
@@ -92,9 +89,7 @@ func (c Credential) MarshalJSON() ([]byte, error) {
 		RepositorySelection json.RawMessage `json:"repository_selection,omitempty"`
 		Repositories        json.RawMessage `json:"repositories,omitempty"`
 		RepositoriesError   string          `json:"repositories_error,omitempty"`
-		Notice              string          `json:"notice,omitempty"`
-	}{Kind: c.Kind, Result: c.Result, ExpiresAt: c.ExpiresAt, Account: c.Account, Item: c.Item, Installation: c.Installation,
-		Notice: c.Notice}
+	}{Kind: c.Kind, Result: c.Result, ExpiresAt: c.ExpiresAt, Account: c.Account, Item: c.Item, Installation: c.Installation}
 	if c.Result == Unrevoked {
 		reason := c.Reason
 		if reason == "" {
@@ -125,7 +120,7 @@ type StartFacts struct {
 type Line struct {
 	Time        time.Time
 	Command     string // the broker subcommand that wrote it
-	Event       string // start, refresh, close or credential-notice
+	Event       string // start, refresh, or close
 	Container   string
 	Start       *StartFacts // read only when Event is start
 	Credentials []Credential

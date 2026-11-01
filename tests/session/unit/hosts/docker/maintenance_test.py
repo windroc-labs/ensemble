@@ -24,10 +24,8 @@ def deadline(seconds):
     return {"at": at(seconds), "action": "close", "reason": REASON}
 
 
-def found(next_check=None, until=None, results=(), notices=()):
-    return SimpleNamespace(
-        next_check=next_check, deadline=until, results=list(results), notices=list(notices)
-    )
+def found(next_check=None, until=None, results=()):
+    return SimpleNamespace(next_check=next_check, deadline=until, results=list(results))
 
 
 class Broker:
@@ -36,8 +34,8 @@ class Broker:
     def __init__(self, *results, closes=()):
         self.results, self.closes, self.calls = list(results), list(closes), []
 
-    def maintain(self, container, manifest, delivered, *, root):
-        self.calls.append(("maintain", container, manifest, list(delivered), root))
+    def maintain(self, container, manifest):
+        self.calls.append(("maintain", container, manifest))
         result = self.results.pop(0)
         if isinstance(result, BaseException):
             raise result
@@ -66,7 +64,6 @@ class TickTest(Case):
             GEN,
             broker,
             report=lambda word, text: self.reports.append((word, text)),
-            root="/repo",
             close=close or closing,
             clock=lambda: self.now,
         )
@@ -92,8 +89,6 @@ class TickTest(Case):
                     "maintain",
                     f"ensemble-worker_1-{GEN}",
                     os.path.join(self.state, f"{GEN}.json"),
-                    [],
-                    "/repo",
                 )
             ],
         )
@@ -134,15 +129,6 @@ class TickTest(Case):
         self.assertEqual(self.make(broker).tick(NOW), NOW + 3600)
         self.assertEqual(self.reports, [])
 
-    def test_notice_is_reported_then_acknowledged_at_once(self):
-        notice = {"key": "env/db@1:7d", "text": "env/db expires in 6 days: rerun its login"}
-        broker = Broker(found(at(3600), notices=[notice]), found(at(3600)))
-        tick = self.make(broker)
-        self.assertEqual(tick.tick(NOW), NOW)
-        self.assertEqual(tick.tick(NOW), NOW + 3600)
-        self.assertEqual(broker.calls[1][3], ["env/db@1:7d"])
-        self.assertEqual(self.reports, [("credential_notice", notice["text"])])
-
     def test_a_deadline_without_next_check_is_still_enforced(self):
         broker = Broker(found(None, deadline(500)))
         tick = self.make(broker)
@@ -156,7 +142,7 @@ class TickTest(Case):
         self.assertIsNone(tick.tick(NOW))
         self.assertIsNone(tick.due)
 
-    def test_reports_carry_only_broker_names_messages_and_notice_text(self):
+    def test_reports_carry_only_broker_names_and_messages(self):
         secret = "ghs_SENTINELs3cr3tTOKEN"
         result = {
             "credential": "github",
@@ -165,14 +151,12 @@ class TickTest(Case):
             "error": {"code": "refresh_failed", "message": "Renewal failed.", "cause": "503"},
             "value": secret,
         }
-        notice = {"key": "k", "text": "renew soon", "secret": secret}
-        broker = Broker(found(at(60), results=[result], notices=[notice]))
+        broker = Broker(found(at(60), results=[result]))
         self.make(broker).tick(NOW)
         self.assertEqual(
             self.reports,
             [
                 ("credential_refresh_failed", "github: Renewal failed. (503)"),
-                ("credential_notice", "renew soon"),
             ],
         )
         self.assertNotIn(secret, repr(self.reports))
@@ -181,9 +165,9 @@ class TickTest(Case):
         clock = [NOW]
 
         class Slow(Broker):
-            def maintain(self, container, manifest, delivered, *, root):
+            def maintain(self, container, manifest):
                 clock[0] += 1800
-                return super().maintain(container, manifest, delivered, root=root)
+                return super().maintain(container, manifest)
 
         tick = maintenance.Maintenance(
             "worker_1",
@@ -191,7 +175,6 @@ class TickTest(Case):
             GEN,
             Slow(SessionError("broker: maintain timed out after 1800 s")),
             report=lambda *_: None,
-            root="/repo",
             close=lambda: None,
             clock=lambda: clock[0],
         )
@@ -214,7 +197,6 @@ class TickTest(Case):
             GEN,
             broker,
             report=lambda *_: None,
-            root="/repo",
             close=lambda: None,
             clock=lambda: clock[0],
         )

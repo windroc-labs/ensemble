@@ -122,7 +122,7 @@ func TestLinearMaintenance(t *testing.T) {
 		if fail {
 			f.fail = "refresh"
 		}
-		result, err := h.Maintain(context.Background(), container, linearManifest(t), nil, true)
+		result, err := h.Maintain(context.Background(), container, linearManifest(t), true)
 		if err != nil || !slices.Contains(f.calls, "refresh") || len(result.Results) != 1 {
 			t.Fatalf("%+v %v calls %v", result, err, f.calls)
 		}

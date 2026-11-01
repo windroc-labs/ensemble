@@ -28,7 +28,7 @@ type Schedule interface {
 	Drop(m Manifest) // removes the record, for a rolled-back start
 }
 
-// StateSchedule keeps the record in m's session state directory, beside <generation>.static.json.
+// StateSchedule keeps the token record in m's session state directory.
 type StateSchedule struct {
 	Home string
 	Safe func(string) error

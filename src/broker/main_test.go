@@ -47,7 +47,7 @@ func recording(calls *[]call) app {
 		return build(ctx, k, arg, p)
 	},
 		start: result("start"), close: result("close"),
-		maintain: func(ctx context.Context, k keys, container, _ string, _ []string, _ bool) (any, error) {
+		maintain: func(ctx context.Context, k keys, container, _ string, _ bool) (any, error) {
 			return result("maintain")(ctx, k, container, nil)
 		},
 		status: func(ctx context.Context, k keys) (any, error) { return result("status")(ctx, k, "", nil) },
@@ -77,7 +77,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"38"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"39"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -809,7 +809,7 @@ func TestAuditHoldsNoSecret(t *testing.T) {
 		case "start":
 			_, err = h.Start(context.Background(), path)
 		case "maintain":
-			_, err = h.Maintain(context.Background(), c, path, nil, true)
+			_, err = h.Maintain(context.Background(), c, path, true)
 		case "close":
 			_, err = h.Close(context.Background(), c)
 		}
@@ -968,9 +968,9 @@ func TestMaintainArgs(t *testing.T) {
 		renew bool
 	}
 	var calls []got
-	a := app{maintain: func(_ context.Context, _ keys, container, manifest string, delivered []string, renew bool) (any, error) {
-		calls = append(calls, got{append([]string{container, manifest}, delivered...), renew})
-		return launcher.MaintainResult{Container: container, Results: []launcher.ProviderResult{}, Notices: []launcher.Notice{}}, nil
+	a := app{maintain: func(_ context.Context, _ keys, container, manifest string, renew bool) (any, error) {
+		calls = append(calls, got{[]string{container, manifest}, renew})
+		return launcher.MaintainResult{Container: container, Results: []launcher.ProviderResult{}}, nil
 	}}
 	base := []string{"maintain", "--container", c, "--manifest", "/tmp/m.json"}
 	for _, tc := range []struct {
@@ -979,26 +979,20 @@ func TestMaintainArgs(t *testing.T) {
 	}{
 		{nil, got{[]string{c, "/tmp/m.json"}, false}},
 		{[]string{"--renew"}, got{[]string{c, "/tmp/m.json"}, true}},
-		{[]string{"--delivered", "ensemble-broker-env/db@2:7d", "--renew", "--delivered", "ensemble-broker-claude/work@1:rotated"},
-			got{[]string{c, "/tmp/m.json", "ensemble-broker-env/db@2:7d", "ensemble-broker-claude/work@1:rotated"}, true}},
 	} {
 		calls = nil
 		code, out, errOut := invoke(a, append(slices.Clone(base), tc.extra...)...)
-		if code != 0 || errOut != "" || out != `{"container":"`+c+`","next_check":null,"deadline":null,"results":[],"notices":[]}`+"\n" ||
+		if code != 0 || errOut != "" || out != `{"container":"`+c+`","next_check":null,"deadline":null,"results":[]}`+"\n" ||
 			len(calls) != 1 || !slices.Equal(calls[0].args, tc.want.args) || calls[0].renew != tc.want.renew {
 			t.Fatalf("%q: %d %q %q %+v", tc.extra, code, out, errOut, calls)
 		}
-	}
-	many := slices.Clone(base)
-	for range maxDelivered + 1 {
-		many = append(many, "--delivered", "ensemble-broker-env/db@2:7d")
 	}
 	calls = nil
 	for _, args := range [][]string{
 		append(slices.Clone(base), "--renew", "--renew"), append(slices.Clone(base), "--delivered"),
 		append(slices.Clone(base), "--delivered", "ensemble-broker-bot/x@1:7d"), append(slices.Clone(base), "extra"),
 		{"maintain", "--container", "bad", "--manifest", "/tmp/m.json"}, {"maintain", "--container", c, "--manifest", "relative"},
-		{"maintain", "--manifest", "/tmp/m.json", "--container", c}, many,
+		{"maintain", "--manifest", "/tmp/m.json", "--container", c},
 	} {
 		code, out, errOut := invoke(a, args...)
 		if code != 2 || out != "" || calls != nil {

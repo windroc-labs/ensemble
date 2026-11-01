@@ -4,17 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"ensemble/broker/internal/broker"
-	"ensemble/broker/internal/credential"
 )
-
-// staticStore is the account's record of its static secrets' versions and expiries.
-func staticStore(home string) credential.StaticStore {
-	dir := filepath.Join(home, ".ensemble/docker")
-	return credential.StaticStore{Path: filepath.Join(dir, "static-secrets.json"), Lock: broker.FileLock(filepath.Join(dir, "static-secrets.lock"), true)}
-}
 
 // stdinReaders read a login's secret and then the keychain password. A terminal on stdin types the secret as one
 // hidden line after prompt; anything else carries it (a token: one line, its newline dropped), and the password comes

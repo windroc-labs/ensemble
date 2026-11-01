@@ -175,7 +175,7 @@ func TestMaintainGitHub(t *testing.T) {
 	d := &fakeDocker{}
 	h := mountHost()
 	h.Docker, h.GitHub = d, tokens
-	got, err := h.Maintain(context.Background(), container, githubManifest(t), nil, false)
+	got, err := h.Maintain(context.Background(), container, githubManifest(t), false)
 	if err != nil || got.Container != container || len(got.Results) != 1 || got.Results[0].Credential != "github" ||
 		*got.Results[0].ExpiresAt != expiry[0].ExpiresAt || got.Deadline != nil {
 		t.Fatalf("%+v %v", got, err)
@@ -191,7 +191,7 @@ func TestMaintainGitHub(t *testing.T) {
 	}
 	host := mountHost()
 	host.Docker, host.GitHub = &fakeDocker{}, &fakeTokens{refresh: docker.ErrUnreachable}
-	got, err = host.Maintain(context.Background(), container, githubManifest(t), nil, false)
+	got, err = host.Maintain(context.Background(), container, githubManifest(t), false)
 	if e := results(got)["github"].Error; err != nil || len(got.Results) != 1 || e == nil || e.Code != protocol.DockerUnreachable {
 		t.Errorf("unreachable: %+v %v", got, err)
 	}

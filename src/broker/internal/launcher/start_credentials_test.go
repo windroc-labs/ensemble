@@ -150,7 +150,6 @@ func TestStartPartialDeliveryAuditAndPersistence(t *testing.T) {
 			tokens := &fakeTokens{owners: []string{"first", "second"}}
 			h, d := githubHost(w, tokens)
 			h.Home, h.Env = t.TempDir(), &fakeEnv{}
-			h.Static = &fakeStatic{loads: []map[string]credential.Static{{}, {}}}
 			h.Schedule = StateSchedule{Home: h.Home, Safe: h.Safe}
 			parent := filepath.Join(h.Home, ".ensemble/docker-state/worker_1")
 			if err := os.MkdirAll(parent, 0o700); err != nil {
@@ -179,7 +178,7 @@ func TestStartPartialDeliveryAuditAndPersistence(t *testing.T) {
 			if !slices.Contains(tokens.calls, "revoke "+container) || !hasCall(d, "rm") {
 				t.Fatalf("rollback or revocation missing: %v %v", tokens.calls, d.verbs())
 			}
-			for _, suffix := range []string{".static.json", ".tokens.json"} {
+			for _, suffix := range []string{".tokens.json"} {
 				if _, err := os.Stat(filepath.Join(parent, tokensGeneration+suffix)); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("failed delivery wrote %s: %v", suffix, err)
 				}

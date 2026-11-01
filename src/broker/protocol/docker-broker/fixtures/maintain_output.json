@@ -30,12 +30,11 @@
           "expires_at": "2026-10-17T13:00:00Z",
           "error": null
         }
-      ],
-      "notices": []
+      ]
     }
   },
   {
-    "name": "maintain-output-static",
+    "name": "maintain-output-idle",
     "valid": true,
     "expected": {
       "stage": "response",
@@ -44,15 +43,9 @@
     },
     "data": {
       "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
-      "next_check": "2026-10-26T13:00:00Z",
+      "next_check": null,
       "deadline": null,
-      "results": [],
-      "notices": [
-        {
-          "key": "ensemble-broker-claude/default@1:30d",
-          "text": "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude default --fresh-token; running sessions keep their copy until they restart"
-        }
-      ]
+      "results": []
     }
   },
   {
@@ -65,13 +58,26 @@
     },
     "data": {
       "container": "ensemble-worker_1-0123456789abcdef0123456789abcdef",
-      "next_check": "2026-10-26T13:00:00Z",
-      "deadline": null,
-      "results": [],
-      "notices": [
+      "next_check": "2026-10-17T12:01:00Z",
+      "deadline": {
+        "at": "2026-10-17T12:05:00Z",
+        "action": "close",
+        "reason": "Client authentication expired; run /usr/local/libexec/ensemble/ensemble-broker login codex on the host, then resume."
+      },
+      "results": [
         {
-          "key": "ensemble-broker-claude/default@1:30d",
-          "text": "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude default --fresh-token; running sessions keep their copy until they restart"
+          "credential": "codex",
+          "expires_at": null,
+          "error": {
+            "code": "refresh_failed",
+            "message": "Renewal unavailable.",
+            "cause": "status 503"
+          }
+        },
+        {
+          "credential": "github",
+          "expires_at": "2026-10-17T13:00:00Z",
+          "error": null
         }
       ],
       "audit_warning": "audit_write_failed"
@@ -109,7 +115,6 @@
           "error": null
         }
       ],
-      "notices": [],
       "token": "ghs_secret"
     }
   },
@@ -144,8 +149,7 @@
           "expires_at": "2026-10-17T13:00:00Z",
           "error": null
         }
-      ],
-      "notices": []
+      ]
     }
   },
   {
@@ -170,8 +174,7 @@
           "expires_at": null,
           "error": null
         }
-      ],
-      "notices": []
+      ]
     }
   },
   {
@@ -199,8 +202,7 @@
             "message": "a\nb"
           }
         }
-      ],
-      "notices": []
+      ]
     }
   }
 ]

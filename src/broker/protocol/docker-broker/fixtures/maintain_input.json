@@ -18,7 +18,7 @@
     }
   },
   {
-    "name": "maintain-input-delivered-renew",
+    "name": "maintain-input-renew",
     "valid": true,
     "expected": {
       "stage": "schema",
@@ -32,16 +32,12 @@
         "ensemble-worker_1-0123456789abcdef0123456789abcdef",
         "--manifest",
         "/Users/example/.ensemble/docker-state/worker_1/0123456789abcdef0123456789abcdef.json",
-        "--delivered",
-        "ensemble-broker-env/db@2:7d",
-        "--renew",
-        "--delivered",
-        "ensemble-broker-claude/work@1:rotated"
+        "--renew"
       ]
     }
   },
   {
-    "name": "maintain-input-bad-key",
+    "name": "maintain-input-unknown-option",
     "valid": false,
     "expected": {
       "stage": "schema",
@@ -55,8 +51,7 @@
         "ensemble-worker_1-0123456789abcdef0123456789abcdef",
         "--manifest",
         "/Users/example/.ensemble/docker-state/worker_1/0123456789abcdef0123456789abcdef.json",
-        "--delivered",
-        "ensemble-broker-bot/x@1:7d"
+        "--extra"
       ]
     }
   },

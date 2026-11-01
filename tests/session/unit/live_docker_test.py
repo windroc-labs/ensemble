@@ -817,8 +817,8 @@ class Broker:
     def __init__(self, fails):
         self.fails, self.calls = fails, []
 
-    def maintain(self, container, manifest, delivered=(), *, renew=False, root):
-        self.calls.append((container, manifest, renew, root))
+    def maintain(self, container, manifest, *, renew=False):
+        self.calls.append((container, manifest, renew))
         if self.fails:
             self.fails -= 1
             if self.fails % 2:
@@ -898,7 +898,7 @@ class RoleRunTest(Case):
             mock.patch("sys.stdout", new_callable=io.StringIO) as out,
         ):
             gate.RoleRun("role", "/bin/docker", broker=broker).renew("c", "m.json")
-        self.assertEqual(broker.calls, [("c", "m.json", True, gate.REPO)] * 3)
+        self.assertEqual(broker.calls, [("c", "m.json", True)] * 3)
         self.assertEqual([c.args for c in sleep.call_args_list], [(gate.REFRESH_RETRY,)] * 2)
         self.assertIn("PASS token refresh of c", out.getvalue())
 

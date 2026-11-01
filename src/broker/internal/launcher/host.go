@@ -81,8 +81,7 @@ type Host struct {
 	Codex    CodexCredentials
 	Opencode ProviderKeys
 	Env      EnvSecrets
-	Static   StaticMeta // nil: no static secret records, as tests without them
-	Schedule Schedule   // nil: no token record, as tests without one; every token provider is then always due
+	Schedule Schedule // nil: no token record, as tests without one; every token provider is then always due
 	GitHub   Tokens
 	Linear   LinearTokens
 	Versions CodexVersions
@@ -177,7 +176,6 @@ type StartResult struct {
 type StatusResult struct {
 	Codex  *protocol.CodexStatus `json:"codex,omitempty"`
 	Claude map[string]bool       `json:"claude"` // each account logged in by name: whether its setup-token is usable
-	Static []StaticStatus        `json:"static,omitempty"`
 }
 
 type CloseResult struct {

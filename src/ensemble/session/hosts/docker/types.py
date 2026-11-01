@@ -20,6 +20,5 @@ class Started:
 @dataclass(frozen=True)
 class Maintained:
     results: list[dict]  # each {"credential", "expires_at", "error"}
-    notices: list[dict]
     next_check: str | None
     deadline: Mapping[str, str] | None  # {"at", "action", "reason"}

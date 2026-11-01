@@ -169,8 +169,8 @@ def attach(name: str = NAME) -> subprocess.Popen:
 
 
 class _Broker:
-    def maintain(self, container, manifest, delivered, *, root):
-        return SimpleNamespace(next_check=None, deadline=None, results=[], notices=[])
+    def maintain(self, container, manifest):
+        return SimpleNamespace(next_check=None, deadline=None, results=[])
 
     def close(self, container):
         return None

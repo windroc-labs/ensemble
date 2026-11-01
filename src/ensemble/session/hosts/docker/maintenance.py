@@ -34,17 +34,15 @@ class Maintenance:
         broker: Broker,
         *,
         report: Callable[[str, str], None],
-        root: str,
         close: Callable[[], object],
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.state, self.generation, self.broker = state, generation, broker
-        self.report, self.root, self.close, self.clock = report, root, close, clock
+        self.report, self.close, self.clock = report, close, clock
         self.container = f"ensemble-{name}-{generation}"
         self.manifest = os.path.join(state, f"{generation}.json")
         self.deadline = _cached(deadline_file(state, generation))
         self.next: float | None = clock()
-        self.delivered: list[str] = []
         self.failing = self.ticked = self.closing = False
         self.due: float | None = self.next
 
@@ -83,16 +81,14 @@ class Maintenance:
         """The next call's time."""
         self.ticked = True
         try:
-            found = self.broker.maintain(
-                self.container, self.manifest, self.delivered, root=self.root
-            )
+            found = self.broker.maintain(self.container, self.manifest)
         except SessionError as error:
             if not self.failing:
                 why = str(error) if isinstance(error, BrokerError) else "transport"
                 _tell(self.report, "credential_maintenance_failed", why)
             self.failing = True
             return self.clock() + RETRY
-        self.failing, self.delivered = False, []
+        self.failing = False
         for result in found.results:
             if (failed := result["error"]) is not None:
                 cause = f" ({failed['cause']})" if "cause" in failed else ""
@@ -101,12 +97,6 @@ class Maintenance:
                     "credential_refresh_failed",
                     f"{result['credential']}: {failed['message']}{cause}",
                 )
-        for notice in found.notices:
-            try:
-                self.report("credential_notice", notice["text"])
-            except (OSError, ValueError):
-                continue
-            self.delivered.append(notice["key"])
         if found.deadline is not None:
             self.deadline = found.deadline
             with contextlib.suppress(OSError):
@@ -115,7 +105,7 @@ class Maintenance:
                     json.dumps(self.deadline),
                     durable=True,
                 )
-        return self.clock() if self.delivered else _timestamp(found.next_check)
+        return _timestamp(found.next_check)
 
 
 def run(
