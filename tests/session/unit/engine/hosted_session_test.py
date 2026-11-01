@@ -1496,7 +1496,7 @@ class UsageTest(Base):
             hosts=parsed(FAKE_HOSTS, "fake"),
             probe=probe,
         )
-        for name in ("claude", "codex", "opencode"):
+        for name in ("codex", "opencode"):
             with (
                 self.subTest(name=name),
                 mock.patch("shutil.which", return_value=None),
@@ -1505,7 +1505,7 @@ class UsageTest(Base):
                 session.usage(name)
         probe.assert_not_called()
         with mock.patch("shutil.which", return_value="/bin/client"):
-            self.assertIsNone(session.usage("claude"))
+            self.assertIsNone(session.usage("codex"))
         self.assertEqual(probe.call_count, 1)
 
     def test_default_provider_reaches_the_container_host_without_a_host_probe(self):

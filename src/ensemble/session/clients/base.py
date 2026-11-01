@@ -11,6 +11,7 @@ from typing import ClassVar
 
 from ensemble.session.clients.common import select
 from ensemble.session.engine.types import (
+    DEFAULT_MAX_USAGE,
     ConfigError,
     Launch,
     ProviderProbe,
@@ -81,6 +82,10 @@ class Client:
 
     def _account(self) -> str:
         return ""
+
+    def _max_usage(self, account: str) -> float:
+        """The usage percent `account` may reach, which Session.usage measures its left against."""
+        return DEFAULT_MAX_USAGE
 
     def _usage_probes(self) -> dict[str, tuple[str, Launch]] | None:
         return None

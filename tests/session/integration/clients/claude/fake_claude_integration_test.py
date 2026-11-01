@@ -13,6 +13,7 @@ import time
 from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
+from ensemble.session.clients.claude.common import ClaudeCommon
 from ensemble.session.clients.claude.tui import ClaudeTui
 from ensemble.session.engine.types import Access, Spec
 from tests.session import case, live_tmux
@@ -851,7 +852,7 @@ class Gate(Case):
         gate = os.path.join(self.root, "gate")
         self.scene(usage="Current session: 1% used\n", gate=gate)
         self.assertEqual(
-            self.run_fake(*ClaudeClient({}).usage_probe().argv[1:]).stdout,
+            self.run_fake(*ClaudeCommon.PROBE[1:]).stdout,
             "Current session: 1% used\n",
         )
         self.assertFalse(os.path.exists(gate))

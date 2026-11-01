@@ -2852,7 +2852,9 @@ class TmuxAccountTest(TmuxBase):
     def test_a_valid_selection_changes_no_tmux_launch(self):
         workdir = os.path.join(self.dir, "work")
         os.mkdir(workdir)
-        client = ClaudeClient({"accounts": {"work": {"dir": "/accounts/work"}}})
+        client = ClaudeClient(
+            {"accounts": {"work": {"dir": "/accounts/work"}, "home": {"dir": "/accounts/home"}}}
+        )
         bin_dir = os.path.join(self.dir, "bin")
         os.mkdir(bin_dir)
         command = os.path.join(bin_dir, "claude")
@@ -2864,7 +2866,7 @@ class TmuxAccountTest(TmuxBase):
             os.environ,
             {"CLAUDE_CONFIG_DIR": "/mine", "PATH": bin_dir + os.pathsep + "/usr/bin:/bin"},
         ):
-            for env in ({}, {ACCOUNT: "work"}, {ACCOUNT: "default"}):
+            for env in ({}, {ACCOUNT: "work"}, {ACCOUNT: "home"}):
                 with self.subTest(env=env):
                     prepared.append(
                         tui.TuiMode.preflight(
