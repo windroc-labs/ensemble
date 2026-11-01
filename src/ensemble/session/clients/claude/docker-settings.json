@@ -1,0 +1,5 @@
+{
+  "idleCompaction": false,
+  "outputStyle": "Concise",
+  "tui": "fullscreen"
+}

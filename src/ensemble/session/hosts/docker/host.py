@@ -766,13 +766,19 @@ class DockerHost(Host):
         volume = workspace_volume(name)
         cwd = os.path.realpath(launch.cwd)
         persistent = json.loads(metadata.get("home_persistent") or "null")
+        files = json.loads(metadata.get("home_files") or "{}")
+        for file in files if persistent is not None else ():
+            if file.split("/", 1)[0] not in persistent or "/" not in file:
+                raise SessionError(
+                    f"docker session {name}: home file {file} is outside its kept dirs"
+                )
         if resume == "0":
             self._move_workspace(name, volume, cwd)
             _reset_home(name, home, persistent or ())
-            for file, text in json.loads(metadata.get("home_files") or "{}").items():
-                save(os.path.join(home, file), text)
-            for directory in persistent or ():
-                os.makedirs(os.path.join(home, directory), mode=0o700, exist_ok=True)
+        for directory in persistent or ():
+            os.makedirs(os.path.join(home, directory), mode=0o700, exist_ok=True)
+        for file, text in files.items() if resume == "0" else ():
+            save(os.path.join(home, file), text)
         clients = client_keys(root)
         manifest = os.path.join(state_dir(name), f"{generation}.json")
         write_manifest(

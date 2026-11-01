@@ -1,12 +1,16 @@
 """What the Claude, Codex and OpenCode clients share."""
 
+import os
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
 from ensemble.session.engine.types import ConfigError, Effort, Permission, Tier
-from ensemble.utils import environment_ok
+from ensemble.utils import STATE, environment_ok, read_regular
+
+DOCKER_CONFIG = f"{STATE}/docker-config"
+DOCKER_CONFIG_MAX = 2 * 1024 * 1024
 
 
 def _names(value, keys) -> bool:
@@ -24,6 +28,28 @@ def question(titles) -> str:
     """A question dialog's blocked reason: `question: ` and its titles, the empty ones left out."""
     found = [t for t in titles if isinstance(t, str) and t] if isinstance(titles, list) else []
     return f"question: {'; '.join(found)}" if found else "question"
+
+
+def docker_config_path(client: str, name: str, default: str) -> str:
+    """The user's Docker config DOCKER_CONFIG/`client`/`name`, else the packaged `default`."""
+    path = os.path.expanduser(f"{DOCKER_CONFIG}/{client}/{name}")
+    return path if os.path.lexists(path) else default
+
+
+def docker_config(client: str, name: str, default: str) -> tuple[str, str]:
+    """(path, text) of docker_config_path; ConfigError: not a regular UTF-8 file of at most
+    DOCKER_CONFIG_MAX bytes.
+    """
+    path = docker_config_path(client, name, default)
+    data = read_regular(path, limit=DOCKER_CONFIG_MAX + 1)
+    try:
+        if data is None or len(data) > DOCKER_CONFIG_MAX:
+            raise ValueError
+        return path, data.decode()
+    except ValueError:
+        raise ConfigError(
+            f"Docker config {path}: want a regular UTF-8 file of at most 2 MiB"
+        ) from None
 
 
 FLAGS = ("flags", strings, "a list of strings")

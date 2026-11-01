@@ -2,7 +2,7 @@
 
 import re
 import signal
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from enum import StrEnum
@@ -165,15 +165,21 @@ class HookCallback:
         return {"module": self.module, "state": dict(self.state), "roots": list(self.roots)}
 
 
+def _no_files() -> Mapping[str, str]:
+    return {}
+
+
 @dataclass(frozen=True)
 class ClientHome:
-    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable."""
+    """`field`: its name in the Host's records; `dir`: its last path part; `env`: its variable;
+    `files`: a new start's; `persistent` set: only these dirs mounted, files under them.
+    """
 
     field: str
     dir: str
     env: str
     credential: str
-    files: tuple[tuple[str, str], ...] = ()
+    files: Callable[[], Mapping[str, str]] = _no_files
     persistent: tuple[str, ...] | None = None
     providers: tuple[str, ...] = ()
 

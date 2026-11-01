@@ -205,6 +205,11 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	return result, nil
 }
 
+// codexKept are the dirs of a Codex home's tmpfs that are bind-mounted from its state dir, so they outlive the
+// container: its history and its own config copy, which CODEX_HOME/config.toml links to. The session's Codex
+// ClientHome.persistent names the same dirs.
+var codexKept = []string{"sessions", "config"}
+
 // mounts are create's --mount and --tmpfs flags and, for the audit, what each one mounts.
 func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 	var flags []string
@@ -226,7 +231,9 @@ func mounts(m Manifest, labels map[string]string) ([]string, []audit.Mount) {
 		// and no setting disables or caps it.
 		tmpfs(m.CodexDir, "rw,noexec,nosuid,nodev,size=1073741824"+owner)
 		tmpfs(docker.RunDir, "rw,noexec,nosuid,nodev,size=1048576"+owner)
-		bind(filepath.Join(m.CodexDir, "sessions"))
+		for _, kept := range codexKept {
+			bind(filepath.Join(m.CodexDir, kept))
+		}
 	} else {
 		bind(m.StateDir())
 	}

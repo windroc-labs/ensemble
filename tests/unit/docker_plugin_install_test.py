@@ -17,6 +17,7 @@ class PluginInstall(Case):
             str(Path(REPO, "src/broker/internal/launcher/assets/plugin-install.py"))
         )
         self.root = Path(self.home, "image")
+        self.system = Path(self.home, "etc/codex/config.toml")
         self.calls = []
         self.markets = {"vendor/catalogue": "example-market"}
         self.plugins = [
@@ -69,7 +70,9 @@ class PluginInstall(Case):
             mock.patch("subprocess.run", side_effect=run or self.client_run),
             mock.patch("sys.stdout", new_callable=io.StringIO) as output,
         ):
-            self.code["install"](self.plugins if plugins is None else plugins, self.root)
+            self.code["install"](
+                self.plugins if plugins is None else plugins, self.root, self.system
+            )
         return output.getvalue()
 
     def remote_run(self, argv, **kw):
@@ -365,6 +368,17 @@ class PluginInstall(Case):
         self.assertTrue((self.root / "plugins").is_dir())
         self.assertTrue((self.root / "codex-plugins/plugins/cache").is_dir())
         self.assertEqual((self.root / "codex-plugins/config.toml").read_text(), "")
+        self.assertEqual(self.system.read_text(), "")
+
+    def test_the_system_config_enables_each_installed_codex_plugin(self):
+        self.install()
+        self.assertEqual(
+            self.system.read_text(),
+            '[plugins."beta@example-market"]\nenabled = true\n'
+            '[plugins."updraft@example-market"]\nenabled = true\n',
+        )
+        self.assertEqual(self.system.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(self.system.parent.stat().st_mode & 0o777, 0o755)
 
     def test_missing_metadata_and_command_failures_fail_the_build(self):
         def no_metadata(_argv, **_kw):
@@ -452,8 +466,9 @@ class PluginInstall(Case):
             mock.patch("subprocess.run", side_effect=self.client_run),
             mock.patch("sys.stdout", new_callable=io.StringIO),
         ):
-            self.code["main"]([str(source), str(self.root)])
+            self.code["main"]([str(source), str(self.root), str(self.system)])
         self.assertTrue((self.root / "plugins/updraft/skills/build/SKILL.md").is_file())
+        self.assertIn("updraft@example-market", self.system.read_text())
 
     def test_fetch_failure_names_client_repo_and_expected_commit(self):
         for client in ("claude", "codex"):
@@ -477,7 +492,7 @@ class PluginInstall(Case):
             mock.patch("subprocess.run") as run,
             self.assertRaisesRegex(SystemExit, "plugin-install:.*full commit"),
         ):
-            self.code["main"]([str(source), str(self.root)])
+            self.code["main"]([str(source), str(self.root), str(self.system)])
         run.assert_not_called()
 
     def test_marketplace_name_collision_between_repositories_fails(self):
@@ -507,7 +522,13 @@ class PluginInstall(Case):
                     self.install([self.plugins[0]], run=bad_marketplace)
                 self.assertFalse(any(argv[0] in ("claude", "codex") for argv, _ in self.calls))
 
-    def test_main_requires_input_file_and_absolute_root(self):
-        for argv in ([], ["input"], ["input", "relative"]):
+    def test_main_requires_input_file_and_absolute_root_and_system_config(self):
+        for argv in (
+            [],
+            ["input"],
+            ["input", "relative", "/etc/codex/config.toml"],
+            ["input", "/image"],
+            ["input", "/image", "relative"],
+        ):
             with self.subTest(argv=argv), self.assertRaises(SystemExit):
                 self.code["main"](argv)

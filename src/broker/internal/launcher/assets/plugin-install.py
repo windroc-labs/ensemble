@@ -167,7 +167,10 @@ def verify_plugin(client, plugin, home, market, location, *, env):
     return expected
 
 
-def install(plugins, root):
+def install(plugins, root, system_config):
+    """`system_config`: Codex's system config.toml, which enables each Codex plugin for every
+    CODEX_HOME in the image.
+    """
     validate(plugins)
     claude, codex = root / "claude-plugins", root / "codex-plugins"
     shared = root / "plugins"
@@ -183,7 +186,7 @@ def install(plugins, root):
         "GIT_TERMINAL_PROMPT": "0",
     }
     homes = {"claude": claude, "codex": codex}
-    markets, prepared = {}, {}
+    markets, prepared, enabled = {}, {}, []
     for plugin in plugins:
         name, repo, expected = plugin["name"], plugin["repo"], plugin["commit"]
         if repo not in prepared:
@@ -206,13 +209,20 @@ def install(plugins, root):
             )
             if client == "claude":
                 (shared / name).symlink_to(location)
+            else:
+                enabled.append(identifier)
+    system_config.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    system_config.write_text(
+        "".join(f"[plugins.{json.dumps(item)}]\nenabled = true\n" for item in sorted(enabled))
+    )
+    system_config.chmod(0o644)
 
 
 def main(argv):
-    if len(argv) != 2 or not Path(argv[1]).is_absolute():
-        sys.exit("usage: plugin-install.py SOURCES ABSOLUTE_ROOT")
+    if len(argv) != 3 or not all(Path(path).is_absolute() for path in argv[1:]):
+        sys.exit("usage: plugin-install.py SOURCES ABSOLUTE_ROOT ABSOLUTE_SYSTEM_CONFIG")
     try:
-        install(json.loads(Path(argv[0]).read_text()), Path(argv[1]))
+        install(json.loads(Path(argv[0]).read_text()), Path(argv[1]), Path(argv[2]))
     except (ValueError, OSError) as error:
         sys.exit(f"plugin-install: {error}")
 
