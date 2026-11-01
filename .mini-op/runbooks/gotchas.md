@@ -37,7 +37,7 @@ The mini's own gotchas (its keychain, OpenCLI, the Terminal, screenshots, key ch
 ## Ensemble install, broker and board
 
 - **Docker's container dirs need Full Disk Access.** `~/Library/Containers/com.docker.docker` cannot be deleted from Terminal ("Operation not permitted"); ssh can (sshd has Full Disk Access). macOS 27 also denies Terminal `~/Library/Group Containers/group.com.docker`, so `install-cleanup.sh` asks Full Disk Access for both.
-- **Broker checks over ssh always fail.** `router --brake`, `router --dry-run` and `ensemble-broker probe-provider` read the provider key from the login keychain, which is locked in an ssh session: over ssh they say `usage unknown` / `login_required`. Run them in the mini's Terminal (`printf '%s\n' '<cmd> > /tmp/x 2>&1' | mini run`, then read the file over ssh), or in tmux session `apmtest` when the user wants to watch (`tmux send-keys -t apmtest:0.0 '<cmd>' Enter`, read with `tmux capture-pane -p -t apmtest:0.0`). The same holds for router runs: start them from the mini's Terminal (mini-op uses tmux session `b1`).
+- **Broker checks over ssh always fail.** `router --dry-run` and `ensemble-broker probe-provider` read the provider key from the login keychain, which is locked in an ssh session: over ssh they say `usage unknown` / `login_required`. Run them in the mini's Terminal (`printf '%s\n' '<cmd> > /tmp/x 2>&1' | mini run`, then read the file over ssh), or in tmux session `apmtest` when the user wants to watch (`tmux send-keys -t apmtest:0.0 '<cmd>' Enter`, read with `tmux capture-pane -p -t apmtest:0.0`). The same holds for router runs: start them from the mini's Terminal (mini-op uses tmux session `b1`).
 - **A Python local-network prompt.** On 2026-10-21 an ensemble Python command reaching the LAN raised "Allow “Python” to find devices on local networks?" (UserNotificationCenter; which command was not pinned down): Allow, since the usage probe needs Strata.
 
 ### macOS password prompts during installs and logins
@@ -47,7 +47,7 @@ The mini's own gotchas (its keychain, OpenCLI, the Terminal, screenshots, key ch
 | Step | Expected prompt | Route below |
 | --- | --- | --- |
 | Install, cleanup or broker rebuild at `sudo` | Terminal `Password:` (or sudo's account-qualified password prompt) | Terminal |
-| `ensemble-broker login github …`, `login claude`, `login codex`, `login opencode …`, `login env …` or `retrust` | Terminal `Login keychain password, to make … (hidden):` | Terminal |
+| `ensemble-broker login github …`, `login claude <name>`, `login codex`, `login opencode …`, `login env …` or `retrust` | Terminal `Login keychain password, to make … (hidden):` | Terminal |
 | Install's Linear apps step, `ensemble-broker login linear …` | Terminal `Login keychain password, to make this Linear client secret trust only the broker (hidden):` | Terminal |
 | Those broker login or re-trust steps, when macOS asks to use a Keychain item or change its access | SecurityAgent / Keychain password dialog, sometimes repeated | Dialog |
 

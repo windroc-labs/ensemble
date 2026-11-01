@@ -54,6 +54,76 @@ empty, so the check skips every Claude start (`usage-skip`): register at least o
 This change ships with the other session account and usage changes in one compatible
 release; do not release it separately.
 
+## Broker protocol 38: named Claude accounts only
+
+The broker has no implicit `default` Claude account any more:
+
+- `ensemble-broker login claude <name>` needs the name; `login claude`, `login claude --expires <date>` and
+  `login claude --fresh-token` fail as usage errors (exit 2) before touching a credential.
+- A Claude manifest without a valid `claude_account` is `manifest_rejected`, before any credential read. A worker
+  started before this release has no account in its manifest: it is refused, not guessed.
+- `ensemble-broker status` lists under `claude` each account logged in by name, and only those; the static list and
+  its notices name them, and every repair command carries the name.
+- An account you log in as `default` is an ordinary account like any other.
+- `scripts/install.sh` checks each registered account: `claude auth status` with that account's `dir` as
+  `CLAUDE_CONFIG_DIR`, logging in only that `dir` when needed, never `~/.claude` on its own; with Docker, also
+  that name's broker credential. With no account registered it stops and names the table to add.
+
+The plugin and its broker ship as one compatible release: a protocol 37 broker and a protocol 38 client refuse each
+other. Upgrade in this order:
+
+1. Stop scheduling new work, then finish or close every running worker (`ensemble-crew close <name>`).
+2. Register each subscription (see [Register each Claude account explicitly](#register-each-claude-account-explicitly)),
+   for example:
+
+   ```toml
+   [session.clients.claude.accounts.work]
+   dir = "~/.claude-work"
+   max_usage = 80
+
+   [session.clients.claude.accounts.home]
+   dir = "~/.claude-home"
+   ```
+
+3. Install the matching plugin and broker: rerun `scripts/install.sh` (with `--docker` on the Docker Host). It logs
+   each registered `dir` in when needed and, with Docker, each name in to the broker.
+4. Check each account by hand if you skipped the installer: `CLAUDE_CONFIG_DIR=<dir> claude auth status` (else
+   `claude auth login`), and on the Docker Host `ensemble-broker login claude work`, then
+   `ensemble-broker login claude home`. Start one worker on each name and close it again:
+   `ensemble-crew worker check --client claude --account work`, then `ensemble-crew close check`.
+5. Once a named start works, delete the old unnamed broker item. This does not touch your Claude Code login:
+
+   ```sh
+   security delete-generic-password -s ensemble-broker-claude -a default ~/Library/Keychains/login.keychain-db
+   ```
+
+6. With no worker running, so no broker command is writing its static metadata, remove the old item's whole record
+   (its version, expiry and notice state) from `~/.ensemble/docker/static-secrets.json`, keeping every other entry,
+   under the broker's own lock:
+
+   ```sh
+   python3 -I - ~/.ensemble/docker/static-secrets.json <<'EOF'
+   import fcntl, json, os, sys
+   path = sys.argv[1]
+   if os.path.exists(path):
+       with open(os.path.join(os.path.dirname(path), "static-secrets.lock"), "a") as lock:
+           fcntl.flock(lock, fcntl.LOCK_EX)
+           with open(path) as f:
+               data = json.load(f)
+           if data.get("secrets", {}).pop("ensemble-broker-claude/default", None) is not None:
+               with open(path + ".tmp", "w") as f:
+                   json.dump(data, f, indent=2)
+               os.chmod(path + ".tmp", os.stat(path).st_mode & 0o777)
+               os.replace(path + ".tmp", path)
+   EOF
+   ```
+
+   Afterwards `ensemble-broker status` has no `default` under `claude`, no `ensemble-broker-claude/default` in
+   `static` and no notice naming it, unless you logged an account in as `default` yourself. Delete the old usage
+   readings, holds and their locks as step 5 of
+   [Register each Claude account explicitly](#register-each-claude-account-explicitly) says.
+7. Resume scheduling.
+
 ## Remove custom research quota brakes
 
 Remove `ensemble-orchestrator router --brake ROLE` from custom callers and remove
@@ -638,8 +708,9 @@ another client's copy, nor an OpenCode copy of another ref (its package's `#<ref
 copy is left, the command keeps the selected-plugin error and the selection: rerun the installer.
 Equal versions use sorted paths to break ties. A ref older than v0.5.0 installs its own launcher, which ignores the selection.
 After plugin refresh, when
-the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing locally usable Claude and ready Codex
-credentials and requesting any missing logins ([broker command usage](../src/broker/main.go)).
+the plugin's broker sources changed, or the installed broker speaks another protocol, it reinstalls the broker, reusing usable Claude and ready Codex
+credentials and requesting any missing logins ([broker command usage](../src/broker/main.go)). Claude credentials are
+each registered account's own: its `dir`'s login and, with Docker, its named broker credential.
 It does not edit config keys a release renames.
 
 For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,
