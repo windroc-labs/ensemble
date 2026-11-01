@@ -55,7 +55,7 @@ func TestLegacyState(t *testing.T) {
 			for s, a := range renamed {
 				services[s] = a
 			}
-			found, err := legacyState(t.TempDir(), legacyKeys{services: services})
+			found, err := legacyState(legacyKeys{services: services})
 			if err != nil || !slices.Equal(found, []string{old + " x"}) {
 				t.Fatalf("%q %v", found, err)
 			}
@@ -72,7 +72,7 @@ func TestLegacyState(t *testing.T) {
 		"static items": {
 			map[string][]string{"ensemble-claude": {"default"}, "ensemble-env/db": {"db"}},
 			`{"secrets":{"ensemble-claude/default":{},"ensemble-claude/work":{},"ensemble-opencode/lan":{},"ensemble-env/db":{}}}`,
-			[]string{"ensemble-claude default", "ensemble-env/db db", "ensemble-claude/work", "ensemble-opencode/lan"},
+			[]string{"ensemble-claude default", "ensemble-env/db db"},
 		},
 		// mini-op's v0.4.1 install (U1b), reconstructed from v0.4.1's keychain services: eight items, one of them the
 		// Claude token whose static-secrets.json record names the same secret. The rename step renames 8.
@@ -88,7 +88,7 @@ func TestLegacyState(t *testing.T) {
 		},
 		"bot account":     {map[string][]string{"ensemble-broker-github-users": {"ensemble-bot"}}, "", []string{"ensemble-broker-github-users ensemble-bot"}},
 		"orchestrator":    {map[string][]string{"linear-app-harness-secret": {"ensemble-claude"}}, "", nil},
-		"static keys":     {nil, `{"secrets":{"ensemble-claude/default":{},"ensemble-broker-env/db":{},"ensemble-opencode/strata":{},"ensemble-env/db":{}}}`, []string{"ensemble-claude/default", "ensemble-env/db", "ensemble-opencode/strata"}},
+		"static keys":     {nil, `{"secrets":{"ensemble-claude/default":{},"ensemble-broker-env/db":{},"ensemble-opencode/strata":{},"ensemble-env/db":{}}}`, nil},
 		"new static keys": {nil, `{"secrets":{"ensemble-broker-claude/default":{"version":1}}}`, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestLegacyState(t *testing.T) {
 			if tc.static != "" {
 				staticFile(t, home, tc.static)
 			}
-			found, err := legacyState(home, legacyKeys{services: tc.services})
+			found, err := legacyState(legacyKeys{services: tc.services})
 			if err != nil || !slices.Equal(found, tc.want) {
 				t.Fatalf("%q %v, want %q", found, err, tc.want)
 			}
@@ -105,14 +105,10 @@ func TestLegacyState(t *testing.T) {
 }
 
 func TestLegacyStateErrors(t *testing.T) {
-	if _, err := legacyState(t.TempDir(), legacyKeys{err: errors.New("keychain status -25291")}); err == nil || !strings.Contains(err.Error(), "-25291") {
+	if _, err := legacyState(legacyKeys{err: errors.New("keychain status -25291")}); err == nil || !strings.Contains(err.Error(), "-25291") {
 		t.Fatalf("listing error: %v", err)
 	}
-	home := t.TempDir()
-	staticFile(t, home, `{"secrets":`)
-	if _, err := legacyState(home, legacyKeys{}); err == nil {
-		t.Fatal("unreadable static-secrets.json accepted")
-	}
+
 }
 
 func TestLegacyStateBlocksCommands(t *testing.T) {

@@ -27,7 +27,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -55,8 +55,6 @@ type app struct {
 	loginCodex    func(ctx context.Context, k keys, out io.Writer) error
 	loginOpencode func(k keys, provider, authFile string, out io.Writer) error
 	loginEnv      func(k keys, name string, out io.Writer) error // login env NAME: the value on stdin
-	// a login claude, opencode or env with an expiry option; authFile: opencode's --auth-file, "" without
-	dated        func(k keys, kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error
 	retrust      func(k keys, out io.Writer) error
 	installCodex func(context.Context, string, bool) (any, error)
 	checkClients func(ctx context.Context, k keys, progress io.Writer) (any, error)
@@ -224,8 +222,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				login = func(k keys) error { return a.loginOpencode(k, args[2], args[4], stdout) }
 			case len(args) == 3 && args[1] == "env" && launcher.ValidEnvName(args[2]):
 				login = func(k keys) error { return a.loginEnv(k, args[2], stdout) }
-			default:
-				login = datedLogin(args, a, stdout)
 			}
 			if login != nil {
 				err := a.legacyError()
@@ -468,7 +464,7 @@ func system() app {
 			return withHost("workspace-rm", "", k, nil, func(h launcher.Host) (any, error) { return h.WorkspaceRm(ctx, volume, force) })
 		},
 		login: func(k keys, account string, out io.Writer) error {
-			return loginClaude(k, account, credential.Registration{}, out)
+			return loginClaude(k, account, out)
 		},
 		loginGitHub: func(ctx context.Context, k keys, app string, key *keyFile, out io.Writer) error {
 			if err := broker.CheckInstalled(); err != nil {
@@ -489,19 +485,10 @@ func system() app {
 			return tokens(k, nil).SaveUser(ctx, out)
 		},
 		loginOpencode: func(k keys, provider, authFile string, out io.Writer) error {
-			return loginOpencode(k, provider, authFile, credential.Registration{}, out)
+			return loginOpencode(k, provider, authFile, out)
 		},
 		loginEnv: func(k keys, name string, out io.Writer) error {
-			return loginEnv(k, name, credential.Registration{}, out)
-		},
-		dated: func(k keys, kind credential.Kind, name, authFile string, reg credential.Registration, out io.Writer) error {
-			switch kind {
-			case credential.Claude:
-				return loginClaude(k, name, reg, out)
-			case credential.Opencode:
-				return loginOpencode(k, name, authFile, reg, out)
-			}
-			return loginEnv(k, name, reg, out)
+			return loginEnv(k, name, out)
 		},
 		retrust: func(k keys, out io.Writer) error {
 			if err := broker.CheckInstalled(); err != nil {
@@ -532,56 +519,47 @@ func system() app {
 	}
 }
 
-// loginClaude is login claude: account's setup-token in k, registered with reg.
-func loginClaude(k keys, account string, reg credential.Registration, out io.Writer) error {
-	home := k.Home
+// loginClaude saves account's setup-token in k.
+func loginClaude(k keys, account string, out io.Writer) error {
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
 	read, hidden := stdinReaders(os.Stdin, "Claude account "+account+" setup-token (hidden): ", true)
-	return newStaticLogin(home).register(credential.StaticRef(credential.Claude, account), reg, out, os.Stderr, func() error {
-		return broker.Login(account, read, func() ([]byte, error) {
-			fmt.Fprint(os.Stderr, "Login keychain password, to make Claude trust only the broker (hidden): ")
-			defer fmt.Fprintln(os.Stderr)
-			return hidden()
-		}, k, os.Stderr, out)
-	})
+	return broker.Login(account, read, func() ([]byte, error) {
+		fmt.Fprint(os.Stderr, "Login keychain password, to make Claude trust only the broker (hidden): ")
+		defer fmt.Fprintln(os.Stderr)
+		return hidden()
+	}, k, os.Stderr, out)
 }
 
-// loginOpencode is login opencode: provider's API key in k, from authFile ("": the terminal), registered with reg.
-func loginOpencode(k keys, provider, authFile string, reg credential.Registration, out io.Writer) error {
-	home := k.Home
+// loginOpencode saves provider's API key in k, from authFile ("": the terminal).
+func loginOpencode(k keys, provider, authFile string, out io.Writer) error {
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
-	return newStaticLogin(home).register(credential.StaticRef(credential.Opencode, provider), reg, out, os.Stderr, func() error {
-		return broker.LoginOpencode(provider, func() ([]byte, error) {
-			if authFile != "" {
-				return readOpencodeAuth(authFile, provider)
-			}
-			fmt.Fprint(os.Stderr, "OpenCode provider "+provider+" API key (hidden): ")
-			defer fmt.Fprintln(os.Stderr)
-			return broker.ReadHidden()
-		}, func() ([]byte, error) {
-			fmt.Fprint(os.Stderr, "Login keychain password, to make the "+provider+" API key trust only the broker (hidden): ")
-			defer fmt.Fprintln(os.Stderr)
-			return broker.ReadHidden()
-		}, k, out)
-	})
+	return broker.LoginOpencode(provider, func() ([]byte, error) {
+		if authFile != "" {
+			return readOpencodeAuth(authFile, provider)
+		}
+		fmt.Fprint(os.Stderr, "OpenCode provider "+provider+" API key (hidden): ")
+		defer fmt.Fprintln(os.Stderr)
+		return broker.ReadHidden()
+	}, func() ([]byte, error) {
+		fmt.Fprint(os.Stderr, "Login keychain password, to make the "+provider+" API key trust only the broker (hidden): ")
+		defer fmt.Fprintln(os.Stderr)
+		return broker.ReadHidden()
+	}, k, out)
 }
 
-// loginEnv is login env: name's value in k, registered with reg.
-func loginEnv(k keys, name string, reg credential.Registration, out io.Writer) error {
-	home := k.Home
+// loginEnv saves name's value in k.
+func loginEnv(k keys, name string, out io.Writer) error {
 	if err := broker.CheckInstalled(); err != nil {
 		return err
 	}
 	read, hidden := stdinReaders(os.Stdin, "Environment secret "+name+" (hidden): ", false)
-	return newStaticLogin(home).register(credential.StaticRef(credential.Env, name), reg, out, os.Stderr, func() error {
-		return broker.LoginEnv(name, read, func() ([]byte, error) {
-			fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-broker-env/"+name+" trust only the broker (hidden): ")
-			defer fmt.Fprintln(os.Stderr)
-			return hidden()
-		}, k, out)
-	})
+	return broker.LoginEnv(name, read, func() ([]byte, error) {
+		fmt.Fprint(os.Stderr, "Login keychain password, to make ensemble-broker-env/"+name+" trust only the broker (hidden): ")
+		defer fmt.Fprintln(os.Stderr)
+		return hidden()
+	}, k, out)
 }
