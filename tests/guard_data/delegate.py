@@ -4,6 +4,8 @@ from tests.guards import PKG
 
 DELEGATE_SRC = f"src/{PKG}/delegate/"
 
+TEAM_WORD_EXAMPLES = {"methods/to-tickets.md": ("GitHub, Linear, …",)}
+
 CONFIG_FILE = f"src/{PKG}/delegate/engine/config.py"
 
 

@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 import tomllib
@@ -14,6 +15,7 @@ from tests.delegate.unit.composer.prompts import (
     RUN,
     composed,
     item,
+    method,
     parameters,
     rule,
     section,
@@ -93,6 +95,56 @@ class Acceptance(Packaged):
         )
         self.assertNotIn("acceptance cell", draft)
         self.assertIn("at most 8 requirement identifiers on an engineer ticket", draft)
+
+    def test_to_tickets_is_the_pinned_upstream_file_including_frontmatter(self):
+        with open(os.path.join(TEAM, "methods", "to-tickets.md"), "rb") as source:
+            self.assertEqual(
+                hashlib.sha256(source.read()).hexdigest(),
+                "56ec23c5b2782785d4e65bff9e315b6d3aeb4ef977c174a219e99489fada1995",
+            )
+        row = next(
+            line
+            for line in team_texts()["README.md"].splitlines()
+            if line.startswith("| `methods/to-tickets.md`")
+        )
+        self.assertIn("4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", row)
+        self.assertTrue(row.endswith("| Verbatim |"), row)
+
+    def test_decompose_owns_mandatory_exploration_and_autonomous_review(self):
+        overrides = section(task_text("decompose"), "Method overrides")
+        for text in (
+            "Step 1",
+            "Skip `/setup-matt-pocock-skills`",
+            "Step 2",
+            "Exploration is mandatory",
+            "every symbol, option, command and file the PRD changes or removes",
+            "plus their callers and tests",
+            "every hit belongs to one ticket's work or is ruled out in a line",
+            "Step 3",
+            "task step 2's fields and scenario acceptance",
+            "Step 4",
+            "numbered list",
+            "title, blockers and end-to-end behaviour",
+            "too coarse or too fine",
+            "each dependency genuinely gates its ticket",
+            "merged or split further",
+            "Do not ask the user or wait for approval",
+        ):
+            self.assertIn(text, overrides)
+        self.assertNotIn("Exploration is mandatory", method("to-tickets"))
+
+    def test_decompose_publishes_with_the_task_command_and_stops_at_publication(self):
+        overrides = section(task_text("decompose"), "Method overrides")
+        for text in (
+            "Step 5",
+            "Publish only with task step 3",
+            "dependency order (blockers first)",
+            "native blocking and sub-issue relationships",
+            "`--state ready` replaces the `ready-for-agent` label",
+            "Do not publish local ticket files",
+            "Stop after publishing",
+        ):
+            self.assertIn(text, overrides)
 
     def test_report_delivery_and_figure_checks(self):
         prompt = composed("researcher")[0]
