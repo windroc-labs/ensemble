@@ -752,42 +752,13 @@ class ConfigurationLoading(ConfigFile, Case):
             with self.subTest(message, text=text):
                 self.fails("orchestrator/config.toml: " + message, text)
 
-    def test_usage_limit(self):
-        for text, expected in (
-            (PIPELINE, {}),
-            (PIPELINE + "[usage_limit]\n", {}),
-            (PIPELINE + '[usage_limit]\na = "off"\nb = "on"\n', {"a": False, "b": True}),
-        ):
-            with self.subTest(expected=expected):
-                cfg = self.load(text)
-                self.assertEqual(cfg.usage_limit, expected)
-                with self.assertRaises(TypeError):
-                    cfg.usage_limit["new"] = False
-        self.local('[usage_limit]\na = "off"\n')
-        self.assertEqual(
-            self.load(PIPELINE + '[usage_limit]\na = "on"\nb = "on"\n').usage_limit,
-            {"a": False, "b": True},
-        )
-
-    def test_usage_limit_rejected(self):
+    def test_usage_limit_is_an_unknown_key(self):
+        self.local('[usage_limit]\nclaude = "off"\n')
         self.fails(
-            'orchestrator/config.toml: usage_limit must be a table of <client> = "on" or "off"',
-            'usage_limit = "off"\n' + PIPELINE,
+            "orchestrator/config.toml: ~/.ensemble/config.local.toml: unknown key 'usage_limit' "
+            "in [orchestrator]",
+            PIPELINE,
         )
-        for value, shown in (
-            ('"OFF"', "'OFF'"),
-            ('""', "''"),
-            ("true", "True"),
-            ("false", "False"),
-            ("0", "0"),
-            ("[]", "[]"),
-            ("{}", "{}"),
-        ):
-            with self.subTest(value=value):
-                self.fails(
-                    f'orchestrator/config.toml: [usage_limit] a must be "on" or "off": {shown}',
-                    PIPELINE + f"[usage_limit]\na = {value}\n",
-                )
 
     def test_client_limits_belong_to_session(self):
         self.fails(

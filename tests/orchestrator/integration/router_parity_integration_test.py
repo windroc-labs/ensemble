@@ -217,7 +217,7 @@ class Recover(Parity):
         return [path, *(os.path.join(top, name) for top, _, names in beside for name in names)]
 
     def interrupted(self):
-        """Claimed by --issue: a tick's usage probe would hang with the agent."""
+        """Claimed by --issue."""
         self.scene([START], hang=True)
         res = self.router("--issue", ID)
         self.assertEqual(res.returncode, 0, res.stderr)

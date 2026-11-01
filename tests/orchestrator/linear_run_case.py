@@ -1,12 +1,10 @@
 """Configured fake run fixtures, shared by LinearRun and CLI tests."""
 
 import json
-import math
 from dataclasses import replace
 
 from ensemble.orchestrator.engine import config, runs
 from ensemble.orchestrator.engine.linear_run import LinearRun
-from ensemble.session import Headroom
 from tests.delegate.fakes.delegate import FakeDelegate
 from tests.orchestrator.case import Case
 from tests.orchestrator.config_fixtures import PIPELINE, ConfigFile
@@ -21,13 +19,6 @@ class ReadyDelegate(FakeDelegate):
         "pm": {"product-design": "design"},
         "engineer": {"build": "build", "light-build": "build", "decompose": "decompose"},
     }
-    usage_result = [Headroom("default", math.inf)]
-    usage_calls = []
-
-    @classmethod
-    def usage(cls, role, *, overlays=()):
-        cls.usage_calls.append(role)
-        return super().usage(role, overlays=overlays)
 
     @classmethod
     def resolve(cls, role, task=None, *, overlays=()):
@@ -50,7 +41,6 @@ class ReadyDelegate(FakeDelegate):
 class RunCase(ConfigFile, Case):
     def setUp(self):
         super().setUp()
-        ReadyDelegate.usage_calls = []
         self.configure()
 
     def configure(self, default="fake"):

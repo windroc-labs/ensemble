@@ -54,13 +54,6 @@ def provider(api, cfg):
             return view
 
         @classmethod
-        def usage(cls, role, *, overlays=()):
-            try:
-                return api.usage(cls.resolve(role, overlays=overlays).client)
-            except SessionConfigError as error:
-                raise ConfigError(str(error)) from None
-
-        @classmethod
         def roles(cls):
             return {role: {task: task for task in data.tasks} for role, data in cfg.roles.items()}
 

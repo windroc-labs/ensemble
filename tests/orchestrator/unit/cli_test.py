@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
+from ensemble.delegate import SessionError
 from ensemble.orchestrator import cli
 from ensemble.orchestrator.engine import config, prune, router, run_comments
 from ensemble.orchestrator.engine import log as event_log
@@ -273,7 +274,7 @@ class Wirings(run_fixtures.Base):
             ),
             "hide": ("continues", "show"),
             "close": ("Terminate", "resume"),
-            "resume": ("exactly one", "--input", "issue board", "usage gate"),
+            "resume": ("exactly one", "--input", "issue board"),
             "content": ("exactly one", "stdout"),
         }
         for command, phrases in expected.items():
@@ -587,19 +588,33 @@ class Queries(RunCase):
                 FakeDelegate.starts(record.workdir),
                 2 if state in ("interrupted", "live-again") else 1,
             )
-        self.assertEqual(ReadyDelegate.usage_calls, ["researcher"])
 
-    def test_config_drift_without_a_limit_probes_before_resuming(self):
+    def test_config_drift_resumes_the_recorded_run(self):
         self.start()
         FakeDelegate.end(self.cfg.issue_workdir("TASK-1"))
         self.configure(default="other")
         result, output, errors = _call(["resume", "TASK-1"], tty=True)
         self.assertEqual((result, errors), (0, ""))
         self.assertEqual(Record.parse(output).name, "TASK-1")
-        self.assertEqual(ReadyDelegate.usage_calls, ["researcher"])
         self.assertTrue(FakeDelegate.attach(self.cfg.issue_workdir("TASK-1")).alive())
         path = Path(self.cfg.logs_dir) / "orchestrator.jsonl"
         self.assertFalse(path.exists())
+
+    def test_a_session_usage_refusal_fails_resume_as_any_session_error(self):
+        _, record = self.start()
+        FakeDelegate.end(record.workdir)
+        for message in ("detach: duplicate", "usage: no available account"):
+            with (
+                self.subTest(message=message),
+                mock.patch.object(ReadyDelegate, "usage", create=True) as queried,
+                mock.patch.object(ReadyDelegate, "resume", side_effect=SessionError(message)),
+            ):
+                result, output, errors = _call(["resume", "TASK-1"])
+                self.assertEqual(
+                    (result, output, errors), (1, "", f"ensemble-orchestrator: TASK-1: {message}\n")
+                )
+                queried.assert_not_called()
+        self.assertFalse((Path(self.cfg.logs_dir) / "orchestrator.jsonl").exists())
 
     def test_close_controls_only_selected_issue_and_show_failure_names_it(self):
         one, _ = self.start("TASK-1")
@@ -749,11 +764,11 @@ class WritebackUsage(RunCase):
         self.assertIn("unknown key 'newer_limits'", errors)
 
     def test_a_configuration_it_cannot_load_is_logged_where_its_logs_go(self):
-        self.append_local("\n[orchestrator.usage_limit]\na = 0\n")
+        self.append_local("\n[orchestrator.task_tiers]\nlight-research = 0\n")
         result, output, errors = _call(
             ["writeback", "--issue", "TASK-1", "--workdir", "/w"], stdin="{}\n"
         )
-        refused = 'orchestrator/config.toml: [usage_limit] a must be "on" or "off": 0'
+        refused = "orchestrator/config.toml: task_tiers.light-research must be a tier, a whole number 1-4: 0"
         self.assertEqual((result, output, errors), (2, "", f"ensemble-orchestrator: {refused}\n"))
         row = logged(self.cfg.logs_dir)[-1]
         self.assertEqual(

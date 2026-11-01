@@ -12,22 +12,12 @@ from tests.orchestrator.config_fixtures import PIPELINE, ConfigFile
 from tests.orchestrator.linear_run_case import SID
 
 EXTENSION = """
-from ensemble.session import Headroom
-
 class ExtensionDelegate(FakeDelegate):
     ROLES = {
         "researcher": {"deep-research": "research"},
         "pm": {"product-design": "design"},
         "engineer": {"build": "build", "decompose": "decompose"},
     }
-
-    @classmethod
-    def usage(cls, role, *, overlays=()):
-        if cls.__name__ != "ExtensionDelegate":
-            raise AssertionError("saved usage provider was replaced by new default")
-        if overlays[-1]["roles"][role]["client"] != "fake":
-            raise AssertionError("saved client was replaced by role default")
-        return [Headroom("default", 90)]
 
     @classmethod
     def resolve(cls, role, task=None, *, overlays=()):
