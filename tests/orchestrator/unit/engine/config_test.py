@@ -192,12 +192,12 @@ PM_ENGINEER = workflow_line(
 )
 
 # verifier (a core charter, as a custom role), then pm
-TESTER_PM = (
+VERIFIER_PM = (
     '[[stage]]\nrole = "verifier"\ninput = "research"\nnext = "pm"\n'
     '[[stage]]\nrole = "pm"\ninput = "design"\ntitle_prefix = "PRD"\n'
 )
 
-TESTER_ROLE = role("verifier")
+VERIFIER_ROLE = role("verifier")
 
 ENGINEER_ONLY = workflow_line('[[stage]]\nrole = "engineer"\ninput = "build"\n')
 
@@ -655,10 +655,10 @@ class ConfigurationLoading(ConfigFile, Case):
     def test_workflow_path_replaces_the_packaged_one(self):
         # whole: the packaged researcher and engineer stages are gone, their tables ignored
         for value in (os.path.join(self.dir, "flow.toml"), "~/flow.toml"):
-            write(os.path.expanduser(value), TESTER_PM)
+            write(os.path.expanduser(value), VERIFIER_PM)
             with self.subTest(value):
                 cfg = self.load(
-                    HEADER + f'workflow = "{value}"\n' + PIPELINE[len(HEADER) :] + TESTER_ROLE
+                    HEADER + f'workflow = "{value}"\n' + PIPELINE[len(HEADER) :] + VERIFIER_ROLE
                 )
                 self.assertEqual(list(cfg.roles), ["verifier", "pm"])
                 self.assertEqual(dict(cfg.stages), {"verifier": 0, "pm": 1})
@@ -699,8 +699,8 @@ class ConfigurationLoading(ConfigFile, Case):
     def test_role_tables_outside_the_workflow(self):
         # a packaged stage's tables are dropped, keys checked; any other non-stage table is an error
         flow = os.path.join(self.dir, "flow.toml")
-        write(flow, TESTER_PM)
-        head = HEADER + f'workflow = "{flow}"\n' + role("pm") + TESTER_ROLE
+        write(flow, VERIFIER_PM)
+        head = HEADER + f'workflow = "{flow}"\n' + role("pm") + VERIFIER_ROLE
         cfg = self.load(head + role("researcher", "max_runs = 2") + role("engineer"))
         self.assertEqual(list(cfg.roles), ["verifier", "pm"])
         self.fails(

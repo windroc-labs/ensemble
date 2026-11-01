@@ -38,7 +38,7 @@ NATIVE = fake_codex.NATIVE
 
 CHANGED = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
-DONE = {"status": "done", "title": "echo", "summary": "Hello.", "deliverable": "Hello.\n"}
+DONE = {"status": "done", "title": "hello", "summary": "Hello.", "deliverable": "Hello.\n"}
 
 
 class HeadlessSessions(Case):

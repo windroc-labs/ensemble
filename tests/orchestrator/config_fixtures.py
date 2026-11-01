@@ -17,10 +17,12 @@ PIPELINE = HEADER + role("researcher") + role("pm") + role("engineer")
 
 
 # the packaged stages and a last one, verifier (a core charter)
-TESTER = workflow_line(PACKAGED_FLOW + '\n[[stage]]\nrole = "verifier"\ninput = "research"\n')
+VERIFIER_STAGE = workflow_line(
+    PACKAGED_FLOW + '\n[[stage]]\nrole = "verifier"\ninput = "research"\n'
+)
 
 # BASE, its verifier stage without tables
-BARE = HEADER + TESTER + role("researcher") + role("pm") + role("engineer")
+BARE = HEADER + VERIFIER_STAGE + role("researcher") + role("pm") + role("engineer")
 
 BASE = BARE + role("verifier")
 

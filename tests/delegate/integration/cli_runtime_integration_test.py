@@ -128,7 +128,9 @@ class Input(Base):
                 inputs = [r["text"] for r in self.records() if r["kind"] == "input"]
                 prompt = self.launches()[-1]["argv"][-1]
                 self.assertEqual(inputs[-1], want)
-                self.assertTrue(prompt.endswith(f"\n# Input\n\n{want.strip()}\n"), prompt[-100:])
+                self.assertTrue(
+                    prompt.endswith(f"\n# Input\n\n{want.strip()}\n\n\nFAKE NOTE"), prompt[-100:]
+                )
                 self.assertNotIn("SECRET", prompt)
 
 

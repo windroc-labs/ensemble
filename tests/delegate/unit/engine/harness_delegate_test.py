@@ -1505,10 +1505,10 @@ class OverlayTest(HarnessCase):
         self.assertEqual(str(caught.exception), f"invalid {path}: 'overlays'")
 
     def test_resume_resolves_with_the_overlays_it_was_built_with(self):
-        record = self.make(overlays=({"roles": {"researcher": {"effort": "high"}}},)).detach()
+        record = self.make(overlays=({"roles": {"researcher": {"effort": "low"}}},)).detach()
         self.stop(record)
         DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume()
-        self.assertEqual(self.metadata()["plan"]["run"]["effort"], "high")
+        self.assertEqual(self.metadata()["plan"]["run"]["effort"], "low")
 
 
 class ResumeInputTest(HarnessCase):

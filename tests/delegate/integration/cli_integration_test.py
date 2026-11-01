@@ -163,7 +163,7 @@ class Outcomes(Integration):
             ),
             (SID, SID, None),
         )
-        self.assertEqual(prompt(second), FIX.format(error=UNSAVED_ERROR))
+        self.assertEqual(prompt(second).partition("\n\n")[0], FIX.format(error=UNSAVED_ERROR))
         self.assertEqual(
             self.kinds(),
             [
@@ -284,7 +284,8 @@ class NeedsInput(Integration):
         )
         self.assertTrue(prompt(second).startswith(RESUME), "the resume prompt")
         self.assertTrue(
-            prompt(second).endswith(f"\n# Input\n\n{ANSWER}\n"), "the answer as the input"
+            prompt(second).rpartition("\n\n")[0].endswith(f"\n# Input\n\n{ANSWER}\n"),
+            "the answer as the input, before the client's command note",
         )
         self.assertEqual(self.users(), [prompt(first), prompt(second)], "one session's transcript")
         self.assertEqual(
