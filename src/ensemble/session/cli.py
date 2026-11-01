@@ -31,7 +31,7 @@ from dataclasses import replace
 
 import ensemble.session.engine.types
 import ensemble.utils
-from ensemble.session.engine.base import Session, hosted_accounts, hosted_viewer
+from ensemble.session.engine.base import Session, hosted_viewer
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import (
     ACCOUNT_SET_BY,
@@ -897,7 +897,7 @@ def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls
     elif cmd == "resume-argv":
         print(json.dumps(list(Session.resume_argv(args.client, args.sid))))
     elif cmd == "accounts":
-        print(json.dumps(hosted_accounts(args.client)))
+        print(json.dumps(Session._hosted("accounts")(args.client)))
     else:
         host = Session.host()
         if not host.attachable:

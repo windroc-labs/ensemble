@@ -200,7 +200,3 @@ class Session(ABC):
 
 def hosted_viewer():
     return load_class(HOSTED, Session).viewer()
-
-
-def hosted_accounts(client: str) -> dict[str, dict[str, str]]:
-    return load_class(HOSTED, Session).accounts(client)
