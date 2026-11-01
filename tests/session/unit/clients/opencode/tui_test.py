@@ -313,6 +313,24 @@ class OnHookTest(Base):
 
 
 class EventsTest(Base):
+    def test_abort_errors_end_as_interrupted_and_later_empty_idle_is_ordinary(self):
+        for label in ("session.error", "session.idle"):
+            with self.subTest(label=label):
+                run = self.run_tui()
+                run.hook_events(tui.START, {"session_id": SES})
+                first = {"session_id": SES, "turn_id": "msg-first"}
+                self.assertEqual(run.hook_events("turn.started", first), [TurnStarted()])
+                self.assertEqual(
+                    run.hook_events(label, {**first, "error": "MessageAbortedError"}),
+                    [TurnEnd(interrupted=True)],
+                )
+                self.assertEqual(
+                    run.hook_events(label, {**first, "error": "MessageAbortedError"}), []
+                )
+                second = {"session_id": SES, "turn_id": "msg-next"}
+                self.assertEqual(run.hook_events("turn.started", second), [TurnStarted()])
+                self.assertEqual(run.hook_events("session.idle", second), [TurnEnd()])
+
     def test_user_message_starts_once_and_late_terminal_does_not_finish_new_turn(self):
         run = self.run_tui()
         run.hook_events(tui.START, {"session_id": SES})

@@ -231,10 +231,29 @@ class TuiSessions(Case):
     def test_an_errored_last_message_ends_the_wait_at_once(self):
         self.scene([[{"errored": True}]])
         _, stream = self.start()
-        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd(""))
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd(interrupted=True))
         self.assertEqual(
             [row["messages_read"] for row in self.logged() if "messages_read" in row], [NATIVE]
         )
+
+    def test_an_aborted_message_keeps_partial_reply_and_does_not_mark_the_next_turn(self):
+        self.scene([[{"text": "partial"}, {"errored": True}], [{"text": "done"}]])
+        handle, stream = self.start()
+        found = stream.until(TurnEnd)
+        self.assertIn(Reply("partial"), found)
+        self.assertEqual(found[-1], TurnEnd("partial", interrupted=True))
+        handle.send("continue")
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("done"))
+
+    def test_a_session_abort_error_ends_as_interrupted_and_allows_a_new_turn(self):
+        error = {"name": "MessageAbortedError", "data": {"message": "aborted"}}
+        self.scene([[{"error": error}], [{"text": "continued"}]])
+        handle, stream = self.start()
+        found = stream.until(TurnEnd)
+        self.assertFalse(any(isinstance(event, TurnFailed) for event in found))
+        self.assertEqual(found[-1], TurnEnd(interrupted=True))
+        handle.send("continue")
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("continued"))
 
     def test_a_turn_never_saved_ends_after_the_wait(self):
         self.scene([[{"unsaved": True}]])

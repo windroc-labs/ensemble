@@ -954,6 +954,7 @@ class JoinedInputTest(TranscriptCase):
         self.assertEqual(self.run.observe(), [])
 
     def test_a_prompt_while_the_turn_is_open_joins_it(self):
+        self.assertNotIn("Interrupt", self.run.hooks)
         self.assertEqual(self.prompt(), [TurnStarted()])
         self.assertEqual(self.prompt(), [])
         self.assertEqual(self.prompt(), [])
