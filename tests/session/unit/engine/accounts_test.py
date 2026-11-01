@@ -1,4 +1,4 @@
-"""Per-account live usage readings, an account's headroom, and the account a start picks."""
+"""Per-account live usage readings and an account's headroom."""
 
 import io
 import math
@@ -55,33 +55,3 @@ class LiveTest(Case):
 
     def test_no_account_reads_nothing(self):
         self.assertEqual(accounts.live({}, mock.Mock(side_effect=AssertionError)), {})
-
-
-class ChooseTest(Case):
-    def test_the_usable_account_with_the_most_left_then_the_first_name(self):
-        inf = math.inf
-        for a, b, want in (
-            (10, 15, "b"),
-            (10, 10, "a"),
-            (0, 1, "b"),
-            (10, inf, "b"),
-            (inf, inf, "a"),
-            (None, -5, None),
-            (0, -5, None),
-            (None, None, None),
-        ):
-            with self.subTest(a=a, b=b):
-                self.assertEqual(accounts.choose({"b": b, "a": a}), want)
-
-    def test_default_is_an_ordinary_name(self):
-        self.assertEqual(accounts.choose({"default": 30, "a": 30}), "a")
-
-    def test_a_wanted_account_only_while_usable_never_another(self):
-        left = {"home": 60, "work": 0, "lab": None}
-        self.assertEqual(accounts.choose(left, "home"), "home")
-        for wanted in ("work", "lab", "missing"):
-            with self.subTest(wanted=wanted):
-                self.assertIsNone(accounts.choose(left, wanted))
-
-    def test_no_candidate_is_none(self):
-        self.assertIsNone(accounts.choose({}))

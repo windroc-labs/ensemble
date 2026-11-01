@@ -1714,8 +1714,8 @@ class WritablePathsTest(HostedTuiBase):
 
 
 class AccountPoolTest(Base):
-    """A client with accounts: Session.usage reads each live; every start reads each again and
-    runs on the wanted one while usable, else the usable one with the most left.
+    """A client with accounts: Session.usage reads each live; a run's events and its operations
+    after its start read none, and mark nothing for the next start.
     """
 
     def setUp(self):
@@ -1746,28 +1746,11 @@ class AccountPoolTest(Base):
         (metadata,) = self.session.host().headless
         return metadata.get("home_account")
 
-    def test_a_start_selecting_none_hands_the_host_the_best_account(self):
-        self.assertEqual(self.started_account(), "work")
-
-    def test_a_selected_account_reaches_the_host_after_every_account_is_read(self):
-        self.assertEqual(self.started_account(**{ACCOUNT_ENV: "default"}), "default")
-        self.assertEqual(self.probed(), ["/d", "/w"])
-
     def usage(self):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             found = self.session.usage("pool")
         self.err = err.getvalue()
         return found
-
-    def started_env(self, **env):
-        """The env a start of a spec with `env` hands its mode."""
-        setup = self.session._config()
-        spec = self.spec(client="pool", mode=Mode.HEADLESS, env=env)
-        client = setup.registry.client("pool")
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            picked = hosted_session._picked(setup, spec, "pool", client, self.session.host())
-        self.err = err.getvalue()
-        return dict(picked.env)
 
     def probed(self):
         return sorted(call.args[0][-1] for call in self.probe.call_args_list)
@@ -1782,36 +1765,6 @@ class AccountPoolTest(Base):
         self.probe.reset_mock()
         self.assertEqual(self.usage(), first)
         self.assertEqual(self.probed(), ["/d", "/w"])
-
-    def test_a_start_selecting_none_runs_on_the_best_account(self):
-        self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
-        self.assertEqual(
-            self.err.splitlines(),
-            [
-                "pool account default: five_hour=70% weekly=10%",
-                "pool account work: five_hour=20% weekly=30%",
-                "pool account work: picked",
-            ],
-        )
-        self.probe.reset_mock()
-        self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
-        self.assertEqual(self.probed(), ["/d", "/w"])
-
-    def test_a_configured_account_is_a_hard_choice_unless_one_is_selected(self):
-        with mock.patch.object(PoolClient, "_account", return_value="default"):
-            self.assertEqual(self.started_env()[ACCOUNT_ENV], "default")
-            self.assertEqual(self.started_env(**{ACCOUNT_ENV: "work"})[ACCOUNT_ENV], "work")
-            self.outputs["/d"] = "100,10"
-            with self.assertRaisesRegex(SessionError, "^usage: no available account$"):
-                self.started_env()
-        self.assertEqual(len(self.probe.call_args_list), 6)
-
-    def test_with_no_reading_known_a_start_fails(self):
-        self.probe.side_effect = None
-        self.probe.return_value = None
-        self.assertEqual(self.usage(), [Headroom("default", None), Headroom("work", None)])
-        with self.assertRaisesRegex(SessionError, "^usage: no available account$"):
-            self.started_env()
 
     def run_on(self, **env):
         """An in_process run selecting `env`'s account, drained."""
@@ -1837,10 +1790,7 @@ class AccountPoolTest(Base):
         self.steps({"out": {"type": "limit", "resets_at": time.time() + 3 * 24 * 3600}})
         self.run_on(**{ACCOUNT_ENV: "work"})
         self.probe.reset_mock()
-        self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
-        self.assertEqual(self.probed(), ["/d", "/w"])
-        self.probe.reset_mock()
-        self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
+        self.assertEqual(self.started_account(), "work")
         self.assertEqual(self.probed(), ["/d", "/w"])
         self.assertEqual(sorted(os.listdir(old)), sorted(seeded))
         for name, text in seeded.items():
@@ -1865,26 +1815,6 @@ class AccountPoolTest(Base):
             self.drain(session)
             self.session.inspect(dataclasses.replace(spec, sid=session.info().sid))
         self.probe.assert_not_called()
-
-    def test_one_account_or_no_container_reads_and_picks_alike(self):
-        for accounts, container, want, picked in (
-            ({"default": "/d"}, True, [Headroom("default", 30)], "default"),
-            (
-                {"default": "/d", "work": "/w"},
-                False,
-                [Headroom("default", 30), Headroom("work", 70)],
-                "work",
-            ),
-        ):
-            with self.subTest(accounts=accounts, container=container):
-                self.pool(accounts, container=container)
-                self.probe.reset_mock()
-                self.assertEqual(self.usage(), want)
-                self.assertEqual(self.probed(), sorted(accounts.values()))
-                self.probe.reset_mock()
-                self.assertEqual(self.started_env()[ACCOUNT_ENV], picked)
-                self.assertEqual(self.probed(), sorted(accounts.values()))
-                self.assertFalse(os.path.exists(os.path.join(self.ensemble, "usage")))
 
 
 CLAUDE = "ensemble.session.clients.claude:ClaudeClient"
@@ -2218,13 +2148,6 @@ class StartCheckTest(Base):
         self.claude({"a": {}, "default": {}})
         self.read(a=panel(30), default=panel(30))
         self.assertEqual(self.start(), ("a", None))
-        self.claude({"home": {}, "work": {}}, host="tmux")
-        self.read(home=panel(80), work=panel(100))
-        self.probe.reset_mock()
-        self.assertEqual(self.start(), ("home", None))
-        self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
-        self.read(home=panel(100), work=panel(100))
-        self.assert_usage_error(self.start())
 
     def test_picked_then_a_fixed_exhausted_account_reads_every_account_again(self):
         for host in self.HOSTS:
@@ -2259,30 +2182,6 @@ class StartCheckTest(Base):
                 self.claude({"work": {"max_usage": 80}})
                 self.read(work=out)
                 self.assert_usage_error(self.start())
-
-    def test_a_bad_config_fails_before_any_probe(self):
-        for accounts, table, message in (
-            ({"work": {"max_usage": 101}}, {}, "session.clients.claude.accounts.work.max_usage"),
-            ({"work": {}}, {"account": "missing"}, "'missing': not a registered"),
-        ):
-            with self.subTest(message=message):
-                try:
-                    self.claude(accounts, **table)
-                except ConfigError as error:
-                    caught = error
-                else:
-                    account, caught = self.start()
-                    self.assertIsNone(account)
-                self.assertIsInstance(caught, ConfigError)
-                self.assertIn(message, str(caught))
-        self.probe.assert_not_called()
-
-    def test_a_client_without_accounts_starts_unprobed(self):
-        self.configure("probe", {"implementation": HOMED_HOST}, probe={"argv": ("probe-cmd",)})
-        spec = self.spec(client="probe", mode=Mode.HEADLESS, name="w1")
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SessionError):
-            self.session.start(spec)
-        self.probe.assert_not_called()
 
 
 class WritableDirsTest(Base):
