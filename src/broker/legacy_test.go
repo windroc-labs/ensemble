@@ -3,8 +3,6 @@ package main
 import (
 	"errors"
 	"io"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -31,17 +29,6 @@ func (k legacyKeys) Services(prefix string) ([]string, error) {
 
 func (k legacyKeys) Accounts(service string) ([]string, error) { return k.services[service], k.err }
 
-func staticFile(t *testing.T, home, content string) {
-	t.Helper()
-	dir := filepath.Join(home, ".ensemble/docker")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "static-secrets.json"), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestLegacyState(t *testing.T) {
 	renamed := map[string][]string{
 		"ensemble-broker-claude":       {"default"},
@@ -63,39 +50,30 @@ func TestLegacyState(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		services map[string][]string
-		static   string
 		want     []string
 	}{
-		"none":        {renamed, "", nil},
-		"env service": {map[string][]string{"ensemble-env/db": {"db"}}, "", []string{"ensemble-env/db db"}},
-		"items":       {map[string][]string{"ensemble-tokens": {"ensemble-ws-a", "ensemble-ws-b"}}, "", []string{"ensemble-tokens ensemble-ws-a", "ensemble-tokens ensemble-ws-b"}},
-		"static items": {
+		"none":        {renamed, nil},
+		"env service": {map[string][]string{"ensemble-env/db": {"db"}}, []string{"ensemble-env/db db"}},
+		"items":       {map[string][]string{"ensemble-tokens": {"ensemble-ws-a", "ensemble-ws-b"}}, []string{"ensemble-tokens ensemble-ws-a", "ensemble-tokens ensemble-ws-b"}},
+		"mixed services": {
 			map[string][]string{"ensemble-claude": {"default"}, "ensemble-env/db": {"db"}},
-			`{"secrets":{"ensemble-claude/default":{},"ensemble-claude/work":{},"ensemble-opencode/lan":{},"ensemble-env/db":{}}}`,
 			[]string{"ensemble-claude default", "ensemble-env/db db"},
 		},
-		// mini-op's v0.4.1 install (U1b), reconstructed from v0.4.1's keychain services: eight items, one of them the
-		// Claude token whose static-secrets.json record names the same secret. The rename step renames 8.
+		// mini-op's v0.4.1 install (U1b) has eight old-name Keychain items.
 		"U1b": {
 			map[string][]string{
 				"ensemble-claude": {"default"}, "ensemble-bot": {"123456"}, "ensemble-github-users": {"ensemble-bot"},
 				"ensemble-tokens": {"ensemble-ws-w1"}, "ensemble-revocations": {"pending"}, "ensemble-codex": {"auth"},
 				"ensemble-codex-grants": {"ensemble-ws-w1"}, "ensemble-linear": {"harness"},
 			},
-			`{"secrets":{"ensemble-claude/default":{"version":1}}}`,
 			[]string{"ensemble-bot 123456", "ensemble-claude default", "ensemble-codex auth", "ensemble-codex-grants ensemble-ws-w1",
 				"ensemble-github-users ensemble-bot", "ensemble-linear harness", "ensemble-revocations pending", "ensemble-tokens ensemble-ws-w1"},
 		},
-		"bot account":     {map[string][]string{"ensemble-broker-github-users": {"ensemble-bot"}}, "", []string{"ensemble-broker-github-users ensemble-bot"}},
-		"orchestrator":    {map[string][]string{"linear-app-harness-secret": {"ensemble-claude"}}, "", nil},
-		"static keys":     {nil, `{"secrets":{"ensemble-claude/default":{},"ensemble-broker-env/db":{},"ensemble-opencode/strata":{},"ensemble-env/db":{}}}`, nil},
-		"new static keys": {nil, `{"secrets":{"ensemble-broker-claude/default":{"version":1}}}`, nil},
+		"bot account":    {map[string][]string{"ensemble-broker-github-users": {"ensemble-bot"}}, []string{"ensemble-broker-github-users ensemble-bot"}},
+		"orchestrator":   {map[string][]string{"linear-app-harness-secret": {"ensemble-claude"}}, nil},
+		"empty keychain": {nil, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
-			home := t.TempDir()
-			if tc.static != "" {
-				staticFile(t, home, tc.static)
-			}
 			found, err := legacyState(legacyKeys{services: tc.services})
 			if err != nil || !slices.Equal(found, tc.want) {
 				t.Fatalf("%q %v, want %q", found, err, tc.want)
@@ -108,7 +86,6 @@ func TestLegacyStateErrors(t *testing.T) {
 	if _, err := legacyState(legacyKeys{err: errors.New("keychain status -25291")}); err == nil || !strings.Contains(err.Error(), "-25291") {
 		t.Fatalf("listing error: %v", err)
 	}
-
 }
 
 func TestLegacyStateBlocksCommands(t *testing.T) {

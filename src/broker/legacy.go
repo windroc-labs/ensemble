@@ -54,7 +54,6 @@ func legacyState(k legacyKeychain) ([]string, error) {
 	if slices.Contains(accounts, "ensemble-bot") {
 		found = append(found, "ensemble-broker-github-users ensemble-bot")
 	}
-
 	return found, nil
 }
 

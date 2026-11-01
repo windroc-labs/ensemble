@@ -15,7 +15,6 @@ const (
 	GitHubToken       = "github-installation-token"
 	LinearAccessToken = "linear-access-token"
 	EnvSecret         = "env-secret"
-	OpencodeAPIKey    = "opencode-api-key"
 
 	Issued    = "issued"
 	Renewed   = "renewed"

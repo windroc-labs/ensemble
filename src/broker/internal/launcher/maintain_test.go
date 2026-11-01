@@ -98,7 +98,7 @@ func TestMaintainGitHubFailureKeepsCodexSuccess(t *testing.T) {
 	if got.Deadline == nil || got.Deadline.At != "2026-10-18T12:00:00Z" || got.NextCheck == nil || *got.NextCheck != soon(time.Minute) {
 		t.Fatalf("%+v", got)
 	}
-	// The immediate call that acknowledges a notice must not try GitHub again before its retry time.
+	// An immediate repeat must not try GitHub again before its retry time.
 	tokens.calls = nil
 	again, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil || len(again.Results) != 0 || slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
