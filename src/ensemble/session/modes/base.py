@@ -49,8 +49,8 @@ from ensemble.utils import (
 )
 
 POINTER = (
-    "Your prompt is {size} bytes, too long for a command line, so it is in {path}. Read all of "
-    "that file now, in parts if your read tool limits size, and follow it as this message."
+    "Your prompt is in {path}. Read all of that file now, in parts if your read tool limits "
+    "size, and follow it as this message."
 )
 PROMPT_FILE = os.path.join("prompt", "prompt.md")
 
@@ -323,7 +323,7 @@ class BaseMode(ABC):
         root = context.container.state_root if context.container else local_dir
         path = os.path.join(root, PROMPT_FILE)
         access = replace(spec.access, reads=(*spec.access.reads, os.path.dirname(path)))
-        pointer = POINTER.format(size=len(spec.prompt.encode("utf-8")), path=path)
+        pointer = POINTER.format(path=path)
         return replace(spec, prompt=pointer, access=access), (path, spec.prompt)
 
     @staticmethod

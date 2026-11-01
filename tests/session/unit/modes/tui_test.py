@@ -2922,7 +2922,7 @@ class PromptFileTest(Base):
         self.seen = Seen(self.client)
 
     def pointer(self, path):
-        return POINTER.format(size=len(BIG.encode()), path=path)
+        return POINTER.format(path=path)
 
     def test_an_over_budget_prompt_becomes_a_pointer_with_its_dir_readable(self):
         self.start(run=self.seen, prompt=BIG, access=Access(cwd=self.tmp, reads=("/r",)))

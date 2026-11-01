@@ -753,7 +753,11 @@ class ThroughItsHost(Base):
         host = WorkerHost()
         self.start_on(host, prompt=big)
         (spec,) = StubRun.specs
-        self.assertEqual(spec.prompt, POINTER.format(size=len(big.encode()), path=path))
+        self.assertEqual(
+            spec.prompt,
+            f"Your prompt is in {path}. Read all of that file now, in parts if your read tool "
+            "limits size, and follow it as this message.",
+        )
         self.assertEqual(spec.access.reads, (os.path.dirname(path),))
         with open(path, encoding="utf-8") as f:
             self.assertEqual(f.read(), big)
@@ -771,7 +775,7 @@ class ThroughItsHost(Base):
             self.start_on(host, prompt=big, name="w")
         metadata = host.starts[0][2]
         self.assertEqual((metadata["prompt_file"], metadata["prompt"]), (path, big))
-        self.assertEqual(StubRun.specs[0].prompt, POINTER.format(size=len(big.encode()), path=path))
+        self.assertEqual(StubRun.specs[0].prompt, POINTER.format(path=path))
         self.assertFalse(os.path.lexists(os.path.join(self.dir, "prompt")))
 
     def test_a_prompt_within_the_budget_stays_and_preflight_writes_nothing(self):

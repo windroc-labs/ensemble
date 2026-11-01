@@ -192,7 +192,7 @@ class Streams(Base):
         prompt, path = "雪 a\n" * 40_000, os.path.join(self.dir, "prompt", "prompt.md")
         self.start(StubClient(run=Echo), prompt=prompt)
         self.addCleanup(self.mode.stop)
-        pointer = POINTER.format(size=len(prompt.encode()), path=path)
+        pointer = POINTER.format(path=path)
         self.assertEqual(self.drain(), [Reply(pointer), TurnFailed("incomplete_turn")])
         with open(path, encoding="utf-8") as f:
             self.assertEqual(f.read(), prompt)
