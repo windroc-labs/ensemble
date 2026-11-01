@@ -99,7 +99,9 @@ class Base(RunReads, FakeClientCase):
             f.write(local_section(text, "delegate"))
 
     def launches(self) -> list[dict]:
-        return read_jsonl(self.log, missing_ok=True)
+        return [
+            e for e in read_jsonl(self.log, missing_ok=True) if e.get("argv", [])[-1:] != ["/usage"]
+        ]
 
     ran = None
 

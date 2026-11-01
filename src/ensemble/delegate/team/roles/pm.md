@@ -11,6 +11,9 @@ Pick the task below that fits the input; unsure → `product-design` (`<tasks>/p
 ## Standards
 
 - Apply [`experience-first`](#principle-index) to product and scope decisions; prefer user outcomes over implementation convenience.
+- **Subtract before you add**: for product and scope decisions, read and follow `<team>/principles/subtract-before-you-add.md`.
+- State the change's intent in the PRD: subtraction or new functionality.
+- List every mechanism the PRD adds or removes (types, switches, tiers, lists, persistent state). For each addition, explain in one sentence why deletion alone cannot meet the requirement.
 - The user's instructions are hard constraints. The PRD keeps the user's implementation ideas in their words; a tentative one ("maybe we could") is marked optional.
 - **Concise**: after writing the PRD, cut repetition and preamble ([Principles › Writing](#writing)); length follows content.
 - What the product already has goes under Done; other sections hold only what's left. When revising, move newly finished items there.

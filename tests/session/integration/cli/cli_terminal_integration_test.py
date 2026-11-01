@@ -12,6 +12,7 @@ from ensemble.session.engine.types import Launch
 from ensemble.session.hosts.tmux import TmuxHost
 from tests.session import live_tmux
 from tests.session.cli_support import MANAGER, CliCase
+from tests.session.integration.clients.claude import fake_usage
 
 TEXT = 'text with "quotes", unicode é and spaces'
 SENTINEL = "."
@@ -145,7 +146,10 @@ class KeyTest(Base):
         os.mkdir(shim)
         with open(os.path.join(shim, "claude"), "w", encoding="utf-8") as f:
             q = shlex.quote
-            f.write(f"#!/bin/sh\nexec {q(sys.executable)} -I {q(program)} {q(self.keys)}\n")
+            f.write(
+                f"#!/bin/sh\n{fake_usage.answers_probes()}"
+                f"exec {q(sys.executable)} -I {q(program)} {q(self.keys)}\n"
+            )
         os.chmod(os.path.join(shim, "claude"), 0o755)
         self.path = os.pathsep.join((shim, self.env()["PATH"]))
 

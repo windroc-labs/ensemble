@@ -36,7 +36,7 @@ from ensemble.session.engine.types import (
     TurnStarted,
 )
 from tests.session.case import PLUGIN_BIN, PY, SID, Case, child_env
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.session.threads import drain
 from tests.utils.sandbox import git, kill, scratch
 from tests.utils.sandbox import pid_exists as running
@@ -50,6 +50,16 @@ TABLE = {
     "tiers": {"4": "haiku"},
     "efforts": {"low": "low"},
 }
+PROBE = [
+    "-p",
+    "--no-session-persistence",
+    "--strict-mcp-config",
+    "--setting-sources",
+    "user",
+    "--settings",
+    '{"remoteControlAtStartup":false,"disableAllHooks":true}',
+    "/usage",
+]
 # A caller: argv[1] is the claude table, argv[2] the workdir. It prints each event's name; on a
 # KeyboardInterrupt (SIGINT, even when inherited ignored) it prints that and stays alive, the fake's
 # parent.
@@ -79,7 +89,7 @@ class Base(Case):
         patch = mock.patch.dict(
             os.environ,
             {
-                "PATH": fake_claude.install(bin_dir),
+                "PATH": fake_usage.install(bin_dir),
                 "CLAUDE_CONFIG_DIR": os.path.join(self.dir, "config"),
                 fake_claude.ENV: self.file,
             },
@@ -114,9 +124,12 @@ class Base(Case):
     def drain(self, handle, on=lambda _event: None) -> list:
         return drain(self, handle, on, WAIT)
 
-    def logged(self) -> list[dict]:
+    def entries(self) -> list[dict]:
         with open(self.log, encoding="utf-8") as f:
             return [json.loads(line) for line in f]
+
+    def logged(self) -> list[dict]:
+        return [e for e in self.entries() if e["argv"] != PROBE]
 
     def written(self) -> list[dict]:
         return [{k: v for k, v in e.items() if k != "ts"} for e in RunLog(self.workdir).read()]
@@ -376,6 +389,9 @@ class InterruptTest(Base):
                 self.fail(f"the caller never {what} (rc {caller.poll()}): {self.printed()}")
             time.sleep(0.05)
 
+    def with_account(self, table):
+        return {**table, "accounts": {"test": {"dir": os.path.join(self.dir, "config")}}}
+
     def printed(self) -> list[str]:
         with open(self.out, encoding="utf-8") as f:
             return f.read().split()
@@ -385,7 +401,7 @@ class InterruptTest(Base):
         self.out = os.path.join(self.dir, "caller.out")
         with open(self.out, "w", encoding="utf-8") as f:
             caller = subprocess.Popen(
-                [*PY, "-c", CALLER, json.dumps(TABLE), self.workdir],
+                [*PY, "-c", CALLER, json.dumps(self.with_account(TABLE)), self.workdir],
                 env=child_env(),
                 stdin=subprocess.DEVNULL,
                 stdout=f,

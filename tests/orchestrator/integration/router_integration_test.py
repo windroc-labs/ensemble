@@ -321,7 +321,9 @@ class Router(TmuxFlow):
                 f"router launch {ID} exit=0",
             ],
         )
-        self.assertEqual([option(c, "--session-id") for c in agent_calls(self.calls())], [sid])
+        calls = self.calls()
+        self.assertEqual([option(c, "--session-id") for c in agent_calls(calls)], [sid])
+        self.assertEqual(len(self.probes()), 1)  # the start's
 
     def test_a_long_description_reaches_the_run_intact(self):
         with self.fake.lock:

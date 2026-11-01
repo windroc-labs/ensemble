@@ -174,8 +174,12 @@ def _resumable(client: Callable[[], Client], info: SessionInfo, spec: Spec) -> S
         raise ConfigError(error)
     if not printable_abs(info.cwd):
         raise ConfigError(f"cwd must be a printable absolute path, got {info.cwd!r:.80}")
+    found = client()
+    env = {**spec.access.env, **spec.env}
+    if account := found._account_of(info.transcript):
+        env.update(found._account_env(account))
     try:
-        return client().session_status(info, env={**spec.access.env, **spec.env})
+        return found.session_status(info, env=env)
     except OSError:
         return SessionStatus(Resumable.UNKNOWN, None, "")
 
@@ -229,6 +233,8 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         spec = replace(spec, env={**spec.env, ACCOUNT_ENV: wanted})
         select_account(spec, client)
     container = host._client_context().container is not None
+    recorded = None if container or not spec.resume else _recorded(spec)
+    conversation = client._account_of(recorded.transcript) if recorded else ""
     readings = accounts.live(
         client._usage_probes() or {},
         lambda launch: _read_usage(setup, client, launch, container=container),
@@ -239,10 +245,33 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         account: accounts.left(reading, client._max_usage(account))
         for account, reading in readings.items()
     }
+    if conversation and not wanted:
+        left = {conversation: left[conversation]}
     if (account := accounts.choose(left, wanted)) is None:
         raise SessionError("usage: no available account")
     print(f"{name} account {account}: picked", file=sys.stderr)
-    return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
+    spec = replace(spec, env={**spec.env, ACCOUNT_ENV: account})
+    if recorded is not None and recorded.transcript:
+        _resume_on(spec, client, account, recorded.transcript)
+    return spec
+
+
+def _recorded(spec: Spec) -> SessionInfo | None:
+    try:
+        return RunLog(spec.workdir).session(spec.sid) if spec.sid else None
+    except OSError:
+        return None
+
+
+def _resume_on(spec: Spec, client: Client, account: str, transcript: str) -> None:
+    """A local resume runs in its account's dir: refused before any launch when its recorded
+    conversation lies elsewhere.
+    """
+    if client._account_of(transcript) != account:
+        raise ConfigError(
+            f"session {spec.name or spec.sid}: conversation {spec.sid} has no transcript to resume"
+            f" in account {account}'s dir"
+        )
 
 
 def _host_class(setup: _Setup, name: str) -> tuple[type[Host], dict]:

@@ -132,7 +132,7 @@ class TeamDirs(Integration):
         super().setUp()
         self.team = owned_team(self, TEAM)
         self.tasks = os.path.join(self.team, "tasks")
-        with open(os.path.join(self.env["HOME"], ".ensemble", "config.local.toml"), "w") as f:
+        with open(os.path.join(self.env["HOME"], ".ensemble", "config.local.toml"), "a") as f:
             f.write(
                 f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
                 + local_section(VERIFIER, "delegate")
@@ -190,7 +190,7 @@ class CodexTeamDirs(CodexIntegration):
         self.team = owned_team(self, TEAM)
         self.tasks = os.path.join(self.team, "tasks")
         os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
-        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
+        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "a") as f:
             f.write(
                 f"[delegate]\nteam_dirs = {json.dumps([self.team])}\n"
                 + local_section(VERIFIER, "delegate")
