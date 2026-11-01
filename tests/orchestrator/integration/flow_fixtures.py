@@ -24,7 +24,7 @@ from tests.orchestrator.integration.fake_python import write_shim
 from tests.orchestrator.unit import board_ids, run_fixtures
 from tests.orchestrator.unit.run_fixtures import ID, SID
 from tests.session import live_tmux
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.utils.case import local_section
 
 ENTRY = os.path.join(os.path.dirname(__file__), "entry.py")
@@ -162,7 +162,7 @@ class Flow(Case):
         self.seam = fake_linear.seam(self, self.fake, fake_linear.serve(self, self.fake))
         self.bin = os.path.join(self.root, "bin")
         os.mkdir(self.bin)
-        self.path = fake_claude.install(self.bin)
+        self.path = fake_usage.install(self.bin)
         self.claude_scenario, self.claude_log = (
             os.path.join(self.root, n) for n in ("claude.json", "claude.jsonl")
         )
@@ -223,7 +223,10 @@ class Flow(Case):
         ]
 
     def calls(self):
-        return jsonl(self.claude_log)
+        return [c for c in jsonl(self.claude_log) if c["argv"][-1:] != ["/usage"]]
+
+    def probes(self):
+        return [c for c in jsonl(self.claude_log) if c["argv"][-1:] == ["/usage"]]
 
     def records(self, ident):
         return input_first(jsonl(run_log(os.path.join(self.workdirs, ident))))

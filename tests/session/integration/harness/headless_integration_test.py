@@ -33,7 +33,7 @@ from ensemble.session.hosts.tmux import TmuxHost, managed
 from tests.session import harnesses, live_tmux, threads
 from tests.session.case import HOSTS, REPO, Case, harnessed
 from tests.session.cli_support import logged
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.session.integration.clients.codex import fake_codex
 from tests.session.integration.clients.opencode import fake_opencode
 from tests.session.integration.harness import headless_caller
@@ -99,7 +99,7 @@ class ClaudeHeadless(Headless):
         super().setUp()
         self.scenario, self.log = self.root / "scenario.json", self.root / "claude.jsonl"
         env = {
-            "PATH": fake_claude.install(str(self.bin)),
+            "PATH": fake_usage.install(str(self.bin)),
             "CLAUDE_CONFIG_DIR": str(self.root / "config"),
             fake_claude.ENV: str(self.scenario),
         }

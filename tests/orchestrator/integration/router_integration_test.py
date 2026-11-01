@@ -316,8 +316,8 @@ class Router(TmuxFlow):
             [f"router usage-skip {ID} client=claude reason=usage usage=work=-5"],
         )
         self.assertEqual((self.state(ID), self.runs()), ("todo", []))
-        self.assertEqual(len(self.calls()), 1)
-        self.assertEqual(agent_calls(self.calls()), [])
+        self.assertEqual(len(self.probes()), 1)
+        self.assertEqual(self.calls(), [])
         self.assertEqual(self.sent("linear.M_STATE"), [])
 
     def test_a_tick_at_50_percent_usage_claims_and_finishes(self):
@@ -336,7 +336,7 @@ class Router(TmuxFlow):
         )
         calls = self.calls()
         self.assertEqual([option(c, "--session-id") for c in agent_calls(calls)], [sid])
-        self.assertEqual(len(calls), 2)  # and the usage probe
+        self.assertEqual(len(self.probes()), 2)  # the board's and the start's
 
     def test_a_long_description_reaches_the_run_intact(self):
         with self.fake.lock:

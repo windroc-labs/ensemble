@@ -22,8 +22,8 @@ from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
 from tests.delegate.replies import block, mark
 from tests.session import live_tmux
-from tests.session.case import PLUGIN_BIN
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.case import PLUGIN_BIN, claude_account
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.utils.jsonl import read_jsonl
 from tests.utils.sandbox import pid_exists as running
 from tests.utils.sandbox import scratch
@@ -52,7 +52,7 @@ class Detach(RunReads, Case):
         )
         for d in (self.proj, self.work, self.bin, self.no_tmux):
             os.mkdir(d)
-        self.path = fake_claude.install(
+        self.path = fake_usage.install(
             self.bin,
             tail=os.pathsep.join((PLUGIN_BIN, os.path.dirname(sys.executable), "/usr/bin", "/bin")),
         )
@@ -61,6 +61,9 @@ class Detach(RunReads, Case):
             os.path.join(self.dir, f) for f in ("events", "scenario.json")
         )
         self.addCleanup(drives.end, self.dir)
+        os.makedirs(self.ensemble, exist_ok=True)
+        with open(os.path.join(self.ensemble, "config.local.toml"), "a", encoding="utf-8") as f:
+            f.write(claude_account(os.path.join(self.home, ".claude")))
 
     def tmux(self) -> live_tmux.Server:
         """The private tmux server a tui run needs, started on first use."""
@@ -315,14 +318,14 @@ class Tui(Detach):
         self.assertEqual(len(self.server.panes(f"={MANAGER}:")), 1)
 
     def test_a_policy_env_secret_reaches_the_client_but_no_argv_record_or_printed_command(self):
-        with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
-            f.write(f'[delegate.policy.claude]\nenv = {{ FAKE_TOKEN = "{SECRET}" }}\n')
+        with open(os.path.join(self.ensemble, "config.local.toml"), "a", encoding="utf-8") as f:
+            f.write(f'\n[delegate.policy.claude]\nenv = {{ FAKE_TOKEN = "{SECRET}" }}\n')
         launched = os.path.join(self.dir, "launched.jsonl")
         dump = (
             "import json, os, sys; f = open(sys.argv[1], 'a'); "
             "f.write(json.dumps({'argv': sys.argv[2:], 'env': dict(os.environ)}) + chr(10))"
         )
-        python, fake = shlex.quote(sys.executable), shlex.quote(fake_claude.__file__)
+        python, fake = shlex.quote(sys.executable), shlex.quote(fake_usage.__file__)
         with open(os.path.join(self.tmux().bin, "claude"), "w", encoding="utf-8") as f:
             f.write(
                 f'#!/bin/sh\n{python} -I -c "{dump}" {shlex.quote(launched)} "$@"\n'

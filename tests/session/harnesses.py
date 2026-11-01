@@ -166,6 +166,14 @@ class Threaded(HostedSession):
     """Injected callables run its harness on a thread (threaded_spawn), else in a process."""
 
     @classmethod
+    def configure(cls, *, clients, **settings):
+        table = clients.get("claude") if isinstance(clients, dict) else None
+        if isinstance(table, dict) and "accounts" not in table:
+            found = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+            clients = {**clients, "claude": {**table, "accounts": {"test": {"dir": found}}}}
+        super().configure(clients=clients, **settings)
+
+    @classmethod
     def _spawn(cls, spec, mode, **options):
         if hosted_session._reconstructible(cls._config()):
             return super()._spawn(spec, mode, **options)

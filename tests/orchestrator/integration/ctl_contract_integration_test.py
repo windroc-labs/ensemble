@@ -11,7 +11,7 @@ from tests.orchestrator.case import PY
 from tests.orchestrator.integration.flow_fixtures import ENTRY, PROJECT, TmuxFlow
 from tests.orchestrator.unit.board_ids import role_id
 from tests.session import live_tmux
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_usage
 from tests.utils.contracts.ctl import CtlContract
 
 
@@ -31,7 +31,7 @@ class LinearCtlContract(CtlContract, TmuxFlow):
             'if [ "$is_run" = false ]; then\n'
             f"  export FAKE_CLAUDE_SCENARIO={shlex.quote(str(probe))}\n"
             "fi\n"
-            f'exec {shlex.quote(sys.executable)} -I {shlex.quote(fake_claude.__file__)} "$@"\n',
+            f'exec {shlex.quote(sys.executable)} -I {shlex.quote(fake_usage.__file__)} "$@"\n',
             encoding="utf-8",
         )
 

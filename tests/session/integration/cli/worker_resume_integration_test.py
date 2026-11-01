@@ -13,7 +13,7 @@ from datetime import datetime
 
 from tests.session import live_tmux
 from tests.session.cli_support import COMMAND, MANAGER, TIMEOUT, CliCase, guard_command, logged
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_usage
 
 FLAGS = ("--model", "m-test")
 ENV_DUMP = (
@@ -166,7 +166,7 @@ class ResumeTest(Base):
         q = shlex.quote
         path = self.first_on_path(
             f'#!/bin/sh\n{q(sys.executable)} -I -c {q(ENV_DUMP)} {q(dump)} "$@"\n'
-            f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@"\n'
+            f'exec {q(sys.executable)} -I {q(fake_usage.__file__)} "$@"\n'
         )
         record = self.record(self.start("w1", "--env", "K=v", "--", *FLAGS, PATH=path))
         self.wait_event("w1", "done")
@@ -196,7 +196,7 @@ class ResumeTest(Base):
         path = self.first_on_path(
             f"#!/bin/sh\n{q(sys.executable)} -I {q(killer)} {q(killer + '.done')} "
             "</dev/null >/dev/null 2>&1 &\n"
-            f'exec {q(sys.executable)} -I {q(fake_claude.__file__)} "$@"\n'
+            f'exec {q(sys.executable)} -I {q(fake_usage.__file__)} "$@"\n'
         )
         killed = self.start("w1", PATH=path)
         # the process killed is its session harness, not the start
@@ -342,7 +342,7 @@ class OldGenerationTest(Base):
         q = shlex.quote
         self.path = self.first_on_path(
             f"#!/bin/sh\nexec {q(sys.executable)} -I {q(program)} {q(self.generations)} "
-            f'{q(fake_claude.__file__)} "$@"\n'
+            f'{q(fake_usage.__file__)} "$@"\n'
         )
         self.addCleanup(self.kill_generations)
 

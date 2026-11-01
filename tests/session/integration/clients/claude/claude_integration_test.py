@@ -42,7 +42,7 @@ from ensemble.session.engine.types import (
 )
 from tests.session.case import PLUGIN_BIN, PY, SID, Case, child_env
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.session.threads import drain
 from tests.utils.sandbox import git, kill, scratch
 from tests.utils.sandbox import pid_exists as running
@@ -99,7 +99,7 @@ class Base(Case):
         patch = mock.patch.dict(
             os.environ,
             {
-                "PATH": fake_claude.install(bin_dir),
+                "PATH": fake_usage.install(bin_dir),
                 "CLAUDE_CONFIG_DIR": os.path.join(self.dir, "config"),
                 fake_claude.ENV: self.file,
             },
@@ -134,9 +134,15 @@ class Base(Case):
     def drain(self, handle, on=lambda _event: None) -> list:
         return drain(self, handle, on, WAIT)
 
-    def logged(self) -> list[dict]:
+    def entries(self) -> list[dict]:
         with open(self.log, encoding="utf-8") as f:
             return [json.loads(line) for line in f]
+
+    def logged(self) -> list[dict]:
+        return [e for e in self.entries() if e["argv"] != PROBE]
+
+    def probes(self) -> list[dict]:
+        return [e for e in self.entries() if e["argv"] == PROBE]
 
     def written(self) -> list[dict]:
         return [{k: v for k, v in e.items() if k != "ts"} for e in RunLog(self.workdir).read()]
@@ -437,7 +443,7 @@ class UsageTest(Base):
         self.scenario(usage=USAGE)
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(self.session_cls.usage("claude"), [Headroom("work", 0.0)])
-        (entry,) = self.logged()
+        (entry,) = self.probes()
         self.assertEqual((entry["argv"], entry["config_dir"]), (PROBE, self.work))
         probe = os.path.join(self.ensemble, "probe")
         self.assertEqual(entry["cwd"], os.path.realpath(probe))
@@ -496,13 +502,13 @@ class AccountUsageTest(Base):
             return self.session_cls.usage("claude")
 
     def probed(self) -> list[str]:
-        return sorted(entry["config_dir"] for entry in self.logged())
+        return sorted(entry["config_dir"] for entry in self.probes())
 
     def test_every_account_is_listed_by_name_under_its_limit(self):
         found = self.usage((70, 10), (20, 30))
         self.assertEqual(found, [Headroom("home", 30.0), Headroom("work", 50.0)])
         self.assertEqual(self.probed(), sorted((self.home, self.work)))
-        self.assertTrue(all(entry["argv"] == PROBE for entry in self.logged()))
+        self.assertTrue(all(entry["argv"] == PROBE for entry in self.probes()))
 
     def test_an_account_at_or_over_its_limit_is_kept(self):
         self.assertEqual(
@@ -511,10 +517,10 @@ class AccountUsageTest(Base):
 
     def test_every_query_reads_every_account_again(self):
         self.usage((70, 10), (20, 30))
-        self.assertEqual(len(self.logged()), 2)
+        self.assertEqual(len(self.probes()), 2)
         found = self.usage((10, 10), (90, 90))
         self.assertEqual(found, [Headroom("home", 90.0), Headroom("work", -10.0)])
-        self.assertEqual(len(self.logged()), 4)
+        self.assertEqual(len(self.probes()), 4)
 
 
 class SessionInfoTest(Base):

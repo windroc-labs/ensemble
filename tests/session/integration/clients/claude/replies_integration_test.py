@@ -14,7 +14,7 @@ from ensemble.session.hosts.base import Host
 from ensemble.utils import read_reply
 from tests.session import harnesses, live_tmux
 from tests.session.case import HOSTS, REPO, Case
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.utils.sandbox import scratch
 
 WAIT = 15
@@ -32,7 +32,7 @@ class RepliesTest(Case):
             path.mkdir(parents=True, exist_ok=True)
         self.server = live_tmux.Server(self, str(self.home), bin_dir=str(self.root / "bin"))
         self.server.start("mgr")
-        fake_claude.install(str(self.server.bin))
+        fake_usage.install(str(self.server.bin))
         self.commands, self.scenario = self.root / "commands.jsonl", self.root / "scenario.json"
         self.events = self.root / "events"
         env = self.server.env(CLAUDE_CONFIG_DIR=str(self.config), TZ="UTC")

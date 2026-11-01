@@ -22,9 +22,9 @@ from ensemble.session.hosts import base as host_base
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.utils import Record
 from tests.session import harnesses
-from tests.session.case import PLUGIN_BIN, child_env
+from tests.session.case import PLUGIN_BIN, child_env, claude_account
 from tests.session.grid import GridCheck
-from tests.session.integration.clients.claude import fake_claude
+from tests.session.integration.clients.claude import fake_claude, fake_usage
 from tests.utils.jsonl import read_jsonl
 
 IDLE = ("cat", "-")
@@ -112,6 +112,12 @@ class Client(NamedTuple):
 class Server:
     def __init__(self, case, home: str, *, bin_dir: str | None = None):
         self.case, self.home, self.size, self.clients = case, home, (200, 50), []
+        local = os.path.join(home, ".ensemble", "config.local.toml")
+        os.makedirs(os.path.dirname(local), exist_ok=True)
+        with open(local, "a+", encoding="utf-8") as f:
+            f.seek(0)
+            if "session.clients.claude.accounts" not in f.read():
+                f.write(claude_account(os.path.join(home, ".claude")))
         program = shutil.which("tmux")
         if program is None:
             case.skipTest("tmux not installed")
@@ -122,7 +128,7 @@ class Server:
         self.socket = os.path.join(self.root, f"tmux-{os.getuid()}", "default")
         self.bin = bin_dir if bin_dir is not None else os.path.join(self.root, "bin")
         os.mkdir(self.bin)
-        self.path = fake_claude.install(
+        self.path = fake_usage.install(
             self.bin,
             tail=os.pathsep.join(
                 (
@@ -447,7 +453,7 @@ def wait_events(path: str, expected, timeout: float = TIMEOUT) -> list[str]:
 
 
 def logged(path: str) -> list[dict]:
-    return read_jsonl(path, missing_ok=True)
+    return [e for e in read_jsonl(path, missing_ok=True) if e.get("argv", [])[-1:] != ["/usage"]]
 
 
 def wait(check, timeout: float = TIMEOUT, what: str = "check() to hold"):
