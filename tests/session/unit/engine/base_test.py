@@ -64,7 +64,7 @@ class SessionClassMethods(Case):
                 Session.validate_policy(flags=(), env={"TOKEN": "v", "ENSEMBLE_ACCOUNT": value})
             self.assertEqual(
                 str(caught.exception),
-                "ENSEMBLE_ACCOUNT is set by --account or [clients.<client>].account or local_account",
+                "ENSEMBLE_ACCOUNT is set by --account or [clients.<client>].account",
             )
 
     def test_public_config_boundary_rejects_missing_hosts_without_a_session(self):
