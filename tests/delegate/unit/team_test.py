@@ -970,7 +970,7 @@ class Principles(Packaged):
         leaves = {
             name.removesuffix(".md")
             for name in os.listdir(os.path.join(TEAM, "principles"))
-            if name.endswith(".md") and name != "README.md"
+            if name.endswith(".md")
         }
         self.assertEqual(len(leaves), 24)
         self.assertEqual(set(re.findall(r"<team>/principles/([\w-]+)\.md", index)), leaves)
@@ -1052,3 +1052,23 @@ class Principles(Packaged):
             "subtract-before-you-add",
         ):
             self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", f"{name}.md")))
+
+
+class Sources(Packaged):
+    def test_readme_links_resolve_and_name_every_method_and_license(self):
+        with open(os.path.join(TEAM, "README.md"), encoding="utf-8") as f:
+            readme = f.read()
+        local = [
+            link.split("#", 1)[0]
+            for link in re.findall(r"\]\(([^)\s]+)\)", readme)
+            if not re.match(r"[a-z]+:|#", link)
+        ]
+        self.assertTrue(local)
+        for link in local:
+            self.assertTrue(os.path.isfile(os.path.join(TEAM, link)), link)
+        for name in os.listdir(os.path.join(TEAM, "methods")):
+            self.assertIn(f"methods/{name}", readme)
+        for name in os.listdir(os.path.join(TEAM, "licenses")):
+            self.assertIn(f"licenses/{name}", local)
+        notice = re.findall(r"<team>/(licenses/[\w.-]+)", team_texts()["principles.md"])
+        self.assertEqual(notice, ["licenses/pstack.txt"])

@@ -1,5 +1,7 @@
 # To Tickets Method
 
+Adapted from Matt Pocock's [`to-tickets` skill](https://github.com/mattpocock/skills/blob/24fe0ef7737efae15c87225755e9f6f5965e4888/skills/engineering/to-tickets/SKILL.md) (MIT).
+
 Break a plan, spec, or conversation into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
 ## Process
