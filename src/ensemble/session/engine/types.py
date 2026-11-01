@@ -638,6 +638,16 @@ class Usage:
 
 
 @dataclass(frozen=True)
+class Headroom:
+    """An account's usage percentage points left under its max_usage, 0 or below at or past it;
+    None: its reading failed; inf: it has no usage panel.
+    """
+
+    account: str
+    left: float | None
+
+
+@dataclass(frozen=True)
 class SessionStatus:
     resumable: Resumable  # given its plain value too
     last_active: float | None
