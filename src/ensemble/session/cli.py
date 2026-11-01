@@ -534,6 +534,22 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
     p.add_argument(
         "sid", metavar="SID", help="required conversation id: [A-Za-z0-9][A-Za-z0-9._:-]*"
     )
+    p = sub.add_parser(
+        "accounts",
+        help="specialist: print a client's registered accounts",
+        description="Specialist: print the accounts registered for a Client, by name.",
+        epilog="Prerequisites and effects\n"
+        "  Requires configured CLIENT with accounts. Prints one JSON object: each\n"
+        "  [session.clients.CLIENT.accounts.NAME] by NAME, with the environment that\n"
+        "  selects it; {} when none is registered. Reads and starts nothing.\n\n"
+        "Examples: annotated invocation form\n"
+        "  ensemble-session accounts CLIENT\n"
+        "  CLIENT selects [session.clients.NAME].\n\n"
+        "Recovery and Next help\n"
+        "  Client configuration: ensemble-session --help",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("client", help="required configured Client name")
     return ap
 
 
@@ -880,6 +896,8 @@ def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls
         return Session.client_resume(args.client, args.arguments)
     elif cmd == "resume-argv":
         print(json.dumps(list(Session.resume_argv(args.client, args.sid))))
+    elif cmd == "accounts":
+        print(json.dumps(Session._hosted("accounts")(args.client)))
     else:
         host = Session.host()
         if not host.attachable:
