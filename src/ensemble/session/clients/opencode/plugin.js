@@ -96,7 +96,7 @@ function report(client, ending) {
   const session = root, user = turnUser, sent = reported, known = completed, merged = joined;
   chain = chain.then(async () => {
     const last = await reply(client, session, user, merged, sent, known, ending);
-    if (ending) await run("session.idle", { session_id: session, turn_id: user, last_assistant_message: last });
+    if (ending) await run("session.idle", { session_id: session, turn_id: user, last_assistant_message: last.text, error: last.error });
   });
 }
 
@@ -104,6 +104,7 @@ function report(client, ending) {
 async function reply(client, session, user, merged, sent, known, ending) {
   const until = Date.now() + REPLY_WAIT;
   let best = "";
+  let error = "";
   for (;;) {
     try {
       const found = await client.session.messages({ path: { id: session } });
@@ -112,6 +113,7 @@ async function reply(client, session, user, merged, sent, known, ending) {
       const answers = (turn ?? []).filter((m) => m?.info?.sessionID === session && m.info.role === "assistant" && !m.info.summary);
       best = answers.map(texts).findLast((t) => t.trim()) ?? best;
       const last = answers.at(-1);
+      error = last?.info?.error?.name ?? "";
       const saved = typeof last?.info?.time?.completed === "number" && texts(last).trim();
       const ready = [...known].every((id) => answers.some((m) => m.info.id === id &&
         (typeof m.info.time?.completed === "number" || m.info.error != null)));
@@ -123,10 +125,10 @@ async function reply(client, session, user, merged, sent, known, ending) {
           sent.add(id);
           await run("message.completed", { session_id: session, turn_id: user, text });
         }
-        if (!ending || (turn && last && (saved || last.info.error != null))) return best;
+        if (!ending || (turn && last && (saved || last.info.error != null))) return { text: best, error };
       }
     } catch {} // a failed read is one more try, not the reply
-    if (Date.now() >= until) return best;
+    if (Date.now() >= until) return { text: best, error };
     await new Promise((resolve) => setTimeout(resolve, REPLY_POLL));
   }
 }

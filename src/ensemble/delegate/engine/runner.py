@@ -82,7 +82,9 @@ class Headless:
             raise ConfigError("session driver returned an Instruction")
         return resumed
 
-    def turn_end(self, handle: Session, reply: str, pending: int) -> str | GiveUp | None:
+    def turn_end(
+        self, handle: Session, reply: str, pending: int, *, interrupted: bool = False
+    ) -> str | GiveUp | None:
         return None
 
     def progress(self) -> None:
@@ -94,7 +96,7 @@ class Headless:
 
 class Tui(Headless):
     """A turn end without an outcome gets NUDGE, STOP_LIMIT more give up (a progress mark
-    resets it); an IdleTimeout gives up. The session is left open.
+    resets it); interrupted ends do not count. An IdleTimeout gives up. The session is left open.
     """
 
     stops_client = False
@@ -107,10 +109,12 @@ class Tui(Headless):
         handle.send(text)
         return handle
 
-    def turn_end(self, handle: Session, reply: str, pending: int) -> str | GiveUp | None:
+    def turn_end(
+        self, handle: Session, reply: str, pending: int, *, interrupted: bool = False
+    ) -> str | GiveUp | None:
         if outcome_block(reply) is not None:
             return END
-        if pending:
+        if pending or interrupted:
             return None
         if not self.nudged:
             self.nudged = True
@@ -296,7 +300,9 @@ class Attempt:
                 self.last = self.reply(event.reply)
             self.replied = None
             if not self.limit:
-                answer = self.policy.turn_end(self.handle, self.last or "", event.pending)
+                answer = self.policy.turn_end(
+                    self.handle, self.last or "", event.pending, interrupted=event.interrupted
+                )
         elif isinstance(event, Stderr):
             say(event.text)
         elif isinstance(event, IdleTimeout):

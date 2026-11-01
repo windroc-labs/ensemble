@@ -40,6 +40,7 @@ from ensemble.session import (
     Session,
     SessionBusy,
     SessionError,
+    TurnEnd,
     TurnFailed,
 )
 from ensemble.session.engine.types import Activity
@@ -903,6 +904,32 @@ class AttemptCore(Handles):
         self.assertEqual(self.handle.calls, [("send", NUDGE)])
         self.assertEqual(self.notes, ["nudge", "give_up"])
         self.assertIn(f"delegate: no outcome after {STOP_LIMIT} turn ends; {LEFT_OPEN}", self.err)
+
+    def test_interrupted_turns_neither_nudge_nor_change_the_no_outcome_count(self):
+        attempt = self.attempt()
+        interrupted = TurnEnd(interrupted=True)
+        for _ in range(STOP_LIMIT + 2):
+            self.assertEqual(self.fed(attempt, Reply("Still working."), interrupted), [None, None])
+        self.assertEqual((self.handle.calls, self.notes), ([], []))
+        self.assertEqual(self.fed(attempt, STOP), [None])
+        self.assertEqual(self.handle.calls, [("send", NUDGE)])
+        for _ in range(STOP_LIMIT - 1):
+            self.assertEqual(self.fed(attempt, STOP, interrupted), [None, None])
+        self.assertEqual(self.fed(attempt, STOP), [GAVE_UP])
+        self.assertEqual(self.notes, ["nudge", "give_up"])
+
+    def test_an_interrupted_end_keeps_an_outcome_already_delivered(self):
+        attempt = self.attempt()
+        found = self.fed(attempt, Reply(block(DONE)), TurnEnd(interrupted=True))
+        self.assertIsNone(found[0])
+        self.assertEqual(found[1].outcome.status, "done")
+        self.assertEqual(self.handle.calls, [])
+
+    def test_ordinary_empty_completions_still_exhaust_the_no_outcome_limit(self):
+        found = self.fed(self.attempt(), *[TurnEnd()] * (STOP_LIMIT + 1))
+        self.assertEqual(found[:-1], [None] * STOP_LIMIT)
+        self.assertEqual(found[-1], GAVE_UP)
+        self.assertEqual(self.handle.calls, [("send", NUDGE)])
 
     def test_a_mark_resets_the_count_before_its_turn_end_counts_and_never_the_nudge(self):
         mark = turn("[ensemble-progress:round] half way")

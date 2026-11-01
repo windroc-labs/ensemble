@@ -888,13 +888,13 @@ class TuiRecoveryIntegrationTest(Live):
         stream = Stream(self, handle)
         self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd("kept"))
         handle.send("interrupt")
-        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd()])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd(interrupted=True)])
         self.assertEqual(self.lines(2), ["w1 done", "w1 done"])
         self.assertEqual(
             self.attach("interrupt again"),
             [[self.sid, True, ""], ["", 0], ""],
         )
-        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd()])
+        self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd(interrupted=True)])
         self.assertEqual(self.attach(), [self.sid, True, ""])
         handle.send("recover")
         self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd("after")])
@@ -907,7 +907,7 @@ class TuiRecoveryIntegrationTest(Live):
         self.scene([[{"kind": "interrupt"}], []])
         handle = self.start()
         stream = Stream(self, handle)
-        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd())
+        self.assertEqual(stream.until(TurnEnd)[-1], TurnEnd(interrupted=True))
         self.assertEqual(self.attach(), [self.sid, True, ""])
         handle.send("silent")
         self.assertEqual(stream.until(TurnEnd), [TurnStarted(), TurnEnd()])

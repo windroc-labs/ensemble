@@ -152,6 +152,11 @@ class OpenCodeTui(Homed, Tui):
             and payload.get("turn_id") != self._turn_id
         ):
             return []
+        if (
+            label in ("session.error", "session.idle")
+            and _text(payload, "error") == "MessageAbortedError"
+        ):
+            label, payload = "session.idle", {**payload, "interrupted": True}
         found = super().hook_events(label, payload)
         if label == "message.completed" and (text := _text(payload, "text")).strip():
             found.append(Reply(text))

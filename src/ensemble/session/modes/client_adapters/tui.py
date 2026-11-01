@@ -146,7 +146,11 @@ class Tui(ABC):
         ):
             return found
         if kind == HookKind.TURN_END:
-            found.append(TurnEnd(self.reply(payload), self.pending(payload)))
+            found.append(
+                TurnEnd(
+                    self.reply(payload), self.pending(payload), payload.get("interrupted") is True
+                )
+            )
         elif kind == HookKind.TURN_FAILED:
             found.extend(self.failure(payload))
         elif kind == HookKind.BLOCKED:

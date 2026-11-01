@@ -568,6 +568,7 @@ class Reply:
 class TurnEnd:
     reply: str = ""
     pending: int = 0
+    interrupted: bool = False
 
 
 @dataclass(frozen=True)
