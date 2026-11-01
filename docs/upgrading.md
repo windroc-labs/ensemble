@@ -53,7 +53,7 @@ no usage-specific rollback, retry or issue state. A login whose `/usage` prints 
 (an API key or gateway) has no usage panel and is never refused for usage.
 
 1. Delete `[orchestrator.usage_limit]` from `~/.ensemble/config.local.toml`; do not move it to
-   another layer. A leftover table is a configuration error (`unknown keys: usage_limit`).
+   another layer. A leftover table is a configuration error (`unknown key 'usage_limit' in [orchestrator]`).
 2. `Delegate.usage`, `HarnessDelegate.usage`, `Session.usage` and the `Headroom` type are gone,
    with no per-account replacement. Remove custom calls and `from ensemble.session import Headroom`:
    request the run instead and handle its ordinary failure, a `SessionError` whose text is the
