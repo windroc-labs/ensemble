@@ -466,7 +466,7 @@ class BoundaryTest(Live):
         )
 
         def exited():
-            # libutempter can lose tmux 3.4's SIGCHLD; a job exit reaps the pending child too.
+            # A job exit reaps a child missed by tmux 3.4's libutempter SIGCHLD race.
             self.tmux("run-shell", "-b", "true")
             state = self.tmux(
                 "display-message",
