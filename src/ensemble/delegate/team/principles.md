@@ -33,7 +33,7 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 - Keep a reason only where it prevents a likely mistake.
 - Name each recurring idea once, in bold, then reuse the name.
 - Say what to do; use a ban only for a hard guardrail.
-- Use short declarative sentences, one thought per sentence. Avoid long dashes and mid-sentence colons in prose; required literals, fixed labels and templates keep their exact form. Brevity keeps every required detail, tradeoff, choice and open decision.
+- Use short declarative sentences, one thought per sentence. Brevity keeps every required detail, tradeoff, choice and open decision.
 - Lead with what changes for the consumer, then what the maintainer inherits, before implementation details.
 - Link only artifacts produced or read this session. Each factual claim carries its evidence or its label (measured, inferred or guess) in the same sentence; predictions and unseen causes are guesses. Run checks you can run yourself.
 - In the deliverable, name each principle that shaped a decision and the specific choice it changed; cite only files read this session.
@@ -41,6 +41,7 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 - **Diagrams and tables**: a flow of 3+ steps or with branches, a structure, a sequence or a timeline → a Mermaid diagram (`flowchart`, `sequenceDiagram` or `timeline` only; short node labels); a comparison of several items → a table; anything simpler → a list or `X → Y`, not prose. Right after a diagram, a caption saying only what it can't carry (sources, confidence, what an edge means, reading order), from facts already in that section, never restating its nodes; delete the text the diagram replaces. A research report: its Template's Body rule instead.
 - A verify report is its Template alone: no goal opening, principle citations, diagram or other section.
 - Reports and PRDs, headings and fixed labels included, are in {{language}}; a `<X, translated>` in a template or task is X in {{language}}. Ids (`FR-<n>`, `NFR-<n>`, `[n]`, `primary`, `secondary`, `code`, `high`, `medium`, `low`, `single-source`, `unverified`), proper nouns and acronyms stay English. A term's first mention adds one gloss, its {{language}} rendering (for an acronym, of its full name); none when the term is common in {{language}}, and none in a heading. Later mentions: just the English.
+- Before delivering, check the prose you wrote against `<team>/methods/unslop.md` and rewrite each match. Where it and this section differ, this section wins; required literals, fixed labels and templates keep their exact form.
 
 ## Principle index
 
