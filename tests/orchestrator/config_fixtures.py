@@ -16,13 +16,15 @@ HARNESS_DELEGATE = load_class("ensemble.delegate:HarnessDelegate", Delegate)
 PIPELINE = HEADER + role("researcher") + role("pm") + role("engineer")
 
 
-# the packaged stages and a last one, dummy-tester (a core charter)
-TESTER = workflow_line(PACKAGED_FLOW + '\n[[stage]]\nrole = "dummy-tester"\ninput = "research"\n')
+# the packaged stages and a last one, verifier (a core charter)
+VERIFIER_STAGE = workflow_line(
+    PACKAGED_FLOW + '\n[[stage]]\nrole = "verifier"\ninput = "research"\n'
+)
 
-# BASE, its dummy-tester stage without tables
-BARE = HEADER + TESTER + role("researcher") + role("pm") + role("engineer")
+# BASE, its verifier stage without tables
+BARE = HEADER + VERIFIER_STAGE + role("researcher") + role("pm") + role("engineer")
 
-BASE = BARE + role("dummy-tester")
+BASE = BARE + role("verifier")
 
 CORE_TOP = '[delegate]\nlanguage = "Chinese"\n'
 

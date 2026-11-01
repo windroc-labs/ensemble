@@ -121,7 +121,9 @@ class Fix(Base):
         sid = self.events[0].sid
         self.assertEqual((first[first.index("--sid") + 1], "--resume" in first), (sid, False))
         self.assertEqual((second[second.index("--sid") + 1], "--resume" in second), (sid, True))
-        self.assertEqual(second[second.index("--") + 1], FIX.format(error=INVALID_ERROR))
+        self.assertEqual(
+            second[second.index("--") + 1], FIX.format(error=INVALID_ERROR) + "\n\nFAKE NOTE"
+        )
         self.assertEqual([type(e) for e in self.events], [Begun, Progress, Finished])
         self.assertEqual(
             self.kinds(), ["session", "input", "progress", "invalid", "session", "result", "end"]

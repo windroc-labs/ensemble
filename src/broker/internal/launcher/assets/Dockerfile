@@ -42,7 +42,7 @@ RUN test -n "${CLAUDE_VERSION}" && test -n "${CODEX_VERSION}" && test -n "${OPEN
     && test "$(HOME="$check" /opt/ensemble/clients/bin/opencode --version)" = "${OPENCODE_VERSION}" \
     && rm -rf "$check" \
     && python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex "${CODEX_VERSION}" \
-    && PATH=/opt/ensemble/clients/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin python3 -I /opt/ensemble/lib/plugin-install.py /opt/ensemble/plugin-sources.json /opt/ensemble
+    && PATH=/opt/ensemble/clients/bin:/home/agent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin python3 -I /opt/ensemble/lib/plugin-install.py /opt/ensemble/plugin-sources.json /opt/ensemble /etc/codex/config.toml
 # python3 on the agent's PATH is this venv's, importing ensemble; system site keeps pip --user working.
 RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/ensemble/bin \
     && printf '%s\n' /opt/ensemble/src > "$(/opt/ensemble/venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/ensemble.pth" \

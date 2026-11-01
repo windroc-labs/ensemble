@@ -193,7 +193,11 @@ class TuiTest(Base):
         plan = tui.decode(json.loads(launch.argv[-1]))
         self.assertEqual(launch.argv[0], "/opt/ensemble/venv/bin/python")
         self.assertEqual(plan.executable, "/opt/ensemble/bin/codex")
+        self.assertTrue(plan.unattended)
         snapshot = self.common.load(str(self.work), spec.sid).snapshot
+        forced = common.unattended_flags(snapshot.cwd)
+        self.assertTrue(holds(tui.execution_argv(plan, snapshot, "trusted"), forced))
+        self.assertTrue(holds(tui.trust_args(plan, snapshot), forced))
         for selection in ((), ("resume", NATIVE)):
             with self.subTest(selection=selection):
                 argv = tui.execution_argv(
@@ -210,6 +214,11 @@ class TuiTest(Base):
         self.assertEqual(
             (json.loads(text)["workdir"], json.loads(text)["sid"]), (str(self.work), "caller-id")
         )
+
+    def test_a_local_launch_plan_is_not_unattended(self):
+        with mock.patch("shutil.which", return_value="/protected/codex"):
+            launch = committed_tui(self.client, dataclasses.replace(self.spec, prompt="hi"), HOOK)
+        self.assertFalse(tui.decode(json.loads(launch.argv[-1])).unattended)
 
     def test_history_scan_and_observation_never_follow_directory_or_file_links(self):
         self.prepare()
@@ -1449,6 +1458,7 @@ class PlanTest(PlanCase):
                 "store",
                 "permission",
                 "flags",
+                "unattended",
             },
         )
         self.assertEqual(data["hook"], list(self.plan.hook.argv))
@@ -1515,6 +1525,30 @@ class PlanTest(PlanCase):
             tui.trust_args(plan, self.snapshot)[-6:],
             ["--disable", "apps", "-c", 'model_verbosity="low"', "--enable", "web"],
         )
+
+    def test_an_unattended_plan_gives_the_run_and_the_hook_probe_the_same_forced_keys(self):
+        forced = list(common.unattended_flags(self.snapshot.cwd))
+        plan = dataclasses.replace(self.plan, unattended=True)
+        command = tui.execution_argv(plan, self.snapshot, "trusted")
+        options = list(common.launch_options(self.snapshot))
+        start = next(
+            i for i in range(len(command)) if command[i : i + len(options)] == options
+        ) + len(options)
+        self.assertEqual(command[start : start + len(forced)], forced)
+        self.assertEqual(tui.trust_args(plan, self.snapshot)[-len(forced) :], forced)
+        for argv in (
+            tui.execution_argv(self.plan, self.snapshot, "trusted"),
+            tui.trust_args(self.plan, self.snapshot),
+        ):
+            self.assertNotIn('forced_login_method="chatgpt"', argv)
+        data = json.loads(tui.encode(plan))
+        self.assertTrue(tui.decode(data).unattended)
+        for value in (1, "true", None):
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(ValueError, "^Codex tui launch: "),
+            ):
+                tui.decode(data | {"unattended": value})
 
     def test_wire_validates_each_command_component_and_prompt(self):
         data = json.loads(tui.encode(self.plan))

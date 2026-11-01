@@ -1,7 +1,17 @@
+import os
+import re
+
 from ensemble.session.clients.codex import CodexClient
-from ensemble.session.clients.common import check_selection, scan, select, split_flags
+from ensemble.session.clients.common import (
+    check_selection,
+    docker_config,
+    scan,
+    select,
+    split_flags,
+)
 from ensemble.session.engine.types import ConfigError
 from tests.session.case import SID, Case
+from tests.utils.sandbox import scratch
 
 
 class FlagsTest(Case):
@@ -114,3 +124,24 @@ class FlagsTest(Case):
                 self.assertRaisesRegex(ConfigError, "session ids are UUIDs"),
             ):
                 select(native, syntax, uuid=True, resume=False)
+
+
+class DockerConfigTest(Case):
+    def setUp(self):
+        self.default = os.path.join(scratch(self), "default.json")
+        with open(self.default, "w") as f:
+            f.write("default")
+        self.path = os.path.join(os.environ["HOME"], ".ensemble", "docker-config", "x", "c.json")
+
+    def test_the_users_file_else_the_packaged_default(self):
+        self.assertEqual(docker_config("x", "c.json", self.default), (self.default, "default"))
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("mine")
+        self.assertEqual(docker_config("x", "c.json", self.default), (self.path, "mine"))
+
+    def test_a_dangling_link_is_refused_not_replaced_by_the_default(self):
+        os.makedirs(os.path.dirname(self.path))
+        os.symlink(os.path.join(os.path.dirname(self.path), "gone"), self.path)
+        with self.assertRaisesRegex(ConfigError, f"^Docker config {re.escape(self.path)}: want"):
+            docker_config("x", "c.json", self.default)

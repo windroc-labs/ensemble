@@ -71,7 +71,7 @@ Pick the task below that fits the input; unsure → `review` (`<tasks>/review.md
 
 ### Task file: `tasks/<task>.md`
 
-It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what to report>` line and a `## Resume` section, outside code fences. The smallest built-in example: `src/ensemble/delegate/team/tasks/echo.md`.
+It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what to report>` line and a `## Resume` section, outside code fences. The smallest built-in example: `src/ensemble/delegate/team/tasks/light-research.md`.
 
 ## Run and check
 
@@ -129,6 +129,23 @@ failed = "Verification failed:"
 
 - Leave `next` and `deliverable` unset: the verifier publishes its report itself ([Upgrading](upgrading.md#verifier-reports-on-github-orchestrator-destination-removed) has its setup), and write-back links the report's `url` on the issue.
 - Its issue, delegated to the verifier app: an optional `Repo:` line (the project's mapping), an optional `Ref:` line, then what to test or the steps to run.
+
+## Docker worker client settings
+
+Each client's Docker workers start from a **Docker config**, a file you edit: yours under `~/.ensemble/docker-config/`, else the packaged default. Your file replaces the default whole; start from a copy of it. Your personal client settings (`~/.claude/settings.json`, `~/.codex/config.toml`) never reach a container.
+
+| Client | Your file | Packaged default | Worker copy | Wins over it |
+|---|---|---|---|---|
+| Claude | `claude/settings.json` | [`docker-settings.json`](../src/ensemble/session/clients/claude/docker-settings.json) | `$CLAUDE_CONFIG_DIR/settings.json` | `skipWorkflowUsageWarning`, `autoCompactEnabled`, `autoContinueAtUsageLimit`, `promptSuggestionEnabled`, which an unattended worker needs; run flags; project settings |
+| Codex | `codex/config.toml` | [`docker-config.toml`](../src/ensemble/session/clients/codex/common/docker-config.toml) | `$CODEX_HOME/config/config.toml`, which `$CODEX_HOME/config.toml` links to | `cli_auth_credentials_store`, `forced_login_method`, `check_for_update_on_startup` and the cwd's project trust, passed as `-c` flags; run flags; project config |
+| OpenCode | `opencode/opencode.json` | [`docker-opencode.json`](../src/ensemble/session/clients/opencode/docker-opencode.json) | `$XDG_DATA_HOME/opencode.json`, named by `OPENCODE_CONFIG` | ensemble's inline config (providers, permissions, plugin); `--model`; project config |
+
+- **When it applies:** each new worker start copies it, so an edit needs no release and reaches later workers only. A resume keeps the worker's copy, with every edit made to it, for every client; only the worker's next new start replaces it.
+- **One worker:** edit its copy in place, inside the container (`docker exec -it <container> vi "$CODEX_HOME/config.toml"`) or on the host under `~/.ensemble/docker-state/<worker>/<client>/` (Codex: `codex/config/config.toml`). Copies are independent: other workers keep theirs. A Codex worker also keeps what Codex itself saves there, such as a service tier set in its TUI.
+- **Codex plugins** the image installs are enabled in the image's `/etc/codex/config.toml`, below the copy, so the Docker config can turn one off.
+- **Model and effort** come from the run's tier and effort flags (`[clients.<name>.tiers]`, `[clients.<name>.efforts]`); the copy only sets what a run leaves unset. The packaged defaults set Claude `opus` / `medium` (`model`, `effortLevel`) and Codex `gpt-6.1-sol` / `high` (`model`, `model_reasoning_effort`). It is a user-level file, never a managed layer.
+- **Trust:** the Docker config applies to every role's Docker workers. Only the keys above are overridden: others, such as Claude `permissions` or `defaultMode`, OpenCode `permission`, or Codex `chatgpt_base_url`, `model_provider` and `[model_providers]` (which can send the broker's ChatGPT login elsewhere), can widen a run's Access. Any change to a worker's copy lasts across that worker's resumes, including one its agent makes, such as an approved hook, an MCP server or a provider URL. A run's `-c mcp_servers={}` also turns off the MCP servers the copy Codex loads names: the Docker config on a new start, the worker's copy on a resume. Keep credentials out of it; the copy is plaintext in every worker's home.
+- An invalid Claude (not a JSON object) or Codex (not TOML) Docker config fails a new Docker start, naming the file; a resume never reads it. OpenCode reports its own parse errors.
 
 ## OpenCode sessions
 

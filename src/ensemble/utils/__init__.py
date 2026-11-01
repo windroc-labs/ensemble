@@ -12,6 +12,7 @@ from ensemble.utils.config_file import (
     unset,
 )
 from ensemble.utils.config_file import load as load_config
+from ensemble.utils.config_file import loads as load_config_text
 from ensemble.utils.environment import (
     ACCOUNT_ENV,
     AGENT_SESSION_ENV,
@@ -182,6 +183,7 @@ __all__ = [
     "last_lines",
     "load_class",
     "load_config",
+    "load_config_text",
     "module_roots",
     "nested_start",
     "number",

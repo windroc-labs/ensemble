@@ -28,9 +28,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## pstack
+
+Files under `src/ensemble/delegate/team/` copy or adapt [pstack](https://github.com/cursor/plugins/tree/main/pstack) in [cursor/plugins](https://github.com/cursor/plugins); which files, from which commit: `src/ensemble/delegate/team/README.md`.
+
+```
+MIT License
+
+Copyright (c) 2026 Lauren Tan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## mattpocock/skills
 
-`src/ensemble/delegate/team/methods/to-tickets.md` is adapted from [`skills/engineering/to-tickets/SKILL.md`](https://github.com/mattpocock/skills/blob/v1.3.1/skills/engineering/to-tickets/SKILL.md) in [mattpocock/skills](https://github.com/mattpocock/skills) v1.3.1.
+Files under `src/ensemble/delegate/team/` copy or adapt [mattpocock/skills](https://github.com/mattpocock/skills); which files, from which commit: `src/ensemble/delegate/team/README.md`.
 
 ```
 MIT License

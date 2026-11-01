@@ -15,7 +15,7 @@
 
 ## Template rules
 
-Instruction sections: omit Template rules and Filled example from the report. Start with the H1, type line, then the alert, with no Conclusion heading between them.
+Instruction section: omit Template rules from the report. Start with the H1, type line, then the alert, with no Conclusion heading between them.
 
 - Title: no gloss; `[Title]` never repeats `[Reference]`. Combining reports: each id appears once, in its sub-report's heading.
 - Type line: `<type>` is Light Research, Research or Deep Research, translated; `<task>` is the selected task name. For local or mixed, append ` · <repo>@<12-character sha>` for each repo; web has no repo segment. Task depth:
@@ -27,8 +27,11 @@ Instruction sections: omit Template rules and Filled example from the report. St
 | Deep Research | Research workflows; independent votes on key claims |
 
 - Alert: one bold answer with confidence; at most 3 reasons; Next step and Risk each one line. No synthesis label inside it.
-- Body: text where detail is needed; a figure (Mermaid, or SVG: [Researcher › Standards › Figures](#standards)) or table wherever it makes the report easier to read. Be concise; avoid long essay-style paragraphs. Outside Findings, one fact per list item. Keep only material relevant to the research question. Mark synthesis at most once per section, outside the alert.
-- Length: display columns. Outside Findings: lists/paragraphs 80; table last column 80, other cells 30. Findings: no per-line cap; the `<details id="findings">` block (keep that id) at most 6000 in total. W/F characters in `unicodedata.east_asian_width` count 2, others 1. URLs, link targets, `[n]` and Markdown markers do not count. Code/Mermaid blocks, headings, type line and HTML tag lines are exempt; text inside `<details>` is checked. Soft-wrapped text shares one item's budget. Delivery check: [Researcher › Standards › Concise](#standards).
+- Body: text where detail is needed; a figure (Mermaid, or SVG: [Researcher › Standards › Figures](#standards)) or table wherever it makes the report easier to read. No essay paragraphs. Outside Findings, one fact per list item. Keep only material relevant to the research question. Mark synthesis at most once per section, outside the alert.
+- Citations: `[n]` is source number n in Sources, written as a link to that source, `[[n]](<URL or code permalink>)`, the same target as its Sources item, so a click opens it. Put it right after the sentence or cell it supports, never in a trailing pile.
+- Length, in display columns: W/F characters in `unicodedata.east_asian_width` count 2, others 1. URLs, link targets, `[n]` and Markdown markers do not count. Code/Mermaid blocks, headings, type line and HTML tag lines are exempt. Soft-wrapped text shares one item's budget.
+  - Outside Findings: lists/paragraphs 80; table last column 80, other cells 30.
+  - Findings: limits in [Findings](#findings) below. Delivery check: [Researcher › Standards › Concise](#standards).
 
 ## Comparison table
 
@@ -36,16 +39,56 @@ Optional; omit when the input asks for no comparison. A table ([Principles › W
 
 ## Findings
 
-<details id="findings">
-<summary>Findings (<count>)</summary>
+<details id="findings" open>
+<summary>Findings: <A> aspects, <F> findings</summary>
 
-One subsection per part of the question; the findings the conclusion depends on first. Each finding is one **bold claim** line, then 1–3 sentences: the evidence (what was measured, on what, how big), why it holds, and what it means for the research question; they end with `(<confidence: high, medium or low>; [n]…; <single-source or unverified, when so>)`. Translate the label names, keeping the listed values English. Sources disagree → name both and which you favor, and why; confidence at most medium.
+The body of the report: the evidence behind the alert, organized so a reader can open one aspect and read it alone.
+
+**Aspects.** One aspect per part of the research question, named after that part (e.g. "What it is for", "How to use it", "Practice in real projects", "How <person> uses it"), in the question's order. Every finding belongs to exactly one aspect; if it bears on another, that aspect says `see <n.m>` instead of repeating it. Number aspects 1, 2, 3…; findings inside aspect n are n.1, n.2…; the summary line counts both (`<A>` aspects, `<F>` findings), translated.
+
+**Aspect layout.** Each aspect, in this order:
+
+1. A blank line, then `---` on its own line, then a blank line (the blank line before `---` is required: without it the line above becomes a heading).
+2. `### <n>. <Aspect name>`.
+3. `> **<Answer, translated>:** <this aspect's answer, 1–2 sentences> (<confidence>)`. It answers this part of the question only; it does not repeat the alert.
+4. Optional orientation, at most 2 sentences: the scope of the aspect or what the reader needs to know first (a term, a timeline).
+5. Findings, the ones this aspect's answer depends on first. Each: `#### <n.m> <claim>`, the claim one plain sentence; then a body of 2–5 sentences: the evidence (what, measured on what, how big, quoted where wording matters), why it holds, what it means for this aspect; then the trailer line `(<confidence: high, medium or low>; <single-source, unverified or sources disagree, when so>)`. Translate labels; keep the listed values English.
+6. Optional, at most one per aspect: a table, figure or example that the prose would otherwise describe badly, placed after the finding it belongs to and referenced by it.
+
+**Shape by aspect kind.** Pick the supporting element that fits; prose alone is fine when nothing fits.
+
+| Aspect kind | Best supporting element |
+|---|---|
+| What it is, why it exists | Quote of the defining source; timeline |
+| How to use it | Minimal example (code ≤ 15 lines); pipeline figure |
+| Practice, pitfalls | Do / avoid table with the reason per row |
+| How a person or project does it | Steps figure; table mapping their parts to ours |
+| Option vs option | Small table on this aspect's criteria only |
+
+**Rules.**
+
+- Sources disagree → name both, which you favor and why; confidence at most medium.
+- Every sentence carries a fact, a number, a name or a consequence. No warm-up ("It is worth noting"), no restating the claim heading, no summary sentence at the end of an aspect.
+- A finding that does not bear on the research question goes; a weak one stays only if it is flagged low.
+- More than 7 findings in an aspect → split the aspect or cut the weakest.
+
+**Limits** (display columns, counted as in Template rules; this whole block at most 15000):
+
+| Item | Limit |
+|---|---|
+| Aspect answer | 160 |
+| Orientation | 160 |
+| Claim heading | 80 |
+| Finding body | 5 sentences, 480 |
+| One aspect, everything in it | 3500 |
+| Code example | 15 lines (exempt from columns) |
+| Table cells | 30; last column 80 |
 
 </details>
 
 ## What it means for us
 
-Optional; omit when the input asks no decision. 1–3 list items tying the findings to that decision: what they favor, rule out or still require.
+Optional; omit when the input asks no decision. 1–3 list items tying the findings to that decision: what they favor, rule out or still require. Point to findings by number (`see 2.3`) rather than restating them.
 
 ## Corrections to known claims
 
@@ -66,124 +109,5 @@ Optional; omit when none. Two columns, translated; conclusion-changing gaps firs
 <summary>Sources (<count>)</summary>
 
 Numbered in first-citation order, numbers matching in-text `[n]`: `1. [<Short title>](<URL or code permalink>) (primary|secondary|code)`.
-
-</details>
-
-## Filled example
-
-# Report: Cursor CLI or Grok Build for ensemble
-
-Light Research: light-research · mixed · windroc-labs/ensemble@f597b17033e7
-
-> [!IMPORTANT]
-> **Prefer Grok Build for the next client.** (medium)
->
-> - Caller-chosen session ids simplify integration.
-> - Claude-style hooks reduce adapter work.
-> - Account isolation has documented storage paths.
->
-> Next step: verify interactive hooks before implementing.
->
-> Risk: interactive session creation remains untested.
-
-## Comparison table
-
-- Synthesis: compare integration differences.
-
-| Need | [Cursor CLI](https://cursor.com/cli) | [Grok Build](https://github.com/xai-org/grok-build) |
-|---|---|---|
-| New session id | ⚠️ create-chat first | ✅ caller UUID via -s |
-| Hooks | ⚠️ CLI coverage unclear | ✅ Claude-style payloads |
-| Account isolation | ⚠️ config only documented | ✅ GROK_HOME |
-| Source access | ❌ closed | ✅ Apache-2.0 |
-
-- Legend: ✅ supported; ⚠️ gap or extra work; ❌ unavailable.
-- Both have: interactive terminals, resume by id, headless output.
-
-## Findings
-
-<details id="findings">
-<summary>Findings (8)</summary>
-
-### Existing client contract
-
-**A new client must supply hooks, caller-known session ids and recorded replies.**
-
-The client base class requires launch, reply, session_id and observe, and maps every hook event to a HookKind [1]. Claude meets it by choosing the session id itself and injecting its hooks at launch [2][3], so a client that allows both can reuse Claude's adapter shape. (high; [1][2][3])
-
-### Cursor CLI
-
-**Every launch needs an extra call to get a session id.**
-
-Cursor's parameter reference has create-chat return a new id, which --resume then restores [4]. Ensemble would run and parse create-chat before each launch, a step Claude does not need. (high; [4])
-
-**Replies arrive on a separate hook, which the CLI may not emit.**
-
-Cursor's hook reference puts the reply text on afterAgentResponse, not on stop [5], so observe must join two events per turn. NVIDIA's guide says the CLI emits fewer hooks than the editor [6]; if so, headless runs could lose replies. (medium; [5][6]; single-source)
-
-**Per-account isolation is undocumented.**
-
-Cursor documents only where its config lives, not its sessions or credentials, so separating accounts would rest on guesses. (low; unverified)
-
-### Grok Build
-
-**Session ids and hooks map one-to-one onto the contract.**
-
-Grok's session guide has -s create a session under a caller UUID and -r resume it [7]; its Stop hook carries lastAssistantMessage, and StopCancelled marks an interrupted turn [8]. That covers session_id, reply and observe with no extra call. (high; [7][8])
-
-**One GROK_HOME per account isolates sessions and credentials.**
-
-GROK_HOME holds auth.json beside the sessions [7][9], so one directory per account separates both. Grok also runs inherited Claude and Cursor hooks unless their ENABLED flags are off [8][10], so the adapter must turn them off. (high; [7][8][9][10])
-
-### Integration work
-
-**Reuse Claude's adapter shape with account-scoped hook files.**
-
-```mermaid
-flowchart LR
-  A[Set GROK_HOME] --> B[Write hooks]
-  B --> C[Launch or resume]
-  C --> D[Read updates]
-```
-
-Synthesis: mapping Grok's docs onto Claude's adapter gives these four steps; hooks filter by sessionId, since one GROK_HOME serves several sessions. (medium; [3][7][8])
-
-**observe's input format is still unknown.**
-
-The docs do not list the fields of updates.jsonl. Grok Build is Apache-2.0 [11], so they can be read in its source before observe is implemented. (low; [11]; unverified)
-
-</details>
-
-## What it means for us
-
-- Grok Build fits today's adapter: ids, replies and isolation map directly.
-- Cursor would add an id call, a two-hook join and guessed isolation.
-
-## Gaps
-
-| Impact | Gap |
-|---|---|
-| Could change conclusion | Neither interactive hook path was tested. |
-| Does not change | Interactive -s is untested; fallback increases work. |
-| Does not change | Cursor isolation and CLI hook coverage remain unverified. |
-| Does not change | updates.jsonl fields still need source inspection. |
-| Does not change | Current beta status could not be confirmed. |
-
-## Sources
-
-<details>
-<summary>Sources (11)</summary>
-
-1. [Client contract](src/ensemble/session/clients/base.py#L116-L192) (code)
-2. [Claude ids](src/ensemble/session/clients/claude/__init__.py#L18-L19) (code)
-3. [Claude hooks](src/ensemble/session/clients/claude/tui.py#L63-L106) (code)
-4. [Cursor parameters](https://cursor.com/docs/cli/reference/parameters) (primary)
-5. [Cursor hooks](https://cursor.com/docs/agent/hooks) (primary)
-6. [NVIDIA CLI caveats](https://docs.nvidia.com/nemo/relay/v0.4.0/nemo-relay-cli/cursor) (secondary)
-7. [Grok sessions](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md#L18-L42) (primary)
-8. [Grok hooks](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md#L60-L435) (primary)
-9. [Grok authentication](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md#L44-L53) (primary)
-10. [Grok config](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md#L21-L30) (primary)
-11. [Grok repository](https://github.com/xai-org/grok-build) (primary)
 
 </details>

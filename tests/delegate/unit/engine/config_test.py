@@ -241,28 +241,28 @@ class EnvironmentCheckTest(Case):
 
     def test_a_local_named_environment_and_role_table_load(self):
         found = self.loaded(
-            DUMMY + '[delegate.roles.dummy-tester.environment]\nname = "dummy"\nprefetch = true\n'
+            DUMMY + '[delegate.roles.researcher.environment]\nname = "dummy"\nprefetch = true\n'
         )
-        self.assertEqual(found["roles"]["dummy-tester"]["environment"]["name"], "dummy")
+        self.assertEqual(found["roles"]["researcher"]["environment"]["name"], "dummy")
 
     def test_local_credential_values_are_preserved_whole(self):
         for source, expected in (("{}", {}), ("{ future_kind = {} }", {"future_kind": {}})):
             for table in (
                 "delegate.environment.docker",
                 "delegate.environments.mini-op",
-                "delegate.roles.dummy-tester.environment",
+                "delegate.roles.researcher.environment",
             ):
                 with self.subTest(table=table, source=source):
                     found = self.loaded(
                         f"[{table}]\ncredentials = {source}\n"
                         + (
                             'name = "mini-op"\n'
-                            if table == "delegate.roles.dummy-tester.environment"
+                            if table == "delegate.roles.researcher.environment"
                             else ""
                         )
                     )
                     overrides = dict(
-                        found.get("roles", {}).get("dummy-tester", {}).get("environment", {})
+                        found.get("roles", {}).get("researcher", {}).get("environment", {})
                     )
                     name = overrides.pop(
                         "name", "mini-op" if table == "delegate.environments.mini-op" else None
@@ -287,8 +287,8 @@ class EnvironmentCheckTest(Case):
             ('[delegate.environment.docker]\nports = ["80"]\n', "[environment.docker]", "ports"),
             ('[delegate.environments.dummy]\nmounts = ["/x"]\n', "[environments.dummy]", "mounts"),
             (
-                DUMMY + '[delegate.roles.dummy-tester.environment]\npassword = "p"\n',
-                "[roles.dummy-tester.environment]",
+                DUMMY + '[delegate.roles.researcher.environment]\npassword = "p"\n',
+                "[roles.researcher.environment]",
                 "password",
             ),
             (
@@ -320,8 +320,8 @@ class EnvironmentCheckTest(Case):
 
     def test_a_role_naming_an_unknown_environment(self):
         self.refused(
-            '[delegate.roles.dummy-tester.environment]\nname = "nope"\n',
-            "[roles.dummy-tester.environment]",
+            '[delegate.roles.researcher.environment]\nname = "nope"\n',
+            "[roles.researcher.environment]",
             "[environments.nope]",
         )
 
@@ -331,8 +331,8 @@ class EnvironmentCheckTest(Case):
     def test_environment_names_follow_the_lock_name_rule(self):
         self.refused('[delegate.environments.Bad]\nimage = "x"\n', "[environments.Bad]")
         self.refused(
-            '[delegate.roles.dummy-tester.environment]\nname = "-x"\n',
-            "[roles.dummy-tester.environment]",
+            '[delegate.roles.researcher.environment]\nname = "-x"\n',
+            "[roles.researcher.environment]",
         )
 
     def test_invalid_values_are_refused_naming_the_table(self):
@@ -342,8 +342,8 @@ class EnvironmentCheckTest(Case):
             ('[delegate.environments.e]\nplugins = "x"\n', "[environments.e]"),
             ('[delegate.environment.docker]\ngateway = "No Such"\n', "[environment.docker]"),
             (
-                "[delegate.roles.dummy-tester]\nenvironment = 3\n",
-                "[roles.dummy-tester.environment]",
+                "[delegate.roles.researcher]\nenvironment = 3\n",
+                "[roles.researcher.environment]",
             ),
         ):
             with self.subTest(text):

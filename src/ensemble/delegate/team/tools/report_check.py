@@ -8,12 +8,120 @@ import unicodedata
 
 LINE_LIMIT = 80
 CELL_LIMIT = 30
-FINDINGS_LIMIT = 6000
+FINDINGS_LIMIT = 15000
+ASPECT_LIMIT = 3500
+ANSWER_LIMIT = 160
+ORIENTATION_LIMIT = 160
+CLAIM_LIMIT = 80
+BODY_LIMIT = 480
+BODY_SENTENCES = 5
+CODE_LINES = 15
 _TAG = r"</?[A-Za-z][^>]*>"
 _LIST = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?")
 _TYPE = re.compile(r"^[^:：]+[:：].*·\s*(?:web|local|mixed)(?:\s*·.*)?$")
 _FINDINGS = re.compile(r"<details\b[^>]*\bid=[\"']?findings\b")
-_LINK = re.compile(r"!?\[([^\]]*)\]\((?:[^()\n]|\([^()\n]*\))*\)")
+_LINK = re.compile(r"!?\[((?:[^\[\]]|\[[^\]]*\])*)\]\((?:[^()\n]|\([^()\n]*\))*\)")
+_CLOSERS = "\"'\u201d\u2019)]"
+_ABBREVIATION = re.compile(r"(?:[A-Za-z]\.){2,}|(?:vs|cf|al|etc)\.", re.IGNORECASE)
+
+
+class Budget:
+    """One scope's running display width: the findings block, an aspect or one of its parts."""
+
+    def __init__(self, line, kind, limit):
+        self.line, self.kind, self.limit = line, kind, limit
+        self.width, self.sentences, self.texts = 0, 0, []
+
+    def add(self, width, text):
+        self.width += width
+        self.texts.append(text)
+
+    def failures(self):
+        text = " ".join(self.texts)[:60]
+        if self.width > self.limit:
+            yield f"line {self.line}: {self.kind} {self.width}>{self.limit}: {text}"
+        if self.sentences > BODY_SENTENCES:
+            yield f"line {self.line}: sentences {self.sentences}>{BODY_SENTENCES}: {text}"
+
+
+def _over(line, kind, width, limit, text):
+    return [f"line {line}: {kind} {width}>{limit}: {text[:60]}"] if width > limit else []
+
+
+class Findings:
+    """The findings block's open scopes: the block, its current aspect and that aspect's part.
+
+    Every measured item adds to each open scope. An aspect's first quoted item is its answer;
+    other text before its first claim heading is orientation; text after a claim is that
+    finding's body.
+    """
+
+    def __init__(self, line):
+        self.block = Budget(line, "findings", FINDINGS_LIMIT)
+        self.aspect = self.part = None
+        self.answered = False
+        self.failures = []
+
+    def heading(self, line, level, title):
+        self.close_part()
+        if level == 3:
+            self.close_aspect()
+            self.aspect = Budget(line, "aspect", ASPECT_LIMIT)
+            self.answered = False
+        else:
+            self.measure(line, "claim", title, CLAIM_LIMIT)
+            self.part = Budget(line, "finding", BODY_LIMIT)
+
+    def measure(self, line, category, value, limit, quote=0):
+        width = _width(value)
+        for scope in (self.block, self.aspect):
+            if scope:
+                scope.add(width, value)
+        if category in ("cell", "claim"):
+            self.failures += _over(line, category, width, limit, value)
+        elif self.part:
+            self.part.add(width, value)
+            if self.part.kind == "finding":
+                self.part.sentences += _sentences(value)
+        elif self.aspect:
+            if quote and not self.answered:
+                self.failures += _over(line, "answer", width, ANSWER_LIMIT, value)
+            else:
+                self.part = Budget(line, "orientation", ORIENTATION_LIMIT)
+                self.part.add(width, value)
+            self.answered = True
+
+    def close_part(self):
+        if self.part:
+            self.failures += self.part.failures()
+        self.part = None
+
+    def close_aspect(self):
+        self.close_part()
+        if self.aspect:
+            self.failures += self.aspect.failures()
+        self.aspect = None
+
+    def close(self):
+        self.close_aspect()
+        self.failures += self.block.failures()
+        return self.failures
+
+
+def _width(text):
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def _sentences(text):
+    count = 0
+    for token in text.split():
+        count += len(re.findall(r"[\u3002\uff01\uff1f]+", token))
+        core = token.rstrip(_CLOSERS)
+        if core[-1:] in (".", "!", "?") and not _ABBREVIATION.fullmatch(
+            core.lstrip(_CLOSERS + "(\"'")
+        ):
+            count += 1
+    return count
 
 
 def _plain(text):
@@ -81,28 +189,29 @@ def _separator(line):
 def check(text):
     failures = []
     pending = []
-    start, kind = 0, "paragraph"
-    budget = None
+    start, kind, start_quote = 0, "paragraph", 0
+    findings = None
     depth = 0
+    code = None
 
-    def measure(line, category, value, limit):
+    def measure(line, category, value, limit, quote=0):
         value = _plain(value)
-        width = sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in value)
-        if budget:
-            budget[1] += width
-            budget[2].append(value)
-        elif width > limit:
-            failures.append(f"line {line}: {category} {width}>{limit}: {value[:60]}")
-
-    def close(line, width, texts):
-        if width > FINDINGS_LIMIT:
-            text = " ".join(texts)[:60]
-            failures.append(f"line {line}: findings {width}>{FINDINGS_LIMIT}: {text}")
+        if findings:
+            findings.measure(line, category, value, limit, quote)
+        else:
+            failures.extend(_over(line, category, _width(value), limit, value))
 
     def flush():
         if pending:
-            measure(start, kind, " ".join(pending), LINE_LIMIT)
+            measure(start, kind, " ".join(pending), LINE_LIMIT, start_quote)
             pending.clear()
+
+    def close_code():
+        nonlocal code
+        if code:
+            line, body = code
+            failures.extend(_over(line, "code", len(body), CODE_LINES, (body or [""])[0]))
+        code = None
 
     lines = text.splitlines()
     fence = ""
@@ -126,22 +235,31 @@ def check(text):
                 and not marker[2].strip()
             ):
                 fence = ""
+                close_code()
+            elif code:
+                code[1].append(line)
             continue
         if marker:
             flush()
             fence = marker[1]
+            if findings and marker[2].strip().split()[:1] != ["mermaid"]:
+                code = (number, [])
             table = after_title = False
             continue
         if not line:
             flush()
             table = False
             continue
-        if re.match(r"^#{1,6}\s", line):
+        heading = re.match(r"^(#{1,6})\s", line)
+        if heading:
             flush()
-            if budget and re.match(r"^#{1,2}\s", line):
-                close(*budget)
-                budget = None
-            after_title = bool(re.match(r"^#\s", line))
+            level = len(heading[1])
+            if findings and level <= 2:
+                failures.extend(findings.close())
+                findings = None
+            elif findings:
+                findings.heading(number, level, _plain(line[heading.end() :]))
+            after_title = level == 1
             table = False
             continue
         if after_title and _TYPE.fullmatch(line):
@@ -158,13 +276,13 @@ def check(text):
         ):
             flush()
             table = False
-            if tags and not budget and _FINDINGS.search(line):
-                budget, depth = [number, 0, []], 0
-            if tags and budget:
+            if tags and not findings and _FINDINGS.search(line):
+                findings, depth = Findings(number), 0
+            if tags and findings:
                 depth += line.count("<details") - line.count("</details")
                 if depth <= 0:
-                    close(*budget)
-                    budget = None
+                    failures.extend(findings.close())
+                    findings = None
             continue
         item = _LIST.match(line)
         if item:
@@ -192,15 +310,16 @@ def check(text):
         table = False
         if item:
             flush()
-            start, kind = number, "list"
+            start, kind, start_quote = number, "list", quote
             pending.append(line[item.end() :])
         else:
             if not pending:
-                start, kind = number, "paragraph"
+                start, kind, start_quote = number, "paragraph", quote
             pending.append(line)
     flush()
-    if budget:
-        close(*budget)
+    close_code()
+    if findings:
+        failures.extend(findings.close())
     return failures
 
 

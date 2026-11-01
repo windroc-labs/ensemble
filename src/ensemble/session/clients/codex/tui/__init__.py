@@ -29,6 +29,7 @@ from ensemble.session.clients.codex.common import (
     native_id,
     refuse_mode,
     reset_at,
+    unattended_flags,
 )
 from ensemble.session.clients.codex.common.types import Snapshot
 from ensemble.session.clients.codex.tui import records, replies
@@ -88,6 +89,7 @@ FIELDS = frozenset(
         "store",
         "permission",
         "flags",
+        "unattended",
     }
 )
 
@@ -108,6 +110,7 @@ class LaunchPlan:
     store: str
     permission: tuple[str, ...]  # its permission mode's flags
     flags: tuple[str, ...]  # the config's current flags; the caller's are in the snapshot
+    unattended: bool = False  # a Docker launch: every codex it runs gets unattended_flags
 
 
 def _hook_identity(value) -> tuple[str, str] | None:
@@ -201,6 +204,7 @@ class CodexTui(Tui):
             os.path.join(runtime.state_root, "codex-store") if runtime else store,
             common.modes[self._context.permission],
             common.flags,
+            runtime is not None,
         )
         self._runtime_files = SessionStore.project(self.state, plan.store) if runtime else {}
         pythonpath = env.get("PYTHONPATH", os.environ.get("PYTHONPATH"))
@@ -473,6 +477,8 @@ def decode(data: object) -> LaunchPlan:
     if not isinstance(data["sid"], str):
         raise ValueError("Codex tui launch: invalid recovery identity")
     permission, flags = _strs(data["permission"]), _strs(data["flags"])
+    if not isinstance(data["unattended"], bool):
+        raise ValueError("Codex tui launch: invalid unattended flag")
     try:
         refuse_mode(permission)
         refuse_mode(flags, f"{TABLE} flags")
@@ -488,6 +494,7 @@ def decode(data: object) -> LaunchPlan:
         store,
         permission,
         flags,
+        data["unattended"],
     )
 
 
@@ -534,7 +541,15 @@ def passed(flags) -> list[str]:
 
 def trust_args(plan: LaunchPlan, snapshot: Snapshot) -> list[str]:
     flags = mcp_off((*plan.flags, *snapshot.flags), snapshot)
-    return [*hook_flags(plan.hook), *passed((*plan.permission, *flags))]
+    return [
+        *hook_flags(plan.hook),
+        *passed((*plan.permission, *flags)),
+        *_unattended(plan, snapshot),
+    ]
+
+
+def _unattended(plan: LaunchPlan, snapshot: Snapshot) -> tuple[str, ...]:
+    return unattended_flags(snapshot.cwd) if plan.unattended else ()
 
 
 def execution_argv(plan: LaunchPlan, snapshot: Snapshot, trusted_state: str) -> list[str]:
@@ -556,6 +571,7 @@ def execution_argv(plan: LaunchPlan, snapshot: Snapshot, trusted_state: str) -> 
         *plan.permission,
         *mcp_off((*plan.flags, *supplied), snapshot),
         *launch_options(snapshot),
+        *_unattended(plan, snapshot),
         *hook_flags(plan.hook),
         "-c",
         trusted_state,

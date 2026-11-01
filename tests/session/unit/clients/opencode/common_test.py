@@ -11,6 +11,7 @@ from unittest import mock
 from ensemble.session.clients.opencode import OpenCodeClient, probe, transcript
 from ensemble.session.clients.opencode import common as common_module
 from ensemble.session.clients.opencode.common import (
+    HOME,
     NATIVE,
     Bindings,
     OpenCodeCommon,
@@ -435,7 +436,7 @@ class SelectionTest(Case):
 
     def test_the_home_is_xdg_data_home_with_no_credential(self):
         self.assertEqual(
-            self.common.home(),
+            replace(self.common.home(), files=HOME.files),
             ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none"),
         )
         host = DockerHost("docker", {"docker": "/usr/local/bin/docker", "isolated": True})
@@ -466,6 +467,27 @@ class SelectionTest(Case):
             },
         )
         self.assertNotIn("home_providers", metadata)
+
+    def test_the_docker_config_is_the_homes_opencode_json_verbatim(self):
+        with open(
+            os.path.join(os.path.dirname(common_module.__file__), "docker-opencode.json")
+        ) as f:
+            default = f.read()
+        self.assertEqual(self.common.home().files(), {"opencode.json": default})
+        self.assertEqual(json.loads(default), {"$schema": "https://opencode.ai/config.json"})
+        path = os.path.join(self.home, ".ensemble", "docker-config", "opencode", "opencode.json")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            f.write("// mine\n{}")
+        self.assertEqual(self.common.home().files(), {"opencode.json": "// mine\n{}"})
+
+    def test_a_container_launch_points_opencode_config_at_the_homes_copy(self):
+        data = os.path.join(self.home, "state", "opencode")
+        spec = replace(self.spec, env={"XDG_DATA_HOME": data})
+        env = self.common.environment(spec, DOCKER_CONTEXT)
+        self.assertEqual(env["OPENCODE_CONFIG"], os.path.join(data, "opencode.json"))
+        self.assertFalse(os.path.exists(data))
+        self.assertNotIn("OPENCODE_CONFIG", self.common.environment(spec, LOCAL_CONTEXT))
 
     def test_extra_flags_are_refused_with_the_reserved_ones(self):
         for flags in (("-c",), ("--prompt=x",), ("--pure",)):

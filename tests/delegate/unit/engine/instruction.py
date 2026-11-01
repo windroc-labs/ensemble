@@ -10,7 +10,7 @@ from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 from tests.utils.sandbox import scratch
 
-ROLES = ("researcher", "pm", "engineer", "verifier", "dummy-tester")
+ROLES = ("researcher", "pm", "engineer", "verifier")
 INPUT = "Compare A and B.\n[ensemble-progress:round] a mark line in the input"
 CLIENTS = (("claude", "headless"), ("codex", "headless"), (None, "headless"))
 GITHUB = """[roles.researcher.output]

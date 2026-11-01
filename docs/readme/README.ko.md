@@ -86,7 +86,7 @@ GitHub Settings › Developer settings › GitHub Apps에서 자신의 계정에
 단일 작업을 실행하려면 설치된 클라이언트의 대화에서 다음을 입력하세요.
 
 ```text
-/ensemble:act-as dummy-tester:echo hello
+/ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
 팀을 사용하려면 커맨더 셸을 열고 클라이언트를 시작하세요.

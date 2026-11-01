@@ -88,8 +88,10 @@ func (h Host) checkMounts(m Manifest) error {
 		return reject("%s_dir %s must be an existing directory without symlinks: %v.", m.Client, dir, err)
 	}
 	if m.Client == "codex" {
-		if err := h.Safe(filepath.Join(dir, "sessions")); err != nil {
-			return reject("codex sessions must be an existing directory without symlinks.")
+		for _, kept := range codexKept {
+			if err := h.Safe(filepath.Join(dir, kept)); err != nil {
+				return reject("codex %s must be an existing directory without symlinks.", kept)
+			}
 		}
 	}
 	if inside(m.CWD, dir) || inside(dir, m.CWD) {

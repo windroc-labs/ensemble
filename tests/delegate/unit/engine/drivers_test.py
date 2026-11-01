@@ -29,7 +29,7 @@ class IdleTimeoutConfig(Case):
             ("", 7200),
             ("[delegate]\nidle_timeout = 14400\n", 14400),
             (
-                "[delegate]\nidle_timeout = 14400\n[delegate.roles.dummy-tester]\nidle_timeout = 0.3\n",
+                "[delegate]\nidle_timeout = 14400\n[delegate.roles.researcher]\nidle_timeout = 0.3\n",
                 0.3,
             ),
         ):
@@ -38,7 +38,7 @@ class IdleTimeoutConfig(Case):
                     self.local(text)
                     session_cls = SessionClass.scripted(turn(START, block(DONE)))
                     result = executed(
-                        Composer().resolve("dummy-tester"),
+                        Composer().resolve("researcher"),
                         Spec("input", self.home, mode=mode),
                         driver=AgentDriver(session_cls),
                     )
@@ -48,7 +48,7 @@ class IdleTimeoutConfig(Case):
                     )
 
     def test_invalid_global_and_role_local_values_raise_delegate_config_error(self):
-        for table in ("delegate", "delegate.roles.dummy-tester"):
+        for table in ("delegate", "delegate.roles.researcher"):
             for value in (
                 "0",
                 "-1",
@@ -66,7 +66,7 @@ class IdleTimeoutConfig(Case):
                 with self.subTest(table=table, value=value):
                     self.local(f"[{table}]\nidle_timeout = {value}\n")
                     with self.assertRaisesRegex(ConfigError, "idle_timeout must be"):
-                        Composer().resolve("dummy-tester")
+                        Composer().resolve("researcher")
 
 
 class Drivers(Case):
@@ -150,7 +150,7 @@ class Drivers(Case):
         events = []
         with no_spawn():
             result = executed(
-                Composer().resolve("dummy-tester"),
+                Composer().resolve("researcher"),
                 Spec("input", work, out=out),
                 driver=FileDriver(),
                 on_event=events.append,

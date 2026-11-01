@@ -87,7 +87,7 @@ Supprimez le PEM après l’importation. La [rotation des identifiants](../upgra
 Pour une seule tâche, dans une conversation de votre client installé :
 
 ```text
-/ensemble:act-as dummy-tester:echo hello
+/ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
 Pour une équipe, ouvrez un shell de commandant et démarrez votre client :

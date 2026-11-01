@@ -86,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
 要执行单个任务，请在已安装客户端的对话中输入：
 
 ```text
-/ensemble:act-as dummy-tester:echo hello
+/ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
 要使用团队，请打开指挥官 shell 并启动客户端：

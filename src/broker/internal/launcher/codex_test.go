@@ -114,7 +114,7 @@ func TestCodexStartIsolation(t *testing.T) {
 		}
 	}
 	joined := strings.Join(run, " ")
-	for _, want := range []string{"CODEX_HOME=", "--label ensemble.client=codex", "/codex:rw,noexec,nosuid,nodev,size=1073741824,mode=0700,uid=1001,gid=1002 ", "/codex/sessions", "--tmpfs /run/ensemble:"} {
+	for _, want := range []string{"CODEX_HOME=", "--label ensemble.client=codex", "/codex:rw,noexec,nosuid,nodev,size=1073741824,mode=0700,uid=1001,gid=1002 ", "/codex/sessions", "/codex/config", "--tmpfs /run/ensemble:"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %s", want)
 		}
@@ -157,7 +157,7 @@ func TestClaudeDoesNotReadCodex(t *testing.T) {
 }
 
 func TestCodexMountBoundary(t *testing.T) {
-	for _, unsafe := range []string{"arbitrary", "noncanonical", "sessions-link"} {
+	for _, unsafe := range []string{"arbitrary", "noncanonical", "sessions-link", "config-link"} {
 		h, d := startHost(&world{labels: goodLabels()}, &fakeCreds{})
 		h.Codex = &fakeCodexCreds{}
 		path := codexManifest(t, func(fields map[string]any) {
@@ -168,9 +168,9 @@ func TestCodexMountBoundary(t *testing.T) {
 				fields["codex_dir"] = fields["codex_dir"].(string) + "/."
 			}
 		})
-		if unsafe == "sessions-link" {
+		if kept, found := strings.CutSuffix(unsafe, "-link"); found {
 			h.Safe = func(p string) error {
-				if strings.HasSuffix(p, "/sessions") {
+				if strings.HasSuffix(p, "/"+kept) {
 					return errors.New("symlink")
 				}
 				return nil
@@ -179,6 +179,12 @@ func TestCodexMountBoundary(t *testing.T) {
 		_, err := h.Start(context.Background(), path)
 		if code(t, err) != protocol.MountRejected || hasCall(d, "run") {
 			t.Fatal("unsafe mount accepted")
+		}
+		if kept, found := strings.CutSuffix(unsafe, "-link"); found {
+			var e *protocol.Error
+			if !errors.As(err, &e) || e.Message != "codex "+kept+" must be an existing directory without symlinks." {
+				t.Fatalf("%s: %v", unsafe, err)
+			}
 		}
 	}
 }

@@ -6,7 +6,6 @@ import shutil
 import stat
 import sys
 import tempfile
-import tomllib
 from pathlib import Path
 
 TEMPLATES = Path("/opt/ensemble/templates")
@@ -69,18 +68,12 @@ def install_hook(stub, destination, owner=0, top=Path("/")):
     destination.chmod(0o755)
 
 
-def bootstrap_codex(directory, cwd, secrets=None, plugins=Path("/opt/ensemble/codex-plugins")):
+def bootstrap_codex(directory, secrets=None, plugins=Path("/opt/ensemble/codex-plugins")):
+    """config.toml links to the worker's own copy in the bind-mounted config/, kept across
+    resumes; Codex writes its config through the link. Ensemble's keys come as -c flags.
+    """
     secrets = SECRETS if secrets is None else secrets
-    native = tomllib.loads((plugins / "config.toml").read_text()).get("plugins", {})
-    enabled = "".join(
-        f"[plugins.{json.dumps(identifier)}]\nenabled = true\n" for identifier in sorted(native)
-    )
-    (directory / "config.toml").write_text(
-        'cli_auth_credentials_store = "file"\n'
-        'forced_login_method = "chatgpt"\n'
-        "check_for_update_on_startup = false\n"
-        f'[projects.{json.dumps(cwd)}]\ntrust_level = "trusted"\n' + enabled
-    )
+    (directory / "config.toml").symlink_to("config/config.toml")
     (directory / "plugins").mkdir(mode=0o700)
     (directory / "plugins/cache").symlink_to(plugins / "plugins/cache", target_is_directory=True)
     (directory / "auth.json").symlink_to(secrets / "codex/auth.json")
@@ -209,7 +202,7 @@ def main(argv):
     if len(argv) == 3 and argv[0] == "claude":
         bootstrap_claude(TEMPLATES, Path(argv[1]), argv[2])
     elif len(argv) == 3 and argv[0] == "codex":
-        bootstrap_codex(Path(argv[1]), argv[2])
+        bootstrap_codex(Path(argv[1]))
     elif argv == ["codex-auth"]:
         inject_codex(sys.stdin.buffer)
     elif len(argv) == 2 and argv[0] == "codex-auth":

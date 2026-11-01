@@ -23,14 +23,14 @@ from tests.delegate.fakes.harness_session import (
 from tests.delegate.harness import SID, HarnessCase
 
 RESUME = (*PY, os.path.join(REPO, "tests", "delegate", "fakes", "control_launcher.py"), "resume")
-DRIVE = f"dummy-tester-{SID[:8]}-drive"
+DRIVE = f"researcher-{SID[:8]}-drive"
 
 
 class ResumeCommand(HarnessCase):
     def setUp(self):
         super().setUp()
         self.record = DrivenDelegate(
-            "dummy-tester",
+            "researcher",
             Spec("input", self.work, client="fake", sid=SID),
             session_cls=PersistentSession,
             host="agent",

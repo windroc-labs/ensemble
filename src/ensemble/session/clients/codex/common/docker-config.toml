@@ -1,0 +1,6 @@
+# Docker Codex workers' config.toml: each new worker copies this file to $CODEX_HOME/config/config.toml,
+# which keeps that worker's edits across its resumes. Ensemble's login, update-check and project-trust
+# flags win over it; a run's model and effort flags win over model and model_reasoning_effort. Copy this
+# file to ~/.ensemble/docker-config/codex/config.toml to change it, e.g. to set service_tier.
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"

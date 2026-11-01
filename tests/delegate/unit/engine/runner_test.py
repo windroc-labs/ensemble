@@ -243,7 +243,7 @@ class InProcess(Base):
             (first["sid"], first["resume"], second["sid"], second["resume"]),
             (sid, False, sid, True),
         )
-        self.assertEqual(second["prompt"], FIX.format(error=INVALID_ERROR))
+        self.assertEqual(second["prompt"], FIX.format(error=INVALID_ERROR) + "\n\nFAKE NOTE")
         self.assertEqual(
             self.kinds(), ["session", "input", "progress", "invalid", "session", "result", "end"]
         )
@@ -264,12 +264,12 @@ class Handles(Base):
             return self.go(**kw)
 
     def planned(self, **kw) -> Plan:
-        """dummy-tester's echo planned with Spec fields `kw`, its agent and run dirs made."""
+        """researcher's light-research planned with Spec fields `kw`, its agent and run dirs made."""
         os.makedirs(Layout(self.work).agent, exist_ok=True)
         composition = Composer()
         accepted = plan(
-            composition.resolve("dummy-tester"),
-            Spec("Echo me.", self.work, task="echo", client="fake", out=self.out, **kw),
+            composition.resolve("researcher"),
+            Spec("Echo me.", self.work, task="light-research", client="fake", out=self.out, **kw),
             driver=self.driver,
             composition=composition,
         )
@@ -289,7 +289,7 @@ class HandleRun(Handles):
         self.assertFalse(os.path.exists(self.channel))
 
     def test_a_named_headless_session_reaches_the_driver_with_its_name(self):
-        for name in (None, "dummy-tester-0f8fad5b"):
+        for name in (None, "researcher-0f8fad5b"):
             with self.subTest(name=name):
                 self.fresh()
                 self.faked(turn(START, block(DONE)), Exited(0), session_name=name)
@@ -512,8 +512,8 @@ class HandleRun(Handles):
     def test_the_runner_records_into_an_existing_run_dir_only(self):
         composition = Composer()
         accepted = plan(
-            composition.resolve("dummy-tester"),
-            Spec("Echo me.", self.work, task="echo", client="fake"),
+            composition.resolve("researcher"),
+            Spec("Echo me.", self.work, task="light-research", client="fake"),
             driver=self.driver,
             composition=composition,
         )
@@ -610,8 +610,8 @@ class TuiStart(Handles):
             ("", [None]),
             ('[delegate]\nshow = "none"\n', [None]),
             (f'[delegate]\nshow = "{command}"\n', [command]),
-            ('[delegate]\nshow = "none"\n[delegate.roles.dummy-tester]\nshow = ""\n', [None]),
-            ('[delegate.roles.dummy-tester]\nshow = "none"\n', [None]),
+            ('[delegate]\nshow = "none"\n[delegate.roles.researcher]\nshow = ""\n', [None]),
+            ('[delegate.roles.researcher]\nshow = "none"\n', [None]),
         ):
             with self.subTest(local=local):
                 self.fresh()
@@ -739,7 +739,7 @@ class InstructionRuns(InstructionCase):
                 self.assertFalse(os.path.exists(os.path.join(args[1].workdir, "run.jsonl")))
 
     def test_an_unconfigured_client_does_not_start_a_session(self):
-        args = self.given("dummy-tester", client="unconfigured")
+        args = self.given("researcher", client="unconfigured")
         with no_spawn():
             result = executed(*args, driver=self.driver)
         self.assertEqual(
@@ -747,7 +747,7 @@ class InstructionRuns(InstructionCase):
         )
 
     def test_a_resume_is_refused(self):
-        args = self.given("dummy-tester", resume=True)
+        args = self.given("researcher", resume=True)
         with (
             no_spawn(),
             self.assertRaisesRegex(ConfigError, "instruction has no session to resume"),

@@ -48,8 +48,8 @@ class MissingTmuxSession(HarnessSession):
 
 class Refusals(HarnessCase):
     def construct(self, *, session_cls=HarnessSession, **placement):
-        spec = Spec("input", self.work, task="echo", client="fake")
-        return DrivenDelegate("dummy-tester", spec, session_cls=session_cls, **placement)
+        spec = Spec("input", self.work, task="light-research", client="fake")
+        return DrivenDelegate("researcher", spec, session_cls=session_cls, **placement)
 
     def test_host_display_and_delegates_configuration_refusals_are_delegate_errors(self):
         for placement in ({"host": "unknown"}, {"display": "invalid"}):
@@ -88,9 +88,9 @@ class Refusals(HarnessCase):
 
     def test_a_start_driver_error_is_the_result_with_one_finished(self):
         events = []
-        spec = Spec("input", self.work, task="echo")
+        spec = Spec("input", self.work, task="light-research")
         result = executed(
-            Composer().resolve("dummy-tester", "echo"),
+            Composer().resolve("researcher", "light-research"),
             spec,
             driver=AgentDriver(MissingTmuxSession),
             on_event=events.append,
@@ -106,9 +106,9 @@ class Refusals(HarnessCase):
             "ensemble.delegate.cli",
             "prompt",
             "--role",
-            "dummy-tester",
+            "researcher",
             "--task",
-            "echo",
+            "light-research",
             "--input",
             "input",
             "--workdir",
@@ -150,7 +150,7 @@ class LiveRun(HarnessCase):
             os.environ.pop(key, None)
 
     def cli(self, *extra):
-        argv = ["run", "--role", "dummy-tester", "--task", "echo", "--input", "again"]
+        argv = ["run", "--role", "researcher", "--task", "light-research", "--input", "again"]
         argv += ["--out", os.path.join(self.home, "out.md"), "--workdir", self.work]
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):

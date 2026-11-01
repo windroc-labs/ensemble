@@ -20,12 +20,14 @@ from ensemble.session.clients.codex.common import (
     NativeMetadata,
     RecoveryError,
     SessionStore,
+    launch_flags,
     mcp_off,
     read_metadata,
     snapshot_data,
     validate_snapshot,
 )
 from ensemble.session.engine.types import Access, ConfigError, SessionInfo, SessionStatus
+from ensemble.utils import docker_home
 from tests.session.unit.clients.codex.support import (
     AUTO,
     BYPASS,
@@ -36,6 +38,7 @@ from tests.session.unit.clients.codex.support import (
     committed_headless,
     committed_tui,
 )
+from tests.utils.sandbox import scratch
 
 
 class LaunchLifecycleTest(Base):
@@ -1544,6 +1547,101 @@ class McpOffTest(Base):
                 *("-c", "mcp_servers.p.enabled=false", "-c", 'mcp_servers.p.url="https://p"'),
                 *("-c", "mcp_servers.s.enabled=false", "-c", 'mcp_servers.s.command="user"'),
             ],
+        )
+
+    def docker_snapshot(self):
+        home = docker_home("w", "codex")
+        spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
+        snapshot = self.common.prepare(spec).snapshot
+        docker = Path(os.environ["HOME"], ".ensemble", "docker-config", "codex", "config.toml")
+        return snapshot, docker, Path(snapshot.codex_home, "config", "config.toml")
+
+    def github(self, command):
+        return [
+            *("-c", "mcp_servers.github.enabled=false"),
+            *("-c", f'mcp_servers.github.command="{command}"'),
+        ]
+
+    def test_a_docker_home_reads_the_docker_config_on_a_new_start_and_the_copy_on_a_resume(self):
+        snapshot, docker, copy = self.docker_snapshot()
+        self.write(self.system, '[mcp_servers.system]\ncommand = "s"\n')
+        self.write(docker, '[mcp_servers.github]\ncommand = "fresh"\n')
+        self.write(copy, '[mcp_servers.github]\ncommand = "kept"\n')
+        self.assertEqual(mcp_off(list(OFF), snapshot), self.github("fresh"))
+        self.assertEqual(mcp_off(list(OFF), snapshot, resume=True), self.github("kept"))
+        self.assertEqual(
+            launch_flags(snapshot, interactive=True, mode=(), configured=OFF, resume=True)[:4],
+            self.github("kept"),
+        )
+
+    def test_each_start_reads_only_the_layer_it_loads_so_the_other_cannot_fail_it(self):
+        snapshot, docker, copy = self.docker_snapshot()
+        self.write(docker, "[mcp_servers\n")
+        self.write(copy, '[mcp_servers.github]\ncommand = "kept"\n')
+        self.assertEqual(mcp_off(list(OFF), snapshot, resume=True), self.github("kept"))
+        self.write(docker, '[mcp_servers.github]\ncommand = "fresh"\n')
+        copy.unlink()
+        copy.symlink_to(self.system)
+        self.assertEqual(mcp_off(list(OFF), snapshot), self.github("fresh"))
+
+    def test_a_resumed_copy_is_read_without_following_a_link_and_within_its_limit(self):
+        snapshot, _, copy = self.docker_snapshot()
+        self.write(self.system, '[mcp_servers.system]\ncommand = "s"\n')
+        copy.parent.mkdir(parents=True, exist_ok=True)
+        for case in ("link", "directory", "oversized"):
+            with self.subTest(case=case):
+                if case == "link":
+                    copy.symlink_to(self.system)
+                elif case == "directory":
+                    copy.unlink()
+                    copy.mkdir()
+                else:
+                    copy.rmdir()
+                    copy.write_text("#" * (2 * 1024 * 1024 + 1))
+                with self.assertRaisesRegex(
+                    ConfigError, f"^{re.escape(str(copy))}: want a regular file of at most 2 MiB$"
+                ):
+                    mcp_off(list(OFF), snapshot, resume=True)
+        copy.write_text("[mcp_servers\n")
+        with self.assertRaisesRegex(ConfigError, f"^{re.escape(str(copy))}: invalid TOML"):
+            mcp_off(list(OFF), snapshot, resume=True)
+        copy.unlink()
+        self.assertEqual(mcp_off(["-a", *OFF], snapshot, resume=True), ["-a"])
+
+    def test_a_dangling_user_config_link_is_no_layer(self):
+        (self.codex_home / "config.toml").symlink_to("config/config.toml")
+        self.assertEqual(mcp_off(["-a", *OFF], self.snapshot()), ["-a"])
+
+    def test_a_docker_home_turns_off_the_docker_configs_servers_not_the_hosts(self):
+        self.write(self.codex_home / "config.toml", '[mcp_servers.host]\ncommand = "h"\n')
+        docker = Path(os.environ["HOME"], ".ensemble", "docker-config", "codex")
+        self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "github-mcp"\n')
+        home = docker_home("w", "codex")
+        spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
+        snapshot = self.common.prepare(spec).snapshot
+        self.assertEqual(snapshot.codex_home, os.path.realpath(home))
+        self.assertEqual(
+            mcp_off(list(OFF), snapshot),
+            [
+                "-c",
+                "mcp_servers.github.enabled=false",
+                "-c",
+                'mcp_servers.github.command="github-mcp"',
+            ],
+        )
+
+    def test_a_docker_home_under_a_linked_state_dir_is_still_one(self):
+        state = os.path.join(os.environ["HOME"], ".ensemble")
+        os.makedirs(state, exist_ok=True)
+        os.symlink(scratch(self), os.path.join(state, "docker-state"))
+        docker = Path(state, "docker-config", "codex")
+        self.write(docker / "config.toml", '[mcp_servers.github]\ncommand = "g"\n')
+        home = docker_home("w", "codex")
+        spec = replace(self.spec, env={**self.spec.env, "CODEX_HOME": home})
+        snapshot = self.common.prepare(spec).snapshot
+        self.assertNotEqual(snapshot.codex_home, home)
+        self.assertEqual(
+            mcp_off(list(OFF), snapshot)[:2], ["-c", "mcp_servers.github.enabled=false"]
         )
 
     def test_a_table_with_no_transport_adds_nothing(self):

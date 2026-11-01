@@ -10,7 +10,7 @@ from tests.delegate.integration.cli import DONE, SID, Integration
 from tests.delegate.replies import block, mark
 
 CLI = (*PY, "-m", "ensemble.delegate.cli")
-NAME = f"dummy-tester-{SID[:8]}"
+NAME = f"researcher-{SID[:8]}"
 
 
 class Queries(Integration):

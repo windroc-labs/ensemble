@@ -130,16 +130,23 @@ class Acceptance(Packaged):
             "| Research |",
             "| Deep Research |",
             "a figure (Mermaid, or SVG: [Researcher › Standards › Figures](#standards)) or table",
-            "avoid long essay-style paragraphs",
-            "Both have:",
+            "No essay paragraphs.",
+            "`[n]` is source number n in Sources, written as a link to that source, "
+            "`[[n]](<URL or code permalink>)`, the same target as its Sources item",
             "A compared project with its own address is a link to it",
-            "| [Grok Build](https://github.com/xai-org/grok-build) |",
             "| Impact | Gap |",
-            "<summary>Findings (<count>)</summary>",
+            '<details id="findings" open>',
+            "<summary>Findings: <A> aspects, <F> findings</summary>",
             "<summary>Sources (<count>)</summary>",
             "at most once per section",
             "bold answer",
-            "one **bold claim** line, then 1–3 sentences",
+            "then a blank line (the blank line before `---` is required",
+            "`### <n>. <Aspect name>`",
+            "`> **<Answer, translated>:** <this aspect's answer, 1–2 sentences> (<confidence>)`",
+            "`#### <n.m> <claim>`, the claim one plain sentence; then a body of 2–5 sentences",
+            "that aspect says `see <n.m>` instead of repeating it",
+            "| Practice, pitfalls | Do / avoid table with the reason per row |",
+            "Point to findings by number (`see 2.3`)",
             "## What it means for us",
             "omit when the input asks no decision",
         ):
@@ -248,7 +255,6 @@ class Shipped(Packaged):
             "pm": "product-design",
             "engineer": "build",
             "verifier": "verify",
-            "dummy-tester": "echo",
         }
         self.assertEqual(set(roles()), set(defaults))
         for role, default in defaults.items():
@@ -369,6 +375,20 @@ class Shipped(Packaged):
         self.assertNotIn("fresh subagent", step)
         self.assertNotRegex(text, r"(?<!/)updraft:")
         self.assertIn("`/updraft:review` again with the same `doc`", text.split("## Resume", 1)[1])
+
+    def test_product_design_self_grills_by_the_grilling_method_for_at_most_3_rounds(self):
+        text = task_text("product-design")
+        step = text.split("5. **Self-grill**", 1)[1].split("\n6.", 1)[0]
+        self.assertTrue(os.path.isfile(os.path.join(TEAM, "methods", "grilling.md")))
+        for literal in (
+            "`<team>/methods/grilling.md`",
+            "at most 3 rounds",
+            "minor details",
+            "what you can't settle → Open questions",
+        ):
+            self.assertIn(literal, step)
+        self.assertNotIn("in one round", step)
+        self.assertIn("never rerun", text.split("## Resume", 1)[1])
 
     def test_product_design_settles_open_questions_with_updraft_council_before_finishing(self):
         text = task_text("product-design")
@@ -639,8 +659,8 @@ class Real(RealConfig):
                 "A research report: its Template's Body rule instead.",
             ):
                 self.assertIn(literal, diagrams, (role, task, literal))
-            for cap in ("3000 words", "5 sentences"):
-                self.assertNotIn(cap, prompt, (role, task, cap))
+            self.assertNotIn("3000 words", prompt, (role, task))
+            self.assertNotIn("5 sentences", writing, (role, task))
 
     def test_every_run_judges_related_work_first_and_only_proposes_board_changes(self):
         for role, task in runs():
@@ -707,7 +727,8 @@ class Real(RealConfig):
         findings = section(light, "Findings")
         self.assertNotIn(point, findings)
         self.assertIn(
-            "`(<confidence: high, medium or low>; [n]…; <single-source or unverified, when so>)`",
+            "`(<confidence: high, medium or low>; <single-source, unverified or sources disagree, "
+            "when so>)`",
             findings,
         )
         self.assertIn(
@@ -836,7 +857,6 @@ class Real(RealConfig):
                 "pm": ["worktree"],
                 "engineer": ["worktree", "status"],
                 "verifier": ["worktree"],
-                "dummy-tester": ["worktree"],
             },
         )
 
@@ -867,11 +887,6 @@ class Real(RealConfig):
                     "([Principles › Writing](#writing)); length follows content.",
                 )
                 for role, doc in (("pm", "the PRD"),)
-            ),
-            (
-                "echo's summary overrides Output's length",
-                task_text("echo"),
-                "`summary` the input's first line, cut to 300 characters.",
             ),
             (
                 "a build's files are its spec and plan doc",
@@ -1015,7 +1030,7 @@ class Principles(Packaged):
         leaves = {
             name.removesuffix(".md")
             for name in os.listdir(os.path.join(TEAM, "principles"))
-            if name.endswith(".md") and name != "README.md"
+            if name.endswith(".md")
         }
         self.assertEqual(len(leaves), 24)
         self.assertEqual(set(re.findall(r"<team>/principles/([\w-]+)\.md", index)), leaves)
@@ -1097,3 +1112,19 @@ class Principles(Packaged):
             "subtract-before-you-add",
         ):
             self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", f"{name}.md")))
+
+
+class Sources(Packaged):
+    def test_readme_links_resolve_and_name_every_method(self):
+        with open(os.path.join(TEAM, "README.md"), encoding="utf-8") as f:
+            readme = f.read()
+        local = [
+            link.split("#", 1)[0]
+            for link in re.findall(r"\]\(([^)\s]+)\)", readme)
+            if not re.match(r"[a-z]+:|#", link)
+        ]
+        self.assertTrue(local)
+        for link in local:
+            self.assertTrue(os.path.isfile(os.path.join(TEAM, link)), link)
+        for name in os.listdir(os.path.join(TEAM, "methods")):
+            self.assertIn(f"methods/{name}", readme)

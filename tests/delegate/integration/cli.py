@@ -26,10 +26,10 @@ RUN = (*PY, "-m", "ensemble.delegate.cli", "run")
 SID = "0f8fad5b-d9cb-469f-a165-70867728950e"
 WAIT = 30  # seconds
 RESETS = 1760000000
-DONE = {"status": "done", "title": "echo", "summary": "Hello.", "deliverable": "Hello.\n"}
+DONE = {"status": "done", "title": "hello", "summary": "Hello.", "deliverable": "Hello.\n"}
 ASKING = {
     "status": "needs_input",
-    "title": "echo",
+    "title": "hello",
     "summary": "Asking.",
     "questions": ["Which greeting?"],
 }
@@ -105,7 +105,7 @@ class Runs(RunReads, Case):
 class Integration(Runs):
     """ROLE over the fake `claude`: own HOME, CLI cwd `proj`, workdir `work`, agent cwd `agent`."""
 
-    ROLE = "dummy-tester"
+    ROLE = "researcher"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -224,7 +224,7 @@ def codex_said(*texts) -> list[dict]:
 class CodexIntegration(Runs):
     """ROLE's TASK, --client codex over fake_codex; HOME outside the temp dirs."""
 
-    ROLE, TASK = "dummy-tester", "echo"
+    ROLE, TASK = "researcher", "light-research"
     CLIENT = "codex"
 
     def setUp(self):

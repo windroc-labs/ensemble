@@ -12,7 +12,7 @@ from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 from tests.utils.sandbox import clean_env, python_path
 
-ROLES = ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
+ROLES = ["researcher", "pm", "engineer", "verifier"]
 BIN = os.path.join(REPO, "bin")  # the plugin's bin/, on a Claude Code session's PATH
 
 
@@ -40,8 +40,8 @@ class ActAs(Case):
         out = os.path.join(Layout(workdir).agent, "prompt.md")
         run = (
             command(3)
-            .replace("<role>", "dummy-tester")
-            .replace("[--task <task>]", "--task echo")
+            .replace("<role>", "researcher")
+            .replace("[--task <task>]", "--task light-research")
             .replace("<workdir>", workdir)
             .replace("<Input>", "Hello.")
         )
@@ -62,7 +62,7 @@ class ActAs(Case):
         )
         composition = Composer()
         expected = composition.render(
-            composition.resolve("dummy-tester", "echo"),
+            composition.resolve("researcher", "light-research"),
             RunParams(input="Hello.", out=out, workdir=Layout(workdir).agent),
         )
         with open(out, "rb") as stream:
