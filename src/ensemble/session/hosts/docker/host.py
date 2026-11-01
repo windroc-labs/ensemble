@@ -63,7 +63,6 @@ from ensemble.session.hosts.docker.broker import (
     Broker,
     BrokerError,
     client_keys,
-    hook_root,
     plugin_root,
     write_manifest,
 )
@@ -1007,7 +1006,6 @@ class DockerHost(Host):
                     state_dir(name),
                     generation,
                     self.broker,
-                    root=hook_root(hook),
                 ),
                 report=self._reporter(name, events),
                 terminal=terminal,

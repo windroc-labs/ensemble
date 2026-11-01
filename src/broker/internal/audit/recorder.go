@@ -23,7 +23,6 @@ type Recorder struct {
 	Log       Appender
 
 	own     []Credential
-	notices []Line
 	flushed bool
 
 	renewing bool          // a maintain that tried a token provider
@@ -58,15 +57,7 @@ func (r *Recorder) Renewing(failed protocol.Code) {
 	}
 }
 
-// Notice records one delivered static secret notice for container ("": the host's), on a line of its own.
-func (r *Recorder) Notice(container string, c Credential) {
-	if r == nil {
-		return
-	}
-	r.notices = append(r.notices, Line{Command: r.Command, Event: noticeEvent, Container: container, Credentials: []Credential{c}})
-}
-
-// Flush writes the notice lines, then the command line for start, refresh and close, and a refresh
+// Flush writes the command line for start, refresh and close, and a refresh
 // line for a maintain that tried a token provider, err being the command's error.
 // Its error describes only audit persistence; the caller keeps the command's result independently.
 func (r *Recorder) Flush(err error) error {
@@ -80,10 +71,6 @@ func (r *Recorder) Flush(err error) error {
 	}
 	at := now()
 	var lines []Line
-	for _, l := range r.notices {
-		l.Time = at
-		lines = append(lines, l)
-	}
 	event := r.Command
 	if (r.Command == maintainCommand || r.Command == "linear-maintain") && r.renewing {
 		event = refreshEvent

@@ -20,7 +20,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "38"
+PROTOCOL = "39"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -382,34 +382,27 @@ class Broker:
         self,
         container: str,
         manifest: str,
-        delivered: Sequence[str] = (),
         *,
         renew: bool = False,
-        root: str,
     ) -> Maintained:
-        """`delivered`: notice keys told; `renew`: renew every token now."""
+        """With `renew`, renew every token now."""
         found = self._parsed(
             "maintain",
             lambda d: (
-                d.keys() == {"container", "next_check", "deadline", "results", "notices"}
+                d.keys() == {"container", "next_check", "deadline", "results"}
                 and d["container"] == container
                 and _credential_expiry(d["next_check"])
                 and deadline_ok(d["deadline"])
                 and isinstance(d["results"], list)
                 and all(map(_result, d["results"]))
-                and _notices(d["notices"])
             ),
             "--container",
             container,
             "--manifest",
             manifest,
             *(("--renew",) if renew else ()),
-            *(arg for key in delivered for arg in ("--delivered", key)),
         )
-        _check_keys(found["notices"], root, "maintain")
-        return Maintained(
-            found["results"], found["notices"], found["next_check"], found["deadline"]
-        )
+        return Maintained(found["results"], found["next_check"], found["deadline"])
 
     def close(self, container: str) -> bool:
         """Whether it removed `container`; False: it was already gone."""
@@ -449,23 +442,6 @@ class Broker:
         return found
 
 
-def _notices(value) -> bool:
-    return isinstance(value, list) and all(
-        isinstance(n, dict) and n.keys() == {"key", "text"} and _text(n["text"]) for n in value
-    )
-
-
-def _check_keys(notices: list[dict], root: str, command: str) -> None:
-    if not notices:
-        return
-    try:
-        key = notice_key(root)
-    except ConfigError as error:
-        raise SessionError(f"broker: {error}") from None
-    if not all(_matches(key, n["key"]) for n in notices):
-        raise SessionError(f"broker: bad response to {command}: fields")
-
-
 def hook_root(hook_path: str) -> str:
     """The parent of the bin/ holding `hook_path`."""
     return os.path.dirname(os.path.dirname(os.path.abspath(hook_path)))
@@ -501,14 +477,6 @@ def _schema(root: str) -> dict:
             return json.load(f)
     except (OSError, ValueError) as error:
         raise ConfigError(f"{SCHEMA}: unreadable ({error})") from None
-
-
-def notice_key(root: str) -> re.Pattern:
-    """The schema's notice key pattern."""
-    try:
-        return re.compile(_schema(root)["$defs"]["notice_key"]["pattern"])
-    except (KeyError, TypeError, re.error):
-        raise ConfigError(f"{SCHEMA}: no notice_key pattern") from None
 
 
 def write_manifest(

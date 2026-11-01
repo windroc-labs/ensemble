@@ -36,7 +36,7 @@ func TestMaintainRecordFailureIsEachProvidersResultAndRecovers(t *testing.T) {
 	if err := os.Mkdir(record, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestMaintainRecordFailureIsEachProvidersResultAndRecovers(t *testing.T) {
 	if err := os.Remove(record); err != nil {
 		t.Fatal(err)
 	}
-	got, err = h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err = h.Maintain(context.Background(), container, manifest, false)
 	if err != nil || results(got)["codex"].Error != nil || results(got)["github"].Error != nil || got.Deadline == nil {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -75,7 +75,7 @@ func TestTokenRecordReplacesLinkWithoutFollowingIt(t *testing.T) {
 	if err := os.Symlink(unrelated, record); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := h.Maintain(context.Background(), container, manifest, nil, false); err != nil || results(got)["codex"].Error != nil {
+	if got, err := h.Maintain(context.Background(), container, manifest, false); err != nil || results(got)["codex"].Error != nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 	raw, err := os.ReadFile(unrelated)
@@ -93,7 +93,7 @@ func TestMaintainKeepsCodexErrorAndRenewsGitHub(t *testing.T) {
 	failed := protocol.New(protocol.RefreshFailed, "Writing Codex credentials into the container failed")
 	failed.Cause = "bootstrap: cannot write managed Codex credentials: No space left on device"
 	creds.err = failed
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestMaintainReportsBothFailures(t *testing.T) {
 			} else {
 				tokens.refresh = github
 			}
-			got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+			got, err := h.Maintain(context.Background(), container, manifest, false)
 			r := results(got)
 			if err != nil || r["codex"].Error == nil || r["codex"].Error.Code != protocol.LoginRequired ||
 				r["github"].Error == nil || r["github"].Error.Code != protocol.GitHubFailed || r["github"].Error.Message != github.Message {

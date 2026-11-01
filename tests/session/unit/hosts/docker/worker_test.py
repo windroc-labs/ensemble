@@ -54,11 +54,11 @@ class Broker:
     def __init__(self, maintain=None):
         self.calls, self._maintain = [], maintain
 
-    def maintain(self, container, manifest, delivered, *, root):
+    def maintain(self, container, manifest):
         self.calls.append("maintain")
         if self._maintain is not None:
             return self._maintain()
-        return SimpleNamespace(next_check=None, deadline=None, results=[], notices=[])
+        return SimpleNamespace(next_check=None, deadline=None, results=[])
 
 
 class Base(Case):
@@ -85,7 +85,6 @@ class Base(Case):
                 GEN,
                 self.broker,
                 report=report,
-                root="/repo",
                 close=close,
                 clock=clock or (lambda: NOW),
             )
@@ -405,7 +404,7 @@ class MaintenanceTest(Base):
         def blocked():
             entered.set()
             release.wait(5)
-            return SimpleNamespace(next_check=None, deadline=None, results=[], notices=[])
+            return SimpleNamespace(next_check=None, deadline=None, results=[])
 
         self.broker = Broker(blocked)
         channel = self.make()

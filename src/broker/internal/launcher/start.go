@@ -131,9 +131,6 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 			return StartResult{}, injected(err, protocol.StartFailed, "Preparing Linear credentials failed.")
 		}
 	}
-	if err := h.checkStatic(staticRefs(m)); err != nil {
-		return StartResult{}, err
-	}
 	lap("preflight")
 	info, err := h.checkImage(ctx, m.Image)
 	if err != nil {
@@ -361,16 +358,6 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	var batch startDelivery
 	defer batch.erase()
-	// Read again just before the Keychain reads, the closest to the versions injected.
-	var record *injectedRecord
-	if refs := staticRefs(m); h.Static != nil && len(refs) > 0 {
-		records, err := h.Static.Load()
-		if err != nil {
-			return StartResult{}, held, storeFailed(err, protocol.StartFailed)
-		}
-		r := injectedRecords(refs, records)
-		record = &r
-	}
 	var codexExpiry *string
 	var commands []credential.Command
 	var message string
@@ -442,11 +429,6 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	}
 	if err := h.deliverStart(ctx, c, &batch); err != nil {
 		return StartResult{}, held, err
-	}
-	if record != nil {
-		if err := h.writeInjected(m, *record, protocol.StartFailed); err != nil {
-			return StartResult{}, held, err
-		}
 	}
 	lap("credentials")
 	if err := h.startTokens(m, codexExpiry, expiries, linearExpiry); err != nil {

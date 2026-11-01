@@ -1,8 +1,6 @@
-// Package credential is the broker's two credential lifecycles: the token lifecycle of one shared account published
-// to host consumers (Linear's: the record it keeps of each consumer's copy) and the static-secret module (static.go:
-// the versions, expiries and notices of the secrets a human registers), plus the adapters every credential is
-// delivered (Deliver) and audited (Note) through. It never reads the Keychain or calls a provider itself: callers hand
-// it a Store and a Provider.
+// Package credential manages shared tokens published to host consumers, static credential references,
+// and the adapters every credential is delivered (Deliver) and audited (Note) through.
+// It never reads the Keychain or calls a provider itself: callers hand it a Store and a Provider.
 package credential
 
 import (

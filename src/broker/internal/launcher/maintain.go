@@ -14,7 +14,7 @@ import (
 
 const (
 	RefreshAhead = 10 * time.Minute // a token provider is renewed this long before its earliest delivered expiry
-	RetryAfter   = time.Minute      // a failed provider, or a failed notice check, is tried again this long after
+	RetryAfter   = time.Minute      // a failed provider is tried again this long after
 )
 
 // Deadline is when a caller must act without a newer confirmation: past At, it performs Action ("close": close the
@@ -31,8 +31,7 @@ type ResultError struct {
 	Cause   string        `json:"cause,omitempty"`
 }
 
-// ProviderResult is one maintained component: a token provider renewed (its earliest new expiry) or failed, or the
-// static secret notices, which only fail.
+// ProviderResult is a token provider renewed (its earliest new expiry) or failed.
 type ProviderResult struct {
 	Credential string       `json:"credential"`
 	ExpiresAt  *string      `json:"expires_at"`
@@ -40,16 +39,13 @@ type ProviderResult struct {
 }
 
 // MaintainResult is everything a caller needs to schedule: when to call again (nil: never), the deadline it enforces
-// meanwhile (nil: none), each component's outcome and the notices due.
+// meanwhile (nil: none), and each provider's outcome.
 type MaintainResult struct {
 	Container string           `json:"container"`
 	NextCheck *string          `json:"next_check"`
 	Deadline  *Deadline        `json:"deadline"`
 	Results   []ProviderResult `json:"results"`
-	Notices   []Notice         `json:"notices"`
 }
-
-const noticesComponent = "notices"
 
 // tokenProvider is one renewable kind's maintenance: renew delivers fresh material into the container and records its
 // expiries through record, returning them; failed is the message for an unclassified error, %s the container;
@@ -108,11 +104,11 @@ func renewGitHub(ctx context.Context, h Host, m Manifest, container string, reco
 	return times, record(times)
 }
 
-// Maintain renews each token provider of the container started with path that is due (every one with renew), works out
-// its static secret notices, acknowledging delivered, and says when to call again. A provider's or the notices' failure
+// Maintain renews each token provider of the container started with path that is due (every one with renew)
+// and says when to call again. A provider's failure
 // is its own result, never the command's: only a manifest that is unreadable, not the container's or not safely
 // mounted fails it.
-func (h Host) Maintain(ctx context.Context, container, path string, delivered []string, renew bool) (MaintainResult, error) {
+func (h Host) Maintain(ctx context.Context, container, path string, renew bool) (MaintainResult, error) {
 	h.Audit.Begin(container, nil)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -133,7 +129,7 @@ func (h Host) Maintain(ctx context.Context, container, path string, delivered []
 	if h.Schedule != nil {
 		record = h.Schedule.Read(m)
 	}
-	result := MaintainResult{Container: container, Results: []ProviderResult{}, Notices: []Notice{}}
+	result := MaintainResult{Container: container, Results: []ProviderResult{}}
 	var next *time.Time
 	consider := func(t time.Time) {
 		if next == nil || t.Before(*next) {
@@ -172,15 +168,6 @@ func (h Host) Maintain(ctx context.Context, container, path string, delivered []
 		consider(dueAt(record, p.kind, now))
 	}
 	result.Deadline = deadlineOf(record, held)
-	if notices, static, err := h.dueNotices(container, m, delivered, now); err != nil {
-		result.Results = append(result.Results, ProviderResult{Credential: noticesComponent, Error: resultError(injected(err, protocol.InternalError, "Checking static secret notices failed."))})
-		consider(now.Add(RetryAfter))
-	} else {
-		result.Notices = notices
-		if static != nil {
-			consider(*static)
-		}
-	}
 	if next != nil {
 		if next.Before(now) {
 			next = &now

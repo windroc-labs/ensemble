@@ -10,6 +10,60 @@ PROTOCOL = Path(REPO, "src/broker/protocol/docker-broker")
 
 
 class DockerBrokerProtocol(Case):
+    def test_static_state_is_absent_from_product_sources(self):
+        removed = (
+            "static-secrets.json",
+            ".static.json",
+            "--expires",
+            "--issued",
+            "--fresh-token",
+            "notice_key",
+            "credential-notice",
+            "credential_notice",
+        )
+        for path in Path(REPO, "src").rglob("*"):
+            if not path.is_file() or path.suffix not in {".go", ".py", ".json"}:
+                continue
+            if path.name.endswith("_test.go"):
+                continue
+            text = path.read_text()
+            for name in removed:
+                with self.subTest(path=str(path.relative_to(REPO)), name=name):
+                    self.assertNotIn(name, text)
+
+    def test_static_fields_and_delivery_options_are_rejected(self):
+        schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
+        for definition, value in (
+            ("status_output", {"claude": {}, "static": []}),
+            (
+                "maintain_output",
+                {
+                    "container": "ensemble-worker_1-" + "a" * 32,
+                    "next_check": None,
+                    "deadline": None,
+                    "results": [],
+                    "notices": [],
+                },
+            ),
+            (
+                "maintain_input",
+                {
+                    "argv": [
+                        "maintain",
+                        "--container",
+                        "ensemble-worker_1-" + "a" * 32,
+                        "--manifest",
+                        "/tmp/m.json",
+                        "--delivered",
+                        "ensemble-broker-env/db@1:7d",
+                    ]
+                },
+            ),
+        ):
+            with self.subTest(definition=definition):
+                validator = Draft202012Validator({**schema, "$ref": f"#/$defs/{definition}"})
+                self.assertFalse(validator.is_valid(value))
+
     def test_status_reports_each_named_claude_accounts_usability(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         validator = Draft202012Validator({**schema, "$ref": "#/$defs/status_output"})

@@ -52,7 +52,7 @@ func TestMaintainCodexFailureKeepsGitHubSuccess(t *testing.T) {
 		credential.Codex: {soon(5 * time.Minute)}, credential.GitHub: {soon(5 * time.Minute)},
 	})
 	creds.err = protocol.New(protocol.RefreshFailed, "Renewal unavailable.")
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestMaintainCodexFailureKeepsGitHubSuccess(t *testing.T) {
 func TestMaintainGitHubFailureKeepsCodexSuccess(t *testing.T) {
 	h, manifest, tokens, creds := maintainHost(t, true, nil)
 	tokens.refresh = errors.New("opaque")
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,9 +98,9 @@ func TestMaintainGitHubFailureKeepsCodexSuccess(t *testing.T) {
 	if got.Deadline == nil || got.Deadline.At != "2026-10-18T12:00:00Z" || got.NextCheck == nil || *got.NextCheck != soon(time.Minute) {
 		t.Fatalf("%+v", got)
 	}
-	// The immediate call that acknowledges a notice must not try GitHub again before its retry time.
+	// An immediate repeat must not try GitHub again before its retry time.
 	tokens.calls = nil
-	again, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	again, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil || len(again.Results) != 0 || slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v %q", again, err, tokens.calls)
 	}
@@ -110,7 +110,7 @@ func TestMaintainRenewsOnlyDueProviders(t *testing.T) {
 	h, manifest, tokens, creds := maintainHost(t, true, map[credential.Kind][]string{
 		credential.Codex: {"2026-10-18T12:00:00Z"}, credential.GitHub: {soon(9 * time.Minute)},
 	})
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestMaintainNextCheck(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+			got, err := h.Maintain(context.Background(), container, manifest, false)
 			if err != nil || creds.injected != c.renewed || (got.NextCheck == nil) != (c.want == nil) || got.NextCheck != nil && *got.NextCheck != *c.want {
 				t.Fatalf("%+v %v injected %d", got, err, creds.injected)
 			}
@@ -152,14 +152,14 @@ func TestMaintainNextCheck(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-func TestMaintainWithoutTokenProvidersOrStaticSecretsNeverChecksAgain(t *testing.T) {
+func TestMaintainWithoutTokenProvidersNeverChecksAgain(t *testing.T) {
 	h, _ := startHost(&world{labels: goodLabels()}, &fakeCreds{})
-	got, err := h.Maintain(context.Background(), container, validManifest(t), nil, false)
-	if err != nil || got.NextCheck != nil || got.Deadline != nil || len(got.Results) != 0 || len(got.Notices) != 0 {
+	got, err := h.Maintain(context.Background(), container, validManifest(t), false)
+	if err != nil || got.NextCheck != nil || got.Deadline != nil || len(got.Results) != 0 {
 		t.Fatalf("%+v %v", got, err)
 	}
 	encoded, _ := json.Marshal(got)
-	if string(encoded) != `{"container":"`+container+`","next_check":null,"deadline":null,"results":[],"notices":[]}` {
+	if string(encoded) != `{"container":"`+container+`","next_check":null,"deadline":null,"results":[]}` {
 		t.Fatalf("%s", encoded)
 	}
 }
@@ -167,7 +167,7 @@ func TestMaintainWithoutTokenProvidersOrStaticSecretsNeverChecksAgain(t *testing
 func TestMaintainRenewFlag(t *testing.T) {
 	far := map[credential.Kind][]string{credential.Codex: {"2026-10-20T12:00:00Z"}, credential.GitHub: {"2026-10-20T12:00:00Z"}}
 	h, manifest, tokens, creds := maintainHost(t, true, far)
-	got, err := h.Maintain(context.Background(), container, manifest, nil, true)
+	got, err := h.Maintain(context.Background(), container, manifest, true)
 	if err != nil || len(got.Results) != 2 || creds.injected != 1 || !slices.Contains(tokens.calls, "refresh ensemble-broker-bot "+container) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -176,7 +176,7 @@ func TestMaintainRenewFlag(t *testing.T) {
 func TestMaintainWithoutRecordCodexFailureHasNoDeadline(t *testing.T) {
 	h, manifest, _, creds := maintainHost(t, false, nil)
 	creds.err = protocol.New(protocol.RefreshFailed, "Renewal unavailable.")
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil || got.Deadline != nil || len(got.Results) != 1 || got.Results[0].Error == nil || got.NextCheck == nil || *got.NextCheck != soon(time.Minute) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -202,50 +202,13 @@ func TestDeadlineUsesEarliestHeldProvider(t *testing.T) {
 	}
 }
 
-func TestMaintainStaticFailureKeepsTokenResults(t *testing.T) {
-	for _, c := range []struct {
-		name  string
-		spoil func(t *testing.T, h *Host, parent string)
-	}{
-		{"store", func(t *testing.T, h *Host, _ string) {
-			h.Static = &fakeStatic{err: &credential.StoreError{Path: "/x/static-secrets.json", Reason: "invalid content"}}
-		}},
-		{"injected record", func(t *testing.T, _ *Host, parent string) {
-			if err := os.WriteFile(filepath.Join(parent, tokensGeneration+".static.json"), []byte("{"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			h, manifest, _, _ := maintainHost(t, true, nil)
-			parent := filepath.Join(h.Home, ".ensemble/docker-state", "worker_1")
-			h.Static = &fakeStatic{}
-			if err := os.WriteFile(filepath.Join(parent, tokensGeneration+".static.json"), []byte(`{"injected":{},"delivered":[]}`), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			c.spoil(t, &h, parent)
-			got, err := h.Maintain(context.Background(), container, manifest, nil, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			r := results(got)
-			if n := r["notices"]; n.Error == nil || n.Error.Code != protocol.InternalError || n.ExpiresAt != nil {
-				t.Fatalf("notices %+v", n)
-			}
-			if r["codex"].Error != nil || r["github"].Error != nil || got.Deadline == nil || got.NextCheck == nil || *got.NextCheck != soon(time.Minute) {
-				t.Fatalf("%+v", got)
-			}
-		})
-	}
-}
-
 func TestMaintainRedactsProviderErrors(t *testing.T) {
 	const sentinel = "SENTINEL-m41nt41n"
 	h, manifest, tokens, creds := maintainHost(t, true, nil)
 	creds.err = &docker.CommandError{Exit: 1, Stderr: "writer said " + sentinel}
 	tokens.refresh = &protocol.Error{Code: protocol.GitHubFailed, Message: "GitHub failed.\nforged line", Cause: "status 500\x07"}
 	_, logPath := audited(t, &h, "maintain", container)
-	got, err := h.Maintain(context.Background(), container, manifest, nil, false)
+	got, err := h.Maintain(context.Background(), container, manifest, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +235,7 @@ func TestMaintainRedactsProviderErrors(t *testing.T) {
 func TestMaintainWritesNoRefreshLineWhenNothingIsDue(t *testing.T) {
 	h, manifest, _, _ := maintainHost(t, false, map[credential.Kind][]string{credential.Codex: {"2026-10-18T12:00:00Z"}})
 	rec, logPath := audited(t, &h, "maintain", container)
-	if _, err := h.Maintain(context.Background(), container, manifest, nil, false); err != nil {
+	if _, err := h.Maintain(context.Background(), container, manifest, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := rec.Flush(nil); err != nil {
@@ -302,7 +265,7 @@ func TestMaintainRejects(t *testing.T) {
 			case "symlink":
 				h.Safe = func(string) error { return errors.New("link") }
 			}
-			_, err := h.Maintain(context.Background(), c, manifest, nil, false)
+			_, err := h.Maintain(context.Background(), c, manifest, false)
 			if code(t, err) != want || creds.injected != 0 || len(tokens.calls) != 0 {
 				t.Fatalf("%v %d %q", err, creds.injected, tokens.calls)
 			}

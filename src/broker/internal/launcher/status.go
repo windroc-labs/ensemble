@@ -24,3 +24,14 @@ func heldKinds(m Manifest) []credential.Kind {
 	}
 	return kinds
 }
+
+// Status checks the local usability of each valid named Claude account.
+func Status(accounts []string, usable func(string) bool) StatusResult {
+	result := StatusResult{Claude: map[string]bool{}}
+	for _, account := range accounts {
+		if ValidClaudeAccount(account) {
+			result.Claude[account] = usable(account)
+		}
+	}
+	return result
+}

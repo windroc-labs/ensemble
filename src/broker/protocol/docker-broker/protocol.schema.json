@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 26",
+  "title": "Docker broker protocol 39",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -446,7 +446,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "38"
+          "const": "39"
         }
       },
       "required": [
@@ -707,10 +707,6 @@
       ],
       "additionalProperties": false
     },
-    "notice_key": {
-      "type": "string",
-      "pattern": "^ensemble-broker-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}@[0-9]{1,9}:(30d|7d|1d|expired|rotated)$"
-    },
     "deadline": {
       "type": "object",
       "properties": {
@@ -756,17 +752,7 @@
             }
           ],
           "items": {
-            "anyOf": [
-              {
-                "const": "--renew"
-              },
-              {
-                "const": "--delivered"
-              },
-              {
-                "$ref": "#/$defs/notice_key"
-              }
-            ]
+            "const": "--renew"
           },
           "not": {
             "contains": {
@@ -775,7 +761,7 @@
             "minContains": 2
           },
           "minItems": 5,
-          "maxItems": 134
+          "maxItems": 6
         }
       },
       "required": [
@@ -885,25 +871,6 @@
             "$ref": "#/$defs/maintain_result"
           }
         },
-        "notices": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "key": {
-                "$ref": "#/$defs/notice_key"
-              },
-              "text": {
-                "$ref": "#/$defs/text"
-              }
-            },
-            "required": [
-              "key",
-              "text"
-            ],
-            "additionalProperties": false
-          }
-        },
         "audit_warning": {
           "$ref": "#/$defs/audit_warning"
         }
@@ -912,8 +879,7 @@
         "container",
         "next_check",
         "deadline",
-        "results",
-        "notices"
+        "results"
       ],
       "additionalProperties": false
     },
@@ -952,58 +918,6 @@
           },
           "additionalProperties": {
             "type": "boolean"
-          }
-        },
-        "static": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "reference": {
-                "type": "string",
-                "pattern": "^ensemble-broker-(claude|opencode|env)/[A-Za-z0-9._-]{1,64}$"
-              },
-              "version": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "expires_at": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/$defs/time"
-                  }
-                ]
-              },
-              "provenance": {
-                "enum": [
-                  "explicit",
-                  "derived",
-                  "assumed",
-                  "unknown"
-                ]
-              },
-              "notice": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/$defs/text"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "reference",
-              "version",
-              "expires_at",
-              "provenance",
-              "notice"
-            ],
-            "additionalProperties": false
           }
         },
         "audit_warning": {

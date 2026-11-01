@@ -887,7 +887,7 @@ class RoleRun:
         deadline = time.monotonic() + REFRESH_WAIT
         while True:
             try:
-                found = self.broker.maintain(container, manifest, renew=True, root=REPO)
+                found = self.broker.maintain(container, manifest, renew=True)
                 if failed := [r for r in found.results if r["error"] is not None]:
                     raise SessionError(f"broker: {failed[0]['error']['message']}")
                 break

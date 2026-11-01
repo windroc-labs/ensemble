@@ -464,10 +464,21 @@ class BoundaryTest(Live):
             "-c",
             "exit 7",
         )
-        live_tmux.wait(
-            lambda: self.tmux("display-message", "-p", "-t", dead, "#{pane_dead_status}") == "7",
-            what="retained terminal exit",
-        )
+
+        def exited():
+            # A job exit reaps a child missed by tmux 3.4's libutempter SIGCHLD race.
+            self.tmux("run-shell", "-b", "true")
+            state = self.tmux(
+                "display-message",
+                "-p",
+                "-t",
+                dead,
+                "#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}",
+            )
+            self.assertEqual(state, "1:7:")
+            return True
+
+        live_tmux.wait(exited, what="retained terminal exit")
         manual = self.tmux(
             "split-window", "-d", "-P", "-F", "#{pane_id}", "-t", self.window, *live_tmux.IDLE
         )

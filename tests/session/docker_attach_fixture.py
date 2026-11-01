@@ -169,8 +169,8 @@ def attach(name: str = NAME) -> subprocess.Popen:
 
 
 class _Broker:
-    def maintain(self, container, manifest, delivered, *, root):
-        return SimpleNamespace(next_check=None, deadline=None, results=[], notices=[])
+    def maintain(self, container, manifest):
+        return SimpleNamespace(next_check=None, deadline=None, results=[])
 
     def close(self, container):
         return None
@@ -192,7 +192,7 @@ def docker_worker(
         remove=remove,
         owner=os.open(os.path.join(directory, "guard.lock"), os.O_RDWR | os.O_CREAT, 0o600),
         maintenance=lambda close, report: Maintenance(
-            "w1", directory, GEN, _Broker(), report=report, root="/", close=close
+            "w1", directory, GEN, _Broker(), report=report, close=close
         ),
         report=lambda *_: None,
         terminal=terminal,
