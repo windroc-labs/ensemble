@@ -114,6 +114,10 @@ class RunRecord:
             if os.path.realpath(spec.workdir) != os.path.realpath(self.layout.workdir):
                 raise ValueError("metadata workdir differs")
             planned = data.pop("plan")
+            if planned["run"].pop("gate", ""):
+                raise ValueError(
+                    "retired quota gate: finish or close this run with the previous plugin before upgrading"
+                )
             session = planned["session"]
             access = session["access"]
             for key in ("dirs", "reads", "commands"):

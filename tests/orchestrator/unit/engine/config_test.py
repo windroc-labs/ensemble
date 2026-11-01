@@ -998,7 +998,7 @@ class CommittedConfiguration(Case):
         )
         self.assertIs(HARNESS_DELEGATE, delegate.HarnessDelegate)
 
-    def test_launchd_jobs_run_ensemble_orchestrator_and_core_has_no_gate(self):
+    def test_launchd_jobs_run_ensemble_orchestrator_and_core_is_empty(self):
         for job in ("router", "promote"):
             plist = os.path.join(REPO, "launchd", f"com.windroc.ensemble.{job}.plist")
             with open(plist, "rb") as f:
@@ -1007,12 +1007,6 @@ class CommittedConfiguration(Case):
         with files("ensemble.orchestrator").joinpath("config.toml").open("rb") as source:
             committed = tomllib.load(source)
         self.assertEqual(committed["core"], {})
-        self.assertEqual(
-            self.load(HEADER + role("researcher") + role("pm") + role("engineer"))
-            .roles["researcher"]
-            .run.gate,
-            "",
-        )
 
     def setUp(self):
         write(os.path.join(self.ensemble, "config.local.toml"), CORE_LOCAL)
@@ -1113,11 +1107,11 @@ class CommittedConfiguration(Case):
         )
         self.assertEqual(cfg.stages, {"researcher": 0, "pm": 1, "engineer": 2})
         self.assertEqual(
-            {r: (x.run.gate, x.run.task, x.run.language) for r, x in cfg.roles.items()},
+            {r: (x.run.task, x.run.language) for r, x in cfg.roles.items()},
             {
-                "researcher": ("", "", "Chinese"),
-                "pm": ("", "", "Chinese"),
-                "engineer": ("", "", "Chinese"),
+                "researcher": ("", "Chinese"),
+                "pm": ("", "Chinese"),
+                "engineer": ("", "Chinese"),
             },
         )
 
@@ -1947,10 +1941,10 @@ class ConfigurationRoot(ConfigFile, Case):
         )
         run = cfg.roles["researcher"].run
         self.assertEqual(
-            (run.tier, run.commands, run.gate),
-            (3, ["env PYTHONPATH={{pythonpath}} python3 -P", "true"], ""),
+            (run.tier, run.commands),
+            (3, ["env PYTHONPATH={{pythonpath}} python3 -P", "true"]),
         )
-        self.assertEqual((cfg.roles["pm"].run.gate, cfg.roles["pm"].run.language), ("", "French"))
+        self.assertEqual(cfg.roles["pm"].run.language, "French")
 
     def test_a_trusted_dir_holding_the_work_dir_stops_the_caller(self):
         work = os.path.join(os.path.realpath(os.path.dirname(self.root)), "state", "ensemble")
@@ -1962,9 +1956,6 @@ class ConfigurationRoot(ConfigFile, Case):
                 self.fails(f"core: trusted_dirs: {entry} is or contains work_dir {work}", text)
         self.core(f'trusted_dirs = ["{os.path.join(work, "x")}", "{self.dir}/other"]\n' + CORE_TOML)
         self.assertEqual(self.load(text).work_dir, work)
-
-    def test_no_core_table(self):
-        self.assertEqual(self.load(PIPELINE).roles["researcher"].run.gate, "")
 
     def test_unknown_overlay_keys_roles_and_output_keys(self):
         unknown = "core: run overlay: unknown key "

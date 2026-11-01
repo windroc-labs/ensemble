@@ -47,10 +47,6 @@ COMMAND_DOCS = (f"src/{PKG}/delegate/team/",)
 
 PYTHON_CODE_ALLOWED = {
     (
-        "tests/delegate/integration/child_env_integration_test.py",
-        "b85585e1f858dc40f456659694ade2800943163db2e71e6c3804fa0fcf16a321",
-    ): "Harness PYTHONPATH and composer access env under a source vs installed layout need a fresh interpreter with HarnessCase's FakeControl drive, patched only in-process.",
-    (
         "tests/delegate/integration/composer/child.py",
         "a063662e735b26ff0fd31341f73be34e1767f34da54766fbe5136f2cfb06dfd2",
     ): "Composer access/render/check_team_dirs (ensemble.delegate.composer, not re-exported) in a fresh -P -S interpreter on the src roots, asserting its modules load from this tree and no team tools/ module is imported.",
@@ -82,10 +78,6 @@ EMBEDDED_PROGRAMS_ALLOWED = {
         "tests/delegate/fakes/callback_recorder.py",
         "9eab95e939ba98ce47fe6013b159a0526b7a4d2e044077d2b53755ba304ec33f",
     ): "Existing callback recorder fixture delays a child to observe callback ordering.",
-    (
-        "tests/delegate/integration/child_env_integration_test.py",
-        "b85585e1f858dc40f456659694ade2800943163db2e71e6c3804fa0fcf16a321",
-    ): "Existing environment fixture captures client launch environments from a separate caller process.",
     (
         "tests/delegate/integration/harness_contract_integration_test.py",
         "8794ebc5222b2b8fa6532c508e68b4a1abe04bc31795f0575bd5a06a1b6482e3",
