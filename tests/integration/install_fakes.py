@@ -423,12 +423,37 @@ def marketplace_name(source):
     return {"agent-plugins-marketplace": "windroc"}.get(name, name)
 
 
+def claude_dir():
+    """The login a claude call uses: login/claude for ~/.claude, login/claude@<dir> for another
+    CLAUDE_CONFIG_DIR."""
+    folder = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if folder in ("", os.path.expanduser("~/.claude")):
+        return "claude"
+    return "claude@" + folder.replace("/", "%")
+
+
+def claude_accounts():
+    """The Claude accounts the session registers: claude_accounts.json, by default work on ~/.claude."""
+    work = {"work": {"CLAUDE_CONFIG_DIR": os.path.expanduser("~/.claude")}}
+    return load(FAKES / "claude_accounts.json", work)
+
+
+def ensemble_session(args):
+    if args != ["accounts", "claude"]:
+        return 2
+    out(json.dumps(claude_accounts()) + "\n")
+    return 0
+
+
 def claude(args):
+    if args[:1] in (["auth"], ["setup-token"]):
+        with open(FAKES / "claude_dirs.log", "a") as log:
+            log.write(" ".join(args) + "\t" + os.environ.get("CLAUDE_CONFIG_DIR", "") + "\n")
     if args in (["auth", "login"], ["auth", "logout"], ["setup-token"]) and bun("claude"):
         return 1
     if args == ["auth", "login"]:
         store_key("Claude Code-credentials", "oauth")
-    done = login("claude", args, ["auth", "status"], ["auth", "login"], ["auth", "logout"])
+    done = login(claude_dir(), args, ["auth", "status"], ["auth", "login"], ["auth", "logout"])
     if done is not None:
         return done
     if args == ["setup-token"]:
@@ -801,7 +826,8 @@ def broker(args):
         )
         claude = (FAKES / "keychain/ensemble-broker-claude").exists()
         claude = claude and not (FAKES / "src/broker/claude_unusable").exists()
-        response = {"codex": state or default, "claude": {"default": claude}}
+        names = load_text(FAKES / "src/broker/claude_accounts").split()
+        response = {"codex": state or default, "claude": dict.fromkeys(names, claude)}
         warning = FAKES / "src/broker/audit_warning.json"
         if warning.exists():
             response["audit_warning"] = load(warning, None)
@@ -833,11 +859,13 @@ def broker(args):
         fresh = {"state": "login_unavailable", "repair": "login"}
         save(codex_file, {**fresh, **kept, "version": args[1]})
         return 0
-    if args == ["login", "claude"]:
+    if args[:2] == ["login", "claude"] and len(args) == 3:
         out("Paste the setup-token (hidden): ")
         mark(FAKES / "src/broker/claude_token", sys.stdin.readline().rstrip("\n"))
         store_key("ensemble-broker-claude", "token")
         (FAKES / "src/broker/claude_unusable").unlink(missing_ok=True)
+        names = set(load_text(FAKES / "src/broker/claude_accounts").split()) | {args[2]}
+        mark(FAKES / "src/broker/claude_accounts", "\n".join(sorted(names)) + "\n")
         return 0
     if args[:3] == ["login", "github", "ensemble-broker-bot"] and args[3:4] == ["--key-file"]:
         if (
@@ -986,6 +1014,7 @@ TOOLS = {
     "pkill": pkill,
     "shasum": shasum,
     "ensemble-broker": broker,
+    "ensemble-session": ensemble_session,
     "docker-uninstall": docker_uninstall,
     "docker-install": docker_install,
     "sw_vers": sw_vers,

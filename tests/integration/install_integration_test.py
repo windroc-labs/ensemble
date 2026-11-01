@@ -373,6 +373,10 @@ class InstallTest(Case):
             self.pkg_src / "scripts/install_linear_app.py",
         )
         executable(self.pkg_src / "src/broker/install.sh", BROKER_INSTALL)
+        executable(
+            self.pkg_src / "bin/ensemble-session",
+            wrapper.format(sys.executable, FAKE_TOOLS, "ensemble-session"),
+        )
         self.versions = self.pkg_src / "src/broker/internal/codex/versions.go"
         self.versions.parent.mkdir(parents=True)
         self.versions.write_text('package codex\n\nconst MinVersion = "0.163.0"\n')
@@ -2220,7 +2224,7 @@ class InstallTest(Case):
         self.assert_ok(result)
         calls = self.calls()
         self.assertIn("broker-install ", calls)
-        self.assertIn("skip: default Claude credential usable by this broker", result.stderr)
+        self.assertIn("skip: Claude account work usable by this broker", result.stderr)
         self.assertNotIn("claude setup-token", calls)
         self.assertNotIn("ensemble-broker login claude", calls)
         self.assertNotIn("ensemble-broker login codex", calls)
@@ -2230,6 +2234,102 @@ class InstallTest(Case):
         self.assert_ok(self.again(answers=[(TOKEN_Q, TOKEN)]))
         self.assertIn("claude setup-token", self.calls())
         self.assertIn("ensemble-broker login claude", self.calls())
+
+    def readiness(self, host, accounts, native, tokens, failing):
+        """A rerun with `accounts` registered, `native` of them logged in on their dirs, `tokens` of them
+        in the broker and `failing` (a call prefix) failing once: its result and its claude calls."""
+        dirs = {name: f"{self.home}/.claude-{name}" for name in accounts}
+        save = {name: {"CLAUDE_CONFIG_DIR": folder} for name, folder in dirs.items()}
+        (self.fakes / "claude_accounts.json").write_text(json.dumps(save))
+        for flag in (self.fakes / "login").glob("claude@*"):
+            flag.unlink()
+        for name in native:
+            (self.fakes / "login" / ("claude@" + dirs[name].replace("/", "%"))).write_text("")
+        (self.fakes / "src/broker/claude_accounts").write_text("".join(f"{n}\n" for n in tokens))
+        (self.fakes / "fail").unlink(missing_ok=True)
+        if failing:
+            (self.fakes / "fail").write_text(failing)
+        (self.fakes / "claude_dirs.log").unlink(missing_ok=True)
+        start = len(self.calls())
+        leave = [(LEAVE_Q, "")] if failing == "claude setup-token" else []
+        result = self.again("--docker" if host == "docker" else "--no-docker", answers=leave)
+        dirs_log = self.fakes / "claude_dirs.log"
+        claude_calls = dirs_log.read_text().splitlines() if dirs_log.exists() else []
+        return result, self.calls()[start:], claude_calls, dirs
+
+    def assert_readiness(self, host, cases):
+        for accounts, native, tokens, failing, wanted in cases:
+            with self.subTest(host=host, accounts=accounts, native=native, tokens=tokens):
+                result, calls, claude_calls, dirs = self.readiness(
+                    host, accounts, native, tokens, failing
+                )
+                if wanted is None:
+                    self.assert_ok(result)
+                else:
+                    self.assertEqual(result.code, 1, result.stderr)
+                    self.assertIn(wanted, result.stderr)
+                self.assertNotIn("ensemble-broker login claude", calls)
+                for line in claude_calls:
+                    if line.startswith("auth "):
+                        self.assertIn(line.split("\t")[1], dirs.values(), line)
+                if host == "tmux":
+                    self.assertFalse([c for c in calls if c.startswith("ensemble-broker login")])
+                    self.assertNotIn("ensemble-broker login claude", result.stderr)
+
+    def test_claude_readiness_checks_each_registered_account_on_docker(self):
+        """Each registered account's own dir and its named broker credential; never ~/.claude implicitly or an
+        unnamed broker login."""
+        self.assert_ok(self.fresh(docker="y", clients="claude"))
+        h = self.home
+        self.assert_readiness(
+            "docker",
+            (
+                (("work",), ("work",), ("work",), None, None),
+                (
+                    ("work",),
+                    ("work",),
+                    (),
+                    "claude setup-token",
+                    "ensemble-broker login claude work",
+                ),
+                (
+                    ("work", "home"),
+                    ("work", "home"),
+                    ("work",),
+                    "claude setup-token",
+                    "ensemble-broker login claude home",
+                ),
+                (
+                    ("work", "home"),
+                    ("work",),
+                    ("work", "home"),
+                    "claude auth login",
+                    f"CLAUDE_CONFIG_DIR={h}/.claude-home claude auth login",
+                ),
+                ((), (), (), None, "no account registered"),
+            ),
+        )
+        result = self.readiness("docker", (), (), (), None)[0]
+        self.assertIn("ensemble-broker login claude <name>", result.stderr)
+
+    def test_claude_readiness_checks_each_registered_account_on_tmux(self):
+        """tmux needs no broker credential; each registered dir is still checked on its own."""
+        self.assert_ok(self.fresh("--no-docker", clients="claude"))
+        h = self.home
+        self.assert_readiness(
+            "tmux",
+            (
+                (("work", "home"), ("work", "home"), (), None, None),
+                (
+                    ("work", "home"),
+                    ("work",),
+                    (),
+                    "claude auth login",
+                    f"CLAUDE_CONFIG_DIR={h}/.claude-home claude auth login",
+                ),
+                ((), (), (), None, "no account registered"),
+            ),
+        )
 
     def test_codex_install_or_update(self):
         self.assert_ok(self.fresh(docker="y"))
@@ -2558,7 +2658,9 @@ class InstallTest(Case):
         self.assertTrue(shown)
         self.assertTrue(all(on < at < off for at in shown), result.tty)
         self.assertRegex(result.tty[on:off], TOKEN_Q)
-        self.assertIn("    setup-token saved in the broker; its screen is cleared\n", result.stderr)
+        self.assertIn(
+            "    work setup-token saved in the broker; its screen is cleared\n", result.stderr
+        )
         self.assertEqual((self.fakes / "src/broker/claude_token").read_text(), TOKEN)
         self.assert_secret_free(TOKEN, result=result)
 
@@ -5103,7 +5205,6 @@ exec /bin/rm "$@"
                 "cask\tclaude-code",
                 "cask\tcodex",
                 "login\tgh",
-                "login\tclaude",
                 "login\tcodex",
                 "claude-marketplace\twindroc",
                 "claude-plugin\tensemble@windroc",
@@ -5111,6 +5212,7 @@ exec /bin/rm "$@"
                 "codex-marketplace\twindroc",
                 "codex-plugin\tensemble@windroc",
                 "codex-plugin\tupdraft@windroc",
+                f"login\tclaude\t{h}/.claude",
                 f"file\t{h}/.ensemble/plugin-root",
                 f"dir\t{h}/.ensemble/bin",
                 f'profile\t{h}/.zprofile\texport PATH="$HOME/.ensemble/bin:$PATH"',
@@ -5162,7 +5264,7 @@ exec /bin/rm "$@"
             "formula\tnode",
             "cask\tdocker-desktop",
             "broker",
-            "keychain\tensemble-broker-claude\tdefault",
+            "keychain\tensemble-broker-claude\twork",
             "keychain\tensemble-broker-codex\tauth",
             "keychain\tensemble-broker-opencode\tlan",
         ):
