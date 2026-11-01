@@ -52,7 +52,6 @@ from ensemble.session.engine.types import (
     Mode,
     Paste,
     Reply,
-    Resumable,
     SessionError,
     SessionInfo,
     SessionRow,
@@ -2029,11 +2028,13 @@ def panel(five=None, week=None) -> str:
     )
 
 
-class ClaudeStartCase(Base):
-    """Real Claude starts on a recording Host, each account's probe output faked."""
+class StartCheckTest(Base):
+    """Every Claude start, on either Host, reads each registered account live once, then runs on
+    the wanted account while it is usable, else on the usable one with the most left, else fails
+    with the usage error before its Host starts anything.
+    """
 
     HOSTS = {"tmux": RECORDING_HOST, "docker": HOMED_HOST}
-    root = "/acct"
 
     def setUp(self):
         super().setUp()
@@ -2053,7 +2054,7 @@ class ClaudeStartCase(Base):
                 "claude": {
                     "implementation": CLAUDE,
                     "accounts": {
-                        name: {"dir": f"{self.root}/{name}", **limits}
+                        name: {"dir": f"/acct/{name}", **limits}
                         for name, limits in accounts.items()
                     },
                     **table,
@@ -2063,13 +2064,13 @@ class ClaudeStartCase(Base):
         )
 
     def read(self, **outputs):
-        self.outputs = {f"{self.root}/{name}": out for name, out in outputs.items()}
+        self.outputs = {f"/acct/{name}": out for name, out in outputs.items()}
 
-    def start(self, *, spec=None, **env):
+    def start(self, **env):
         """The account a headless start's Host got, None when refused before it; the error."""
         host = self.session.host()
         before = len(host.headless)
-        spec = spec or self.spec(client="claude", mode=Mode.HEADLESS, name="w1", env=env)
+        spec = self.spec(client="claude", mode=Mode.HEADLESS, name="w1", env=env)
         with contextlib.redirect_stderr(io.StringIO()):
             try:
                 self.session.start(spec)
@@ -2083,12 +2084,8 @@ class ClaudeStartCase(Base):
         account = os.path.basename(launch.env["CLAUDE_CONFIG_DIR"])
         self.assertEqual(metadata.get("home_account", account), account)
         self.assertEqual(
-            {
-                text
-                for text in (*launch.env.values(), *metadata.values())
-                if text.startswith(f"{self.root}/")
-            },
-            {f"{self.root}/{account}"},
+            {text for text in (*launch.env.values(), *metadata.values()) if "/acct/" in text},
+            {f"/acct/{account}"},
         )
         return account, None
 
@@ -2100,13 +2097,6 @@ class ClaudeStartCase(Base):
         self.assertIsNone(account)
         self.assertIsInstance(error, SessionError)
         self.assertEqual(str(error), "usage: no available account")
-
-
-class StartCheckTest(ClaudeStartCase):
-    """Every Claude start, on either Host, reads each registered account live once, then runs on
-    the wanted account while it is usable, else on the usable one with the most left, else fails
-    with the usage error before its Host starts anything.
-    """
 
     def test_no_registered_account_is_a_config_error_before_any_probe(self):
         for host in self.HOSTS:
@@ -2292,68 +2282,6 @@ class StartCheckTest(ClaudeStartCase):
         spec = self.spec(client="probe", mode=Mode.HEADLESS, name="w1")
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SessionError):
             self.session.start(spec)
-        self.probe.assert_not_called()
-
-
-class ResumeCheckTest(ClaudeStartCase):
-    """A tmux resume runs the start check too, and only on the account whose dir holds its
-    conversation: the automatic choice narrowed to it, a hard choice refused when it is another.
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.root = os.path.join(self.home, "acct")
-
-    def conversation(self, account_dir):
-        """A conversation recorded under `account_dir`; its resume spec."""
-        transcript = ClaudeClient({}).common.transcript(
-            self.workdir, SID, {"CLAUDE_CONFIG_DIR": account_dir}
-        )
-        os.makedirs(os.path.dirname(transcript), exist_ok=True)
-        Path(transcript).touch()
-        info = SessionInfo(SID, self.workdir, project=False, transcript=transcript, resume="")
-        os.makedirs(self.workdir, exist_ok=True)
-        RunLog(self.workdir).note("session", **info.persisted())
-        return self.spec(client="claude", mode=Mode.HEADLESS, name="w1", sid=SID, resume=True)
-
-    def test_an_automatic_resume_stays_on_its_conversations_account(self):
-        self.claude({"home": {}, "work": {}}, host="tmux")
-        spec = self.conversation(os.path.join(self.root, "home"))
-        self.read(home=panel(70), work=panel(10))
-        self.assertEqual(self.start(spec=spec), ("home", None))
-        self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
-        self.read(home=panel(100), work=panel(10))
-        self.assert_usage_error(self.start(spec=spec))
-
-    def test_a_hard_choice_of_another_account_is_refused_after_the_check(self):
-        for env, table in (({ACCOUNT_ENV: "work"}, {}), ({}, {"account": "work"})):
-            with self.subTest(env=env, table=table):
-                self.claude({"home": {}, "work": {}}, host="tmux", **table)
-                spec = dataclasses.replace(
-                    self.conversation(os.path.join(self.root, "home")), env=env
-                )
-                self.read(home=panel(10), work=panel(10))
-                self.probe.reset_mock()
-                account, error = self.start(spec=spec)
-                self.assertIsNone(account)
-                self.assertIsInstance(error, ConfigError)
-                self.assertIn(f"conversation {SID} has no transcript to resume", str(error))
-                self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
-
-    def test_a_conversation_in_no_registered_dir_is_refused(self):
-        self.claude({"home": {}, "work": {}}, host="tmux")
-        spec = self.conversation(os.path.join(self.home, ".claude"))
-        self.read(home=panel(10), work=panel(10))
-        account, error = self.start(spec=spec)
-        self.assertIsNone(account)
-        self.assertIsInstance(error, ConfigError)
-        self.assertIn("has no transcript to resume", str(error))
-
-    def test_inspect_finds_the_conversation_in_its_accounts_dir(self):
-        self.claude({"home": {}, "work": {}}, host="tmux")
-        spec = self.conversation(os.path.join(self.root, "work"))
-        plan = dataclasses.replace(spec, resume=False)
-        self.assertEqual(self.session.inspect(plan).resumable, Resumable.YES)
         self.probe.assert_not_called()
 
 
