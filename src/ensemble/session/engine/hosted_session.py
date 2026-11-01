@@ -45,7 +45,6 @@ from ensemble.session.engine.types import (
     IdleTimeout,
     KeyPress,
     Launch,
-    LimitHit,
     Liveness,
     Mode,
     NoRecordedSession,
@@ -217,19 +216,14 @@ def _read_usage(
         return None
 
 
-def _pooled(setup: _Setup, name: str, client: Client, host: Host) -> dict[str, Usage | None] | None:
+def _pooled(setup: _Setup, client: Client, host: Host) -> dict[str, Usage | None] | None:
     probes = client._usage_probes()
     if probes is None or len(probes) < 2 or host._client_context().container is None:
         return None
-    return accounts.readings(name, probes, lambda launch: _read_usage(setup, client, launch))
-
-
-def _pool_account(spec: Spec, client: Client, host: Host) -> str | None:
-    """The account a start runs on, when its client has two or more on a container Host."""
-    registered = client._accounts()
-    if registered is None or len(registered) < 2 or host._client_context().container is None:
-        return None
-    return spec.env.get(ACCOUNT_ENV) or None
+    return accounts.live(
+        {account: launch for account, (_, launch) in probes.items()},
+        lambda launch: _read_usage(setup, client, launch),
+    )
 
 
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
@@ -237,7 +231,7 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
         return spec
     if account := client._account():
         return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
-    if (pool := _pooled(setup, name, client, host)) is None:
+    if (pool := _pooled(setup, client, host)) is None:
         return spec
     if (account := accounts.best(pool)) is None:
         return spec
@@ -448,7 +442,6 @@ class HostedSession(Session):
         self._capacity: Admission | None = None
         self._capacity_hosts: Mapping[str, Host] = {}
         self._read_only = False  # a view's attach: no run records
-        self._account: str | None = None  # its pool account, held over at a usage limit
 
     @classmethod
     def configure(
@@ -835,7 +828,6 @@ class HostedSession(Session):
                 raise
             session._capacity = capacity
             session._capacity_hosts = {_host_key(setup, selected_host): on}
-            session._account = _pool_account(spec, client, on)
             return session
 
     @classmethod
@@ -1250,8 +1242,6 @@ class HostedSession(Session):
             )
         elif isinstance(event, Stderr):
             self._log.note("stderr", best_effort=True, text=event.text)
-        elif isinstance(event, LimitHit) and self._account is not None:
-            accounts.hold(self.client, self._account, event.resets_at)
         self._fold(event)
         if isinstance(event, ClientBound):
             self._refresh_metadata()
