@@ -1513,8 +1513,19 @@ class Full(IssueCase):
                 self.assertEqual((code, out, gql.calls), (2, b"", []))
                 self.assertIn("--full --output FILE", err)
 
+    def test_an_output_in_missing_directories_creates_them(self):
+        path = os.path.join(self.root, "missing", "nested", "TASK-2.json")
+        code, out, err = self.run_main(["read", "TASK-2", "--full", "--output", path], self.gql())
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out), {"identifier": "TASK-2", "output": path})
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["identifier"], "TASK-2")
+
     def test_an_unwritable_output_exits_two(self):
-        path = os.path.join(self.root, "missing", "TASK-2.json")
+        blocker = os.path.join(self.root, "file")
+        with open(blocker, "w", encoding="utf-8") as f:
+            f.write("")
+        path = os.path.join(blocker, "TASK-2.json")
         code, out, err = self.run_main(["read", "TASK-2", "--full", "--output", path], self.gql())
         self.assertEqual((code, out), (2, b""))
         self.assertIn("--output", err)
