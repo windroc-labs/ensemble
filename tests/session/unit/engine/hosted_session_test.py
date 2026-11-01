@@ -1987,7 +1987,8 @@ class ClaudeStartCase(Base):
         self.assertEqual(str(error), "refused by the test Host")
         metadata, launch = host.headless[-1], host.launches[-1]
         account = os.path.basename(launch.env["CLAUDE_CONFIG_DIR"])
-        self.assertEqual(metadata.get("home_account", account), account)
+        if self.session.host()._client_context().container is not None:
+            self.assertEqual(metadata["home_account"], account)
         self.assertEqual(
             {
                 text

@@ -273,6 +273,7 @@ def _resume_on(spec: Spec, client: Client, account: str, transcript: str) -> Non
     if client._account_of(transcript) != account:
         raise ConfigError(
             f"session {spec.name or spec.sid}: conversation {spec.sid} has no transcript to resume"
+            f" in account {account}'s dir"
         )
 
 

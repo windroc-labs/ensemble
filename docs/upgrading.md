@@ -23,7 +23,9 @@ reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.tom
    `[session.clients.claude] account = "default"` needs a registered `default`; prefer a real name.
 3. On the Docker Host, log each name in to the broker: `ensemble-broker login claude work`.
 4. On the tmux Host, a start now runs on its account's login: `CLAUDE_CONFIG_DIR` is that
-   account's `dir`. Log each `dir` in with `CLAUDE_CONFIG_DIR=<dir> claude auth login`.
+   account's `dir`. Log each `dir` in with `CLAUDE_CONFIG_DIR=<dir> claude auth login`. A tmux
+   resume stays on the account whose `dir` holds its conversation; another account chosen by
+   `--account` or `account` refuses the resume.
 5. Delete the old usage readings, holds and their locks; nothing reads them any more:
 
    ```sh
