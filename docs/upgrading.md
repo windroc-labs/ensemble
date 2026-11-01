@@ -12,6 +12,10 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
 | Linear app | Rotate its client secret in Linear API Applications; this invalidates all app tokens. Follow the configured writer's [renewal procedure](#linear-broker-renewal) |
 
+## dummy-tester role and echo task removed
+
+The `dummy-tester` role and its `echo` task are gone. A `[delegate.roles.dummy-tester]` table left in `~/.ensemble/config.local.toml` makes `ensemble-delegate run --list` and every orchestrator config load fail with `roles.dummy-tester: no charter roles/dummy-tester.md in core or team_dirs`: delete the table. A run naming the role now fails with `unknown role 'dummy-tester'`; for a smoke test, run `researcher` with its `light-research` task instead.
+
 ## Docker workers: per-client Docker config
 
 Docker workers no longer copy `model`, `effortLevel`, `modelSettings` or `env.CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION` from your `~/.claude/settings.json`. Each client's Docker workers now start from its Docker config: `~/.ensemble/docker-config/<client>/`, else a packaged default ([Docker worker client settings](customizing-roles-and-tasks.md#docker-worker-client-settings)). To keep those keys, copy [the Claude default](../src/ensemble/session/clients/claude/docker-settings.json) to `~/.ensemble/docker-config/claude/settings.json` and set them. Never put credentials there (`env.ANTHROPIC_API_KEY`, `apiKeyHelper`): it is copied in plaintext into every worker's home. Running workers keep their settings; new starts use the Docker config. A Codex worker now keeps its copy across resumes, like the others. One started before this change resumes with no copy, so Codex loads no user config until its next new start.
