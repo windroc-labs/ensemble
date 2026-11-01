@@ -99,6 +99,7 @@ class Preflight(Case):
         probe_bin = os.path.join(self.home, "probe-bin")
         os.mkdir(probe_bin)
         Path(probe_bin, "claude").touch(mode=0o755)
+        os.makedirs(os.path.join(self.home, ".ensemble", "probe"), 0o700)
         path = os.pathsep.join((probe_bin, os.environ.get("PATH", os.defpath)))
         self.enterContext(mock.patch.dict(os.environ, {"PATH": path}))
         self.session = harnesses.Threaded.configured(
