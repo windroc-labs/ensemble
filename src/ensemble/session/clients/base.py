@@ -87,6 +87,10 @@ class Client:
         """The env a run on registered `account` takes over every other source."""
         return {}
 
+    def _account_of(self, transcript: str) -> str:
+        """The registered account whose dir holds `transcript`; "": none."""
+        return ""
+
     def _max_usage(self, account: str) -> float:
         return DEFAULT_MAX_USAGE
 
