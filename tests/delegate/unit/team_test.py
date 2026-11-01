@@ -36,6 +36,8 @@ from tests.delegate.unit.composer.shipped import (
 )
 from tests.delegate.unit.composer.teams import INTRO
 
+NOTICES = "THIRD_PARTY_NOTICES.md"
+
 PUBLISHING = (
     {"type": "pull-request"},
     {"type": "github", "repo": "o/notes", "branch": "main", "dir": "reports/"},
@@ -1060,7 +1062,7 @@ class Principles(Packaged):
 
 
 class Sources(Packaged):
-    def test_readme_links_resolve_and_name_every_method_and_license(self):
+    def test_readme_links_resolve_name_every_method_and_point_to_the_notices(self):
         with open(os.path.join(TEAM, "README.md"), encoding="utf-8") as f:
             readme = f.read()
         local = [
@@ -1068,12 +1070,21 @@ class Sources(Packaged):
             for link in re.findall(r"\]\(([^)\s]+)\)", readme)
             if not re.match(r"[a-z]+:|#", link)
         ]
-        self.assertTrue(local)
         for link in local:
             self.assertTrue(os.path.isfile(os.path.join(TEAM, link)), link)
         for name in os.listdir(os.path.join(TEAM, "methods")):
             self.assertIn(f"methods/{name}", readme)
-        for name in os.listdir(os.path.join(TEAM, "licenses")):
-            self.assertIn(f"licenses/{name}", local)
-        notice = re.findall(r"<team>/(licenses/[\w.-]+)", team_texts()["principles.md"])
-        self.assertEqual(notice, ["licenses/pstack.txt"])
+        notices = os.path.realpath(os.path.join(TEAM, "..", "..", "..", "..", NOTICES))
+        self.assertIn(notices, {os.path.realpath(os.path.join(TEAM, link)) for link in local})
+        self.assertNotIn("Copyright", readme)
+
+    def test_upstream_licenses_live_only_in_the_third_party_notices(self):
+        self.assertFalse(os.path.exists(os.path.join(TEAM, "licenses")))
+        self.assertNotIn("licenses/", team_texts()["principles.md"])
+        with open(os.path.join(TEAM, "..", "..", "..", "..", NOTICES), encoding="utf-8") as f:
+            sections = f.read().split("\n## ")
+        for upstream, holder in (("pstack", "Lauren Tan"), ("mattpocock/skills", "Matt Pocock")):
+            (section,) = [s for s in sections if s.startswith(f"{upstream}\n")]
+            (text,) = re.findall(r"\n```\n(.*?)\n```", section, re.S)
+            self.assertTrue(text.startswith(f"MIT License\n\nCopyright (c) 2026 {holder}\n"))
+            self.assertIn("The above copyright notice and this permission notice", text)
