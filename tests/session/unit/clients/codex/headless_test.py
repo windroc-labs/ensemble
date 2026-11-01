@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import tomllib
 from datetime import UTC, datetime
 from unittest import mock
 
@@ -360,6 +361,14 @@ class ContainerLaunch(Base):
         text = '# mine\nservice_tier = "fast"\n'
         self.docker_config(text)
         self.assertEqual(self.client.headless()._home().files(), {"config/config.toml": text})
+
+    def test_the_packaged_docker_config_sets_the_model_and_effort_a_run_leaves_unset(self):
+        ((name, text),) = self.client.headless()._home().files().items()
+        config = tomllib.loads(text)
+        self.assertEqual(name, "config/config.toml")
+        self.assertEqual(
+            (config["model"], config["model_reasoning_effort"]), ("gpt-6.1-sol", "high")
+        )
 
     def test_an_invalid_docker_config_fails_naming_it(self):
         path = self.docker_config("a = " + "[" * 5000 + "]" * 5000)
