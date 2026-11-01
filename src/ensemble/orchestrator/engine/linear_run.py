@@ -58,10 +58,6 @@ class LinearRun:
                 overlays += ({"roles": {role: {"output": dict(output) | {"host": host}}}},)
         if tier is not None:
             overlays += ({"roles": {role: {"tier": tier}}},)
-        if role == "researcher":
-            overlays += (
-                {"roles": {role: {"gate": "ensemble-orchestrator router --brake researcher"}}},
-            )
         self.delegate: Delegate = provider.create(
             role,
             Spec(

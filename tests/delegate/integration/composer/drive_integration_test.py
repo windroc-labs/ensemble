@@ -32,7 +32,6 @@ class NewRun(child.Case):
                     f"python3 -P {TOOLS}/svg_check.py *",
                     f"python3 -P {TOOLS}/report_check.py *",
                 ],
-                "gate": "",
                 "env": {"PYTHONPATH": os.path.join(REPO, "src")},
                 "cwd": self.proj,
                 "project": False,

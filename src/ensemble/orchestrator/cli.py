@@ -108,7 +108,7 @@ def main(argv=None):
     entries = {
         "router": (
             partial(router.main, trackers=TRACKERS),
-            "claim or resume an issue's agent run: a tick, --issue or --brake",
+            "claim or resume an issue's agent run: a tick or --issue",
         ),
         "promote": (
             partial(promote.main, trackers=TRACKERS, gql=client.linear_gql),

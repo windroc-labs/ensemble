@@ -39,7 +39,6 @@ class RunConfig:
     write: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
     templates: list[str] = field(default_factory=list)
-    gate: str = ""
     language: str = ""
     cwd: str = ""
     role_title: str = ""
@@ -76,8 +75,6 @@ class RunConfig:
             raise ConfigError(f"client must be a non-empty one-line name, got {self.client!r:.80}")
         if "type" not in self.output:
             raise ConfigError("output.type is not set")
-        if not isinstance(self.gate, str) or "\n" in self.gate or "`" in self.gate:
-            raise ConfigError("gate must be one line of shell command without backticks")
         if not isinstance(self.show, str) or not self.show.isprintable():
             raise ConfigError(f"show must be one line of shell command, got {self.show!r:.80}")
         if not isinstance(self.language, str) or "\n" in self.language:
@@ -149,7 +146,6 @@ class Intent:
     reads: tuple[str, ...]
     writes: tuple[str, ...]
     commands: tuple[str, ...]
-    gate: str
     env: Mapping[str, str]
     cwd: str
     project: bool

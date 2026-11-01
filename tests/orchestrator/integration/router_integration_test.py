@@ -2,7 +2,7 @@
 and calls back ensemble-orchestrator writeback; fake_claude as claude, FakeLinear over HTTP.
 A claim runs to In Review; a crash resumes the same session; a Linear failure mid write-back fails
 its callback, and Recover then writes the outcome back in process, without an agent; a Linear outage stops a tick and --issue; a tick's usage gate; a long description reaches the run; a
-SIGTERM'd harness ends its run and its agent; the researcher's gate runs on a session's PYTHONPATH.
+SIGTERM ends the run and agent; a session's PYTHONPATH can reject the removed brake.
 """
 
 import contextlib
@@ -373,7 +373,7 @@ class Router(TmuxFlow):
 class Gate(Flow):
     SHIMS = ("claude", "python3")
 
-    def test_the_researchers_gate_on_a_sessions_core_only_pythonpath(self):
+    def test_removed_brake_is_rejected_on_a_sessions_core_only_pythonpath(self):
         shim = os.path.join(self.bin, "python3")
         with open(shim, "w") as f:
             f.write(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
@@ -394,9 +394,7 @@ class Gate(Flow):
             timeout=TIMEOUT,
         )
         self.assertNotIn("ModuleNotFoundError", res.stderr)
-        self.assertEqual(
-            (res.returncode, res.stdout), (0, "five_hour=50% weekly=none\n"), res.stderr
-        )
+        self.assertEqual((res.returncode, res.stdout), (2, ""), res.stderr)
 
 
 if __name__ == "__main__":

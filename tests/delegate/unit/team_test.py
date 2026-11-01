@@ -825,7 +825,7 @@ class Real(RealConfig):
             "The ultracode round's agents are readers",
             "the deep-research method's agents are web agents",
             "No Workflow tool → follow that method.",
-            "Before the second, the brake ([Researcher › Methods](#methods)).",
+            "**Mixed**: prepare; one round of each, each on its own part.",
             "No subagents with a round's tools → skip that round, under Gaps.",
         ):
             self.assertIn(phrase, task_text("deep-research"))

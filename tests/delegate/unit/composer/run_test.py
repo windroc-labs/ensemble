@@ -191,24 +191,12 @@ class Access(Fake):
                 self.assertEqual(intent.reads, (self.tasks, self.root, "/extra"))
                 self.assertEqual(intent.writes, ())
 
-    def test_dirs_reads_writes_commands_filled_the_gate_apart_verbatim_and_the_session_env(self):
-        gate, home = "python3 /u/usage.py {{workdir}} *", os.path.expanduser("~/w")
+    def test_dirs_reads_writes_commands_filled_and_the_session_env(self):
+        home = os.path.expanduser("~/w")
         env = {"PYTHONPATH": SRC["delegate"]}
         out = os.path.join(self.root, "out")
-        for name, cfg, repo_dir, dirs, reads, writes, commands, want, session in (
-            (
-                "gate",
-                {"commands": ["python3 -P -m x *"], "gate": gate},
-                None,
-                [],
-                [self.tasks, self.root],
-                [],
-                ["python3 -P -m x *"],
-                gate,
-                env,
-            ),
-            ("no gate", {"commands": ["x"]}, None, [], [self.tasks, self.root], [], ["x"], "", env),
-            ("a gate alone", {"gate": gate}, None, [], [self.tasks, self.root], [], [], gate, env),
+        for name, cfg, repo_dir, dirs, reads, writes, commands, session in (
+            ("commands", {"commands": ["x"]}, None, [], [self.tasks, self.root], [], ["x"], env),
             (
                 "repo entry binds to the repo dir",
                 {"write": ["repo"], "commands": ["x --dir {{workdir}}/src *"]},
@@ -217,7 +205,6 @@ class Access(Fake):
                 [self.tasks, self.root],
                 [self.repo],
                 [f"x --dir {self.work}/src *"],
-                "",
                 env,
             ),
             (
@@ -228,7 +215,6 @@ class Access(Fake):
                 [self.tasks, self.root],
                 [],
                 [f"python3 -P {self.root}/tools/x.py --dir {self.work}/src *"],
-                "",
                 env,
             ),
             (
@@ -239,7 +225,6 @@ class Access(Fake):
                 [self.tasks, self.root],
                 [home],
                 [],
-                "",
                 {},
             ),
             (
@@ -250,7 +235,6 @@ class Access(Fake):
                 [self.tasks, self.root, self.repo],
                 [],
                 [],
-                "",
                 {},
             ),
             (
@@ -261,7 +245,6 @@ class Access(Fake):
                 [self.tasks],
                 [out, self.root],
                 [],
-                "",
                 {},
             ),
             (
@@ -272,7 +255,6 @@ class Access(Fake):
                 [self.root],
                 [self.tasks],
                 [],
-                "",
                 {},
             ),
         ):
@@ -284,7 +266,6 @@ class Access(Fake):
                         reads=tuple(reads),
                         writes=tuple(writes),
                         commands=tuple(commands),
-                        gate=want,
                         env=session,
                         cwd=self.work,
                         project=False,
@@ -387,19 +368,16 @@ class Resolve(Fake):
         self.assertIs(run.effort, Effort.LOW)
         self.assertEqual(self.resolved("editor", overlays=[overlay, {"tier": 4}]).tier, 4)
 
-    def test_gate_config_is_removed_at_every_level(self):
-        self.assertEqual(self.resolved().gate, "")
+    def test_role_config_rejects_the_removed_gate(self):
         self.configure(
             RUN_CONFIG.replace('effort = "medium"', 'effort = "medium"\ngate = "make gate"')
         )
         self.assertIn("unknown key 'gate'", self.refused())
-        self.configure('gate = "make gate"\n' + RUN_CONFIG)
-        self.assertIn("unknown key 'gate'", self.refused())
 
-    def test_runtime_overlays_carry_the_owners_gate(self):
+    def test_runtime_overlays_reject_the_removed_gate(self):
         for overlay in ({"gate": "owner brake"}, {"roles": {"writer": {"gate": "owner brake"}}}):
             with self.subTest(overlay=overlay):
-                self.assertEqual(self.resolved(overlays=[overlay]).gate, "owner brake")
+                self.assertIn("unknown key 'gate'", self.refused(overlays=[overlay]))
 
     def test_language_at_any_level(self):
         self.assertEqual(self.resolved("editor").language, "")
@@ -573,9 +551,6 @@ class Validate(Fake):
         language = "language must be one line of text"
         for overlay, msg in (
             ({"tier": 9}, TIER),
-            ({"gate": "a\nb"}, "gate must be one line"),
-            ({"gate": "echo `id`"}, "gate must be one line"),
-            ({"gate": 7}, "gate must be one line"),
             ({"language": "a\nb"}, language),
             ({"language": 7}, language),
         ):
@@ -584,7 +559,7 @@ class Validate(Fake):
 
     def test_replace_is_checked(self):
         run = self.resolved("editor")
-        for change in ({"effort": "ultra"}, {"gate": "a\nb"}, {"client": ""}):
+        for change in ({"effort": "ultra"}, {"client": ""}):
             with self.subTest(change=change), self.assertRaises(ConfigError):
                 replace(run, **change)
 

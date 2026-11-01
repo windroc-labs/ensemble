@@ -311,7 +311,6 @@ class Wirings(run_fixtures.Base):
                 "ensemble-orchestrator router",
                 "--dry-run",
                 "--issue ID",
-                "--brake ROLE",
                 "--display",
                 "--events",
                 "at most once",

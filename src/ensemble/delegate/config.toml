@@ -114,7 +114,6 @@ host = ""
 #                 they are approved. {{workdir}} is <workdir>/agent, {{team}} core's team/ dir, {{role_team}} the
 #                 role's team root; a word holding one is shell-quoted once filled, and a prompt text writing the command
 #                 with <Workdir>, <team> or <role team> gets it as approved when that quoting changed it; [] → none
-# A caller may supply a costly-step brake at runtime; it has no configuration key here.
 #   <run key>     tier, effort, client, language, cwd, idle_timeout, show or [output], for that role
 
 # ── Researcher ──────────────────────────────────────────

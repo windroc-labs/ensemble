@@ -710,9 +710,8 @@ def _runnable(cfg, work, delegate_cls, index):
     if isinstance(overlay, dict) and isinstance(roles := overlay.get("roles", {}), dict):
         tables.update({f"overlay.roles.{role}": table for role, table in roles.items()})
     for where, table in tables.items():
-        for key in ("gate", "credentials"):
-            if isinstance(table, dict) and key in table:
-                raise ConfigError(f"core: run overlay: unknown key {key!r} in [{where}]")
+        if isinstance(table, dict) and "credentials" in table:
+            raise ConfigError(f"core: run overlay: unknown key 'credentials' in [{where}]")
     try:
         trusted = delegate_cls.trusted_dirs()
     except (OSError, ValueError, delegate.ConfigError) as e:

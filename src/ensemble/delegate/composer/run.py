@@ -1,7 +1,7 @@
 """A role's run config (resolve: the core config, then the caller's overlays), one run's params
 and its client-neutral access intent (access), whose env is the session env its commands need.
 An overlay can widen read, write and commands, so a caller passes only operator-controlled
-config as one. A runtime overlay may also supply the caller's gate command; config files cannot.
+config as one.
 """
 
 import os
@@ -44,7 +44,6 @@ RUN_KEYS = frozenset(
         "show",
     }
 )
-OVERLAY_KEYS = RUN_KEYS | {"gate"}
 ENVIRONMENT_KEY = "environment"  # a config role table's; engine/config.py checks it
 OUTPUT_KEYS = frozenset({"type", "repo", "branch", "dir", "host"})
 OLD_KEYS = frozenset({"default_task", "tasks"})
@@ -101,7 +100,7 @@ def resolve(
         **values,
     )
     for overlay in overlays:
-        values = _run_keys(overlay, role, OVERLAY_KEYS)
+        values = _run_keys(overlay, role)
         run = replace(run, **values)
     if not (found := charter(team, role)):
         raise no_charter(role, cfg, team)
@@ -176,13 +175,12 @@ def access(
             seen.add(real)
             reads.append(p)
     commands = tuple(c.rule for c in approved(run, workdir, team, docker=docker))
-    needs_env = (commands or run.gate) and not docker
+    needs_env = commands and not docker
     return Intent(
         dirs=tuple(dirs),
         reads=tuple(reads),
         writes=tuple(paths["write"]),
         commands=commands,
-        gate=run.gate,
         env=utils.import_env(delegate_config, session, utils) if needs_env else {},
         cwd=cwd,
         project=project,
@@ -211,8 +209,6 @@ def approved(
 
 
 def _check(cfg: Mapping) -> None:
-    if "gate" in cfg:
-        raise ConfigError("unknown key 'gate'")
     for key in cfg:
         if hint := utils.renamed_key(key):
             raise ConfigError(f"unknown key {key!r}{hint}")
@@ -228,7 +224,7 @@ def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
     for key in (ENVIRONMENT_KEY, "environments"):
         if key in overlay:
             raise _untrusted(f"{where}.{key}")
-    _check_keys(overlay, OVERLAY_KEYS | {"roles"}, f"[{where}]")
+    _check_keys(overlay, RUN_KEYS | {"roles"}, f"[{where}]")
     _check_output(overlay, f"{where}.output", _boxed)
     if "roles" not in overlay:
         return
@@ -241,7 +237,7 @@ def _check_overlay(overlay: Mapping, roles: set[str], where: str) -> None:
             raise ConfigError(f"[{where}.roles.{role}] must be a table")
         if ENVIRONMENT_KEY in table:
             raise _untrusted(f"{where}.roles.{role}.{ENVIRONMENT_KEY}")
-        _check_role(table, role, f"{where}.", _boxed, OVERLAY_KEYS)
+        _check_role(table, role, f"{where}.", _boxed)
 
 
 def _untrusted(where: str) -> ConfigError:
