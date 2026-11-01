@@ -14,7 +14,6 @@ import fcntl
 import io
 import itertools
 import json
-import math
 import os
 import shutil
 import signal
@@ -26,7 +25,7 @@ from dataclasses import asdict, replace
 from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.delegate import ConfigError, Outcome, Spec
+from ensemble.delegate import ConfigError, Delegate, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
@@ -40,7 +39,6 @@ from ensemble.session import (
     Access,
     EnvironmentSpec,
     Exited,
-    Headroom,
     Mode,
     NotShowable,
     Reply,
@@ -104,7 +102,7 @@ class RealSpawn(DrivenDelegate):
 
 
 class ResearchRounds(HarnessCase):
-    def test_both_hosts_deliver_two_rounds_without_usage_queries(self):
+    def test_both_hosts_deliver_two_rounds(self):
         for host in ("agent", "box"):
             with self.subTest(host="tmux" if host == "agent" else "Docker"):
                 self.settings()
@@ -130,18 +128,8 @@ class ResearchRounds(HarnessCase):
                 self.assertNotIn("<gate>", prompt)
                 self.assertNotIn("brake", prompt.lower())
                 self.assertNotIn("gate", self.metadata()["plan"]["run"])
-                with (
-                    mock.patch.object(
-                        DrivenDelegate, "usage", side_effect=AssertionError("no quota")
-                    ) as quota,
-                    mock.patch.object(
-                        HarnessSession, "usage", side_effect=AssertionError("no probe")
-                    ) as probe,
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
+                with contextlib.redirect_stdout(io.StringIO()):
                     result = view.run()
-                    quota.assert_not_called()
-                    probe.assert_not_called()
                 self.assertEqual(result.returncode, 0)
                 self.assertIsNotNone(result.outcome)
                 self.assertEqual(result.outcome.deliverable, outcome["deliverable"])
@@ -533,13 +521,6 @@ class CallerSessionTest(HarnessCase):
 
 class VerifierClientTest(HarnessCase):
     """verifier uses the router's client overlay and an explicit Spec client."""
-
-    def test_the_gate_s_overlay_selects_each_client(self):
-        for client in ("codex", "opencode", "claude"):
-            with self.subTest(client=client), mock.patch.object(HarnessSession, "usage") as usage:
-                overlays = ({}, {"roles": {"verifier": {"client": client}}})
-                DrivenDelegate.usage("verifier", overlays=overlays, session_cls=HarnessSession)
-                usage.assert_called_once_with(client)
 
     def test_a_spec_selects_each_client_over_the_overlay(self):
         self.settings(default="docker")  # mini-op needs a Docker default
@@ -1488,39 +1469,48 @@ class SaveFailureTest(HarnessCase):
         self.assertEqual(result.outcome.status, "done")
 
 
-class UsageSession(HarnessSession):
-    clients = []
-    result = []
+class RefusingSession(HarnessSession):
+    """Records each start's client; refuses client `b` as session refuses a client whose every
+    account is spent.
+    """
+
+    starts: list[str] = []
 
     @classmethod
-    def usage(cls, client):
-        cls.clients.append(client)
-        if isinstance(cls.result, BaseException):
-            raise cls.result
-        return cls.result
+    def start(cls, spec, *, display=None, host=None, idle_timeout=None):
+        cls.starts.append(spec.client)
+        if spec.client == "b":
+            raise SessionError("usage: no available account")
+        return super().start(spec, display=display, host=host, idle_timeout=idle_timeout)
 
 
 class OverlayTest(HarnessCase):
-    def test_usage_reads_the_client_the_owner_overlays_resolve(self):
-        UsageSession.clients = []
-        overlays = ({"roles": {"researcher": {"client": "claude"}}},)
-        DrivenDelegate.usage("researcher", session_cls=UsageSession)
-        DrivenDelegate.usage("researcher", overlays=overlays, session_cls=UsageSession)
-        DrivenDelegate.usage(
-            "researcher",
-            overlays=({"roles": {"researcher": {"client": "opencode", "tier": 3}}},),
-            session_cls=UsageSession,
-        )
-        self.assertEqual(UsageSession.clients, ["fake", "claude", "opencode"])
+    def test_neither_delegate_nor_session_has_a_usage_query(self):
+        for cls in (Delegate, HarnessDelegate, Session):
+            with self.subTest(cls=cls.__name__):
+                self.assertFalse(hasattr(cls, "usage"))
 
-    def test_usage_passes_the_sessions_list_through(self):
-        found = [Headroom("api", math.inf), Headroom("broken", None), Headroom("work", -10)]
-        UsageSession.result = found
-        self.addCleanup(setattr, UsageSession, "result", [])
-        self.assertIs(DrivenDelegate.usage("researcher", session_cls=UsageSession), found)
-        UsageSession.result = SessionConfigError("bad session config")
-        with self.assertRaisesRegex(ConfigError, "^bad session config$"):
-            DrivenDelegate.usage("researcher", session_cls=UsageSession)
+    def test_a_refused_start_of_the_overlay_client_ends_the_attempt_with_its_whole_text(self):
+        self.settings(client="a")
+        with open(self.local, "a", encoding="utf-8") as file:
+            for name in ("a", "b"):
+                file.write(
+                    f"[session.clients.{name}]\n"
+                    'implementation = "tests.session.fake_client:FakeClient"\n'
+                )
+        RefusingSession.starts = []
+        view = self.make(
+            spec=Spec("Hello.", self.work, task="light-research", sid=SID),
+            overlays=({"roles": {"researcher": {"client": "b"}}},),
+            session_cls=RefusingSession,
+        )
+        self.assertEqual(self.metadata()["plan"]["session"]["client"], "b")
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = view.run()
+        self.assertEqual(RefusingSession.starts, ["b"])
+        self.assertEqual((result.returncode, result.outcome), (1, None))
+        self.assertEqual(result.error, "headless: usage: no available account")
+        self.assertEqual(self.metadata()["attempt"], 1)
 
     def test_owner_overlays_shape_the_persisted_run(self):
         self.make()

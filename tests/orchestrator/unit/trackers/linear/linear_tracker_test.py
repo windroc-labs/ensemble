@@ -10,7 +10,6 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 from ensemble.orchestrator.engine import (
-    gate,
     inputs,
     issues,
     linear_run,
@@ -125,7 +124,6 @@ HUMANS = ("Me@X.com", "you@x.com")
 SELVES = Selves(HARNESS_USER, frozenset({role_id("pm")}), MANAGER_USER)
 USER = "00000000-0000-4000-8000-000000000203"  # the user, a member
 RULES = (
-    gate,
     inputs,
     issues,
     linear_run,

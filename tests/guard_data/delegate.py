@@ -55,11 +55,7 @@ PYTHON_CODE_ALLOWED = {
     (
         "tests/delegate/integration/harness_contract_integration_test.py",
         "8794ebc5222b2b8fa6532c508e68b4a1abe04bc31795f0575bd5a06a1b6482e3",
-    ): "The contract's class-method test calls HarnessDelegate.usage without session_cls, which configures the process-global Session from config; tests may not patch HostedSession._setup, so only a fresh interpreter keeps that out of the test process.",
-    (
-        "tests/delegate/integration/harness_integration_test.py",
-        "5dd44a31ba4bad11f5f08cb32897d0924ad6129fa176b421e2068d7a6e935b44",
-    ): "HarnessDelegate.usage with its default session_cls configures the process-global Session and loads UsageClient through it; no public fresh session class exists and tests may not configure or patch the shared Session in-process.",
+    ): "The contract's class-method test calls HarnessDelegate's class methods on the process-global configuration; only a fresh interpreter keeps that out of the test process.",
     (
         "tests/delegate/integration/harness_integration_test.py",
         "46b8ec8ae6df3a3d2489099a82ac08f41ad27ec2146be5a2e4938ace8cf13632",
@@ -84,10 +80,6 @@ EMBEDDED_PROGRAMS_ALLOWED = {
         "tests/delegate/integration/harness_contract_integration_test.py",
         "8794ebc5222b2b8fa6532c508e68b4a1abe04bc31795f0575bd5a06a1b6482e3",
     ): "Existing process fixture checks class methods answer for its roles and refuse an unknown one.",
-    (
-        "tests/delegate/integration/harness_integration_test.py",
-        "5dd44a31ba4bad11f5f08cb32897d0924ad6129fa176b421e2068d7a6e935b44",
-    ): "Existing process fixture checks role client usage maps the client reading to its headroom list without starting.",
     (
         "tests/delegate/integration/harness_integration_test.py",
         "46b8ec8ae6df3a3d2489099a82ac08f41ad27ec2146be5a2e4938ace8cf13632",

@@ -240,7 +240,6 @@ SESSION_NAME_RULE = f"{TAG.pattern} but not {NO_DISPLAY}"
 
 COMMAND = "ensemble-session"
 ACCOUNT_SET_BY = f"{ACCOUNT_ENV} is set by --account or [clients.<client>].account"
-DEFAULT_ACCOUNT = "default"
 DEFAULT_MAX_USAGE = 100
 RESUME = (COMMAND, "resume")
 
@@ -636,12 +635,6 @@ class Window:
 class Usage:
     five_hour: Window | None  # None: not reported
     weekly: Window | None
-
-
-@dataclass(frozen=True)
-class Headroom:
-    account: str
-    left: float | None
 
 
 @dataclass(frozen=True)

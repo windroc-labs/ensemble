@@ -16,11 +16,9 @@ from ensemble.orchestrator.engine import (
     prune,
     router,
     run_comments,
-    runs,
     writeback,
 )
 from ensemble.orchestrator.engine.config import credentials, load
-from ensemble.orchestrator.engine.gate import Gate
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.types import (
     MOVES,
@@ -69,7 +67,6 @@ def _query_help(command):
             "answer to a needs_input run. Send the answer to its open TUI session\n"
             "(ensemble-session send); that gone, continue its conversation:\n"
             "ensemble-crew reopen --help.\n"
-            "A usage gate may block restart; wait for its reset before retrying.\n"
             "--input is rejected: record answers on the issue board.\n"
             "Run outside an agent session. ENSEMBLE_SID, if supplied, must match\n"
             "the recorded session and is read once and removed.\n"
@@ -262,20 +259,6 @@ def main(argv=None):
 
     def resume(view):
         alive, outcome = view.delegate.alive(), view.delegate.outcome()
-        if not alive and outcome is None:
-            entries = runs.parse_log(cfg.runs_log)
-            entry = runs.latest(entries)[view.issue]
-            gate = Gate(
-                cfg=cfg,
-                dry=False,
-                say=partial(event_log.log, "router", quiet=True),
-            )
-            if gate.blocked(
-                entry.role,
-                view.issue,
-                key=(view.delegate_kind, runs.client_of(entries, view.sid)),
-            ):
-                raise RuntimeError("resume blocked by usage gate")
         record = view.resume().to_line()
         if not alive and outcome is not None:
             print(

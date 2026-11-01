@@ -1,8 +1,6 @@
 """A caller-owned fake Session class (and its Host) for orchestrator unit tests."""
 
-from ensemble.session import Headroom, NoRecordedSession, SessionStatus
-
-LOW = [Headroom("default", 90.0)]
+from ensemble.session import NoRecordedSession, SessionStatus
 
 
 def _answer(value):
@@ -12,16 +10,15 @@ def _answer(value):
 
 
 class FakeApi:
-    """`live` None: sessions unknown; `statuses`, `usages` (default LOW) and `shown`: a value or
-    an exception to raise; `records`: recorded sessions per sid. host() is itself; `order` logs
+    """`live` None: sessions unknown; `statuses` and `shown`: a value or an exception to raise; `records`: recorded sessions per sid. host() is itself; `order` logs
     close, show and detach; the rest are delegate_fixture's.
     """
 
     def __init__(self, order=None):
         self.order = [] if order is None else order
         self.live, self.errors, self.shown, self.info = [], {}, None, []
-        self.statuses, self.records, self.usages = {}, {}, {}
-        self.usage_calls, self.constructed, self.detached, self.runs_at_detach = [], [], [], []
+        self.statuses, self.records = {}, {}
+        self.constructed, self.detached, self.runs_at_detach = [], [], []
         self.construct_error = self.detach_error = self.tui_error = None
         self.tui_checks, self.cleaned, self.asked = [], [], []
         self.outcomes, self.checkouts = {}, {}
@@ -49,10 +46,6 @@ class FakeApi:
         return _answer(
             self.statuses.get(spec.sid, SessionStatus("yes", None, f"resume {spec.sid}"))
         )
-
-    def usage(self, client):
-        self.usage_calls.append(client)
-        return _answer(self.usages.get(client, LOW))
 
     def attach_command(self, name):
         return f"attach {name}"

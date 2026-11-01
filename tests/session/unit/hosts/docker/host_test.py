@@ -43,9 +43,7 @@ from ensemble.session.harness import guard
 from ensemble.session.hosts.base import Host, phase_reporter, tui_lock
 from ensemble.session.hosts.docker import worker as worker_module
 from ensemble.session.hosts.docker.broker import (
-    BROKER,
     TIMEOUT,
-    Broker,
     BrokerError,
     client_keys,
 )
@@ -59,8 +57,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.session.hosts.types import CommandView
 from ensemble.utils import inode_lock, parse_time
 from tests.session.case import REPO, Case
-from tests.session.unit.hosts.docker.support import BETA, UPDRAFT, data
-from tests.session.unit.hosts.docker.support import FakeBroker as BrokerRunner
+from tests.session.unit.hosts.docker.support import BETA, UPDRAFT
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
 DOCKER = "/usr/local/bin/docker"
@@ -126,12 +123,6 @@ class FakeBroker:
         self.order.append("version")
         if "version" in self.failing:
             raise self.failing["version"]
-
-    def probe_provider(self, provider, base_url):
-        self.order.append(("probe", provider, base_url))
-        if "probe-provider" in self.failing:
-            raise self.failing["probe-provider"]
-        return True
 
     def build(self, package, *, plugins=(), **environment):
         self.order.append(("build", package))
@@ -265,59 +256,6 @@ class ConfigTest(Base):
         self.assertTrue(host.tui_settings().status_line)
         self.assertEqual(host.tui_settings().badge, "🐳")
         self.assertEqual(host.tui_settings().hidden_size, (100, 30))
-
-    def test_provider_usage_rejects_broker_18_before_probing_credentials(self):
-        request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
-        locked = data("error-login_required")
-        locked["error"].update(
-            command="probe-provider",
-            message="secret-store ensemble-broker-opencode: keychain locked",
-        )
-        runner = BrokerRunner(
-            (0, '{"protocol_version":"18"}\n', ""),
-            (5, "", json.dumps(locked)),
-        )
-        self.host.broker = Broker(runner)
-        with self.assertRaisesRegex(SessionError, "protocol '18', want '38'") as caught:
-            self.host._provider_usage(request)
-        self.assertIn(
-            f"gh logged in), then {BROKER} retrust; scripts/install.sh", str(caught.exception)
-        )
-        self.assertEqual(runner.calls, [[BROKER, "version"]])
-        self.assertEqual(len(runner.results), 1)
-
-    def test_provider_usage_checks_protocol_and_uses_the_broker(self):
-        request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
-        self.assertTrue(self.host._provider_usage(request))
-        self.assertEqual(self.order, ["version", ("probe", "strata", "https://strata.test/v1")])
-        self.broker.failing["version"] = SessionError("upgrade broker")
-        with self.assertRaisesRegex(SessionError, "upgrade broker"):
-            self.host._provider_usage(request)
-
-    def test_provider_usage_preserves_host_credential_failures(self):
-        request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
-        for exit_code, code, message in (
-            (11, "keychain_failed", "secret-store ensemble-strata: keychain locked"),
-            (11, "keychain_failed", "secret-store ensemble-strata: credentials unreadable"),
-        ):
-            with self.subTest(code=code):
-                error = BrokerError(exit_code, code, message, "not_needed", None)
-                self.broker.failing["probe-provider"] = error
-                with self.assertRaises(SessionError) as caught:
-                    self.host._provider_usage(request)
-                self.assertIs(caught.exception, error)
-
-    def test_provider_usage_reports_missing_or_invalid_key_as_client_configuration(self):
-        request = SimpleNamespace(provider="strata", base_url="https://strata.test/v1")
-        for message in (
-            "No API key in ensemble-broker-opencode",
-            "Invalid API key in ensemble-broker-opencode",
-        ):
-            with self.subTest(message=message):
-                error = BrokerError(5, "login_required", message, "not_needed", None)
-                self.broker.failing["probe-provider"] = error
-                with self.assertRaisesRegex(ConfigError, message):
-                    self.host._provider_usage(request)
 
     def test_the_packaged_table_parses_and_tmux_stays_the_default(self):
         with open(os.path.join(REPO, "src/ensemble/session/config.toml"), "rb") as f:

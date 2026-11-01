@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from ensemble.delegate.composer import RunConfig
 from ensemble.delegate.engine.types import Event, Outer, Result, Spec
 from ensemble.delegate.event.outcome import Outcome
-from ensemble.session import Headroom, SessionStatus
+from ensemble.session import SessionStatus
 from ensemble.utils import Display, Record, Status
 
 
@@ -29,10 +29,6 @@ class Delegate(ABC):
     @abstractmethod
     def attach(cls, record_or_workdir: Record | str, *, sid: str | None = None) -> Delegate:
         """ConfigError when `sid` is given and the run is another session's."""
-
-    @classmethod
-    @abstractmethod
-    def usage(cls, role: str, *, overlays: Sequence[Mapping] = ()) -> list[Headroom]: ...
 
     @classmethod
     @abstractmethod

@@ -40,14 +40,6 @@ implementation = "ensemble.delegate:HarnessDelegate"
 # local: [orchestrator.task_tiers]
 # local: light-build = 3
 
-# Per-client usage checks, owned by the orchestrator; empty table or an unlisted client means "on".
-#   <client>  "on": keep the board-start usage gate.
-#             "off": neither reads nor evaluates usage; other clients keep their setting.
-[usage_limit]
-
-# local: [orchestrator.usage_limit]
-# local: "<client>" = "off"
-
 # An orchestrated role: each workflow stage's role is one, and a table names only a stage's role. Its tasks are its
 # charter's index (roles/<role>.md › Tasks, in core or a [delegate] team_dirs dir). Its Linear app:
 # [linear.roles.<role>]. A table for a packaged stage your workflow leaves out is ignored.

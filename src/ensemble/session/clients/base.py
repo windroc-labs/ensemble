@@ -14,7 +14,6 @@ from ensemble.session.engine.types import (
     DEFAULT_MAX_USAGE,
     ConfigError,
     Launch,
-    ProviderProbe,
     Resumable,
     SessionInfo,
     SessionStatus,
@@ -72,9 +71,6 @@ class Client:
 
     def _executable(self, *, container: bool = False) -> str:
         return ""
-
-    def _provider_probe(self) -> ProviderProbe | None:
-        return None
 
     def _accounts(self) -> frozenset[str] | None:
         """The registered account names a session may select; None: the client has no accounts."""

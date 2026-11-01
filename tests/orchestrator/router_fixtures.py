@@ -18,9 +18,6 @@ from ensemble.orchestrator.engine import (
     router,
     runs,
 )
-from ensemble.orchestrator.engine import (
-    gate as quota,
-)
 from ensemble.orchestrator.engine.types import LinearError, Spec, TrackerKind
 from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
@@ -245,7 +242,7 @@ class FakeLinear:
         self.todo_error = False
         self.unreadable = set()
         self.refuse = set()
-        self.ids = {}  # an issue's uuid → its identifier, for write-back's calls
+        self.ids = {}  # issue uuid → identifier, for write-back
         self.group = {
             "isGroup": True,
             "children": {"nodes": [{"id": i} for i in (LIGHT, DEEP, ORPHAN_LABEL)]},
@@ -484,7 +481,7 @@ class Base(run_fixtures.Base):
         cfg = config.load(path=self.config_path)
         return replace(cfg, delegates={**cfg.delegates, cfg.delegate_kind: provider(self.api, cfg)})
 
-    def board(self, fake, use, *, dry=False, gate=False, again=False):
+    def board(self, fake, use, *, dry=False, again=False):
         self.write_runs()
         cfg = self.cfg()
         err = io.StringIO()
@@ -498,7 +495,6 @@ class Base(run_fixtures.Base):
                     dry=dry,
                     keychain=self.keychain,
                     wiring=self.wiring,
-                    gate=quota.Gate(dry=dry, cfg=cfg) if gate else None,
                 )
             )
         self.raw, self.err = err.getvalue(), self.unmap(err.getvalue())
@@ -518,13 +514,13 @@ class Base(run_fixtures.Base):
             )
         return "new" if run else ""
 
-    def claim(self, fake, *, full=(), dry=False, recover=False, gate=False, again=False):
+    def claim(self, fake, *, full=(), dry=False, recover=False, again=False):
 
         def use(b):
             recover and b.recover()
             return b.take(full=full)
 
-        self.taken = taken = self.board(fake, use, dry=dry, gate=gate, again=again)
+        self.taken = taken = self.board(fake, use, dry=dry, again=again)
         return (
             taken
             and f"{taken[0]['identifier']} {taken[0]['url']} {taken[0]['project']['name']}"
@@ -587,7 +583,7 @@ class TickBase(Base):
         except config.ConfigError:
             delegate_cls = None
 
-        self.api.order, self.api.usage_calls, self.api.info = [], [], []
+        self.api.order, self.api.info = [], []
         self.start = None if outer else start or Start()
         self.write_runs()
         err, out = Stderr(tty=tty), io.StringIO()

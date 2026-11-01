@@ -1,7 +1,7 @@
 """router.py as a subprocess: it detaches the run's LinearRun, whose drive runs as a local process
 and calls back ensemble-orchestrator writeback; fake_claude as claude, FakeLinear over HTTP.
 A claim runs to In Review; a crash resumes the same session; a Linear failure mid write-back fails
-its callback, and Recover then writes the outcome back in process, without an agent; a Linear outage stops a tick and --issue; a tick's usage gate; a long description reaches the run; a
+its callback, and Recover then writes the outcome back in process, without an agent; a Linear outage stops a tick and --issue; a long description reaches the run; a
 SIGTERM ends the run and agent; a session's PYTHONPATH can reject the removed brake.
 """
 
@@ -307,19 +307,6 @@ class Router(TmuxFlow):
         self.assert_built(sid)
         self.assertEqual([e["kind"] for e in self.logged()].count("linear-error"), 1)
 
-    def test_a_tick_at_95_percent_usage_skips_the_claim(self):
-        self.scene([START, DONE], usage=usage(0.95))
-        res = self.router()
-        self.assertEqual((res.returncode, res.stdout, res.stderr), (0, "", ""))
-        self.assertEqual(
-            self.said(),
-            [f"router usage-skip {ID} client=claude reason=usage usage=work=-5"],
-        )
-        self.assertEqual((self.state(ID), self.runs()), ("todo", []))
-        self.assertEqual(len(self.probes()), 1)
-        self.assertEqual(self.calls(), [])
-        self.assertEqual(self.sent("linear.M_STATE"), [])
-
     def test_a_tick_at_50_percent_usage_claims_and_finishes(self):
         self.scene([START, DONE], usage=usage(0.5))
         sid = self.claim("start", ())
@@ -336,7 +323,7 @@ class Router(TmuxFlow):
         )
         calls = self.calls()
         self.assertEqual([option(c, "--session-id") for c in agent_calls(calls)], [sid])
-        self.assertEqual(len(self.probes()), 2)  # the board's and the start's
+        self.assertEqual(len(self.probes()), 1)  # the start's
 
     def test_a_long_description_reaches_the_run_intact(self):
         with self.fake.lock:

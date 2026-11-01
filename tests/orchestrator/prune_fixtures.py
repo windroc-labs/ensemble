@@ -329,7 +329,6 @@ class PruneScenario(Case):
         )
         self.cfg = config.Config(
             task_tiers={},
-            usage_limit={},
             roles=dict.fromkeys(ROLES.values()),  # prune reads only the names
             local_clones={},
             tracker=TrackerKind.LINEAR,

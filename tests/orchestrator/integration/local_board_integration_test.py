@@ -18,7 +18,6 @@ from tests.orchestrator.integration.flow_fixtures import (
     ROLES,
     TIMEOUT,
     BinFlow,
-    usage,
 )
 from tests.orchestrator.unit.board_ids import role_id
 
@@ -26,7 +25,6 @@ AGENT_GROUP = "00000000-0000-4000-8000-000000000101"
 CLAUDE = "00000000-0000-4000-8000-000000000102"
 LINEAR_STATES = {"ready": "todo", "review": "in_review", "done": "done"}
 T0 = datetime(2026, 10, 1, 9, tzinfo=UTC)
-USAGE = "work=40"  # the 50% reading under the flow account's max_usage of 90
 BAD_TASK = (
     'Task "light-research" is not one of engineer\'s tasks (build, light-build, decompose). '
     "Fix the task or the assignee, then move the issue back to ready/."
@@ -157,7 +155,7 @@ class LocalBoard(BinFlow):
         )
 
     def dry_run(self, board=None):
-        self.scene([], usage=usage(0.5))
+        self.scene([])
         res = self.run_router("--dry-run", board=board)
         self.assertEqual((res.returncode, res.stdout), (0, ""), res.stderr)
         return lines(res)
@@ -217,7 +215,6 @@ class LocalBoard(BinFlow):
                 {"kind": "blocked", "issue": "LOC-10", "by": ["LOC-11"]},
                 {"kind": "plan", "mode": "new", "queue": 8},
                 *picked(4),
-                {"kind": "usage", "client": "claude", "usage": USAGE, "allowed": True},
                 *picked(5),
                 *picked(1),
                 *picked(2),
@@ -344,7 +341,6 @@ class LocalBoard(BinFlow):
                     "client_source": "default",
                     "credentials": {},
                 },
-                {"kind": "usage", "client": "claude", "usage": USAGE, "allowed": True},
             ),
         )
         self.assertFalse(os.path.lexists(os.path.join(boards[1], ".state")))

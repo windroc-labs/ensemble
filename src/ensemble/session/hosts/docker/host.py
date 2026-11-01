@@ -578,15 +578,6 @@ class DockerHost(Host):
             ),
         )
 
-    def _provider_usage(self, request):
-        self.broker.version()
-        try:
-            return self.broker.probe_provider(request.provider, request.base_url)
-        except BrokerError as error:
-            if error.code == "login_required":
-                raise ConfigError(str(error)) from None
-            raise
-
     def _client_env(
         self, name: str, client: str, home: ClientHome | None, *, resume: bool
     ) -> Mapping[str, str]:

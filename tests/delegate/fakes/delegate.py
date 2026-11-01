@@ -44,7 +44,6 @@ def _update(workdir: str, **changes) -> dict:
 class FakeDelegate(Delegate):
     ROLES = {"dummy": {"note": "notes its input"}}
     outcome_result = Outcome("done", "Noted", "noted its input", deliverable="hello")
-    usage_result = []
 
     @classmethod
     def create(cls, role, spec, *, display=None, callback=None, overlays=()):
@@ -85,11 +84,6 @@ class FakeDelegate(Delegate):
         view = cls.__new__(cls)
         view.workdir = os.path.abspath(workdir)
         return view
-
-    @classmethod
-    def usage(cls, role, *, overlays=()):
-        cls._known(role)
-        return cls.usage_result
 
     @classmethod
     def roles(cls):

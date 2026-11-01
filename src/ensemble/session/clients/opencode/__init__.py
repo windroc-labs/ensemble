@@ -54,9 +54,6 @@ class OpenCodeClient(Client):
     def _executable(self, *, container=False):
         return "" if container else self.common.executable
 
-    def _provider_probe(self):
-        return self.common.usage_provider()
-
     def usage(self, output):
         return self.common.parse_usage(output)
 

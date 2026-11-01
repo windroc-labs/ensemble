@@ -19,7 +19,6 @@ from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
     Access,
     Exited,
-    Headroom,
     Mode,
     NoRecordedSession,
     Reply,
@@ -40,35 +39,10 @@ from tests.delegate.fakes.harness_session import (
     RecordingHost,
     harness_launches,
 )
-from tests.delegate.fakes.session import SessionClass
 from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.integration.cli import TEAMS, owned_team
 from tests.delegate.replies import block, mark
 from tests.delegate.unit.runs import DONE
-
-USAGE_QUERY = """import io, json, unittest
-from unittest import mock
-from ensemble.delegate import HarnessDelegate
-from ensemble.session import Headroom, Usage, Window
-from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
-from tests.delegate.fakes.usage import UsageClient
-case = unittest.TestCase()
-sentinel = Usage(Window(12.5, 1767225600.0), Window(37.0, None))
-probes = []
-for expected, found in ((sentinel, [Headroom("default", 63.0)]), (None, [Headroom("default", None)])):
-    UsageClient.usage_result = expected
-    process = mock.Mock(stdout=io.StringIO("quota"))
-    process.communicate.return_value = ("quota", "")
-    with mock.patch("subprocess.Popen", return_value=process) as probe:
-        case.assertEqual(HarnessDelegate.usage("researcher"), found)
-    case.assertEqual(probe.call_count, 1)
-    probes.append(probe.call_count)
-case.assertEqual(UsageClient.queried, ["role_usage", "role_usage"])
-case.assertEqual((UsageClient.starts, HarnessSession.started, RecordingHost.launches), ([], [], []))
-print(json.dumps({"queried": UsageClient.queried, "probes": probes,
-                  "starts": UsageClient.starts, "session_starts": HarnessSession.started,
-                  "launches": RecordingHost.launches}))
-"""
 
 
 class ConfiguredSession(HarnessSession):
@@ -385,73 +359,6 @@ class Views(HarnessCase):
         self.assertEqual((launched.sid, launched.client), (SID, "fake"))
         self.assertIn("French", launched.prompt)
         self.assertNotIn("German", launched.prompt)
-
-
-class UsageQueries(HarnessCase):
-    def test_role_client_usage_preserves_sentinel_identity_and_none_without_starting(self):
-        self.settings(client="role_usage")
-        with open(self.local, "a", encoding="utf-8") as file:
-            file.write(
-                "[session.clients.role_usage]\n"
-                'implementation = "tests.delegate.fakes.usage:UsageClient"\n'
-                'label = "role_usage"\n'
-                f"cwd = {json.dumps(self.home)}\n"
-            )
-        result = subprocess.run(
-            [sys.executable, "-P", "-S", "-c", USAGE_QUERY],
-            cwd=self.home,
-            env=child_env(None, REPO),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            json.loads(result.stdout),
-            {
-                "queried": ["role_usage", "role_usage"],
-                "probes": [1, 1],
-                "starts": [],
-                "session_starts": [],
-                "launches": [],
-            },
-        )
-
-    def test_usage_configures_and_asks_only_the_given_session_class(self):
-        sentinel = [Headroom("default", 63.0)]
-        asked = []
-
-        class Probe(SessionClass):
-            @classmethod
-            def usage(cls, client):
-                asked.append(client)
-                return sentinel
-
-        self.assertIs(DrivenDelegate.usage("researcher", session_cls=Probe), sentinel)
-        self.assertEqual(asked, ["fake"])
-        self.assertEqual(
-            sorted(Probe.configured["hosts"].tables),
-            ["agent", "changed", "docker", "harness", "tmux"],
-        )
-
-    def test_session_config_errors_are_the_delegates(self):
-        class Refusing(SessionClass):
-            @classmethod
-            def usage(cls, client):
-                raise SessionConfigError(f"[clients.{client}]: no usage probe")
-
-        with self.assertRaises(ConfigError) as caught:
-            DrivenDelegate.usage("researcher", session_cls=Refusing)
-        self.assertEqual(str(caught.exception), "[clients.fake]: no usage probe")
-        self.settings(default="nope")
-        with self.assertRaises(ConfigError) as caught:
-            DrivenDelegate.usage("researcher", session_cls=SessionClass)
-        self.assertEqual(
-            str(caught.exception),
-            "[hosts] default: 'nope' is not a Host here; "
-            "want one of agent, changed, docker, harness, tmux",
-        )
 
 
 class Completion(HarnessCase):

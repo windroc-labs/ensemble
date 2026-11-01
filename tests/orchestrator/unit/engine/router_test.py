@@ -7,7 +7,6 @@ import functools
 import inspect
 import io
 import json
-import math
 import os
 import re
 import tempfile
@@ -30,7 +29,6 @@ from ensemble.orchestrator.engine import (
     router,
     runs,
 )
-from ensemble.orchestrator.engine import gate as quota
 from ensemble.orchestrator.engine.flow.types import IssueState, Pick
 from ensemble.orchestrator.engine.types import (
     LinearError,
@@ -44,7 +42,7 @@ from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
     ops,
 )
-from ensemble.session import ConfigError, Headroom, SessionError, SessionStatus
+from ensemble.session import ConfigError, SessionError, SessionStatus
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV, OutcomeStatus, Record
 from tests.orchestrator.router_fixtures import (
     AGENT,
@@ -148,14 +146,6 @@ AGENT_A = "00000000-0000-4000-8000-000000000082"
 AGENT_B = "00000000-0000-4000-8000-000000000083"
 AGENT_TOP = f'linear.agent_label_group = "{AGENT_GROUP}"\n'
 AGENT_LABELS = f'[linear.agent_labels]\na = "{AGENT_A}"\nb = "{AGENT_B}"\n'
-
-
-def reading(left=90.0):
-    """A client's one account with `left` points of headroom."""
-    return [Headroom("default", left)]
-
-
-UNKNOWN = [Headroom("default", None)]
 
 
 def writes(fake):
@@ -1061,6 +1051,61 @@ class RouterEntry(OuterBase):
                     self.assertIn("[environment.tmux]", "\n".join(said))
                     self.assertEqual(runs.parse_log(self.runs), [])
 
+    def test_a_session_usage_refusal_ends_each_entry_as_any_session_error(self):
+        self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
+        refused, control = "usage: no available account", "detach: duplicate"
+
+        def attempt(entry, message):
+            self.lines, self.todo["comments"], self.todo["labels"] = [], [], []
+            self.todo["state"] = "Todo" if entry == "claim" else "In Progress"
+            if entry != "claim":
+                self.resumable(ID, "old", 60, role="engineer")
+            if entry == "new client":
+                self.todo["labels"] = [label("changed", AGENT_B, AGENT_GROUP)]
+            self.api.detach_error = SessionError(message)
+            rc = self.entry()
+            said, state = self.said(), self.todo["state"]
+            self.api.detach_error = None
+            self.lines = self.raw_runs().splitlines()
+            later = self.entry(now=NOW + timedelta(hours=3))
+            kinds = [json.loads(line)["kind"] for line in self.raw_runs().splitlines()]
+            shown = [config.UUID_RE.sub("<sid>", line) for line in said + self.said()]
+            return rc, state, later, self.todo["comments"], kinds, shown
+
+        for entry in ("claim", "resume", "new client"):
+            with self.subTest(entry=entry):
+                rc, state, later, comments, kinds, said = attempt(entry, refused)
+                self.assertIn(f"launch-error TASK-7 error=SessionError: {refused}", said)
+                self.assertFalse([line for line in said if "usage-skip" in line], said)
+                swapped = [line.replace(refused, control) for line in said]
+                expected = attempt(entry, control)
+                self.assertEqual((rc, state, later, comments, kinds, swapped), expected)
+        self.assertFalse(hasattr(self.cfg().delegate_cls, "usage"))
+
+    def test_a_tick_claim_or_restart_on_a_misconfigured_label_client_goes_to_review(self):
+        self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
+        self.fake.ids[UUID] = ID
+        for state in ("Todo", "In Progress"):
+            with self.subTest(state=state):
+                self.lines, self.todo["state"], self.todo["comments"] = [], state, []
+                self.todo["labels"] = [label("chosen", AGENT_B, AGENT_GROUP)]
+                if state == "In Progress":
+                    self.resumable(ID, "old", 60, role="engineer")
+                self.api.construct_error = DelegateConfigError("b: not installed\nhidden details")
+                self.assertEqual(self.entry(), 0)
+                self.assertEqual(self.todo["state"], "In Review")
+                self.assertEqual(
+                    self.todo["comments"],
+                    [
+                        'Client "b" chosen on the issue, but the run could not be built: '
+                        "b: not installed\n\nFix the issue's client or the client configuration, "
+                        "then move this issue back to Todo."
+                    ],
+                )
+                said = self.said()
+                self.assertTrue([s for s in said if s.startswith(f"launch-error {ID} client=b ")])
+                self.assertEqual(said[-1], f"launch {ID} exit=1")
+
     def test_automatic_retry_follows_the_label(self):
         self.write_config(AGENT_TOP + OUTER + AGENT_LABELS)
         self.fake.history = self.hist
@@ -1488,7 +1533,7 @@ class AgentLabels(Base):
                 )
                 self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
 
-    def test_invalid_agent_and_task_labels_share_one_comment_before_gate(self):
+    def test_invalid_agent_and_task_labels_share_one_comment(self):
         self.write_config(AGENT_TOP + CONFIG + TASK_LABELS + AGENT_LABELS)
         for labels, fragments in (
             (
@@ -1511,13 +1556,12 @@ class AgentLabels(Base):
         ):
             with self.subTest(labels=labels):
                 fake = self.fake(issue("TASK-1", "Todo", "researcher", labels=labels))
-                self.assertEqual(self.claim(fake, gate=True), "")
+                self.assertEqual(self.claim(fake), "")
                 found = fake.issues["TASK-1"]
                 self.assertEqual(found["state"], "In Review")
                 self.assertEqual(len(found["comments"]), 1)
                 for fragment in (*fragments, "Todo"):
                     self.assertIn(fragment, found["comments"][0])
-                self.assertEqual(self.api.usage_calls, [])
                 self.assertEqual((runs.parse_log(self.runs), runs.failures(self.runs)), ([], []))
                 self.assertNotIn(IDS_BY_KEY["in_progress"], [v.get("s") for _, v in fake.mutations])
 
@@ -1532,18 +1576,6 @@ class AgentLabels(Base):
 
 
 class LabelClients(TickBase):
-    def test_missing_selected_client_is_a_launch_error_comment(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        fake = self.fake(
-            issue("TASK-1", "Todo", "engineer", labels=[label("chosen", AGENT_A, AGENT_GROUP)])
-        )
-        self.api.usages["a"] = ConfigError("client executable claude is missing or not executable")
-        self.assertEqual(self.tick(fake), 0)
-        self.assertFalse(self.start.launches)
-        self.assertTrue(any(line.startswith("launch-error TASK-1") for line in self.said()))
-        self.assertEqual(fake.issues["TASK-1"]["state"], "In Review")
-        self.assertTrue(any("missing or not executable" in str(call) for call in fake.mutations))
-
     def test_a_todo_run_after_a_start_on_another_client_follows_the_label(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
         for argv in ((), ("--issue", "TASK-1")):
@@ -1589,7 +1621,6 @@ class LabelClients(TickBase):
                         (spec.client, spec.client_source, spec.mode), ("a", source, "new")
                     )
                     self.assertNotEqual(spec.sid, old_sid)
-                    self.assertEqual(self.api.usage_calls, [] if argv else ["a"])
                     found = fake.issues["TASK-1"]
                     self.assertEqual(
                         (found["state"], found.get("comments", [])), ("In Progress", [])
@@ -1626,14 +1657,6 @@ class LabelClients(TickBase):
                 )
                 self.unchanged(fake)
 
-    def test_a_usage_blocked_restart_logs_only_its_usage_skip(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        self.api.usages = {"a": reading(-5), "b": reading(90)}
-        _, fake = self.interrupted("b", [label("changed", AGENT_A, AGENT_GROUP)])
-        self.assertEqual(self.tick(fake), 0)
-        self.assertEqual(self.said(), ["usage-skip TASK-1 client=a reason=usage usage=default=-5"])
-        self.assertEqual(self.start.launches, [])
-
     def test_a_resume_keeps_its_session_when_the_label_agrees_or_is_invalid(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
         for argv in ((), ("--issue", "TASK-1")):
@@ -1649,22 +1672,6 @@ class LabelClients(TickBase):
                     self.assertEqual((spec.client, spec.mode, spec.sid), ("b", "resume", old_sid))
                     self.assertEqual(fake.issues["TASK-1"].get("comments", []), [])
                     self.assertNotIn("restart", [e["kind"] for e in logged(self.logs)])
-
-    def test_a_restart_whose_label_client_is_misconfigured_goes_to_review(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        self.api.usages = {"a": DelegateConfigError("a: not installed\nhidden details")}
-        _, fake = self.interrupted("b", [label("changed", AGENT_A, AGENT_GROUP)])
-        self.assertEqual(self.tick(fake), 0)
-        found = fake.issues["TASK-1"]
-        self.assertEqual(found["state"], "In Review")
-        (comment,) = found["comments"]
-        self.assertEqual(
-            comment,
-            'Client "a" chosen on the issue, but the run could not be built: a: not installed\n\n'
-            "Fix the issue's client or the client configuration, then move this issue back to Todo.",
-        )
-        self.assertNotIn("hidden details", comment)
-        self.assertEqual(self.start.launches, [])
 
     def test_a_launcher_sid_naming_the_old_session_is_refused_not_reused(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
@@ -1730,7 +1737,7 @@ class RouterArguments(Base):
         ):
             with self.subTest(argv=argv):
                 self.assertEqual(self.main(argv), (2, router.USAGE + "\n"))
-        self.assertEqual((self.api.order, self.api.usage_calls), ([], []))
+        self.assertEqual(self.api.order, [])
         self.assertEqual(
             router.USAGE,
             "usage: ensemble-orchestrator router [--dry-run] [--issue ID] "
@@ -1851,14 +1858,13 @@ class RouterLocking(TickBase):
                     others.enter_context(held(self.runs, name))
             self.assertEqual(self.tick(fake, "--dry-run"), 0)
             self.assertEqual(
-                self.said()[:-1],
+                self.said(),
                 [
                     "plan mode=new queue=1",
                     "pick TASK-1 queue=1",
                     f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 ],
             )
-            self.assertRegex(self.said()[-1], "^usage client=a ")
             self.assertEqual(self.tick(fake, "--dry-run", "--issue", "TASK-1"), 0)
             self.assertEqual(
                 self.said(),
@@ -1990,226 +1996,6 @@ class RouterOutages(TickBase):
                 )
 
 
-class ClientUsage(Base):
-    """The usage gate's thresholds over the Delegate's Usage (the old rate_limit_event rows)."""
-
-    def gate(self):
-        self.write_runs()
-        return quota.Gate(dry=False, cfg=self.cfg())
-
-    def test_off_skips_probe_only_for_that_client(self):
-        self.write_config(CONFIG + '[usage_limit]\na = "off"\nb = "on"\n')
-        self.api.usages = {"a": AssertionError("off must not probe"), "b": reading(-5)}
-        with redirect_stderr(io.StringIO()), self.log_dir(again=False):
-            gate = self.gate()
-            self.assertFalse(gate.blocked("researcher", "TASK-1", key=("harness", "a")))
-            self.assertFalse(gate.blocked("engineer", "TASK-2", key=("harness", "a")))
-            self.assertTrue(gate.blocked("pm", "TASK-3", key=("harness", "b")))
-        self.assertEqual(self.api.usage_calls, ["b"])
-
-    def test_off_skips_unknown_exhausted_and_errors_in_dry_run_too(self):
-        self.write_config(CONFIG + '[usage_limit]\na = "off"\n')
-        for usage in (UNKNOWN, reading(0), ConfigError("unreadable")):
-            with self.subTest(usage=usage):
-                self.api.usages, self.api.usage_calls = {"a": usage}, []
-                said = []
-                gate = quota.Gate(
-                    lambda *a, said=said, **kw: said.append((a, kw)),
-                    cfg=self.cfg(),
-                    dry=True,
-                )
-                self.assertFalse(
-                    gate.blocked("researcher", "TASK-1", key=("harness", "a"), reject_config=True)
-                )
-                self.assertEqual((self.api.usage_calls, said), ([], []))
-
-    def test_explicit_on_keeps_unknown_and_exhausted_blocked(self):
-        self.write_config(CONFIG + '[usage_limit]\na = "on"\n')
-        for usage in (UNKNOWN, reading(0)):
-            with self.subTest(usage=usage), redirect_stderr(io.StringIO()):
-                self.api.usages, self.api.usage_calls = {"a": usage}, []
-                self.assertTrue(self.gate().blocked("researcher", "TASK-1", key=("harness", "a")))
-                self.assertEqual(self.api.usage_calls, ["a"])
-
-    def test_a_usage_probe_defect_is_not_unknown_usage(self):
-        error = AttributeError("client defect")
-        self.api.usages["a"] = error
-        with self.assertRaises(AttributeError) as caught:
-            self.gate().blocked("researcher", "TASK-1", key=("harness", "a"))
-        self.assertIs(caught.exception, error)
-
-    def test_thresholds(self):
-        rows = (
-            (reading(0.1), None),
-            (reading(0), "reason=usage usage=default=0"),
-            (reading(-50), "reason=usage usage=default=-50"),
-            (reading(math.inf), None),
-            ([Headroom("home", None), Headroom("work", 3)], None),
-            (
-                [Headroom("home", None), Headroom("work", -3)],
-                "reason=usage usage=home=unknown work=-3",
-            ),
-            ([], "reason=usage unknown"),
-            (UNKNOWN, "reason=usage unknown"),
-            (ConfigError("no client a"), "reason=usage unknown"),
-        )
-        for value, why in rows:
-            with self.subTest(value=value):
-                self.api.usages = {"a": value}
-                with redirect_stderr(io.StringIO()), self.log_dir(again=False):
-                    self.assertEqual(
-                        self.gate().blocked("researcher", "TASK-1", key=("harness", "a")),
-                        why is not None,
-                    )
-                self.raw = ""
-                self.assertEqual(self.said(), [f"usage-skip TASK-1 client=a {why}"] if why else [])
-
-
-class ClaimUsageGates(Base):
-    """Each candidate gates on its own client's usage."""
-
-    def test_a_label_selected_client_gates_independently_of_the_role_default(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        self.api.usages = {"a": reading(-5), "b": reading(50)}
-        fake = FakeLinear(
-            [
-                issue(
-                    "TASK-1",
-                    "Todo",
-                    "researcher",
-                    priority=1,
-                    labels=[label("Selected", AGENT_B, AGENT_GROUP)],
-                ),
-                issue("TASK-2", "Todo", "researcher", priority=2),
-            ]
-        )
-        self.assertTrue(self.claim(fake, gate=True).startswith("TASK-1 "))
-        self.assertEqual(self.taken[3:], ("b", "label"))
-        self.assertEqual(self.api.usage_calls, ["b"])
-        fake.issues["TASK-1"]["state"] = "In Progress"
-        self.assertEqual(self.claim(fake, gate=True), "")
-        self.assertEqual(self.api.usage_calls, ["b", "a"])
-        self.assertIn("usage-skip TASK-2 client=a", "\n".join(self.said()))
-
-    def test_a_blocked_head_client_lets_the_next_client_claim(self):
-        rows = (
-            (reading(-5), "reason=usage usage=default=-5"),
-            (reading(0), "reason=usage usage=default=0"),
-            (UNKNOWN, "reason=usage unknown"),
-            (ConfigError("no client a"), "reason=usage unknown"),
-        )
-        for value, why in rows:
-            with self.subTest(why=why):
-                self.api.usages, self.api.usage_calls = {"a": value, "b": reading(50)}, []
-                fake = two()
-                self.assertEqual(
-                    self.claim(fake, gate=True),
-                    f"TASK-2 https://linear.app/x/TASK-2 {PD}",
-                )
-                self.assertEqual(
-                    self.said(),
-                    [
-                        "pick TASK-1 queue=2",
-                        f"usage-skip TASK-1 client=a {why}",
-                        "pick TASK-2 queue=2",
-                        "claim TASK-2 role=pm client=b client_source=default",
-                    ],
-                )
-                self.assertEqual([v["i"] for _, v in fake.mutations], ["TASK-2"])
-                self.assertEqual(self.api.usage_calls, ["a", "b"])
-
-    def test_an_absent_window_never_blocks(self):
-        self.api.usages = {"a": reading(90)}
-        self.assertEqual(
-            self.claim(two(), gate=True),
-            "TASK-1 https://linear.app/x/TASK-1 Deep Research",
-        )
-
-    def test_two_candidates_of_a_client_probe_it_once(self):
-        self.api.usages = {"a": reading(-5)}
-        fake = FakeLinear(
-            [
-                issue("TASK-1", "Todo", "researcher", priority=1),
-                issue("TASK-3", "Todo", "researcher", priority=2),
-                issue("TASK-2", "Todo", "pm", priority=3, project=PD),
-            ]
-        )
-        self.assertEqual(
-            self.claim(fake, gate=True),
-            f"TASK-2 https://linear.app/x/TASK-2 {PD}",
-        )
-        why = "client=a reason=usage usage=default=-5"
-        self.assertEqual(
-            self.said(),
-            [
-                "pick TASK-1 queue=3",
-                f"usage-skip TASK-1 {why}",
-                "pick TASK-3 queue=3",
-                f"usage-skip TASK-3 {why}",
-                "pick TASK-2 queue=3",
-                "claim TASK-2 role=pm client=b client_source=default",
-            ],
-        )
-        self.assertEqual(self.api.usage_calls, ["a", "b"])
-
-    def test_all_blocked_claims_nothing(self):
-        self.api.usages = {"a": reading(-5), "b": UNKNOWN}
-        fake = two()
-        self.assertEqual(self.claim(fake, gate=True), "")
-        self.assertEqual(fake.mutations, [])
-        self.assertEqual(self.said()[-1], "pick-none reason=nothing claimable")
-
-    def test_the_claim_gates_on_the_rechecked_roles_client(self):
-        self.api.usages = {"a": reading(-5), "b": reading(50)}
-        rows = (
-            ("researcher", "pm", f"TASK-1 https://linear.app/x/TASK-1 {DR}", ["b"]),
-            ("pm", "researcher", "", ["a"]),
-        )
-        for listed, now, out, calls in rows:
-            with self.subTest(listed=listed):
-                self.api.usage_calls = []
-                fake = Changed(
-                    [issue("TASK-1", "Todo", listed)], {"TASK-1": {"delegate": who(now)}}
-                )
-                self.assertEqual(self.claim(fake, gate=True), out)
-                self.assertEqual(self.api.usage_calls, calls)
-                self.assertEqual(len(fake.mutations), int(bool(out)))
-
-    def test_a_usage_skip_is_said_once_a_day(self):
-        self.api.usages = {"a": reading(-5)}
-        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
-        skip = "usage-skip TASK-1 client=a reason=usage usage=default=-5"
-        for again, said in ((False, [skip]), (True, [])):
-            self.assertEqual(self.claim(fake, gate=True, again=again), "")
-            self.assertEqual(
-                self.said(), ["pick TASK-1 queue=1", *said, "pick-none reason=nothing claimable"]
-            )
-        self.assertEqual(self.api.usage_calls, ["a", "a"])
-
-    def test_dry_run_prints_the_live_usage(self):
-        self.api.usages["a"] = UNKNOWN
-        fake = two()
-        self.assertEqual(
-            self.claim(fake, dry=True, gate=True),
-            f"TASK-2 https://linear.app/x/TASK-2 {PD}",
-        )
-        self.assertEqual(
-            self.said(),
-            [
-                "pick TASK-1 queue=2",
-                f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
-                "usage client=a usage=default=unknown allowed=false",
-                "usage-skip TASK-1 client=a reason=usage unknown",
-                "pick TASK-2 queue=2",
-                f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'pm', None))}",
-                "usage client=b usage=default=90 allowed=true",
-            ],
-        )
-        self.assertEqual(self.taken[1:], (None, "pm", "b", "default"))
-        self.assertEqual((fake.mutations, self.api.usage_calls), ([], ["a", "b"]))
-        self.assertEqual([v["i"] for q, v in fake.queries if q == RECHECK], ["TASK-1", "TASK-2"])
-
-
 class ClientAdmission(TickBase):
     def test_client_capacity_is_left_to_the_session_start(self):
         fake = self.fake(issue("TASK-1", "Todo", "researcher"))
@@ -2218,7 +2004,7 @@ class ClientAdmission(TickBase):
 
 
 class RemovedBrake(Base):
-    def test_parent_clients_cannot_restore_quota_queries_or_start_a_run(self):
+    def test_parent_clients_cannot_restore_the_brake_or_start_a_run(self):
         for legacy, current in ((False, False), (True, False), (False, True), (True, True)):
             with mock.patch.dict(os.environ):
                 os.environ.pop("AGENT_PM_CLIENT", None)
@@ -2228,10 +2014,6 @@ class RemovedBrake(Base):
                 if current:
                     os.environ["ENSEMBLE_CLIENT"] = "b"
                 for role in ("researcher", "missing"):
-                    self.api.usages = {
-                        "a": AssertionError("no quota"),
-                        "b": AssertionError("no quota"),
-                    }
                     start = mock.Mock(side_effect=AssertionError("no start"))
                     with (
                         self.subTest(legacy=legacy, current=current, role=role),
@@ -2250,7 +2032,6 @@ class RemovedBrake(Base):
                         )
                         self.assertEqual(out.getvalue(), "")
                         self.assertEqual(err.getvalue(), router.USAGE + "\n")
-                        self.assertEqual(self.api.usage_calls, [])
                         self.assertEqual(self.api.constructed, [])
                         start.assert_not_called()
                 role_text = (
@@ -2458,11 +2239,9 @@ class LocalBoard(TickBase):
                 self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", ident), 0)
                 self.assertIn(f"pick-none {ident} reason={reason}", self.said())
 
-    def test_removed_brake_on_local_never_queries_usage(self):
-        self.api.usages = {"a": AssertionError("no quota")}
+    def test_removed_brake_on_local_is_a_usage_error(self):
         self.assertEqual(self.on_local(self.fake(), "--brake", "researcher"), 2)
         self.assertEqual((self.out, self.err), ("", router.USAGE + "\n"))
-        self.assertEqual(self.api.usage_calls, [])
         self.assertEqual(self.connects, [])
 
     def test_tracker_file_error_exit_2(self):
@@ -2494,162 +2273,8 @@ class LocalBoard(TickBase):
         self.assertIn("preview LOC-1 client=a client_source=default credentials={}", self.said())
 
 
-class ScheduledUsageGates(TickBase):
-    """Over a tick, each candidate gates on its client; a resume keeps its recorded client."""
-
-    def test_provider_credential_error_keeps_other_clients_schedulable(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        for dry in (False, True):
-            for selected in (False, True):
-                for message in (
-                    "No API key in ensemble-broker-opencode",
-                    "Invalid API key in ensemble-broker-opencode",
-                ):
-                    with self.subTest(dry=dry, selected=selected, message=message):
-                        self.lines = []
-                        failed = "b" if selected else "a"
-                        healthy = "a" if selected else "b"
-                        self.api.usages = {failed: ConfigError(message), healthy: reading(90)}
-                        labels = [label("Selected", AGENT_B, AGENT_GROUP)] if selected else []
-                        fake = self.fake(
-                            issue("TASK-1", "Todo", "researcher", priority=1, labels=labels),
-                            issue("TASK-2", "Todo", "researcher" if selected else "pm", priority=2),
-                        )
-                        self.assertEqual(self.tick(fake, *(["--dry-run"] if dry else [])), 0)
-                        self.assertEqual(self.api.usage_calls, [failed, healthy])
-                        if selected:
-                            if dry:
-                                self.assertIn("would comment TASK-1", "\n".join(self.said()))
-                            else:
-                                self.assertEqual(fake.issues["TASK-1"]["state"], "In Review")
-                                self.assertIn(message, fake.issues["TASK-1"]["comments"][0])
-                        else:
-                            self.assertIn(
-                                "usage-skip TASK-1 client=a reason=usage unknown", self.said()
-                            )
-                            self.assertEqual(fake.issues["TASK-1"]["state"], "Todo")
-                            self.assertFalse(fake.issues["TASK-1"].get("comments"))
-                        if dry:
-                            self.unchanged(fake)
-                        else:
-                            self.assertEqual(
-                                [(item.issue, item.client) for item in self.start.launches],
-                                [("TASK-2", healthy)],
-                            )
-                        self.assertFalse(fake.issues["TASK-2"].get("comments"))
-
-    def test_resume_probe_failure_only_stops_tick_for_host_errors(self):
-        for dry in (False, True):
-            for host_failure in (False, True):
-                with self.subTest(dry=dry, host_failure=host_failure):
-                    self.lines = []
-                    message = (
-                        "ensemble-broker-opencode: keychain locked"
-                        if host_failure
-                        else "ensemble-broker-opencode: no API key"
-                    )
-                    error = SessionError(message) if host_failure else ConfigError(message)
-                    self.api.usages = {"a": error, "b": reading(90)}
-                    fake = self.fake(
-                        issue("TASK-1", "In Progress", "researcher", priority=1),
-                        issue("TASK-2", "Todo", "pm", priority=2),
-                    )
-                    self.resumable("TASK-1", "saved", 60)
-                    self.assertEqual(
-                        self.tick(fake, *(["--dry-run"] if dry else [])),
-                        2 if host_failure else 0,
-                    )
-                    self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
-                    self.assertFalse(fake.issues["TASK-1"].get("comments"))
-                    if host_failure:
-                        self.assertIn(message, self.err)
-                        self.assertNotIn("launch-error", self.err)
-                        self.assertEqual(self.api.usage_calls, ["a"])
-                    else:
-                        self.assertIn(
-                            "usage-skip TASK-1 client=a reason=usage unknown", self.said()
-                        )
-                        self.assertEqual(self.api.usage_calls, ["a", "b"])
-                    if dry or host_failure:
-                        self.unchanged(fake)
-                    else:
-                        self.assertEqual(
-                            [(item.issue, item.client) for item in self.start.launches],
-                            [("TASK-2", "b")],
-                        )
-
-    def test_host_usage_failure_stops_tick_without_issue_writes(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        for dry, selected, reason in (
-            (False, False, "keychain locked"),
-            (False, True, "credentials unreadable"),
-            (True, False, "broker missing"),
-            (True, True, "broker timed out"),
-        ):
-            with self.subTest(dry=dry, selected=selected, reason=reason):
-                self.lines = []
-                client = "b" if selected else "a"
-                labels = [label("Selected", AGENT_B, AGENT_GROUP)] if selected else []
-                self.api.usages = {
-                    client: SessionError(f"secret-store ensemble-provider: {reason}")
-                }
-                fake = self.fake(
-                    issue("TASK-1", "Todo", "researcher", priority=1, labels=labels),
-                    issue("TASK-2", "Todo", "pm", priority=2),
-                )
-                self.assertEqual(self.tick(fake, *(["--dry-run"] if dry else [])), 2)
-                self.assertIn(reason, self.err)
-                self.assertIn("ensemble-provider", self.err)
-                self.assertNotIn("launch-error", self.err)
-                self.assertNotIn("would comment", self.err)
-                self.assertEqual(self.api.usage_calls, [client])
-                self.unchanged(fake)
-                for item in fake.issues.values():
-                    self.assertEqual(item["state"], "Todo")
-                    self.assertFalse(item.get("comments"))
-
-    def test_label_client_configuration_rejection_is_visible_even_after_cached_default_error(self):
-        self.write_config(
-            AGENT_TOP + CONFIG.replace(OVERLAY, '[core]\nclient = "b"\n') + AGENT_LABELS
-        )
-        self.api.usages = {"b": DelegateConfigError("b: not installed\nhidden details")}
-        fake = self.fake(
-            issue("TASK-1", "Todo", "researcher", priority=1),
-            issue(
-                "TASK-2",
-                "Todo",
-                "researcher",
-                priority=2,
-                labels=[label("Selected", AGENT_B, AGENT_GROUP)],
-            ),
-        )
-        self.assertEqual(self.tick(fake), 0)
-        self.assertEqual(self.api.usage_calls, ["b"])
-        self.assertEqual(fake.issues["TASK-1"]["state"], "Todo")
-        self.assertEqual(fake.issues["TASK-2"]["state"], "In Review")
-        comments = fake.issues["TASK-2"]["comments"]
-        self.assertEqual(len(comments), 1)
-        self.assertIn("b: not installed", comments[0])
-        self.assertNotIn("hidden details", comments[0])
-        self.assertNotIn(router.INTERRUPTED.format(state="Todo"), comments[0])
-        self.assertTrue(
-            any(line.startswith("launch-error TASK-2 client=b") for line in self.said())
-        )
-        self.assertEqual((self.start.launches, runs.parse_log(self.runs)), ([], []))
-        self.assertEqual(self.tick(fake, now=NOW + timedelta(hours=3)), 0)
-        self.assertEqual(len(comments), 1)
-
-    def test_dry_run_previews_client_configuration_rejection_without_writes(self):
-        self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        self.api.usages = {"b": DelegateConfigError("b: not installed")}
-        fake = self.fake(
-            issue("TASK-1", "Todo", "researcher", labels=[label("Selected", AGENT_B, AGENT_GROUP)])
-        )
-        self.assertEqual(self.tick(fake, "--dry-run"), 0)
-        self.assertIn("would comment TASK-1", "\n".join(self.said()))
-        self.assertIn("b: not installed", "\n".join(self.said()))
-        self.assertEqual(fake.issues["TASK-1"]["state"], "Todo")
-        self.unchanged(fake)
+class ScheduledPreviews(TickBase):
+    """A dry tick previews each candidate's client; a resume keeps its recorded client."""
 
     def test_dry_run_reads_all_candidate_labels_and_only_previews_errors(self):
         self.write_config(AGENT_TOP + CONFIG + TASK_LABELS + AGENT_LABELS)
@@ -2731,124 +2356,25 @@ class ScheduledUsageGates(TickBase):
         self.assertNotIn("would comment", said)
         self.unchanged(fake)
 
-    def test_recorded_client_exhaustion_blocks_its_resume(self):
-        self.api.usages = {"a": reading(-5), "b": reading(90)}
-        fake = self.fake(issue("TASK-1", "In Progress", "researcher"))
-        self.resumable("TASK-1", "saved", 60)
-        self.assertEqual(self.tick(fake), 0)
-        self.assertEqual(self.api.usage_calls, ["a"])
-        self.assertEqual(self.said(), ["usage-skip TASK-1 client=a reason=usage usage=default=-5"])
-        self.unchanged(fake)
-
-    def test_a_blocked_resume_candidate_lets_a_claim_start(self):
-        self.api.usages = {"a": reading(-5), "b": reading(50)}
+    def test_a_dry_run_walks_the_same_and_changes_nothing(self):
         fake = self.fake(
             issue("TASK-1", "In Progress", "researcher", priority=1),
             issue("TASK-2", "Todo", "pm", priority=2, project=PD),
         )
         self.resumable("TASK-1", "a", 60)
-        self.assertEqual(self.tick(fake), 0)
+        before = self.before()
+        self.assertEqual(self.tick(fake, "--dry-run"), 0)
         self.assertEqual(
             self.said(),
             [
-                "usage-skip TASK-1 client=a reason=usage usage=default=-5",
+                "preview TASK-1 client=a mode=resume sid=a",
+                "plan TASK-1 mode=resume sid=a",
                 "plan mode=new queue=1",
                 "pick TASK-2 queue=1",
-                "claim TASK-2 role=pm client=b client_source=default",
-                "launch TASK-2 exit=0",
+                f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'pm', None))}",
             ],
         )
-        (launch,) = self.start.launches
-        self.assertEqual((launch.issue, launch.client), ("TASK-2", "b"))
-        self.assertEqual(self.launched_run(), ("start", "TASK-2", launch.sid, "pm", "b"))
-        self.assertEqual(self.api.usage_calls, ["a", "b"])
-        self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
-
-    def test_all_blocked_starts_nothing_and_probes_a_client_once(self):
-        self.api.usages = {"a": reading(-5)}
-        fake = self.fake(
-            issue("TASK-1", "In Progress", "researcher", priority=1),
-            issue("TASK-3", "In Progress", "engineer", priority=2, project=PD),
-            issue("TASK-2", "Todo", "researcher", priority=2),
-        )
-        self.resumable("TASK-1", "a", 60)
-        self.resumable("TASK-3", "c", 50, "engineer")
-        before = self.before()
-        why = "client=a reason=usage usage=default=-5"
-        for again, said in ((False, [f"usage-skip TASK-{n} {why}" for n in (1, 3, 2)]), (True, [])):
-            with self.subTest(again=again):
-                self.assertEqual(self.tick(fake, again=again), 0)
-                self.assertEqual(self.said(), said)
-                self.assertEqual(
-                    (self.start.launches, fake.mutations, self.state, self.api.usage_calls),
-                    ([], [], before, ["a"]),
-                )
-
-    def test_unknown_usage_skips_to_the_next_client(self):
-        self.api.usages["a"] = UNKNOWN
-        self.tick(two())
-        self.assertEqual(
-            self.said(),
-            [
-                "plan mode=new queue=2",
-                "pick TASK-1 queue=2",
-                "usage-skip TASK-1 client=a reason=usage unknown",
-                "pick TASK-2 queue=2",
-                "claim TASK-2 role=pm client=b client_source=default",
-                "launch TASK-2 exit=0",
-            ],
-        )
-        self.assertEqual(
-            (self.launched_runs(), self.api.usage_calls), ([("TASK-2", "new")], ["a", "b"])
-        )
-        self.assertEqual(self.state, "")
-
-    def test_a_dry_run_walks_the_same_and_changes_nothing(self):
-        b = "usage client=b usage=default=90 allowed=true"
-        rows = (
-            (
-                True,
-                [
-                    "preview TASK-1 client=a mode=resume sid=a",
-                    "usage client=a usage=default=unknown allowed=false",
-                    "usage-skip TASK-1 client=a reason=usage unknown",
-                    "plan mode=new queue=1",
-                    "pick TASK-2 queue=1",
-                    f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'pm', None))}",
-                    b,
-                ],
-                ["a", "b"],
-            ),
-            (
-                False,
-                [
-                    "preview TASK-1 client=a mode=resume sid=a",
-                    "usage client=a usage=default=90 allowed=true",
-                    "plan TASK-1 mode=resume sid=a",
-                    "plan mode=new queue=1",
-                    "pick TASK-2 queue=1",
-                    f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'pm', None))}",
-                    b,
-                ],
-                ["a", "b"],
-            ),
-        )
-        for unknown, said, calls in rows:
-            with self.subTest(unknown=unknown):
-                self.lines, self.hist = [], {}
-                self.api.usages["a"] = UNKNOWN if unknown else reading()
-                fake = self.fake(
-                    issue("TASK-1", "In Progress", "researcher", priority=1),
-                    issue("TASK-2", "Todo", "pm", priority=2, project=PD),
-                )
-                self.resumable("TASK-1", "a", 60)
-                before = self.before()
-                self.assertEqual(self.tick(fake, "--dry-run"), 0)
-                self.assertEqual(self.said(), said)
-                self.assertEqual(
-                    (self.start.launches, fake.mutations, self.state, self.api.usage_calls),
-                    ([], [], before, calls),
-                )
+        self.assertEqual((self.start.launches, fake.mutations, self.state), ([], [], before))
 
 
 class TaskSelection(TaskLabelsScenario):
@@ -3061,9 +2587,7 @@ class ScheduledTaskSelection(TickBase):
             (fake.queries, fake.mutations),
             ([(ops.Q_TEAM, {"t": TEAM}), (ops.Q_TASK_GROUP, {"i": TASK_GROUP})], []),
         )
-        self.assertEqual(
-            (self.api.order, self.api.usage_calls, self.start.launches), (SESSIONS, [], [])
-        )
+        self.assertEqual((self.api.order, self.start.launches), (SESSIONS, []))
 
     def test_blocked_invalid_label_waits_for_its_blocker(self):
         for argv, plan, end, rc in (
@@ -3798,9 +3322,8 @@ class ExplicitIssueRuns(TickBase):
             ),
         ]
 
-    def test_todo_is_claimed_and_started_whatever_the_gates(self):
+    def test_todo_is_claimed_and_started_whatever_the_role_limits(self):
         self.add(kind="start", ident="TASK-8", sid="old", minutes_ago=60 * 24 * 8)
-        self.api.usages = {"a": reading(-5)}
         fake = self.fake(
             issue("TASK-1", "In Progress", "researcher"),
             issue("TASK-2", "In Progress", "researcher", priority=1),
@@ -3830,7 +3353,7 @@ class ExplicitIssueRuns(TickBase):
         self.assertRegex(launch.sid, config.UUID_RE)
         self.assertEqual(self.launched_run(), ("start", "TASK-4", launch.sid, "engineer", "a"))
         self.assertIn("TASK-8", self.state)
-        self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, []))
+        self.assertEqual(self.api.order, SESSIONS)
         self.assertEqual(
             {i: (t["state"], t.get("comments")) for i, t in fake.issues.items()},
             {
@@ -3948,7 +3471,7 @@ class ExplicitIssueRuns(TickBase):
             ),
         )
         self.assertEqual(self.launched_run(), ("resume", "TASK-1", "a", "researcher", "a"))
-        self.assertEqual((fake.mutations, self.api.usage_calls), ([], []))
+        self.assertEqual(fake.mutations, [])
 
     def test_in_progress_with_nothing_to_resume_is_settled_at_once(self):
         self.write_config(HUMANS + CONFIG)
@@ -3966,9 +3489,7 @@ class ExplicitIssueRuns(TickBase):
                     (fake.issues["TASK-1"]["state"], fake.issues["TASK-1"]["comments"]),
                     (state, [comment]),
                 )
-                self.assertEqual(
-                    (self.start.launches, self.api.usage_calls, self.state), ([], [], before)
-                )
+                self.assertEqual((self.start.launches, self.state), ([], before))
 
     def test_dry_run_prints_the_decision_only(self):
         def todo():
@@ -4011,9 +3532,7 @@ class ExplicitIssueRuns(TickBase):
                     (fake.issues["TASK-1"]["state"], fake.mutations),
                     ("Todo" if name == "todo" else "In Progress", []),
                 )
-                self.assertEqual(
-                    (self.start.launches, self.api.usage_calls, self.state), ([], [], before)
-                )
+                self.assertEqual((self.start.launches, self.state), ([], before))
                 self.assertEqual(
                     [q for q, _ in fake.queries if q == RECHECK],
                     [RECHECK] if name in ("todo", "resume") else [],
@@ -4112,8 +3631,7 @@ class ExplicitIssueRuns(TickBase):
                     )
                     self.assertEqual(self.said(), ['blocked TASK-1 by=["TASK-7"]'])
                     self.assertEqual(
-                        (self.api.usage_calls, self.start.launches, fake.mutations, self.state),
-                        ([], [], [], before),
+                        (self.start.launches, fake.mutations, self.state), ([], [], before)
                     )
                     self.assertEqual(len(fake.reads()), 1)
 
@@ -4197,63 +3715,7 @@ class ExplicitIssueRuns(TickBase):
 
 
 class TickRecords(TickScenario):
-    def test_a_usage_blocked_tick_writes_only_its_usage_skips_once_a_day(self):
-        fake = FakeLinear(
-            [
-                issue("TASK-1", "Todo", "researcher", priority=1),
-                issue("TASK-2", "Todo", "engineer", priority=2, project=PD),
-            ]
-        )
-        for again, five, said in (
-            (
-                False,
-                -5,
-                [f"usage-skip TASK-{n} client=a reason=usage usage=default=-5" for n in (1, 2)],
-            ),
-            (True, -7, []),
-        ):
-            with self.subTest(again=again):
-                self.api.usages = {"a": reading(five)}
-                self.assertEqual(self.tick(fake, again=again), 0)
-                self.assertEqual(self.said(), said)
-                self.unchanged(fake)
-
-    def test_a_usage_skipped_head_then_a_claim_keeps_every_line(self):
-        self.api.usages = {"a": reading(-5), "b": reading(50)}
-        self.tick(two())
-        self.assertEqual(
-            self.said(),
-            [
-                "plan mode=new queue=2",
-                "pick TASK-1 queue=2",
-                "usage-skip TASK-1 client=a reason=usage usage=default=-5",
-                "pick TASK-2 queue=2",
-                "claim TASK-2 role=pm client=b client_source=default",
-                "launch TASK-2 exit=0",
-            ],
-        )
-
-    def test_usage_skips_after_a_claim_skip_end_the_tick_quietly(self):
-        self.api.usages = {"a": reading(-5)}
-        fake = FakeLinear(
-            [
-                issue("TASK-1", "Todo", "researcher", priority=1),
-                issue("TASK-2", "Todo", "researcher", priority=2),
-            ]
-        )
-        for sid in "abcd":
-            self.add(kind="start", ident="TASK-1", sid=sid, minutes_ago=300)
-        self.tick(fake)
-        self.assertEqual(
-            self.said(),
-            [
-                "plan mode=new queue=2",
-                "claim-skip TASK-1 to=in_review reason=reached 4 attempts",
-                "usage-skip TASK-2 client=a reason=usage usage=default=-5",
-            ],
-        )
-
-    def test_an_outage_mid_walk_writes_the_waiting_lines_first(self):
+    def test_an_outage_mid_walk_follows_the_walk_lines(self):
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
         gql = failing(FAILURES["timeout"], gql=fake, ops={"issue"})
         self.assertEqual(self.tick(gql), 1)
@@ -4923,7 +4385,7 @@ class ClaimRechecks(Base):
     def test_reassigned_to_another_role_is_claimed_as_that_role(self):
         fake = Changed([issue("TASK-1", "Todo", "researcher")], {"TASK-1": {"delegate": who("pm")}})
         self.assertEqual(
-            self.claim(fake, gate=True),
+            self.claim(fake),
             "TASK-1 https://linear.app/x/TASK-1 Deep Research",
         )
         taken, task, role, client, source = self.taken
@@ -4934,7 +4396,6 @@ class ClaimRechecks(Base):
             self.said(),
             ["pick TASK-1 queue=1", "claim TASK-1 role=pm client=b client_source=default"],
         )
-        self.assertEqual(self.api.usage_calls, ["b"])
         a = router.begin(
             self.cfg(),
             Spec.from_issue(taken, role=role, mode="new", sid="s1", task=task, client=client),
@@ -5207,10 +4668,7 @@ class ScheduledRuns(TickScenario):
                 fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
                 self.assertEqual(self.tick(fake, *argv, live=None), 0)
                 self.assertEqual(self.said(), ["skip reason=agent runs unknown"])
-                self.assertEqual(
-                    (fake.queries, self.start.launches, self.api.usage_calls, self.state),
-                    ([], [], [], before),
-                )
+                self.assertEqual((fake.queries, self.start.launches, self.state), ([], [], before))
 
     def test_all_full_skips_before_linear(self):
         self.add(kind="start", ident="TASK-8", sid="old", minutes_ago=60 * 24 * 8)
@@ -5230,9 +4688,7 @@ class ScheduledRuns(TickScenario):
                     [f"skip reason=all roles full live={counts}"] if "--dry-run" in argv else [],
                     (cfg, argv),
                 )
-                self.assertEqual(
-                    (fake.queries, self.api.order, self.api.usage_calls), ([], SESSIONS, []), argv
-                )
+                self.assertEqual((fake.queries, self.api.order), ([], SESSIONS), argv)
                 self.assertIn("TASK-8", self.state, argv)
 
     def test_partly_full_role_gets_a_launch(self):
@@ -5350,7 +4806,6 @@ class ScheduledRuns(TickScenario):
             },
         )
         self.assertEqual(self.launched_run(), ("resume", "TASK-2", "b", "researcher", "a"))
-        self.assertEqual(self.api.usage_calls, ["a"])
 
     def test_nothing_to_do_with_full_role(self):
         fake = FakeLinear(
@@ -5361,7 +4816,7 @@ class ScheduledRuns(TickScenario):
         )
         self.tick(fake, live=["ensemble-engineer-TASK-2"])
         self.assertEqual(self.said(), [])
-        self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, []))
+        self.assertEqual(self.api.order, SESSIONS)
         self.assertEqual([q for q, _ in fake.queries if "users" in q], [])
         self.assertEqual(fake.mutations, [])
 
@@ -5389,7 +4844,7 @@ class ScheduledRuns(TickScenario):
                 "TASK-4": "Todo",
             },
         )
-        self.assertEqual((self.api.usage_calls, self.api.order), (["a"], SESSIONS))
+        self.assertEqual(self.api.order, SESSIONS)
 
     def test_one_claim_per_tick(self):
         self.write_config(CONFIG_ENG2)
@@ -5410,7 +4865,7 @@ class ScheduledRuns(TickScenario):
                 "launch TASK-1 exit=0",
             ],
         )
-        self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, ["a"]))
+        self.assertEqual(self.api.order, SESSIONS)
         self.assertEqual(
             {i: t["state"] for i, t in fake.issues.items()},
             {"TASK-1": "In Progress", "TASK-2": "Todo", "TASK-3": "Todo"},
@@ -5434,38 +4889,17 @@ class ScheduledRuns(TickScenario):
                 "claim-skip TASK-3 to=in_review reason=reached 4 attempts",
                 "pick TASK-5 queue=4",
                 f"preview TASK-5 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'engineer', None))}",
-                "usage client=a usage=default=90 allowed=true",
                 "pick TASK-6 queue=4",
                 f"preview TASK-6 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'engineer', None))}",
                 "pick TASK-4 queue=4",
                 f"preview TASK-4 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'pm', None))}",
-                "usage client=b usage=default=90 allowed=true",
             ],
         )
-        self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, ["a", "b"]))
+        self.assertEqual(self.api.order, SESSIONS)
         self.unchanged(fake)
         self.assertEqual(
             [v["i"] for q, v in fake.queries if q == RECHECK], ["TASK-5", "TASK-6", "TASK-4"]
         )
-
-    def test_dry_run_usage_blocked(self):
-        self.api.usages = {"a": reading(-5)}
-        fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
-        self.assertEqual(self.tick(fake, "--dry-run"), 0)
-        why = "usage=default=-5"
-        self.assertEqual(
-            self.said(),
-            [
-                "plan mode=new queue=1",
-                "pick TASK-1 queue=1",
-                f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
-                f"usage client=a {why} allowed=false",
-                f"usage-skip TASK-1 client=a reason=usage {why}",
-                "pick-none reason=nothing claimable",
-                "skip reason=nothing claimed",
-            ],
-        )
-        self.assertEqual((fake.mutations, self.start.launches), ([], []))
 
     def test_dry_run(self):
         self.add(kind="start", ident="TASK-8", sid="old", minutes_ago=60 * 24 * 8)
@@ -5483,14 +4917,12 @@ class ScheduledRuns(TickScenario):
                 'plan mode=new queue=1 live={"engineer": "1/1", "pm": "1/1"}',
                 "pick TASK-2 queue=1",
                 f"preview TASK-2 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
-                "usage client=a usage=default=90 allowed=true",
             ],
         )
-        self.assertEqual(self.api.usage_calls, ["a"])
         self.assertEqual((self.start.launches, fake.mutations), ([], []))
         self.assertIn("TASK-8", self.state)
 
-    def test_all_todo_blocked_reads_no_usage(self):
+    def test_all_todo_blocked_starts_nothing(self):
         def issues():
             return [
                 issue(
@@ -5524,9 +4956,7 @@ class ScheduledRuns(TickScenario):
                 fake = FakeLinear(issues())
                 self.assertEqual(self.tick(fake, *argv), 0)
                 self.assertEqual(self.said(), blocked)
-                self.assertEqual(
-                    (self.api.usage_calls, self.start.launches, fake.mutations), ([], [], [])
-                )
+                self.assertEqual((self.start.launches, fake.mutations), ([], []))
                 self.assertEqual(len(fake.reads()), 1)
 
     def test_ready_tick_reads_todo_once(self):

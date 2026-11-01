@@ -11,8 +11,6 @@ import gc
 import io
 import itertools
 import json
-import logging
-import math
 import os
 import re
 import select
@@ -43,7 +41,6 @@ from ensemble.session.engine.types import (
     ClientBound,
     ConfigError,
     Exited,
-    Headroom,
     Hosts,
     IdleTimeout,
     Key,
@@ -117,9 +114,6 @@ def own(case, client="fake", mode="tui", prompt="hello", spec=None, **fields) ->
     session = case.session.own(spec, owner=Channel.create().directory)._session
     case.addCleanup(session.stop)
     return session
-
-
-UNKNOWN = [Headroom("default", None)]
 
 
 class CapacityHost(ScreenHost):
@@ -483,7 +477,7 @@ class ConfiguredTest(Case):
         config["hosts"]["default"] = "missing"
         config["clients"]["fake"]["implementation"] = "missing.module:Missing"
         self.assertIsInstance(own.host(), FakeHost)
-        self.assertEqual(own.usage("fake"), [])
+        self.assertIsInstance(own.class_roots("fake"), tuple)
 
     def test_raw_configuration_accepts_preparsed_hosts(self):
         own = type("Own", (HostedSession,), {})
@@ -530,7 +524,6 @@ class ConfiguredTest(Case):
             ("start", lambda: fresh.start(spec)),
             ("attach", lambda: fresh.attach("w1")),
             ("inspect", lambda: fresh.inspect(spec)),
-            ("usage", lambda: fresh.usage("fake")),
             ("layout", fresh.layout),
             ("writable_dirs", lambda: fresh.writable_dirs(spec)),
             ("display", fresh.display),
@@ -1469,225 +1462,6 @@ class EventsOverAModeTest(Case):
         self.assertEqual(self.session(name="w1").name, "w1")
 
 
-class UsageTest(Base):
-    def test_a_configured_non_executable_program_is_a_configuration_error(self):
-        program = os.path.join(self.dir, "not-executable")
-        with open(program, "w", encoding="utf-8") as file:
-            file.write("data")
-        os.chmod(program, 0o600)
-        session = harnesses.Threaded.configured(
-            clients={
-                "opencode": {
-                    "implementation": "ensemble.session.clients.opencode:OpenCodeClient",
-                    "model": "ollama/local",
-                    "executable": program,
-                }
-            },
-            hosts=parsed(FAKE_HOSTS, "fake"),
-        )
-        with self.assertRaisesRegex(ConfigError, "missing or not executable"):
-            session.usage("opencode")
-
-    def test_missing_builtin_executables_raise_configuration_errors_before_probing(self):
-        probe = mock.Mock(return_value=None)
-        session = harnesses.Threaded.configured(
-            clients={
-                "claude": {
-                    "implementation": "ensemble.session.clients.claude:ClaudeClient",
-                    "accounts": {"work": {"dir": "/abs/work"}},
-                },
-                "codex": {"implementation": "ensemble.session.clients.codex:CodexClient"},
-                "opencode": {
-                    "implementation": "ensemble.session.clients.opencode:OpenCodeClient",
-                    "model": "ollama/local",
-                },
-            },
-            hosts=parsed(FAKE_HOSTS, "fake"),
-            probe=probe,
-        )
-        for name in ("claude", "codex", "opencode"):
-            with (
-                self.subTest(name=name),
-                mock.patch("shutil.which", return_value=None),
-                self.assertRaisesRegex(ConfigError, "missing or not executable"),
-            ):
-                session.usage(name)
-        probe.assert_not_called()
-        with mock.patch("shutil.which", return_value="/bin/client"):
-            self.assertEqual(session.usage("claude"), [Headroom("work", None)])
-        self.assertEqual(probe.call_count, 1)
-
-    def test_default_provider_reaches_the_container_host_without_a_host_probe(self):
-        class ProviderHost(ScreenHost):
-            def _client_context(self):
-                return dataclasses.replace(
-                    super()._client_context(),
-                    container=engine_types.Container("/bin", "/python", "/source", "/state"),
-                )
-
-            def _provider_usage(self, request):
-                self.request = request
-                return self.available
-
-        host = ProviderHost("tmux")
-        probe = mock.Mock(return_value='{"models": []}')
-        self.session = harnesses.Threaded.configured(
-            clients={
-                "opencode": {
-                    "implementation": "ensemble.session.clients.opencode:OpenCodeClient",
-                    "model": "strata/remote",
-                    "tiers": {"1": "ollama/local"},
-                    "providers": {"strata": {"base_url": "https://strata.test/v1", "models": []}},
-                }
-            },
-            hosts=parsed(FAKE_HOSTS, "fake"),
-            probe=probe,
-            host_factory=lambda *_args: host,
-        )
-        for available in (True, False):
-            host.available = available
-            self.assertEqual(
-                self.session.usage("opencode"),
-                [Headroom("default", math.inf if available else None)],
-            )
-            self.assertEqual(
-                (host.request.provider, host.request.base_url), ("strata", "https://strata.test/v1")
-            )
-        probe.assert_not_called()
-
-    def test_default_ollama_ignores_a_remote_tier_and_needs_no_host_opencode(self):
-        class ContainerHost(ScreenHost):
-            def _client_context(self):
-                return dataclasses.replace(
-                    super()._client_context(),
-                    container=engine_types.Container("/bin", "/python", "/source", "/state"),
-                )
-
-            def _provider_usage(self, request):
-                raise AssertionError("the default Ollama model needs no provider request")
-
-        probe = mock.Mock(return_value='{"models": []}')
-        self.session = harnesses.Threaded.configured(
-            clients={
-                "opencode": {
-                    "implementation": "ensemble.session.clients.opencode:OpenCodeClient",
-                    "model": "ollama/local",
-                    "tiers": {"1": "strata/remote"},
-                    "providers": {"strata": {"base_url": "https://strata.test/v1", "models": []}},
-                }
-            },
-            hosts=parsed(FAKE_HOSTS, "fake"),
-            probe=probe,
-            host_factory=lambda *_args: ContainerHost("tmux"),
-        )
-        with mock.patch("shutil.which", return_value=None) as executable:
-            self.assertEqual(self.session.usage("opencode"), [Headroom("default", math.inf)])
-        self.assertNotIn("opencode", [call.args[0] for call in executable.call_args_list])
-        self.assertEqual(probe.call_count, 1)
-
-    def probing(self, out="42.5", **launch) -> mock.Mock:
-        """Client probe configured, its probe the Launch of `launch` (argv ("probe-cmd", "-x")
-        unless given), the Setup's probe a mock giving `out`.
-        """
-        probe = mock.Mock(return_value=out)
-        self.session_dependencies = {**self.session_dependencies, "probe": probe}
-        self.configure("probe", probe={"argv": ("probe-cmd", "-x"), **launch})
-        return probe
-
-    def usage(self, out="42.5", **launch):
-        probe = self.probing(out, **launch)
-        return self.session.usage("probe"), probe
-
-    def test_no_probe_is_empty_and_runs_nothing(self):
-        probe = self.probing()
-        self.assertEqual(self.session.usage("fake"), [])
-        probe.assert_not_called()
-        self.assertFalse(os.path.exists(self.probe_dir))
-
-    def test_the_probes_stdout_as_the_client_parses_it(self):
-        found, probe = self.usage("42.5")
-        self.assertEqual(found, [Headroom("default", 57.5)])
-        probe.assert_called_once_with(
-            ("probe-cmd", "-x"),
-            cwd=self.probe_dir,
-            env=mock.ANY,
-            timeout=120,
-        )
-
-    def test_a_spawn_error_is_unknown(self):
-        """The real probe, its spawn failing: nothing runs."""
-        self.session_dependencies = {**self.session_dependencies, "probe": hosted_session.probe}
-        self.configure("probe", probe={"argv": ("probe-cmd",)})
-        with mock.patch("subprocess.Popen", side_effect=OSError("no exec")) as popen:
-            self.assertEqual(self.session.usage("probe"), UNKNOWN)
-        popen.assert_called_once()
-
-    def test_a_timeout_is_unknown(self):
-        found, probe = self.usage(None)
-        self.assertEqual(found, UNKNOWN)
-        self.assertEqual(probe.call_args.kwargs["timeout"], 120)
-
-    def test_a_reading_without_windows_has_unbounded_headroom(self):
-        with mock.patch.object(ProbeClient, "usage", return_value=engine_types.Usage(None, None)):
-            found, probe = self.usage()
-        self.assertEqual(found, [Headroom("default", math.inf)])
-        probe.assert_called_once()
-
-    def test_no_reading_is_unknown(self):
-        with mock.patch.object(ProbeClient, "usage", return_value=None):
-            self.assertEqual(self.usage()[0], UNKNOWN)
-
-    def test_an_exception_from_the_clients_parse_is_unknown(self):
-        for out in ("", "garbage"):
-            with self.subTest(out=out):
-                self.assertEqual(self.usage(out)[0], UNKNOWN)
-
-    def test_usage_parse_failure_keeps_its_fallback_with_logging_disabled(self):
-        disabled = logging.root.manager.disable
-        try:
-            logging.disable(logging.CRITICAL)
-            self.assertEqual(self.usage("garbage")[0], UNKNOWN)
-        finally:
-            logging.disable(disabled)
-
-    def test_a_probe_without_a_command_is_unknown(self):
-        found, probe = self.usage(argv=())
-        self.assertEqual(found, UNKNOWN)
-        probe.assert_not_called()
-
-    def test_the_probe_dir_is_made_0700_under_home(self):
-        self.usage()
-        mode = os.lstat(self.probe_dir).st_mode
-        self.assertTrue(stat.S_ISDIR(mode))
-        self.assertEqual(stat.S_IMODE(mode), 0o700)
-        found, probe = self.usage()
-        self.assertEqual(found, [Headroom("default", 57.5)])
-        self.assertEqual(probe.call_args.kwargs["cwd"], self.probe_dir)
-
-    def test_a_file_at_the_probe_dir_is_unknown_and_runs_nothing(self):
-        open(self.probe_dir, "w").close()
-        found, probe = self.usage()
-        self.assertEqual(found, UNKNOWN)
-        probe.assert_not_called()
-
-    def test_the_probe_gets_the_child_environment_in_launch_cwd(self):
-        cwd = os.path.join(self.dir, "cwd")
-        os.mkdir(cwd)
-        with mock.patch.dict(os.environ, {"API_DROP": "x", "API_KEEP": "k"}):
-            _, probe = self.usage(env={"API_ADD": "a"}, unset=("API_DROP",), cwd=cwd)
-        env = probe.call_args.kwargs["env"]
-        self.assertEqual(
-            (env.get("API_DROP"), env["API_KEEP"], env["API_ADD"], env["PWD"]),
-            (None, "k", "a", cwd),
-        )
-        self.assertEqual(probe.call_args.kwargs["cwd"], cwd)
-        self.assertFalse(os.path.exists(self.probe_dir))
-
-    def test_a_registry_error_raises(self):
-        with self.assertRaises(ConfigError):
-            self.session.usage("nope")
-
-
 class WritablePathsTest(HostedTuiBase):
     def test_cwd_and_grants_over_the_state_root_and_hook_paths_start_in_every_mode(self):
         for mode, resume in itertools.product(Mode, (False, True)):
@@ -1715,8 +1489,9 @@ class WritablePathsTest(HostedTuiBase):
 
 
 class AccountPoolTest(Base):
-    """A client with accounts: Session.usage reads each live; a run's events and its operations
-    after its start read none, and mark nothing for the next start.
+    """A client with accounts: each start reads each account live, in a private probe dir; a probe
+    that cannot read leaves its account unusable; a run's events and its operations after its
+    start read none, and mark nothing for the next start.
     """
 
     def setUp(self):
@@ -1747,25 +1522,48 @@ class AccountPoolTest(Base):
         (metadata,) = self.session.host().headless
         return metadata.get("home_account")
 
-    def usage(self):
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            found = self.session.usage("pool")
-        self.err = err.getvalue()
-        return found
-
     def probed(self):
         return sorted(call.args[0][-1] for call in self.probe.call_args_list)
 
-    def test_usage_is_every_accounts_live_headroom(self):
-        self.assertEqual(self.usage(), [Headroom("default", 30), Headroom("work", 70)])
+    def test_each_accounts_probe_runs_in_a_private_dir_under_home(self):
+        self.assertEqual(self.started_account(), "work")
         self.assertEqual(self.probed(), ["/d", "/w"])
-        self.assertFalse(os.path.exists(os.path.join(self.ensemble, "usage")))
+        mode = os.lstat(self.probe_dir).st_mode
+        self.assertEqual((stat.S_ISDIR(mode), stat.S_IMODE(mode)), (True, 0o700))
+        self.assertEqual(
+            {(call.kwargs["cwd"], call.kwargs["timeout"]) for call in self.probe.call_args_list},
+            {(self.probe_dir, 120)},
+        )
 
-    def test_every_usage_reads_every_account_again(self):
-        first = self.usage()
-        self.probe.reset_mock()
-        self.assertEqual(self.usage(), first)
-        self.assertEqual(self.probed(), ["/d", "/w"])
+    def refused(self):
+        """The error of a headless start on the container Host refused before the Host."""
+        self.configure(
+            "pool",
+            {"implementation": HOMED_HOST},
+            probe={"argv": ("probe-cmd", "/x")},
+            accounts={"work": "/w"},
+        )
+        spec = self.spec(client="pool", mode=Mode.HEADLESS, name="w1")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SessionError) as caught:
+            self.session.start(spec)
+        self.assertEqual(self.session.host().headless, [])
+        return str(caught.exception)
+
+    def test_a_probe_that_cannot_read_leaves_its_account_unusable(self):
+        for out in (None, "", "garbage"):
+            with self.subTest(out=out):
+                self.outputs["/w"] = out
+                self.assertEqual(self.refused(), "usage: no available account")
+        self.outputs["/w"] = "10,10"
+        self.session_dependencies = {**self.session_dependencies, "probe": hosted_session.probe}
+        with mock.patch("subprocess.Popen", side_effect=OSError("no exec")) as popen:
+            self.assertEqual(self.refused(), "usage: no available account")
+        popen.assert_called_once()
+
+    def test_a_file_at_the_probe_dir_runs_no_probe(self):
+        open(self.probe_dir, "w").close()
+        self.assertEqual(self.refused(), "usage: no available account")
+        self.probe.assert_not_called()
 
     def run_on(self, **env):
         """An in_process run selecting `env`'s account, drained."""
@@ -1818,30 +1616,33 @@ class AccountPoolTest(Base):
         self.probe.assert_not_called()
 
 
+class NoAccountsTest(Base):
+    def test_a_client_without_accounts_starts_without_running_its_usage_probe(self):
+        probe = mock.Mock(side_effect=AssertionError("probed"))
+        self.session_dependencies = {**self.session_dependencies, "probe": probe}
+        self.configure("probe", probe={"argv": ("probe-cmd",)})
+        with mock.patch.object(
+            ProbeClient, "in_process", fake_client.InProcessFakeClient.in_process
+        ):
+            session = self.start(client="probe", mode=Mode.IN_PROCESS)
+            self.assertEqual(self.drain(session)[-1], Exited(0))
+        probe.assert_not_called()
+
+
 CLAUDE = "ensemble.session.clients.claude:ClaudeClient"
 PANEL = "Current session\n{five}% used\nCurrent week (all models)\n{week}% used\n"
 
 
-class HeadroomTest(Base):
-    """Session.usage of Claude: every registered account read live once, by name, on either Host."""
+class AccountConfigTest(Base):
+    """A bad Claude account table fails the start before any probe."""
 
     def setUp(self):
         super().setUp()
-        self.outputs = {}
-        self.probe = mock.Mock(side_effect=self.answer)
+        self.probe = mock.Mock(side_effect=AssertionError("probed"))
         self.session_dependencies = {**self.session_dependencies, "probe": self.probe}
-        self.which = mock.patch("shutil.which", return_value="/bin/claude")
-        self.which.start()
-        self.addCleanup(self.which.stop)
+        self.enterContext(mock.patch("shutil.which", return_value="/bin/claude"))
 
-    def answer(self, argv, *, env, **_):
-        out = self.outputs[env["CLAUDE_CONFIG_DIR"]]
-        if isinstance(out, BaseException):
-            raise out
-        return out
-
-    def claude(self, accounts, *, container=True, host=CONTAINER_HOST, **table):
-        settings = {"implementation": host} if container else {}
+    def claude(self, accounts, *, host, **table):
         self.configure_session(
             {
                 "claude": {
@@ -1853,61 +1654,8 @@ class HeadroomTest(Base):
                     **table,
                 }
             },
-            settings,
+            {"implementation": host},
         )
-
-    def usage(self):
-        with contextlib.redirect_stderr(io.StringIO()):
-            return self.session.usage("claude")
-
-    def probed(self):
-        return sorted(call.kwargs["env"]["CLAUDE_CONFIG_DIR"] for call in self.probe.call_args_list)
-
-    def test_no_registered_claude_account_reads_nothing(self):
-        for container in (True, False):
-            with self.subTest(container=container):
-                self.claude({}, container=container)
-                self.assertEqual(self.usage(), [])
-        self.probe.assert_not_called()
-
-    def test_accounts_are_listed_by_name(self):
-        self.outputs = {"/acct/work": PANEL.format(five=10, week=10)}
-        self.claude({"work": {}})
-        self.assertEqual([h.account for h in self.usage()], ["work"])
-        self.outputs["/acct/home"] = PANEL.format(five=10, week=10)
-        self.claude({"work": {}, "home": {}})
-        self.assertEqual([h.account for h in self.usage()], ["home", "work"])
-
-    def test_each_account_is_read_once_on_either_host(self):
-        self.outputs = {
-            "/acct/work": PANEL.format(five=90, week=10),
-            "/acct/home": PANEL.format(five=30, week=20),
-            "/acct/api": "Total cost: $0.00\n",
-            "/acct/broken": None,
-        }
-        accounts = {"work": {"max_usage": 80}, "home": {"max_usage": 100}, "api": {}, "broken": {}}
-        for container in (True, False):
-            with self.subTest(container=container):
-                self.probe.reset_mock()
-                self.claude(accounts, container=container)
-                self.assertEqual(
-                    self.usage(),
-                    [
-                        Headroom("api", math.inf),
-                        Headroom("broken", None),
-                        Headroom("home", 70),
-                        Headroom("work", -10),
-                    ],
-                )
-                self.assertEqual(
-                    self.probed(), ["/acct/api", "/acct/broken", "/acct/home", "/acct/work"]
-                )
-                self.assertFalse(os.path.exists(os.path.join(self.ensemble, "usage")))
-
-    def test_one_account_is_a_one_item_list(self):
-        self.outputs = {"/acct/work": PANEL.format(five=95, week=10)}
-        self.claude({"work": {}})
-        self.assertEqual(self.usage(), [Headroom("work", 5)])
 
     def test_a_bad_account_config_fails_the_start_before_any_probe(self):
         for accounts, table, message in (

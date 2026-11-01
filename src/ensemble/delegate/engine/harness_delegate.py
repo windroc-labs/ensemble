@@ -56,7 +56,6 @@ from ensemble.delegate.event.reply import outcome_only
 from ensemble.delegate.event.types import Outcome
 from ensemble.session import (
     SIGNALS,
-    Headroom,
     HookCallback,
     Host,
     Launch,
@@ -138,10 +137,10 @@ def _unknown(error: Unanswered) -> Unanswered:
 
 
 TUI_START_TIMEOUT = 30  # s for a tui run's agent session to go live, off Docker
-DOCKER_START_TIMEOUT = 120  # seconds, container start included
+DOCKER_START_TIMEOUT = 120  # s, container start included
 TUI_POLL = 0.1  # seconds
 DRAIN_WAIT = 35  # s a gone worker waits before its drive ends the attempt; past the harness's drain
-GONE_EVERY = 1.0  # seconds between the drive's worker checks
+GONE_EVERY = 1.0  # s between worker checks
 COLOR_WAIT = 15  # seconds
 WIND_DOWN_WAIT = 30.0  # seconds
 DRIVE_STOP_WAIT = 5.0  # seconds after SIGTERM, then SIGKILL
@@ -552,22 +551,6 @@ class HarnessDelegate(Delegate):
             if events is not None:
                 validate_events(events)
         except (OSError, ValueError, SessionConfigError, SessionError) as error:
-            raise ConfigError(str(error)) from None
-
-    @classmethod
-    def usage(
-        cls,
-        role: str,
-        *,
-        overlays: Sequence[Mapping] = (),
-        session_cls: type[Session] = Session,
-    ) -> list[Headroom]:
-        composition = Composer()
-        try:
-            session_cls.configure_from(thaw(composition.config.values))
-            run = composition.resolve(role, overlays=overlays)
-            return session_cls.usage(run.client)
-        except SessionConfigError as error:
             raise ConfigError(str(error)) from None
 
     def _own(self, state: DelegateState) -> Session | None:

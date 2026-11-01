@@ -9,7 +9,6 @@ from typing import Any
 from ensemble.session.engine.types import (
     ACCOUNT_SET_BY,
     ConfigError,
-    Headroom,
     Hosts,
     IdleTimeout,
     KeyPress,
@@ -71,7 +70,7 @@ class Session(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """Idempotent owner shutdown; SessionError/Unanswered if unconfirmed."""
+        """Idempotent; SessionError/Unanswered if unconfirmed."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...
@@ -163,10 +162,6 @@ class Session(ABC):
     @classmethod
     def list(cls, match: str | None = None, *, display: Display = None) -> list[SessionRow]:
         return cls._hosted("list")(match, display=display)
-
-    @classmethod
-    def usage(cls, client: str) -> list[Headroom]:
-        return cls._hosted("usage")(client)
 
     @classmethod
     def client_resume(cls, client: str, argv: Sequence[str]) -> int:

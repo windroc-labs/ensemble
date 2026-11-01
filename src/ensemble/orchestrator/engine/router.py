@@ -32,7 +32,6 @@ from ensemble.orchestrator.engine.flow.types import (
     NO_ISSUE,
     IssueState,
 )
-from ensemble.orchestrator.engine.gate import Gate
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import linear_error, log
 from ensemble.orchestrator.engine.runs import (
@@ -78,14 +77,14 @@ Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
                              [--tui [--display D] [--events FILE]]
 
 Arguments and options:
-  (no mode)     One scheduled tick: role max_runs and usage
-                gates; starts at most one role's run. Linear uses the app
-                delegate (Agent field); local boards use the role directory.
-  --issue ID    Only this issue identifier, e.g. TASK-1; bypass role max_runs
-                and usage gates; session client limits still apply.
-  --dry-run     Print the plan without claiming issues or launching work;
-                a tick still performs usage checks. Not an offline preview:
-                read configuration, run inventory, credentials and board data.
+  (no mode)     One scheduled tick under role max_runs; starts at most one
+                role's run. Linear uses the app delegate (Agent field);
+                local boards use the role directory.
+  --issue ID    Only this issue identifier, e.g. TASK-1; bypass role
+                max_runs; session client limits still apply.
+  --dry-run     Print the plan without claiming issues or launching work.
+                Not an offline preview: read configuration, run inventory,
+                credentials and board data.
 --tui         With either: each run it starts or resumes is attended (TUI (text user interface) mode), shown at D (opaque,
               its format: ensemble-session --help; no D: the caller's place; none: started hidden,
               passed on as given), its events written to FILE, else $ENSEMBLE_EVENTS. Exits 2 before
@@ -107,13 +106,13 @@ Prerequisites and effects:
   A launch prepares input, records a runs.jsonl row and detaches a LinearRun;
   the router exits while the Delegate harness writes events back to the board.
   Other events go to orchestrator.jsonl (src router). A tick without diagnostics
-  writes none; Linear issues without a configured role delegate log claim-skip,
-  and usage-blocked candidates log usage-skip. Preview plans print JSON lines
-  to stderr. Output files follow Delegate configuration.
+  writes none; Linear issues without a configured role delegate log claim-skip.
+  Preview plans print JSON lines to stderr. Output files follow Delegate
+  configuration.
 
 Exit conditions:
-  Tick: 2 on configuration or host usage probe failure, 1 when Linear is unavailable (each logged
-  once a day), otherwise 0.
+  Tick: 2 on configuration failure, 1 when Linear is unavailable (each logged once a day),
+  otherwise 0.
   --issue: 2 on configuration failure, 1 when Linear is unavailable or on
   unknown run inventory; 2 when busy (another router held the lock for 600 s;
   it waits meanwhile), being started by another router, already live or
@@ -240,11 +239,9 @@ def client_for(pick, default) -> tuple[str | None, ClientSource, str | None]:
 
 
 class Board:
-    def __init__(
-        self, gql, entries, cfg, *, now, dry, keychain, wiring: Wiring, gate=None, say=None
-    ):
+    def __init__(self, gql, entries, cfg, *, now, dry, keychain, wiring: Wiring, say=None):
         self.gql, self.entries, self.now, self.dry = gql, entries, now, dry
-        self.cfg, self.keychain, self.wiring, self.gate = cfg, keychain, wiring, gate
+        self.cfg, self.keychain, self.wiring = cfg, keychain, wiring
         self.owner_field = "delegate" if cfg.tracker is TrackerKind.LINEAR else "assignee"
         self.say: Callable[..., None] = say or functools.partial(log, "router", dry=dry)
         self.ready, self.blocked, self.live, self.statuses = None, {}, set(), {}
@@ -329,11 +326,11 @@ class Board:
         if left is not None:
             self.say("move-skip", issue["identifier"], step=step, state=left)
 
-    def bounce(self, issue, body, frm=IssueState.READY):
-        """An issue that cannot be run: comment body and move it from frm to In Review."""
+    def bounce(self, issue, body):
+        """An issue that cannot be run: comment body and move it from Todo to In Review."""
         if self.dry:
             self.say("would comment", issue["identifier"], body=body, to="in_review")
-        self.comment_and_move(issue, body, IssueState.REVIEW, frm, "claim")
+        self.comment_and_move(issue, body, IssueState.REVIEW, IssueState.READY, "claim")
 
     def status(self, ident, sid):
         if sid not in self.statuses:
@@ -519,27 +516,6 @@ class Board:
             resumed=client_of(self.entries, sid),
         )
 
-    def gated(self, issue, role, client, source, frm=IssueState.READY):
-        """Whether the usage gate blocks a new run of client; an issue-chosen client's quota
-        configuration error bounces the issue from frm instead.
-        """
-        ident = issue["identifier"]
-        try:
-            return self.gate is not None and self.gate.blocked(
-                role,
-                ident,
-                key=(self.cfg.delegate_kind, client),
-                reject_config=source == "label",
-            )
-        except delegate.ConfigError as error:
-            self.say("launch-error", ident, client=client, error=one_line(error))
-            self.bounce(
-                issue,
-                _label_client_message(client, error, self.tracker.state_name(IssueState.READY)),
-                frm,
-            )
-            return True
-
     def resumption(self, issue, sid, new_sid):
         """The run that continues the issue's session sid: its resume, or a new session (new_sid) on
         the client the issue chooses when that differs, as a session resumes only in its own
@@ -672,8 +648,6 @@ class Board:
                 reason = "bad task and Agent labels"
             self.say("claim-skip", ident, to="in_review", reason=reason)
             self.bounce(issue, "\n\n".join(comments))
-            return None
-        if self.gated(issue, role, client, source):
             return None
         taken = {**issue, "assignee": current.assignee, "project": current.home}
         if self.dry:
@@ -993,38 +967,6 @@ def starts(runs, dry, *, shared):
     return _flock(runs, dry, "router-starts.lock", op, wait=None if shared else 0)
 
 
-class Held:
-    """A tick's walk log: plan, pick, usage-skip, pick-none and skip lines wait, written before the
-    next other line. At the walk's end, waiting usage-skips mean a usage-blocked walk: only they are
-    written; else all are. A dry run and an exception wait for nothing.
-    """
-
-    WAIT = {"plan", "pick", "usage-skip", "pick-none", "skip"}
-
-    def __init__(self, dry):
-        self.dry, self.waiting = dry, []
-
-    def __call__(self, kind, issue=None, **fields):
-        if not self.dry and kind in self.WAIT:
-            self.waiting.append((kind, issue, fields))
-            return
-        self.write()
-        log("router", kind, issue, dry=self.dry, **fields)
-
-    def write(self, kinds=WAIT):
-        for kind, issue, fields in self.waiting:
-            if kind in kinds:
-                log("router", kind, issue, **fields)
-        self.waiting = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, error, *_):
-        blocked = error is None and any(w[0] == "usage-skip" for w in self.waiting)
-        self.write({"usage-skip"} if blocked else self.WAIT)
-
-
 def other_sid(spec, launch_sid):
     """Whether the run's session is not the launcher's `launch_sid`, said."""
     if launch_sid is None or spec.sid == launch_sid:
@@ -1036,28 +978,16 @@ def other_sid(spec, launch_sid):
     return True
 
 
-def choose(board, gate, live_ids, full, counts, *, new_sid):
+def choose(board, live_ids, full, counts, *, new_sid):
     unclaimed = False
 
     def resumes():
         for issue, sid in board.recover(live_ids):
             if not board.available(issue, full):
                 continue
-            spec, role = board.resumption(issue, sid, new_sid), board.role(issue)
-            if spec.mode == "new":
-                blocked = board.gated(
-                    issue, role, spec.client, spec.client_source, IssueState.RUNNING
-                )
-            else:
-                key = (delegate_of(board.entries, sid), spec.client)
-                blocked = gate.blocked(
-                    role,
-                    issue["identifier"],
-                    key=key,
-                )
-            if not blocked:
-                board.plan(("resume", spec, sid), counts)
-                yield spec
+            spec = board.resumption(issue, sid, new_sid)
+            board.plan(("resume", spec, sid), counts)
+            yield spec
 
     def claimed():
         nonlocal unclaimed
@@ -1113,28 +1043,15 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
                 trim(runs, now)
             except (OSError, UnicodeDecodeError) as e:
                 say("skip", reason="trim failed", error=one_line(e))
-        with Held(dry) as walk:
-            gate = Gate(dry=dry, say=walk, cfg=cfg)
-            board = Board(
-                gql,
-                entries,
-                cfg,
-                now=now,
-                dry=dry,
-                keychain=keychain,
-                wiring=wiring,
-                gate=gate,
-                say=walk,
-            )
-            live_ids = {i for ids in live.values() for i in ids}
-            new_sid = launch_sid or str(uuid.uuid4())
-            spec = choose(board, gate, live_ids, full, counts, new_sid=new_sid)
-            if not dry and spec is not None and other_sid(spec, launch_sid):
-                return 2
-            if spec is None or dry:
-                return 0
-            walk.write()  # the outer logs past the walk
-            return start_run(start, begin(cfg, spec), walk)
+        board = Board(gql, entries, cfg, now=now, dry=dry, keychain=keychain, wiring=wiring)
+        live_ids = {i for ids in live.values() for i in ids}
+        new_sid = launch_sid or str(uuid.uuid4())
+        spec = choose(board, live_ids, full, counts, new_sid=new_sid)
+        if not dry and spec is not None and other_sid(spec, launch_sid):
+            return 2
+        if spec is None or dry:
+            return 0
+        return start_run(start, begin(cfg, spec), say)
 
 
 def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, launch_sid=None):
