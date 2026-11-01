@@ -242,7 +242,7 @@ class FakeLinear:
         self.todo_error = False
         self.unreadable = set()
         self.refuse = set()
-        self.ids = {}  # an issue's uuid → its identifier, for write-back's calls
+        self.ids = {}  # issue uuid → identifier, for write-back
         self.group = {
             "isGroup": True,
             "children": {"nodes": [{"id": i} for i in (LIGHT, DEEP, ORPHAN_LABEL)]},

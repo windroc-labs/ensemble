@@ -70,7 +70,7 @@ class Session(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """Idempotent owner shutdown; SessionError/Unanswered if unconfirmed."""
+        """Idempotent; SessionError/Unanswered if unconfirmed."""
 
     @abstractmethod
     def session_status(self) -> SessionStatus: ...

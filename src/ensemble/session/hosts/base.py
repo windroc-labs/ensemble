@@ -58,7 +58,7 @@ TUI_DIR = f"{STATE}/tui"
 HARNESS_ROOT = f"{STATE}/harness"
 GUARD_LEASE_FD = "ENSEMBLE_GUARD_LEASE_FD"
 GUARD_HOOK_SOCKET = "ENSEMBLE_GUARD_HOOK_SOCKET"
-GUARD_WAIT = 10  # s for a guard's reply, or its exit after a close (it gives up 9 s after one)
+GUARD_WAIT = 10  # s for a guard's reply or exit after a close (it gives up after 9 s)
 TUI_STATE = "session.json"
 PROMPTED = "prompted"  # "<generation> <begun> <submitted>" sends
 ACTIVITY = "activity"  # "<generation> <word>": its harness's last mark
@@ -370,7 +370,7 @@ class Host(ABC):
         ]
 
     def attach_target(self, name: str) -> CommandView | None:
-        """None unless attachable."""
+        """None if not attachable."""
         return None
 
     _inherit_env = True
