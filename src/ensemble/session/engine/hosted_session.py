@@ -228,8 +228,7 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
     container = host._client_context().container is not None
     wanted = spec.env.get(ACCOUNT_ENV) or client._account(container=container)
     recorded = None if container or not spec.resume else _recorded(spec)
-    transcript = recorded.transcript if recorded else ""
-    conversation = "" if client._in_default(transcript) else client._account_of(transcript)
+    conversation = client._account_of(recorded.transcript) if recorded else ""
     if not (container or wanted or conversation):
         return spec
     if not registered:

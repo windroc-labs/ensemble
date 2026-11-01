@@ -2003,18 +2003,15 @@ class ResumeCheckTest(ClaudeStartCase):
         self.assertIsInstance(error, ConfigError)
         self.assertIn("has no transcript to resume", str(error))
 
-    def test_a_conversation_in_the_default_dir_resumes_there_though_an_account_shares_it(self):
-        default = os.path.join(self.root, "home")
-        self.enterContext(mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": default}))
+    def test_an_account_dir_inside_the_users_config_keeps_its_conversations(self):
+        self.root = os.path.join(self.home, ".claude")
         self.claude({"home": {}, "work": {}}, host="tmux")
-        spec = self.conversation(default)
-        self.assertIsNone(self.start(spec=spec)[1])
-        self.probe.assert_not_called()
         self.read(home=panel(10), work=panel(10))
-        chosen = dataclasses.replace(spec, env={ACCOUNT_ENV: "home"})
-        self.assertEqual(self.start(spec=chosen), ("home", None))
-        self.claude({"home": {}, "work": {}}, host="tmux", local_account="home")
-        self.assertEqual(self.start(spec=spec), ("home", None))
+        self.assertEqual(self.start(spec=self.conversation(f"{self.root}/work")), ("work", None))
+        self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
+        self.probe.reset_mock()
+        self.assertEqual(self.start(spec=self.conversation(self.root)), ("", None))
+        self.probe.assert_not_called()
 
     def test_inspect_finds_the_conversation_in_its_accounts_dir(self):
         self.claude({"home": {}, "work": {}}, host="tmux")

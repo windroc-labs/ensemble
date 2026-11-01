@@ -91,11 +91,6 @@ class ClaudeClient(Client):
                 return name
         return ""
 
-    def _in_default(self, transcript):
-        root = os.path.realpath(self.common.config_dir())
-        path = os.path.realpath(transcript) if printable_abs(transcript) else ""
-        return bool(path) and os.path.commonpath((path, root)) == root
-
     def _executable(self, *, container=False):
         return "claude"
 

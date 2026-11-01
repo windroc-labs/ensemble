@@ -85,10 +85,6 @@ class Client:
     def _account_of(self, transcript: str) -> str:
         return ""
 
-    def _in_default(self, transcript: str) -> bool:
-        """transcript lies in the config of a start choosing no account."""
-        return False
-
     def _max_usage(self, account: str) -> float:
         return DEFAULT_MAX_USAGE
 
