@@ -34,6 +34,11 @@ from tests.session import live_tmux
 from tests.utils.sandbox import pid_exists as running
 
 ANSWER = "Say hello."
+# the Claude client's note on a run with approved commands, appended to each prompt
+CLAUDE_NOTE = (
+    "Pre-approved commands match on their exact text and each shell call starts fresh, so "
+    "anything else waits on a permission prompt."
+)
 DRAFT = "Draft.\n"
 
 
@@ -163,7 +168,7 @@ class Outcomes(Integration):
             ),
             (SID, SID, None),
         )
-        self.assertEqual(prompt(second).partition("\n\n")[0], FIX.format(error=UNSAVED_ERROR))
+        self.assertEqual(prompt(second), f"{FIX.format(error=UNSAVED_ERROR)}\n\n{CLAUDE_NOTE}")
         self.assertEqual(
             self.kinds(),
             [
@@ -284,8 +289,8 @@ class NeedsInput(Integration):
         )
         self.assertTrue(prompt(second).startswith(RESUME), "the resume prompt")
         self.assertTrue(
-            prompt(second).rpartition("\n\n")[0].endswith(f"\n# Input\n\n{ANSWER}\n"),
-            "the answer as the input, before the client's command note",
+            prompt(second).endswith(f"\n# Input\n\n{ANSWER}\n\n\n{CLAUDE_NOTE}"),
+            "the answer as the input, then the client's command note",
         )
         self.assertEqual(self.users(), [prompt(first), prompt(second)], "one session's transcript")
         self.assertEqual(
