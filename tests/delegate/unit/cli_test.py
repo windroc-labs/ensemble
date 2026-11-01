@@ -86,7 +86,7 @@ RECORD = Record(
     ("ensemble-delegate",),
     ("ensemble-delegate", "resume", "/work"),
     "mgr",
-    "dummy-tester",
+    "researcher",
 )
 
 
@@ -153,7 +153,7 @@ class Detach(Base):
         code, out, err = self.cli(
             "run",
             "--role",
-            "dummy-tester",
+            "researcher",
             "--input",
             "x",
             "--workdir",
@@ -185,7 +185,7 @@ class Detach(Base):
                     (code, out, err), (0, RECORD.to_line() + "\n", f"delegate: session {SID}\n")
                 )
                 ((role, spec, placement),) = Detaching.made
-                self.assertEqual((role, placement), ("dummy-tester", {"display": None}))
+                self.assertEqual((role, placement), ("researcher", {"display": None}))
                 self.assertEqual(
                     (spec.mode, spec.sid, spec.events, spec.workdir, spec.out),
                     (mode, SID, self.events, self.work, self.out),
@@ -366,7 +366,13 @@ class Harnessed(HarnessCase):
         self.events = os.path.join(self.home, "events")
 
     def cli(
-        self, *extra, input="Hello.", stdin=None, role="dummy-tester", task="echo", client="fake"
+        self,
+        *extra,
+        input="Hello.",
+        stdin=None,
+        role="researcher",
+        task="light-research",
+        client="fake",
     ):
         class Bound(DrivenDelegate):
             def __init__(self, role, spec, **placement):
@@ -398,7 +404,7 @@ lock = "dummy-lock"
 item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
-[delegate.roles.dummy-tester.environment]
+[delegate.roles.researcher.environment]
 name = "dummy"
 prefetch = true
 """
@@ -627,19 +633,30 @@ class DryRun(Base):
                 "workdir": self.work,
                 "cwd": Layout(self.work).agent,
                 "project": False,
-                "tier": 3,
-                "effort": "low",
+                "tier": 2,
+                "effort": "high",
                 "sessions": {"agent": None},
                 "hosts": {"agent": "tmux"},
                 "callback": None,
                 "environment": None,
             },
         )
+        tools, agent = os.path.join(TEAM, "tools"), Layout(self.work).agent
         self.assertEqual(
             (shown["dirs"], shown["reads"], shown["commands"]),
-            ([], [os.path.join(TEAM, "tasks"), TEAM], []),
+            (
+                [],
+                [os.path.join(TEAM, "tasks"), TEAM],
+                [
+                    f"python3 -P {tools}/repo.py worktree --dir {agent}/src *",
+                    f"python3 -P {tools}/svg_check.py *",
+                    f"python3 -P {tools}/report_check.py *",
+                ],
+            ),
         )
-        self.assertIn("**Your task**: `echo` (`<tasks>/echo.md`).", shown["prompt"])
+        self.assertIn(
+            "**Your task**: `light-research` (`<tasks>/light-research.md`).", shown["prompt"]
+        )
         self.assertTrue(shown["prompt"].endswith("\n# Input\n\nHello.\n"))
         self.assertEqual(err, "")
         self.assertEqual(
@@ -669,9 +686,9 @@ class InProcess(Base):
             code, out, err = self.cli(
                 "run",
                 "--role",
-                "dummy-tester",
+                "researcher",
                 "--task",
-                "echo",
+                "light-research",
                 "--input",
                 "Hello.",
                 "--client",
@@ -680,7 +697,9 @@ class InProcess(Base):
                 "in_process",
             )
         self.assertEqual((code, out), (0, ""), err)
-        workdir = os.path.join(self.ensemble, "adhoc", "2026-10-16-dummy-tester-echo-" + SID[:8])
+        workdir = os.path.join(
+            self.ensemble, "adhoc", "2026-10-16-researcher-light-research-" + SID[:8]
+        )
         self.assertIn(Layout(workdir).out, err)
         with open(os.path.join(Layout(workdir).run, "delegate.json"), encoding="utf-8") as stream:
             self.assertEqual(json.load(stream)["spec"]["sid"], SID)
@@ -744,9 +763,9 @@ class InProcess(Base):
             code, out, err = self.cli(
                 "run",
                 "--role",
-                "dummy-tester",
+                "researcher",
                 "--task",
-                "echo",
+                "light-research",
                 "--input",
                 "Hello.",
                 "--workdir",
@@ -774,7 +793,7 @@ class InProcess(Base):
         with open(RunState(Layout(self.work)).record) as f:
             state = json.load(f)
         self.assertEqual(
-            (state["role"], state["attempt"], state["completed"]), ("dummy-tester", 1, True)
+            (state["role"], state["attempt"], state["completed"]), ("researcher", 1, True)
         )
         self.assertEqual(
             (sorted(os.listdir(self.work)), sorted(os.listdir(Layout(self.work).run))),
@@ -857,9 +876,9 @@ class List(Base):
         self.assertEqual((code, err), (0, ""))
         lines = out.splitlines()
         self.assertEqual([line for line in lines if not line.startswith("  ")], HEADS)
-        echo = Composer().index("dummy-tester")["echo"]
+        verify = Composer().index("verifier")["verify"]
         self.assertTrue(
-            out.endswith(f"\ndummy-tester  local  built-in\n  echo: {echo}  [built-in]\n"), out
+            out.endswith(f"\nverifier  github  built-in\n  verify: {verify}  [built-in]\n"), out
         )
         self.assertTrue(
             all(line.endswith("  [built-in]") for line in lines if line.startswith("  "))
@@ -946,14 +965,14 @@ class Configures(Base):
         self.assertEqual((self.launches(), os.path.exists(self.work)), ([], False))
 
     def test_a_role_accounts_table_exits_2_naming_the_session_key(self):
-        self.local('[roles.dummy-tester.accounts]\nfake = "work"\n')
+        self.local('[roles.researcher.accounts]\nfake = "work"\n')
         code, out, err = self.runs()
         self.assertEqual(
             (code, out, err.splitlines()[-1]),
             (
                 2,
                 "",
-                "delegate: unknown key 'accounts' in roles.dummy-tester; moved to"
+                "delegate: unknown key 'accounts' in roles.researcher; moved to"
                 " [session.clients.<client>] account",
             ),
         )
@@ -973,7 +992,7 @@ class Usage(Base):
         ):
             with self.subTest(argv=argv):
                 self.assertEqual(
-                    self.cli("run", "--role", "dummy-tester", "--client", "fake", *argv),
+                    self.cli("run", "--role", "researcher", "--client", "fake", *argv),
                     (2, "", "delegate: --input is required\n"),
                 )
         self.assertEqual(self.launches(), [])
@@ -994,7 +1013,7 @@ class Usage(Base):
             (("--client=fake",), "--client given twice"),
             (("--out", "b.md"), "--out given twice"),
             (("--workdir", "b"), "--workdir given twice"),
-            (("--role", "dummy-tester"), "--role given twice"),
+            (("--role", "researcher"), "--role given twice"),
             (("--mode", "tui", "--mode", "headless"), "--mode given twice"),
             (("--name", "a", "--name", "b"), "--name given twice"),
         ):
@@ -1042,7 +1061,7 @@ class Usage(Base):
             (
                 "a bad tier",
                 {},
-                "[roles.dummy-tester]\ntier = 9\n",
+                "[roles.researcher]\ntier = 9\n",
                 "tier must be an integer 1–4, got 9",
             ),
             ("an unknown client", {"client": "nope"}, "", "no [clients.nope] table"),
@@ -1078,7 +1097,7 @@ class Prompt(Case):
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(self.home)
 
-    def prompt(self, *extra, role="dummy-tester", input="Hello.\n"):
+    def prompt(self, *extra, role="researcher", input="Hello.\n"):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             try:
@@ -1088,7 +1107,7 @@ class Prompt(Case):
                         "--role",
                         role,
                         "--task",
-                        "echo",
+                        "light-research",
                         "--input",
                         input,
                         "--workdir",
@@ -1107,7 +1126,7 @@ class Prompt(Case):
             local_section('[hosts]\ndefault = "missing"\n', "session"), encoding="utf-8"
         )
         composition = Composer()
-        config = composition.resolve("dummy-tester", "echo")
+        config = composition.resolve("researcher", "light-research")
         expected = composition.render(
             config, RunParams(input="Hello.\n", out=self.out, workdir=Layout(self.work).agent)
         )
@@ -1147,7 +1166,7 @@ class Prompt(Case):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
             code = cli.main(
-                ["prompt", "--role", "dummy-tester", "--input", "x"]
+                ["prompt", "--role", "researcher", "--input", "x"]
                 + ["--workdir", self.work, "--out", "-"]
             )
         self.assertEqual(
@@ -1273,7 +1292,7 @@ class Commands(Base):
         for argv, want in (
             (("bogus",), "invalid choice: 'bogus'"),
             ((), "the following arguments are required: command"),
-            (("--role", "dummy-tester", "--list"), "invalid choice: 'dummy-tester'"),
+            (("--role", "researcher", "--list"), "invalid choice: 'researcher'"),
         ):
             with self.subTest(argv=argv):
                 code, out, err = self.cli(*argv)
@@ -1541,7 +1560,7 @@ class Queries(Case):
 
 class AdhocWorkdir(Base):
     def test_dry_run_derives_workdir_from_date_role_task_and_final_sid(self):
-        for task in (None, "echo"):
+        for task in (None, "light-research"):
             for supplied in (False, True):
                 with (
                     self.subTest(task=task, supplied=supplied),
@@ -1551,7 +1570,7 @@ class AdhocWorkdir(Base):
                     code, out, err = self.cli(
                         "run",
                         "--role",
-                        "dummy-tester",
+                        "researcher",
                         "--input",
                         "hello",
                         "--client",
@@ -1562,9 +1581,9 @@ class AdhocWorkdir(Base):
                     )
                 self.assertEqual(code, 0, err)
                 shown = json.loads(out)
-                suffix = "-echo" if task else ""
+                suffix = "-light-research" if task else ""
                 expected = os.path.join(
-                    self.ensemble, "adhoc", f"2026-10-16-dummy-tester{suffix}-{SID[:8]}"
+                    self.ensemble, "adhoc", f"2026-10-16-researcher{suffix}-{SID[:8]}"
                 )
                 self.assertEqual((shown["sid"], shown["workdir"]), (SID, expected))
                 self.assertFalse(os.path.exists(expected))

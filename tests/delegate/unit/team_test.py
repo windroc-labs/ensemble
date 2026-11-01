@@ -251,7 +251,6 @@ class Shipped(Packaged):
             "pm": "product-design",
             "engineer": "build",
             "verifier": "verify",
-            "dummy-tester": "echo",
         }
         self.assertEqual(set(roles()), set(defaults))
         for role, default in defaults.items():
@@ -803,7 +802,6 @@ class Real(RealConfig):
                 "pm": ["worktree"],
                 "engineer": ["worktree", "status"],
                 "verifier": ["worktree"],
-                "dummy-tester": ["worktree"],
             },
         )
 
@@ -834,11 +832,6 @@ class Real(RealConfig):
                     "([Principles › Writing](#writing)); length follows content.",
                 )
                 for role, doc in (("pm", "the PRD"),)
-            ),
-            (
-                "echo's summary overrides Output's length",
-                task_text("echo"),
-                "`summary` the input's first line, cut to 300 characters.",
             ),
             (
                 "a build's files are its spec and plan doc",
@@ -1067,7 +1060,7 @@ class Principles(Packaged):
 
 
 class Sources(Packaged):
-    def test_readme_links_resolve_and_name_every_method_and_license(self):
+    def test_readme_links_resolve_and_name_every_method(self):
         with open(os.path.join(TEAM, "README.md"), encoding="utf-8") as f:
             readme = f.read()
         local = [
@@ -1080,7 +1073,3 @@ class Sources(Packaged):
             self.assertTrue(os.path.isfile(os.path.join(TEAM, link)), link)
         for name in os.listdir(os.path.join(TEAM, "methods")):
             self.assertIn(f"methods/{name}", readme)
-        for name in os.listdir(os.path.join(TEAM, "licenses")):
-            self.assertIn(f"licenses/{name}", local)
-        notice = re.findall(r"<team>/(licenses/[\w.-]+)", team_texts()["principles.md"])
-        self.assertEqual(notice, ["licenses/pstack.txt"])

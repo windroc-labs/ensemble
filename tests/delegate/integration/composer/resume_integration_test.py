@@ -17,8 +17,8 @@ PICK = "**Your task**: pick it from your charter's Tasks section"
 
 class NeedsInput(child.Case):
     def test_the_answer_is_the_resume_prompts_input(self):
-        first = self.compose("dummy-tester")["prompt"]
-        second = self.compose("dummy-tester", input=ANSWER, resume=True)["prompt"]
+        first = self.compose("researcher")["prompt"]
+        second = self.compose("researcher", input=ANSWER, resume=True)["prompt"]
         self.assertFalse(first.startswith(RESUME), "the first prompt")
         self.assertTrue(second.startswith(RESUME), "the resume prompt")
         self.assertTrue(second.endswith(f"\n# Input\n\n{ANSWER}\n"), "the answer as the input")
@@ -57,7 +57,7 @@ class Draft(child.Case):
     def test_a_new_run_and_its_resume_name_the_same_deliverable_file(self):
         for resume in (False, True):
             with self.subTest(resume=resume):
-                prompt = self.compose("dummy-tester", resume=resume)["prompt"]
+                prompt = self.compose("researcher", resume=resume)["prompt"]
                 self.assertIn(f"\n- `<Workdir>`: `{self.work}`\n", prompt)
                 self.assertIn(
                     (

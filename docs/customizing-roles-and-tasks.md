@@ -71,7 +71,7 @@ Pick the task below that fits the input; unsure → `review` (`<tasks>/review.md
 
 ### Task file: `tasks/<task>.md`
 
-It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what to report>` line and a `## Resume` section, outside code fences. The smallest built-in example: `src/ensemble/delegate/team/tasks/echo.md`.
+It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what to report>` line and a `## Resume` section, outside code fences. The smallest built-in example: `src/ensemble/delegate/team/tasks/light-research.md`.
 
 ## Run and check
 

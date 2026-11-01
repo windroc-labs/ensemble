@@ -18,7 +18,7 @@ from tests.session import fake_client
 from tests.utils.case import local_section
 from tests.utils.jsonl import read_jsonl
 
-TUI = "dummy-tester-11111111"
+TUI = "researcher-11111111"
 HARNESS = f"{TUI}-drive"
 
 KEYS = {
@@ -44,7 +44,6 @@ HEADS = [
     "pm  local  built-in",
     "engineer  pull-request  built-in",
     "verifier  github  built-in",
-    "dummy-tester  local  built-in",
 ]
 
 
@@ -148,8 +147,8 @@ class Base(RunReads, FakeClientCase):
     def runs(
         self,
         *extra,
-        role="dummy-tester",
-        task="echo",
+        role="researcher",
+        task="light-research",
         input="Hello.",
         client="fake",
         stdin="",

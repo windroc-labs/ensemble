@@ -87,7 +87,7 @@ Delete the PEM after import. [Credential rotation](docs/upgrading.md#credential-
 For one task in your installed client's conversation:
 
 ```text
-/ensemble:act-as dummy-tester:echo hello
+/ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
 For a crew, open a commander shell and start your client:

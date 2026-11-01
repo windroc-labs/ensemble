@@ -48,7 +48,7 @@ COMMAND_DOCS = (f"src/{PKG}/delegate/team/",)
 PYTHON_CODE_ALLOWED = {
     (
         "tests/delegate/integration/child_env_integration_test.py",
-        "118b630ac258347793732e1124cc9ae51b0aba0fd29877ba2917e9a82d2cb6e0",
+        "b85585e1f858dc40f456659694ade2800943163db2e71e6c3804fa0fcf16a321",
     ): "Harness PYTHONPATH and composer access env under a source vs installed layout need a fresh interpreter with HarnessCase's FakeControl drive, patched only in-process.",
     (
         "tests/delegate/integration/composer/child.py",
@@ -56,15 +56,15 @@ PYTHON_CODE_ALLOWED = {
     ): "Composer access/render/check_team_dirs (ensemble.delegate.composer, not re-exported) in a fresh -P -S interpreter on the src roots, asserting its modules load from this tree and no team tools/ module is imported.",
     (
         "tests/delegate/integration/harness_contract_integration_test.py",
-        "59fe3b8a4b565bc2929dcc4ca9a08aab98884f0813693836ebb2241fd595bb17",
+        "8794ebc5222b2b8fa6532c508e68b4a1abe04bc31795f0575bd5a06a1b6482e3",
     ): "The contract's class-method test calls HarnessDelegate.usage without session_cls, which configures the process-global Session from config; tests may not patch HostedSession._setup, so only a fresh interpreter keeps that out of the test process.",
     (
         "tests/delegate/integration/harness_integration_test.py",
-        "18f10c6337d4fdd297ccadc7943384323e8832b3ecc0552fa1d5dee70c7ef775",
+        "022632d0814a59f26d0f8bed05260476f437af148fc0a1f21ac3abeee6a04155",
     ): "HarnessDelegate.usage with its default session_cls configures the process-global Session and loads UsageClient through it; no public fresh session class exists and tests may not configure or patch the shared Session in-process.",
     (
         "tests/delegate/integration/harness_integration_test.py",
-        "6388d395c30e89fdf22436b81638660fae74038141f6087419c4edfa2dd7b654",
+        "46b8ec8ae6df3a3d2489099a82ac08f41ad27ec2146be5a2e4938ace8cf13632",
     ): "Two-process detach race needs DrivenDelegate's disk-backed FakeControl drive and PersistentSession's Hosts, injectable only as a session_cls class object.",
     (
         "tests/delegate/integration/harness_integration_test.py",
@@ -72,7 +72,7 @@ PYTHON_CODE_ALLOWED = {
     ): "Two-process resume race needs DrivenDelegate's disk-backed FakeControl drive.",
     (
         "tests/delegate/integration/harness_owner_integration_test.py",
-        "a1c12b66651799dd60cf58c932a8e2be8f34089ecfb19bcef946f5b3b037c32f",
+        "41184d219b3b056d6a162347262b987e9760d7efea0bd1af2ee4b6dad933140c",
     ): "Foreground owner process needs the scripted process-free HarnessSession (tests.delegate), injectable only as a session_cls class object.",
 }
 
@@ -84,19 +84,19 @@ EMBEDDED_PROGRAMS_ALLOWED = {
     ): "Existing callback recorder fixture delays a child to observe callback ordering.",
     (
         "tests/delegate/integration/child_env_integration_test.py",
-        "118b630ac258347793732e1124cc9ae51b0aba0fd29877ba2917e9a82d2cb6e0",
+        "b85585e1f858dc40f456659694ade2800943163db2e71e6c3804fa0fcf16a321",
     ): "Existing environment fixture captures client launch environments from a separate caller process.",
     (
         "tests/delegate/integration/harness_contract_integration_test.py",
-        "59fe3b8a4b565bc2929dcc4ca9a08aab98884f0813693836ebb2241fd595bb17",
+        "8794ebc5222b2b8fa6532c508e68b4a1abe04bc31795f0575bd5a06a1b6482e3",
     ): "Existing process fixture checks class methods answer for its roles and refuse an unknown one.",
     (
         "tests/delegate/integration/harness_integration_test.py",
-        "18f10c6337d4fdd297ccadc7943384323e8832b3ecc0552fa1d5dee70c7ef775",
+        "022632d0814a59f26d0f8bed05260476f437af148fc0a1f21ac3abeee6a04155",
     ): "Existing process fixture checks role client usage preserves sentinel identity and none without starting.",
     (
         "tests/delegate/integration/harness_integration_test.py",
-        "6388d395c30e89fdf22436b81638660fae74038141f6087419c4edfa2dd7b654",
+        "46b8ec8ae6df3a3d2489099a82ac08f41ad27ec2146be5a2e4938ace8cf13632",
     ): "Existing process fixture checks two processes launch one harness.",
     (
         "tests/delegate/integration/harness_integration_test.py",
@@ -104,6 +104,6 @@ EMBEDDED_PROGRAMS_ALLOWED = {
     ): "Existing process fixture checks two processes resume once and return the same record.",
     (
         "tests/delegate/integration/harness_owner_integration_test.py",
-        "a1c12b66651799dd60cf58c932a8e2be8f34089ecfb19bcef946f5b3b037c32f",
+        "41184d219b3b056d6a162347262b987e9760d7efea0bd1af2ee4b6dad933140c",
     ): "Existing harness ownership fixture starts an independent owner process for recovery checks.",
 }

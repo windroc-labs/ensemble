@@ -42,7 +42,7 @@ from tests.delegate.unit.runs import DONE, GAVE_UP, START
 from tests.utils.jsonl import read_jsonl
 
 NEEDS = {**DONE, "status": "needs_input", "questions": ["Which?"], "deliverable": ""}
-NAME = f"dummy-tester-{SID[:8]}"
+NAME = f"researcher-{SID[:8]}"
 IDLE = 600.0
 
 
@@ -141,7 +141,7 @@ class HandlerCase(HarnessCase):
     def setUp(self):
         super().setUp()
         self.events = os.path.join(self.home, "events.log")
-        spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
+        spec = Spec("input", self.work, task="light-research", sid=SID, client="fake", mode="tui")
         AgentSession.agent = AgentSession.refusal = AgentSession.attaching = None
         self.delegate = self.make(
             spec=replace(spec, events=self.events), callback=("callback",), session_cls=AgentSession

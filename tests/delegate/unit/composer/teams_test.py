@@ -199,9 +199,7 @@ class Catalog(Fake):
 
     def test_the_defaults_are_the_real_team_root_and_config(self):
         self.assertEqual(team().root, TEAM)
-        self.assertEqual(
-            list(catalog()), ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
-        )
+        self.assertEqual(list(catalog()), ["researcher", "pm", "engineer", "verifier"])
         self.assertEqual(list(index("researcher")), ["deep-research", "research", "light-research"])
 
 

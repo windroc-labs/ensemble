@@ -29,7 +29,7 @@ from tests.utils.sandbox import pid_exists as running
 from tests.utils.sandbox import scratch
 
 MANAGER = "mgr"
-ROLE = "dummy-tester"
+ROLE = "researcher"
 TUI = f"{ROLE}-{SID[:8]}"
 DRIVE = f"{TUI}-drive"
 HARNESS_ARGV = ("-m", "ensemble.delegate.engine.harness")

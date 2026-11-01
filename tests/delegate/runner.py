@@ -72,8 +72,8 @@ def executed(
 
 
 class Base(RunReads, FakeClientCase):
-    """dummy-tester's echo over the fake client in workdir `work` (not made), out `out`, the cwd
-    its agent dir; `channel` its run.jsonl.
+    """researcher's light-research over the fake client in workdir `work` (not made), out `out`,
+    the cwd its agent dir; `channel` its run.jsonl.
     """
 
     def setUp(self):
@@ -104,7 +104,7 @@ class Base(RunReads, FakeClientCase):
                 f,
             )
         composition = Composer()
-        config = composition.resolve("dummy-tester")
+        config = composition.resolve("researcher")
         config = replace(config, output=output) if output else config
         self.events, err = [], io.StringIO()
 
@@ -124,7 +124,7 @@ class Base(RunReads, FakeClientCase):
             with redirect_stderr(err):
                 return executed(
                     config,
-                    Spec(kw.pop("input"), self.work, task="echo", **kw),
+                    Spec(kw.pop("input"), self.work, task="light-research", **kw),
                     on_event=on,
                     driver=self.driver,
                     composition=composition,

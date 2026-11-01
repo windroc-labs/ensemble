@@ -20,7 +20,7 @@ from tests.session import harnesses
 from tests.utils.case import local_section
 from tests.utils.sandbox import scratch
 
-ROLES = ("researcher", "pm", "engineer", "verifier", "dummy-tester")
+ROLES = ("researcher", "pm", "engineer", "verifier")
 INPUT = "Compare A and B."
 ENSEMBLE = re.compile(r"python3 -P (?:-m ensemble\.[\w.]+|<team>/tools/[\w-]+\.py) \w+")
 REPO = "python3 -P <team>/tools/repo.py"

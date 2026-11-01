@@ -884,7 +884,7 @@ class TeamDirs(Fake):
 
 class Acceptance(Packaged):
     def test_every_role_and_task_composes_with_no_reference_error(self):
-        self.assertEqual(roles(), ["researcher", "pm", "engineer", "verifier", "dummy-tester"])
+        self.assertEqual(roles(), ["researcher", "pm", "engineer", "verifier"])
         for role, task in runs():
             with self.subTest(role=role, task=task):
                 self.assertEqual(reference_errors(*role_sources(role, task)), [])

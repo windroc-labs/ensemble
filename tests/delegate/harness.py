@@ -57,7 +57,7 @@ class HarnessCase(Case):
                 f'[delegate]\nlanguage = "{language}"\n'
                 f"team_dirs = {json.dumps(list(team_dirs))}\n"
                 f"trusted_dirs = {json.dumps(list(trusted_dirs))}\n"
-                f'[delegate.roles.dummy-tester]\nclient = "{client}"\n'
+                f'[delegate.roles.researcher]\nclient = "{client}"\n'
                 + local_section(VERIFIER, "delegate")
                 + f'[session.hosts]\ndefault = "{default}"\n'
                 "[session.clients.fake]\n"
@@ -69,10 +69,10 @@ class HarnessCase(Case):
                     'implementation = "tests.delegate.fakes.harness_session:RecordingHost"\n'
                 )
 
-    def make(self, *, role="dummy-tester", spec=None, session_cls=HarnessSession, **kw):
+    def make(self, *, role="researcher", spec=None, session_cls=HarnessSession, **kw):
         kw.setdefault("viewer", FakeViewer())
         spec = spec or Spec(
-            "Hello.\nLiteral input.", self.work, task="echo", sid=SID, client="fake"
+            "Hello.\nLiteral input.", self.work, task="light-research", sid=SID, client="fake"
         )
         return DrivenDelegate(role, spec, session_cls=session_cls, **kw)
 

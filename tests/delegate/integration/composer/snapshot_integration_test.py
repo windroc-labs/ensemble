@@ -20,16 +20,15 @@ class ConfigSnapshot(Case):
         second = Composer()
         params = RunParams(input="Echo.", out="/corpus/work/out.md", workdir="/corpus/work")
         with mock.patch("tomllib.load", side_effect=AssertionError("configuration reread")):
-            self.assertEqual(first.resolve("dummy-tester").language, "First")
-            self.assertEqual(second.resolve("dummy-tester").language, "Second")
+            self.assertEqual(first.resolve("researcher").language, "First")
+            self.assertEqual(second.resolve("researcher").language, "Second")
             self.assertEqual(first.trusted_dirs(), frozenset({"/first"}))
             self.assertEqual(second.trusted_dirs(), frozenset({"/second"}))
-            self.assertEqual(
-                list(first.index()), ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
+            self.assertEqual(list(first.index()), ["researcher", "pm", "engineer", "verifier"])
+            self.assertIn(
+                "are in First", first.render(first.resolve("researcher", "light-research"), params)
             )
             self.assertIn(
-                "are in First", first.render(first.resolve("dummy-tester", "echo"), params)
-            )
-            self.assertIn(
-                "are in Second", second.render(second.resolve("dummy-tester", "echo"), params)
+                "are in Second",
+                second.render(second.resolve("researcher", "light-research"), params),
             )

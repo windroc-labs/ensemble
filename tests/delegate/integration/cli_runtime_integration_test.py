@@ -128,7 +128,9 @@ class Input(Base):
                 inputs = [r["text"] for r in self.records() if r["kind"] == "input"]
                 prompt = self.launches()[-1]["argv"][-1]
                 self.assertEqual(inputs[-1], want)
-                self.assertTrue(prompt.endswith(f"\n# Input\n\n{want.strip()}\n"), prompt[-100:])
+                self.assertTrue(
+                    prompt.endswith(f"\n# Input\n\n{want.strip()}\n\n\nFAKE NOTE"), prompt[-100:]
+                )
                 self.assertNotIn("SECRET", prompt)
 
 
@@ -136,7 +138,7 @@ class DryRun(Base):
     def test_the_client_defaults_to_the_roles_in_the_config(self):
         code, out, _ = self.runs("--dry-run", client=None)
         self.assertEqual(
-            (code, json.loads(out)["client"]), (0, Composer().resolve("dummy-tester").client)
+            (code, json.loads(out)["client"]), (0, Composer().resolve("researcher").client)
         )
         self.local('client = "fake"\n')
         code, _, err = self.runs(client=None)

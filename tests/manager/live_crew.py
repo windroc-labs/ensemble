@@ -19,7 +19,7 @@ from tests.session.live_tmux import MANAGER, logged
 from tests.utils.sandbox import scratch
 
 OTHER = "mgr2"
-ROLE = "dummy-tester"
+ROLE = "researcher"
 TIMEOUT = 90
 CREW = (*PY, "-m", "ensemble.manager.cli")
 BIN = os.path.join(REPO, "bin")

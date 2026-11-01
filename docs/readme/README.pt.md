@@ -87,7 +87,7 @@ Exclua o PEM após a importação. A [rotação de credenciais](../upgrading.md#
 Para uma única tarefa, na conversa do cliente instalado:
 
 ```text
-/ensemble:act-as dummy-tester:echo hello
+/ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
 Para uma equipe, abra um shell de comandante e inicie seu cliente:

@@ -39,7 +39,7 @@ with layout:
     (launch,) = harness_launches()
     harness_env = {key: value for key, value in launch["env"].items() if key == "PYTHONPATH"}
     composer = delegate.composer
-    base = composer.resolve("dummy-tester", "echo")
+    base = composer.resolve("researcher", "light-research")
     access = {}
     for label, commands, gate in (
         ("commands", ["command"], ""),
