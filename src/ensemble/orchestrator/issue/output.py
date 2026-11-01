@@ -1,7 +1,5 @@
-"""The issue command's output rules: stdout holds one JSON object of at most LIMIT UTF-8 bytes, a
-write's receipt at most RECEIPT; diagnostics go to stderr, as bounded; exit OK, FAILED (the tracker
-failed, a write's result is unknown, a refusal, or create's relations partly failed, its report on
-stdout) or USAGE (usage, configuration or an unresolved reference).
+"""Issue command output: one JSON object on stdout within LIMIT bytes (a receipt: RECEIPT),
+bounded stderr, exit OK, FAILED or USAGE.
 """
 
 import contextlib
@@ -55,16 +53,14 @@ REFS = frozenset(
 
 
 def encode(payload):
-    # backslashreplace: a lone surrogate becomes its JSON escape
+    # a lone surrogate becomes its escape
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return text.encode("utf-8", "backslashreplace") + b"\n"
 
 
 def fit(payload, tiers, texts, follow):
-    """payload encoded within LIMIT: drop the last item of its largest list in the first of tiers
-    (tuples of list fields) with one not empty, then halve its longest text at a dotted path in
-    texts, naming each cut in truncated, until it fits; continue is follow once anything is
-    truncated, absent when follow is None.
+    """payload encoded within LIMIT: drop list items by tiers, then halve texts' longest, each cut
+    named in truncated; continue is follow once anything is cut.
     """
     payload = copy.deepcopy(payload)
     payload.setdefault("truncated", [])
@@ -92,7 +88,7 @@ def fit(payload, tiers, texts, follow):
 
 
 def _gone(marker, field, kept):
-    # a marker inside an item fit dropped, such as comments.4.body once 4 comments remain
+    # comments.4.body once 4 comments remain
     parts = marker.split(".")
     return len(parts) > 2 and parts[0] == field and parts[1].isdigit() and int(parts[1]) >= kept
 
@@ -110,10 +106,8 @@ def _text(payload, path):
 
 
 def fit_page(rows, cursor):
-    """A page's rows [(item, cut fields, cursor), …] and the cursor after it (None: last page) as
-    {items, has_next_page, next_cursor, truncated} within LIMIT: trailing items drop, next_cursor
-    then following the last kept one; a lone item's longest text other than a reference halves;
-    each cut is items.<n>.<field>.
+    """rows [(item, cut fields, cursor), …] as a page within LIMIT: trailing items drop, else a
+    lone item's longest non-reference text halves; each cut is items.<n>.<field>.
     """
     items = [copy.deepcopy(item) for item, _, _ in rows]
     cut = [f"items.{n}.{field}" for n, (_, fields, _) in enumerate(rows) for field in fields]
@@ -138,7 +132,7 @@ def fit_page(rows, cursor):
 
 
 def _texts(node, path):
-    # (path, text) of each non-empty string in node but a reference
+    # (path, text) of non-empty strings but references
     pairs = node.items() if isinstance(node, dict) else enumerate(node)
     for key, value in pairs:
         if isinstance(value, (dict, list)):
@@ -148,8 +142,8 @@ def _texts(node, path):
 
 
 def write_full(path, payload):
-    """payload as normalized JSON in path, its missing directories created, through a temp file
-    renamed over it; its absolute path.
+    """payload as normalized JSON in path, its directories created, written atomically; its
+    absolute path.
     """
     path = os.path.abspath(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -188,7 +182,7 @@ def receipt_payload(r: Receipt):
 
 
 def partial_report(e: RelationsFailed):
-    """create's receipt, partial: the relations done, failed (error cut) and recover commands."""
+    """create's partial receipt: relations done, failed and recover commands."""
     failed = [{b.direction: b.other, "error": error[:ERROR_CHARS]} for b, error in e.failed]
     return {
         **receipt_payload(e.receipt),
@@ -213,7 +207,7 @@ def partial_message(e: RelationsFailed):
 
 
 def receipt(payload):
-    """payload encoded within RECEIPT, its actor's name halved until it fits."""
+    """payload within RECEIPT, the actor's name halved to fit."""
     actor = payload["actor"]
     while len(data := encode(payload)) > RECEIPT and actor["name"]:
         actor["name"] = actor["name"][: len(actor["name"]) // 2]
@@ -221,7 +215,7 @@ def receipt(payload):
 
 
 def compact(full):
-    """full cut to the default limits; truncated names each cut field, or one with more pages."""
+    """full cut to the default limits, each cut named in truncated."""
     out, pages, cuts = dict(full), set(full["truncated"]), []
     if full["description"] is not None and len(full["description"]) > DESCRIPTION_CHARS:
         out["description"] = full["description"][:DESCRIPTION_CHARS]
@@ -244,7 +238,7 @@ def compact(full):
 
 
 def dry_run(plan):
-    """What archive would do, with the descendants it would archive and the unfinished issues."""
+    """archive's plan: descendants and unfinished issues."""
     return {
         "issue": {"id": plan.key, "identifier": plan.ident, "url": plan.url},
         "operation": "archive",
@@ -262,7 +256,7 @@ def _item(sub):
 
 
 def refusal(ident, plan):
-    """archive's refusal of ident: the unfinished issues of plan, the first SHOWN by name."""
+    """archive's refusal: plan's unfinished issues, the first SHOWN named."""
     unfinished = plan.unfinished
     shown = ", ".join(f"{s.ident} ({s.state})" for s in unfinished[:SHOWN])
     more = f" and {len(unfinished) - SHOWN} more" if len(unfinished) > SHOWN else ""
