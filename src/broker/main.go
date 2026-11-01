@@ -27,7 +27,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude [NAME] | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | (login claude, opencode and env also take --expires YYYY-MM-DD; claude --issued YYYY-MM-DD or --fresh-token instead) | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] [--delivered KEY]... | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -50,7 +50,7 @@ type app struct {
 	status        func(ctx context.Context, k keys) (any, error)
 	probeOpencode func(ctx context.Context, k keys, provider, base string) (any, error)
 	workspaceRm   func(ctx context.Context, k keys, volume string, force bool) (any, error)
-	login         func(k keys, account string, out io.Writer) error                                // login claude [NAME]
+	login         func(k keys, account string, out io.Writer) error                                // login claude NAME
 	loginGitHub   func(ctx context.Context, k keys, app string, key *keyFile, out io.Writer) error // key: nil without --key-file
 	loginCodex    func(ctx context.Context, k keys, out io.Writer) error
 	loginOpencode func(k keys, provider, authFile string, out io.Writer) error
@@ -205,8 +205,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 			case args[0] != "login":
 			case len(args) == 2 && args[1] == "codex":
 				login = func(k keys) error { return a.loginCodex(ctx, k, stdout) }
-			case len(args) == 2 && args[1] == "claude":
-				login = func(k keys) error { return a.login(k, launcher.DefaultClaudeAccount, stdout) }
 			case len(args) == 3 && args[1] == "claude" && launcher.ValidClaudeAccount(args[2]):
 				login = func(k keys) error { return a.login(k, args[2], stdout) }
 			case len(args) == 3 && args[1] == "github" && args[2] == broker.AppKeyService:

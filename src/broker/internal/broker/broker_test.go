@@ -239,7 +239,7 @@ func TestLoginTrustsOnlyBroker(t *testing.T) {
 			continue
 		}
 		if err == nil || !strings.Contains(err.Error(), "keychain item ensemble-broker-claude") || !strings.Contains(err.Error(), tc.fails) ||
-			!strings.HasSuffix(err.Error(), "rerun ensemble-broker login claude to finish") || k.gets != 0 {
+			!strings.HasSuffix(err.Error(), "rerun ensemble-broker login claude default to finish") || k.gets != 0 {
 			t.Fatalf("%s: %v, reads %d", name, err, k.gets)
 		}
 	}
@@ -256,10 +256,10 @@ func TestLoginNeedsDialog(t *testing.T) {
 		fails     string
 	}{
 		"always allowed": {getErrs: []error{ErrNeedsDialog}, dialog: true},
-		"allowed once":   {getErrs: []error{ErrNeedsDialog, ErrNeedsDialog}, dialog: true, fails: "keychain item ensemble-broker-claude default still needs a keychain dialog: click Always Allow, not Allow; rerun ensemble-broker login claude"},
-		"denied":         {getErrs: []error{ErrNeedsDialog}, dialogErr: errors.New("keychain status -128"), dialog: true, fails: "keychain item ensemble-broker-claude default: reading it failed: keychain status -128; rerun ensemble-broker login claude"},
-		"other bytes":    {readBack: "sk-ant-other", fails: "keychain item ensemble-broker-claude default: reading it failed: it holds other bytes; rerun ensemble-broker login claude"},
-		"read error":     {getErrs: []error{errors.New("keychain status -25300")}, fails: "keychain item ensemble-broker-claude default: reading it failed: keychain status -25300; rerun ensemble-broker login claude"},
+		"allowed once":   {getErrs: []error{ErrNeedsDialog, ErrNeedsDialog}, dialog: true, fails: "keychain item ensemble-broker-claude default still needs a keychain dialog: click Always Allow, not Allow; rerun ensemble-broker login claude default"},
+		"denied":         {getErrs: []error{ErrNeedsDialog}, dialogErr: errors.New("keychain status -128"), dialog: true, fails: "keychain item ensemble-broker-claude default: reading it failed: keychain status -128; rerun ensemble-broker login claude default"},
+		"other bytes":    {readBack: "sk-ant-other", fails: "keychain item ensemble-broker-claude default: reading it failed: it holds other bytes; rerun ensemble-broker login claude default"},
+		"read error":     {getErrs: []error{errors.New("keychain status -25300")}, fails: "keychain item ensemble-broker-claude default: reading it failed: keychain status -25300; rerun ensemble-broker login claude default"},
 	} {
 		k := &fakeKeychain{getErrs: tc.getErrs, dialogErr: tc.dialogErr}
 		if tc.readBack != "" {
@@ -328,7 +328,7 @@ func TestLoginAccounts(t *testing.T) {
 }
 
 func TestClaudeLogin(t *testing.T) {
-	if got := ClaudeLogin("default"); got != "ensemble-broker login claude" {
+	if got := ClaudeLogin("default"); got != "ensemble-broker login claude default" {
 		t.Fatal(got)
 	}
 	if got := ClaudeLogin("work"); got != "ensemble-broker login claude work" {

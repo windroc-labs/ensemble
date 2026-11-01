@@ -57,7 +57,7 @@ func TestNoticesThirtyDays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude --fresh-token; running sessions keep their copy until they restart"
+	want := "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude default --fresh-token; running sessions keep their copy until they restart"
 	if len(got.Notices) != 1 || got.Notices[0].Key != "ensemble-broker-claude/default@1:30d" || got.Notices[0].Text != want {
 		t.Fatalf("%+v", got)
 	}

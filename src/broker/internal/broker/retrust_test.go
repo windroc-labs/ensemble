@@ -313,7 +313,7 @@ func TestRetrustRejectsTeamPartition(t *testing.T) {
 	k := newRetrustKeychain(map[string]*AppAccess{tokenService + "/default": a})
 	p := &countingPassword{}
 	notice, _, err := retrust(k, p)
-	if err != nil || p.calls != 0 || len(k.steps) != 0 || !strings.Contains(notice, `"ensemble-broker-claude" "default" left unchanged: it trusts another application; run ensemble-broker login claude`) {
+	if err != nil || p.calls != 0 || len(k.steps) != 0 || !strings.Contains(notice, `"ensemble-broker-claude" "default" left unchanged: it trusts another application; run ensemble-broker login claude default`) {
 		t.Fatalf("%v asked %d steps %q notice %q", err, p.calls, k.steps, notice)
 	}
 }
@@ -335,7 +335,7 @@ func TestRetrustLeavesForeignItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`"ensemble-broker-claude" "default" left unchanged: it trusts another application; run ensemble-broker login claude` + "\n",
+		`"ensemble-broker-claude" "default" left unchanged: it trusts another application; run ensemble-broker login claude default` + "\n",
 		`"ensemble-broker-codex" "auth" left unchanged: it trusts another application; run ` + codexLoginCommand + "\n",
 		`"ensemble-broker-bot" "1" left unchanged: it trusts another application; run ensemble-broker login github ensemble-broker-bot` + "\n",
 		`"ensemble-broker-opencode" "strata" left unchanged: it trusts another application; run ensemble-broker login opencode strata` + "\n",

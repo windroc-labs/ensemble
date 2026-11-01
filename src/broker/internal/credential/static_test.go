@@ -77,7 +77,7 @@ func TestStaticRefAndLogin(t *testing.T) {
 		name, ref string
 		login     string
 	}{
-		{Claude, "default", "ensemble-broker-claude/default", "ensemble-broker login claude"},
+		{Claude, "default", "ensemble-broker-claude/default", "ensemble-broker login claude default"},
 		{Claude, "work", "ensemble-broker-claude/work", "ensemble-broker login claude work"},
 		{Opencode, "strata", "ensemble-broker-opencode/strata", "ensemble-broker login opencode strata"},
 		{Env, "db", "ensemble-broker-env/db", "ensemble-broker login env db"},
@@ -219,7 +219,7 @@ func TestText(t *testing.T) {
 		at             time.Time
 		want           string
 	}{
-		{"ensemble-broker-claude/default", "30d", staticNow, "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude --fresh-token; running sessions keep their copy until they restart"},
+		{"ensemble-broker-claude/default", "30d", staticNow, "ensemble-broker-claude/default expires 2026-11-15 (explicit), in 20 days: run claude setup-token, then ensemble-broker login claude default --fresh-token; running sessions keep their copy until they restart"},
 		{"ensemble-broker-claude/work", "1d", time.Date(2026, 11, 14, 13, 0, 0, 0, time.UTC), "ensemble-broker-claude/work expires 2026-11-15 (explicit), in 1 day: run claude setup-token, then ensemble-broker login claude work --fresh-token; running sessions keep their copy until they restart"},
 		{"ensemble-broker-opencode/strata", "expired", time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC), "ensemble-broker-opencode/strata expired 2026-11-15 (explicit): issue a new key, then ensemble-broker login opencode strata --expires <date>; new starts are refused until then"},
 		{"ensemble-broker-env/db", "7d", time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), "ensemble-broker-env/db expires 2026-11-15 (explicit), in 6 days: rotate it at its source, then ensemble-broker login env db [--expires <date>]; running sessions keep their copy until they restart"},

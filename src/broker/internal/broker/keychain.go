@@ -351,7 +351,7 @@ func erase(b []byte) {
 	}
 }
 
-// ClaudeLogin is the command that logs account in: login claude, NAME only for an account other than the default.
+// ClaudeLogin is the command that logs account in: login claude NAME.
 func ClaudeLogin(account string) string {
 	return credential.LoginCommand(credential.StaticRef(credential.Claude, account))
 }
