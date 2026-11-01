@@ -66,8 +66,8 @@ Environment credentials are declared in delegate environment `credentials` table
 selected declaration once; it and Session carry that JSON text separately from the caller's credential text.
 The broker alone validates both declarations and merges their kinds, with the caller's whole value winning.
 The merged `env` list supplies only `ensemble-broker-env/*` items, at `/run/ensemble/secrets/env/<file>`;
-without `env`, no environment secret is delivered. These static copies use the broker's existing expiry
-checks, notices and audit. Session saves both declarations on the host for resume/reopen; later configuration
+without `env`, no environment secret is delivered. The broker audits their injection and withdrawal.
+Session saves both declarations on the host for resume/reopen; later configuration
 changes affect new runs. The removed environment and manifest `secrets` fields have no compatibility path.
 
 GitHub container tokens use the same merged request, with a `github` declaration (`app`, `permissions`); its token

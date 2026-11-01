@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"ensemble/broker/internal/broker"
+	"ensemble/broker/internal/launcher"
 	"ensemble/broker/internal/protocol"
 )
 
@@ -39,40 +44,137 @@ func TestCommandsIgnoreOldStaticFiles(t *testing.T) {
 			if state == "corrupt" {
 				content = `{"secrets":`
 			}
+			files := []string{
+				filepath.Join(home, ".ensemble/docker/static-secrets.json"),
+				filepath.Join(home, ".ensemble/docker/static-secrets.lock"),
+				filepath.Join(home, ".ensemble/docker-state/worker_1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.static.json"),
+			}
 			if state != "missing" {
-				staticFile(t, home, content)
+				for _, path := range files {
+					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			var calls []call
 			a := recording(&calls)
+			a.keychain = func(bool) (keys, error) { return keys{Home: home}, nil }
 			a.legacy = func() ([]string, error) { return legacyState(legacyKeys{}) }
-			logins := 0
-			a.login = func(keys, string, io.Writer) error { logins++; return nil }
-			a.loginOpencode = func(keys, string, string, io.Writer) error { logins++; return nil }
-			a.loginEnv = func(keys, string, io.Writer) error { logins++; return nil }
-			for _, args := range [][]string{
-				{"login", "claude", "work"}, {"login", "opencode", "lan"}, {"login", "env", "build-key"},
-				{"status"}, {"start", "--manifest", "/tmp/m.json"},
-				{"maintain", "--container", "ensemble-w1-" + strings.Repeat("a", 32), "--manifest", "/tmp/m.json"},
+			stored := memoryKeychain{}
+			checkHome := func(k keys) {
+				if k.Home != home {
+					t.Fatalf("wrong command home: %q", k.Home)
+				}
+			}
+			read := func(value string) func() ([]byte, error) {
+				return func() ([]byte, error) { return []byte(value), nil }
+			}
+			password := func() ([]byte, error) { t.Fatal("trusted fake requested password"); return nil, nil }
+			a.login = func(k keys, account string, out io.Writer) error {
+				checkHome(k)
+				return broker.Login(account, read("claude-fixture"), password, stored, io.Discard, out)
+			}
+			a.loginOpencode = func(k keys, provider, _ string, out io.Writer) error {
+				checkHome(k)
+				return broker.LoginOpencode(provider, read("opencode-fixture"), password, stored, out)
+			}
+			a.loginEnv = func(k keys, name string, out io.Writer) error {
+				checkHome(k)
+				return broker.LoginEnv(name, read("env-fixture"), password, stored, out)
+			}
+			a.status = func(_ context.Context, k keys) (any, error) {
+				checkHome(k)
+				accounts, err := stored.Accounts("ensemble-broker-claude")
+				return launcher.Status(accounts, broker.Credentials{Keychain: stored}.Usable), err
+			}
+			for _, tc := range []struct {
+				args []string
+				want string
+			}{
+				{[]string{"login", "claude", "work"}, "Claude account work setup-token saved; keychain trusts only the broker\n"},
+				{[]string{"login", "opencode", "lan"}, "OpenCode provider lan API key saved; keychain trusts only the broker\n"},
+				{[]string{"login", "env", "build-key"}, "Environment secret ensemble-broker-env/build-key saved; keychain trusts only the broker\n"},
+				{[]string{"status"}, "{\"claude\":{\"work\":true}}\n"},
+				{[]string{"start", "--manifest", "/tmp/m.json"}, "{\"ok\":\"start\"}\n"},
+				{[]string{"maintain", "--container", "ensemble-w1-" + strings.Repeat("a", 32), "--manifest", "/tmp/m.json"}, "{\"ok\":\"maintain\"}\n"},
 			} {
-				if code, _, errOut := invoke(a, args...); code != 0 {
-					t.Fatalf("%q: code=%d stderr=%s", args, code, errOut)
+				if code, out, errOut := invoke(a, tc.args...); code != 0 || out != tc.want || errOut != "" {
+					t.Fatalf("%q: code=%d stdout=%q stderr=%q", tc.args, code, out, errOut)
 				}
 			}
-			if logins != 3 || len(calls) != 3 {
-				t.Fatalf("logins=%d calls=%v", logins, calls)
+			if len(calls) != 2 || len(stored) != 3 || string(stored["ensemble-broker-claude/work"]) != "claude-fixture" ||
+				string(stored["ensemble-broker-opencode/lan"]) != "opencode-fixture" ||
+				string(stored["ensemble-broker-env/build-key/build-key"]) != "env-fixture" {
+				t.Fatalf("wrong key references or command calls: %v", calls)
 			}
-			path := filepath.Join(home, ".ensemble/docker/static-secrets.json")
-			data, err := os.ReadFile(path)
-			if state == "missing" {
-				if !os.IsNotExist(err) {
-					t.Fatalf("old file created: %q %v", data, err)
+			for _, path := range files {
+				data, err := os.ReadFile(path)
+				if state == "missing" {
+					if !os.IsNotExist(err) {
+						t.Fatalf("old file created: %s %v", path, err)
+					}
+				} else if err != nil || string(data) != content {
+					t.Fatalf("old file changed: %s %v", path, err)
 				}
-			} else if err != nil || string(data) != content {
-				t.Fatalf("old file changed: %q %v", data, err)
-			}
-			if _, err := os.Lstat(filepath.Join(home, ".ensemble/docker/static-secrets.lock")); !os.IsNotExist(err) {
-				t.Fatalf("static lock created: %v", err)
 			}
 		})
 	}
+}
+
+type memoryKeychain map[string][]byte
+
+func (k memoryKeychain) Secret(service, account string) ([]byte, error) {
+	value, ok := k[service+"/"+account]
+	if !ok {
+		return nil, broker.ErrNotFound
+	}
+	return slices.Clone(value), nil
+}
+func (k memoryKeychain) PutSecret(service, account string, value []byte) error {
+	k[service+"/"+account] = slices.Clone(value)
+	return nil
+}
+func (k memoryKeychain) DeleteSecret(service, account string) error {
+	delete(k, service+"/"+account)
+	return nil
+}
+func (k memoryKeychain) Get(account string) ([]byte, error) {
+	return k.Secret("ensemble-broker-claude", account)
+}
+func (k memoryKeychain) Put(account string, value []byte) error {
+	return k.PutSecret("ensemble-broker-claude", account, value)
+}
+func (memoryKeychain) GetWithDialog(string) ([]byte, error) {
+	return nil, errors.New("unexpected dialog")
+}
+func (k memoryKeychain) AppAccess(service, account string) (broker.AppAccess, error) {
+	if _, ok := k[service+"/"+account]; !ok {
+		return broker.AppAccess{}, broker.ErrNotFound
+	}
+	return broker.AppAccess{Broker: "fixture", Partition: "fixture", Entries: []broker.ACLEntry{
+		{Authorizations: []string{"decrypt"}, Apps: []string{"fixture"}},
+		{Authorizations: []string{"partition_id"}, Partitions: []string{"fixture"}},
+	}}, nil
+}
+func (memoryKeychain) TrustApps(string, string, []byte) error {
+	return errors.New("unexpected trust change")
+}
+func (memoryKeychain) TrustAppsByDialog(string, string) error {
+	return errors.New("unexpected trust dialog")
+}
+func (memoryKeychain) TrustPartition(string, string, []byte) error {
+	return errors.New("unexpected partition change")
+}
+func (k memoryKeychain) Accounts(service string) ([]string, error) {
+	var accounts []string
+	for item := range k {
+		if name, ok := strings.CutPrefix(item, service+"/"); ok {
+			accounts = append(accounts, name)
+		}
+	}
+	slices.Sort(accounts)
+	return accounts, nil
 }

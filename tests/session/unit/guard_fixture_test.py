@@ -5,12 +5,22 @@ import os
 import signal
 import sys
 import tempfile
+import time
 from unittest import mock
 
 from tests.session import docker_attach_fixture, guard_fixture
 from tests.session.case import Case
 
 FIXTURES = (guard_fixture, docker_attach_fixture)
+
+
+class DockerMaintenanceTest(Case):
+    def test_attach_fixture_constructs_and_ticks_maintenance(self):
+        handle = docker_attach_fixture.docker_worker(self.home, mock.Mock(), start_reader=False)
+        try:
+            self.assertIsNone(handle.maintenance.tick(time.time()))
+        finally:
+            os.close(handle.owner)
 
 
 class ReadinessTest(Case):

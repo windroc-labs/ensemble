@@ -192,7 +192,7 @@ def docker_worker(
         remove=remove,
         owner=os.open(os.path.join(directory, "guard.lock"), os.O_RDWR | os.O_CREAT, 0o600),
         maintenance=lambda close, report: Maintenance(
-            "w1", directory, GEN, _Broker(), report=report, root="/", close=close
+            "w1", directory, GEN, _Broker(), report=report, close=close
         ),
         report=lambda *_: None,
         terminal=terminal,
