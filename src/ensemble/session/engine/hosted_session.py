@@ -1105,7 +1105,7 @@ class HostedSession(Session):
         found = cls._config().registry.client(client)
         if (registered := found._accounts()) is None:
             raise ConfigError(f"client {client} has no accounts")
-        return {name: found._account_env(name) for name in sorted(registered)}
+        return {name: dict(found._account_env(name)) for name in sorted(registered)}
 
     @classmethod
     def usage(cls, client: str) -> list[Headroom]:
