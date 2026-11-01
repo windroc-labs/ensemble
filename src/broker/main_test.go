@@ -77,7 +77,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"37"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"38"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -338,7 +338,7 @@ func TestLoginGitHubDispatch(t *testing.T) {
 }
 
 func TestLoginClaudeDispatch(t *testing.T) {
-	for want, args := range map[string][]string{"default": {"login", "claude"}, "work": {"login", "claude", "work"}, "a.b-1_2": {"login", "claude", "a.b-1_2"}} {
+	for want, args := range map[string][]string{"default": {"login", "claude", "default"}, "work": {"login", "claude", "work"}, "a.b-1_2": {"login", "claude", "a.b-1_2"}} {
 		var got string
 		a := app{login: func(_ keys, account string, out io.Writer) error {
 			got = account
@@ -349,10 +349,16 @@ func TestLoginClaudeDispatch(t *testing.T) {
 			t.Fatalf("%q: exit %d account %q %q %q", args, code, got, out, errOut)
 		}
 	}
-	_, _, errOut := invoke(app{}, "login", "claude", "Work")
-	var got struct{ Error struct{ Message string } }
-	if err := json.Unmarshal([]byte(errOut), &got); err != nil || !strings.Contains(got.Error.Message, " | login claude [NAME] | ") {
-		t.Fatalf("usage %q", errOut)
+	// An invalid or missing name is usage, refused before any keychain access.
+	for _, args := range [][]string{{"Work"}, {}, {"--expires", "2027-01-01"}, {"--fresh-token"}} {
+		var dated []datedCall
+		a := datedApp(&dated)
+		a.keychain = func(bool) (keys, error) { t.Fatalf("%q opened the keychain", args); return keys{}, nil }
+		code, _, errOut := invoke(a, append([]string{"login", "claude"}, args...)...)
+		var got struct{ Error struct{ Message string } }
+		if err := json.Unmarshal([]byte(errOut), &got); code != 2 || err != nil || !strings.Contains(got.Error.Message, " | login claude NAME | ") || len(dated) != 0 {
+			t.Fatalf("%q: exit %d usage %q", args, code, errOut)
+		}
 	}
 }
 
@@ -966,11 +972,10 @@ func TestLoginClaudeFlagsDispatch(t *testing.T) {
 		args []string
 		want datedCall
 	}{
-		{[]string{"--fresh-token"}, datedCall{credential.Claude, "default", "", credential.Registration{Fresh: true}}},
 		{[]string{"work", "--fresh-token"}, datedCall{credential.Claude, "work", "", credential.Registration{Fresh: true}}},
-		{[]string{"--expires", "2027-01-02"}, datedCall{credential.Claude, "default", "", credential.Registration{Expires: day(t, "2027-01-02")}}},
+		{[]string{"default", "--expires", "2027-01-02"}, datedCall{credential.Claude, "default", "", credential.Registration{Expires: day(t, "2027-01-02")}}},
 		{[]string{"work", "--issued", "2026-01-02", "--expires", "2027-01-02"}, datedCall{credential.Claude, "work", "", credential.Registration{Issued: day(t, "2026-01-02"), Expires: day(t, "2027-01-02")}}},
-		{[]string{"--fresh-token", "--expires", "2027-01-02"}, datedCall{credential.Claude, "default", "", credential.Registration{Fresh: true, Expires: day(t, "2027-01-02")}}},
+		{[]string{"work", "--fresh-token", "--expires", "2027-01-02"}, datedCall{credential.Claude, "work", "", credential.Registration{Fresh: true, Expires: day(t, "2027-01-02")}}},
 	} {
 		var got []datedCall
 		code, out, errOut := invoke(datedApp(&got), append([]string{"login", "claude"}, c.args...)...)
@@ -1015,9 +1020,9 @@ func TestLoginFlagsUsage(t *testing.T) {
 		args []string
 		err  string
 	}{
-		{[]string{"claude", "--expires", "2027-1-2"}, `"2027-1-2" is not a YYYY-MM-DD date`},
-		{[]string{"claude", "--expires", "2027-01-02", "--expires", "2027-01-03"}, "--expires given twice"},
-		{[]string{"claude", "--fresh-token", "--fresh-token"}, "--fresh-token given twice"},
+		{[]string{"claude", "work", "--expires", "2027-1-2"}, `"2027-1-2" is not a YYYY-MM-DD date`},
+		{[]string{"claude", "work", "--expires", "2027-01-02", "--expires", "2027-01-03"}, "--expires given twice"},
+		{[]string{"claude", "work", "--fresh-token", "--fresh-token"}, "--fresh-token given twice"},
 		{[]string{"env", "db", "--expires", "2027-02-30"}, `"2027-02-30" is not a YYYY-MM-DD date`},
 	} {
 		code, out, errOut := invoke(a, append([]string{"login"}, c.args...)...)
@@ -1306,9 +1311,8 @@ func TestOnlyLoginsAndRetrustAreInteractive(t *testing.T) {
 		interactive []bool
 	}{
 		{[]string{"retrust"}, []bool{true}},
-		{[]string{"login", "claude"}, []bool{true}},
 		{[]string{"login", "claude", "work"}, []bool{true}},
-		{[]string{"login", "claude", "--expires", "2027-01-01"}, []bool{true}},
+		{[]string{"login", "claude", "work", "--expires", "2027-01-01"}, []bool{true}},
 		{[]string{"login", "github", broker.AppKeyService}, []bool{true}},
 		{[]string{"login", "codex"}, []bool{true}},
 		{[]string{"login", "opencode", "strata"}, []bool{true}},

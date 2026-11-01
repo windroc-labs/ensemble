@@ -10,12 +10,12 @@ PROTOCOL = Path(REPO, "src/broker/protocol/docker-broker")
 
 
 class DockerBrokerProtocol(Case):
-    def test_status_reports_only_default_claude_usability(self):
+    def test_status_reports_each_named_claude_accounts_usability(self):
         schema = json.loads((PROTOCOL / "protocol.schema.json").read_text())
         validator = Draft202012Validator({**schema, "$ref": "#/$defs/status_output"})
-        for ready in (True, False):
-            self.assertTrue(validator.is_valid({"claude": {"default": ready}}))
-        for value in ({}, {"default": "token"}, {"default": True, "token": "secret"}):
+        for value in ({}, {"work": True}, {"home": False, "work": True}, {"default": True}):
+            self.assertTrue(validator.is_valid({"claude": value}))
+        for value in ({"work": "token"}, {"Work": True}, {"setup-token": True}, {"": True}):
             self.assertFalse(validator.is_valid({"claude": value}))
         self.assertFalse(validator.is_valid({"revocations": []}))
 

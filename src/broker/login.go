@@ -28,7 +28,7 @@ var datedFlags = map[credential.Kind]map[string]bool{
 	credential.Env:      {"--expires": true},
 }
 
-// datedLogin parses login claude [NAME] | opencode PROVIDER | env NAME with at least one of its expiry options, in
+// datedLogin parses login claude NAME | opencode PROVIDER | env NAME with at least one of its expiry options, in
 // any order: nil when args is no such login, which is usage. A malformed date or a repeated option is the returned
 // login's error.
 func datedLogin(args []string, a app, stdout io.Writer) func(keys) error {
@@ -38,8 +38,6 @@ func datedLogin(args []string, a app, stdout io.Writer) func(keys) error {
 	var kind credential.Kind
 	name, rest := args[2], args[3:]
 	switch {
-	case args[1] == "claude" && len(args[2]) > 0 && args[2][0] == '-':
-		kind, name, rest = credential.Claude, launcher.DefaultClaudeAccount, args[2:]
 	case args[1] == "claude" && launcher.ValidClaudeAccount(name):
 		kind = credential.Claude
 	case args[1] == "opencode" && launcher.ValidProvider(name):

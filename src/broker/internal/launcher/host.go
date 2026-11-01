@@ -176,7 +176,7 @@ type StartResult struct {
 
 type StatusResult struct {
 	Codex  *protocol.CodexStatus `json:"codex,omitempty"`
-	Claude map[string]bool       `json:"claude,omitempty"`
+	Claude map[string]bool       `json:"claude"` // each account logged in by name: whether its setup-token is usable
 	Static []StaticStatus        `json:"static,omitempty"`
 }
 

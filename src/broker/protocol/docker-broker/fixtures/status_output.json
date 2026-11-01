@@ -7,7 +7,9 @@
       "exit_code": 0,
       "error_code": null
     },
-    "data": {}
+    "data": {
+      "claude": {}
+    }
   },
   {
     "name": "status-output-codex-ready",
@@ -18,6 +20,7 @@
       "error_code": null
     },
     "data": {
+      "claude": {},
       "codex": {
         "version": "0.162.1",
         "path": "/usr/local/libexec/ensemble/codex/releases/release-abc/codex",
@@ -38,6 +41,7 @@
       "error_code": null
     },
     "data": {
+      "claude": {},
       "codex": {
         "version": "",
         "path": "",
@@ -137,6 +141,7 @@
       "error_code": null
     },
     "data": {
+      "claude": {},
       "audit_warning": "audit_write_failed"
     }
   },
@@ -150,11 +155,11 @@
     },
     "data": {
       "claude": {
-        "default": true
+        "work": true
       },
       "static": [
         {
-          "reference": "ensemble-broker-claude/default",
+          "reference": "ensemble-broker-claude/work",
           "version": 2,
           "expires_at": "2027-10-26T12:00:00Z",
           "provenance": "assumed",
@@ -187,11 +192,11 @@
     },
     "data": {
       "claude": {
-        "default": true
+        "work": true
       },
       "static": [
         {
-          "reference": "ensemble-broker-claude/default",
+          "reference": "ensemble-broker-claude/work",
           "version": 2,
           "expires_at": "2027-10-26T12:00:00Z",
           "provenance": "assumed",
