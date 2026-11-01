@@ -50,6 +50,7 @@ import os
 import re
 import select
 import shlex
+import shutil
 import subprocess
 import sys
 import termios
@@ -85,6 +86,18 @@ def install(bin_dir: str, tail: str = "/usr/bin:/bin") -> str:
         f.write(f'#!/bin/sh\nexec {q(sys.executable)} -I {q(os.path.abspath(__file__))} "$@"\n')
     os.chmod(path, 0o755)
     return f"{bin_dir}:{tail}"
+
+
+def check(path: str) -> None:
+    """AssertionError unless `path` resolves claude to a stand-in install() wrote."""
+    found = shutil.which("claude", path=path)
+    try:
+        with open(found or "", encoding="utf-8") as f:
+            ours = shlex.quote(os.path.abspath(__file__)) in f.read()
+    except OSError:
+        ours = False
+    if not ours:
+        raise AssertionError(f"PATH {path!r} resolves claude to {found!r}, not the stand-in")
 
 
 def _number(value) -> bool:

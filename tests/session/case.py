@@ -45,7 +45,8 @@ def packaged_hosts() -> dict[str, Permission]:
 
 def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedSession]:
     """A HostedSession class of `clients`, `tmux` in [hosts.tmux]; TmuxHosts and Viewers hold
-    TmuxCli `host` (None: own); dependencies: class_loader, probe, clock, viewer_factory.
+    TmuxCli `host` (None: own); dependencies: class_loader, probe (default: fails the test),
+    clock, viewer_factory.
     """
     hosts = Host.parse_hosts({"tmux": {**HOSTS["tmux"], **(tmux or {})}, "default": "tmux"})
 
@@ -53,9 +54,14 @@ def configured(clients, tmux=None, *, host=None, **dependencies) -> type[HostedS
         return kind(name, table, tmux=host) if issubclass(kind, TmuxHost) else kind(name, table)
 
     dependencies.setdefault("viewer_factory", lambda settings: Viewer(settings, tmux=host))
+    dependencies.setdefault("probe", _unexpected_probe)
     return harnesses.Threaded.configured(
         clients=clients, hosts=hosts, host_factory=build, **dependencies
     )
+
+
+def _unexpected_probe(argv, **_):
+    raise AssertionError(f"unexpected usage probe: {' '.join(argv)}")
 
 
 def harnessed(clients) -> type[HostedSession]:

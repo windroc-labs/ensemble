@@ -1613,6 +1613,8 @@ class UsageTest(Base):
         )
 
     def test_a_spawn_error_is_unknown(self):
+        """The real probe, its spawn failing: nothing runs."""
+        self.session_dependencies = {**self.session_dependencies, "probe": hosted_session.probe}
         self.configure("probe", probe={"argv": ("probe-cmd",)})
         with mock.patch("subprocess.Popen", side_effect=OSError("no exec")) as popen:
             self.assertEqual(self.session.usage("probe"), UNKNOWN)
