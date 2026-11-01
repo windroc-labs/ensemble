@@ -9,7 +9,6 @@ import sys
 
 from ensemble.manager import State
 from ensemble.utils import Record
-from tests.delegate import tester
 from tests.manager.case import REPO
 from tests.manager.live_crew import MANAGER, LiveCrew
 from tests.orchestrator.integration import fake_gh, fake_linear, fake_python, fake_transport
@@ -43,11 +42,9 @@ class LivePipeline(LiveCrew):
         self.workdirs = os.path.join(state, "work")
         with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
             f.write(
-                tester.enabled(
-                    local_section(run_fixtures.local(state) + TASK_LABELS, "orchestrator")
-                    + "\n"
-                    + run_fixtures.CORE_LOCAL
-                )
+                local_section(run_fixtures.local(state) + TASK_LABELS, "orchestrator")
+                + "\n"
+                + run_fixtures.CORE_LOCAL
             )
         self.fake = fake_linear.FakeLinear(harness=HARNESS)
         self.fake.user("Harness", HARNESS, uid=board_ids.HARNESS_USER)

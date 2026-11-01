@@ -42,8 +42,8 @@ def _update(workdir: str, **changes) -> dict:
 
 
 class FakeDelegate(Delegate):
-    ROLES = {"dummy": {"echo": "echoes its input"}}
-    outcome_result = Outcome("done", "Echoed", "echoed its input", deliverable="hello")
+    ROLES = {"dummy": {"note": "notes its input"}}
+    outcome_result = Outcome("done", "Noted", "noted its input", deliverable="hello")
     usage_result = None
 
     @classmethod

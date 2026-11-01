@@ -20,7 +20,7 @@ LOCAL = (
 class ExtensionClient(child.Case):
     def test_its_client_resolves_composes_and_the_catalog_lists_every_role(self):
         self.local(LOCAL)
-        got = self.compose("dummy-tester", "echo")
+        got = self.compose("researcher", "light-research")
         self.assertFalse(got["repo_imported"])
         for path in got["files"]:
             self.assertTrue(path.startswith(tuple(r + os.sep for r in ROOTS)), path)
@@ -31,13 +31,11 @@ class ExtensionClient(child.Case):
         self.assertNotIn(BANNER, got["prompt"])
         self.assertIn(f"\n{RETURN}\n", got["prompt"])
         self.assertIn("# Input\n\nHello.", got["prompt"])
-        tiered = self.compose("dummy-tester", "echo", overlays=[{"tier": 4}])["run"]
+        tiered = self.compose("researcher", "light-research", overlays=[{"tier": 4}])["run"]
         self.assertEqual((tiered["client"], tiered["tier"]), ("extension", 4))
         catalog = self.child("index")
-        self.assertEqual(
-            list(catalog), ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
-        )
-        self.assertIn("echo", catalog["dummy-tester"])
+        self.assertEqual(list(catalog), ["researcher", "pm", "engineer", "verifier"])
+        self.assertIn("light-research", catalog["researcher"])
 
 
 if __name__ == "__main__":

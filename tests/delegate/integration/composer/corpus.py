@@ -81,8 +81,8 @@ def corpus():
         f"{WORKDIR}/escape/out.md",
     ):
         cases[f"deliverable/{out or 'absent'}"] = (
-            "corpus-poet",
-            "corpus-verse",
+            "researcher",
+            "light-research",
             (),
             RunParams(input=INPUT, out=out, workdir=WORKDIR),
         )

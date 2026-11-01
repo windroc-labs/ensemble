@@ -5,7 +5,6 @@ import os
 from ensemble.delegate import Delegate
 from ensemble.orchestrator.engine import config
 from ensemble.utils import load_class
-from tests.delegate import tester
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import HEADER, PACKAGED_FLOW, role, workflow_line
 from tests.utils.case import local_section
@@ -17,16 +16,15 @@ HARNESS_DELEGATE = load_class("ensemble.delegate:HarnessDelegate", Delegate)
 PIPELINE = HEADER + role("researcher") + role("pm") + role("engineer")
 
 
-# the packaged stages and a last one, dummy-tester (the tests' team_dirs charter, which CORE_LOCAL
-# enables)
-TESTER = workflow_line(PACKAGED_FLOW + '\n[[stage]]\nrole = "dummy-tester"\ninput = "research"\n')
+# the packaged stages and a last one, verifier (a core charter)
+TESTER = workflow_line(PACKAGED_FLOW + '\n[[stage]]\nrole = "verifier"\ninput = "research"\n')
 
-# BASE, its dummy-tester stage without tables
+# BASE, its verifier stage without tables
 BARE = HEADER + TESTER + role("researcher") + role("pm") + role("engineer")
 
-BASE = BARE + role("dummy-tester")
+BASE = BARE + role("verifier")
 
-CORE_TOP = tester.enabled('[delegate]\nlanguage = "Chinese"\n')
+CORE_TOP = '[delegate]\nlanguage = "Chinese"\n'
 
 
 CORE_TABLES = (

@@ -28,7 +28,7 @@ def config(**layers) -> dict:
     return cfg
 
 
-def resolved(cfg: dict, role: str = "dummy-tester", host: str = "docker") -> Resolved | None:
+def resolved(cfg: dict, role: str = "researcher", host: str = "docker") -> Resolved | None:
     return resolve(cfg, role=role, host=host, packaged=PACKAGED)
 
 
@@ -48,7 +48,7 @@ class ResolveTest(Case):
     def test_named_environment_takes_default_gateway(self):
         cfg = config(
             environments={"dummy": {"image": "dummy-env:test"}},
-            roles={"dummy-tester": {"environment": {"name": "dummy"}}},
+            roles={"researcher": {"environment": {"name": "dummy"}}},
         )
         found = resolved(cfg)
         assert found is not None
@@ -59,7 +59,7 @@ class ResolveTest(Case):
         cfg = config(
             environment={"docker": PACKAGED["docker"] | {"gateway": "x"}},
             environments={"dummy": {"image": "dummy-env:test"}},
-            roles={"dummy-tester": {"environment": {"name": "dummy"}}},
+            roles={"researcher": {"environment": {"name": "dummy"}}},
         )
         found = resolved(cfg)
         assert found is not None
@@ -73,7 +73,7 @@ class ResolveTest(Case):
         cfg = config(
             environments={"dummy": {"image": "dummy-env:test", "credentials": {"env": [SECRET]}}},
             roles={
-                "dummy-tester": {
+                "researcher": {
                     "environment": {"name": "dummy", "credentials": {"other-kind": [other]}}
                 }
             },
@@ -83,7 +83,7 @@ class ResolveTest(Case):
         self.assertEqual(json.loads(found.credentials), {"other-kind": [other]})
 
     def test_role_overrides_without_a_name_go_over_the_default(self):
-        cfg = config(roles={"dummy-tester": {"environment": {"lock": "dummy-lock"}}})
+        cfg = config(roles={"researcher": {"environment": {"lock": "dummy-lock"}}})
         found = resolved(cfg)
         assert found is not None
         self.assertEqual(
@@ -93,7 +93,7 @@ class ResolveTest(Case):
     def test_packaged_default_resolves_to_none(self):
         for table in ({}, {"prefetch": False}, {"gateway": "workers", "plugins": []}):
             with self.subTest(table=table):
-                cfg = config(roles={"dummy-tester": {"environment": table}})
+                cfg = config(roles={"researcher": {"environment": table}})
                 self.assertIsNone(resolved(cfg))
 
     def test_any_difference_passes_environment(self):
@@ -104,10 +104,10 @@ class ResolveTest(Case):
             {"gateway": "x"},
         ):
             with self.subTest(table=table):
-                found = resolved(config(roles={"dummy-tester": {"environment": table}}))
+                found = resolved(config(roles={"researcher": {"environment": table}}))
                 assert found is not None
                 self.assertEqual(found.spec.persisted() | table, found.spec.persisted())
-        found = resolved(config(roles={"dummy-tester": {"environment": {"prefetch": True}}}))
+        found = resolved(config(roles={"researcher": {"environment": {"prefetch": True}}}))
         self.assertEqual(
             found, Resolved(EnvironmentSpec(image="@worker", gateway="workers"), prefetch=True)
         )
@@ -115,14 +115,14 @@ class ResolveTest(Case):
     def test_a_host_without_a_default_table_refuses_a_selection_or_override(self):
         cfg = config(
             environments={"dummy": {"image": "dummy-env:test"}},
-            roles={"dummy-tester": {"environment": {"name": "dummy"}}},
+            roles={"researcher": {"environment": {"name": "dummy"}}},
         )
         for host in ("tmux", "d2"):
             with self.subTest(host=host), self.assertRaises(ConfigError) as caught:
                 resolved(cfg, host=host)
             self.assertIn(f"[environment.{host}]", str(caught.exception))
-            self.assertIn("dummy-tester", str(caught.exception))
-        cfg = config(roles={"dummy-tester": {"environment": {"lock": "l"}}})
+            self.assertIn("researcher", str(caught.exception))
+        cfg = config(roles={"researcher": {"environment": {"lock": "l"}}})
         with self.assertRaises(ConfigError) as caught:
             resolved(cfg, host="tmux")
         self.assertIn("[environment.tmux]", str(caught.exception))

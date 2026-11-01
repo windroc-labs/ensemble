@@ -11,7 +11,6 @@ from ensemble.delegate.engine.types import DriverSpec, Finished, Instruction
 from ensemble.session import Access, Session
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as StartSpec
-from tests.delegate import tester
 from tests.delegate.case import Case
 from tests.delegate.fakes.session import SessionClass
 from tests.delegate.replies import block
@@ -23,14 +22,14 @@ from tests.session.case import no_spawn
 class IdleTimeoutConfig(Case):
     def local(self, text):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as stream:
-            stream.write(tester.enabled(text))
+            stream.write(text)
 
     def test_default_global_and_role_values_reach_an_executed_session(self):
         for text, expected in (
             ("", 7200),
             ("[delegate]\nidle_timeout = 14400\n", 14400),
             (
-                "[delegate]\nidle_timeout = 14400\n[delegate.roles.dummy-tester]\nidle_timeout = 0.3\n",
+                "[delegate]\nidle_timeout = 14400\n[delegate.roles.researcher]\nidle_timeout = 0.3\n",
                 0.3,
             ),
         ):
@@ -39,7 +38,7 @@ class IdleTimeoutConfig(Case):
                     self.local(text)
                     session_cls = SessionClass.scripted(turn(START, block(DONE)))
                     result = executed(
-                        Composer().resolve("dummy-tester"),
+                        Composer().resolve("researcher"),
                         Spec("input", self.home, mode=mode),
                         driver=AgentDriver(session_cls),
                     )
@@ -49,7 +48,7 @@ class IdleTimeoutConfig(Case):
                     )
 
     def test_invalid_global_and_role_local_values_raise_delegate_config_error(self):
-        for table in ("delegate", "delegate.roles.dummy-tester"):
+        for table in ("delegate", "delegate.roles.researcher"):
             for value in (
                 "0",
                 "-1",
@@ -67,7 +66,7 @@ class IdleTimeoutConfig(Case):
                 with self.subTest(table=table, value=value):
                     self.local(f"[{table}]\nidle_timeout = {value}\n")
                     with self.assertRaisesRegex(ConfigError, "idle_timeout must be"):
-                        Composer().resolve("dummy-tester")
+                        Composer().resolve("researcher")
 
 
 class Drivers(Case):
@@ -149,11 +148,9 @@ class Drivers(Case):
         work = os.path.join(self.home, "work")
         out = os.path.join(work, "instruction.md")
         events = []
-        with open(os.path.join(self.ensemble, "config.local.toml"), "w") as stream:
-            stream.write(tester.enabled(""))
         with no_spawn():
             result = executed(
-                Composer().resolve("dummy-tester"),
+                Composer().resolve("researcher"),
                 Spec("input", work, out=out),
                 driver=FileDriver(),
                 on_event=events.append,

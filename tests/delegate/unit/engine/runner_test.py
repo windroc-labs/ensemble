@@ -225,7 +225,9 @@ class InProcess(Base):
         )
 
     def test_silence_longer_than_the_idle_timeout_is_recorded_and_the_run_goes_on(self):
-        self.local("[delegate]\nidle_timeout = 0.3\n")
+        self.write(
+            os.path.join(self.ensemble, "config.local.toml"), "[delegate]\nidle_timeout = 0.3\n"
+        )
         r = self.go({"sleep": 1.0}, said(START, block(DONE)))
         self.assertEqual(r.outcome.status, "done")
         idle = [e for e in self.records() if e["kind"] == "idle"]
@@ -241,7 +243,7 @@ class InProcess(Base):
             (first["sid"], first["resume"], second["sid"], second["resume"]),
             (sid, False, sid, True),
         )
-        self.assertEqual(second["prompt"], FIX.format(error=INVALID_ERROR))
+        self.assertEqual(second["prompt"], FIX.format(error=INVALID_ERROR) + "\n\nFAKE NOTE")
         self.assertEqual(
             self.kinds(), ["session", "input", "progress", "invalid", "session", "result", "end"]
         )
@@ -262,12 +264,12 @@ class Handles(Base):
             return self.go(**kw)
 
     def planned(self, **kw) -> Plan:
-        """dummy-tester's echo planned with Spec fields `kw`, its agent and run dirs made."""
+        """researcher's light-research planned with Spec fields `kw`, its agent and run dirs made."""
         os.makedirs(Layout(self.work).agent, exist_ok=True)
         composition = Composer()
         accepted = plan(
-            composition.resolve("dummy-tester"),
-            Spec("Echo me.", self.work, task="echo", client="fake", out=self.out, **kw),
+            composition.resolve("researcher"),
+            Spec("Echo me.", self.work, task="light-research", client="fake", out=self.out, **kw),
             driver=self.driver,
             composition=composition,
         )
@@ -287,7 +289,7 @@ class HandleRun(Handles):
         self.assertFalse(os.path.exists(self.channel))
 
     def test_a_named_headless_session_reaches_the_driver_with_its_name(self):
-        for name in (None, "dummy-tester-0f8fad5b"):
+        for name in (None, "researcher-0f8fad5b"):
             with self.subTest(name=name):
                 self.fresh()
                 self.faked(turn(START, block(DONE)), Exited(0), session_name=name)
@@ -510,8 +512,8 @@ class HandleRun(Handles):
     def test_the_runner_records_into_an_existing_run_dir_only(self):
         composition = Composer()
         accepted = plan(
-            composition.resolve("dummy-tester"),
-            Spec("Echo me.", self.work, task="echo", client="fake"),
+            composition.resolve("researcher"),
+            Spec("Echo me.", self.work, task="light-research", client="fake"),
             driver=self.driver,
             composition=composition,
         )
@@ -608,12 +610,12 @@ class TuiStart(Handles):
             ("", [None]),
             ('[delegate]\nshow = "none"\n', [None]),
             (f'[delegate]\nshow = "{command}"\n', [command]),
-            ('[delegate]\nshow = "none"\n[delegate.roles.dummy-tester]\nshow = ""\n', [None]),
-            ('[delegate.roles.dummy-tester]\nshow = "none"\n', [None]),
+            ('[delegate]\nshow = "none"\n[delegate.roles.researcher]\nshow = ""\n', [None]),
+            ('[delegate.roles.researcher]\nshow = "none"\n', [None]),
         ):
             with self.subTest(local=local):
                 self.fresh()
-                self.local(local)
+                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
                 self.driver.display = "mgr"
                 self.began()
                 self.assertEqual(self.handle.shown, shown)
@@ -623,7 +625,7 @@ class TuiStart(Handles):
         for local in ("", '[delegate]\nshow = "none"\n', '[delegate]\nshow = "open {{session}}"\n'):
             with self.subTest(local=local):
                 self.fresh()
-                self.local(local)
+                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
                 self.driver.display = "mgr"
                 handle = FakeHandle([])
                 handle.hidden = True

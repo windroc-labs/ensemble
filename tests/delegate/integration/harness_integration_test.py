@@ -31,7 +31,6 @@ from ensemble.session import (
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 from ensemble.utils import Record
-from tests.delegate import tester
 from tests.delegate.case import REPO, SRC, child_env
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.fakes.harness_session import (
@@ -62,7 +61,7 @@ for expected in (sentinel, None):
     process = mock.Mock(stdout=io.StringIO("quota"))
     process.communicate.return_value = ("quota", "")
     with mock.patch("subprocess.Popen", return_value=process) as probe:
-        case.assertIs(HarnessDelegate.usage("dummy-tester"), expected)
+        case.assertIs(HarnessDelegate.usage("researcher"), expected)
     case.assertEqual(probe.call_count, 1)
     probes.append(probe.call_count)
 case.assertEqual(UsageClient.queried, ["role_usage", "role_usage"])
@@ -105,7 +104,7 @@ class Planning(HarnessCase):
                 data["callback"],
                 data["attempt"],
             ),
-            ("dummy-tester", "agent", None, "opaque-display", callback, 1),
+            ("researcher", "agent", None, "opaque-display", callback, 1),
         )
         self.assertNotIn("harness_host", data)
         self.assertEqual(data["spec"]["sid"], SID)
@@ -116,8 +115,8 @@ class Planning(HarnessCase):
         original = Spec("input", self.work)
         for role, spec in (
             ("absent-role", original),
-            ("dummy-tester", replace(original, task="absent-task")),
-            ("dummy-tester", replace(original, mode="absent-mode")),
+            ("researcher", replace(original, task="absent-task")),
+            ("researcher", replace(original, mode="absent-mode")),
         ):
             with self.subTest(role=role, spec=spec), self.assertRaises(ConfigError):
                 self.make(role=role, spec=spec)
@@ -236,7 +235,7 @@ class Planning(HarnessCase):
         self.assertNotIn("protect", metadata["plan"]["session"])
 
     def test_constructor_keeps_its_config_snapshot_when_local_file_changes(self):
-        delegate = self.make(spec=Spec("input", self.work, task="echo", sid=SID))
+        delegate = self.make(spec=Spec("input", self.work, task="light-research", sid=SID))
         self.settings(language="French", client="another-client")
         delegate.run()
         launched = HarnessSession.started[-1]["spec"]
@@ -285,11 +284,11 @@ class Views(HarnessCase):
         self.assertEqual(str(caught.exception), "unknown host changed")
 
     def test_a_completed_foreground_tui_left_open_is_not_alive(self):
-        spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
+        spec = Spec("input", self.work, task="light-research", sid=SID, client="fake", mode="tui")
         delegate = self.make(spec=spec)
         HarnessSession.script, HarnessSession.lingers = (TurnEnd(block(DONE)),), True
         self.assertEqual(delegate.run().outcome.status, "done")
-        agent = HarnessSession.attach(f"dummy-tester-{SID[:8]}")
+        agent = HarnessSession.attach(f"researcher-{SID[:8]}")
         self.assertEqual(agent.alive(), True)
         self.assertEqual(
             (delegate.alive(), DrivenDelegate.attach(self.work).alive()), (False, False)
@@ -373,15 +372,12 @@ class Views(HarnessCase):
         team = os.path.realpath(
             owned_team(self, {}, root=os.environ.get("ENSEMBLE_TEST_TMP", TEAMS))
         )
-        self.settings(team_dirs=(tester.team(), team))
-        self.make(spec=Spec("input", self.work, task="echo", client="fake", sid=SID))
-        self.settings(language="French", team_dirs=(tester.team(), team))
+        self.settings(team_dirs=(team,))
+        self.make(spec=Spec("input", self.work, task="light-research", client="fake", sid=SID))
+        self.settings(language="French", team_dirs=(team,))
         view = DrivenDelegate.attach(self.work)
         self.settings(
-            language="German",
-            client="changed-client",
-            default="changed",
-            team_dirs=(tester.team(), team),
+            language="German", client="changed-client", default="changed", team_dirs=(team,)
         )
         view.resume()
         view.close()
@@ -433,7 +429,7 @@ class UsageQueries(HarnessCase):
                 asked.append(client)
                 return sentinel
 
-        self.assertIs(DrivenDelegate.usage("dummy-tester", session_cls=Probe), sentinel)
+        self.assertIs(DrivenDelegate.usage("researcher", session_cls=Probe), sentinel)
         self.assertEqual(asked, ["fake"])
         self.assertEqual(
             sorted(Probe.configured["hosts"].tables),
@@ -447,11 +443,11 @@ class UsageQueries(HarnessCase):
                 raise SessionConfigError(f"[clients.{client}]: no usage probe")
 
         with self.assertRaises(ConfigError) as caught:
-            DrivenDelegate.usage("dummy-tester", session_cls=Refusing)
+            DrivenDelegate.usage("researcher", session_cls=Refusing)
         self.assertEqual(str(caught.exception), "[clients.fake]: no usage probe")
         self.settings(default="nope")
         with self.assertRaises(ConfigError) as caught:
-            DrivenDelegate.usage("dummy-tester", session_cls=SessionClass)
+            DrivenDelegate.usage("researcher", session_cls=SessionClass)
         self.assertEqual(
             str(caught.exception),
             "[hosts] default: 'nope' is not a Host here; "
@@ -580,7 +576,7 @@ class TuiStart(HarnessCase):
         delegate = self.tui()
         with self.assertRaises(SessionError) as caught:
             delegate.detach()
-        name = f"dummy-tester-{SID[:8]}"
+        name = f"researcher-{SID[:8]}"
         self.assertEqual(
             str(caught.exception), f"tui session {name} did not start: its harness ended"
         )
@@ -643,7 +639,7 @@ class Announce(HarnessCase):
             delegate.announce(result)
         with open(self.events, encoding="utf-8") as file:
             lines = file.read().splitlines()
-        stamp, name = "[0-9]{2}:[0-9]{2}:[0-9]{2}", f"dummy-tester-{SID[:8]}-drive"
+        stamp, name = "[0-9]{2}:[0-9]{2}:[0-9]{2}", f"researcher-{SID[:8]}-drive"
         for line, status in zip(lines, ("done", "needs_input", "error", "error"), strict=True):
             self.assertRegex(line, f"^{stamp} {name} outcome {status}$")
 
@@ -662,7 +658,7 @@ class Announce(HarnessCase):
 
 class Names(HarnessCase):
     def test_the_agent_is_name_and_the_harness_name_drive_in_every_mode(self):
-        default = f"dummy-tester-{SID[:8]}"
+        default = f"researcher-{SID[:8]}"
         for mode, name in (
             ("headless", None),
             ("tui", None),
@@ -732,7 +728,7 @@ class Display(HarnessCase):
         CountingDisplay.reset()
         spec = Spec("input", self.work, mode="tui", client="fake", sid=SID)
         record = DrivenDelegate(
-            "dummy-tester",
+            "researcher",
             spec,
             session_cls=CountingDisplay,
             host="agent",
@@ -759,7 +755,7 @@ class ConcurrentDetach(HarnessCase):
             "from ensemble.delegate import ConfigError, Spec\n"
             "from tests.delegate.fakes.harness_session import DrivenDelegate, PersistentSession\n"
             "spec = Spec('input', sys.argv[1], client='fake', sid=sys.argv[4])\n"
-            "delegate = DrivenDelegate('dummy-tester', spec, session_cls=PersistentSession,\n"
+            "delegate = DrivenDelegate('researcher', spec, session_cls=PersistentSession,\n"
             "                           host='agent')\n"
             "open(sys.argv[2] + str(os.getpid()), 'w').close()\n"
             "while not os.path.exists(sys.argv[3]): time.sleep(0.01)\n"
@@ -961,7 +957,7 @@ class Answer(HarnessCase):
 class ConcurrentResume(HarnessCase):
     def test_two_processes_resume_once_and_return_the_same_record(self):
         delegate = DrivenDelegate(
-            "dummy-tester",
+            "researcher",
             Spec("input", self.work, client="fake", sid=SID),
             session_cls=PersistentSession,
             host="agent",

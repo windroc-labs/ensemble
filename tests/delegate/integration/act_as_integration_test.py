@@ -6,7 +6,6 @@ import subprocess
 from ensemble.delegate.cli import listing
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.types import Layout
-from tests.delegate import tester
 from tests.delegate.case import REPO, Case
 from tests.delegate.skills.act_as import argv, command
 from tests.delegate.verifier import VERIFIER
@@ -37,13 +36,12 @@ class ActAs(Case):
         self.assertEqual([r.split()[0] for r in want.splitlines() if r[:1] != " "], ROLES)
 
     def test_step_3_delivers_the_instruction_file(self):
-        tester.configure(self.home)
         workdir = os.path.join(self.home, "work")
         out = os.path.join(Layout(workdir).agent, "prompt.md")
         run = (
             command(3)
-            .replace("<role>", "dummy-tester")
-            .replace("[--task <task>]", "--task echo")
+            .replace("<role>", "researcher")
+            .replace("[--task <task>]", "--task light-research")
             .replace("<workdir>", workdir)
             .replace("<Input>", "Hello.")
         )
@@ -64,7 +62,7 @@ class ActAs(Case):
         )
         composition = Composer()
         expected = composition.render(
-            composition.resolve("dummy-tester", "echo"),
+            composition.resolve("researcher", "light-research"),
             RunParams(input="Hello.", out=out, workdir=Layout(workdir).agent),
         )
         with open(out, "rb") as stream:

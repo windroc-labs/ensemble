@@ -12,14 +12,14 @@ from unittest import mock
 from ensemble.manager import Entry, Roster, State
 from ensemble.manager.engine.crew import RECOVERY_AGE
 from ensemble.utils import ProcessControl, Record
-from tests.delegate import drives, tester
+from tests.delegate import drives
 from tests.manager.case import PY, REPO, SRC, Case
 from tests.session import live_tmux
 from tests.session.live_tmux import MANAGER, logged
 from tests.utils.sandbox import scratch
 
 OTHER = "mgr2"
-ROLE = tester.ROLE
+ROLE = "researcher"
 TIMEOUT = 90
 CREW = (*PY, "-m", "ensemble.manager.cli")
 BIN = os.path.join(REPO, "bin")
@@ -65,7 +65,6 @@ class LiveCrew(live_tmux.Calls, Case):
         self.cwd = os.path.join(self.root, "work")
         for path in (self.ensemble, self.cwd):
             os.makedirs(path)
-        tester.configure(self.home)
         self.enterContext(mock.patch.dict(os.environ, {"HOME": self.home}))
         self.spies = os.path.join(self.root, "spies")
         self.server = live_tmux.Server(self, self.home)

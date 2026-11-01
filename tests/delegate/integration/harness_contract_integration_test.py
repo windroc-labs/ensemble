@@ -30,7 +30,7 @@ from tests.delegate.harness import HarnessCase
 
 class ClassQueries(DelegateContract, HarnessCase):
     delegate_cls = HarnessDelegate
-    ROLE = "dummy-tester"
+    ROLE = "researcher"
     SHOWABLE = sys.argv[1] == "True"
 
     def setUp(self):
@@ -51,7 +51,7 @@ sys.exit(not result.wasSuccessful())
 
 class HarnessContract(DelegateContract, HarnessCase):
     delegate_cls = ViewedHarnessDelegate
-    ROLE = "dummy-tester"
+    ROLE = "researcher"
     SHOWABLE = False
 
     def test_class_methods_answer_for_its_roles_and_refuse_an_unknown_one(self):

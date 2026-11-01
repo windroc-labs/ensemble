@@ -6,16 +6,16 @@ import os
 import unittest
 
 from ensemble.delegate.composer.prompt import RESUME
-from tests.delegate import tester
 from tests.delegate.case import REPO
 from tests.delegate.integration.composer import child
 
-TEAM = os.path.join(REPO, "src", "ensemble", "delegate", "team")
+TASKS = os.path.join(REPO, "src", "ensemble", "delegate", "team", "tasks")
+TOOLS = os.path.join(os.path.dirname(TASKS), "tools")
 
 
 class NewRun(child.Case):
     def test_a_new_runs_prompt_and_intent(self):
-        got = self.compose(tester.ROLE, cwd=self.proj)
+        got = self.compose("researcher", cwd=self.proj)
         self.assertFalse(got["prompt"].startswith(RESUME))
         self.assertTrue(got["prompt"].endswith("\n# Input\n\nHello.\n"))
         self.assertEqual(
@@ -25,11 +25,15 @@ class NewRun(child.Case):
             got["intent"],
             {
                 "dirs": [self.work],
-                "reads": [os.path.join(tester.team(), "tasks"), TEAM, tester.team()],
+                "reads": [TASKS, os.path.dirname(TASKS)],
                 "writes": [],
-                "commands": [],
+                "commands": [
+                    f"python3 -P {TOOLS}/repo.py worktree --dir {self.work}/src *",
+                    f"python3 -P {TOOLS}/svg_check.py *",
+                    f"python3 -P {TOOLS}/report_check.py *",
+                ],
                 "gate": "",
-                "env": {},
+                "env": {"PYTHONPATH": os.path.join(REPO, "src")},
                 "cwd": self.proj,
                 "project": False,
             },

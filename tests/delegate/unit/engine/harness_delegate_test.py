@@ -64,7 +64,7 @@ from tests.delegate.fakes.harness_session import (
     RecordingProcess,
     harness_launches,
 )
-from tests.delegate.harness import CORE, SID, HarnessCase
+from tests.delegate.harness import SID, HarnessCase
 from tests.delegate.replies import block
 from tests.delegate.unit.engine.orphans import Orphan
 from tests.session import harnesses
@@ -141,7 +141,7 @@ class CreateTest(HarnessCase):
 
         overlay = {"effort": "high"}
         view = Bound.create(
-            "dummy-tester",
+            "researcher",
             Spec("input", self.work, client="fake", sid=SID),
             display="none",
             callback=("callback",),
@@ -161,7 +161,7 @@ class ReferenceRepoTest(HarnessCase):
         spec = Spec(
             "Reference: T\nRepo: acme/ensemble\n\nHello.",
             self.work,
-            task="echo",
+            task="light-research",
             sid=SID,
             client="fake",
         )
@@ -182,11 +182,13 @@ class Drive(HarnessCase):
     spawned = False
 
     def headless(self):
-        spec = Spec("input", self.work, task="echo", mode="headless", client="fake", sid=SID)
+        spec = Spec(
+            "input", self.work, task="light-research", mode="headless", client="fake", sid=SID
+        )
         if not self.spawned:
             return self.make(spec=spec, host="agent")
         return RealSpawn(
-            "dummy-tester", spec, session_cls=HarnessSession, viewer=FakeViewer(), host="agent"
+            "researcher", spec, session_cls=HarnessSession, viewer=FakeViewer(), host="agent"
         )
 
     def real_spawn(self, popen):
@@ -257,7 +259,7 @@ class Drive(HarnessCase):
         os.symlink(target, os.path.join(self.work, "run", "drive.log"))
         with self.assertRaises(SessionError) as caught:
             delegate.detach()
-        self.assertRegex(str(caught.exception), r"^detach dummy-tester-0f8fad5b-drive: ")
+        self.assertRegex(str(caught.exception), r"^detach researcher-0f8fad5b-drive: ")
         self.assertFalse(os.path.lexists(target))
         self.assertEqual((self.metadata()["detached"], self.metadata()["drive"]), (False, None))
 
@@ -282,9 +284,7 @@ class Drive(HarnessCase):
                 ):
                     delegate.detach()
                 FakeControl.spawn_error = None
-                self.assertEqual(
-                    str(caught.exception), f"detach dummy-tester-{SID[:8]}-drive: {why}"
-                )
+                self.assertEqual(str(caught.exception), f"detach researcher-{SID[:8]}-drive: {why}")
                 cancel.assert_called_once_with()
                 self.assertEqual(self.metadata(), before)
 
@@ -297,10 +297,10 @@ class Drive(HarnessCase):
             client="fake",
             sid=SID,
         )
-        delegate = self.make(role=CORE, spec=spec, host="box")
+        delegate = self.make(spec=spec, host="box")
         self.assertEqual(self.metadata()["plan"]["docker"], True)
         record = delegate.detach()
-        self.assertEqual(record.sessions, (f"{CORE}-{SID[:8]}",))
+        self.assertEqual(record.sessions, (f"researcher-{SID[:8]}",))
         self.assertEqual(
             [launch["name"] for launch in harness_launches()], [f"{record.name}-drive"]
         )
@@ -345,36 +345,47 @@ class Drive(HarnessCase):
         FakeControl.stubborn = "kill"
         with self.assertRaises(SessionError) as caught:
             DrivenDelegate.attach(record, session_cls=HarnessSession).close()
-        self.assertEqual(str(caught.exception), f"close dummy-tester-{SID[:8]}-drive: did not exit")
+        self.assertEqual(str(caught.exception), f"close researcher-{SID[:8]}-drive: did not exit")
         self.assertEqual(control.data()["signals"], ["terminate", "kill"])
 
 
 class Record(HarnessCase):
     def test_sessions_without_drive(self):
-        for mode, sessions in (("tui", (f"dummy-tester-{SID[:8]}",)), ("headless", ())):
+        for mode, sessions in (("tui", (f"researcher-{SID[:8]}",)), ("headless", ())):
             with self.subTest(mode=mode):
                 shutil.rmtree(self.work, ignore_errors=True)
-                spec = Spec("input", self.work, task="echo", mode=mode, client="fake", sid=SID)
+                spec = Spec(
+                    "input", self.work, task="light-research", mode=mode, client="fake", sid=SID
+                )
                 record = self.make(spec=spec, host="agent").detach()
                 self.assertEqual(record.sessions, sessions)
-                self.assertNotIn(f"dummy-tester-{SID[:8]}-drive", record.sessions)
+                self.assertNotIn(f"researcher-{SID[:8]}-drive", record.sessions)
                 self.stop(record)
 
 
 class DockerHeadlessTest(HarnessCase):
     def test_a_headless_session_carries_the_agent_name_only_on_the_docker_host(self):
         docker_box(self)
-        name = f"{CORE}-{SID[:8]}"
+        name = f"researcher-{SID[:8]}"
         for host, want in (("box", name), ("agent", None)):
             with self.subTest(host=host):
-                spec = Spec("input", self.work, mode="headless", client="fake", sid=SID)
+                spec = Spec(
+                    "input",
+                    self.work,
+                    task="light-research",
+                    mode="headless",
+                    client="fake",
+                    sid=SID,
+                )
                 placement = {"session_cls": HarnessSession, "host": host}
-                preview = DrivenDelegate.preview(CORE, spec, **placement)
+                preview = DrivenDelegate.preview("researcher", spec, **placement)
                 self.assertEqual((preview.agent, preview.plan.session.name), (want, want))
                 self.assertEqual(preview.plan.docker, want is not None)
                 self.assertEqual(preview.plan.spec.name, want)
-        spec = Spec("input", self.work, mode="headless", client="fake", sid=SID)
-        view = self.make(role=CORE, spec=spec, host="box")
+        spec = Spec(
+            "input", self.work, task="light-research", mode="headless", client="fake", sid=SID
+        )
+        view = self.make(spec=spec, host="box")
         self.assertEqual(self.metadata()["plan"]["session"]["name"], name)
         view._complete(Result(0, Outcome("needs_input", "Q", "A", questions=["Which?"])))
         view.resume(input="The answer.")
@@ -397,15 +408,17 @@ class ForegroundHeadlessCloseTest(HarnessCase):
             self.addCleanup(patcher.stop)
 
     def foreground(self, host):
-        spec = Spec("input", self.work, mode="headless", client="fake", sid=SID)
-        self.make(role=CORE, spec=spec, host=host)
+        spec = Spec(
+            "input", self.work, task="light-research", mode="headless", client="fake", sid=SID
+        )
+        self.make(spec=spec, host=host)
         return DrivenDelegate.attach(self.work, session_cls=HarnessSession)
 
     def test_on_docker_it_closes_the_running_runs_session_by_name(self):
         view = self.foreground("box")
         with RunState(Layout(self.work)).run_lock():
             view.close()
-        HarnessSession.retire.assert_called_once_with(f"{CORE}-{SID[:8]}", sid=SID, host="box")
+        HarnessSession.retire.assert_called_once_with(f"researcher-{SID[:8]}", sid=SID, host="box")
         HarnessSession.retire.side_effect = Unanswered("still running without its harness")
         with RunState(Layout(self.work)).run_lock(), self.assertRaises(Unanswered):
             view.close()
@@ -458,8 +471,8 @@ class DockerPreflightTest(HarnessCase):
         return support.FakeProc(argv, out=support.text(f"{command}-output").encode())
 
     def create(self, mode):
-        spec = Spec("input", self.work, mode=mode, sid=SID)
-        return self.make(role=CORE, spec=spec, session_cls=Session, host="box")
+        spec = Spec("input", self.work, task="light-research", mode=mode, sid=SID)
+        return self.make(spec=spec, session_cls=Session, host="box")
 
     def test_a_fresh_workdir_passes_the_docker_preflight(self):
         for mode in ("headless", "tui"):
@@ -1140,7 +1153,7 @@ class RunEndTest(HarnessCase):
         os.symlink(self.elsewhere, os.path.join(self.tmp, "link"))
 
     def test_a_finished_run_leaves_only_its_out_there(self):
-        view = self.kept(task="echo")
+        view = self.kept(task="light-research")
         self.fill()
         view.run()
         self.assertEqual(os.listdir(self.tmp), ["deliverable.md"])
@@ -1184,7 +1197,7 @@ class RunEndTest(HarnessCase):
     def test_a_read_only_go_module_cache_is_cleared_too(self):
         for kept, left in ((True, ["deliverable.md"]), (False, None)):
             with self.subTest(kept=kept):
-                view = self.kept(task="echo") if kept else self.make()
+                view = self.kept(task="light-research") if kept else self.make()
                 self.fill()
                 go_cache(self.tmp)
                 view.run()
@@ -1203,11 +1216,13 @@ class RunEndTest(HarnessCase):
 
 class PreviewTest(HarnessCase):
     def test_preview_names_the_sessions_hosts_and_callback_and_writes_nothing(self):
-        for mode, agent in (("tui", f"dummy-tester-{SID[:8]}"), ("headless", None)):
+        for mode, agent in (("tui", f"researcher-{SID[:8]}"), ("headless", None)):
             with self.subTest(mode=mode):
-                spec = Spec("input", self.work, task="echo", mode=mode, client="fake", sid=SID)
+                spec = Spec(
+                    "input", self.work, task="light-research", mode=mode, client="fake", sid=SID
+                )
                 preview = DrivenDelegate.preview(
-                    "dummy-tester",
+                    "researcher",
                     spec,
                     session_cls=HarnessSession,
                     callback=["writeback", "--issue", "ticket-id"],
@@ -1246,17 +1261,17 @@ class InstructTest(HarnessCase):
     def test_instruct_delivers_the_composed_prompt_without_state_or_session(self):
         out = os.path.join(self.work, "prompt.md")
         result = DrivenDelegate.instruct(
-            "dummy-tester", Spec("Hello.", self.work, task="echo", out=out)
+            "researcher", Spec("Hello.", self.work, task="light-research", out=out)
         )
         self.assertEqual(result, Result(0, None, instruction=out))
         composer = Composer()
         want = composer.render(
-            composer.resolve("dummy-tester", "echo"),
+            composer.resolve("researcher", "light-research"),
             RunParams(input="Hello.", out=out, workdir=Layout(self.work).agent),
         )
         with open(out, encoding="utf-8") as file:
             self.assertEqual(file.read(), want)
-        self.assertIn("**Your task**: `echo`", want)
+        self.assertIn("**Your task**: `light-research`", want)
         self.assertEqual(os.listdir(self.work), ["prompt.md"])
         self.assertEqual(
             (HarnessSession.started, RecordingHost.launches, harness_launches()), ([], [], [])
@@ -1460,12 +1475,12 @@ class UsageSession(HarnessSession):
 class OverlayTest(HarnessCase):
     def test_usage_reads_the_client_the_owner_overlays_resolve(self):
         UsageSession.clients = []
-        overlays = ({"roles": {"dummy-tester": {"client": "claude"}}},)
-        DrivenDelegate.usage("dummy-tester", session_cls=UsageSession)
-        DrivenDelegate.usage("dummy-tester", overlays=overlays, session_cls=UsageSession)
+        overlays = ({"roles": {"researcher": {"client": "claude"}}},)
+        DrivenDelegate.usage("researcher", session_cls=UsageSession)
+        DrivenDelegate.usage("researcher", overlays=overlays, session_cls=UsageSession)
         DrivenDelegate.usage(
-            "dummy-tester",
-            overlays=({"roles": {"dummy-tester": {"client": "opencode", "tier": 3}}},),
+            "researcher",
+            overlays=({"roles": {"researcher": {"client": "opencode", "tier": 3}}},),
             session_cls=UsageSession,
         )
         self.assertEqual(UsageSession.clients, ["fake", "claude", "opencode"])
@@ -1473,7 +1488,7 @@ class OverlayTest(HarnessCase):
     def test_owner_overlays_shape_the_persisted_run(self):
         self.make()
         self.assertEqual(self.metadata()["plan"]["run"]["effort"], "high")
-        self.make(overlays=({"roles": {"dummy-tester": {"effort": "low"}}},))
+        self.make(overlays=({"roles": {"researcher": {"effort": "low"}}},))
         self.assertEqual(self.metadata()["plan"]["run"]["effort"], "low")
 
     def test_a_record_without_overlays_is_corrupt(self):
@@ -1490,7 +1505,7 @@ class OverlayTest(HarnessCase):
         self.assertEqual(str(caught.exception), f"invalid {path}: 'overlays'")
 
     def test_resume_resolves_with_the_overlays_it_was_built_with(self):
-        record = self.make(overlays=({"roles": {"dummy-tester": {"effort": "high"}}},)).detach()
+        record = self.make(overlays=({"roles": {"researcher": {"effort": "high"}}},)).detach()
         self.stop(record)
         DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume()
         self.assertEqual(self.metadata()["plan"]["run"]["effort"], "high")
@@ -1500,7 +1515,13 @@ class ResumeInputTest(HarnessCase):
     def waiting(self, *, mode="headless", outer=None, close=True):
         events = os.path.join(self.home, "events")
         spec = Spec(
-            "initial", self.work, task="echo", mode=mode, client="fake", sid=SID, events=events
+            "initial",
+            self.work,
+            task="light-research",
+            mode=mode,
+            client="fake",
+            sid=SID,
+            events=events,
         )
         record = self.make(spec=spec, display="none").detach(outer=outer)
         view = DrivenDelegate.attach(self.work, session_cls=HarnessSession)
@@ -2105,7 +2126,7 @@ class CrashTest(HarnessCase):
     def test_resume_refuses_a_run_replaced_since_its_attach(self):
         view, _name = crashed(self)
         other = "0b6f2c1e-6d0a-4c1b-9a51-3f1f6b0e2a7d"
-        self.make(spec=Spec("input", self.work, task="echo", sid=other))
+        self.make(spec=Spec("input", self.work, task="light-research", sid=other))
         launches = len(harness_launches())
         with self.assertRaisesRegex(ConfigError, f"run {SID} was replaced by {other}"):
             view.resume()
@@ -2211,7 +2232,7 @@ class SweepTest(HarnessCase):
         self.assertEqual(self.record(), before)
 
 
-AGENT = f"{CORE}-{SID[:8]}"
+AGENT = f"researcher-{SID[:8]}"
 HARNESS = f"{AGENT}-drive"
 SCREEN = "OpenAI Codex\n\n  Booting\n\naccount/read failed during TUI bootstrap\n\n"
 TAIL = "OpenAI Codex | Booting | account/read failed during TUI bootstrap"
@@ -2235,7 +2256,7 @@ class StartedTest(HarnessCase):
             docker_box(self)
         text = "Reference: T\nRepo: acme/ensemble\n\nHi." if docker else "input"
         spec = Spec(text, self.work, mode="tui", client="fake", sid=SID)
-        return self.make(role=CORE, spec=spec, host=self.host)
+        return self.make(spec=spec, host=self.host)
 
     def ends(self, ending=None):
         """The drive has ended by the time its spawn returns, after `ending` ran."""
@@ -2590,14 +2611,11 @@ class EnvironmentTest(HarnessCase):
         with open(self.local, "a", encoding="utf-8") as file:
             file.write(text)
 
-    def make(self, *, role=CORE, **kw):
-        return super().make(role=role, **kw)
-
     def spec(self, text=TARGETED, **kw):
-        return Spec(text, self.work, client="fake", sid=SID, **kw)
+        return Spec(text, self.work, client="fake", sid=SID, **{"task": "light-research", **kw})
 
-    def preview(self, role=CORE, host="docker", text=TARGETED, **kw):
-        spec = self.spec(text, task="build" if role == "engineer" else None)
+    def preview(self, role="researcher", host="docker", text=TARGETED, **kw):
+        spec = self.spec(text, task="build" if role == "engineer" else "light-research")
         placement = {"session_cls": HarnessSession, "host": host}
         return DrivenDelegate.preview(role, spec, **placement | kw)
 
@@ -2638,11 +2656,11 @@ class EnvironmentTest(HarnessCase):
         )
 
     def test_orchestrator_overlay_with_role_environment_is_refused(self):
-        overlay = {"roles": {CORE: {"environment": {"name": "dummy"}}}}
+        overlay = {"roles": {"researcher": {"environment": {"name": "dummy"}}}}
         self.append(ACCEPTANCE)
         with self.assertRaises(ConfigError) as caught:
             self.make(spec=self.spec(), host="docker", overlays=(overlay,))
-        self.assertIn(f"[overlay.roles.{CORE}.environment]", str(caught.exception))
+        self.assertIn("[overlay.roles.researcher.environment]", str(caught.exception))
         self.assertFalse(os.path.exists(self.work))
 
     def test_issue_text_names_change_nothing(self):
@@ -2722,8 +2740,8 @@ class EnvironmentTest(HarnessCase):
 
     def test_a_role_environment_acceptance_config_end_to_end(self):
         self.append(ACCEPTANCE)
-        echoed = {"status": "done", "title": "Echo", "summary": "echoed", "deliverable": TARGETED}
-        HarnessSession.script = (Reply(block(echoed)), Exited(0))
+        done = {"status": "done", "title": "Done", "summary": "done", "deliverable": TARGETED}
+        HarnessSession.script = (Reply(block(done)), Exited(0))
         view = self.make(spec=self.spec(mode="headless"), host="docker")
         self.assertEqual(
             HarnessSession.preflights[-1]["spec"].environment,
@@ -2774,7 +2792,7 @@ class OwnedRun(HarnessCase):
         spec = Spec(
             "input",
             work or self.work,
-            task="echo",
+            task="light-research",
             sid=sid,
             client="fake",
             mode="tui",
@@ -2825,11 +2843,13 @@ class OwnedRun(HarnessCase):
         )
         self.assertEqual(self.metadata()["plan"]["session"]["handlers"][0]["state"]["worker"], 1)
         self.work = os.path.join(self.home, "headless")
-        spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="headless")
+        spec = Spec(
+            "input", self.work, task="light-research", sid=SID, client="fake", mode="headless"
+        )
         self.assertEqual(self.make(spec=spec)._state.plan.session.handlers, ())
         HarnessSession.owns = False
         self.work = os.path.join(self.home, "refused")
-        spec = Spec("input", self.work, task="echo", sid=SID, client="fake", mode="tui")
+        spec = Spec("input", self.work, task="light-research", sid=SID, client="fake", mode="tui")
         with self.assertRaisesRegex(ConfigError, "^handlers: fake tui has no session harness yet$"):
             self.make(spec=spec)
         self.assertFalse(os.path.exists(Layout(self.work).run))

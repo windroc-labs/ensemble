@@ -65,7 +65,7 @@ ROLES = {
     role_id("researcher"): "researcher",
     role_id("pm"): "pm",
     role_id("engineer"): "engineer",
-    "u-dummy-tester": "dummy-tester",
+    "u-verifier": "verifier",
 }
 
 

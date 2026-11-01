@@ -42,7 +42,7 @@ from tests.orchestrator.unit.keychain_fixtures import app_transport, token_http_
 from tests.orchestrator.unit.run_fixtures import CORE_LOCAL, logged, show
 from tests.utils.process_fixtures import CompletedProcess
 
-A, B = "engineer-TASK-7-0b6f2c1e", "dummy-tester-TASK-7-7c1d9e2f"
+A, B = "engineer-TASK-7-0b6f2c1e", "verifier-TASK-7-7c1d9e2f"
 OTHER_SID = "7c1d9e2f-0a3b-4c5d-8e6f-1a2b3c4d5e6f"
 
 

@@ -68,7 +68,7 @@ class NewRun(Integration):
                     "kind": "result",
                     "outcome": {
                         "status": "done",
-                        "title": "echo",
+                        "title": "hello",
                         "summary": "Hello.",
                         "questions": [],
                         "url": self.out,
@@ -294,7 +294,7 @@ class NeedsInput(Integration):
                     "kind": "result",
                     "outcome": {
                         "status": "done",
-                        "title": "echo",
+                        "title": "hello",
                         "summary": "Hello.",
                         "questions": [],
                         "url": self.out,

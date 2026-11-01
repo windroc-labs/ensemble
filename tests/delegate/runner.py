@@ -13,7 +13,6 @@ from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import execute
 from ensemble.delegate.engine.types import Layout, Result
-from tests.delegate import tester
 from tests.delegate.case import FakeClientCase, RunReads
 from tests.delegate.replies import completed_steps
 from tests.delegate.unit.runs import DONE, NAME, turn
@@ -73,18 +72,13 @@ def executed(
 
 
 class Base(RunReads, FakeClientCase):
-    """dummy-tester's echo (tests/delegate/tester.py) over the fake client in workdir `work` (not
-    made), out `out`, the cwd its agent dir; `channel` its run.jsonl.
+    """researcher's light-research over the fake client in workdir `work` (not made), out `out`,
+    the cwd its agent dir; `channel` its run.jsonl.
     """
 
     def setUp(self):
         super().setUp()
         self.channel = run_log(self.work)
-        self.local("")
-
-    def local(self, text) -> None:
-        """The local config `text`, the tester team enabled."""
-        self.write(os.path.join(self.ensemble, "config.local.toml"), tester.enabled(text))
 
     def go(
         self,
@@ -110,7 +104,7 @@ class Base(RunReads, FakeClientCase):
                 f,
             )
         composition = Composer()
-        config = composition.resolve("dummy-tester")
+        config = composition.resolve("researcher")
         config = replace(config, output=output) if output else config
         self.events, err = [], io.StringIO()
 
@@ -130,7 +124,7 @@ class Base(RunReads, FakeClientCase):
             with redirect_stderr(err):
                 return executed(
                     config,
-                    Spec(kw.pop("input"), self.work, task="echo", **kw),
+                    Spec(kw.pop("input"), self.work, task="light-research", **kw),
                     on_event=on,
                     driver=self.driver,
                     composition=composition,

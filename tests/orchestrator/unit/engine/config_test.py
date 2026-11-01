@@ -191,13 +191,13 @@ PM_ENGINEER = workflow_line(
     '[[stage]]\nrole = "engineer"\ninput = "build"\n'
 )
 
-# dummy-tester (the tests' team_dirs charter, as a custom role), then pm
+# verifier (a core charter, as a custom role), then pm
 TESTER_PM = (
-    '[[stage]]\nrole = "dummy-tester"\ninput = "research"\nnext = "pm"\n'
+    '[[stage]]\nrole = "verifier"\ninput = "research"\nnext = "pm"\n'
     '[[stage]]\nrole = "pm"\ninput = "design"\ntitle_prefix = "PRD"\n'
 )
 
-TESTER_ROLE = role("dummy-tester")
+TESTER_ROLE = role("verifier")
 
 ENGINEER_ONLY = workflow_line('[[stage]]\nrole = "engineer"\ninput = "build"\n')
 
@@ -245,18 +245,18 @@ class ConfigurationLoading(ConfigFile, Case):
         def text(fields):
             return (
                 BARE
-                + "[linear.roles.dummy-tester]\n"
+                + "[linear.roles.verifier]\n"
                 + "".join(f"{k} = {json.dumps(v)}\n" for k, v in fields.items())
             )
 
-        found = self.load(text(app)).linear.roles["dummy-tester"]
+        found = self.load(text(app)).linear.roles["verifier"]
         self.assertEqual(found.scopes, "read,write,app:assignable,app:mentionable")
         self.assertEqual(found.user_id, app["user_id"])
         for key in app:
             for fields in ({k: v for k, v in app.items() if k != key}, app | {key: ""}):
                 with (
                     self.subTest(key=key, fields=fields),
-                    self.assertRaisesRegex(config.ConfigError, f"linear.roles.dummy-tester.{key}"),
+                    self.assertRaisesRegex(config.ConfigError, f"linear.roles.verifier.{key}"),
                 ):
                     self.load(text(fields))
         for key in ("typo", "token"):
@@ -279,8 +279,8 @@ class ConfigurationLoading(ConfigFile, Case):
         group = "linear.task_label_group must be a Linear label group id (UUID): "
         label = BASE + f'[linear.task_labels]\nlight-research = "{LABEL1}"\n'
         upper = "ABCDEF00-0000-4000-8000-000000000021"
-        solo = role("dummy-tester")
-        x = BARE + "[roles.dummy-tester]\n[linear.roles.dummy-tester]\n"
+        solo = role("verifier")
+        x = BARE + "[roles.verifier]\n[linear.roles.verifier]\n"
         cases = [
             (
                 HEADER
@@ -294,15 +294,15 @@ class ConfigurationLoading(ConfigFile, Case):
                 "unknown keys: docs, tasks",
             ),
             (
-                BASE.replace(solo, role("dummy-tester", 'role = "x"', 'task = "y"')),
-                "[roles.dummy-tester] has unknown keys: role, task",
+                BASE.replace(solo, role("verifier", 'role = "x"', 'task = "y"')),
+                "[roles.verifier] has unknown keys: role, task",
             ),
             (
-                BASE.replace(solo, role("dummy-tester", 'tasks = ["x"]', "read_only = []")),
-                "[roles.dummy-tester] has unknown keys: read_only",
+                BASE.replace(solo, role("verifier", 'tasks = ["x"]', "read_only = []")),
+                "[roles.verifier] has unknown keys: read_only",
             ),
-            (BARE, missing(", ".join(f"linear.roles.dummy-tester.{k}" for k in config.AppKey))),
-            (x + "max_runs = 2\n", "[linear.roles.dummy-tester] has unknown keys: max_runs"),
+            (BARE, missing(", ".join(f"linear.roles.verifier.{k}" for k in config.AppKey))),
+            (x + "max_runs = 2\n", "[linear.roles.verifier] has unknown keys: max_runs"),
             (
                 BASE + '[linear.roles.ghost]\nclient_id = "g"\n',
                 "[linear.roles.ghost] names no stage of the workflow",
@@ -311,10 +311,10 @@ class ConfigurationLoading(ConfigFile, Case):
             (BASE + "[roles.ghost]\nnext = 'pm'\n", "[roles.ghost] has unknown keys: next"),
             (
                 BASE.replace(
-                    "[roles.dummy-tester]\n",
-                    '[roles.dummy-tester]\ntypo = "s"\ntoken = "k"\n',
+                    "[roles.verifier]\n",
+                    '[roles.verifier]\ntypo = "s"\ntoken = "k"\n',
                 ),
-                "[roles.dummy-tester] has unknown keys: token, typo",
+                "[roles.verifier] has unknown keys: token, typo",
             ),
             ("linear.typo = 1\nlinear.other = 2\n" + BASE, "unknown keys in [linear]: other, typo"),
             (HEADER + "linear.roles = 5\n[roles.x]\n", "[linear.roles] must be a table"),
@@ -322,8 +322,8 @@ class ConfigurationLoading(ConfigFile, Case):
             (HEADER + "roles.pm = 5\n", "[roles.pm] must be a table"),
             *[
                 (
-                    BARE + role("dummy-tester", f"max_runs = {value}"),
-                    f"[roles.dummy-tester] max_runs must be a whole number >= 1: {shown}",
+                    BARE + role("verifier", f"max_runs = {value}"),
+                    f"[roles.verifier] max_runs must be a whole number >= 1: {shown}",
                 )
                 for shown, value in {
                     "0": "0",
@@ -474,8 +474,8 @@ class ConfigurationLoading(ConfigFile, Case):
             ),
             (PIPELINE + role("ghost"), "[roles.ghost] names no stage of the workflow"),
             (
-                PIPELINE + role("dummy-tester"),
-                "[roles.dummy-tester] names no stage of the workflow",
+                PIPELINE + role("verifier"),
+                "[roles.verifier] names no stage of the workflow",
             ),
             (
                 PIPELINE.replace("linear-app-pm-", "linear-app-researcher-"),
@@ -497,7 +497,7 @@ class ConfigurationLoading(ConfigFile, Case):
                     ),
                 )
                 for task, text in (
-                    ("echo", PIPELINE),
+                    ("verify", PIPELINE),
                     ("ghost", PIPELINE),
                     ("product-design", HEADER + RESEARCHER_ONLY + role("researcher")),
                 )
@@ -660,9 +660,9 @@ class ConfigurationLoading(ConfigFile, Case):
                 cfg = self.load(
                     HEADER + f'workflow = "{value}"\n' + PIPELINE[len(HEADER) :] + TESTER_ROLE
                 )
-                self.assertEqual(list(cfg.roles), ["dummy-tester", "pm"])
-                self.assertEqual(dict(cfg.stages), {"dummy-tester": 0, "pm": 1})
-                self.assertEqual(config.TASKS["dummy-tester"].done, "dummy-tester done:")
+                self.assertEqual(list(cfg.roles), ["verifier", "pm"])
+                self.assertEqual(dict(cfg.stages), {"verifier": 0, "pm": 1})
+                self.assertEqual(config.TASKS["verifier"].done, "verifier done:")
 
     def test_empty_workflow_reads_the_packaged_one(self):
         cfg = self.load(HEADER + 'workflow = ""\n' + PIPELINE[len(HEADER) :])
@@ -702,7 +702,7 @@ class ConfigurationLoading(ConfigFile, Case):
         write(flow, TESTER_PM)
         head = HEADER + f'workflow = "{flow}"\n' + role("pm") + TESTER_ROLE
         cfg = self.load(head + role("researcher", "max_runs = 2") + role("engineer"))
-        self.assertEqual(list(cfg.roles), ["dummy-tester", "pm"])
+        self.assertEqual(list(cfg.roles), ["verifier", "pm"])
         self.fails(
             "orchestrator/config.toml: [roles.researcher] has unknown keys: next",
             head + role("researcher", 'next = "pm"'),
@@ -1609,7 +1609,7 @@ class ShellExecution(Case):
 
 class TuiSessionNames(Case):
     def test_prefix_of_a_role_and_issue(self):
-        for role_name in ("engineer", "dummy-tester", "pm2"):
+        for role_name in ("engineer", "verifier", "pm2"):
             with self.subTest(role=role_name):
                 self.assertEqual(config.tui_prefix(role_name, ID), f"{role_name}-{ID}-")
 

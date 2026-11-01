@@ -9,7 +9,6 @@ from unittest import mock
 from ensemble.delegate import cli
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.session import ConfigError
-from tests.delegate import tester
 from tests.delegate.case import FakeClientCase, RunReads
 from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.replies import block, completed_steps
@@ -19,7 +18,7 @@ from tests.session import fake_client
 from tests.utils.case import local_section
 from tests.utils.jsonl import read_jsonl
 
-TUI = "dummy-tester-11111111"
+TUI = "researcher-11111111"
 HARNESS = f"{TUI}-drive"
 
 KEYS = {
@@ -97,7 +96,7 @@ class Base(RunReads, FakeClientCase):
 
     def local(self, text):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
-            f.write(tester.enabled(local_section(text, "delegate")))
+            f.write(local_section(text, "delegate"))
 
     def launches(self) -> list[dict]:
         return read_jsonl(self.log, missing_ok=True)
@@ -148,8 +147,8 @@ class Base(RunReads, FakeClientCase):
     def runs(
         self,
         *extra,
-        role="dummy-tester",
-        task="echo",
+        role="researcher",
+        task="light-research",
         input="Hello.",
         client="fake",
         stdin="",
