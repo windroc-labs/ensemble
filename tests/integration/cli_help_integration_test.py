@@ -149,7 +149,7 @@ class HelpSafety(Case):
             self.assertIn("ensemble-", out)
 
     def matrix(self, root):
-        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 59)
+        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 60)
         before = self.snapshot()
         package, commands = SURFACES[root]
         for leaf in [None, *commands]:
