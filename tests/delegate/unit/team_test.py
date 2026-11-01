@@ -364,6 +364,20 @@ class Shipped(Packaged):
         self.assertNotRegex(text, r"(?<!/)updraft:")
         self.assertIn("`/updraft:review` again with the same `doc`", text.split("## Resume", 1)[1])
 
+    def test_product_design_self_grills_by_the_grilling_method_for_at_most_3_rounds(self):
+        text = task_text("product-design")
+        step = text.split("5. **Self-grill**", 1)[1].split("\n6.", 1)[0]
+        self.assertTrue(os.path.isfile(os.path.join(TEAM, "methods", "grilling.md")))
+        for literal in (
+            "`<team>/methods/grilling.md`",
+            "at most 3 rounds",
+            "minor details",
+            "what you can't settle → Open questions",
+        ):
+            self.assertIn(literal, step)
+        self.assertNotIn("in one round", step)
+        self.assertIn("never rerun", text.split("## Resume", 1)[1])
+
     def test_product_design_settles_open_questions_with_updraft_council_before_finishing(self):
         text = task_text("product-design")
         step = text.split("8. **Council.**", 1)[1].split("\n9.", 1)[0]
