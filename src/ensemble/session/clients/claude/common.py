@@ -174,6 +174,18 @@ def _credential(name: str) -> bool:
     return name.startswith("ANTHROPIC_") or name == "CLAUDE_CODE_OAUTH_TOKEN"
 
 
+def _no_credentials(env: Mapping[str, str]) -> dict[str, str]:
+    """`env` less every credential: a run authenticates as its account's login alone."""
+    return {k: v for k, v in env.items() if not _credential(k)}
+
+
+def _inherited_credentials() -> tuple[str, ...]:
+    """The credentials a child must not inherit."""
+    return tuple(
+        sorted(name for name in {*os.environ, "CLAUDE_CODE_OAUTH_TOKEN"} if _credential(name))
+    )
+
+
 def _read_dir(path: str) -> str:
     if not printable_abs(path) or any(c in NOT_LITERAL for c in path):
         raise ConfigError(
@@ -465,7 +477,7 @@ class ClaudeCommon:
     def save(self, spec: Spec) -> None:
         """What resume_main replays: spec's launch, Access and env."""
         access, sid = spec.access, self.uuid(spec.sid)
-        env = {**self.env(), **access.env, **spec.env}
+        env = _no_credentials({**self.env(), **access.env, **spec.env})
         state = {
             "version": 2,
             "cwd": access.cwd,
@@ -522,7 +534,8 @@ class ClaudeCommon:
                 effort=state["effort"],
                 name=state["name"],
             )
-            os.execvpe(command[0], list(command), {**os.environ, **TUI_ENV, **state["env"]})
+            env = _no_credentials({**os.environ, **TUI_ENV, **state["env"]})
+            os.execvpe(command[0], list(command), env)
         except (ConfigError, OSError) as exc:
             print(f"claude resume: {exc}", file=sys.stderr)
             return 1
@@ -553,7 +566,7 @@ class ClaudeCommon:
             raise ConfigError(f"session ids are UUIDs, got {sid!r:.80}")
         merged = {
             k: v
-            for k, v in {**env, **self.env(), **access.env, **spec.env}.items()
+            for k, v in _no_credentials({**env, **self.env(), **access.env, **spec.env}).items()
             if k not in LOCAL_ENV_VARS
         }
         transcript = self.transcript(cwd, sid, merged)
@@ -584,7 +597,7 @@ class ClaudeCommon:
         return Launch(
             argv,
             env=merged,
-            unset=self.UNSET,
+            unset=tuple(dict.fromkeys((*self.UNSET, *_inherited_credentials()))),
             transcript=transcript or "",
             resume=self.resume(cwd, sid),
         )
@@ -644,15 +657,12 @@ class ClaudeCommon:
 
     def probe(self, account: str) -> Launch:
         """`account`'s probe: the config's env in its dir; no API credentials."""
-        env = {k: v for k, v in self.env().items() if not _credential(k)}
+        env = _no_credentials(self.env())
         env["CLAUDE_CONFIG_DIR"] = self.accounts[account].dir
-        found = sorted(
-            name for name in {*os.environ, "CLAUDE_CODE_OAUTH_TOKEN"} if _credential(name)
-        )
         return Launch(
             self.PROBE,
             env={**env, "DISABLE_AUTOUPDATER": "1"},
-            unset=tuple(dict.fromkeys((*self.UNSET, *found))),
+            unset=tuple(dict.fromkeys((*self.UNSET, *_inherited_credentials()))),
         )
 
     @staticmethod

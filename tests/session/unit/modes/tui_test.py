@@ -2849,7 +2849,7 @@ class TmuxErrorTest(TmuxBase):
 
 
 class TmuxAccountTest(TmuxBase):
-    def test_a_valid_selection_changes_no_tmux_launch(self):
+    def test_a_valid_selection_runs_on_its_accounts_dir(self):
         workdir = os.path.join(self.dir, "work")
         os.mkdir(workdir)
         client = ClaudeClient(
@@ -2886,8 +2886,11 @@ class TmuxAccountTest(TmuxBase):
         argv, env = prepared[0].argv, dict(prepared[0].env)
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], "/mine")
         self.assertNotIn(ACCOUNT, env)
-        for other in prepared[1:]:
-            self.assertEqual((other.argv, dict(other.env)), (argv, env))
+        for other, account in zip(prepared[1:], ("work", "home"), strict=True):
+            self.assertEqual(
+                (other.argv, dict(other.env)),
+                (argv, {**env, "CLAUDE_CONFIG_DIR": f"/accounts/{account}"}),
+            )
         with self.assertRaises(ConfigError) as caught:
             tui.TuiMode.preflight(
                 Spec(

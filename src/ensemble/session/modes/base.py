@@ -295,12 +295,14 @@ class BaseMode(ABC):
 
     @staticmethod
     def _selected(spec: Spec, client: Client) -> tuple[Spec, str]:
-        """spec less ACCOUNT_ENV, and the account it selects (for the Host only); before any Host
-        call.
+        """spec less ACCOUNT_ENV, its selected account's env over its own, and that account (for
+        the Host); before any Host call.
         """
         check_selection(spec.flags, client.forbidden_selection, client.valued_flags)
         account = _select_account(spec, client)
         env = {k: v for k, v in spec.env.items() if k != ACCOUNT_ENV}
+        if account:
+            env.update(client._account_env(account))
         return replace(spec, env=env), account
 
     @staticmethod

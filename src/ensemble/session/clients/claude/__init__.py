@@ -65,6 +65,9 @@ class ClaudeClient(Client):
     def _account(self):
         return self.config.get("account", "")
 
+    def _account_env(self, account):
+        return {"CLAUDE_CONFIG_DIR": self.common.accounts[account].dir}
+
     def _executable(self, *, container=False):
         return "claude"
 

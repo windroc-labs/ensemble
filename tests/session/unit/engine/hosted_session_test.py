@@ -2080,7 +2080,14 @@ class StartCheckTest(Base):
         if len(host.headless) == before:
             return None, error
         self.assertEqual(str(error), "refused by the test Host")
-        return host.headless[-1].get("home_account", "?"), None
+        metadata, launch = host.headless[-1], host.launches[-1]
+        account = os.path.basename(launch.env["CLAUDE_CONFIG_DIR"])
+        self.assertEqual(metadata.get("home_account", account), account)
+        self.assertEqual(
+            {text for text in (*launch.env.values(), *metadata.values()) if "/acct/" in text},
+            {f"/acct/{account}"},
+        )
+        return account, None
 
     def probed(self):
         return sorted(call.kwargs["env"]["CLAUDE_CONFIG_DIR"] for call in self.probe.call_args_list)
@@ -2214,8 +2221,7 @@ class StartCheckTest(Base):
         self.claude({"home": {}, "work": {}}, host="tmux")
         self.read(home=panel(80), work=panel(100))
         self.probe.reset_mock()
-        account, error = self.start()
-        self.assertEqual((account, error), ("?", None))
+        self.assertEqual(self.start(), ("home", None))
         self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
         self.read(home=panel(100), work=panel(100))
         self.assert_usage_error(self.start())
@@ -2228,7 +2234,7 @@ class StartCheckTest(Base):
                 self.probe.reset_mock()
                 account, error = self.start()
                 self.assertIsNone(error)
-                self.assertEqual(account, "home" if host == "docker" else "?")
+                self.assertEqual(account, "home")
                 self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
                 self.claude({"home": {}, "work": {}}, host=host, account="work")
                 self.probe.reset_mock()
