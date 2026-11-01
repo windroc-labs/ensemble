@@ -1,4 +1,6 @@
-"""Orchestrator quota decisions over Delegate usage readings, for scheduling and recovery."""
+"""Orchestrator quota decisions over Delegate per-account headroom, for scheduling and recovery:
+a start is allowed while any account has points left under its max_usage (inf: no usage panel).
+"""
 
 import functools
 from collections.abc import Callable
@@ -6,22 +8,29 @@ from collections.abc import Callable
 from ensemble import delegate
 from ensemble.orchestrator.engine.log import log
 from ensemble.orchestrator.engine.types import ConfigError
-from ensemble.utils import exhausted, summary
 
 
 def _probe(role, cfg, provider, client):
-    """Usage, else None, and the configuration or runtime error that left it unknown."""
+    """Each account's headroom, else [], and the configuration or runtime error that left it so."""
     if provider is None:
-        return None, None
+        return [], None
     overlays = (cfg.core,)
     if client is not None:
         overlays += ({"roles": {role: {"client": client}}},)
     try:
         return provider.usage(role, overlays=overlays), None
     except delegate.ConfigError as error:
-        return None, error
+        return [], error
     except delegate.SessionError as error:
-        return None, error
+        return [], error
+
+
+def _points(left) -> str:
+    return "unknown" if left is None else f"{left:g}"
+
+
+def _shown(found) -> str:
+    return " ".join(f"{h.account}={_points(h.left)}" for h in found) or "none"
 
 
 class Gate:
@@ -44,11 +53,16 @@ class Gate:
         return reason is not None
 
     def _check(self, role, client, kind):
-        usage, error = _probe(role, self.cfg, self.cfg.delegates.get(kind), client)
+        found, error = _probe(role, self.cfg, self.cfg.delegates.get(kind), client)
         if isinstance(error, delegate.SessionError):
             raise ConfigError(f"host usage probe failed for client {client}: {error}") from None
-        shown = {"usage": summary(usage)}
-        reason = "usage unknown" if usage is None else "usage" if exhausted(usage) else None
+        shown = {"usage": _shown(found)}
+        if any(h.left is not None and h.left > 0 for h in found):
+            reason = None
+        elif all(h.left is None for h in found):
+            reason = "usage unknown"
+        else:
+            reason = "usage"
         fields = shown if reason == "usage" else {}
         if self.dry:
             self.say("usage", client=client, **shown, allowed=reason is None)

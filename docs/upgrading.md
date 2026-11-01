@@ -1,5 +1,42 @@
 # Upgrading
 
+## Register each Claude account explicitly
+
+The session registers only the Claude accounts you list. There is no implicit `default`
+account, and `~/.claude` is no longer registered on its own. Each account needs a `dir` and
+may set `max_usage`, the percent of each usage window (five-hour and weekly alike) it may
+reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.toml`:
+
+1. List every subscription under its own name, its `dir` the `CLAUDE_CONFIG_DIR` logged in to it.
+   To keep using `~/.claude`, register it under a name:
+
+   ```toml
+   [session.clients.claude.accounts.work]
+   dir = "~/.claude-work"
+   max_usage = 80
+
+   [session.clients.claude.accounts.home]
+   dir = "~/.claude"
+   ```
+
+2. A table without `dir` is now a configuration error, one named `default` included. A
+   `[session.clients.claude] account = "default"` needs a registered `default`; prefer a real name.
+3. On the Docker Host, log each name in to the broker: `ensemble-broker login claude work`.
+4. On the tmux Host, a start still runs on your local login (its `CLAUDE_CONFIG_DIR`, else
+   `~/.claude`): register that dir as an account, so the usage check reads the login the run
+   uses.
+
+`Session.usage("claude")` now lists every registered account's points left under its
+`max_usage`, read live on each query, on both Hosts. With the orchestrator's usage check on (its
+default), a start goes ahead while any account has points left; the old 90% five-hour and 100%
+weekly start thresholds no longer apply to it. With no Claude account registered the list is
+empty, so the check skips every Claude start (`usage-skip`): register at least one, or set
+`[orchestrator.usage_limit] claude = "off"`. A login whose `/usage` prints only a cost summary
+(an API key or gateway) has no usage panel and is never blocked by the check.
+
+This change ships with the other session account and usage changes in one compatible
+release; do not release it separately.
+
 ## Remove custom research quota brakes
 
 Remove `ensemble-orchestrator router --brake ROLE` from custom callers and remove

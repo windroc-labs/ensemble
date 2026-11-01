@@ -1,8 +1,6 @@
-"""A custom role as a board stage: a team dir's writer charter and note task in
-`[delegate] team_dirs`, an `[orchestrator] workflow` file whose writer stage, set by role and input
-alone, hands off to pm in place of the packaged researcher, and writer's Linear app. Its issue
-goes from Todo through router.py's claim and a done run's write-back to In Review, then after a
-Handoff promote.py makes pm's PRD issue.
+"""A custom role as a board stage: a team dir's writer, a workflow whose writer stage hands off
+to pm, and writer's Linear app; its issue goes from Todo to In Review, then promote.py makes pm's
+PRD issue.
 """
 
 import json
@@ -13,7 +11,7 @@ from unittest import mock
 from ensemble.orchestrator.engine import config
 from tests.orchestrator.case import REPO
 from tests.orchestrator.integration import fake_linear, segments
-from tests.orchestrator.integration.flow_fixtures import BRANCH, DOCS
+from tests.orchestrator.integration.flow_fixtures import BRANCH, DOCS, claude_account
 from tests.orchestrator.integration.segments import INSTRUCTIONS, RESEARCH, Segment
 from tests.orchestrator.unit import run_fixtures
 from tests.orchestrator.unit.board_ids import PACKAGED_FLOW, role, role_id
@@ -74,6 +72,7 @@ class CustomStage(Segment):
                 + f"\n[delegate]\nteam_dirs = {json.dumps([team])}\n"
                 + run_fixtures.CORE_LOCAL
                 + f"\n[delegate.roles.{ROLE}.output]\n{output}"
+                + claude_account(self.root)
             )
         self.fake.user("Writer", TOKEN, uid=WRITER)
         with open(self.seam, encoding="utf-8") as f:  # its keys: the users when it was written

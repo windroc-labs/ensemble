@@ -8,6 +8,7 @@ import contextlib
 import dataclasses
 import io
 import json
+import math
 import os
 import shlex
 import signal
@@ -20,13 +21,13 @@ import uuid
 from unittest import mock
 
 from ensemble.session import Session
-from ensemble.session.engine.accounts import TTL
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
     Access,
     Activity,
     ConfigError,
     Exited,
+    Headroom,
     IdleTimeout,
     LimitHit,
     Mode,
@@ -38,9 +39,7 @@ from ensemble.session.engine.types import (
     TurnEnd,
     TurnFailed,
     TurnStarted,
-    Window,
 )
-from ensemble.utils import exhausted
 from tests.session.case import PLUGIN_BIN, PY, SID, Case, child_env
 from tests.session.fakes.container_host import PATH as CONTAINER_HOST
 from tests.session.integration.clients.claude import fake_claude
@@ -429,17 +428,26 @@ class InterruptTest(Base):
 
 
 class UsageTest(Base):
-    def test_the_probes_usage_panel_is_the_usage(self):
+    def setUp(self):
+        super().setUp()
+        self.work = os.path.join(self.dir, "work-config")
+        self.configure_session({"claude": {**TABLE, "accounts": {"work": {"dir": self.work}}}})
+
+    def test_the_probes_usage_panel_is_the_accounts_headroom(self):
         self.scenario(usage=USAGE)
-        found = self.session_cls.usage("claude")
-        self.assertEqual((found.five_hour.used_percent, found.weekly), (25.0, Window(100.0, None)))
-        self.assertIsNotNone(found.five_hour.resets_at)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.session_cls.usage("claude"), [Headroom("work", 0.0)])
         (entry,) = self.logged()
-        self.assertEqual(entry["argv"], PROBE)
+        self.assertEqual((entry["argv"], entry["config_dir"]), (PROBE, self.work))
         probe = os.path.join(self.ensemble, "probe")
         self.assertEqual(entry["cwd"], os.path.realpath(probe))
         self.assertEqual(stat.S_IMODE(os.lstat(probe).st_mode), 0o700)
         self.assertEqual(self.written(), [])
+
+    def test_a_cost_summary_alone_is_unbounded(self):
+        self.scenario(usage="Total cost: $0.00\n")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.session_cls.usage("claude"), [Headroom("work", math.inf)])
 
     def test_unknown_is_none(self):
         for name, fields in (
@@ -459,7 +467,7 @@ class UsageTest(Base):
                     with self.assertRaisesRegex(ConfigError, "missing or not executable"):
                         self.session_cls.usage("claude")
                 else:
-                    self.assertIsNone(self.session_cls.usage("claude"))
+                    self.assertEqual(self.session_cls.usage("claude"), [Headroom("work", None)])
 
 
 def panel(five, week):
@@ -467,49 +475,45 @@ def panel(five, week):
 
 
 class AccountUsageTest(Base):
-    """`default` and `work` on a Host running containers: the fake claude answers /usage by its
-    CLAUDE_CONFIG_DIR (default's unset, whatever the caller's), and Session.usage is the reading of
-    the account a start would pick.
+    """`home` and `work` on a Host running containers: the fake claude answers /usage by its
+    CLAUDE_CONFIG_DIR, whatever the caller's, and Session.usage lists each account's live headroom.
     """
 
     def setUp(self):
         super().setUp()
+        self.home = os.path.join(self.dir, "home-config")
         self.work = os.path.join(self.dir, "work-config")
-        table = {**TABLE, "accounts": {"work": {"dir": self.work}}}
+        accounts = {"work": {"dir": self.work, "max_usage": 80}, "home": {"dir": self.home}}
+        table = {**TABLE, "accounts": accounts}
         self.configure_session({"claude": table}, {"implementation": CONTAINER_HOST})
 
-    def usage(self, default, work, now=None):
-        self.scenario(usage={"": panel(*default), self.work: panel(*work)})
-        with contextlib.redirect_stderr(io.StringIO()):
-            if now is None:
-                return self.session_cls.usage("claude")
-            with mock.patch("time.time", return_value=now):
-                return self.session_cls.usage("claude")
+    def usage(self, home, work):
+        self.scenario(usage={self.home: panel(*home), self.work: panel(*work)})
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir}),
+        ):
+            return self.session_cls.usage("claude")
 
     def probed(self) -> list[str]:
         return sorted(entry["config_dir"] for entry in self.logged())
 
-    def test_the_account_with_more_left_is_the_usage(self):
+    def test_every_account_is_listed_by_name_under_its_limit(self):
         found = self.usage((70, 10), (20, 30))
-        self.assertEqual((found.five_hour.used_percent, found.weekly.used_percent), (20.0, 30.0))
-        self.assertEqual(self.probed(), ["", self.work])
+        self.assertEqual(found, [Headroom("home", 30.0), Headroom("work", 50.0)])
+        self.assertEqual(self.probed(), sorted((self.home, self.work)))
         self.assertTrue(all(entry["argv"] == PROBE for entry in self.logged()))
 
-    def test_an_account_over_a_threshold_loses(self):
-        found = self.usage((92, 5), (50, 60))
-        self.assertEqual((found.five_hour.used_percent, found.weekly.used_percent), (50.0, 60.0))
+    def test_an_account_at_or_over_its_limit_is_kept(self):
+        self.assertEqual(
+            self.usage((95, 10), (10, 100)), [Headroom("home", 5.0), Headroom("work", -20.0)]
+        )
 
-    def test_every_account_over_is_exhausted(self):
-        self.assertTrue(exhausted(self.usage((95, 10), (10, 100))))
-
-    def test_a_reading_within_the_ttl_runs_no_probe(self):
-        now = time.time()
-        first = self.usage((70, 10), (20, 30), now)
+    def test_every_query_reads_every_account_again(self):
+        self.usage((70, 10), (20, 30))
         self.assertEqual(len(self.logged()), 2)
-        self.assertEqual(self.usage((10, 10), (90, 90), now + TTL - 1), first)
-        self.assertEqual(len(self.logged()), 2)
-        found = self.usage((10, 10), (90, 90), now + TTL)
-        self.assertEqual((found.five_hour.used_percent, found.weekly.used_percent), (10.0, 10.0))
+        found = self.usage((10, 10), (90, 90))
+        self.assertEqual(found, [Headroom("home", 90.0), Headroom("work", -10.0)])
         self.assertEqual(len(self.logged()), 4)
 
 

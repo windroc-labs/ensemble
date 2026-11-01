@@ -118,6 +118,50 @@ class PanelTest(Case):
                 parse(text, NOW)
 
 
+class CostSummaryTest(Case):
+    """An API key or gateway login has no subscription usage panel: `/usage` prints only what
+    the session cost.
+    """
+
+    def test_a_cost_summary_alone_has_no_panel(self):
+        for text in (
+            "Total cost: $0.00",
+            "Usage: 0 input, 0 output",
+            "Usage: 1,234 input, 56 output\n",
+            panel(
+                "Total cost:            $0.00",
+                "Total duration (API):  0s",
+                "Total duration (wall): 1.2s",
+                "Total code changes:    0 lines added, 0 lines removed",
+                "Usage:                 0 input, 0 output, 0 cache read, 0 cache write",
+            ),
+            panel(
+                "",
+                "Total cost:            $0.0123",
+                "Usage by model:",
+                "    claude-haiku:  10 input, 2 output, 0 cache read, 0 cache write ($0.0001)",
+                "",
+            ),
+        ):
+            with self.subTest(text):
+                self.assertEqual(parse(text, NOW), Usage(None, None))
+
+    def test_anything_else_is_still_a_failed_read(self):
+        rows = (
+            ("Total cost: $0.00\nSure, here is your usage.", NO_PANEL),
+            ("Usage: none", NO_PANEL),
+            ("Total cost: unknown", NO_PANEL),
+            ("", "no output"),
+            ("Loading usage data…\n", "still loading"),
+            ("Hi! It looks like you typed /usage. How can I help?\n", NO_PANEL),
+            ("@@ ## %% !!\n", NO_PANEL),
+            ("Failed to load usage data\nTotal cost: $0.00\n", "could not load usage data"),
+        )
+        for text, reason in rows:
+            with self.subTest(text), self.assertRaisesRegex(ValueError, f"^{re.escape(reason)}$"):
+                parse(text, NOW)
+
+
 class ResetTest(Case):
     def test_forms(self):
         for text, want in (

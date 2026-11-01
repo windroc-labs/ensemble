@@ -96,6 +96,12 @@ GUARD = (
 )
 
 
+def claude_account(root):
+    """The fake claude's dir as one Claude account; max_usage 90 blocks at 95%."""
+    path = os.path.join(root, "claude-config")
+    return f'\n[session.clients.claude.accounts.work]\ndir = "{path}"\nmax_usage = 90\n'
+
+
 def usage(five_hour):
     return f"Current session: {round(100 * five_hour)}% used\n"
 
@@ -141,6 +147,7 @@ class Flow(Case):
                 local_section(run_fixtures.local(state) + TASK_LABELS, "orchestrator")
                 + "\n"
                 + run_fixtures.CORE_LOCAL
+                + claude_account(self.root)
             )
         self.fake = fake_linear.FakeLinear(harness=HARNESS)
         self.fake.user("Harness", HARNESS, uid=board_ids.HARNESS_USER)

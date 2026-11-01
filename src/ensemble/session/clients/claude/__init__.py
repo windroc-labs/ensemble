@@ -65,15 +65,15 @@ class ClaudeClient(Client):
     def _account(self):
         return self.config.get("account", "")
 
-    def usage_probe(self):
-        return self.common.probe()
-
     def _executable(self, *, container=False):
         return "claude"
 
     def _usage_probes(self):
         accounts = self.common.accounts
         return {name: (accounts[name].dir, self.common.probe(name)) for name in accounts}
+
+    def _max_usage(self, account):
+        return self.common.accounts[account].max_usage
 
     def usage(self, output):
         return self.common.parse_usage(output)

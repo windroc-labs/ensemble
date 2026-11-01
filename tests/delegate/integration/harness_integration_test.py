@@ -19,14 +19,13 @@ from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
 from ensemble.session import (
     Access,
     Exited,
+    Headroom,
     Mode,
     NoRecordedSession,
     Reply,
     SessionError,
     SessionStatus,
     TurnEnd,
-    Usage,
-    Window,
 )
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
@@ -50,18 +49,18 @@ from tests.delegate.unit.runs import DONE
 USAGE_QUERY = """import io, json, unittest
 from unittest import mock
 from ensemble.delegate import HarnessDelegate
-from ensemble.session import Usage, Window
+from ensemble.session import Headroom, Usage, Window
 from tests.delegate.fakes.harness_session import HarnessSession, RecordingHost
 from tests.delegate.fakes.usage import UsageClient
 case = unittest.TestCase()
 sentinel = Usage(Window(12.5, 1767225600.0), Window(37.0, None))
 probes = []
-for expected in (sentinel, None):
+for expected, found in ((sentinel, [Headroom("default", 63.0)]), (None, [Headroom("default", None)])):
     UsageClient.usage_result = expected
     process = mock.Mock(stdout=io.StringIO("quota"))
     process.communicate.return_value = ("quota", "")
     with mock.patch("subprocess.Popen", return_value=process) as probe:
-        case.assertIs(HarnessDelegate.usage("researcher"), expected)
+        case.assertEqual(HarnessDelegate.usage("researcher"), found)
     case.assertEqual(probe.call_count, 1)
     probes.append(probe.call_count)
 case.assertEqual(UsageClient.queried, ["role_usage", "role_usage"])
@@ -420,7 +419,7 @@ class UsageQueries(HarnessCase):
         )
 
     def test_usage_configures_and_asks_only_the_given_session_class(self):
-        sentinel = Usage(Window(12.5, 1767225600.0), Window(37.0, None))
+        sentinel = [Headroom("default", 63.0)]
         asked = []
 
         class Probe(SessionClass):

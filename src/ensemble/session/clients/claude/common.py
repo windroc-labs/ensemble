@@ -4,6 +4,7 @@ import contextlib
 import functools
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -17,7 +18,7 @@ from ensemble.session.clients.claude import usage
 from ensemble.session.clients.common import UUID, scan, strings
 from ensemble.session.engine.types import (
     COMMAND,
-    DEFAULT_ACCOUNT,
+    DEFAULT_MAX_USAGE,
     ClientHome,
     ConfigError,
     Effort,
@@ -238,43 +239,60 @@ CHECKS = (
     *common.CHECKS,
 )
 ACCOUNT_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+ACCOUNTS = "session.clients.claude.accounts"
 NOT_ACCOUNT = (
     "not an account name (1–64 lowercase letters, digits, '.', '_' or '-', starting with a letter"
     " or digit, and not setup-token)"
 )
+ABSOLUTE = "an absolute path after ~ expansion"
 
 
 @dataclass(frozen=True)
 class _Account:
-    """A [clients.claude.accounts.<name>] table: its CLAUDE_CONFIG_DIR and display string."""
+    """A [clients.claude.accounts.<name>] table: its CLAUDE_CONFIG_DIR, display string and the
+    usage percent it may reach.
+    """
 
     dir: str
     display: str = ""
+    max_usage: float = DEFAULT_MAX_USAGE
 
 
 def _accounts(config: Mapping) -> dict[str, _Account]:
-    """The registry, `default` always in it; a config error names the bad key."""
-    found = {DEFAULT_ACCOUNT: _Account(os.path.expanduser("~/.claude"))}
+    """The registry: the listed accounts only; a config error names the bad key in full."""
+    found = {}
     for name, table in config.get("accounts", {}).items():
-        at = f"{TABLE}.accounts.{name}"
+        at = f"{ACCOUNTS}.{name}"
         if not (isinstance(name, str) and ACCOUNT_NAME.fullmatch(name)) or name == "setup-token":
-            raise ConfigError(f"{TABLE}.accounts {name!r}: {NOT_ACCOUNT}")
+            raise ConfigError(f"{ACCOUNTS} {name!r}: {NOT_ACCOUNT}")
         if not isinstance(table, Mapping):
             raise ConfigError(f"{at} must be a table")
-        for key, value in table.items():
-            if key not in ("dir", "account"):
-                raise ConfigError(f"{at}.{key}: unknown key; an account has only dir and account")
-            if not isinstance(value, str):
+        for key in table:
+            if key not in ("dir", "account", "max_usage"):
+                raise ConfigError(
+                    f"{at}.{key}: unknown key; an account has only dir, account and max_usage"
+                )
+        for key in ("dir", "account"):
+            if key in table and not isinstance(table[key], str):
                 raise ConfigError(f"{at}.{key} must be a string")
-        account = replace(found[DEFAULT_ACCOUNT], display=table.get("account", ""))
-        if "dir" in table:
-            if name == DEFAULT_ACCOUNT:
-                raise ConfigError(f"{at}.dir: the default account's dir is ~/.claude; remove it")
-            if not printable_abs(path := os.path.expanduser(table["dir"])):
-                raise ConfigError(f"{at}.dir must be an absolute path after ~ expansion")
-            account = replace(account, dir=path)
-        found[name] = account
+        if "dir" not in table:
+            raise ConfigError(f"{at}.dir is required: {ABSOLUTE}")
+        if not printable_abs(path := os.path.expanduser(table["dir"])):
+            raise ConfigError(f"{at}.dir must be {ABSOLUTE}")
+        found[name] = _Account(path, table.get("account", ""), _max_usage(at, table))
     return found
+
+
+def _max_usage(at: str, table: Mapping) -> float:
+    value = table.get("max_usage", DEFAULT_MAX_USAGE)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 < value <= DEFAULT_MAX_USAGE
+    ):
+        raise ConfigError(f"{at}.max_usage must be a number with 0 < max_usage <= 100")
+    return value
 
 
 def size(path: str) -> int:
@@ -624,19 +642,13 @@ class ClaudeCommon:
             *tail,
         )
 
-    def probe(self, account: str | None = None) -> Launch:
-        """The config's env, else `account`'s dir (unset for ~/.claude); no API credentials."""
+    def probe(self, account: str) -> Launch:
+        """`account`'s probe: the config's env in its dir; no API credentials."""
         env = {k: v for k, v in self.env().items() if not _credential(k)}
+        env["CLAUDE_CONFIG_DIR"] = self.accounts[account].dir
         found = sorted(
             name for name in {*os.environ, "CLAUDE_CODE_OAUTH_TOKEN"} if _credential(name)
         )
-        if account is not None:
-            env.pop("CLAUDE_CONFIG_DIR", None)
-            path = self.accounts[account].dir
-            if path == self.accounts[DEFAULT_ACCOUNT].dir:
-                found.append("CLAUDE_CONFIG_DIR")
-            else:
-                env["CLAUDE_CONFIG_DIR"] = path
         return Launch(
             self.PROBE,
             env={**env, "DISABLE_AUTOUPDATER": "1"},

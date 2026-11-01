@@ -1,5 +1,6 @@
 """`claude -p /usage` text as Usage, ported from CodexBar's ClaudeStatusProbe.parse,
 ClaudeUsageFetcher.makeSnapshot and ClaudeStatusProbe.parseResetDate (THIRD_PARTY_NOTICES.md).
+A cost summary alone (an API key or gateway login) is Usage(None, None).
 """
 
 import json
@@ -25,6 +26,29 @@ WHEN = re.compile(
     r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))? ?(?P<half>am|pm)?",
     re.I,
 )
+
+
+COST_SUMMARY = re.compile(
+    r"(?i)\s*(?:total cost:\s*\$?[0-9]|usage:\s*[0-9][0-9,]*\s+input,\s*[0-9][0-9,]*\s+output\b)"
+)
+COST_LINE = re.compile(
+    r"(?i)\s*(?:"
+    r"total cost:\s*\$?[0-9][0-9.,]*"
+    r"|total duration \((?:api|wall)\):.*"
+    r"|total code changes:.*"
+    r"|usage:\s*[0-9][0-9,]*\s+input,.*"
+    r"|usage by model:\s*"
+    r")\s*"
+    r"|\s+[\w.\-\[\]]+:\s+[0-9][0-9,]*\s+input,.*"
+)
+
+
+def _cost_only(text: str) -> bool:
+    """Only cost-summary lines, one a total cost or token count."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    return any(COST_SUMMARY.match(line) for line in lines) and all(
+        COST_LINE.fullmatch(line) for line in lines
+    )
 
 
 def _norm(text: str) -> str:
@@ -271,8 +295,8 @@ def _window(left: int | None, reset: str | None, now: float, span: int) -> Windo
 
 
 def parse(text: str, now: float | None = None) -> Usage:
-    """The session window and the most-used weekly one (all models or one model's); ValueError
-    with the reason when `text` holds no usage panel.
+    """The session window and the most-used weekly one (all models or one model's); no window
+    for a cost summary alone; ValueError with the reason when `text` holds neither.
     """
     now = time.time() if now is None else now
     if found := re.search(re.escape(INSIGHTS), text, re.I):
@@ -283,6 +307,8 @@ def parse(text: str, now: float | None = None) -> Usage:
         raise ValueError(error)
     if "loadingusage" in _compact(text) and not _percents(text):
         raise ValueError("still loading")
+    if _cost_only(text):
+        return Usage(None, None)
     lines = text.splitlines()
     session = _find(lines, SESSION, _left, 12)
     if session is None:

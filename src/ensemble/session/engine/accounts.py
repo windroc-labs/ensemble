@@ -1,4 +1,6 @@
-"""Per-account usage readings, cached on disk, and the account a start selecting none runs on."""
+"""Per-account usage readings, live or cached on disk, and the account a start selecting none
+runs on.
+"""
 
 import contextlib
 import json
@@ -9,7 +11,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
-from ensemble.session.engine.types import DEFAULT_ACCOUNT, Launch, Usage, Window
+from ensemble.session.engine.types import Launch, Usage, Window
 from ensemble.utils import STATE, exhausted, file_lock, read_regular, save, summary
 
 TTL = 300  # seconds
@@ -35,6 +37,24 @@ def readings(
     path = _path(client)
     with _lock(path):
         return _readings(client, path, probes, read, holds)
+
+
+def live(
+    probes: Mapping[str, Launch], read: Callable[[Launch], Usage | None]
+) -> dict[str, Usage | None]:
+    """Each account's reading, all read concurrently; no cache."""
+    if not probes:
+        return {}
+    with ThreadPoolExecutor(len(probes)) as pool:
+        return dict(zip(probes, pool.map(read, probes.values()), strict=True))
+
+
+def left(usage: Usage | None, limit: float) -> float | None:
+    """Points left under `limit` by the most-used window; inf: no window; None: no reading."""
+    if usage is None:
+        return None
+    used = [w.used_percent for w in (usage.five_hour, usage.weekly) if w is not None]
+    return limit - max(used) if used else math.inf
 
 
 def hold(client: str, account: str, resets_at: float | None) -> None:
@@ -118,7 +138,7 @@ def _fresh(at: float, usage: Usage | None, now: float) -> bool:
 
 
 def pick(found: Mapping[str, Usage | None]) -> str | None:
-    """The account under every threshold with the most usage left; a tie: default, else by name."""
+    """The account under every threshold with the most usage left; a tie: by name."""
     return _most_left({n: u for n, u in found.items() if u is not None and not exhausted(u)})
 
 
@@ -128,7 +148,7 @@ def best(found: Mapping[str, Usage | None]) -> str | None:
 
 
 def _most_left(found: Mapping[str, Usage]) -> str | None:
-    return min(found, key=lambda n: (-_left(found[n]), n != DEFAULT_ACCOUNT, n), default=None)
+    return min(found, key=lambda n: (-_left(found[n]), n), default=None)
 
 
 def _left(usage: Usage) -> float:

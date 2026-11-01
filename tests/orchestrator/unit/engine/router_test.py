@@ -7,6 +7,7 @@ import functools
 import inspect
 import io
 import json
+import math
 import os
 import re
 import tempfile
@@ -43,8 +44,7 @@ from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
     ops,
 )
-from ensemble.session import ConfigError, SessionError, SessionStatus, Window
-from ensemble.session import Usage as SessionUsage
+from ensemble.session import ConfigError, Headroom, SessionError, SessionStatus
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV, OutcomeStatus, Record
 from tests.orchestrator.router_fixtures import (
     AGENT,
@@ -150,11 +150,12 @@ AGENT_TOP = f'linear.agent_label_group = "{AGENT_GROUP}"\n'
 AGENT_LABELS = f'[linear.agent_labels]\na = "{AGENT_A}"\nb = "{AGENT_B}"\n'
 
 
-def reading(five=10.0, weekly=10.0):
-    return SessionUsage(
-        None if five is None else Window(five, None),
-        None if weekly is None else Window(weekly, None),
-    )
+def reading(left=90.0):
+    """A client's one account with `left` points of headroom."""
+    return [Headroom("default", left)]
+
+
+UNKNOWN = [Headroom("default", None)]
 
 
 def writes(fake):
@@ -1627,12 +1628,10 @@ class LabelClients(TickBase):
 
     def test_a_usage_blocked_restart_logs_only_its_usage_skip(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        self.api.usages = {"a": reading(95), "b": reading(10)}
+        self.api.usages = {"a": reading(-5), "b": reading(90)}
         _, fake = self.interrupted("b", [label("changed", AGENT_A, AGENT_GROUP)])
         self.assertEqual(self.tick(fake), 0)
-        self.assertEqual(
-            self.said(), ["usage-skip TASK-1 client=a reason=usage usage=five_hour=95% weekly=10%"]
-        )
+        self.assertEqual(self.said(), ["usage-skip TASK-1 client=a reason=usage usage=default=-5"])
         self.assertEqual(self.start.launches, [])
 
     def test_a_resume_keeps_its_session_when_the_label_agrees_or_is_invalid(self):
@@ -2000,7 +1999,7 @@ class ClientUsage(Base):
 
     def test_off_skips_probe_only_for_that_client(self):
         self.write_config(CONFIG + '[usage_limit]\na = "off"\nb = "on"\n')
-        self.api.usages = {"a": AssertionError("off must not probe"), "b": reading(95)}
+        self.api.usages = {"a": AssertionError("off must not probe"), "b": reading(-5)}
         with redirect_stderr(io.StringIO()), self.log_dir(again=False):
             gate = self.gate()
             self.assertFalse(gate.blocked("researcher", "TASK-1", key=("harness", "a")))
@@ -2010,7 +2009,7 @@ class ClientUsage(Base):
 
     def test_off_skips_unknown_exhausted_and_errors_in_dry_run_too(self):
         self.write_config(CONFIG + '[usage_limit]\na = "off"\n')
-        for usage in (None, reading(100, 100), ConfigError("unreadable")):
+        for usage in (UNKNOWN, reading(0), ConfigError("unreadable")):
             with self.subTest(usage=usage):
                 self.api.usages, self.api.usage_calls = {"a": usage}, []
                 said = []
@@ -2026,7 +2025,7 @@ class ClientUsage(Base):
 
     def test_explicit_on_keeps_unknown_and_exhausted_blocked(self):
         self.write_config(CONFIG + '[usage_limit]\na = "on"\n')
-        for usage in (None, reading(90)):
+        for usage in (UNKNOWN, reading(0)):
             with self.subTest(usage=usage), redirect_stderr(io.StringIO()):
                 self.api.usages, self.api.usage_calls = {"a": usage}, []
                 self.assertTrue(self.gate().blocked("researcher", "TASK-1", key=("harness", "a")))
@@ -2041,14 +2040,17 @@ class ClientUsage(Base):
 
     def test_thresholds(self):
         rows = (
-            (reading(89.9, 99.9), None),
-            (reading(90, 10), "reason=usage usage=five_hour=90% weekly=10%"),
-            (reading(10, 100), "reason=usage usage=five_hour=10% weekly=100%"),
-            (reading(150, None), "reason=usage usage=five_hour=150% weekly=none"),
-            (reading(None, 99), None),
-            (reading(89, None), None),
-            (reading(None, None), None),
-            (None, "reason=usage unknown"),
+            (reading(0.1), None),
+            (reading(0), "reason=usage usage=default=0"),
+            (reading(-50), "reason=usage usage=default=-50"),
+            (reading(math.inf), None),
+            ([Headroom("home", None), Headroom("work", 3)], None),
+            (
+                [Headroom("home", None), Headroom("work", -3)],
+                "reason=usage usage=home=unknown work=-3",
+            ),
+            ([], "reason=usage unknown"),
+            (UNKNOWN, "reason=usage unknown"),
             (ConfigError("no client a"), "reason=usage unknown"),
         )
         for value, why in rows:
@@ -2062,23 +2064,13 @@ class ClientUsage(Base):
                 self.raw = ""
                 self.assertEqual(self.said(), [f"usage-skip TASK-1 client=a {why}"] if why else [])
 
-    def test_summary(self):
-        rows = (
-            (None, "unknown"),
-            (reading(95, 10.5), "five_hour=95% weekly=10.5%"),
-            (reading(None, 100), "five_hour=none weekly=100%"),
-            (reading(89.94, None), "five_hour=89.94% weekly=none"),
-        )
-        for usage, out in rows:
-            self.assertEqual(quota.summary(usage), out)
-
 
 class ClaimUsageGates(Base):
     """Each candidate gates on its own client's usage."""
 
     def test_a_label_selected_client_gates_independently_of_the_role_default(self):
         self.write_config(AGENT_TOP + CONFIG + AGENT_LABELS)
-        self.api.usages = {"a": reading(95), "b": reading(50)}
+        self.api.usages = {"a": reading(-5), "b": reading(50)}
         fake = FakeLinear(
             [
                 issue(
@@ -2101,9 +2093,9 @@ class ClaimUsageGates(Base):
 
     def test_a_blocked_head_client_lets_the_next_client_claim(self):
         rows = (
-            (reading(95, 10), "reason=usage usage=five_hour=95% weekly=10%"),
-            (reading(10, 100), "reason=usage usage=five_hour=10% weekly=100%"),
-            (None, "reason=usage unknown"),
+            (reading(-5), "reason=usage usage=default=-5"),
+            (reading(0), "reason=usage usage=default=0"),
+            (UNKNOWN, "reason=usage unknown"),
             (ConfigError("no client a"), "reason=usage unknown"),
         )
         for value, why in rows:
@@ -2127,14 +2119,14 @@ class ClaimUsageGates(Base):
                 self.assertEqual(self.api.usage_calls, ["a", "b"])
 
     def test_an_absent_window_never_blocks(self):
-        self.api.usages = {"a": reading(None, 10)}
+        self.api.usages = {"a": reading(90)}
         self.assertEqual(
             self.claim(two(), gate=True),
             "TASK-1 https://linear.app/x/TASK-1 Deep Research",
         )
 
     def test_two_candidates_of_a_client_probe_it_once(self):
-        self.api.usages = {"a": reading(95)}
+        self.api.usages = {"a": reading(-5)}
         fake = FakeLinear(
             [
                 issue("TASK-1", "Todo", "researcher", priority=1),
@@ -2146,7 +2138,7 @@ class ClaimUsageGates(Base):
             self.claim(fake, gate=True),
             f"TASK-2 https://linear.app/x/TASK-2 {PD}",
         )
-        why = "client=a reason=usage usage=five_hour=95% weekly=10%"
+        why = "client=a reason=usage usage=default=-5"
         self.assertEqual(
             self.said(),
             [
@@ -2161,14 +2153,14 @@ class ClaimUsageGates(Base):
         self.assertEqual(self.api.usage_calls, ["a", "b"])
 
     def test_all_blocked_claims_nothing(self):
-        self.api.usages = {"a": reading(95), "b": None}
+        self.api.usages = {"a": reading(-5), "b": UNKNOWN}
         fake = two()
         self.assertEqual(self.claim(fake, gate=True), "")
         self.assertEqual(fake.mutations, [])
         self.assertEqual(self.said()[-1], "pick-none reason=nothing claimable")
 
     def test_the_claim_gates_on_the_rechecked_roles_client(self):
-        self.api.usages = {"a": reading(95), "b": reading(50)}
+        self.api.usages = {"a": reading(-5), "b": reading(50)}
         rows = (
             ("researcher", "pm", f"TASK-1 https://linear.app/x/TASK-1 {DR}", ["b"]),
             ("pm", "researcher", "", ["a"]),
@@ -2184,9 +2176,9 @@ class ClaimUsageGates(Base):
                 self.assertEqual(len(fake.mutations), int(bool(out)))
 
     def test_a_usage_skip_is_said_once_a_day(self):
-        self.api.usages = {"a": reading(95)}
+        self.api.usages = {"a": reading(-5)}
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
-        skip = "usage-skip TASK-1 client=a reason=usage usage=five_hour=95% weekly=10%"
+        skip = "usage-skip TASK-1 client=a reason=usage usage=default=-5"
         for again, said in ((False, [skip]), (True, [])):
             self.assertEqual(self.claim(fake, gate=True, again=again), "")
             self.assertEqual(
@@ -2195,7 +2187,7 @@ class ClaimUsageGates(Base):
         self.assertEqual(self.api.usage_calls, ["a", "a"])
 
     def test_dry_run_prints_the_live_usage(self):
-        self.api.usages["a"] = None
+        self.api.usages["a"] = UNKNOWN
         fake = two()
         self.assertEqual(
             self.claim(fake, dry=True, gate=True),
@@ -2206,11 +2198,11 @@ class ClaimUsageGates(Base):
             [
                 "pick TASK-1 queue=2",
                 f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
-                "usage client=a usage=unknown allowed=false",
+                "usage client=a usage=default=unknown allowed=false",
                 "usage-skip TASK-1 client=a reason=usage unknown",
                 "pick TASK-2 queue=2",
                 f"preview TASK-2 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'pm', None))}",
-                "usage client=b usage=five_hour=10% weekly=10% allowed=true",
+                "usage client=b usage=default=90 allowed=true",
             ],
         )
         self.assertEqual(self.taken[1:], (None, "pm", "b", "default"))
@@ -2517,7 +2509,7 @@ class ScheduledUsageGates(TickBase):
                         self.lines = []
                         failed = "b" if selected else "a"
                         healthy = "a" if selected else "b"
-                        self.api.usages = {failed: ConfigError(message), healthy: reading(10)}
+                        self.api.usages = {failed: ConfigError(message), healthy: reading(90)}
                         labels = [label("Selected", AGENT_B, AGENT_GROUP)] if selected else []
                         fake = self.fake(
                             issue("TASK-1", "Todo", "researcher", priority=1, labels=labels),
@@ -2557,7 +2549,7 @@ class ScheduledUsageGates(TickBase):
                         else "ensemble-broker-opencode: no API key"
                     )
                     error = SessionError(message) if host_failure else ConfigError(message)
-                    self.api.usages = {"a": error, "b": reading(10)}
+                    self.api.usages = {"a": error, "b": reading(90)}
                     fake = self.fake(
                         issue("TASK-1", "In Progress", "researcher", priority=1),
                         issue("TASK-2", "Todo", "pm", priority=2),
@@ -2740,18 +2732,16 @@ class ScheduledUsageGates(TickBase):
         self.unchanged(fake)
 
     def test_recorded_client_exhaustion_blocks_its_resume(self):
-        self.api.usages = {"a": reading(95), "b": reading(10)}
+        self.api.usages = {"a": reading(-5), "b": reading(90)}
         fake = self.fake(issue("TASK-1", "In Progress", "researcher"))
         self.resumable("TASK-1", "saved", 60)
         self.assertEqual(self.tick(fake), 0)
         self.assertEqual(self.api.usage_calls, ["a"])
-        self.assertEqual(
-            self.said(), ["usage-skip TASK-1 client=a reason=usage usage=five_hour=95% weekly=10%"]
-        )
+        self.assertEqual(self.said(), ["usage-skip TASK-1 client=a reason=usage usage=default=-5"])
         self.unchanged(fake)
 
     def test_a_blocked_resume_candidate_lets_a_claim_start(self):
-        self.api.usages = {"a": reading(95), "b": reading(50)}
+        self.api.usages = {"a": reading(-5), "b": reading(50)}
         fake = self.fake(
             issue("TASK-1", "In Progress", "researcher", priority=1),
             issue("TASK-2", "Todo", "pm", priority=2, project=PD),
@@ -2761,7 +2751,7 @@ class ScheduledUsageGates(TickBase):
         self.assertEqual(
             self.said(),
             [
-                "usage-skip TASK-1 client=a reason=usage usage=five_hour=95% weekly=10%",
+                "usage-skip TASK-1 client=a reason=usage usage=default=-5",
                 "plan mode=new queue=1",
                 "pick TASK-2 queue=1",
                 "claim TASK-2 role=pm client=b client_source=default",
@@ -2775,7 +2765,7 @@ class ScheduledUsageGates(TickBase):
         self.assertEqual(fake.issues["TASK-1"]["state"], "In Progress")
 
     def test_all_blocked_starts_nothing_and_probes_a_client_once(self):
-        self.api.usages = {"a": reading(95)}
+        self.api.usages = {"a": reading(-5)}
         fake = self.fake(
             issue("TASK-1", "In Progress", "researcher", priority=1),
             issue("TASK-3", "In Progress", "engineer", priority=2, project=PD),
@@ -2784,7 +2774,7 @@ class ScheduledUsageGates(TickBase):
         self.resumable("TASK-1", "a", 60)
         self.resumable("TASK-3", "c", 50, "engineer")
         before = self.before()
-        why = "client=a reason=usage usage=five_hour=95% weekly=10%"
+        why = "client=a reason=usage usage=default=-5"
         for again, said in ((False, [f"usage-skip TASK-{n} {why}" for n in (1, 3, 2)]), (True, [])):
             with self.subTest(again=again):
                 self.assertEqual(self.tick(fake, again=again), 0)
@@ -2795,7 +2785,7 @@ class ScheduledUsageGates(TickBase):
                 )
 
     def test_unknown_usage_skips_to_the_next_client(self):
-        self.api.usages["a"] = None
+        self.api.usages["a"] = UNKNOWN
         self.tick(two())
         self.assertEqual(
             self.said(),
@@ -2814,13 +2804,13 @@ class ScheduledUsageGates(TickBase):
         self.assertEqual(self.state, "")
 
     def test_a_dry_run_walks_the_same_and_changes_nothing(self):
-        b = "usage client=b usage=five_hour=10% weekly=10% allowed=true"
+        b = "usage client=b usage=default=90 allowed=true"
         rows = (
             (
                 True,
                 [
                     "preview TASK-1 client=a mode=resume sid=a",
-                    "usage client=a usage=unknown allowed=false",
+                    "usage client=a usage=default=unknown allowed=false",
                     "usage-skip TASK-1 client=a reason=usage unknown",
                     "plan mode=new queue=1",
                     "pick TASK-2 queue=1",
@@ -2833,7 +2823,7 @@ class ScheduledUsageGates(TickBase):
                 False,
                 [
                     "preview TASK-1 client=a mode=resume sid=a",
-                    "usage client=a usage=five_hour=10% weekly=10% allowed=true",
+                    "usage client=a usage=default=90 allowed=true",
                     "plan TASK-1 mode=resume sid=a",
                     "plan mode=new queue=1",
                     "pick TASK-2 queue=1",
@@ -2846,7 +2836,7 @@ class ScheduledUsageGates(TickBase):
         for unknown, said, calls in rows:
             with self.subTest(unknown=unknown):
                 self.lines, self.hist = [], {}
-                self.api.usages["a"] = None if unknown else reading()
+                self.api.usages["a"] = UNKNOWN if unknown else reading()
                 fake = self.fake(
                     issue("TASK-1", "In Progress", "researcher", priority=1),
                     issue("TASK-2", "Todo", "pm", priority=2, project=PD),
@@ -3810,7 +3800,7 @@ class ExplicitIssueRuns(TickBase):
 
     def test_todo_is_claimed_and_started_whatever_the_gates(self):
         self.add(kind="start", ident="TASK-8", sid="old", minutes_ago=60 * 24 * 8)
-        self.api.usages = {"a": reading(95)}
+        self.api.usages = {"a": reading(-5)}
         fake = self.fake(
             issue("TASK-1", "In Progress", "researcher"),
             issue("TASK-2", "In Progress", "researcher", priority=1),
@@ -4217,13 +4207,10 @@ class TickRecords(TickScenario):
         for again, five, said in (
             (
                 False,
-                95,
-                [
-                    f"usage-skip TASK-{n} client=a reason=usage usage=five_hour=95% weekly=10%"
-                    for n in (1, 2)
-                ],
+                -5,
+                [f"usage-skip TASK-{n} client=a reason=usage usage=default=-5" for n in (1, 2)],
             ),
-            (True, 97, []),
+            (True, -7, []),
         ):
             with self.subTest(again=again):
                 self.api.usages = {"a": reading(five)}
@@ -4232,14 +4219,14 @@ class TickRecords(TickScenario):
                 self.unchanged(fake)
 
     def test_a_usage_skipped_head_then_a_claim_keeps_every_line(self):
-        self.api.usages = {"a": reading(95), "b": reading(50)}
+        self.api.usages = {"a": reading(-5), "b": reading(50)}
         self.tick(two())
         self.assertEqual(
             self.said(),
             [
                 "plan mode=new queue=2",
                 "pick TASK-1 queue=2",
-                "usage-skip TASK-1 client=a reason=usage usage=five_hour=95% weekly=10%",
+                "usage-skip TASK-1 client=a reason=usage usage=default=-5",
                 "pick TASK-2 queue=2",
                 "claim TASK-2 role=pm client=b client_source=default",
                 "launch TASK-2 exit=0",
@@ -4247,7 +4234,7 @@ class TickRecords(TickScenario):
         )
 
     def test_usage_skips_after_a_claim_skip_end_the_tick_quietly(self):
-        self.api.usages = {"a": reading(95)}
+        self.api.usages = {"a": reading(-5)}
         fake = FakeLinear(
             [
                 issue("TASK-1", "Todo", "researcher", priority=1),
@@ -4262,7 +4249,7 @@ class TickRecords(TickScenario):
             [
                 "plan mode=new queue=2",
                 "claim-skip TASK-1 to=in_review reason=reached 4 attempts",
-                "usage-skip TASK-2 client=a reason=usage usage=five_hour=95% weekly=10%",
+                "usage-skip TASK-2 client=a reason=usage usage=default=-5",
             ],
         )
 
@@ -5447,12 +5434,12 @@ class ScheduledRuns(TickScenario):
                 "claim-skip TASK-3 to=in_review reason=reached 4 attempts",
                 "pick TASK-5 queue=4",
                 f"preview TASK-5 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'engineer', None))}",
-                "usage client=a usage=five_hour=10% weekly=10% allowed=true",
+                "usage client=a usage=default=90 allowed=true",
                 "pick TASK-6 queue=4",
                 f"preview TASK-6 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'engineer', None))}",
                 "pick TASK-4 queue=4",
                 f"preview TASK-4 client=b client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'pm', None))}",
-                "usage client=b usage=five_hour=10% weekly=10% allowed=true",
+                "usage client=b usage=default=90 allowed=true",
             ],
         )
         self.assertEqual((self.api.order, self.api.usage_calls), (SESSIONS, ["a", "b"]))
@@ -5462,10 +5449,10 @@ class ScheduledRuns(TickScenario):
         )
 
     def test_dry_run_usage_blocked(self):
-        self.api.usages = {"a": reading(95)}
+        self.api.usages = {"a": reading(-5)}
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
         self.assertEqual(self.tick(fake, "--dry-run"), 0)
-        why = "usage=five_hour=95% weekly=10%"
+        why = "usage=default=-5"
         self.assertEqual(
             self.said(),
             [
@@ -5496,7 +5483,7 @@ class ScheduledRuns(TickScenario):
                 'plan mode=new queue=1 live={"engineer": "1/1", "pm": "1/1"}',
                 "pick TASK-2 queue=1",
                 f"preview TASK-2 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
-                "usage client=a usage=five_hour=10% weekly=10% allowed=true",
+                "usage client=a usage=default=90 allowed=true",
             ],
         )
         self.assertEqual(self.api.usage_calls, ["a"])

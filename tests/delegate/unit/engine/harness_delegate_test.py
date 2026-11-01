@@ -14,6 +14,7 @@ import fcntl
 import io
 import itertools
 import json
+import math
 import os
 import shutil
 import signal
@@ -39,6 +40,7 @@ from ensemble.session import (
     Access,
     EnvironmentSpec,
     Exited,
+    Headroom,
     Mode,
     NotShowable,
     Reply,
@@ -1478,10 +1480,14 @@ class SaveFailureTest(HarnessCase):
 
 class UsageSession(HarnessSession):
     clients = []
+    result = []
 
     @classmethod
     def usage(cls, client):
         cls.clients.append(client)
+        if isinstance(cls.result, BaseException):
+            raise cls.result
+        return cls.result
 
 
 class OverlayTest(HarnessCase):
@@ -1496,6 +1502,15 @@ class OverlayTest(HarnessCase):
             session_cls=UsageSession,
         )
         self.assertEqual(UsageSession.clients, ["fake", "claude", "opencode"])
+
+    def test_usage_passes_the_sessions_list_through(self):
+        found = [Headroom("api", math.inf), Headroom("broken", None), Headroom("work", -10)]
+        UsageSession.result = found
+        self.addCleanup(setattr, UsageSession, "result", [])
+        self.assertIs(DrivenDelegate.usage("researcher", session_cls=UsageSession), found)
+        UsageSession.result = SessionConfigError("bad session config")
+        with self.assertRaisesRegex(ConfigError, "^bad session config$"):
+            DrivenDelegate.usage("researcher", session_cls=UsageSession)
 
     def test_owner_overlays_shape_the_persisted_run(self):
         self.make()

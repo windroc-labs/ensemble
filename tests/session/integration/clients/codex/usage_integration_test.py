@@ -9,12 +9,13 @@ from pathlib import Path
 from unittest import mock
 
 from ensemble.session.clients.codex import CodexClient
-from ensemble.session.engine.types import ConfigError, Usage, Window
+from ensemble.session.engine.types import ConfigError, Headroom, Window
 from tests.session.case import REPO, Case
 from tests.session.integration.clients.codex import fake_app_server
 from tests.utils.sandbox import scratch
 
 FIVE, WEEK = Window(62, 2000), Window(41, 4000)
+BOTH = [Headroom("default", 38)]  # the most-used window's points left under 100
 
 
 class UsageIntegrationTest(Case):
@@ -68,7 +69,7 @@ class UsageIntegrationTest(Case):
         return result
 
     def test_one_light_probe_matches_ids_and_maps_window_duration(self):
-        self.assertEqual(self.probe(), Usage(FIVE, WEEK))
+        self.assertEqual(self.probe(), BOTH)
         rows = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(rows[0]["argv"], ["app-server"])
         self.assertIsNone(rows[0]["marker"])
@@ -85,9 +86,9 @@ class UsageIntegrationTest(Case):
 
     def test_each_reply_maps_to_its_windows_and_failures_are_unknown_and_cleaned_up(self):
         for case, expected in (
-            ("weekly-only", Usage(None, WEEK)),
-            ("error", None),
-            ("ignore-term", Usage(FIVE, WEEK)),
+            ("weekly-only", [Headroom("default", 59)]),
+            ("error", [Headroom("default", None)]),
+            ("ignore-term", BOTH),
         ):
             with self.subTest(case=case):
                 self.log.unlink(missing_ok=True)
@@ -101,9 +102,7 @@ class UsageIntegrationTest(Case):
         common = self.common
         inherited = {key: "inherited" for key in (*common.UNSET, *common.DEFAULTS)}
         with mock.patch.dict(os.environ, inherited):
-            self.assertEqual(
-                self.probe(FAKE_ADDITION="configured", PAGER="configured"), Usage(FIVE, WEEK)
-            )
+            self.assertEqual(self.probe(FAKE_ADDITION="configured", PAGER="configured"), BOTH)
         env = json.loads(self.log.read_text().splitlines()[0])["env"]
         for key in common.UNSET:
             self.assertIsNone(env[key], key)

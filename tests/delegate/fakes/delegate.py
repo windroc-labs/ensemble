@@ -44,7 +44,7 @@ def _update(workdir: str, **changes) -> dict:
 class FakeDelegate(Delegate):
     ROLES = {"dummy": {"note": "notes its input"}}
     outcome_result = Outcome("done", "Noted", "noted its input", deliverable="hello")
-    usage_result = None
+    usage_result = []
 
     @classmethod
     def create(cls, role, spec, *, display=None, callback=None, overlays=()):
