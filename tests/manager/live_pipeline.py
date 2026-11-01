@@ -22,6 +22,7 @@ from tests.orchestrator.integration.flow_fixtures import (
     ROLES,
     TASK_LABELS,
     TOKENS,
+    claude_account,
 )
 from tests.orchestrator.integration.flow_fixtures import REPO as PROJECT_REPO
 from tests.orchestrator.unit import board_ids, run_fixtures
@@ -45,6 +46,7 @@ class LivePipeline(LiveCrew):
                 local_section(run_fixtures.local(state) + TASK_LABELS, "orchestrator")
                 + "\n"
                 + run_fixtures.CORE_LOCAL
+                + claude_account(self.root)
             )
         self.fake = fake_linear.FakeLinear(harness=HARNESS)
         self.fake.user("Harness", HARNESS, uid=board_ids.HARNESS_USER)

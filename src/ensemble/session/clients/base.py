@@ -84,7 +84,6 @@ class Client:
         return ""
 
     def _max_usage(self, account: str) -> float:
-        """The usage percent `account` may reach, which Session.usage measures its left against."""
         return DEFAULT_MAX_USAGE
 
     def _usage_probes(self) -> dict[str, tuple[str, Launch]] | None:

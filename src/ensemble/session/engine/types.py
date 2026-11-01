@@ -240,8 +240,8 @@ SESSION_NAME_RULE = f"{TAG.pattern} but not {NO_DISPLAY}"
 
 COMMAND = "ensemble-session"
 ACCOUNT_SET_BY = f"{ACCOUNT_ENV} is set by --account or [clients.<client>].account"
-DEFAULT_ACCOUNT = "default"  # the one Headroom of a client without accounts
-DEFAULT_MAX_USAGE = 100  # percent of each usage window an account may reach
+DEFAULT_ACCOUNT = "default"
+DEFAULT_MAX_USAGE = 100
 RESUME = (COMMAND, "resume")
 
 
@@ -640,10 +640,6 @@ class Usage:
 
 @dataclass(frozen=True)
 class Headroom:
-    """An account's usage percentage points left under its max_usage, 0 or below at or past it;
-    None: its reading failed; inf: it has no usage panel.
-    """
-
     account: str
     left: float | None
 

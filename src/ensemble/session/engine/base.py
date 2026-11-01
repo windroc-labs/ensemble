@@ -166,9 +166,6 @@ class Session(ABC):
 
     @classmethod
     def usage(cls, client: str) -> list[Headroom]:
-        """Each registered account's Headroom, by name; a client without accounts: one default
-        item; no probe: [].
-        """
         return cls._hosted("usage")(client)
 
     @classmethod

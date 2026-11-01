@@ -97,9 +97,7 @@ GUARD = (
 
 
 def claude_account(root):
-    """The fake claude's config dir as the one registered Claude account; its max_usage of 90
-    makes a 95% reading block a start.
-    """
+    """The fake claude's dir as one Claude account; max_usage 90 blocks at 95%."""
     path = os.path.join(root, "claude-config")
     return f'\n[session.clients.claude.accounts.work]\ndir = "{path}"\nmax_usage = 90\n'
 

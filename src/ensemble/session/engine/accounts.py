@@ -1,5 +1,5 @@
-"""Per-account usage readings: live ones for Session.usage, cached on disk ones for the account a
-start selecting none runs on; and an account's headroom under its max_usage.
+"""Per-account usage readings, live or cached on disk, and the account a start selecting none
+runs on.
 """
 
 import contextlib
@@ -42,20 +42,15 @@ def readings(
 def live(
     probes: Mapping[str, Launch], read: Callable[[Launch], Usage | None]
 ) -> dict[str, Usage | None]:
-    """Each account's reading by `read` of its launch, all concurrently, once each; no cache."""
+    """Each account's reading, all read concurrently; no cache."""
     if not probes:
         return {}
     with ThreadPoolExecutor(len(probes)) as pool:
-        found = dict(zip(probes, pool.map(read, probes.values()), strict=True))
-    for name, usage in found.items():
-        print(f"usage: account {name}: {summary(usage)}", file=sys.stderr)
-    return found
+        return dict(zip(probes, pool.map(read, probes.values()), strict=True))
 
 
 def left(usage: Usage | None, limit: float) -> float | None:
-    """Points left under `limit` by the most-used window reported; inf: none reported (no usage
-    panel); None: no reading.
-    """
+    """Points left under `limit` by the most-used window; inf: no window; None: no reading."""
     if usage is None:
         return None
     used = [w.used_percent for w in (usage.five_hour, usage.weekly) if w is not None]

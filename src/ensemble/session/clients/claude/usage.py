@@ -1,7 +1,6 @@
 """`claude -p /usage` text as Usage, ported from CodexBar's ClaudeStatusProbe.parse,
 ClaudeUsageFetcher.makeSnapshot and ClaudeStatusProbe.parseResetDate (THIRD_PARTY_NOTICES.md).
-A login without a subscription usage panel (an API key or gateway) prints only a cost summary,
-read as Usage(None, None).
+A cost summary alone (an API key or gateway login) is Usage(None, None).
 """
 
 import json
@@ -45,7 +44,7 @@ COST_LINE = re.compile(
 
 
 def _cost_only(text: str) -> bool:
-    """Every line a cost-summary line, one of them the total cost or token usage."""
+    """Only cost-summary lines, one a total cost or token count."""
     lines = [line for line in text.splitlines() if line.strip()]
     return any(COST_SUMMARY.match(line) for line in lines) and all(
         COST_LINE.fullmatch(line) for line in lines

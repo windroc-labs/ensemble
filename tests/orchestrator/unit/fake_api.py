@@ -12,12 +12,9 @@ def _answer(value):
 
 
 class FakeApi:
-    """`live` None: the sessions unknown; `statuses` (per sid, default resumable yes), `usages`
-    (per client, default LOW) and `shown`: a value or an exception to raise; `records`: the
-    recorded sessions per sid, inspect's NoRecordedSession without one. host() is itself. `order`
-    logs the close, show and detach calls; `constructed`, `detached`, `tui_checks` and their
-    errors, `checkouts` (per workdir, default None) with `asked` its (class, workdir) calls, and
-    `cleaned`: delegate_fixture's.
+    """`live` None: sessions unknown; `statuses`, `usages` (default LOW) and `shown`: a value or
+    an exception to raise; `records`: recorded sessions per sid. host() is itself; `order` logs
+    close, show and detach; the rest are delegate_fixture's.
     """
 
     def __init__(self, order=None):
