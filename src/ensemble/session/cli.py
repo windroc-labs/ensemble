@@ -228,7 +228,11 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
     p.add_argument(
         "--account",
         metavar="NAME",
-        help="its [session.clients.CLIENT.accounts.NAME] account (default: default; Docker Host only)",
+        help=(
+            "its [session.clients.CLIENT.accounts.NAME] account (default: [session.clients.CLIENT]"
+            " account, else the one account registered, else the one with the most usage left;"
+            " Docker Host only)"
+        ),
     )
     p.add_argument(
         "--display",

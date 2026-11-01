@@ -41,7 +41,8 @@ implementation = "ensemble.delegate:HarnessDelegate"
 # local: light-build = 3
 
 # Per-client usage checks, owned by the orchestrator; empty table or an unlisted client means "on".
-#   <client>  "on": keep the board-start usage gate.
+#   <client>  "on": keep the board-start usage gate: a start goes ahead while any of the client's accounts has
+#             points left under its [session.clients.<client>.accounts.<name>] max_usage.
 #             "off": neither reads nor evaluates usage; other clients keep their setting.
 [usage_limit]
 
