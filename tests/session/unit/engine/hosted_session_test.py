@@ -1845,8 +1845,17 @@ class AccountPoolTest(Base):
                 self.probe.reset_mock()
                 self.assertEqual(self.usage(), Usage(Window(-1, None), Window(-1, None)))
                 self.assertEqual(self.probed(), ["/x"])
-                self.assertNotIn(ACCOUNT_ENV, self.started_env())
                 self.assertFalse(os.path.exists(self.cache))
+        self.assertNotIn(ACCOUNT_ENV, self.started_env())
+
+    def test_one_registered_account_is_selected_unprobed(self):
+        for container in (True, False):
+            with self.subTest(container=container):
+                self.pool({"work": "/w"}, container=container)
+                self.probe.reset_mock()
+                self.assertEqual(self.started_env()[ACCOUNT_ENV], "work")
+                self.assertEqual(self.started_env(**{ACCOUNT_ENV: "work"})[ACCOUNT_ENV], "work")
+                self.probe.assert_not_called()
 
 
 class WritableDirsTest(Base):

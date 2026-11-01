@@ -32,7 +32,6 @@ from ensemble.session.engine.base import Session
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
-    DEFAULT_ACCOUNT,
     Access,
     ClientBound,
     ConfigError,
@@ -227,13 +226,16 @@ def _pool_account(spec: Spec, client: Client, host: Host) -> str | None:
     registered = client._accounts()
     if registered is None or len(registered) < 2 or host._client_context().container is None:
         return None
-    return spec.env.get(ACCOUNT_ENV) or DEFAULT_ACCOUNT
+    return spec.env.get(ACCOUNT_ENV) or None
 
 
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
     if spec.env.get(ACCOUNT_ENV):
         return spec
     if account := client._account():
+        return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
+    if len(registered := client._accounts() or ()) == 1:
+        (account,) = registered
         return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
     if (pool := _pooled(setup, name, client, host)) is None:
         return spec

@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
-from ensemble.session.engine.types import DEFAULT_ACCOUNT, Launch, Usage, Window
+from ensemble.session.engine.types import Launch, Usage, Window
 from ensemble.utils import STATE, exhausted, file_lock, read_regular, save, summary
 
 TTL = 300  # seconds
@@ -118,7 +118,7 @@ def _fresh(at: float, usage: Usage | None, now: float) -> bool:
 
 
 def pick(found: Mapping[str, Usage | None]) -> str | None:
-    """The account under every threshold with the most usage left; a tie: default, else by name."""
+    """The account under every threshold with the most usage left; a tie: by name."""
     return _most_left({n: u for n, u in found.items() if u is not None and not exhausted(u)})
 
 
@@ -128,7 +128,7 @@ def best(found: Mapping[str, Usage | None]) -> str | None:
 
 
 def _most_left(found: Mapping[str, Usage]) -> str | None:
-    return min(found, key=lambda n: (-_left(found[n]), n != DEFAULT_ACCOUNT, n), default=None)
+    return min(found, key=lambda n: (-_left(found[n]), n), default=None)
 
 
 def _left(usage: Usage) -> float:

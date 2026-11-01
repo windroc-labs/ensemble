@@ -48,9 +48,11 @@ class PickTest(Case):
     def test_a_reading_without_windows_has_everything_left(self):
         self.assertEqual(accounts.pick({"default": usage(1, 1), "work": usage(None)}), "work")
 
-    def test_a_tie_goes_to_default_then_name_order(self):
+    def test_equal_readings_pick_by_name_alone(self):
         found = {"b": usage(30), "a": usage(10, 30), "default": usage(30, 10)}
-        self.assertEqual((accounts.pick(found), accounts.best(found)), ("default", "default"))
+        self.assertEqual((accounts.pick(found), accounts.best(found)), ("a", "a"))
+        found = {"default": usage(95, 10), "a": usage(95, 10)}
+        self.assertEqual((accounts.pick(found), accounts.best(found)), (None, "a"))
         self.assertEqual(accounts.pick({"b": usage(5), "a": usage(5)}), "a")
         over = {"b": usage(95), "a": usage(95), "c": usage(99)}
         self.assertEqual((accounts.pick(over), accounts.best(over)), (None, "a"))
