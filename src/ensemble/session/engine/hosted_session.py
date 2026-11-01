@@ -71,7 +71,7 @@ from ensemble.session.harness.types import Op
 from ensemble.session.harness.view import OwnedSession, confirmed_end, dialog, fold
 from ensemble.session.hosts.base import SIGNALS, Host, activity, host_resume, stored_record
 from ensemble.session.modes import headless, in_process, tui
-from ensemble.session.modes.base import BaseMode, child_env
+from ensemble.session.modes.base import BaseMode, _select_account, child_env
 from ensemble.session.viewer import display as displays
 from ensemble.session.viewer.viewer import Viewer
 from ensemble.utils import (
@@ -216,26 +216,35 @@ def _read_usage(
         return None
 
 
-def _pooled(setup: _Setup, client: Client, host: Host) -> dict[str, Usage | None] | None:
-    probes = client._usage_probes()
-    if probes is None or len(probes) < 2 or host._client_context().container is None:
-        return None
-    return accounts.live(
-        {account: launch for account, (_, launch) in probes.items()},
-        lambda launch: _read_usage(setup, client, launch),
-    )
-
-
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
-    if spec.env.get(ACCOUNT_ENV):
+    """The start check of a client with accounts: each registered account read live once, the
+    start on the wanted one (--account, else the client's account) only while it is usable, else
+    on the usable one with the most usage left; SessionError when none is.
+    """
+    if (registered := client._accounts()) is None:
         return spec
-    if account := client._account():
-        return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
-    if (pool := _pooled(setup, client, host)) is None:
-        return spec
-    if (account := accounts.best(pool)) is None:
-        return spec
-    print(f"{name} account {account}: picked ({summary(pool[account])})", file=sys.stderr)
+    if not registered:
+        raise ConfigError(
+            f"client {name}: no account registered; add a"
+            f" [session.clients.{name}.accounts.<name>] table with its required dir"
+        )
+    if wanted := spec.env.get(ACCOUNT_ENV) or client._account():
+        spec = replace(spec, env={**spec.env, ACCOUNT_ENV: wanted})
+        _select_account(spec, client)
+    container = host._client_context().container is not None
+    readings = accounts.live(
+        client._usage_probes() or {},
+        lambda launch: _read_usage(setup, client, launch, container=container),
+    )
+    for account, reading in sorted(readings.items()):
+        print(f"{name} account {account}: {summary(reading)}", file=sys.stderr)
+    left = {
+        account: accounts.left(reading, client._max_usage(account))
+        for account, reading in readings.items()
+    }
+    if (account := accounts.choose(left, wanted)) is None:
+        raise SessionError("usage: no available account")
+    print(f"{name} account {account}: picked", file=sys.stderr)
     return replace(spec, env={**spec.env, ACCOUNT_ENV: account})
 
 
@@ -1105,7 +1114,7 @@ class HostedSession(Session):
             reading = _read_usage(setup, found, launch, container=container)
             return [Headroom(DEFAULT_ACCOUNT, accounts.left(reading, DEFAULT_MAX_USAGE))]
         readings = accounts.live(
-            {name: launch for name, (_, launch) in probes.items()},
+            probes,
             lambda launch: _read_usage(setup, found, launch, container=container),
         )
         return [

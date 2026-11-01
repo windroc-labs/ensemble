@@ -1,4 +1,6 @@
-"""A TmuxHost whose clients get a container context, as on the Docker Host."""
+"""A TmuxHost whose clients get a container context, as on the Docker Host; Hosts that record a
+headless start and refuse it.
+"""
 
 import sys
 from collections.abc import Mapping
@@ -9,6 +11,7 @@ from ensemble.session.hosts.tmux import TmuxHost
 
 PATH = f"{__name__}:ContainerTmuxHost"
 HOMED = f"{__name__}:HomedContainerHost"
+RECORDING = f"{__name__}:RecordingTmuxHost"
 NAMED = f"{__name__}:NamedHeadlessHost"
 
 
@@ -24,17 +27,15 @@ class NamedHeadlessHost(TmuxHost):
     _named_headless = True
 
 
-class HomedContainerHost(ContainerTmuxHost):
-    """Gives a client its home env, as the Docker Host does; keeps each headless start's metadata
-    in `headless`, then refuses the start.
+class _Recording(TmuxHost):
+    """Keeps each headless start's metadata in `headless` and launch in `launches`, then refuses
+    the start.
     """
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.headless: list[dict[str, str]] = []
-
-    def _client_env(self, name, client, home, *, resume) -> Mapping[str, str]:
-        return {"FAKE_HOME": "/h"}
+        self.launches: list[Launch] = []
 
     def worker(
         self,
@@ -51,4 +52,16 @@ class HomedContainerHost(ContainerTmuxHost):
                 name, launch, terminal=True, display=display, events=events, metadata=metadata
             )
         self.headless.append(dict(metadata or {}))
+        self.launches.append(launch)
         raise SessionError("refused by the test Host")
+
+
+class RecordingTmuxHost(_Recording):
+    """A local Host recording its headless starts."""
+
+
+class HomedContainerHost(_Recording, ContainerTmuxHost):
+    """Gives a client its home env, as the Docker Host does, and records its headless starts."""
+
+    def _client_env(self, name, client, home, *, resume) -> Mapping[str, str]:
+        return {"FAKE_HOME": "/h"}

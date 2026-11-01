@@ -86,7 +86,7 @@ class Client:
     def _max_usage(self, account: str) -> float:
         return DEFAULT_MAX_USAGE
 
-    def _usage_probes(self) -> dict[str, tuple[str, Launch]] | None:
+    def _usage_probes(self) -> dict[str, Launch] | None:
         return None
 
     def usage(self, output: str) -> Usage | None:

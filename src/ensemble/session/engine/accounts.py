@@ -5,7 +5,6 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 
 from ensemble.session.engine.types import Launch, Usage
-from ensemble.utils import exhausted
 
 
 def live(
@@ -26,20 +25,11 @@ def left(usage: Usage | None, limit: float) -> float | None:
     return limit - max(used) if used else math.inf
 
 
-def pick(found: Mapping[str, Usage | None]) -> str | None:
-    """The account under every threshold with the most usage left; a tie: by name."""
-    return _most_left({n: u for n, u in found.items() if u is not None and not exhausted(u)})
-
-
-def best(found: Mapping[str, Usage | None]) -> str | None:
-    """pick, else the known account with the most usage left; None: no reading known."""
-    return pick(found) or _most_left({n: u for n, u in found.items() if u is not None})
-
-
-def _most_left(found: Mapping[str, Usage]) -> str | None:
-    return min(found, key=lambda n: (-_left(found[n]), n), default=None)
-
-
-def _left(usage: Usage) -> float:
-    windows = (usage.five_hour, usage.weekly)
-    return 100 - max((w.used_percent for w in windows if w is not None), default=0)
+def choose(left: Mapping[str, float | None], wanted: str = "") -> str | None:
+    """`left`: each candidate account's points left. `wanted` while usable (more than 0 left);
+    none wanted: the usable one with the most left, a tie by name; None: none usable.
+    """
+    usable = {name: points for name, points in left.items() if points is not None and points > 0}
+    if wanted:
+        return wanted if wanted in usable else None
+    return min(usable, key=lambda name: (-usable[name], name), default=None)

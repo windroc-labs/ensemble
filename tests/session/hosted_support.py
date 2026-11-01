@@ -98,7 +98,7 @@ class PoolClient(ProbeClient):
 
     def _usage_probes(self):
         return {
-            name: (identity, Launch(("probe-cmd", identity)))
+            name: Launch(("probe-cmd", identity))
             for name, identity in self.config["accounts"].items()
         }
 

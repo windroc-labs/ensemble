@@ -57,35 +57,31 @@ class LiveTest(Case):
         self.assertEqual(accounts.live({}, mock.Mock(side_effect=AssertionError)), {})
 
 
-class PickTest(Case):
-    def test_the_account_with_more_left_wins(self):
-        found = {"default": usage(70, 10), "work": usage(20, 30)}
-        self.assertEqual((accounts.pick(found), accounts.best(found)), ("work", "work"))
+class ChooseTest(Case):
+    def test_the_usable_account_with_the_most_left_then_the_first_name(self):
+        inf = math.inf
+        for a, b, want in (
+            (10, 15, "b"),
+            (10, 10, "a"),
+            (0, 1, "b"),
+            (10, inf, "b"),
+            (inf, inf, "a"),
+            (None, -5, None),
+            (0, -5, None),
+            (None, None, None),
+        ):
+            with self.subTest(a=a, b=b):
+                self.assertEqual(accounts.choose({"b": b, "a": a}), want)
 
-    def test_an_account_over_a_threshold_loses_to_one_under(self):
-        found = {"default": usage(92, 5), "work": usage(50, 60)}
-        self.assertEqual(accounts.pick(found), "work")
-        self.assertEqual(accounts.pick({"default": usage(10, 100), "work": usage(89, 1)}), "work")
+    def test_default_is_an_ordinary_name(self):
+        self.assertEqual(accounts.choose({"default": 30, "a": 30}), "a")
 
-    def test_with_every_account_over_best_is_the_one_with_most_left(self):
-        found = {"default": usage(95, 10), "work": usage(10, 100), "lab": usage(91, 92)}
-        self.assertIsNone(accounts.pick(found))
-        self.assertEqual(accounts.best(found), "lab")
+    def test_a_wanted_account_only_while_usable_never_another(self):
+        left = {"home": 60, "work": 0, "lab": None}
+        self.assertEqual(accounts.choose(left, "home"), "home")
+        for wanted in ("work", "lab", "missing"):
+            with self.subTest(wanted=wanted):
+                self.assertIsNone(accounts.choose(left, wanted))
 
-    def test_unknown_readings_are_never_picked(self):
-        self.assertEqual(accounts.best({"default": None, "work": usage(95)}), "work")
-        self.assertEqual(accounts.pick({"default": None, "work": usage(40)}), "work")
-        self.assertIsNone(accounts.best({"default": None, "work": None}))
-        self.assertIsNone(accounts.best({}))
-
-    def test_a_reading_without_windows_has_everything_left(self):
-        self.assertEqual(accounts.pick({"default": usage(1, 1), "work": usage(None)}), "work")
-
-    def test_equal_readings_pick_by_name_alone(self):
-        found = {"b": usage(30), "a": usage(10, 30), "default": usage(30, 10)}
-        self.assertEqual((accounts.pick(found), accounts.best(found)), ("a", "a"))
-        found = {"default": usage(95, 10), "a": usage(95, 10)}
-        self.assertEqual((accounts.pick(found), accounts.best(found)), (None, "a"))
-        self.assertEqual(accounts.pick({"b": usage(5), "a": usage(5)}), "a")
-        over = {"b": usage(95), "a": usage(95), "c": usage(99)}
-        self.assertEqual((accounts.pick(over), accounts.best(over)), (None, "a"))
+    def test_no_candidate_is_none(self):
+        self.assertIsNone(accounts.choose({}))

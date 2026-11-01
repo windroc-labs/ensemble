@@ -69,8 +69,7 @@ class ClaudeClient(Client):
         return "claude"
 
     def _usage_probes(self):
-        accounts = self.common.accounts
-        return {name: (accounts[name].dir, self.common.probe(name)) for name in accounts}
+        return {name: self.common.probe(name) for name in self.common.accounts}
 
     def _max_usage(self, account):
         return self.common.accounts[account].max_usage
