@@ -76,7 +76,7 @@ class Client:
         """The registered account names a session may select; None: the client has no accounts."""
         return None
 
-    def _account(self) -> str:
+    def _account(self, *, container: bool) -> str:
         return ""
 
     def _account_env(self, account: str) -> Mapping[str, str]:

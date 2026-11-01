@@ -121,7 +121,17 @@ class ClientTest(Base):
         self.assertEqual(
             ClaudeClient.keys,
             frozenset(
-                {"flags", "allow", "tiers", "efforts", "env", "modes", "accounts", "account"}
+                {
+                    "flags",
+                    "allow",
+                    "tiers",
+                    "efforts",
+                    "env",
+                    "modes",
+                    "accounts",
+                    "account",
+                    "local_account",
+                }
             ),
         )
         self.assertEqual((ClaudeClient.client_note, ClaudeCommon.NOTE), (NOTE, NOTE))

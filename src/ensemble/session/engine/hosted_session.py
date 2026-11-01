@@ -219,22 +219,27 @@ def _read_usage(
 
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
     """The start check of a client with accounts: each registered account read live once, the
-    start on the wanted one (--account, else the client's account) only while it is usable, else
-    on the usable one with the most usage left; SessionError when none is.
+    start on the wanted one (--account, else the client's account; a local resume: its
+    conversation's) only while it is usable, else on the usable one with the most usage left;
+    SessionError when none is. A local start wanting none runs unchecked on its own config.
     """
     if (registered := client._accounts()) is None:
+        return spec
+    container = host._client_context().container is not None
+    recorded = None if container or not spec.resume else _recorded(spec)
+    conversation = client._account_of(recorded.transcript) if recorded else ""
+    configured = "" if spec.resume and not container else client._account(container=container)
+    wanted = spec.env.get(ACCOUNT_ENV) or configured
+    if not (container or wanted or conversation):
         return spec
     if not registered:
         raise ConfigError(
             f"client {name}: no account registered; add a"
             f" [session.clients.{name}.accounts.<name>] table with its required dir"
         )
-    if wanted := spec.env.get(ACCOUNT_ENV) or client._account():
+    if wanted:
         spec = replace(spec, env={**spec.env, ACCOUNT_ENV: wanted})
         select_account(spec, client)
-    container = host._client_context().container is not None
-    recorded = None if container or not spec.resume else _recorded(spec)
-    conversation = client._account_of(recorded.transcript) if recorded else ""
     readings = accounts.live(
         client._usage_probes() or {},
         lambda launch: _read_usage(setup, client, launch, container=container),

@@ -263,12 +263,25 @@ class AccountsTest(Base):
                 self.refused(lambda *, a=accounts: self.found(a), message)
                 self.refused(lambda *, a=accounts: ClaudeClient({"accounts": a}), message)
 
-    def test_a_fixed_account_is_a_registered_one(self):
-        work = {"work": {"dir": "/abs/w"}}
-        self.assertEqual(ClaudeClient({"accounts": work, "account": "work"})._account(), "work")
-        self.assertEqual(ClaudeClient({"accounts": work})._account(), "")
-        self.assertEqual(read_config(local=os.devnull)["clients"]["claude"]["account"], "")
+    def test_a_fixed_account_is_a_registered_one_per_host_kind(self):
+        both = {"w": {"dir": "/abs/w"}, "t": {"dir": "/abs/t"}}
+        fixed = ClaudeClient({"accounts": both, "account": "w", "local_account": "t"})
+        self.assertEqual(
+            (fixed._account(container=True), fixed._account(container=False)), ("w", "t")
+        )
+        unset = ClaudeClient({"accounts": both})
+        self.assertEqual(
+            (unset._account(container=True), unset._account(container=False)), ("", "")
+        )
+        packaged = read_config(local=os.devnull)["clients"]["claude"]
+        self.assertEqual((packaged["account"], packaged["local_account"]), ("", ""))
         for config, message in (
+            (
+                {"accounts": both, "local_account": "missing"},
+                "[clients.claude].local_account 'missing': not a registered account"
+                " ([clients.claude.accounts.missing])",
+            ),
+            ({"local_account": 1}, "[clients.claude].local_account must be a string"),
             (
                 {"account": "work"},
                 "[clients.claude].account 'work': not a registered account"
@@ -280,7 +293,7 @@ class AccountsTest(Base):
                 " ([clients.claude.accounts.default])",
             ),
             (
-                {"accounts": work, "account": "missing"},
+                {"accounts": both, "account": "missing"},
                 "[clients.claude].account 'missing': not a registered account"
                 " ([clients.claude.accounts.missing])",
             ),

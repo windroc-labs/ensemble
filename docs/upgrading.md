@@ -1,5 +1,18 @@
 # Upgrading
 
+## tmux Host Claude starts run on `~/.claude` again
+
+On the tmux Host, a Claude start that selects no account runs on your own `~/.claude` again, with
+its plugins, settings and login, and reads no usage. `[session.clients.claude] account` now applies
+to the Docker Host only. To run tmux starts on a registered account, set `local_account` in
+`~/.ensemble/config.local.toml`, or pass `--account`. A tmux resume keeps the account whose `dir`
+holds its conversation, else `~/.claude`, whatever `local_account` says:
+
+```toml
+[session.clients.claude]
+local_account = "work"
+```
+
 ## Register each Claude account explicitly
 
 The session registers only the Claude accounts you list. There is no implicit `default`
@@ -8,7 +21,7 @@ may set `max_usage`, the percent of each usage window (five-hour and weekly alik
 reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.toml`:
 
 1. List every subscription under its own name, its `dir` the `CLAUDE_CONFIG_DIR` logged in to it.
-   To keep using `~/.claude`, register it under a name:
+   To select `~/.claude` by name, register it:
 
    ```toml
    [session.clients.claude.accounts.work]
@@ -22,10 +35,10 @@ reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.tom
 2. A table without `dir` is now a configuration error, one named `default` included. A
    `[session.clients.claude] account = "default"` needs a registered `default`; prefer a real name.
 3. On the Docker Host, log each name in to the broker: `ensemble-broker login claude work`.
-4. On the tmux Host, a start now runs on its account's login: `CLAUDE_CONFIG_DIR` is that
-   account's `dir`. Log each `dir` in with `CLAUDE_CONFIG_DIR=<dir> claude auth login`. A tmux
-   resume stays on the account whose `dir` holds its conversation; another account chosen by
-   `--account` or `account` refuses the resume.
+4. On the tmux Host, a start on an account (`--account` or `local_account`) runs on its login:
+   `CLAUDE_CONFIG_DIR` is that account's `dir`. Log each `dir` in with
+   `CLAUDE_CONFIG_DIR=<dir> claude auth login`. A tmux resume stays on the account whose `dir`
+   holds its conversation; another account chosen by `--account` refuses the resume.
 5. Delete the old usage readings, holds and their locks; nothing reads them any more:
 
    ```sh
@@ -36,14 +49,17 @@ reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.tom
    Either fails harmlessly when the directory is gone or holds anything else. Account dirs,
    broker credentials and other `~/.ensemble` state are untouched.
 
-Before launching, every Claude start, on either Host, reads each registered account's usage once,
-live, and compares it with that account's `max_usage`. `--account`, else
-`[session.clients.claude] account`, runs only while that account is below its limit in every
-window, and is never replaced by another. With neither, the start picks the account with the most
-usage left, a tie by name. With no account usable, or every reading failed, the start fails with
-`usage: no available account` and starts nothing. A Claude start with no account registered is a
-configuration error. Nothing is cached or held: a run that hits a usage limit marks nothing, and
-the next start reads again. There are no separate start thresholds besides `max_usage`.
+A tmux Claude start without `--account` runs on `~/.claude` and reads no usage when it is new and
+`local_account` is empty, or resumes a conversation not recorded in an account's `dir`. Before
+launching, every other Claude start reads each registered account's usage once, live, and compares
+it with that account's `max_usage`. `--account`, else `account` on the Docker Host or
+`local_account` on a new tmux start, runs only while that account is below its limit in every
+window, and is never replaced by another. With none, a Docker Host start picks the account with
+the most usage left, a tie by name. With no account usable, or every reading failed, the start
+fails with `usage: no available account` and starts nothing. A start that reads usage with no
+account registered is a configuration error. Nothing is cached or held: a run that hits a usage
+limit marks nothing, and the next start reads again. There are no separate start thresholds besides
+`max_usage`.
 
 ## Usage is decided only in the session
 
