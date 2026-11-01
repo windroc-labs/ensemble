@@ -26,7 +26,7 @@ class ExtensionClient(child.Case):
             self.assertTrue(path.startswith(tuple(r + os.sep for r in ROOTS)), path)
         self.assertEqual(
             (got["run"]["client"], got["run"]["tier"], got["run"]["effort"]),
-            ("extension", 3, "low"),
+            ("extension", 2, "high"),
         )
         self.assertNotIn(BANNER, got["prompt"])
         self.assertIn(f"\n{RETURN}\n", got["prompt"])

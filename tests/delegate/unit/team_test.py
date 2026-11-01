@@ -251,7 +251,6 @@ class Shipped(Packaged):
             "pm": "product-design",
             "engineer": "build",
             "verifier": "verify",
-            "dummy-tester": "echo",
         }
         self.assertEqual(set(roles()), set(defaults))
         for role, default in defaults.items():
@@ -803,7 +802,6 @@ class Real(RealConfig):
                 "pm": ["worktree"],
                 "engineer": ["worktree", "status"],
                 "verifier": ["worktree"],
-                "dummy-tester": ["worktree"],
             },
         )
 
@@ -834,11 +832,6 @@ class Real(RealConfig):
                     "([Principles › Writing](#writing)); length follows content.",
                 )
                 for role, doc in (("pm", "the PRD"),)
-            ),
-            (
-                "echo's summary overrides Output's length",
-                task_text("echo"),
-                "`summary` the input's first line, cut to 300 characters.",
             ),
             (
                 "a build's files are its spec and plan doc",

@@ -64,7 +64,7 @@ from tests.delegate.fakes.harness_session import (
     RecordingProcess,
     harness_launches,
 )
-from tests.delegate.harness import SID, HarnessCase
+from tests.delegate.harness import CORE, SID, HarnessCase
 from tests.delegate.replies import block
 from tests.delegate.unit.engine.orphans import Orphan
 from tests.session import harnesses
@@ -297,10 +297,10 @@ class Drive(HarnessCase):
             client="fake",
             sid=SID,
         )
-        delegate = self.make(spec=spec, host="box")
+        delegate = self.make(role=CORE, spec=spec, host="box")
         self.assertEqual(self.metadata()["plan"]["docker"], True)
         record = delegate.detach()
-        self.assertEqual(record.sessions, (f"dummy-tester-{SID[:8]}",))
+        self.assertEqual(record.sessions, (f"{CORE}-{SID[:8]}",))
         self.assertEqual(
             [launch["name"] for launch in harness_launches()], [f"{record.name}-drive"]
         )
@@ -364,19 +364,17 @@ class Record(HarnessCase):
 class DockerHeadlessTest(HarnessCase):
     def test_a_headless_session_carries_the_agent_name_only_on_the_docker_host(self):
         docker_box(self)
-        name = f"dummy-tester-{SID[:8]}"
+        name = f"{CORE}-{SID[:8]}"
         for host, want in (("box", name), ("agent", None)):
             with self.subTest(host=host):
-                spec = Spec(
-                    "input", self.work, task="echo", mode="headless", client="fake", sid=SID
-                )
+                spec = Spec("input", self.work, mode="headless", client="fake", sid=SID)
                 placement = {"session_cls": HarnessSession, "host": host}
-                preview = DrivenDelegate.preview("dummy-tester", spec, **placement)
+                preview = DrivenDelegate.preview(CORE, spec, **placement)
                 self.assertEqual((preview.agent, preview.plan.session.name), (want, want))
                 self.assertEqual(preview.plan.docker, want is not None)
                 self.assertEqual(preview.plan.spec.name, want)
-        spec = Spec("input", self.work, task="echo", mode="headless", client="fake", sid=SID)
-        view = self.make(spec=spec, host="box")
+        spec = Spec("input", self.work, mode="headless", client="fake", sid=SID)
+        view = self.make(role=CORE, spec=spec, host="box")
         self.assertEqual(self.metadata()["plan"]["session"]["name"], name)
         view._complete(Result(0, Outcome("needs_input", "Q", "A", questions=["Which?"])))
         view.resume(input="The answer.")
@@ -399,17 +397,15 @@ class ForegroundHeadlessCloseTest(HarnessCase):
             self.addCleanup(patcher.stop)
 
     def foreground(self, host):
-        spec = Spec("input", self.work, task="echo", mode="headless", client="fake", sid=SID)
-        self.make(spec=spec, host=host)
+        spec = Spec("input", self.work, mode="headless", client="fake", sid=SID)
+        self.make(role=CORE, spec=spec, host=host)
         return DrivenDelegate.attach(self.work, session_cls=HarnessSession)
 
     def test_on_docker_it_closes_the_running_runs_session_by_name(self):
         view = self.foreground("box")
         with RunState(Layout(self.work)).run_lock():
             view.close()
-        HarnessSession.retire.assert_called_once_with(
-            f"dummy-tester-{SID[:8]}", sid=SID, host="box"
-        )
+        HarnessSession.retire.assert_called_once_with(f"{CORE}-{SID[:8]}", sid=SID, host="box")
         HarnessSession.retire.side_effect = Unanswered("still running without its harness")
         with RunState(Layout(self.work)).run_lock(), self.assertRaises(Unanswered):
             view.close()
@@ -462,8 +458,8 @@ class DockerPreflightTest(HarnessCase):
         return support.FakeProc(argv, out=support.text(f"{command}-output").encode())
 
     def create(self, mode):
-        spec = Spec("input", self.work, task="echo", mode=mode, sid=SID)
-        return self.make(spec=spec, session_cls=Session, host="box")
+        spec = Spec("input", self.work, mode=mode, sid=SID)
+        return self.make(role=CORE, spec=spec, session_cls=Session, host="box")
 
     def test_a_fresh_workdir_passes_the_docker_preflight(self):
         for mode in ("headless", "tui"):
@@ -1476,9 +1472,9 @@ class OverlayTest(HarnessCase):
 
     def test_owner_overlays_shape_the_persisted_run(self):
         self.make()
-        self.assertEqual(self.metadata()["plan"]["run"]["effort"], "low")
-        self.make(overlays=({"roles": {"dummy-tester": {"effort": "high"}}},))
         self.assertEqual(self.metadata()["plan"]["run"]["effort"], "high")
+        self.make(overlays=({"roles": {"dummy-tester": {"effort": "low"}}},))
+        self.assertEqual(self.metadata()["plan"]["run"]["effort"], "low")
 
     def test_a_record_without_overlays_is_corrupt(self):
         self.make()
@@ -2215,7 +2211,7 @@ class SweepTest(HarnessCase):
         self.assertEqual(self.record(), before)
 
 
-AGENT = f"dummy-tester-{SID[:8]}"
+AGENT = f"{CORE}-{SID[:8]}"
 HARNESS = f"{AGENT}-drive"
 SCREEN = "OpenAI Codex\n\n  Booting\n\naccount/read failed during TUI bootstrap\n\n"
 TAIL = "OpenAI Codex | Booting | account/read failed during TUI bootstrap"
@@ -2239,7 +2235,7 @@ class StartedTest(HarnessCase):
             docker_box(self)
         text = "Reference: T\nRepo: acme/ensemble\n\nHi." if docker else "input"
         spec = Spec(text, self.work, mode="tui", client="fake", sid=SID)
-        return self.make(spec=spec, host=self.host)
+        return self.make(role=CORE, spec=spec, host=self.host)
 
     def ends(self, ending=None):
         """The drive has ended by the time its spawn returns, after `ending` ran."""
@@ -2575,7 +2571,7 @@ lock = "dummy-lock"
 item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
-[delegate.roles.dummy-tester.environment]
+[delegate.roles.researcher.environment]
 name = "dummy"
 prefetch = true
 """
@@ -2594,11 +2590,14 @@ class EnvironmentTest(HarnessCase):
         with open(self.local, "a", encoding="utf-8") as file:
             file.write(text)
 
-    def spec(self, text=TARGETED, **kw):
-        return Spec(text, self.work, client="fake", sid=SID, **{"task": "echo", **kw})
+    def make(self, *, role=CORE, **kw):
+        return super().make(role=role, **kw)
 
-    def preview(self, role="dummy-tester", host="docker", text=TARGETED, **kw):
-        spec = self.spec(text, task="build" if role == "engineer" else "echo")
+    def spec(self, text=TARGETED, **kw):
+        return Spec(text, self.work, client="fake", sid=SID, **kw)
+
+    def preview(self, role=CORE, host="docker", text=TARGETED, **kw):
+        spec = self.spec(text, task="build" if role == "engineer" else None)
         placement = {"session_cls": HarnessSession, "host": host}
         return DrivenDelegate.preview(role, spec, **placement | kw)
 
@@ -2639,11 +2638,11 @@ class EnvironmentTest(HarnessCase):
         )
 
     def test_orchestrator_overlay_with_role_environment_is_refused(self):
-        overlay = {"roles": {"dummy-tester": {"environment": {"name": "dummy"}}}}
+        overlay = {"roles": {CORE: {"environment": {"name": "dummy"}}}}
         self.append(ACCEPTANCE)
         with self.assertRaises(ConfigError) as caught:
             self.make(spec=self.spec(), host="docker", overlays=(overlay,))
-        self.assertIn("[overlay.roles.dummy-tester.environment]", str(caught.exception))
+        self.assertIn(f"[overlay.roles.{CORE}.environment]", str(caught.exception))
         self.assertFalse(os.path.exists(self.work))
 
     def test_issue_text_names_change_nothing(self):
@@ -2721,7 +2720,7 @@ class EnvironmentTest(HarnessCase):
         self.stop(self.answered(view))
         self.assertIsNone(self.metadata()["plan"]["session"]["environment"])
 
-    def test_dummy_tester_acceptance_config_end_to_end(self):
+    def test_a_role_environment_acceptance_config_end_to_end(self):
         self.append(ACCEPTANCE)
         echoed = {"status": "done", "title": "Echo", "summary": "echoed", "deliverable": TARGETED}
         HarnessSession.script = (Reply(block(echoed)), Exited(0))

@@ -6,15 +6,16 @@ import os
 import unittest
 
 from ensemble.delegate.composer.prompt import RESUME
+from tests.delegate import tester
 from tests.delegate.case import REPO
 from tests.delegate.integration.composer import child
 
-TASKS = os.path.join(REPO, "src", "ensemble", "delegate", "team", "tasks")
+TEAM = os.path.join(REPO, "src", "ensemble", "delegate", "team")
 
 
 class NewRun(child.Case):
     def test_a_new_runs_prompt_and_intent(self):
-        got = self.compose("dummy-tester", cwd=self.proj)
+        got = self.compose(tester.ROLE, cwd=self.proj)
         self.assertFalse(got["prompt"].startswith(RESUME))
         self.assertTrue(got["prompt"].endswith("\n# Input\n\nHello.\n"))
         self.assertEqual(
@@ -24,7 +25,7 @@ class NewRun(child.Case):
             got["intent"],
             {
                 "dirs": [self.work],
-                "reads": [TASKS, os.path.dirname(TASKS)],
+                "reads": [os.path.join(tester.team(), "tasks"), TEAM, tester.team()],
                 "writes": [],
                 "commands": [],
                 "gate": "",

@@ -225,9 +225,7 @@ class InProcess(Base):
         )
 
     def test_silence_longer_than_the_idle_timeout_is_recorded_and_the_run_goes_on(self):
-        self.write(
-            os.path.join(self.ensemble, "config.local.toml"), "[delegate]\nidle_timeout = 0.3\n"
-        )
+        self.local("[delegate]\nidle_timeout = 0.3\n")
         r = self.go({"sleep": 1.0}, said(START, block(DONE)))
         self.assertEqual(r.outcome.status, "done")
         idle = [e for e in self.records() if e["kind"] == "idle"]
@@ -615,7 +613,7 @@ class TuiStart(Handles):
         ):
             with self.subTest(local=local):
                 self.fresh()
-                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
+                self.local(local)
                 self.driver.display = "mgr"
                 self.began()
                 self.assertEqual(self.handle.shown, shown)
@@ -625,7 +623,7 @@ class TuiStart(Handles):
         for local in ("", '[delegate]\nshow = "none"\n', '[delegate]\nshow = "open {{session}}"\n'):
             with self.subTest(local=local):
                 self.fresh()
-                self.write(os.path.join(self.ensemble, "config.local.toml"), local)
+                self.local(local)
                 self.driver.display = "mgr"
                 handle = FakeHandle([])
                 handle.hidden = True
@@ -739,7 +737,7 @@ class InstructionRuns(InstructionCase):
                 self.assertFalse(os.path.exists(os.path.join(args[1].workdir, "run.jsonl")))
 
     def test_an_unconfigured_client_does_not_start_a_session(self):
-        args = self.given("dummy-tester", client="unconfigured")
+        args = self.given("researcher", client="unconfigured")
         with no_spawn():
             result = executed(*args, driver=self.driver)
         self.assertEqual(
@@ -747,7 +745,7 @@ class InstructionRuns(InstructionCase):
         )
 
     def test_a_resume_is_refused(self):
-        args = self.given("dummy-tester", resume=True)
+        args = self.given("researcher", resume=True)
         with (
             no_spawn(),
             self.assertRaisesRegex(ConfigError, "instruction has no session to resume"),

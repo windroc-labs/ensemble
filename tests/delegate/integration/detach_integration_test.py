@@ -16,7 +16,7 @@ from ensemble.delegate import DelegateEvent
 from ensemble.delegate.engine.types import Layout
 from ensemble.session import SIGNALS
 from ensemble.utils import ProcessControl, Record, Status
-from tests.delegate import drives
+from tests.delegate import drives, tester
 from tests.delegate.case import PY, PYTHONPATH, Case, RunReads
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.integration.cli import ASKING, DONE, RUN, SID
@@ -29,7 +29,7 @@ from tests.utils.sandbox import pid_exists as running
 from tests.utils.sandbox import scratch
 
 MANAGER = "mgr"
-ROLE = "dummy-tester"
+ROLE = tester.ROLE
 TUI = f"{ROLE}-{SID[:8]}"
 DRIVE = f"{TUI}-drive"
 HARNESS_ARGV = ("-m", "ensemble.delegate.engine.harness")
@@ -45,6 +45,7 @@ RESUME = (*RUN[:-1], "resume")
 
 class Detach(RunReads, Case):
     def setUp(self):
+        tester.configure(self.home)
         self.dir = scratch(self)
         self.server = None
         self.proj, self.work, self.bin, self.no_tmux = (
@@ -315,8 +316,9 @@ class Tui(Detach):
         self.assertEqual(len(self.server.panes(f"={MANAGER}:")), 1)
 
     def test_a_policy_env_secret_reaches_the_client_but_no_argv_record_or_printed_command(self):
-        with open(os.path.join(self.ensemble, "config.local.toml"), "w", encoding="utf-8") as f:
-            f.write(f'[delegate.policy.claude]\nenv = {{ FAKE_TOKEN = "{SECRET}" }}\n')
+        tester.configure(
+            self.home, f'[delegate.policy.claude]\nenv = {{ FAKE_TOKEN = "{SECRET}" }}\n'
+        )
         launched = os.path.join(self.dir, "launched.jsonl")
         dump = (
             "import json, os, sys; f = open(sys.argv[1], 'a'); "

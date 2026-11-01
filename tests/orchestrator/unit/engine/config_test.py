@@ -191,7 +191,7 @@ PM_ENGINEER = workflow_line(
     '[[stage]]\nrole = "engineer"\ninput = "build"\n'
 )
 
-# dummy-tester (a core charter, as a custom role), then pm
+# dummy-tester (the tests' team_dirs charter, as a custom role), then pm
 TESTER_PM = (
     '[[stage]]\nrole = "dummy-tester"\ninput = "research"\nnext = "pm"\n'
     '[[stage]]\nrole = "pm"\ninput = "design"\ntitle_prefix = "PRD"\n'

@@ -31,6 +31,7 @@ from ensemble.session import (
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as SessionSpec
 from ensemble.utils import Record
+from tests.delegate import tester
 from tests.delegate.case import REPO, SRC, child_env
 from tests.delegate.fakes import callback_recorder
 from tests.delegate.fakes.harness_session import (
@@ -372,12 +373,15 @@ class Views(HarnessCase):
         team = os.path.realpath(
             owned_team(self, {}, root=os.environ.get("ENSEMBLE_TEST_TMP", TEAMS))
         )
-        self.settings(team_dirs=(team,))
+        self.settings(team_dirs=(tester.team(), team))
         self.make(spec=Spec("input", self.work, task="echo", client="fake", sid=SID))
-        self.settings(language="French", team_dirs=(team,))
+        self.settings(language="French", team_dirs=(tester.team(), team))
         view = DrivenDelegate.attach(self.work)
         self.settings(
-            language="German", client="changed-client", default="changed", team_dirs=(team,)
+            language="German",
+            client="changed-client",
+            default="changed",
+            team_dirs=(tester.team(), team),
         )
         view.resume()
         view.close()

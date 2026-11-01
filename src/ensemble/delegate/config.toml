@@ -164,11 +164,6 @@ dir = "Verification/"
 name = "mini-op"
 prefetch = true
 
-# ── Dummy Tester ────────────────────────────────────────
-[roles.dummy-tester]
-tier = 3
-effort = "low"
-
 # Environments: the container a role run's agent starts in, on a Docker-kind
 # Host. Only this file and config.local.toml set them: a caller's overlay (the orchestrator's among them) holding
 # environment, environments or roles.<role>.environment is refused, and nothing in a run's input selects one.

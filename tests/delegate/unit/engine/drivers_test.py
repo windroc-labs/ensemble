@@ -11,6 +11,7 @@ from ensemble.delegate.engine.types import DriverSpec, Finished, Instruction
 from ensemble.session import Access, Session
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import Spec as StartSpec
+from tests.delegate import tester
 from tests.delegate.case import Case
 from tests.delegate.fakes.session import SessionClass
 from tests.delegate.replies import block
@@ -22,7 +23,7 @@ from tests.session.case import no_spawn
 class IdleTimeoutConfig(Case):
     def local(self, text):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as stream:
-            stream.write(text)
+            stream.write(tester.enabled(text))
 
     def test_default_global_and_role_values_reach_an_executed_session(self):
         for text, expected in (
@@ -148,6 +149,8 @@ class Drivers(Case):
         work = os.path.join(self.home, "work")
         out = os.path.join(work, "instruction.md")
         events = []
+        with open(os.path.join(self.ensemble, "config.local.toml"), "w") as stream:
+            stream.write(tester.enabled(""))
         with no_spawn():
             result = executed(
                 Composer().resolve("dummy-tester"),

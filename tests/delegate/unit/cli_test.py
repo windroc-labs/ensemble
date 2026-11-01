@@ -21,6 +21,7 @@ from ensemble.delegate.engine.types import Layout, Result
 from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import NotShowable, SessionBusy, SessionError
 from ensemble.utils import Record, Status
+from tests.delegate import tester
 from tests.delegate.case import SID, Case, committed
 from tests.delegate.cli_case import (
     COMMANDS,
@@ -38,7 +39,7 @@ from tests.delegate.fakes.harness_session import (
     RecordingHost,
     harness_launches,
 )
-from tests.delegate.harness import HarnessCase
+from tests.delegate.harness import CORE, HarnessCase
 from tests.delegate.unit.runs import DONE
 from tests.session import fake_client
 from tests.session.case import SID as HARNESS_SID
@@ -398,7 +399,7 @@ lock = "dummy-lock"
 item = "ensemble-broker-env/dummy"
 file = "dummy.txt"
 
-[delegate.roles.dummy-tester.environment]
+[delegate.roles.researcher.environment]
 name = "dummy"
 prefetch = true
 """
@@ -418,7 +419,7 @@ class Environments(Harnessed):
 
     def test_dry_run_prints_environment(self):
         self.configure("docker")
-        code, out, err = self.cli("--dry-run", input=self.TARGETED)
+        code, out, err = self.cli("--dry-run", input=self.TARGETED, role=CORE, task="research")
         self.assertEqual(code, 0, err)
         self.assertEqual(
             json.loads(out)["environment"],
@@ -434,7 +435,7 @@ class Environments(Harnessed):
 
     def test_run_refuses_environment_on_tmux(self):
         self.configure("tmux")
-        code, out, err = self.cli(input=self.TARGETED)
+        code, out, err = self.cli(input=self.TARGETED, role=CORE, task="research")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("[environment.tmux]", err)
         self.assertFalse(os.path.exists(self.work))
@@ -627,8 +628,8 @@ class DryRun(Base):
                 "workdir": self.work,
                 "cwd": Layout(self.work).agent,
                 "project": False,
-                "tier": 3,
-                "effort": "low",
+                "tier": 2,
+                "effort": "high",
                 "sessions": {"agent": None},
                 "hosts": {"agent": "tmux"},
                 "callback": None,
@@ -637,7 +638,7 @@ class DryRun(Base):
         )
         self.assertEqual(
             (shown["dirs"], shown["reads"], shown["commands"]),
-            ([], [os.path.join(TEAM, "tasks"), TEAM], []),
+            ([], [os.path.join(tester.team(), "tasks"), TEAM, tester.team()], []),
         )
         self.assertIn("**Your task**: `echo` (`<tasks>/echo.md`).", shown["prompt"])
         self.assertTrue(shown["prompt"].endswith("\n# Input\n\nHello.\n"))
@@ -856,13 +857,15 @@ class List(Base):
         code, out, err = self.cli("run", "--list")
         self.assertEqual((code, err), (0, ""))
         lines = out.splitlines()
-        self.assertEqual([line for line in lines if not line.startswith("  ")], HEADS)
+        charter = os.path.join(tester.team(), "roles", "dummy-tester.md")
+        heads = [line for line in lines if not line.startswith("  ")]
+        self.assertEqual(heads, [*HEADS, f"dummy-tester  local  {charter}"])
         echo = Composer().index("dummy-tester")["echo"]
+        task = os.path.join(tester.team(), "tasks", "echo.md")
+        self.assertTrue(out.endswith(f"\n{heads[-1]}\n  echo: {echo}  [{task}]\n"), out)
+        core = lines[: lines.index(heads[-1])]
         self.assertTrue(
-            out.endswith(f"\ndummy-tester  local  built-in\n  echo: {echo}  [built-in]\n"), out
-        )
-        self.assertTrue(
-            all(line.endswith("  [built-in]") for line in lines if line.startswith("  "))
+            all(line.endswith("  [built-in]") for line in core if line.startswith("  "))
         )
         self.assertNotIn("<tasks>", out)
         self.assertEqual(os.listdir(self.ensemble), ["config.local.toml"])
@@ -1075,6 +1078,7 @@ class Prompt(Case):
     def setUp(self):
         self.work = os.path.join(self.home, "work")
         self.out = os.path.join(self.work, "prompt.md")
+        Path(self.ensemble, "config.local.toml").write_text(tester.enabled(""), encoding="utf-8")
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(self.home)
 
@@ -1104,7 +1108,8 @@ class Prompt(Case):
 
     def test_instruction_matches_composer_bytes_no_client_or_session_configuration(self):
         Path(self.ensemble, "config.local.toml").write_text(
-            local_section('[hosts]\ndefault = "missing"\n', "session"), encoding="utf-8"
+            tester.enabled(local_section('[hosts]\ndefault = "missing"\n', "session")),
+            encoding="utf-8",
         )
         composition = Composer()
         config = composition.resolve("dummy-tester", "echo")

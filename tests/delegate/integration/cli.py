@@ -12,6 +12,7 @@ import tempfile
 import time
 
 from ensemble.utils import SID_ENV, Record, Status
+from tests.delegate import tester
 from tests.delegate.case import PY, REPO, Case, RunReads, child_env
 from tests.delegate.plans import TEAM_FILES, write_team
 from tests.delegate.workdir import input_first
@@ -105,9 +106,10 @@ class Runs(RunReads, Case):
 class Integration(Runs):
     """ROLE over the fake `claude`: own HOME, CLI cwd `proj`, workdir `work`, agent cwd `agent`."""
 
-    ROLE = "dummy-tester"
+    ROLE = tester.ROLE
 
     def setUp(self):
+        tester.configure(self.home)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.addCleanup(harnesses.end, self.home)
@@ -224,7 +226,7 @@ def codex_said(*texts) -> list[dict]:
 class CodexIntegration(Runs):
     """ROLE's TASK, --client codex over fake_codex; HOME outside the temp dirs."""
 
-    ROLE, TASK = "dummy-tester", "echo"
+    ROLE, TASK = tester.ROLE, tester.TASK
     CLIENT = "codex"
 
     def setUp(self):
@@ -233,6 +235,7 @@ class CodexIntegration(Runs):
         for d in (home, tmp):
             self.addCleanup(d.cleanup)
         self.home, root = os.path.realpath(home.name), os.path.realpath(tmp.name)
+        tester.configure(self.home)
         self.addCleanup(harnesses.end, self.home)
         self.root = root
         self.work, bin_dir = os.path.join(root, "work"), os.path.join(root, "bin")
@@ -315,9 +318,9 @@ class OpenCodeIntegration(CodexIntegration):
         os.chmod(opencode, 0o755)
         self.proj = os.path.join(self.root, "project")
         os.mkdir(self.proj)
-        os.makedirs(os.path.join(self.home, ".ensemble"), exist_ok=True)
-        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
-            f.write(local_section(f"trusted_dirs = [{json.dumps(self.proj)}]\n", "delegate"))
+        tester.configure(
+            self.home, local_section(f"trusted_dirs = [{json.dumps(self.proj)}]\n", "delegate")
+        )
 
     def drive(self, steps, *extra, **scenario) -> subprocess.CompletedProcess:
         return super().drive(steps, "--cwd", self.proj, *extra, **scenario)

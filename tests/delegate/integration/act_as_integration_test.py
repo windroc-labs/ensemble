@@ -6,13 +6,14 @@ import subprocess
 from ensemble.delegate.cli import listing
 from ensemble.delegate.composer import Composer, RunParams
 from ensemble.delegate.engine.types import Layout
+from tests.delegate import tester
 from tests.delegate.case import REPO, Case
 from tests.delegate.skills.act_as import argv, command
 from tests.delegate.verifier import VERIFIER
 from tests.utils.case import local_section
 from tests.utils.sandbox import clean_env, python_path
 
-ROLES = ["researcher", "pm", "engineer", "verifier", "dummy-tester"]
+ROLES = ["researcher", "pm", "engineer", "verifier"]
 BIN = os.path.join(REPO, "bin")  # the plugin's bin/, on a Claude Code session's PATH
 
 
@@ -36,6 +37,7 @@ class ActAs(Case):
         self.assertEqual([r.split()[0] for r in want.splitlines() if r[:1] != " "], ROLES)
 
     def test_step_3_delivers_the_instruction_file(self):
+        tester.configure(self.home)
         workdir = os.path.join(self.home, "work")
         out = os.path.join(Layout(workdir).agent, "prompt.md")
         run = (

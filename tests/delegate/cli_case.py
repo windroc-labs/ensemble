@@ -9,6 +9,7 @@ from unittest import mock
 from ensemble.delegate import cli
 from ensemble.delegate.engine.harness_delegate import HarnessDelegate
 from ensemble.session import ConfigError
+from tests.delegate import tester
 from tests.delegate.case import FakeClientCase, RunReads
 from tests.delegate.fakes.harness_session import DrivenDelegate
 from tests.delegate.replies import block, completed_steps
@@ -44,7 +45,6 @@ HEADS = [
     "pm  local  built-in",
     "engineer  pull-request  built-in",
     "verifier  github  built-in",
-    "dummy-tester  local  built-in",
 ]
 
 
@@ -97,7 +97,7 @@ class Base(RunReads, FakeClientCase):
 
     def local(self, text):
         with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:
-            f.write(local_section(text, "delegate"))
+            f.write(tester.enabled(local_section(text, "delegate")))
 
     def launches(self) -> list[dict]:
         return read_jsonl(self.log, missing_ok=True)

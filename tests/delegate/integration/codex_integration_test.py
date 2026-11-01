@@ -10,6 +10,7 @@ import os
 import unittest
 
 from ensemble.delegate.engine.types import Layout
+from tests.delegate import tester
 from tests.delegate.integration.cli import ASKING, DONE, NATIVE, CodexIntegration
 from tests.delegate.integration.cli import codex_said as said
 from tests.delegate.replies import block, mark
@@ -38,9 +39,9 @@ class Codex(CodexIntegration):
     def test_writable_roots_never_hold_the_workdir_or_its_run_dir(self):
         extra, layout = os.path.join(self.home, "extra"), Layout(self.work)
         os.mkdir(extra)
-        os.makedirs(os.path.join(self.home, ".ensemble"))
-        with open(os.path.join(self.home, ".ensemble", "config.local.toml"), "w") as f:
-            f.write(f"[delegate.roles.{self.ROLE}]\nwrite = {json.dumps([extra])}\n")
+        tester.configure(
+            self.home, f"[delegate.roles.{self.ROLE}]\nwrite = {json.dumps([extra])}\n"
+        )
         res = self.drive(said(block(DONE)))
         self.assertEqual(res.returncode, 0, res.stderr)
         (call,) = self.calls()

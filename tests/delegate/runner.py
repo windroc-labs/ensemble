@@ -13,6 +13,7 @@ from ensemble.delegate.composer import Composer
 from ensemble.delegate.engine.plan import plan
 from ensemble.delegate.engine.runner import execute
 from ensemble.delegate.engine.types import Layout, Result
+from tests.delegate import tester
 from tests.delegate.case import FakeClientCase, RunReads
 from tests.delegate.replies import completed_steps
 from tests.delegate.unit.runs import DONE, NAME, turn
@@ -72,13 +73,18 @@ def executed(
 
 
 class Base(RunReads, FakeClientCase):
-    """dummy-tester's echo over the fake client in workdir `work` (not made), out `out`, the cwd
-    its agent dir; `channel` its run.jsonl.
+    """dummy-tester's echo (tests/delegate/tester.py) over the fake client in workdir `work` (not
+    made), out `out`, the cwd its agent dir; `channel` its run.jsonl.
     """
 
     def setUp(self):
         super().setUp()
         self.channel = run_log(self.work)
+        self.local("")
+
+    def local(self, text) -> None:
+        """The local config `text`, the tester team enabled."""
+        self.write(os.path.join(self.ensemble, "config.local.toml"), tester.enabled(text))
 
     def go(
         self,

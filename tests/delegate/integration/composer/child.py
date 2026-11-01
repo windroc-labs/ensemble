@@ -1,5 +1,6 @@
 """The Composer in a child process: PY with PYTHONPATH this tree's import root, the test's own HOME
-(its ~/.ensemble/config.local.toml the only local config) and a temp cwd, printing one JSON value.
+(its ~/.ensemble/config.local.toml the only local config, the tester team enabled unless it sets
+team_dirs: tests/delegate/tester.py) and a temp cwd, printing one JSON value.
 PROGRAM runs argv[1]: compose (one agent run as its caller, the Delegate, would), catalog (every
 role's catalog row, rendered, with a workdir), or index.
 """
@@ -8,7 +9,7 @@ import json
 import os
 import subprocess
 
-from tests.delegate import case
+from tests.delegate import case, tester
 from tests.delegate.case import PY, child_env
 from tests.utils.sandbox import scratch
 
@@ -90,10 +91,11 @@ class Case(case.Case):
         for d in (self.work, self.proj):
             os.mkdir(d)
         self.out = os.path.join(self.work, "out.md")
+        self.local("")
 
     def local(self, text: str, mode: str = "w") -> None:
         with open(os.path.join(self.ensemble, "config.local.toml"), mode, encoding="utf-8") as f:
-            f.write(text)
+            f.write(tester.enabled(text) if mode == "w" else text)
 
     def child(self, *args: str):
         res = subprocess.run(

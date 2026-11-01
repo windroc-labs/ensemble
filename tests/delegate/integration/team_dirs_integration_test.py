@@ -62,9 +62,7 @@ class ComposerTeamDirs(child.Case):
 
     def test_the_catalog_lists_its_role_after_cores_with_its_sources(self):
         rows = self.child("catalog", self.work)
-        self.assertEqual(
-            list(rows), ["researcher", "pm", "engineer", "verifier", "dummy-tester", "writer"]
-        )
+        self.assertEqual(list(rows), ["researcher", "pm", "engineer", "verifier", "writer"])
         note = ["a short note; always; light.", os.path.join(self.tasks, "note.md")]
         self.assertEqual(
             rows["writer"], ["local", os.path.join(self.team, "roles", "writer.md"), {"note": note}]
