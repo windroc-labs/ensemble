@@ -41,15 +41,14 @@ with layout:
     composer = delegate.composer
     base = composer.resolve("researcher", "light-research")
     access = {}
-    for label, commands, gate in (
-        ("commands", ["command"], ""),
-        ("gate", [], "gate"),
-        ("both", ["command"], "gate"),
+    for label, commands in (
+        ("commands", ["command"]),
+        ("no commands", []),
     ):
         intent = composer.access(
-            replace(base, commands=commands, gate=gate), case.work, cwd=case.work, project=False
+            replace(base, commands=commands), case.work, cwd=case.work, project=False
         )
-        access[label] = {"env": dict(intent.env), "commands": list(intent.commands), "gate": intent.gate}
+        access[label] = {"env": dict(intent.env), "commands": list(intent.commands)}
 print(json.dumps({"harness": harness_env, "composer": access}))
 """
 
@@ -88,15 +87,14 @@ class ChildEnvironments(Case):
 
     def assert_environments(self, actual, expected, *, harness):
         self.assertEqual(actual["harness"], harness)
-        for label, commands, gate in (
-            ("commands", ["command"], ""),
-            ("gate", [], "gate"),
-            ("both", ["command"], "gate"),
+        for label, commands in (
+            ("commands", ["command"]),
+            ("no commands", []),
         ):
             with self.subTest(caller=label):
                 self.assertEqual(
                     actual["composer"][label],
-                    {"env": expected, "commands": commands, "gate": gate},
+                    {"env": expected if commands else {}, "commands": commands},
                 )
 
     def test_source_callers_supply_the_shared_import_root_once(self):

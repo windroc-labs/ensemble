@@ -491,7 +491,6 @@ class Prompt(Fake):
             "scripts",
             "tasks",
             "team",
-            "gate",
             "repo",
             "branch",
             "dir",
@@ -516,7 +515,6 @@ class Parameters(Fake):
                 "<tasks>",
                 "<team>",
                 "<role team>",
-                "<gate>",
                 "<out-repo>",
                 "<out-branch>",
                 "<out-dir>",
@@ -552,29 +550,20 @@ class Parameters(Fake):
         self.assertEqual(list(names), ["<Workdir>", "<tasks>", "<team>"])
         self.assertEqual(names["<team>"], f"`{self.root}`")
 
-    def test_gate_used_by_name_in_an_indexed_task_file_only(self):
-        self.write({"tasks/short-note.md": "# Short Note\n\nRun `<gate>` first.\n"})
-        self.assertEqual(parameters(self.compose()[0])["<gate>"], "`none`")
-        self.assertEqual(
-            parameters(self.compose(overlays=[{"gate": "owner brake"}])[0])["<gate>"],
-            "`owner brake`",
-        )
-        self.assertNotIn("<gate>", parameters(self.compose("editor")[0]))
-
-    def test_gate_used_in_a_method_file_a_text_names(self):
+    def test_parameter_used_in_a_method_file_a_text_names(self):
         self.write(
             {
-                ("tasks/long-note.md"): (
+                "tasks/long-note.md": (
                     "# Long Note\n\nFollow `<team>/methods/m.md`, `<team>/methods/gone.md`.\n"
                 ),
-                "methods/m.md": "# M\n\nRun `<gate>`.\n",
+                "methods/m.md": "# M\n\nUse `<out-host>`.\n",
                 "methods/other.md": "# O\n\n`<out-dir>`\n",
             }
         )
         names = parameters(self.compose()[0])
-        self.assertEqual(list(names), ["<Workdir>", "<tasks>", "<team>", "<gate>"])
+        self.assertEqual(list(names), ["<Workdir>", "<tasks>", "<team>", "<out-host>"])
         self.write({"tasks/long-note.md": "# Long Note\n\nFollow `{{team}}/methods/m.md`.\n"})
-        self.assertNotIn("<gate>", parameters(self.compose()[0]))
+        self.assertNotIn("<out-host>", parameters(self.compose()[0]))
 
     def test_github_output_its_used_keys(self):
         names = parameters(self.compose("editor")[0])

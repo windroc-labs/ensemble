@@ -8,6 +8,10 @@ without querying usage. The built-in researcher no longer receives a caller-supp
 quota brake and no longer skips its second round because of usage. Board-start
 usage checks remain in place.
 
+Remove `gate` keys from custom delegate overlays and remove `gate=` arguments to
+`RunConfig`. The delegate rejects `gate` overlays and no longer defines the `<gate>`
+prompt parameter. Update custom research instructions that use that parameter.
+
 This change ships with the other session account and usage changes in one compatible
 release; do not release it separately.
 

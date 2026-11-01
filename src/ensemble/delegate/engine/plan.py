@@ -152,7 +152,7 @@ def plan(
         _refuse_overlap("write dir", path, layout)
     access = Access(
         dirs=intent.dirs,
-        commands=intent.commands + ((intent.gate,) if intent.gate else ()),
+        commands=intent.commands,
         cwd=here,
         project=project,
         reads=intent.reads,

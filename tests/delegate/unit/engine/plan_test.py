@@ -204,7 +204,7 @@ class Layouts(Base):
         self.agent, self.run_dir = (os.path.join(self.work, d) for d in ("agent", "run"))
 
     def test_workdir_placeholder_cwd_and_deliverable_are_the_agent_dir(self):
-        keys = {"commands": ["x --dir {{workdir}}/src *"], "gate": ""}
+        keys = {"commands": ["x --dir {{workdir}}/src *"]}
         got, _ = self.planned(cwd=None, out=None, keys=keys)
         self.assertIn(f"\n- `<Workdir>`: `{self.agent}`\n", got.prompt)
         self.assertIn("`<Workdir>/tmp/deliverable.md`", got.prompt)
@@ -320,13 +320,12 @@ class Planned(Base):
         super().setUp()
         self.layout = Layout(self.work)
 
-    def test_the_access_is_the_intents_with_the_gate_last_and_its_env(self):
-        command, gate = f"x --dir {self.layout.agent}/src *", "python3 /u/usage.py *"
+    def test_the_access_is_the_intents_commands_and_env(self):
+        command = f"x --dir {self.layout.agent}/src *"
         env = {"PYTHONPATH": SRC["delegate"]}
         for keys, commands, want in (
-            (self.KEYS | {"gate": gate}, (command, gate), env),
-            (self.KEYS | {"gate": ""}, (command,), env),
-            (self.KEYS | {"commands": [], "gate": ""}, (), {}),
+            (self.KEYS, (command,), env),
+            (self.KEYS | {"commands": []}, (), {}),
         ):
             with self.subTest(keys=keys):
                 got, _ = self.planned(keys=keys)
@@ -648,14 +647,6 @@ class Docker(DockerCase):
     """A run whose agent Host is the Docker Host: only the image's team, in its agent dir, its
     Reference repo by name and its deliverable inline.
     """
-
-    def test_a_runtime_gate_is_passed_unchanged_to_each_mode(self):
-        for mode in ("headless", "tui"):
-            with self.subTest(mode=mode):
-                got, _ = self.planned(mode=mode, keys={"gate": "owner-brake researcher"})
-                self.assertEqual(got.run.gate, "owner-brake researcher")
-                self.assertIn(got.run.gate, got.session.access.commands)
-                self.assertNotIn("`owner-brake researcher`", got.prompt)
 
     def test_a_headless_run_gets_the_docker_rules_and_an_in_process_one_none(self):
         got, _ = self.planned(mode="headless", out=None)
