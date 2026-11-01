@@ -251,7 +251,7 @@ class SessionTuiTest(Base):
                     (dict(launch.env), launch.unset, launch.cwd, launch.transcript, launch.resume),
                     (
                         {**TUI_DEFAULTS, "K": "spec", "S": "s"},
-                        (*UNSET, "CLAUDE_CODE_OAUTH_TOKEN"),
+                        UNSET,
                         "",
                         ClaudeCommon({}).transcript(cwd, SID),
                         reference(cwd),

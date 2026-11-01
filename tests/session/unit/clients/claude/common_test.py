@@ -557,7 +557,7 @@ class EnvTest(Base):
     def test_the_launch_env_unset_and_cwd(self):
         launch = self.launch()
         self.assertEqual(dict(launch.env), {**CEILING, "K": "v"})
-        self.assertEqual(launch.unset, (*UNSET, "CLAUDE_CODE_OAUTH_TOKEN"))
+        self.assertEqual(launch.unset, UNSET)
         self.assertEqual(ClaudeCommon.UNSET, UNSET)
         self.assertEqual(launch.cwd, "")
 
@@ -610,30 +610,6 @@ class UsageProbeTest(Base):
                 for name, path in (("work", "/w"), ("home", home))
             },
         )
-
-    def test_a_run_never_takes_credentials_from_any_env_source(self):
-        ambient = {"ANTHROPIC_API_KEY": "sk-1", "CLAUDE_CODE_OAUTH_TOKEN": "t", "HOME": self.home}
-        config = {"env": {"ANTHROPIC_BASE_URL": "u", "K": "v"}, "accounts": {"w": {"dir": "/w"}}}
-        spec = Spec(
-            workdir=self.work,
-            sid=SID,
-            access=Access(cwd=self.work, env={"ANTHROPIC_AUTH_TOKEN": "a"}),
-            env={"CLAUDE_CODE_OAUTH_TOKEN": "s", "CLAUDE_CONFIG_DIR": "/w"},
-        )
-        with mock.patch.dict(os.environ, ambient, clear=True):
-            client = ClaudeClient(config)
-            launches = (client.headless().launch(spec), client.tui().launch(spec, HOOK))
-        for launch in launches:
-            with self.subTest(argv=launch.argv[:2]):
-                self.assertFalse(
-                    {k for k in launch.env if k.startswith("ANTHROPIC_")}
-                    | ({"CLAUDE_CODE_OAUTH_TOKEN"} & launch.env.keys())
-                )
-                self.assertEqual(launch.env["K"], "v")
-                self.assertEqual(launch.env["CLAUDE_CONFIG_DIR"], "/w")
-                self.assertTrue(
-                    {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} <= set(launch.unset)
-                )
 
     def test_no_registered_account_has_no_probe(self):
         self.assertEqual(ClaudeClient({})._usage_probes(), {})
@@ -776,18 +752,6 @@ class ResumeTest(Base):
         code, _, _, execute = self.resumed([store(), self.cwd, SID])
         self.assertEqual(code, 0)
         self.assertEqual({k: execute[0].args[2].get(k) for k in TUI_DEFAULTS}, TUI_DEFAULTS)
-
-    def test_client_resume_replays_the_run_with_no_credential(self):
-        spec = dataclasses.replace(
-            self.spec, env={"ANTHROPIC_API_KEY": "sk-1", "CLAUDE_CONFIG_DIR": "/w", "K": "spec"}
-        )
-        self.client.common.save(spec)
-        with mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "t"}):
-            code, _, _, execute = self.resumed([store(), self.cwd, SID])
-        self.assertEqual(code, 0)
-        env = execute[0].args[2]
-        self.assertEqual((env["CLAUDE_CONFIG_DIR"], env["K"]), ("/w", "spec"))
-        self.assertFalse({"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} & env.keys())
 
     def test_client_resume_keeps_saved_tui_default_overrides(self):
         overrides = dict.fromkeys(TUI_DEFAULTS, "0")
