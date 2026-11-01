@@ -43,7 +43,7 @@ from ensemble.orchestrator.trackers.linear import (
     linear_tracker,
     ops,
 )
-from ensemble.session import ConfigError, Session, SessionError, SessionStatus, Window
+from ensemble.session import ConfigError, SessionError, SessionStatus, Window
 from ensemble.session import Usage as SessionUsage
 from ensemble.utils import EVENTS_ENV, SHORT, SID_ENV, OutcomeStatus, Record
 from tests.orchestrator.router_fixtures import (
@@ -1262,7 +1262,7 @@ class AttendedEntry(OuterBase):
         return Record.parse(lines[0])
 
     def test_tui_takes_display_and_events_and_they_need_it(self):
-        base = {"brake": None, "dry": False, "tui": True, "issue": None}
+        base = {"dry": False, "tui": True, "issue": None}
         for argv, want in (
             (["--issue", ID, "--tui"], {**base, "issue": ID, "display": None, "events": None}),
             (["--tui"], {**base, "display": None, "events": None}),
@@ -1735,7 +1735,7 @@ class RouterArguments(Base):
         self.assertEqual(
             router.USAGE,
             "usage: ensemble-orchestrator router [--dry-run] [--issue ID] "
-            "[--tui [--display D] [--events FILE]] | --brake ROLE",
+            "[--tui [--display D] [--events FILE]]",
         )
         for flag in ("--gate", "--split", "--manager", "--now"):
             self.assertNotIn(flag, router.USAGE + router.HELP)
@@ -1844,7 +1844,7 @@ class RouterLocking(TickBase):
                 self.assertEqual(start.launches[0].issue, "TASK-1")
                 self.assertTrue(all(free(self.runs, *lock) for lock in LOCKS.values()))
 
-    def test_a_dry_run_and_the_brake_take_no_lock(self):
+    def test_a_dry_run_takes_no_lock(self):
         fake = FakeLinear([issue("TASK-1", "Todo", "researcher")])
         with contextlib.ExitStack() as others:
             for name, op in LOCKS.values():
@@ -1868,15 +1868,6 @@ class RouterLocking(TickBase):
                     f"preview TASK-1 client=a client_source=default credentials={json.dumps(config.credentials(config.load(path=self.config_path), 'researcher', None))}",
                 ],
             )
-            out = io.StringIO()
-            with redirect_stdout(out):
-                rc = router.main(
-                    ["--brake", "researcher"],
-                    config_path=self.config_path,
-                    trackers=cli.TRACKERS,
-                    delegate_cls=self.cfg().delegate_cls,
-                )
-            self.assertEqual((rc, out.getvalue()), (0, "five_hour=10% weekly=10%\n"))
         self.assertEqual(fake.mutations, [])
 
 
@@ -2045,11 +2036,10 @@ class ClientUsage(Base):
         error = AttributeError("client defect")
         self.api.usages["a"] = error
         with self.assertRaises(AttributeError) as caught:
-            quota.read_usage("researcher", self.cfg())
+            self.gate().blocked("researcher", "TASK-1", key=("harness", "a"))
         self.assertIs(caught.exception, error)
 
     def test_thresholds(self):
-        self.assertEqual(quota.BRAKE_5H, 80)
         rows = (
             (reading(89.9, 99.9), None),
             (reading(90, 10), "reason=usage usage=five_hour=90% weekly=10%"),
@@ -2235,96 +2225,47 @@ class ClientAdmission(TickBase):
         self.assertEqual(self.launched_runs(), [("TASK-1", "new")])
 
 
-class RunBrake(Base):
-    """`--brake ROLE`: ROLE's client usage against BRAKE_5H and MAX_WEEK; no lock, no limit row."""
-
-    def brake(self, role):
-        out, err = io.StringIO(), io.StringIO()
-        with (
-            redirect_stdout(out),
-            redirect_stderr(err),
-            mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}),
-        ):
-            rc = router.main(
-                ["--brake", role],
-                config_path=self.config_path,
-                trackers=cli.TRACKERS,
-                delegate_cls=self.cfg().delegate_cls,
-            )
-            self.path = os.environ["PATH"]
-        self.err = err.getvalue()
-        return rc, out.getvalue()
-
-    def test_blocks_at_brake_5h(self):
-        self.assertEqual(quota.BRAKE_5H, 80)
-        rows = (
-            (reading(70), 0, "five_hour=70% weekly=10%"),
-            (reading(79.9, 99.9), 0, "five_hour=79.9% weekly=99.9%"),
-            (reading(80), 1, "five_hour=80% weekly=10%"),
-            (reading(10, 100), 1, "five_hour=10% weekly=100%"),
-            (reading(None, None), 0, "five_hour=none weekly=none"),
-            (None, 1, "unknown"),
-            (ConfigError("no client a"), 1, "unknown"),
-            (SessionError("boom"), 1, "unknown"),
-        )
-        for value, rc, out in rows:
-            with self.subTest(value=value):
-                self.api.usages, self.api.usage_calls = {"a": value}, []
-                self.assertEqual(self.brake("researcher"), (rc, out + "\n"))
-                self.assertEqual((self.api.usage_calls, self.err), (["a"], ""))
-        self.assertEqual(self.path, config.path())
-
-    def test_off_skips_probe_for_actual_run_client_and_default(self):
-        self.write_config(CONFIG + '[usage_limit]\na = "off"\nb = "on"\n')
-        self.api.usages = {"a": AssertionError("off must not probe"), "b": reading(80)}
-        self.assertEqual(self.brake("researcher"), (0, ""))
-        self.assertEqual(self.api.usage_calls, [])
-        with mock.patch.dict(os.environ, {"ENSEMBLE_CLIENT": "b"}):
-            self.assertEqual(self.brake("researcher"), (1, "five_hour=80% weekly=10%\n"))
-        with mock.patch.dict(os.environ, {"ENSEMBLE_CLIENT": "a"}):
-            self.assertEqual(self.brake("pm"), (0, ""))
-        self.assertEqual(self.api.usage_calls, ["b"])
-
-    def test_the_roles_own_client(self):
-        self.api.usages = {"a": reading(95), "b": reading(50)}
-        self.assertEqual(self.brake("pm"), (0, "five_hour=50% weekly=10%\n"))
-        self.assertEqual(self.api.usage_calls, ["b"])
-
-    def test_the_run_client_overrides_the_role_default(self):
-        for usage, rc in ((reading(70), 0), (reading(80), 1), (None, 1)):
-            with self.subTest(usage=usage):
-                self.api.usages, self.api.usage_calls = {"a": reading(95), "b": usage}, []
-                with mock.patch.dict(os.environ, {"ENSEMBLE_CLIENT": "b"}):
-                    self.assertEqual(self.brake("researcher"), (rc, quota.summary(usage) + "\n"))
-                self.assertEqual(self.api.usage_calls, ["b"])
-
-    def test_brake_reads_only_the_client_through_the_real_harness_delegate(self):
-        queried = []
-
-        class UsageSession(Session):
-            @classmethod
-            def configure_from(cls, config, *, hosts=None):
-                pass
-
-            @classmethod
-            def usage(cls, client):
-                queried.append(client)
-                return reading(80)
-
-        class ActualUsage(HarnessDelegate):
-            @classmethod
-            def usage(cls, role, *, overlays=(), session_cls=UsageSession):
-                return super().usage(role, overlays=overlays, session_cls=session_cls)
-
-        with mock.patch("tests.orchestrator.router_fixtures.provider", return_value=ActualUsage):
-            self.assertEqual(self.brake("researcher"), (1, "five_hour=80% weekly=10%\n"))
-            with mock.patch.dict(os.environ, {"ENSEMBLE_CLIENT": "b"}):
-                self.assertEqual(self.brake("researcher")[0], 1)
-        self.assertEqual(queried, ["a", "b"])
-
-    def test_no_such_role(self):
-        self.assertEqual(self.brake("ghost"), (2, ""))
-        self.assertEqual((self.err, self.api.usage_calls), ("router.py: no role ghost\n", []))
+class RemovedBrake(Base):
+    def test_parent_clients_cannot_restore_quota_queries_or_start_a_run(self):
+        for legacy, current in ((False, False), (True, False), (False, True), (True, True)):
+            with mock.patch.dict(os.environ):
+                os.environ.pop("AGENT_PM_CLIENT", None)
+                os.environ.pop("ENSEMBLE_CLIENT", None)
+                if legacy:
+                    os.environ["AGENT_PM_CLIENT"] = "b"
+                if current:
+                    os.environ["ENSEMBLE_CLIENT"] = "b"
+                for role in ("researcher", "missing"):
+                    with (
+                        self.subTest(legacy=legacy, current=current, role=role),
+                        mock.patch.object(
+                            config, "load", side_effect=AssertionError("no config")
+                        ) as load,
+                        mock.patch.object(
+                            HarnessDelegate, "usage", side_effect=AssertionError("no quota")
+                        ) as usage,
+                        mock.patch.object(
+                            HarnessDelegate, "create", side_effect=AssertionError("no start")
+                        ) as create,
+                        redirect_stdout(io.StringIO()) as out,
+                        redirect_stderr(io.StringIO()) as err,
+                    ):
+                        self.assertEqual(router.main(["--brake", role], trackers=cli.TRACKERS), 2)
+                        self.assertEqual(out.getvalue(), "")
+                        self.assertEqual(err.getvalue(), router.USAGE + "\n")
+                        load.assert_not_called()
+                        usage.assert_not_called()
+                        create.assert_not_called()
+                role_text = (
+                    Path(inspect.getfile(HarnessDelegate)).parents[1]
+                    / "team"
+                    / "roles"
+                    / "researcher.md"
+                )
+                task_text = role_text.parent.parent / "tasks" / "deep-research.md"
+                for text in (role_text.read_text(), task_text.read_text()):
+                    self.assertNotIn("brake", text.lower())
+                    self.assertNotIn("<gate>", text)
 
 
 LOCAL = CONFIG.replace('tracker = "linear"\n', 'tracker = "local"\n')
@@ -2520,10 +2461,11 @@ class LocalBoard(TickBase):
                 self.assertEqual(self.tick(self.fake(), "--dry-run", "--issue", ident), 0)
                 self.assertIn(f"pick-none {ident} reason={reason}", self.said())
 
-    def test_brake_on_local(self):
-        self.api.usages = {"a": reading(70)}
-        self.assertEqual(self.on_local(self.fake(), "--brake", "researcher"), 0)
-        self.assertEqual((self.out, self.err), ("five_hour=70% weekly=10%\n", ""))
+    def test_removed_brake_on_local_never_queries_usage(self):
+        self.api.usages = {"a": AssertionError("no quota")}
+        self.assertEqual(self.on_local(self.fake(), "--brake", "researcher"), 2)
+        self.assertEqual((self.out, self.err), ("", router.USAGE + "\n"))
+        self.assertEqual(self.api.usage_calls, [])
         self.assertEqual(self.connects, [])
 
     def test_tracker_file_error_exit_2(self):
@@ -5744,7 +5686,7 @@ class RecoverWriteBack(TickBase):
 
 
 class InsideAnAgentSession(RouterArguments):
-    def test_a_tick_or_an_issue_is_refused_and_help_brake_and_dry_run_still_run(self):
+    def test_a_tick_or_an_issue_is_refused_and_help_and_dry_run_still_run(self):
         refused = "router.py: refused inside an agent session"
         with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}):
             for argv in ([], ["--issue", "TASK-1"]):

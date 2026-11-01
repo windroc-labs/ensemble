@@ -32,7 +32,7 @@ from ensemble.orchestrator.engine.flow.types import (
     NO_ISSUE,
     IssueState,
 )
-from ensemble.orchestrator.engine.gate import BRAKE_5H, Gate, read_usage
+from ensemble.orchestrator.engine.gate import Gate
 from ensemble.orchestrator.engine.linear_run import LinearRun
 from ensemble.orchestrator.engine.log import linear_error, log
 from ensemble.orchestrator.engine.runs import (
@@ -65,21 +65,17 @@ from ensemble.orchestrator.engine.types import (
 )
 from ensemble.orchestrator.trackers.linear.client import has_token, linear_gql
 from ensemble.utils import (
-    CLIENT_ENV,
     EVENTS_ENV,
     SID_ENV,
-    exhausted,
     nested_start,
     one_line,
     printable,
-    summary,
 )
 
 HELP = """Claim or resume issue work with one scheduler tick or an explicit issue.
 
 Usage: ensemble-orchestrator router [--dry-run] [--issue ID]
                              [--tui [--display D] [--events FILE]]
-       ensemble-orchestrator router --brake ROLE
 
 Arguments and options:
   (no mode)     One scheduled tick: role max_runs and usage
@@ -97,10 +93,8 @@ Arguments and options:
               show the TUI, a D its Host cannot use, FILE not writable). A run it starts or resumes
               prints its Record line on stdout, its attach command on stderr. launchd never passes
               it: a tick resumes a run headless.
---brake ROLE  Print the run's client usage (else ROLE's); exit 0 if a deep-research round may start, 1 if not or
-              unknown, 2 no such role.
 --help        Print this; exit 0. Bad arguments exit 2.
-  -h           Equivalent to --help. --brake must stand alone.
+  -h           Equivalent to --help.
   Valued options occur at most once; boolean flags may repeat with no change.
 
 Prerequisites and effects:
@@ -130,7 +124,7 @@ Exit conditions:
   the issue that stderr did not show, e.g. router.py: pick-none TASK-1 reason=...
   ENSEMBLE_SID is read once and removed: new run identity, or must match a
   resumed run (mismatch: 2; dry-run: 0). ENSEMBLE_AGENT_SESSION blocks tick and
-  --issue execution with 2; --dry-run and --brake remain available.
+  --issue execution with 2; --dry-run remains available.
   --tui exits 2 before Linear calls if events are absent or its Delegate refuses
   display/events (no usable placement, invalid Host value or unwritable file).
 
@@ -139,8 +133,6 @@ Examples (configured Linear access, client and a claimable TASK-1):
   Prints the issue plan; no claim or launch.
   ensemble-orchestrator router --issue TASK-1 --tui --display none --events /tmp/demo-events.jsonl
   Starts attended but hidden; writes events and prints the Record.
-  ensemble-orchestrator router --brake engineer
-  Requires a configured engineer role; prints usage without starting work.
 
 Recovery and next help:
   Busy or being started: retry later. Live run: ensemble-orchestrator status TASK-1
@@ -168,7 +160,7 @@ WAIT = 600  # s an --issue run waits for the router lock: its claim takes second
 POLL = 0.2
 USAGE = (
     "usage: ensemble-orchestrator router [--dry-run] [--issue ID] "
-    "[--tui [--display D] [--events FILE]] | --brake ROLE"
+    "[--tui [--display D] [--events FILE]]"
 )
 FLAGS = {"--dry-run": "dry", "--tui": "tui"}
 ENVIRONMENT_ERROR = re.compile(r"\[environment\.[^\]\s]+\]")
@@ -1213,21 +1205,9 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
         return start(begin(cfg, spec))
 
 
-def brake(role, cfg):
-    client = os.environ.get(CLIENT_ENV) or cfg.roles[role].run.client
-    if not cfg.usage_limit.get(client, True):
-        return 0
-    usage = read_usage(role, cfg, client=client)
-    print(summary(usage))
-    return 1 if usage is None or exhausted(usage, BRAKE_5H) else 0
-
-
 def options(argv):
-    opts = {"brake": None, "dry": False, "tui": False}
+    opts = {"dry": False, "tui": False}
     opts.update(dict.fromkeys(VALUED.values()))
-    if "--brake" in argv:
-        ok = len(argv) == 2 and argv[0] == "--brake" and not argv[1].startswith("-")
-        return {**opts, "brake": argv[1]} if ok else None
     i = 0
     while i < len(argv):
         a, value = argv[i], argv[i + 1] if i + 1 < len(argv) else None
@@ -1263,7 +1243,7 @@ def attended_runs(opts, cfg):
 
 def _help_text():
     return re.sub(
-        r"(?m)^--(?:tui|brake)\b[^\n]*(?:\n {14}[^\n]+)*",
+        r"(?m)^--tui\b[^\n]*(?:\n {14}[^\n]+)*",
         lambda match: textwrap.fill(
             " ".join(line.strip() for line in match[0].splitlines()),
             width=80,
@@ -1297,7 +1277,7 @@ def main(
     if opts is None:
         print(USAGE, file=sys.stderr)
         return 2
-    starts = opts["brake"] is None and not opts["dry"]
+    starts = not opts["dry"]
     if starts and (refused := nested_start()):
         print(f"router.py: {refused}", file=sys.stderr)
         return 2
@@ -1358,12 +1338,6 @@ def _route(opts, cfg, launch_sid, *, trackers, now, gql, run, keychain, start, d
     if delegate_cls is not None:
         cfg = replace(cfg, delegates={**cfg.delegates, cfg.delegate_kind: delegate_cls})
     wiring = trackers[cfg.tracker]
-    if opts["brake"] is not None:
-        role = opts["brake"]
-        if role not in cfg.roles:
-            print(f"router.py: no role {role}", file=sys.stderr)
-            return 2
-        return brake(role, cfg)
     try:
         attended = attended_runs(opts, cfg)
     except ConfigError as error:

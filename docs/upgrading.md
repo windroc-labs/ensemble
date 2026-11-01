@@ -1,5 +1,16 @@
 # Upgrading
 
+## Remove custom research quota brakes
+
+Remove `ensemble-orchestrator router --brake ROLE` from custom callers and remove
+quota commands before the second deep-research round. The old option now exits 2
+without querying usage. The built-in researcher no longer receives a caller-supplied
+quota brake and no longer skips its second round because of usage. Board-start
+usage checks remain in place.
+
+This change ships with the other session account and usage changes in one compatible
+release; do not release it separately.
+
 ## Credential rotation
 
 Broker [command usage](../src/broker/main.go) owns login syntax; replacing a stored login is not upstream revocation.

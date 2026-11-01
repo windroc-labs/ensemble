@@ -219,16 +219,7 @@ class Runs(RunCase):
                 "display": "opaque:\nvalue",
                 "callback": ["ensemble-orchestrator", "writeback", "--issue", "TASK-1", "--workdir"]
                 + [spec.workdir],
-                "overlays": (
-                    self.cfg.core,
-                    {
-                        "roles": {
-                            "researcher": {
-                                "gate": "ensemble-orchestrator router --brake researcher"
-                            }
-                        }
-                    },
-                ),
+                "overlays": (self.cfg.core,),
             },
         )
         self.assertEqual(record.display, "opaque:\nvalue")
@@ -258,45 +249,25 @@ class Runs(RunCase):
                     (
                         self.cfg.core,
                         {"roles": {"researcher": {"tier": 3}}},
-                        {
-                            "roles": {
-                                "researcher": {
-                                    "gate": "ensemble-orchestrator router --brake researcher"
-                                }
-                            }
-                        },
                     ),
                 )
 
-    def test_only_researcher_receives_the_orchestrators_brake(self):
+    def test_no_role_receives_a_quota_gate(self):
+        self.start()
         for role in ("researcher", "engineer", "pm"):
-            with self.subTest(role=role):
-                owner = LinearRun(
-                    "TASK-1",
-                    "input",
-                    self.cfg.issue_workdir("TASK-1"),
-                    cfg=self.cfg,
-                    role=role,
-                    sid=SID,
-                    delegate_cls=CapturedDelegate,
-                )
-                self.assertEqual(
-                    owner.delegate.accepted[2]["overlays"],
-                    (self.cfg.core,)
-                    + (
-                        (
-                            {
-                                "roles": {
-                                    role: {
-                                        "gate": "ensemble-orchestrator router --brake researcher"
-                                    }
-                                }
-                            },
-                        )
-                        if role == "researcher"
-                        else ()
-                    ),
-                )
+            for resume in (False, True):
+                with self.subTest(role=role, resume=resume):
+                    owner = LinearRun(
+                        "TASK-1",
+                        "input",
+                        self.cfg.issue_workdir("TASK-1"),
+                        cfg=self.cfg,
+                        role=role,
+                        sid=SID,
+                        resume=resume,
+                        delegate_cls=CapturedDelegate,
+                    )
+                    self.assertEqual(owner.delegate.accepted[2]["overlays"], (self.cfg.core,))
 
     def test_spec_passes_only_the_workdir(self):
         owner, _ = self.start(delegate_cls=CapturedDelegate)

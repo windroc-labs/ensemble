@@ -8,12 +8,6 @@ from ensemble.orchestrator.engine.log import log
 from ensemble.orchestrator.engine.types import ConfigError
 from ensemble.utils import exhausted, summary
 
-BRAKE_5H = 80
-
-
-def read_usage(role, cfg, *, client=None):
-    return _probe(role, cfg, cfg.delegate_cls, client)[0]
-
 
 def _probe(role, cfg, provider, client):
     """Usage, else None, and the configuration or runtime error that left it unknown."""

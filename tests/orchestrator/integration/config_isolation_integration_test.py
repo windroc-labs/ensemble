@@ -334,7 +334,7 @@ class PackagedDeployments(ConfigFile, Case):
         self.local(PIPELINE + f'[local_clones]\n"{SLUG}" = {json.dumps(str(self.deployment))}\n')
         self.assertEqual(self.child()["clones"], {SLUG: str(self.deployment)})
 
-    def test_default_gate_runs_outside_checkout_cwd(self):
+    def test_removed_brake_never_probes_outside_checkout_cwd(self):
         self.local(PIPELINE)
         fake_bin = Path(self.dir) / "bin"
         fake_bin.mkdir()
@@ -358,7 +358,7 @@ class PackagedDeployments(ConfigFile, Case):
             timeout=60,
             stdin=subprocess.DEVNULL,
         )
-        self.assertIn(result.returncode, (0, 1), result.stderr)
-        self.assertEqual(result.stderr, "")
-        self.assertTrue(marker.exists(), result.stdout)
-        self.assertTrue(result.stdout.strip())
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("usage:", result.stderr)
+        self.assertFalse(marker.exists())
+        self.assertEqual(result.stdout, "")

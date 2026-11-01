@@ -65,7 +65,7 @@ from tests.delegate.fakes.harness_session import (
     harness_launches,
 )
 from tests.delegate.harness import SID, HarnessCase
-from tests.delegate.replies import block
+from tests.delegate.replies import block, mark
 from tests.delegate.unit.engine.orphans import Orphan
 from tests.session import harnesses
 from tests.session.case import PLUGIN_BIN
@@ -101,8 +101,55 @@ class RealSpawn(DrivenDelegate):
     _spawn = staticmethod(HarnessDelegate._spawn)
 
 
+class ResearchRounds(HarnessCase):
+    def test_both_hosts_deliver_two_rounds_without_usage_queries(self):
+        for host in ("agent", "box"):
+            for switch in ("on", "off"):
+                with self.subTest(host="tmux" if host == "agent" else "Docker", switch=switch):
+                    self.settings()
+                    docker_box(self)
+                    with open(self.local, "a", encoding="utf-8") as file:
+                        file.write(f'[orchestrator.usage_limit]\nfake = "{switch}"\n')
+                    outcome = {
+                        "status": "done",
+                        "title": "Two research rounds",
+                        "summary": "Completed both rounds",
+                        "deliverable": "First round findings.\nSecond round findings.",
+                    }
+                    HarnessSession.script = (
+                        Reply(mark("start", "Run both research rounds.")),
+                        Reply("First round findings."),
+                        Reply("Second round findings."),
+                        Reply(block(outcome)),
+                        Exited(0),
+                    )
+                    view = self.make(
+                        spec=Spec("Research both parts.", self.work, task="deep-research", sid=SID),
+                        host=host,
+                    )
+                    prompt = self.metadata()["plan"]["session"]["prompt"]
+                    self.assertNotIn("<gate>", prompt)
+                    self.assertNotIn("brake", prompt.lower())
+                    self.assertEqual(self.metadata()["plan"]["run"]["gate"], "")
+                    with (
+                        mock.patch.object(
+                            HarnessDelegate, "usage", side_effect=AssertionError("no quota")
+                        ) as quota,
+                        mock.patch.object(
+                            HarnessSession, "usage", side_effect=AssertionError("no probe")
+                        ) as probe,
+                        contextlib.redirect_stdout(io.StringIO()),
+                    ):
+                        result = view.run()
+                        quota.assert_not_called()
+                        probe.assert_not_called()
+                    self.assertEqual(result.returncode, 0)
+                    self.assertIsNotNone(result.outcome)
+                    self.assertEqual(result.outcome.deliverable, outcome["deliverable"])
+
+
 class CreateTest(HarnessCase):
-    def test_resumed_run_keeps_the_owners_brake(self):
+    def test_resumed_run_keeps_the_owners_gate_configuration(self):
         command = "owner-brake researcher"
         record = self.make(
             role="researcher",
@@ -115,7 +162,7 @@ class CreateTest(HarnessCase):
         self.assertIn(command, self.metadata()["plan"]["session"]["access"]["commands"])
         self.stop(resumed)
 
-    def test_only_the_owners_overlay_sets_a_brake_regardless_of_callback(self):
+    def test_only_the_owners_overlay_sets_a_gate_regardless_of_callback(self):
         command = "owner-brake researcher"
         for callback in (None, (), ("owner",), ("owner", "writeback")):
             for expected in ("", command):
@@ -132,7 +179,7 @@ class CreateTest(HarnessCase):
                         expected in preview.plan.session.access.commands, bool(expected)
                     )
                     if expected:
-                        self.assertIn(f"`{expected}`", preview.plan.session.prompt)
+                        self.assertNotIn(f"`{expected}`", preview.plan.session.prompt)
 
     def test_create_persists_placement_with_overlays(self):
         class Bound(DrivenDelegate):

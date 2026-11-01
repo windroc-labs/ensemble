@@ -999,13 +999,13 @@ class Real(RealConfig):
         want = {
             "engineer": base,
             "pm": [*base, *out],
-            "researcher": [*base, "<gate>", *out],
+            "researcher": [*base, *out],
         }
         for role, task in [(r, None) for r in want] + [
             (r, t) for r, t in role_tasks() if r in want
         ]:
             self.assertEqual(parameter_names(role, task), want[role], (role, task))
-        self.assertEqual(parameter_names("researcher", output={"type": "local"}), [*base, "<gate>"])
+        self.assertEqual(parameter_names("researcher", output={"type": "local"}), base)
 
     def test_names_written_as_their_values_each_requested_command_starts_a_command(self):
         for role in roles():
@@ -1028,8 +1028,8 @@ class Real(RealConfig):
     def test_standalone_researcher_keeps_no_brake(self):
         for task in (None, "deep-research", "research", "light-research"):
             prompt = composed("researcher", task)[0]
-            self.assertIn("the gate is `<gate>`", prompt, task)
-            self.assertEqual(parameters(prompt)["<gate>"], "`none`", task)
+            self.assertNotIn("<gate>", prompt, task)
+            self.assertNotIn("brake", prompt.lower(), task)
 
     def test_github_host_defaults_and_overrides(self):
         prompt, run = composed("researcher")

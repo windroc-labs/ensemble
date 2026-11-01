@@ -28,7 +28,6 @@ Read the input; decide its type ([Researcher › Type and target](#type-and-targ
 ## Methods
 
 - Read-only: the **deep-research method** `<team>/methods/deep-research.md`.
-- **Brake**, before a costly step (a second round): the gate is `<gate>`; unless `none`, run it. Nonzero exit → skip that step; a round's output goes under Gaps.
 
 ## Failure
 
