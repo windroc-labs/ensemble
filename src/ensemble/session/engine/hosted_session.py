@@ -219,10 +219,9 @@ def _read_usage(
 
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
     """The start check of a client with accounts: each registered account read live once, the
-    start on the wanted one (--account, else the client's account for its Host, which a local
-    resume ignores for its conversation's) only while it is usable, else on the usable one with the
-    most usage left; SessionError when none is. A local start wanting none, resuming no account's
-    conversation, runs unchecked on its own config.
+    start on the wanted one (--account, else the client's account; a local resume: its
+    conversation's) only while it is usable, else on the usable one with the most usage left;
+    SessionError when none is. A local start wanting none runs unchecked on its own config.
     """
     if (registered := client._accounts()) is None:
         return spec
