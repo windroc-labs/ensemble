@@ -150,7 +150,7 @@ class LongPromptTest(Live):
         path = os.path.join(path, "prompt.md")
         self.assertEqual(
             argv[argv.index("--") + 1],
-            POINTER.format(size=len(prompt.encode()), path=path),
+            POINTER.format(path=path),
         )
         with open(path, encoding="utf-8") as f:
             self.assertEqual(f.read(), prompt)
