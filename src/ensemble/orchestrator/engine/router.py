@@ -1206,8 +1206,7 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
 
 
 def options(argv):
-    opts = {"dry": False, "tui": False}
-    opts.update(dict.fromkeys(VALUED.values()))
+    opts = {"dry": False, "tui": False, **dict.fromkeys(VALUED.values())}
     i = 0
     while i < len(argv):
         a, value = argv[i], argv[i + 1] if i + 1 < len(argv) else None

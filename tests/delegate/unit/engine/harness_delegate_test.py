@@ -133,7 +133,7 @@ class ResearchRounds(HarnessCase):
                     self.assertEqual(self.metadata()["plan"]["run"]["gate"], "")
                     with (
                         mock.patch.object(
-                            HarnessDelegate, "usage", side_effect=AssertionError("no quota")
+                            DrivenDelegate, "usage", side_effect=AssertionError("no quota")
                         ) as quota,
                         mock.patch.object(
                             HarnessSession, "usage", side_effect=AssertionError("no probe")

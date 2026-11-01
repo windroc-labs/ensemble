@@ -2236,26 +2236,31 @@ class RemovedBrake(Base):
                 if current:
                     os.environ["ENSEMBLE_CLIENT"] = "b"
                 for role in ("researcher", "missing"):
+                    self.api.usages = {
+                        "a": AssertionError("no quota"),
+                        "b": AssertionError("no quota"),
+                    }
+                    start = mock.Mock(side_effect=AssertionError("no start"))
                     with (
                         self.subTest(legacy=legacy, current=current, role=role),
-                        mock.patch.object(
-                            config, "load", side_effect=AssertionError("no config")
-                        ) as load,
-                        mock.patch.object(
-                            HarnessDelegate, "usage", side_effect=AssertionError("no quota")
-                        ) as usage,
-                        mock.patch.object(
-                            HarnessDelegate, "create", side_effect=AssertionError("no start")
-                        ) as create,
                         redirect_stdout(io.StringIO()) as out,
                         redirect_stderr(io.StringIO()) as err,
                     ):
-                        self.assertEqual(router.main(["--brake", role], trackers=cli.TRACKERS), 2)
+                        self.assertEqual(
+                            router.main(
+                                ["--brake", role],
+                                trackers=cli.TRACKERS,
+                                config_path=self.config_path,
+                                delegate_cls=self.cfg().delegate_cls,
+                                start=start,
+                            ),
+                            2,
+                        )
                         self.assertEqual(out.getvalue(), "")
                         self.assertEqual(err.getvalue(), router.USAGE + "\n")
-                        load.assert_not_called()
-                        usage.assert_not_called()
-                        create.assert_not_called()
+                        self.assertEqual(self.api.usage_calls, [])
+                        self.assertEqual(self.api.constructed, [])
+                        start.assert_not_called()
                 role_text = (
                     Path(inspect.getfile(HarnessDelegate)).parents[1]
                     / "team"

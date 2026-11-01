@@ -2,7 +2,7 @@
 and calls back ensemble-orchestrator writeback; fake_claude as claude, FakeLinear over HTTP.
 A claim runs to In Review; a crash resumes the same session; a Linear failure mid write-back fails
 its callback, and Recover then writes the outcome back in process, without an agent; a Linear outage stops a tick and --issue; a tick's usage gate; a long description reaches the run; a
-SIGTERM'd harness ends its run and its agent; the removed brake is rejected on a session's PYTHONPATH.
+SIGTERM ends the run and agent; a session's PYTHONPATH can reject the removed brake.
 """
 
 import contextlib
