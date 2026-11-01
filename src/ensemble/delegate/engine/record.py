@@ -114,10 +114,6 @@ class RunRecord:
             if os.path.realpath(spec.workdir) != os.path.realpath(self.layout.workdir):
                 raise ValueError("metadata workdir differs")
             planned = data.pop("plan")
-            if planned["run"].pop("gate", ""):
-                raise ValueError(
-                    "retired quota gate: finish or close this run with the previous plugin before upgrading"
-                )
             session = planned["session"]
             access = session["access"]
             for key in ("dirs", "reads", "commands"):
@@ -145,13 +141,6 @@ class RunRecord:
                 raise ValueError("invalid closing")
             callback = data.pop("callback")
             overlays = tuple(data.pop("overlays"))
-            for overlay in overlays:
-                if isinstance(overlay, dict):
-                    overlay.pop("gate", None)
-                    roles = overlay.get("roles", {})
-                    for table in roles.values() if isinstance(roles, dict) else ():
-                        if isinstance(table, dict):
-                            table.pop("gate", None)
             data.pop("harness_host", None)  # older runs
             state = DelegateState(
                 **data,

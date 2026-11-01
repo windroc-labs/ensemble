@@ -12,10 +12,9 @@ Remove `gate` keys from custom delegate overlays and remove `gate=` arguments to
 `RunConfig`. The delegate rejects `gate` overlays and no longer defines the `<gate>`
 prompt parameter. Update custom research instructions that use that parameter.
 
-Before upgrading, finish or close runs that carry a quota gate with the previous
-plugin. Their saved prompts and permissions still contain quota commands, so the
-new plugin refuses those records. Existing records with an empty gate remain
-readable and resumable.
+Before upgrading, use the previous plugin to finish or close every existing run,
+including runs with an empty gate. The new plugin does not read or migrate the old
+gate fields. Start new runs after upgrading.
 
 This change ships with the other session account and usage changes in one compatible
 release; do not release it separately.
