@@ -2,21 +2,19 @@
 
 ## tmux Host Claude starts run on `~/.claude` again
 
-A Claude start on the tmux Host that selects no account now runs on your own `~/.claude`, as
-before 0.7.0: its plugins, user settings and login. The session sets no `CLAUDE_CONFIG_DIR` and
-reads no usage for it, and it needs no registered account. `[session.clients.claude] account` now
-applies to the Docker Host only. A tmux start selects an account with `--account` or the new
-`local_account`; it then runs on that account's `dir`, checked live against its `max_usage`:
+On the tmux Host, a Claude start that selects no account runs on your own `~/.claude` again, with
+its plugins, settings and login, and reads no usage. `[session.clients.claude] account` now applies
+to the Docker Host only. To run tmux starts on a registered account, set `local_account` in
+`~/.ensemble/config.local.toml`, or pass `--account`:
 
 ```toml
 [session.clients.claude]
 local_account = "work"
 ```
 
-A tmux resume choosing no account runs on the account whose `dir` holds its conversation; one
-recorded in `~/.claude` resumes there with no `CLAUDE_CONFIG_DIR`, even when an account's `dir` is
-`~/.claude`. A resume choosing another account, by `--account` or `local_account`, is refused. If you set `account` for tmux starts, move it to
-`local_account`, or keep both for the two Hosts.
+This replaces the tmux part of the next section: there, a tmux start uses an account, its login
+and its usage check only when it selects one or resumes a conversation recorded in an
+account's `dir`.
 
 ## Register each Claude account explicitly
 
@@ -40,11 +38,10 @@ reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.tom
 2. A table without `dir` is now a configuration error, one named `default` included. A
    `[session.clients.claude] account = "default"` needs a registered `default`; prefer a real name.
 3. On the Docker Host, log each name in to the broker: `ensemble-broker login claude work`.
-4. On the tmux Host, a start selecting an account (`--account` or `local_account`, above) runs on
-   its login: `CLAUDE_CONFIG_DIR` is that account's `dir`. Log each `dir` in with
-   `CLAUDE_CONFIG_DIR=<dir> claude auth login`. A tmux resume stays on the account whose `dir`
-   holds its conversation; another account chosen by `--account` or `local_account` refuses the
-   resume.
+4. On the tmux Host, a start now runs on its account's login: `CLAUDE_CONFIG_DIR` is that
+   account's `dir`. Log each `dir` in with `CLAUDE_CONFIG_DIR=<dir> claude auth login`. A tmux
+   resume stays on the account whose `dir` holds its conversation; another account chosen by
+   `--account` or `account` refuses the resume.
 5. Delete the old usage readings, holds and their locks; nothing reads them any more:
 
    ```sh
@@ -55,15 +52,14 @@ reach; it defaults to 100. Before the next run, in `~/.ensemble/config.local.tom
    Either fails harmlessly when the directory is gone or holds anything else. Account dirs,
    broker credentials and other `~/.ensemble` state are untouched.
 
-Before launching, every Docker Host Claude start, and every tmux one on an account, reads each
-registered account's usage once, live, and compares it with that account's `max_usage`.
-`--account`, else `[session.clients.claude] account` (Docker) or `local_account` (tmux), runs only
-while that account is below its limit in every window, and is never replaced by another. With
-neither, a Docker start picks the account with the most usage left, a tie by name. With no account
-usable, or every reading failed, the start fails with `usage: no available account` and starts
-nothing. A Docker Host Claude start with no account registered is a configuration error. Nothing
-is cached or held: a run that hits a usage limit marks nothing, and the next start reads again.
-There are no separate start thresholds besides `max_usage`.
+Before launching, every Claude start, on either Host, reads each registered account's usage once,
+live, and compares it with that account's `max_usage`. `--account`, else
+`[session.clients.claude] account`, runs only while that account is below its limit in every
+window, and is never replaced by another. With neither, the start picks the account with the most
+usage left, a tie by name. With no account usable, or every reading failed, the start fails with
+`usage: no available account` and starts nothing. A Claude start with no account registered is a
+configuration error. Nothing is cached or held: a run that hits a usage limit marks nothing, and
+the next start reads again. There are no separate start thresholds besides `max_usage`.
 
 ## Usage is decided only in the session
 
@@ -96,8 +92,7 @@ The broker has no implicit `default` Claude account any more:
   its notices name them, and every repair command carries the name.
 - An account you log in as `default` is an ordinary account like any other.
 - `scripts/install.sh` no longer logs Claude in, natively or to the broker: log each account in yourself (step 4).
-  A Docker start with no account registered, or any start selecting an unregistered one, fails with a configuration
-  error naming the table.
+  A start with no account registered, or an unregistered one, fails with a configuration error naming the table.
 
 The plugin and its broker ship as one compatible release: a protocol 37 broker and a protocol 38 client refuse each
 other. Upgrade in this order:

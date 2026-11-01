@@ -28,7 +28,6 @@ NAMES = {
     "test-accounts",
     "gotchas",
     "docker-guard-main-process",
-    "tmux-claude-account",
 }
 SECRET_READERS = (
     "install-ensemble/storekey-stdin",
