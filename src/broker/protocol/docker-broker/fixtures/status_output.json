@@ -183,61 +183,6 @@
     }
   },
   {
-    "name": "status-output-claude-none",
-    "valid": true,
-    "expected": {
-      "stage": "response",
-      "exit_code": 0,
-      "error_code": null
-    },
-    "data": {
-      "claude": {}
-    }
-  },
-  {
-    "name": "status-output-claude-accounts",
-    "valid": true,
-    "expected": {
-      "stage": "response",
-      "exit_code": 0,
-      "error_code": null
-    },
-    "data": {
-      "claude": {
-        "home": false,
-        "work": true
-      }
-    }
-  },
-  {
-    "name": "status-output-claude-bad-name",
-    "valid": false,
-    "expected": {
-      "stage": "response",
-      "exit_code": null,
-      "error_code": null
-    },
-    "data": {
-      "claude": {
-        "Work": true
-      }
-    }
-  },
-  {
-    "name": "status-output-claude-not-boolean",
-    "valid": false,
-    "expected": {
-      "stage": "response",
-      "exit_code": null,
-      "error_code": null
-    },
-    "data": {
-      "claude": {
-        "work": "yes"
-      }
-    }
-  },
-  {
     "name": "status-output-static-secret",
     "valid": false,
     "expected": {

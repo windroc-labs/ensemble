@@ -1095,11 +1095,10 @@ apps() {
   fi
 }
 
-# Exit 0 when client $1 (gh, claude or codex) has a saved login.
+# Exit 0 when client $1 (gh or codex) has a saved login.
 login_status() {
   case $1 in
     gh) gh auth status ;;
-    claude) claude auth status ;;
     codex) codex login status ;;
   esac </dev/null >/dev/null 2>&1
 }
@@ -2127,7 +2126,7 @@ store_app_key() {
   ledger_add keychain ensemble-broker-bot "$app_id"
 }
 
-# Pinned Codex: install, update, login, ready or busy.
+# Pinned Codex version $1: install, update, login, ready or busy.
 broker_need() {
   "$broker" status </dev/null | python3 -I -c '
 import json, sys
@@ -2148,7 +2147,7 @@ if state == "busy":
     print("busy")
 elif state == "installation_invalid":
     print("install" if "install-codex" in codex.get("repair", "") else "update")
-elif version(codex.get("version", "")) < version(sys.argv[2]):
+elif version(codex.get("version", "")) < version(sys.argv[1]):
     print("update")
 else:
     print("ready" if state == "ready" else "login")' "$@"
@@ -2230,14 +2229,14 @@ broker_logins() {
     skip "Codex not chosen"
   else
     min=$(go_const src/broker/internal/codex/versions.go MinVersion)
-    need=$(broker_need codex "$min")
+    need=$(broker_need "$min")
     case $need in
       busy) die "broker busy; rerun" ;;
       install | update) sudo -A "$broker" "$need-codex" "$min" </dev/null >&2 ;;
       *) skip "Codex $min or newer installed" ;;
     esac
     step "broker login: Codex"
-    if [ "$(broker_need codex "$min")" = ready ]; then
+    if [ "$(broker_need "$min")" = ready ]; then
       skip "logged in"
     else
       record_item ensemble-broker-codex auth

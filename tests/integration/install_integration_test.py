@@ -361,6 +361,7 @@ class InstallTest(Case):
         self.tcc = Path(self.home, "Library/Application Support/com.apple.TCC/TCC.db")
         self.tcc.parent.mkdir(parents=True)
         self.tcc.write_text("granted")
+        (self.fakes / "src/broker").mkdir(parents=True)
         self.pkg_src = self.fakes / "pkg-src"
         (self.pkg_src / "scripts").mkdir(parents=True)
         shutil.copyfile(
@@ -2445,6 +2446,7 @@ class InstallTest(Case):
 
     def test_docker_install_without_retired_items_skips(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
+        (self.fakes / "keychain").mkdir(exist_ok=True)
         keychain = {p.name: p.read_bytes() for p in (self.fakes / "keychain").iterdir()}
         result = self.again()
         self.assert_ok(result)
@@ -5221,7 +5223,7 @@ exec /bin/rm "$@"
         self.assertEqual(result.code, 1)
         self.assertIn("install-cleanup.sh: nothing removed", result.stderr)
         self.assertIn("  formula gh", result.tty)
-        self.assertIn("  login claude", result.tty)
+        self.assertIn("  login gh", result.tty)
         self.assertFalse([c for c in self.calls() if c.startswith("sudo")])
         self.assertEqual(self.snapshot(), before)
 
@@ -5869,7 +5871,6 @@ exec /bin/rm "$@"
             "claude plugin uninstall ensemble@windroc",
             "claude plugin marketplace remove windroc",
             "gh auth logout --hostname github.com",
-            "claude auth logout",
             "codex logout",
             "brew uninstall --cask codex",
             "brew uninstall --cask claude-code",
