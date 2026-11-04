@@ -152,18 +152,23 @@ class Kind(StrEnum):
     HEADLESS = "headless"
 
 
-def _kind(name: str, generation: str | None = None) -> Kind | None:
+def _damaged_record(name: str) -> bool:
+    if not os.path.lexists(os.path.join(state_dir(name), RECORD)):
+        return False
     found = _record(name)
     recorded = found.get("generation")
-    if (
+    return (
         not isinstance(recorded, str)
         or not GEN.fullmatch(recorded)
-        or generation is not None
-        and recorded != generation
-    ):
-        return None
+        or "kind" in found
+        and found["kind"] not in tuple(Kind)
+    )
+
+
+def _kind(name: str, generation: str) -> Kind | None:
+    found = _record(name)
     kind = found.get("kind")
-    return Kind(kind) if kind in tuple(Kind) else None
+    return Kind(kind) if found.get("generation") == generation and kind in tuple(Kind) else None
 
 
 def _guarded(name: str, generation: str) -> bool:
@@ -456,7 +461,7 @@ class DockerHost(Host):
         }
 
     def sweep(self, own: str) -> None:
-        """Closes guarded rows whose owner lock is free; others only under their tui
+        """Closes rows whose owner lock is free, and `own`'s debris; others only under their tui
         lock, untaken if busy (`own`'s caller holds its).
         """
         try:
@@ -467,13 +472,13 @@ class DockerHost(Host):
         for row in rows:
             try:
                 if row.name == own:
-                    self._sweep_row(row)
+                    self._sweep_row(row, own=True)
                     continue
                 lock = tui_lock(row.name)
                 with inode_lock(lock, wait=False) as held:
                     if held:
                         try:
-                            self._sweep_row(row)
+                            self._sweep_row(row, own=False)
                         finally:
                             if not os.path.lexists(_state_file(row.name)):
                                 os.unlink(lock)
@@ -569,8 +574,10 @@ class DockerHost(Host):
                     with contextlib.suppress(FileNotFoundError):
                         os.unlink(marker)
 
-    def _sweep_row(self, row: Row) -> None:
-        if _guarded(row.name, row.generation) and _lock_free(_owner_path(row.name)):
+    def _sweep_row(self, row: Row, *, own: bool) -> None:
+        if _damaged_record(row.name):
+            return
+        if _lock_free(_owner_path(row.name)) or own and not _guarded(row.name, row.generation):
             self.broker.close(row.container)
 
     def _client_context(self) -> ClientContext:
@@ -887,7 +894,7 @@ class DockerHost(Host):
         events: str | None,
         metadata: Mapping[str, str] | None,
     ) -> DockerWorker:
-        """Holds the owner lock; a live or unknown earlier generation refuses (SessionBusy),
+        """Holds the owner lock; a live or unknown earlier guarded generation refuses (SessionBusy),
         an ended one is removed first.
         """
         if why := display_error(display):
@@ -907,14 +914,11 @@ class DockerHost(Host):
             raise SessionBusy(name, BUSY)
         made: list[DockerWorker] = []  # once built, the handle alone owns `owner`
         try:
-            if os.path.lexists(os.path.join(state_dir(name), RECORD)) and _kind(name) is None:
-                raise SessionBusy(name, BUSY)
+            if _damaged_record(name):
+                raise SessionBusy(name, f"damaged record: {os.path.join(state_dir(name), RECORD)}")
             for row in self._rows():
-                if row.name == name:
-                    if (
-                        not _guarded(name, row.generation)
-                        or self._row_liveness(name, row.generation) != Liveness.ABSENT
-                    ):
+                if row.name == name and _guarded(name, row.generation):
+                    if self._row_liveness(name, row.generation) != Liveness.ABSENT:
                         raise SessionBusy(name, BUSY)
                     self.broker.close(row.container)
             with _Stops() as stops:

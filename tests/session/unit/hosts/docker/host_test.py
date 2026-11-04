@@ -85,6 +85,8 @@ BAD_RECORDS = {
     "non-object": "[]",
     "missing generation": '{"kind":"tui"}',
     "bad generation": '{"kind":"tui","generation":[]}',
+    "unknown kind": json.dumps({"generation": GEN, "kind": "other"}),
+    "null kind": json.dumps({"generation": GEN, "kind": None}),
 }
 
 
@@ -1226,13 +1228,18 @@ class StartTest(StartBase):
         self.assertIn(("close", CONTAINER), self.order)
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
 
-    def test_failed_removal_of_an_ended_worker_refuses_start(self):
+    def test_a_container_the_sweep_could_not_remove_refuses_start_naming_it(self):
         old = "f" * 32
-        self.guarded_record(old)
         self.docker.ps = [f"ensemble-w-{old}\tw\t{old}\trunning"]
-        self.probe_says("exited")
         self.broker.close = mock.Mock(side_effect=SessionError("broker: boom"))
-        with self.assertRaisesRegex(SessionError, "broker: boom"):
+        with (
+            self.assertLogs("session", "WARNING"),
+            self.assertRaisesRegex(
+                SessionError,
+                f"^docker session w: container ensemble-w-{old} of an earlier start is still up"
+                r" \(its removal failed; see the log\); the next start retries it$",
+            ),
+        ):
             self.start()
         self.broker.close.assert_called_once_with(f"ensemble-w-{old}")
 
@@ -1438,13 +1445,13 @@ class EnvironmentTest(StartBase):
                         self.assertEqual(self.order, [])
 
     def test_fresh_start_does_not_inherit_saved_credentials(self):
-        self.record(kind="tui", credentials="{}", environment_credentials="{}")
+        self.record(credentials="{}", environment_credentials="{}")
         self.start()
         self.assertNotIn("credentials", self.manifest())
         self.assertNotIn("environment_credentials", self.manifest())
 
     def test_another_identity_does_not_inherit_saved_credentials(self):
-        self.record(kind="tui", sid="another", credentials="{}", environment_credentials="{}")
+        self.record(sid="another", credentials="{}", environment_credentials="{}")
         self.history()
         self.start(resume="1")
         self.assertNotIn("credentials", self.manifest())
@@ -1452,7 +1459,7 @@ class EnvironmentTest(StartBase):
 
     def resumable(self, environment):
         """w's host.json from a start in `environment` (absent: a pre-upgrade one), its history."""
-        self.record(kind="tui", **({} if environment == "absent" else {"environment": environment}))
+        self.record(**({} if environment == "absent" else {"environment": environment}))
         self.history()
 
     def test_preflight_sends_version_only_without_querying_the_lock(self):
@@ -1464,7 +1471,7 @@ class EnvironmentTest(StartBase):
 
     def test_another_sids_record_is_not_the_stored_environment(self):
         self.resumable(ENVIRONMENT.persisted())
-        self.record(kind="tui", sid="another", environment=ENVIRONMENT.persisted())
+        self.record(sid="another", environment=ENVIRONMENT.persisted())
         self.start(resume="1")
         self.assertEqual(self.broker.built, {})
         self.assertIsNone(self.host_record()["environment"])
@@ -1730,7 +1737,19 @@ class SweepTest(Base):
         self.addCleanup(_close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
 
-    def test_sweep_closes_free_guarded_workers_and_keeps_unknown_held_and_busy_ones(self):
+    def test_sweep_preserves_damaged_records_and_containers(self):
+        for label, text in BAD_RECORDS.items():
+            for own in ("w", "bad"):
+                with self.subTest(record=label, own=own):
+                    path = self.damaged_record("bad", text)
+                    self.docker.ps = [self.row("bad"), self.row("clean")]
+                    self.broker.closed.clear()
+                    self.host.sweep(own)
+                    self.assertEqual(self.broker.closed, [f"ensemble-clean-{GEN}"])
+                    with open(path) as f:
+                        self.assertEqual(f.read(), text)
+
+    def test_sweep_closes_debris_and_free_workers_and_keeps_held_and_busy_ones(self):
         self.host_json("b", self.OLD, kind="tui")
         self.host_json("c", mode="guard")  # no kind: an older release's start
         for name, kind in (("d", "tui"), ("e", "tui"), ("k", "headless"), ("l", "headless")):
@@ -1759,7 +1778,8 @@ class SweepTest(Base):
         self.host.sweep("w")
         self.assertEqual(
             self.broker.closed,
-            [f"ensemble-{name}-{GEN}" for name in ("e", "l")],
+            [f"ensemble-w-{self.OLD}"]
+            + [f"ensemble-{name}-{GEN}" for name in ("a", "b", "c", "e", "l")],
         )
         self.assertFalse([call for call in self.docker.order if call[:1] == ["exec"]])
 
@@ -1780,7 +1800,8 @@ class SweepTest(Base):
         self.held("w", "guard.lock")  # the caller's own start holds it
         self.docker.ps = [self.row("w")]
         self.host.sweep("w")
-        self.assertEqual(self.broker.closed, [])
+        self.assertEqual(self.broker.closed, [f"ensemble-w-{GEN}"])
+        self.broker.closed.clear()
         self.host_json("w", kind="tui")
         self.host.sweep("w")
         self.assertEqual(self.broker.closed, [])
@@ -1789,12 +1810,10 @@ class SweepTest(Base):
         self.docker.ps = [self.row("a"), self.row("x", state="exited")]
         before = self.files()
         self.host.sweep("w")
-        self.assertEqual(self.broker.closed, [])
+        self.assertEqual(self.broker.closed, [f"ensemble-a-{GEN}", f"ensemble-x-{GEN}"])
         self.assertEqual(self.files(), before)
 
     def test_a_failing_close_or_listing_skips_and_logs(self):
-        self.host_json("a", kind="tui")
-        self.host_json("b", kind="tui")
         self.docker.ps = [self.row("a"), self.row("b")]
         closes = iter([SessionError("broker: boom"), True])
 
@@ -2338,6 +2357,21 @@ class GuardedStartTest(StartBase):
 
 
 class WorkerLivenessTest(StartBase):
+    def test_start_reclaims_a_pre_upgrade_container(self):
+        self.record()
+        self.listed("w")
+
+        def close(container):
+            self.broker.closed.append(container)
+            self.docker.ps = []
+            return True
+
+        self.broker.close = close
+        handle = self.start()
+        self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertEqual(len(self.execs), 1)
+        handle.close()
+
     def test_a_held_owner_lock_is_live_with_no_docker_call(self):
         self.owner_held()
         self.order.clear()
@@ -2392,22 +2426,23 @@ class WorkerLivenessTest(StartBase):
         self.assertEqual(self.broker.closed[0], f"ensemble-w-{old}")
         self.assertEqual(len(self.execs), 1)
 
-    def test_a_debris_row_refuses_start_before_cleanup(self):
+    def test_a_debris_row_is_left_to_the_container_refusal(self):
         self.listed("w")
         self.record()
-        with self.assertRaises(SessionBusy):
+        refusal = "container ensemble-w-.* of an earlier start is still up"
+        with self.assertRaisesRegex(SessionError, f"^docker session w: {refusal}"):
             self.start()
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(self.execs, [])
-        self.assertEqual(self.broker.closed, [])
 
     def test_damaged_own_records_refuse_start_without_cleanup_or_overwrite(self):
         self.listed("w")
         for label, text in BAD_RECORDS.items():
             with self.subTest(record=label):
                 path = self.damaged_record("w", text)
-                with self.assertRaises(SessionBusy):
+                with self.assertRaises(SessionBusy) as raised:
                     self.start()
+                self.assertIn(path, str(raised.exception))
                 with open(path) as f:
                     self.assertEqual(f.read(), text)
                 self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
@@ -2418,8 +2453,9 @@ class WorkerLivenessTest(StartBase):
         for label, text in BAD_RECORDS.items():
             with self.subTest(record=label):
                 path = self.damaged_record("w", text)
-                with self.assertRaises(SessionBusy):
+                with self.assertRaises(SessionBusy) as raised:
                     self.start()
+                self.assertIn(path, str(raised.exception))
                 with open(path) as f:
                     self.assertEqual(f.read(), text)
                 self.assertEqual(self.broker.closed, [])
