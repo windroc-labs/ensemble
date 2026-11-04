@@ -83,6 +83,32 @@ def clients():
 
 
 class ManagedTest(Case):
+    def test_a_broken_neighbors_record_does_not_block_start_or_close(self):
+        broken = managed.location("tmux", "broken")
+        managed.private_directory(broken)
+        host = TmuxHost("tmux")
+        with spawned(), self.assertLogs("session", level="WARNING"):
+            self.assertEqual(host.list(), [])
+            channel = host.worker(
+                "healthy",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
+            )
+            channel.close()
+        self.assertTrue(os.path.isdir(broken))
+
+    def test_a_missing_current_record_still_blocks_the_same_name(self):
+        managed.private_directory(managed.location("tmux", "broken"))
+        with spawned() as spawn, self.assertRaises(Unanswered):
+            TmuxHost("tmux").worker(
+                "broken",
+                Launch((sys.executable,), cwd=self.home),
+                terminal=True,
+                metadata={"generation": uuid.uuid4().hex},
+            )
+        spawn.assert_not_called()
+
     def test_next_generation_removes_the_previous_exit_diagnostic(self):
         generation = "a" * 32
         directory = guard_dir(generation, "exited")

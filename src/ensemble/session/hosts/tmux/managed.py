@@ -102,7 +102,10 @@ def load_json(path: str, *, limit: int = 4096) -> dict:
             or info.st_size > limit
         ):
             raise OSError("invalid guard record")
-        value = json.loads(stream.read(limit + 1))
+        try:
+            value = json.loads(stream.read(limit + 1))
+        except RecursionError as error:
+            raise ValueError("invalid guard record") from error
     if not isinstance(value, dict):
         raise ValueError("invalid guard record")
     return value
@@ -228,10 +231,14 @@ def records(host: str) -> dict[str, WorkerState]:
     found = {}
     try:
         check_directory(root)
-        for entry in sorted(os.listdir(root)):
-            if not re.fullmatch(r"[0-9a-f]{16}", entry):
-                continue
-            directory = os.path.join(root, entry)
+        entries = sorted(os.listdir(root))
+    except OSError as error:
+        raise Unanswered(f"host {host}: guard inventory: {error}") from error
+    for entry in entries:
+        if not re.fullmatch(r"[0-9a-f]{16}", entry):
+            continue
+        directory = os.path.join(root, entry)
+        try:
             check_directory(directory)
             record = load_json(os.path.join(directory, "current.json"), limit=STATE_MAX)
             if set(record) == {"generation"}:  # old records still gate starts by their lease
@@ -259,8 +266,8 @@ def records(host: str) -> dict[str, WorkerState]:
                 None,
                 host,
             )
-    except (OSError, ValueError) as error:
-        raise Unanswered(f"host {host}: guard inventory: {error}") from error
+        except (OSError, ValueError) as error:
+            LOG.warning("host %s: guard inventory %s: %s; skipped", host, directory, error)
     return found
 
 
