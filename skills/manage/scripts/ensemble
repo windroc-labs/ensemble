@@ -6,6 +6,28 @@
 # terminal it then opens the selected one: attach to its session, resume its recorded client under
 # its hold (typed into the hold's idle shell, or as a new hold's command), or ensemble <name>.
 # --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
+usage() {
+  printf '%s\n' 'usage: ensemble <session-name> | ensemble list | ensemble --install' \
+    '       ensemble -h | ensemble --help' \
+    'session-name: letters, digits, _ and -; must not start with -'
+}
+usage_error() {
+  usage >&2
+  exit 2
+}
+valid_name() {
+  local LC_ALL=C
+  [[ $1 =~ ^[A-Za-z0-9_-]+$ ]]
+}
+for argument in "$@"; do
+  case $argument in -h | --help) usage; exit 0 ;; esac
+done
+case ${1:-} in
+--install) [ $# -eq 1 ] || usage_error ;;
+list) ;;
+-*) usage_error ;;
+*) [ $# -eq 1 ] && valid_name "$1" || usage_error ;;
+esac
 if [ "$1" = --install ]; then
   root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P) || exit
   bin=$HOME/.ensemble/bin
@@ -88,7 +110,7 @@ if [ "$1" = list ]; then
     ;;
   esac
 fi
-s=${1:?usage: ensemble <session-name> | ensemble list | ensemble --install}
+s=$1
 tmux has -t "=$s" 2>/dev/null || {
   [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
   start "$s" "$PWD" "$crew" hold "--manager=$s" "--session=$s" -- "${SHELL:-/bin/sh}" -l

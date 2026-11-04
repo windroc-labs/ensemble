@@ -142,7 +142,7 @@ def _record(name: str) -> dict:
     try:
         with open(os.path.join(state_dir(name), RECORD), encoding="utf-8") as f:
             found = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return found if isinstance(found, dict) else {}
 
@@ -152,10 +152,23 @@ class Kind(StrEnum):
     HEADLESS = "headless"
 
 
+def _damaged_record(name: str) -> bool:
+    if not os.path.lexists(os.path.join(state_dir(name), RECORD)):
+        return False
+    found = _record(name)
+    recorded = found.get("generation")
+    return (
+        not isinstance(recorded, str)
+        or not GEN.fullmatch(recorded)
+        or "kind" in found
+        and found["kind"] not in tuple(Kind)
+    )
+
+
 def _kind(name: str, generation: str) -> Kind | None:
     found = _record(name)
     kind = found.get("kind")
-    return Kind(kind) if found.get("generation") == generation and kind in set(Kind) else None
+    return Kind(kind) if found.get("generation") == generation and kind in tuple(Kind) else None
 
 
 def _guarded(name: str, generation: str) -> bool:
@@ -562,6 +575,8 @@ class DockerHost(Host):
                         os.unlink(marker)
 
     def _sweep_row(self, row: Row, *, own: bool) -> None:
+        if _damaged_record(row.name):
+            return
         if _lock_free(_owner_path(row.name)) or own and not _guarded(row.name, row.generation):
             self.broker.close(row.container)
 
@@ -899,6 +914,8 @@ class DockerHost(Host):
             raise SessionBusy(name, BUSY)
         made: list[DockerWorker] = []  # once built, the handle alone owns `owner`
         try:
+            if _damaged_record(name):
+                raise SessionBusy(name, f"damaged record: {os.path.join(state_dir(name), RECORD)}")
             for row in self._rows():
                 if row.name == name and _guarded(name, row.generation):
                     if self._row_liveness(name, row.generation) != Liveness.ABSENT:

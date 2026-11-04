@@ -77,6 +77,17 @@ IMAGE = "ensemble-worker:" + "a" * 64
 STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 DIGEST = "sha256:" + "c" * 64
 HOME = ClientHome("agent_dir", "agent", "AGENT_HOME", "agent-token")
+BAD_RECORDS = {
+    "deep json": "[" * 2000 + "0" + "]" * 2000,
+    "list kind": json.dumps({"generation": GEN, "kind": []}),
+    "object kind": json.dumps({"generation": GEN, "kind": {}}),
+    "invalid json": "{",
+    "non-object": "[]",
+    "missing generation": '{"kind":"tui"}',
+    "bad generation": '{"kind":"tui","generation":[]}',
+    "unknown kind": json.dumps({"generation": GEN, "kind": "other"}),
+    "null kind": json.dumps({"generation": GEN, "kind": None}),
+}
 
 
 def done(rc=0, out="", err=""):
@@ -231,6 +242,14 @@ class Base(Case):
 
     def guarded_record(self, gen=GEN, kind="tui"):
         self.record(generation=gen, kind=kind)
+
+    def damaged_record(self, name, text):
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state, exist_ok=True)
+        path = os.path.join(state, "host.json")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
 
 
 def _close(fd):
@@ -1718,6 +1737,18 @@ class SweepTest(Base):
         self.addCleanup(_close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
 
+    def test_sweep_preserves_damaged_records_and_containers(self):
+        for label, text in BAD_RECORDS.items():
+            for own in ("w", "bad"):
+                with self.subTest(record=label, own=own):
+                    path = self.damaged_record("bad", text)
+                    self.docker.ps = [self.row("bad"), self.row("clean")]
+                    self.broker.closed.clear()
+                    self.host.sweep(own)
+                    self.assertEqual(self.broker.closed, [f"ensemble-clean-{GEN}"])
+                    with open(path) as f:
+                        self.assertEqual(f.read(), text)
+
     def test_sweep_closes_debris_and_free_workers_and_keeps_held_and_busy_ones(self):
         self.host_json("b", self.OLD, kind="tui")
         self.host_json("c", mode="guard")  # no kind: an older release's start
@@ -2096,6 +2127,18 @@ class LastLinesTest(Base):
 
 
 class ListTest(Base):
+    def test_damaged_records_leave_healthy_inventory_available(self):
+        self.listed("bad", "w")
+        self.guarded_record()
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                self.damaged_record("bad", text)
+                self.assertEqual(self.host.list(), ["w"])
+                self.assertEqual([row.name for row in self.host.rows()], ["w"])
+                self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
+                self.assertEqual(self.host.worker_liveness("bad", GEN), Liveness.UNKNOWN)
+                self.assertIsNotNone(self.host.attach_target("w"))
+
     def test_admission_inventory_distinguishes_missing_docker_from_empty(self):
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
         with self.assertRaisesRegex(SessionError, "inventory unavailable"):
@@ -2314,6 +2357,21 @@ class GuardedStartTest(StartBase):
 
 
 class WorkerLivenessTest(StartBase):
+    def test_start_reclaims_a_pre_upgrade_container(self):
+        self.record()
+        self.listed("w")
+
+        def close(container):
+            self.broker.closed.append(container)
+            self.docker.ps = []
+            return True
+
+        self.broker.close = close
+        handle = self.start()
+        self.assertEqual(self.broker.closed, [CONTAINER])
+        self.assertEqual(len(self.execs), 1)
+        handle.close()
+
     def test_a_held_owner_lock_is_live_with_no_docker_call(self):
         self.owner_held()
         self.order.clear()
@@ -2376,6 +2434,44 @@ class WorkerLivenessTest(StartBase):
             self.start()
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(self.execs, [])
+
+    def test_damaged_own_records_refuse_start_without_cleanup_or_overwrite(self):
+        self.listed("w")
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                path = self.damaged_record("w", text)
+                with self.assertRaises(SessionBusy) as raised:
+                    self.start()
+                self.assertIn(path, str(raised.exception))
+                with open(path) as f:
+                    self.assertEqual(f.read(), text)
+                self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+                self.assertEqual(self.broker.closed, [])
+                self.assertEqual(self.execs, [])
+
+    def test_damaged_own_records_block_name_without_container(self):
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                path = self.damaged_record("w", text)
+                with self.assertRaises(SessionBusy) as raised:
+                    self.start()
+                self.assertIn(path, str(raised.exception))
+                with open(path) as f:
+                    self.assertEqual(f.read(), text)
+                self.assertEqual(self.broker.closed, [])
+                self.assertEqual(self.execs, [])
+
+    def test_other_damaged_records_allow_start_and_close(self):
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                self.damaged_record("bad", text)
+                self.listed("bad")
+                handle = self.start()
+                self.assertNotIn(f"ensemble-bad-{GEN}", self.broker.closed)
+                before = self.broker.closed.count(CONTAINER)
+                handle.close()
+                self.assertEqual(self.broker.closed.count(CONTAINER), before + 1)
+                self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
 
 
 class GuardedRowTest(StartBase):

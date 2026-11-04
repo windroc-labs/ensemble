@@ -441,6 +441,12 @@ older release started, so before upgrading:
 Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
 listed, and the next Docker start removes its container as debris.
 
+A damaged Docker `host.json` is preserved with its container and blocks reuse of that session name, even when no
+container remains. The refusal names the record's full path; other sessions can still start, close and list.
+Stop the owning harness before repairing or moving aside that `host.json`, keeping the rest of its directory for
+conversation history. Records with a valid generation and no `kind` remain usable by start and resume; their
+leftover containers follow the normal debris cleanup above.
+
 ## Broker protocol 31: output-repo token beside prefetch
 
 Historical protocol 31 behavior; protocol 35 replaces the grant with an explicit credential declaration above.

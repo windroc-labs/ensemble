@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import uuid
+from pathlib import Path
 
 from ensemble.manager.engine.roster import Roster
 from ensemble.manager.engine.types import ActiveHolder, Held
@@ -230,6 +231,20 @@ class FakeTmux(Case):
                 self.assertIn(USAGE, err)
                 self.assertEqual(calls, [])
 
+    def test_help_has_no_tmux_or_manager_side_effects(self):
+        before = sorted(Path(self.home).rglob("*"))
+        for args in (("-h",), ("--help",), ("s1", "--help"), ("--install", "--help")):
+            for tmux in ("", "/tmp/fake,1,0"):
+                for has_rc in (0, 1):
+                    with self.subTest(args=args, tmux=tmux, has_rc=has_rc):
+                        process, out, err, calls = self.run_ensemble(
+                            *args, TMUX=tmux, has_rc=has_rc
+                        )
+                        self.assertEqual((process.returncode, err), (0, ""))
+                        self.assertIn(USAGE, out)
+                        self.assertEqual(calls, [])
+                        self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+
     def test_an_existing_session_is_only_attached(self):
         _, _, _, calls = self.run_ensemble("s1", has_rc=0)
         self.assertEqual(
@@ -276,10 +291,33 @@ class FakeTmux(Case):
         _, _, _, calls = self.run_ensemble("s1")
         self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/sh"))
 
-    def test_only_the_first_argument_names_the_session_as_one_word(self):
-        for args, name in ((("m a'n$x",), "m a'n$x"), (("s1", "extra", "--install"), "s1")):
+    def test_invalid_names_and_extra_arguments_have_no_side_effects(self):
+        before = sorted(Path(self.home).rglob("*"))
+        for args in (
+            ("m a'n$x",),
+            ("s1", "extra", "--install"),
+            ("--unknown",),
+            ("-dash",),
+            (".",),
+            ("..",),
+            ("../outside",),
+            ("a/b",),
+            ("a:b",),
+            ("a.b",),
+            ("name\n",),
+            ("--install", "extra"),
+        ):
             with self.subTest(args=args):
-                _, _, _, calls = self.run_ensemble(*args)
+                process, _, err, calls = self.run_ensemble(*args, TMUX="/tmp/fake,1,0")
+                self.assertEqual(process.returncode, 2, err)
+                self.assertIn(USAGE, err)
+                self.assertEqual(calls, [])
+                self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+
+    def test_valid_names_start_and_attach(self):
+        for name in ("s1", "A_9-z", "_leading", "trailing-"):
+            with self.subTest(name=name):
+                _, _, _, calls = self.run_ensemble(name)
                 self.assertEqual(
                     [call[2:] for call in calls],
                     [

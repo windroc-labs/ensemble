@@ -139,7 +139,52 @@ class GuardInventoryTest(Case):
         directory = _worker(self, "worker")
         record = managed.load_json(os.path.join(directory, "current.json"))
         managed.save_json(os.path.join(directory, "current.json"), {**record, "name": "forged"})
-        with self.assertRaises(SessionError):
+        _worker(self, "healthy")
+        with self.assertLogs("session", level="WARNING") as messages:
+            self.assertEqual(self.host.list(), ["healthy"])
+        self.assertIn(directory, messages.output[0])
+
+    def test_damaged_guard_entries_do_not_hide_healthy_workers(self):
+        _worker(self, "healthy")
+        for damage in ("missing", "json", "nested", "shape", "mode", "symlink", "directory"):
+            with self.subTest(damage=damage):
+                directory = _worker(self, damage, state="exited", live=False)
+                current = os.path.join(directory, "current.json")
+                if damage == "missing":
+                    os.unlink(current)
+                elif damage == "json":
+                    with open(current, "w") as stream:
+                        stream.write("{")
+                elif damage == "nested":
+                    with open(current, "w") as stream:
+                        stream.write('{"value":' + "[" * 2000 + "0" + "]" * 2000 + "}")
+                elif damage == "shape":
+                    managed.save_json(current, {"host": "tmux", "name": []})
+                elif damage == "mode":
+                    os.chmod(current, 0o644)
+                elif damage == "symlink":
+                    os.unlink(current)
+                    os.symlink(os.path.join(self.home, "absent"), current)
+                else:
+                    os.chmod(directory, 0o755)
+                with self.assertLogs("session", level="WARNING") as messages:
+                    self.assertEqual(self.host.list(), ["healthy"])
+                    self.assertEqual([r.name for r in self.host.rows()], ["healthy"])
+                self.assertTrue(any(directory in line for line in messages.output))
+
+    def test_a_guard_directory_disappearing_during_listing_does_not_hide_healthy_workers(self):
+        _worker(self, "healthy")
+        root = managed.control_root()
+        entries = os.listdir(root) + ["0" * 16]
+        with mock.patch.object(os, "listdir", return_value=entries), self.assertLogs("session"):
+            self.assertEqual(self.host.list(), ["healthy"])
+
+    def test_an_unreadable_inventory_root_is_still_an_error(self):
+        _worker(self, "healthy")
+        with (
+            mock.patch.object(os, "listdir", side_effect=PermissionError("root unreadable")),
+            self.assertRaises(Unanswered),
+        ):
             self.host.list()
 
 
