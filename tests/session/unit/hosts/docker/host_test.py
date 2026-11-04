@@ -83,6 +83,8 @@ BAD_RECORDS = {
     "object kind": json.dumps({"generation": GEN, "kind": {}}),
     "invalid json": "{",
     "non-object": "[]",
+    "missing generation": '{"kind":"tui"}',
+    "bad generation": '{"kind":"tui","generation":[]}',
 }
 
 
@@ -1436,13 +1438,13 @@ class EnvironmentTest(StartBase):
                         self.assertEqual(self.order, [])
 
     def test_fresh_start_does_not_inherit_saved_credentials(self):
-        self.record(credentials="{}", environment_credentials="{}")
+        self.record(kind="tui", credentials="{}", environment_credentials="{}")
         self.start()
         self.assertNotIn("credentials", self.manifest())
         self.assertNotIn("environment_credentials", self.manifest())
 
     def test_another_identity_does_not_inherit_saved_credentials(self):
-        self.record(sid="another", credentials="{}", environment_credentials="{}")
+        self.record(kind="tui", sid="another", credentials="{}", environment_credentials="{}")
         self.history()
         self.start(resume="1")
         self.assertNotIn("credentials", self.manifest())
@@ -1450,7 +1452,7 @@ class EnvironmentTest(StartBase):
 
     def resumable(self, environment):
         """w's host.json from a start in `environment` (absent: a pre-upgrade one), its history."""
-        self.record(**({} if environment == "absent" else {"environment": environment}))
+        self.record(kind="tui", **({} if environment == "absent" else {"environment": environment}))
         self.history()
 
     def test_preflight_sends_version_only_without_querying_the_lock(self):
@@ -1462,7 +1464,7 @@ class EnvironmentTest(StartBase):
 
     def test_another_sids_record_is_not_the_stored_environment(self):
         self.resumable(ENVIRONMENT.persisted())
-        self.record(sid="another", environment=ENVIRONMENT.persisted())
+        self.record(kind="tui", sid="another", environment=ENVIRONMENT.persisted())
         self.start(resume="1")
         self.assertEqual(self.broker.built, {})
         self.assertIsNone(self.host_record()["environment"])
@@ -2409,6 +2411,17 @@ class WorkerLivenessTest(StartBase):
                 with open(path) as f:
                     self.assertEqual(f.read(), text)
                 self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+                self.assertEqual(self.broker.closed, [])
+                self.assertEqual(self.execs, [])
+
+    def test_damaged_own_records_block_name_without_container(self):
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                path = self.damaged_record("w", text)
+                with self.assertRaises(SessionBusy):
+                    self.start()
+                with open(path) as f:
+                    self.assertEqual(f.read(), text)
                 self.assertEqual(self.broker.closed, [])
                 self.assertEqual(self.execs, [])
 

@@ -152,10 +152,18 @@ class Kind(StrEnum):
     HEADLESS = "headless"
 
 
-def _kind(name: str, generation: str) -> Kind | None:
+def _kind(name: str, generation: str | None = None) -> Kind | None:
     found = _record(name)
+    recorded = found.get("generation")
+    if (
+        not isinstance(recorded, str)
+        or not GEN.fullmatch(recorded)
+        or generation is not None
+        and recorded != generation
+    ):
+        return None
     kind = found.get("kind")
-    return Kind(kind) if found.get("generation") == generation and kind in tuple(Kind) else None
+    return Kind(kind) if kind in tuple(Kind) else None
 
 
 def _guarded(name: str, generation: str) -> bool:
@@ -899,6 +907,8 @@ class DockerHost(Host):
             raise SessionBusy(name, BUSY)
         made: list[DockerWorker] = []  # once built, the handle alone owns `owner`
         try:
+            if os.path.lexists(os.path.join(state_dir(name), RECORD)) and _kind(name) is None:
+                raise SessionBusy(name, BUSY)
             for row in self._rows():
                 if row.name == name:
                     if (

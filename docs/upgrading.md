@@ -439,7 +439,11 @@ older release started, so before upgrading:
    and every other session with `ensemble-session close NAME`.
 
 Conversations stay: resume them after the upgrade. A session missed is not supported afterwards: on Docker it is not
-listed, and the next Docker start removes its container as debris.
+listed. Unknown containers and damaged `host.json` records are preserved and block reuse of their session name, even
+when no container remains. Other sessions can still start, close and list. Stop the owning harness before recovery;
+identify any remaining container with `docker ps -a --filter label=ensemble.session=NAME` and remove it with
+`docker rm -f CONTAINER`. Repair or move aside only `~/.ensemble/docker-state/NAME/host.json`, keeping the rest of
+that directory for conversation history.
 
 ## Broker protocol 31: output-repo token beside prefetch
 
