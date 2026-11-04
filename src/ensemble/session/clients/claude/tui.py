@@ -345,7 +345,7 @@ def on_hook(call: HookCall) -> dict | None:
 
 
 def _queued(path: str) -> int:
-    """Items queued since the newest prompt or tool result (a join), not taken out."""
+    """Items queued since the newest prompt or tool result, not yet dequeued, removed or joined."""
     try:
         data = read(path, limit=TAIL, tail=True) or b""
     except ValueError:
@@ -362,6 +362,8 @@ def _queued(path: str) -> int:
             break
         if record.get("type") == "queue-operation":
             operations.append(record.get("operation"))
+        elif record.get("type") == "attachment" and _joined(record.get("attachment")):
+            operations.append("joined")
     queued = 0
     for operation in reversed(operations):
         queued = queued + 1 if operation == "enqueue" else max(queued - 1, 0)
@@ -398,6 +400,10 @@ def _chain(path: str, sid: str, config_dir: str) -> list[tuple[str, str | None, 
         )
         original = found[1] if found and found[1] else original
     return ClaudeCommon.walk(original, sid, config_dir)
+
+
+def _joined(attachment) -> bool:
+    return isinstance(attachment, dict) and attachment.get("type") == "queued_command"
 
 
 def _first(payload: dict, *keys: str) -> str:

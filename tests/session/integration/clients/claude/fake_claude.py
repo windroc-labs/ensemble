@@ -22,10 +22,10 @@ turn with StopFailure; {"kind": "dialog", "text": S} prints S and reads another 
 conversation can answer from the first generation's.
 {"kind": "queued", "answer": A} runs a tool while the next stdin line arrives, which Claude Code
 queues (an enqueue record) and joins to the turn once the tool returns (PostToolUse, then a
-remove record and a queued_command attachment), then answers A; with "prompted": true, UserPromptSubmit runs for the line
+queued_command attachment), then answers A; with "prompted": true, UserPromptSubmit runs for the line
 as the turn joins it, before its attachment, as Claude Code 2.1.312 does. {"kind": "notice", "text":
 T} is a background task's completion Claude Code queues and joins to the turn: an enqueue record,
-UserPromptSubmit for T, then a remove record and a task-notification queued_command attachment; it reads no input. {"kind": "pause", "file": F} waits
+UserPromptSubmit for T, then a task-notification queued_command attachment; it reads no input. {"kind": "pause", "file": F} waits
 for F to exist; {"kind": "input"} waits for any input to arrive (kept for the next line).
 - turns: interactive steps of turn 2 on.
 - dialog: interactive text printed at startup, before the first SessionStart (as Claude's workspace
@@ -76,7 +76,6 @@ DEFAULTS = {
     "commands": None,
 }
 LIMIT = "You've hit your usage limit."
-REMOVE = {"type": "queue-operation", "operation": "remove"}  # a queued item joined to the turn
 
 
 def install(bin_dir: str, tail: str = "/usr/bin:/bin") -> str:
@@ -449,7 +448,6 @@ class InteractiveSession:
             self.joined(line, "prompt")
         else:
             attachment = {"type": "queued_command", "prompt": line, "commandMode": "prompt"}
-            request.record(REMOVE)
             request.record({"type": "attachment", "attachment": attachment})
         print(answer, flush=True)
         request.keep("assistant", [{"type": "text", "text": answer}])
@@ -459,7 +457,6 @@ class InteractiveSession:
         """`text` joined to the running turn with its UserPromptSubmit, as Claude Code 2.1.312."""
         self.hook("UserPromptSubmit", {"prompt": text})
         attachment = {"type": "queued_command", "prompt": text, "commandMode": mode}
-        self.request.record(REMOVE)
         self.request.record({"type": "attachment", "attachment": attachment})
 
     def answer(self) -> None:

@@ -1106,8 +1106,14 @@ class QueuedInputTest(TranscriptCase):
         self.append(queue("enqueue"), PROMPT)
         self.assertNotIn(QUEUED, self.stop())
 
+    def test_a_join_takes_its_item_out_with_or_without_a_remove_record(self):
+        self.append(PROMPT, queue("enqueue"), queue("enqueue"), JOINED)
+        self.assertEqual(self.stop()[QUEUED], 1)
+        self.append(PROMPT, queue("enqueue"), queue("enqueue"), queue("remove"), JOINED)
+        self.assertNotIn(QUEUED, self.stop())
+
     def test_removals_of_items_queued_earlier_cancel_no_later_one(self):
-        self.append(RESULT, queue("remove"), queue("dequeue"), queue("enqueue"))
+        self.append(RESULT, queue("remove"), JOINED, queue("dequeue"), queue("enqueue"))
         self.assertEqual(self.stop()[QUEUED], 1)
 
     def test_sidechain_and_malformed_records_are_not_the_turn_or_the_queue(self):

@@ -370,7 +370,7 @@ class Steps(Case):
         (path,) = self.transcripts()
         records = read_jsonl(path)
         return [
-            (r["operation"], r.get("content"))
+            ("enqueue", r["content"])
             if r["type"] == "queue-operation"
             else (r["attachment"]["commandMode"], r["attachment"]["prompt"])
             for r in records
@@ -386,7 +386,7 @@ class Steps(Case):
         hooks = self.settings("UserPromptSubmit", "PostToolUse", "Stop")
         res = self.run_fake(*SESSION, "--settings", hooks, "--", "hi", stdin="more\n")
         self.assertEqual((res.returncode, res.stdout), (0, "Noted.\nDone.\n"), res.stderr)
-        self.assertEqual(self.joined(), [("enqueue", "more"), ("remove", None), ("prompt", "more")])
+        self.assertEqual(self.joined(), [("enqueue", "more"), ("prompt", "more")])
         return self.prompts()
 
     def test_a_queued_line_joins_the_turn_with_no_hook(self):
@@ -422,10 +422,7 @@ class Steps(Case):
                 ("Stop", None),
             ],
         )
-        self.assertEqual(
-            self.joined(),
-            [("enqueue", notice), ("remove", None), ("task-notification", notice)],
-        )
+        self.assertEqual(self.joined(), [("enqueue", notice), ("task-notification", notice)])
 
 
 class Pane(Case):
