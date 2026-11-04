@@ -42,6 +42,7 @@ from ensemble.session.modes.client_adapters.tui import Tui
 from ensemble.utils import number
 
 AFTER_LIMIT = "ensemble_after_limit"  # on_hook's mark on a prompt that follows a usage limit
+QUEUED = "ensemble_queued"
 LIMIT = re.compile(r"You've hit your ((?:[\w']+ ){0,3})limit|Usage limit reached")
 WHEN = re.compile(
     (
@@ -294,7 +295,9 @@ class ClaudeTui(Tui):
 
     def pending(self, payload):
         tasks = payload.get("background_tasks")
-        return len(tasks) if isinstance(tasks, list) else 0
+        queued = payload.get(QUEUED)
+        queued = queued if type(queued) is int and queued > 0 else 0
+        return (len(tasks) if isinstance(tasks, list) else 0) + queued
 
     def activity(self, payload):
         return _first(payload, "tool_name")
@@ -336,7 +339,35 @@ def on_hook(call: HookCall) -> dict | None:
     current = current if isinstance(current, str) and os.path.isabs(current) else path
     if call.label == "UserPromptSubmit" and _limit_last(current):
         return {**call.payload, AFTER_LIMIT: True}
+    if call.label == "Stop" and (queued := _queued(current)):
+        return {**call.payload, QUEUED: queued}
     return call.payload
+
+
+def _queued(path: str) -> int:
+    """Items queued since the newest prompt or tool result, not yet dequeued, removed or joined."""
+    try:
+        data = read(path, limit=TAIL, tail=True) or b""
+    except ValueError:
+        return 0
+    operations = []
+    for line in reversed(data.split(b"\n")):
+        try:
+            record = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(record, dict) or record.get("isSidechain") is True:
+            continue
+        if record.get("type") == "user":
+            break
+        if record.get("type") == "queue-operation":
+            operations.append(record.get("operation"))
+        elif record.get("type") == "attachment" and _joined(record.get("attachment")):
+            operations.append("joined")
+    queued = 0
+    for operation in reversed(operations):
+        queued = queued + 1 if operation == "enqueue" else max(queued - 1, 0)
+    return queued
 
 
 def _limit_last(path: str) -> bool:
@@ -369,6 +400,10 @@ def _chain(path: str, sid: str, config_dir: str) -> list[tuple[str, str | None, 
         )
         original = found[1] if found and found[1] else original
     return ClaudeCommon.walk(original, sid, config_dir)
+
+
+def _joined(attachment) -> bool:
+    return isinstance(attachment, dict) and attachment.get("type") == "queued_command"
 
 
 def _first(payload: dict, *keys: str) -> str:

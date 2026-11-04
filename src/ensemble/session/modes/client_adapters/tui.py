@@ -64,7 +64,7 @@ class Tui(ABC):
     def reply(self, payload: dict) -> str: ...
 
     def pending(self, payload: dict) -> int:
-        """Background work whose end starts a new turn."""
+        """Background work running, or input queued, at a turn end: each starts a new turn."""
         return 0
 
     def activity(self, payload: dict) -> str:

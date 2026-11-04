@@ -7,7 +7,7 @@ import shlex
 from unittest import mock
 
 from ensemble.session.clients.claude import ClaudeClient
-from ensemble.session.clients.claude.tui import AFTER_LIMIT, ClaudeTui, on_hook
+from ensemble.session.clients.claude.tui import AFTER_LIMIT, QUEUED, ClaudeTui, on_hook
 from ensemble.session.engine.types import (
     Access,
     Activity,
@@ -485,6 +485,11 @@ class TuiPayloadTest(Base):
             (self.run.pending, {"background_tasks": 3}, 0),
             (self.run.pending, {"background_tasks": "ab"}, 0),
             (self.run.pending, {"background_tasks": {"a": 1}}, 0),
+            (self.run.pending, {QUEUED: 1}, 1),
+            (self.run.pending, {"background_tasks": [1], QUEUED: 2}, 3),
+            (self.run.pending, {QUEUED: -1}, 0),
+            (self.run.pending, {QUEUED: True}, 0),
+            (self.run.pending, {QUEUED: "2"}, 0),
             (self.run.activity, {"tool_name": "Bash"}, "Bash"),
             (self.run.activity, {}, ""),
             (self.run.activity, {"tool_name": 1}, ""),
@@ -1047,6 +1052,90 @@ class JoinedInputTest(TranscriptCase):
         run.observe()
         self.assertEqual(self.prompt(run), [TurnStarted()])
         self.assertEqual(self.prompt(run), [])
+
+
+def queue(operation: str, **extra) -> dict:
+    return {"type": "queue-operation", "operation": operation, **extra}
+
+
+RESULT = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
+JOINED = {"type": "attachment", "attachment": {"type": "queued_command", "prompt": "x"}}
+
+
+class QueuedInputTest(TranscriptCase):
+    """Input Claude Code queued during a turn's last reply, after its last tool returned, and has
+    not taken out when the turn ends (a background task's notice) starts the next turn on its own:
+    the Stop counts it as pending work. Input queued earlier was joined as a tool returned.
+    """
+
+    def hook(self, label, **payload):
+        call = HookCall(
+            label=label,
+            payload={"session_id": SID, **payload},
+            sid=SID,
+            workdir=self.work,
+            events=None,
+            state=self.run.hook_callback().state,
+        )
+        return on_hook(call)
+
+    def stop(self):
+        return self.hook("Stop", last_assistant_message="Waiting.", background_tasks=[])
+
+    def test_a_notice_queued_during_the_last_reply_is_pending_work(self):
+        notice = queue("enqueue", content="<task-notification>")
+        self.append(PROMPT, said("m1", tool("Agent")), RESULT, notice, said("m2", text("Waiting.")))
+        payload = self.stop()
+        self.assertEqual(payload[QUEUED], 1)
+        self.assertEqual(
+            self.run.hook_events("UserPromptSubmit", {"session_id": SID}), [TurnStarted()]
+        )
+        self.assertEqual(self.run.hook_events("Stop", payload), [TurnEnd("Waiting.", 1)])
+
+    def test_each_taken_out_item_leaves_the_queue(self):
+        for taken in ("dequeue", "remove", "popAll"):
+            with self.subTest(taken=taken):
+                self.append(PROMPT, queue("enqueue"), queue("enqueue"), queue(taken))
+                self.assertEqual(self.stop()[QUEUED], 1)
+                self.append(queue(taken))
+                self.assertNotIn(QUEUED, self.stop())
+
+    def test_input_queued_before_the_last_tool_returned_was_joined(self):
+        self.append(PROMPT, queue("enqueue"), RESULT, JOINED, said("m1", text("Waiting.")))
+        self.assertNotIn(QUEUED, self.stop())
+        self.append(queue("enqueue"), PROMPT)
+        self.assertNotIn(QUEUED, self.stop())
+
+    def test_a_join_takes_its_item_out_with_or_without_a_remove_record(self):
+        self.append(PROMPT, queue("enqueue"), queue("enqueue"), JOINED)
+        self.assertEqual(self.stop()[QUEUED], 1)
+        self.append(PROMPT, queue("enqueue"), queue("enqueue"), queue("remove"), JOINED)
+        self.assertNotIn(QUEUED, self.stop())
+
+    def test_removals_of_items_queued_earlier_cancel_no_later_one(self):
+        self.append(RESULT, queue("remove"), JOINED, queue("dequeue"), queue("enqueue"))
+        self.assertEqual(self.stop()[QUEUED], 1)
+
+    def test_sidechain_and_malformed_records_are_not_the_turn_or_the_queue(self):
+        self.append(
+            RESULT,
+            queue("enqueue"),
+            {**RESULT, "isSidechain": True},
+            {**queue("enqueue"), "isSidechain": True},
+            '{"type": "queue-operation", "operation": "enqueue"',
+            said("m1", text("queue-operation")),
+        )
+        self.assertEqual(self.stop()[QUEUED], 1)
+
+    def test_only_a_stop_reads_the_queue(self):
+        self.append(queue("enqueue"))
+        self.assertEqual(
+            self.hook("UserPromptSubmit", prompt="x"), {"session_id": SID, "prompt": "x"}
+        )
+        self.assertEqual(
+            self.hook("PostToolUse", tool_name="Bash"), {"session_id": SID, "tool_name": "Bash"}
+        )
+        self.assertEqual(self.stop()[QUEUED], 1)
 
 
 NEXT = "1f8fad5b-d9cb-469f-a165-70867728950e"
