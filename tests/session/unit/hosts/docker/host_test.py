@@ -77,6 +77,13 @@ IMAGE = "ensemble-worker:" + "a" * 64
 STOPS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 DIGEST = "sha256:" + "c" * 64
 HOME = ClientHome("agent_dir", "agent", "AGENT_HOME", "agent-token")
+BAD_RECORDS = {
+    "deep json": "[" * 2000 + "0" + "]" * 2000,
+    "list kind": json.dumps({"generation": GEN, "kind": []}),
+    "object kind": json.dumps({"generation": GEN, "kind": {}}),
+    "invalid json": "{",
+    "non-object": "[]",
+}
 
 
 def done(rc=0, out="", err=""):
@@ -231,6 +238,14 @@ class Base(Case):
 
     def guarded_record(self, gen=GEN, kind="tui"):
         self.record(generation=gen, kind=kind)
+
+    def damaged_record(self, name, text):
+        state = os.path.join(self.home, ".ensemble", "docker-state", name)
+        os.makedirs(state, exist_ok=True)
+        path = os.path.join(state, "host.json")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
 
 
 def _close(fd):
@@ -1209,18 +1224,13 @@ class StartTest(StartBase):
         self.assertIn(("close", CONTAINER), self.order)
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
 
-    def test_a_container_the_sweep_could_not_remove_refuses_start_naming_it(self):
+    def test_failed_removal_of_an_ended_worker_refuses_start(self):
         old = "f" * 32
+        self.guarded_record(old)
         self.docker.ps = [f"ensemble-w-{old}\tw\t{old}\trunning"]
+        self.probe_says("exited")
         self.broker.close = mock.Mock(side_effect=SessionError("broker: boom"))
-        with (
-            self.assertLogs("session", "WARNING"),
-            self.assertRaisesRegex(
-                SessionError,
-                f"^docker session w: container ensemble-w-{old} of an earlier start is still up"
-                r" \(its removal failed; see the log\); the next start retries it$",
-            ),
-        ):
+        with self.assertRaisesRegex(SessionError, "broker: boom"):
             self.start()
         self.broker.close.assert_called_once_with(f"ensemble-w-{old}")
 
@@ -1718,7 +1728,7 @@ class SweepTest(Base):
         self.addCleanup(_close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
 
-    def test_sweep_closes_debris_and_free_workers_and_keeps_held_and_busy_ones(self):
+    def test_sweep_closes_free_guarded_workers_and_keeps_unknown_held_and_busy_ones(self):
         self.host_json("b", self.OLD, kind="tui")
         self.host_json("c", mode="guard")  # no kind: an older release's start
         for name, kind in (("d", "tui"), ("e", "tui"), ("k", "headless"), ("l", "headless")):
@@ -1747,8 +1757,7 @@ class SweepTest(Base):
         self.host.sweep("w")
         self.assertEqual(
             self.broker.closed,
-            [f"ensemble-w-{self.OLD}"]
-            + [f"ensemble-{name}-{GEN}" for name in ("a", "b", "c", "e", "l")],
+            [f"ensemble-{name}-{GEN}" for name in ("e", "l")],
         )
         self.assertFalse([call for call in self.docker.order if call[:1] == ["exec"]])
 
@@ -1769,8 +1778,7 @@ class SweepTest(Base):
         self.held("w", "guard.lock")  # the caller's own start holds it
         self.docker.ps = [self.row("w")]
         self.host.sweep("w")
-        self.assertEqual(self.broker.closed, [f"ensemble-w-{GEN}"])
-        self.broker.closed.clear()
+        self.assertEqual(self.broker.closed, [])
         self.host_json("w", kind="tui")
         self.host.sweep("w")
         self.assertEqual(self.broker.closed, [])
@@ -1779,10 +1787,12 @@ class SweepTest(Base):
         self.docker.ps = [self.row("a"), self.row("x", state="exited")]
         before = self.files()
         self.host.sweep("w")
-        self.assertEqual(self.broker.closed, [f"ensemble-a-{GEN}", f"ensemble-x-{GEN}"])
+        self.assertEqual(self.broker.closed, [])
         self.assertEqual(self.files(), before)
 
     def test_a_failing_close_or_listing_skips_and_logs(self):
+        self.host_json("a", kind="tui")
+        self.host_json("b", kind="tui")
         self.docker.ps = [self.row("a"), self.row("b")]
         closes = iter([SessionError("broker: boom"), True])
 
@@ -2096,6 +2106,18 @@ class LastLinesTest(Base):
 
 
 class ListTest(Base):
+    def test_damaged_records_leave_healthy_inventory_available(self):
+        self.listed("bad", "w")
+        self.guarded_record()
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                self.damaged_record("bad", text)
+                self.assertEqual(self.host.list(), ["w"])
+                self.assertEqual([row.name for row in self.host.rows()], ["w"])
+                self.assertEqual([row.name for row in self.host._capacity_rows()], ["w"])
+                self.assertEqual(self.host.worker_liveness("bad", GEN), Liveness.UNKNOWN)
+                self.assertIsNotNone(self.host.attach_target("w"))
+
     def test_admission_inventory_distinguishes_missing_docker_from_empty(self):
         self.host.run = mock.Mock(side_effect=FileNotFoundError(2, "no docker"))
         with self.assertRaisesRegex(SessionError, "inventory unavailable"):
@@ -2368,14 +2390,39 @@ class WorkerLivenessTest(StartBase):
         self.assertEqual(self.broker.closed[0], f"ensemble-w-{old}")
         self.assertEqual(len(self.execs), 1)
 
-    def test_a_debris_row_is_left_to_the_container_refusal(self):
+    def test_a_debris_row_refuses_start_before_cleanup(self):
         self.listed("w")
         self.record()
-        refusal = "container ensemble-w-.* of an earlier start is still up"
-        with self.assertRaisesRegex(SessionError, f"^docker session w: {refusal}"):
+        with self.assertRaises(SessionBusy):
             self.start()
         self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
         self.assertEqual(self.execs, [])
+        self.assertEqual(self.broker.closed, [])
+
+    def test_damaged_own_records_refuse_start_without_cleanup_or_overwrite(self):
+        self.listed("w")
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                path = self.damaged_record("w", text)
+                with self.assertRaises(SessionBusy):
+                    self.start()
+                with open(path) as f:
+                    self.assertEqual(f.read(), text)
+                self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
+                self.assertEqual(self.broker.closed, [])
+                self.assertEqual(self.execs, [])
+
+    def test_other_damaged_records_allow_start_and_close(self):
+        for label, text in BAD_RECORDS.items():
+            with self.subTest(record=label):
+                self.damaged_record("bad", text)
+                self.listed("bad")
+                handle = self.start()
+                self.assertNotIn(f"ensemble-bad-{GEN}", self.broker.closed)
+                before = self.broker.closed.count(CONTAINER)
+                handle.close()
+                self.assertEqual(self.broker.closed.count(CONTAINER), before + 1)
+                self.assertTrue(_free(os.path.join(self.state, "guard.lock")))
 
 
 class GuardedRowTest(StartBase):
