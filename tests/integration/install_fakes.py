@@ -38,7 +38,9 @@ ENSEMBLE_FILES = (
     "src/ensemble/session/hosts/docker/broker.py",
     "src/broker/internal/protocol/protocol.go",
     "src/broker/internal/launcher/versions.go",
+    "src/ensemble/session/config.toml",
 )
+UPDRAFT_ARCHIVE = "https://codeload.github.com/windroc-labs/updraft/tar.gz/"
 
 
 def out(text, stream=sys.stdout):
@@ -232,6 +234,17 @@ def linear(args):
     return 0
 
 
+def updraft_archive(commit):
+    """GitHub's tarball of updraft at `commit`: one top directory, its principles index naming it."""
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:gz") as tar:
+        body = f"updraft {commit}\n".encode()
+        info = tarfile.TarInfo(f"updraft-{commit}/skills/principles/SKILL.md")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+    return data.getvalue()
+
+
 def curl(args):
     url = args[-1]
     if url == LINEAR:
@@ -246,6 +259,10 @@ def curl(args):
         return 0
     if url.startswith("https://api.github.com/repos/windroc-labs/ensemble/commits/"):
         out((FAKES / "commit").read_text())
+        return 0
+    if url.startswith(UPDRAFT_ARCHIVE):
+        sys.stdout.buffer.write(updraft_archive(url.removeprefix(UPDRAFT_ARCHIVE)))
+        sys.stdout.flush()
         return 0
     market = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
     raw = "https://raw.githubusercontent.com/windroc-labs/ensemble/"

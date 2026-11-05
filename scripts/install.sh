@@ -1358,9 +1358,9 @@ ensemble_plugin_check() {
   fi
 }
 
-# Claude Code and Codex install ensemble, and updraft for host workers, from the windroc marketplace.
+# Claude Code and Codex install ensemble and updraft from the windroc marketplace.
 claude_plugins() {
-  local rc id ids=(ensemble@windroc)
+  local rc id ids=(ensemble@windroc updraft@windroc)
   step "Claude Code plugins"
   if ! has claude; then
     skip "Claude Code not chosen"
@@ -1376,7 +1376,6 @@ claude_plugins() {
     [ "$rc" = 0 ] || die "Claude Code: marketplace windroc has another source"
     claude plugin marketplace update windroc </dev/null >&2 || die "Claude Code: cannot refresh marketplace windroc"
   fi
-  if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
     rc=0
     claude_plugin "$id" || rc=$?
@@ -1416,7 +1415,7 @@ codex_call() {
 }
 
 codex_plugins() {
-  local rc id ids=(ensemble@windroc)
+  local rc id ids=(ensemble@windroc updraft@windroc)
   step "Codex plugins"
   if ! has codex; then
     skip "Codex not chosen"
@@ -1431,7 +1430,6 @@ codex_plugins() {
     [ "$rc" = 0 ] || die "Codex: marketplace windroc has another source"
     codex_call "Codex: cannot refresh marketplace windroc" plugin marketplace upgrade windroc
   fi
-  if [ "$docker" != yes ]; then ids+=(updraft@windroc); fi
   for id in "${ids[@]}"; do
     rc=0
     codex_plugin "$id" || rc=$?
@@ -1619,6 +1617,35 @@ opencode_plugin() {
   "$opencode_executable" plugin -g -f "$spec" </dev/null >&2
   [ -d "$dir/node_modules/ensemble" ] || die "OpenCode did not download $spec"
   state_set opencode_plugin_commit "$commit"
+}
+
+# updraft for OpenCode: the commit the Docker image pins (src/ensemble/session/config.toml at $ref), unpacked into
+# ~/.ensemble/plugins/updraft, where the opencode client loads skills from.
+opencode_updraft() {
+  local commit dir=$HOME/.ensemble/plugins/updraft archive
+  step "OpenCode updraft"
+  if ! has opencode; then
+    skip "OpenCode not chosen"
+    return
+  fi
+  commit=$(ensemble_file "$ref" src/ensemble/session/config.toml \
+    | sed -n 's|.*"updraft@windroc-labs/updraft#\([0-9a-f]\{40\}\)[:"].*|\1|p' | sed -n 1p)
+  [ -n "$commit" ] || die "no updraft pin in src/ensemble/session/config.toml at $ref"
+  if [ -d "$dir/skills" ] && [ "$(state_get opencode_updraft_commit)" = "$commit" ]; then
+    skip "updraft at ${commit:0:12}"
+    return
+  fi
+  record_dir "$HOME/.ensemble/plugins"
+  record_dir "$dir"
+  archive="$state_dir/updraft.tar.gz"
+  mkdir -p "$state_dir"
+  curl -fsSL "https://codeload.github.com/windroc-labs/updraft/tar.gz/$commit" </dev/null >"$archive" \
+    || die "cannot download updraft $commit from github.com/windroc-labs/updraft"
+  rm -rf -- "$dir"
+  mkdir -p "$dir"
+  tar -xzf "$archive" --strip-components=1 -C "$dir" || die "cannot unpack updraft $commit into $dir"
+  rm -f -- "$archive"
+  state_set opencode_updraft_commit "$commit"
 }
 
 # Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text, and shows a configured
@@ -2977,6 +3004,7 @@ main() {
   if has claude || has codex; then plugin_dir; fi
   opencode_install
   opencode_plugin
+  opencode_updraft
   if ! has claude && ! has codex; then plugin_dir; fi
   opencode_provider
   docker_steps
