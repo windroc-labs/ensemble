@@ -1,5 +1,25 @@
 # Upgrading
 
+## Principles and methods come from updraft
+
+Ensemble no longer ships `<team>/principles/*.md` or `<team>/methods/unslop.md`, `grilling.md`
+and `to-tickets.md`; role runs read them from the installed updraft plugin.
+
+1. Rerun the [installer](#with-scriptsinstallsh). It now installs `updraft@windroc` for Claude Code
+   and Codex with `--docker` too, and for OpenCode unpacks the updraft commit the Docker image pins
+   into `~/.ensemble/plugins/updraft`; without it, host runs cannot read the files.
+2. In a team dir file, replace each removed path with updraft's file of the same name:
+
+   | Was | Now |
+   |---|---|
+   | `<team>/principles/<name>.md` | updraft's `skills/principle-<name>/SKILL.md` |
+   | `<team>/methods/unslop.md` | updraft's `skills/unslop/SKILL.md` |
+   | `<team>/methods/grilling.md` | updraft's `skills/grilling/SKILL.md` |
+   | `<team>/methods/to-tickets.md` | updraft's `skills/to-tickets/SKILL.md` |
+
+   A file that still names one of these methods stops every run with `names <team>/methods/<m>.md,
+   which core has no file for`. `/updraft:principles` shows the plugin's directory.
+
 ## tmux Host Claude starts run on `~/.claude` again
 
 On the tmux Host, a Claude start that selects no account runs on your own `~/.claude` again, with
