@@ -11,6 +11,7 @@ from ensemble.delegate.composer.base import TEAM, outline
 from ensemble.delegate.composer.teams import START
 from ensemble.delegate.engine.config import read_config
 from ensemble.utils import unfenced
+from tests.delegate.case import REPO
 from tests.delegate.unit.composer.prompts import (
     RUN,
     composed,
@@ -103,8 +104,8 @@ class Acceptance(Packaged):
             )
         row = next(
             line
-            for line in team_texts()["README.md"].splitlines()
-            if line.startswith("| `methods/to-tickets.md`")
+            for line in _notices().splitlines()
+            if line.startswith("| `src/ensemble/delegate/team/methods/to-tickets.md`")
         )
         self.assertIn("4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", row)
         self.assertTrue(row.endswith("| Verbatim |"), row)
@@ -1169,17 +1170,14 @@ class Principles(Packaged):
             self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", f"{name}.md")))
 
 
+def _notices():
+    with open(os.path.join(REPO, "THIRD_PARTY_NOTICES.md"), encoding="utf-8") as f:
+        return f.read()
+
+
 class Sources(Packaged):
-    def test_readme_links_resolve_and_name_every_method(self):
-        with open(os.path.join(TEAM, "README.md"), encoding="utf-8") as f:
-            readme = f.read()
-        local = [
-            link.split("#", 1)[0]
-            for link in re.findall(r"\]\(([^)\s]+)\)", readme)
-            if not re.match(r"[a-z]+:|#", link)
-        ]
-        self.assertTrue(local)
-        for link in local:
-            self.assertTrue(os.path.isfile(os.path.join(TEAM, link)), link)
+    def test_notices_hold_the_provenance_of_every_method(self):
+        self.assertFalse(os.path.exists(os.path.join(TEAM, "README.md")))
+        notices = _notices()
         for name in os.listdir(os.path.join(TEAM, "methods")):
-            self.assertIn(f"methods/{name}", readme)
+            self.assertIn(f"`src/ensemble/delegate/team/methods/{name}`", notices)
