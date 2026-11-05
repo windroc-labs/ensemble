@@ -73,6 +73,8 @@ Pick the task below that fits the input; unsure → `review` (`<tasks>/review.md
 
 It starts with a `# ` heading, has exactly one `[ensemble-progress:start] <what to report>` line and a `## Resume` section, outside code fences. The smallest built-in example: `src/ensemble/delegate/team/tasks/light-research.md`.
 
+The built-in tasks are playbooks, with these sections in order: `## Inputs`, `## Capabilities` (the updraft skill or principle each step uses), `## Role limits`, `## Steps`, `## Result`, `## Failure`, `## Resume`. A custom task may follow that shape; only the checks above are enforced.
+
 ## Run and check
 
 | Command | Does |

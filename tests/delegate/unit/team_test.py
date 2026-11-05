@@ -287,6 +287,20 @@ class Acceptance(Packaged):
             self.assertEqual(len(START.findall(text)), 1, name)
             self.assertIn("## Resume", [line.rstrip() for _, line in unfenced(text)], name)
 
+    def test_each_shipped_task_is_a_playbook(self):
+        playbook = ["Inputs", "Capabilities", "Role limits", "Steps", "Result", "Failure", "Resume"]
+        for name in os.listdir(TASKS):
+            text = task_text(name.removesuffix(".md"))
+            heads = [line[3:].rstrip() for _, line in unfenced(text) if line.startswith("## ")]
+            self.assertEqual([h for h in heads if h in playbook], playbook, name)
+            capabilities = section(text, "Capabilities").strip()
+            self.assertTrue(
+                capabilities.startswith(
+                    ("| Step | updraft capability | Use |", "No updraft capability: ")
+                ),
+                name,
+            )
+
 
 class Shipped(Packaged):
     def test_text_holds_only_the_placeholders_render_fills(self):
