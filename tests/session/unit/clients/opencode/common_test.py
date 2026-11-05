@@ -517,7 +517,10 @@ class SelectionTest(Case):
         updraft = "file:///opt/ensemble/plugins/updraft"
         container = self.common.inline(self.spec, DOCKER_CONTEXT)
         self.assertEqual(container["plugin"], [updraft])
-        self.assertEqual(container["skills"], {"paths": ["/opt/windroc/mini-op/skills"]})
+        self.assertEqual(
+            container["skills"],
+            {"paths": ["/opt/ensemble/plugins", "/opt/windroc/mini-op/skills"]},
+        )
         tui = self.common.inline(self.spec, DOCKER_CONTEXT, plugin="file:///opt/plugin.js")
         self.assertEqual(tui["plugin"], ["file:///opt/plugin.js", updraft])
         host = self.common.inline(self.spec, LOCAL_CONTEXT)

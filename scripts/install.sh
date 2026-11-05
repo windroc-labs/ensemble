@@ -1574,11 +1574,14 @@ ref_commit() {
   printf '%s' "$commit"
 }
 
+# Exit 0 when the OpenCode config in dir $1 lists plugin spec $2.
+opencode_listed() { grep -qsF "\"$2\"" "$1/opencode.json" "$1/opencode.jsonc"; }
+
 # ensemble's OpenCode plugin at $ref and updraft's at the commit the Docker image pins (src/ensemble/session/config.toml
 # at $ref), the way OpenCode installs one: opencode plugin -g, which adds it to the global config and downloads it. One
-# consent covers the entries the config lacks.
+# consent covers the entries the config lacks; declined, those already listed are still kept current.
 opencode_plugins() {
-  local conf pin commit missing= i
+  local conf pin commit missing= declined= i
   local -a specs commits keys=(opencode_plugin_commit opencode_updraft_commit)
   step "OpenCode plugins"
   if ! has opencode; then
@@ -1593,16 +1596,16 @@ opencode_plugins() {
   specs=("$(opencode_spec)" "updraft@git+https://github.com/windroc-labs/updraft.git#$pin")
   commits=("$commit" "$pin")
   for i in 0 1; do
-    if ! grep -qsF "\"${specs[i]}\"" "$conf/opencode.json" "$conf/opencode.jsonc"; then
-      missing+="${missing:+, }\"${specs[i]}\""
-    fi
+    if ! opencode_listed "$conf" "${specs[i]}"; then missing+="${missing:+, }\"${specs[i]}\""; fi
   done
   if [ -n "$missing" ] && ! consent "$conf/opencode.json(c)" "\"plugin\": [$missing]  (opencode plugin -g -f)"; then
     skip declined
-    return
+    declined=1
   fi
   for i in 0 1; do
-    opencode_plugin "$conf" "${specs[i]}" "${commits[i]}" "${keys[i]}"
+    if [ -z "$declined" ] || opencode_listed "$conf" "${specs[i]}"; then
+      opencode_plugin "$conf" "${specs[i]}" "${commits[i]}" "${keys[i]}"
+    fi
   done
 }
 
@@ -1613,13 +1616,17 @@ opencode_plugin() {
   local conf=$1 spec=$2 commit=$3 key=$4 dir file name had
   dir=$(opencode_cache_dir "$spec") && under_home "$dir" || die "$spec: not an OpenCode package dir"
   had=$(state_get "$key")
-  if grep -qsF "\"$spec\"" "$conf/opencode.json" "$conf/opencode.jsonc"; then
+  if opencode_listed "$conf" "$spec"; then
     if [ -d "$dir/node_modules/${spec%%@*}" ] && [ "$had" = "$commit" ]; then
       skip "$spec at ${commit:0:12}"
       return
     fi
     [ -d "$dir" ] && [ -n "$had" ] || had=unknown
-    say "    $spec: ${spec##*#} is at ${commit:0:12}, OpenCode's copy at ${had:0:12}: downloading it again"
+    if [ "${spec##*#}" = "$commit" ]; then
+      say "    $spec: OpenCode's copy at ${had:0:12}: downloading it again"
+    else
+      say "    $spec: ${spec##*#} is at ${commit:0:12}, OpenCode's copy at ${had:0:12}: downloading it again"
+    fi
   fi
   for file in "$conf/opencode.json" "$conf/opencode.jsonc" "$conf/package.json" "$conf/package-lock.json" "$conf/.gitignore"; do
     if [ -f "$file" ] && ! recorded file "$file" && ! recorded opencode-config "$file"; then

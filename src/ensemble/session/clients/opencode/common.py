@@ -54,9 +54,8 @@ HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOCKER_CONFIG_FILE = "opencode.json"
 STORE = f"{STATE}/sessions/opencode"
-IMAGE_UPDRAFT = "/opt/ensemble/plugins/updraft"  # also an OpenCode plugin
-IMAGE_SKILLS = "/opt/windroc/mini-op/skills"
-# Under XDG_CACHE_HOME: where `opencode plugin -g` (scripts/install.sh) puts updraft at any commit.
+IMAGE_PLUGINS = "/opt/ensemble/plugins"
+# Under XDG_CACHE_HOME: where `opencode plugin -g` puts updraft at any commit.
 HOST_UPDRAFT = "opencode/packages/updraft@git+https:"
 BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
@@ -388,14 +387,12 @@ class OpenCodeCommon:
         return exe
 
     def inline(self, spec: Spec, context: ClientContext, plugin: str | None = None) -> dict:
-        """Providers, permissions, plugins; API keys from broker files, else auth.json. On the
-        host, updraft is a plugin of OpenCode's global config.
-        """
+        """Providers, permissions, plugins; API keys from broker files, else auth.json."""
         access = spec.access
         plugins = [plugin] if plugin is not None else []
         if context.container:
-            updraft = IMAGE_UPDRAFT
-            plugins.append(f"file://{IMAGE_UPDRAFT}")
+            updraft = f"{IMAGE_PLUGINS}/updraft"
+            plugins.append(f"file://{updraft}")
         else:
             cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
             updraft = os.path.join(cache, HOST_UPDRAFT)
@@ -438,7 +435,11 @@ class OpenCodeCommon:
         return {
             "$schema": "https://opencode.ai/config.json",
             **({"plugin": plugins} if plugins else {}),
-            **({"skills": {"paths": [IMAGE_SKILLS]}} if context.container else {}),
+            **(
+                {"skills": {"paths": [IMAGE_PLUGINS, "/opt/windroc/mini-op/skills"]}}
+                if context.container
+                else {}
+            ),
             "autoupdate": False,
             # Else a refusal ends the turn (session/processor.ts).
             "experimental": {"continue_loop_on_deny": True},

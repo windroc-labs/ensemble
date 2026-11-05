@@ -3136,6 +3136,20 @@ class InstallTest(Case):
         self.assertEqual((self.opencode_package() / "COMMIT").read_text(), OLD)
         self.assertEqual(self.state()["opencode_plugin_commit"], OLD)
 
+    def test_opencode_declined_updraft_still_updates_listed_ensemble(self):
+        self.assert_ok(self.opencode_only())
+        path = Path(self.home, ".config/opencode/opencode.jsonc")
+        path.write_text(json.dumps({"plugin": [SPEC]}))
+        (self.fakes / "commit").write_text(NEW)
+        result = self.opencode_rerun((WRITE_Q, "n"), (WRITE_Q, "n"))
+        self.assert_ok(result)
+        self.assertIn(f'"plugin": ["{UPDRAFT}"]  (opencode plugin -g -f)', result.tty)
+        self.assertIn("==> OpenCode plugins\n    skip: declined\n", result.stderr)
+        self.assertEqual(self.plugin_calls(), [f"opencode plugin -g -f {SPEC}"])
+        self.assertEqual(json.loads(path.read_text())["plugin"], [SPEC])
+        self.assertEqual((self.opencode_package() / "COMMIT").read_text(), NEW)
+        self.assertEqual(self.state()["opencode_plugin_commit"], NEW)
+
     def test_opencode_ref_outside_cache_deletes_nothing(self):
         victim = Path(self.home, ".cache/opencode/victim")
         victim.mkdir(parents=True)
