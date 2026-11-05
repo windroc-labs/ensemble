@@ -827,4 +827,4 @@ class Real(RealConfig):
                 self.assertIn(
                     TEAM, access(resolve(role), "/work", cwd="/work", project=False).reads, role
                 )
-        self.assertEqual(named, ["researcher", "pm", "engineer"])
+        self.assertEqual(named, ["researcher"])

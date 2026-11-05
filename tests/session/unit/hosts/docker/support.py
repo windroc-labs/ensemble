@@ -9,7 +9,7 @@ from tests.session.case import PLUGIN_BIN, REPO
 FIXTURES = os.path.join(REPO, "src", "broker", "protocol", "docker-broker", "fixtures")
 HOOK = os.path.join(PLUGIN_BIN, "ensemble-session")
 UPDRAFT = (
-    "updraft@windroc-labs/updraft#1ce3f221c7626296e7cc8eca7a24c3f9257396ca"
+    "updraft@windroc-labs/updraft#907c58655c4e79f5dc0f53e01396295a5da303ad"
     "::windroc-labs/agent-plugins-marketplace#dbea3408ab0c113bd74f414ab3a19d820e0f6e43"
 )
 BETA = "beta@owner/market#" + "b" * 40
