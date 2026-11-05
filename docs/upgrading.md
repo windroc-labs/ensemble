@@ -1,13 +1,24 @@
 # Upgrading
 
+## OpenCode loads updraft as a plugin
+
+OpenCode now gets updraft the way it gets ensemble: an
+`updraft@git+https://github.com/windroc-labs/updraft.git#<commit>` entry in its global `plugin` list, at the
+commit the Docker image pins. The plugin brings updraft's skills, `/updraft:<skill>` commands and `updraft:<name>`
+reviewer subagents; ensemble no longer sets OpenCode's `skills.paths` to `~/.ensemble/plugins`.
+
+1. Rerun the [installer](#with-scriptsinstallsh) with OpenCode selected. It asks once before adding the entry;
+   without it, OpenCode on the tmux Host has no updraft.
+2. Delete `~/.ensemble/plugins/updraft`, the copy earlier installers unpacked: nothing reads it now.
+
 ## Principles and methods come from updraft
 
 Ensemble no longer ships `<team>/principles/*.md` or `<team>/methods/unslop.md`, `grilling.md`
 and `to-tickets.md`; role runs read them from the installed updraft plugin.
 
 1. Rerun the [installer](#with-scriptsinstallsh). It now installs `updraft@windroc` for Claude Code
-   and Codex with `--docker` too, and for OpenCode unpacks the updraft commit the Docker image pins
-   into `~/.ensemble/plugins/updraft`; without it, host runs cannot read the files.
+   and Codex with `--docker` too, and for OpenCode its plugin at the updraft commit the Docker image
+   pins; without it, host runs cannot read the files.
 2. In a team dir file, replace each removed path with updraft's file of the same name:
 
    | Was | Now |
