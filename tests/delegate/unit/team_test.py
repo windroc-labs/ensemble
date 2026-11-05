@@ -1,4 +1,3 @@
-import hashlib
 import os
 import re
 import tomllib
@@ -16,7 +15,6 @@ from tests.delegate.unit.composer.prompts import (
     RUN,
     composed,
     item,
-    method,
     parameters,
     rule,
     section,
@@ -96,19 +94,16 @@ class Acceptance(Packaged):
         self.assertNotIn("acceptance cell", draft)
         self.assertIn("at most 8 requirement identifiers on an engineer ticket", draft)
 
-    def test_to_tickets_is_the_pinned_upstream_file_including_frontmatter(self):
-        with open(os.path.join(TEAM, "methods", "to-tickets.md"), "rb") as source:
-            self.assertEqual(
-                hashlib.sha256(source.read()).hexdigest(),
-                "56ec23c5b2782785d4e65bff9e315b6d3aeb4ef977c174a219e99489fada1995",
-            )
-        row = next(
-            line
-            for line in _notices().splitlines()
-            if line.startswith("| `src/ensemble/delegate/team/methods/to-tickets.md`")
-        )
-        self.assertIn("4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", row)
-        self.assertTrue(row.endswith("| Verbatim |"), row)
+    def test_the_team_ships_no_grilling_or_to_tickets_copy_and_names_updraft_skills(self):
+        for name in ("grilling", "to-tickets"):
+            self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", f"{name}.md")), name)
+        for path, text in team_texts().items():
+            with self.subTest(path=path):
+                self.assertNotIn("<team>/methods/grilling.md", text)
+                self.assertNotIn("<team>/methods/to-tickets.md", text)
+        intro = task_text("decompose").split("\n## Steps", 1)[0]
+        self.assertIn("updraft's `skills/to-tickets/SKILL.md`", intro)
+        self.assertIn("This task's method overrides take precedence", intro)
 
     def test_decompose_owns_mandatory_exploration_and_autonomous_review(self):
         overrides = section(task_text("decompose"), "Method overrides")
@@ -131,7 +126,6 @@ class Acceptance(Packaged):
             "Do not ask the user or wait for approval",
         ):
             self.assertIn(text, overrides)
-        self.assertNotIn("Exploration is mandatory", method("to-tickets"))
 
     def test_decompose_publishes_with_the_task_command_and_stops_at_publication(self):
         overrides = section(task_text("decompose"), "Method overrides")
@@ -428,12 +422,11 @@ class Shipped(Packaged):
         self.assertNotRegex(text, r"(?<!/)updraft:")
         self.assertIn("`/updraft:review` again with the same `doc`", text.split("## Resume", 1)[1])
 
-    def test_product_design_self_grills_by_the_grilling_method_for_at_most_3_rounds(self):
+    def test_product_design_self_grills_by_updraft_grilling_skill_for_at_most_3_rounds(self):
         text = task_text("product-design")
         step = text.split("5. **Self-grill**", 1)[1].split("\n6.", 1)[0]
-        self.assertTrue(os.path.isfile(os.path.join(TEAM, "methods", "grilling.md")))
         for literal in (
-            "`<team>/methods/grilling.md`",
+            "updraft's `skills/grilling/SKILL.md`",
             "at most 3 rounds",
             "minor details",
             "what you can't settle → Open questions",

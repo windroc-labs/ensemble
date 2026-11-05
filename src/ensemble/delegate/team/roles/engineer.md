@@ -8,7 +8,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 
 - `build` (`<tasks>/build.md`): a PRD into a pull request with `/updraft:build` (spec, plan, implementation, verification, review); when the change needs a spec and plan, e.g. a feature spanning several modules; heavy.
 - `light-build` (`<tasks>/light-build.md`): a small, clearly specified change into a pull request with `/updraft:light-build` (a task list in its plan doc, implementation, verification, a light review, no spec doc); when the requirement text alone is enough to build from, e.g. a template or wording tweak; light.
-- `decompose` (`<tasks>/decompose.md`): one handed-off PRD into runnable child issues with the pinned to-tickets method; when the input requests decomposition; light.
+- `decompose` (`<tasks>/decompose.md`): one handed-off PRD into runnable child issues with updraft's to-tickets method; when the input requests decomposition; light.
 
 ## Rules
 

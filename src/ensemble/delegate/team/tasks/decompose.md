@@ -1,6 +1,6 @@
 # Decompose
 
-Turn one handed-off PRD into child issues with `<team>/methods/to-tickets.md`. This task's method overrides take precedence. Publish with this task's commands and fields.
+Turn one handed-off PRD into child issues with the to-tickets method, updraft's `skills/to-tickets/SKILL.md`. This task's method overrides take precedence. Publish with this task's commands and fields.
 
 ## Steps
 
