@@ -54,8 +54,10 @@ HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOCKER_CONFIG_FILE = "opencode.json"
 STORE = f"{STATE}/sessions/opencode"
-IMAGE_PLUGINS = "/opt/ensemble/plugins"
-HOST_PLUGINS = f"{STATE}/plugins"  # install.sh puts updraft here
+IMAGE_UPDRAFT = "/opt/ensemble/plugins/updraft"  # also an OpenCode plugin
+IMAGE_SKILLS = "/opt/windroc/mini-op/skills"
+# Under XDG_CACHE_HOME: where `opencode plugin -g` (scripts/install.sh) puts updraft at any commit.
+HOST_UPDRAFT = "opencode/packages/updraft@git+https:"
 BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
 OLLAMA_PORT = 11434
@@ -386,10 +388,17 @@ class OpenCodeCommon:
         return exe
 
     def inline(self, spec: Spec, context: ClientContext, plugin: str | None = None) -> dict:
-        """Providers, permissions, plugin; API keys from broker files, else auth.json."""
+        """Providers, permissions, plugins; API keys from broker files, else auth.json. On the
+        host, updraft is a plugin of OpenCode's global config.
+        """
         access = spec.access
-        plugins = IMAGE_PLUGINS if context.container else os.path.expanduser(HOST_PLUGINS)
-        updraft = os.path.join(plugins, "updraft")
+        plugins = [plugin] if plugin is not None else []
+        if context.container:
+            updraft = IMAGE_UPDRAFT
+            plugins.append(f"file://{IMAGE_UPDRAFT}")
+        else:
+            cache = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+            updraft = os.path.join(cache, HOST_UPDRAFT)
         commands = dict.fromkeys(access.commands, "allow")
         permission: dict = {
             "bash": {"*": "ask", **commands} if commands else "ask",
@@ -428,12 +437,8 @@ class OpenCodeCommon:
                 providers[name]["options"]["apiKey"] = f"{{file:{key}}}"
         return {
             "$schema": "https://opencode.ai/config.json",
-            **({"plugin": [plugin]} if plugin is not None else {}),
-            "skills": {
-                "paths": [plugins, "/opt/windroc/mini-op/skills"]
-                if context.container
-                else [plugins]
-            },
+            **({"plugin": plugins} if plugins else {}),
+            **({"skills": {"paths": [IMAGE_SKILLS]}} if context.container else {}),
             "autoupdate": False,
             # Else a refusal ends the turn (session/processor.ts).
             "experimental": {"continue_loop_on_deny": True},

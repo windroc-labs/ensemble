@@ -166,7 +166,10 @@ class LaunchTest(Base):
         )
         self.assertNotIn(["--version"], [call.args[0][1:] for call in run.call_args_list])
         config = json.loads(launch.env["OPENCODE_CONFIG_CONTENT"])
-        self.assertEqual(config["plugin"], [f"file://{IMAGE_CLIENT}/plugin.js"])
+        self.assertEqual(
+            config["plugin"],
+            [f"file://{IMAGE_CLIENT}/plugin.js", "file:///opt/ensemble/plugins/updraft"],
+        )
         self.assertEqual(
             config["provider"]["ollama"]["options"]["baseURL"],
             "http://host.docker.internal:11434/v1",
