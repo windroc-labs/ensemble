@@ -30,7 +30,7 @@ SOFTWARE.
 
 ## pstack
 
-Files under `src/ensemble/delegate/team/` copy or adapt [pstack](https://github.com/cursor/plugins/tree/main/pstack) in [cursor/plugins](https://github.com/cursor/plugins); which files, from which commit: `src/ensemble/delegate/team/README.md`.
+Files under `src/ensemble/delegate/team/` adapt [pstack](https://github.com/cursor/plugins/tree/main/pstack) in [cursor/plugins](https://github.com/cursor/plugins); which files, from which commit: `src/ensemble/delegate/team/README.md`.
 
 ```
 MIT License
