@@ -11,6 +11,7 @@ from ensemble.delegate.composer.base import TEAM, outline
 from ensemble.delegate.composer.teams import START
 from ensemble.delegate.engine.config import read_config
 from ensemble.utils import unfenced
+from tests.delegate.case import REPO
 from tests.delegate.unit.composer.prompts import (
     RUN,
     composed,
@@ -29,7 +30,6 @@ from tests.delegate.unit.composer.shipped import (
     Packaged,
     RealConfig,
     catalog,
-    expanded,
     guide,
     role_tasks,
     roles,
@@ -104,8 +104,8 @@ class Acceptance(Packaged):
             )
         row = next(
             line
-            for line in team_texts()["README.md"].splitlines()
-            if line.startswith("| `methods/to-tickets.md`")
+            for line in _notices().splitlines()
+            if line.startswith("| `src/ensemble/delegate/team/methods/to-tickets.md`")
         )
         self.assertIn("4ae2317ddb22b046e26455e4f9c9b3aaaf62212d", row)
         self.assertTrue(row.endswith("| Verbatim |"), row)
@@ -1069,7 +1069,7 @@ def _principle_citations(text):
     return {
         name
         for pair in re.findall(
-            r"\[`?([\w-]+)`?\]\(#principle-index\)|<team>/principles/([\w-]+)\.md", text
+            r"\[`?([\w-]+)`?\]\(#principle-index\)|skills/principle-([\w-]+)/SKILL\.md", text
         )
         for name in pair
         if name
@@ -1077,25 +1077,29 @@ def _principle_citations(text):
 
 
 class Principles(Packaged):
-    def test_index_covers_each_leaf_once_and_resolves_in_every_role(self):
+    def test_index_names_each_updraft_principle_once_in_every_role(self):
         index = section(team_texts()["principles.md"], "Principle index")
-        leaves = {
-            name.removesuffix(".md")
-            for name in os.listdir(os.path.join(TEAM, "principles"))
-            if name.endswith(".md")
-        }
-        self.assertEqual(len(leaves), 24)
-        self.assertEqual(set(re.findall(r"<team>/principles/([\w-]+)\.md", index)), leaves)
-        for name in leaves:
-            self.assertEqual(index.count(f"<team>/principles/{name}.md"), 1)
+        names = re.findall(r"`skills/principle-([\w-]+)/SKILL\.md`", index)
+        self.assertEqual(len(names), 24)
+        self.assertEqual(len(set(names)), 24)
+        self.assertIn("updraft's `principles` skill", index)
         for role in roles():
             prompt, run = composed(role)
-            self.assertIn(os.path.join(TEAM, "principles", "fix-root-causes.md"), expanded(prompt))
+            self.assertIn("`skills/principle-fix-root-causes/SKILL.md`", prompt)
+            self.assertIn("`skills/unslop/SKILL.md`", prompt)
             self.assertEqual(run.read, [])
+
+    def test_the_team_ships_no_principle_or_unslop_copy(self):
+        self.assertFalse(os.path.exists(os.path.join(TEAM, "principles")))
+        self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", "unslop.md")))
+        for path, text in team_texts().items():
+            with self.subTest(path=path):
+                self.assertNotIn("<team>/principles/", text)
+                self.assertNotIn("<team>/methods/unslop.md", text)
 
     def test_task_principle_citations_resolve_and_shape_steps(self):
         index = section(team_texts()["principles.md"], "Principle index")
-        names = set(re.findall(r"<team>/principles/([\w-]+)\.md", index))
+        names = set(re.findall(r"skills/principle-([\w-]+)/SKILL\.md", index))
         for task in os.listdir(os.path.join(TEAM, "tasks")):
             text = task_text(task.removesuffix(".md"))
             with self.subTest(task=task):
@@ -1114,7 +1118,7 @@ class Principles(Packaged):
 
     def test_role_and_task_citations_resolve_without_overlap(self):
         index = section(team_texts()["principles.md"], "Principle index")
-        names = set(re.findall(r"<team>/principles/([\w-]+)\.md", index))
+        names = set(re.findall(r"skills/principle-([\w-]+)/SKILL\.md", index))
         for role, tasks in catalog().items():
             with open(os.path.join(TEAM, "roles", f"{role}.md")) as f:
                 selected = _principle_citations(f.read())
@@ -1139,7 +1143,7 @@ class Principles(Packaged):
             ("Redesign from first principles", "redesign-from-first-principles"),
         ):
             standing_rule = item(rules, label)
-            self.assertIn(f"<team>/principles/{name}.md", standing_rule)
+            self.assertIn(f"updraft's `skills/principle-{name}/SKILL.md`", standing_rule)
             self.assertIn("read and follow", standing_rule)
             self.assertNotIn("reviewer", standing_rule)
 
@@ -1166,17 +1170,14 @@ class Principles(Packaged):
             self.assertFalse(os.path.exists(os.path.join(TEAM, "methods", f"{name}.md")))
 
 
+def _notices():
+    with open(os.path.join(REPO, "THIRD_PARTY_NOTICES.md"), encoding="utf-8") as f:
+        return f.read()
+
+
 class Sources(Packaged):
-    def test_readme_links_resolve_and_name_every_method(self):
-        with open(os.path.join(TEAM, "README.md"), encoding="utf-8") as f:
-            readme = f.read()
-        local = [
-            link.split("#", 1)[0]
-            for link in re.findall(r"\]\(([^)\s]+)\)", readme)
-            if not re.match(r"[a-z]+:|#", link)
-        ]
-        self.assertTrue(local)
-        for link in local:
-            self.assertTrue(os.path.isfile(os.path.join(TEAM, link)), link)
+    def test_notices_hold_the_provenance_of_every_method(self):
+        self.assertFalse(os.path.exists(os.path.join(TEAM, "README.md")))
+        notices = _notices()
         for name in os.listdir(os.path.join(TEAM, "methods")):
-            self.assertIn(f"methods/{name}", readme)
+            self.assertIn(f"`src/ensemble/delegate/team/methods/{name}`", notices)

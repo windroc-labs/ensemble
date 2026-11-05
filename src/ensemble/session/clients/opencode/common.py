@@ -54,6 +54,8 @@ HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOCKER_CONFIG_FILE = "opencode.json"
 STORE = f"{STATE}/sessions/opencode"
+IMAGE_PLUGINS = "/opt/ensemble/plugins"
+HOST_PLUGINS = f"{STATE}/plugins"  # install.sh puts updraft here
 BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
 OLLAMA_PORT = 11434
@@ -386,12 +388,14 @@ class OpenCodeCommon:
     def inline(self, spec: Spec, context: ClientContext, plugin: str | None = None) -> dict:
         """Providers, permissions, plugin; API keys from broker files, else auth.json."""
         access = spec.access
+        plugins = IMAGE_PLUGINS if context.container else os.path.expanduser(HOST_PLUGINS)
+        updraft = os.path.join(plugins, "updraft")
         commands = dict.fromkeys(access.commands, "allow")
         permission: dict = {
             "bash": {"*": "ask", **commands} if commands else "ask",
         }
         dirs = _grant_paths(access.dirs)
-        reads = _grant_paths(access.reads)
+        reads = _grant_paths((*access.reads, updraft) if access.reads else ())
         if outside := [*reads, *dirs]:
             permission["external_directory"] = {
                 pattern: "allow" for d in outside for pattern in (d, f"{d}/*")
@@ -425,11 +429,11 @@ class OpenCodeCommon:
         return {
             "$schema": "https://opencode.ai/config.json",
             **({"plugin": [plugin]} if plugin is not None else {}),
-            **(
-                {"skills": {"paths": ["/opt/ensemble/plugins", "/opt/windroc/mini-op/skills"]}}
+            "skills": {
+                "paths": [plugins, "/opt/windroc/mini-op/skills"]
                 if context.container
-                else {}
-            ),
+                else [plugins]
+            },
             "autoupdate": False,
             # Else a refusal ends the turn (session/processor.ts).
             "experimental": {"continue_loop_on_deny": True},

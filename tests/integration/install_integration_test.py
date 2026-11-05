@@ -375,6 +375,11 @@ class InstallTest(Case):
         launcher = self.pkg_src / "src/broker/internal/launcher/versions.go"
         launcher.parent.mkdir(parents=True)
         launcher.write_text('package launcher\n\nconst opencodeMinVersion = "1.19.3"\n')
+        (self.pkg_src / "src/ensemble/session").mkdir(parents=True)
+        shutil.copyfile(
+            Path(REPO, "src/ensemble/session/config.toml"),
+            self.pkg_src / "src/ensemble/session/config.toml",
+        )
         (self.pkg_src / ".claude-plugin").mkdir()
         (self.pkg_src / ".claude-plugin/plugin.json").write_text('{"version": "9.8.7"}\n')
         shutil.copytree(Path(REPO, "launchd"), self.pkg_src / "launchd")
@@ -959,7 +964,7 @@ class InstallTest(Case):
             '[session.hosts]\ndefault = "docker"\n\n[delegate]\nclient = "codex"\n',
         )
         self.assertNotIn("plugins =", self.config().read_text())
-        self.assertNotIn("updraft", "\n".join(self.plugin_calls()))
+        self.assertIn("codex plugin add updraft@windroc", self.plugin_calls())
         cases = (
             (
                 '# mine\n[session.hosts]\ndefault = "tmux" # x\n\n[other]\nx = 1\n',
@@ -1153,25 +1158,29 @@ class InstallTest(Case):
             ],
         )
 
-    def test_docker_installs_only_ensemble_plugins_on_host(self):
+    def test_docker_installs_updraft_for_host_clients_too(self):
         self.assert_ok(self.fresh(docker="y"))
         self.assertEqual(
             self.plugin_calls(),
             [
                 "claude plugin marketplace add windroc-labs/agent-plugins-marketplace",
                 "claude plugin install ensemble@windroc",
+                "claude plugin install updraft@windroc",
                 "codex plugin marketplace add windroc-labs/agent-plugins-marketplace",
                 "codex plugin add ensemble@windroc",
+                "codex plugin add updraft@windroc",
             ],
         )
 
-    def test_docker_does_not_enable_existing_disabled_updraft(self):
+    def test_docker_enables_an_existing_disabled_updraft(self):
         self.assert_ok(self.fresh())
         for client in ("claude", "codex"):
             path = Path(self.fakes, client, "plugins.json")
             path.write_text(path.read_text().replace("true", "false"))
         self.assert_ok(self.again("--docker", answers=[(WRITE_Q, "y"), (PEM_Q, "")]))
-        self.assertNotIn("updraft", "\n".join(self.plugin_calls()))
+        calls = self.plugin_calls()
+        self.assertIn("claude plugin enable updraft@windroc", calls)
+        self.assertIn("codex plugin add updraft@windroc", calls)
 
     def test_docker_keeps_an_explicit_image_plugin_list(self):
         self.assert_ok(self.fresh(clients="claude", docker="y"))
@@ -2270,6 +2279,27 @@ class InstallTest(Case):
         self.assert_ok(result)
         self.assertIn("context = 131072", self.config().read_text())
         self.assertEqual(self.state()["opencode_context"], "131072")
+
+    def test_opencode_gets_the_updraft_commit_the_docker_image_pins(self):
+        config = Path(REPO, "src/ensemble/session/config.toml").read_text()
+        pin = re.search(r"updraft@windroc-labs/updraft#([0-9a-f]{40})", config)[1]
+        flags = ("--clients", "claude,opencode", "--no-docker")
+        flags += ("--opencode-provider", "lan", "--opencode-url", "http://10.0.0.5:8080/v1")
+        flags += ("--opencode-model", "m1", "--opencode-context", "204800", "--opencode-key-stdin")
+        result = self.run_install(
+            *flags,
+            stdin=KEY + "\n",
+            answers=[(SUDO_Q, PASSWORD), *[(WRITE_Q, "y")] * 6],
+        )
+        self.assert_ok(result)
+        index = Path(self.ensemble, "plugins/updraft/skills/principles/SKILL.md")
+        self.assertEqual(index.read_text(), f"updraft {pin}\n")
+        self.assertEqual(self.state()["opencode_updraft_commit"], pin)
+        added = Path(self.ensemble, "install/added").read_text().splitlines()
+        self.assertIn(f"dir\t{self.ensemble}/plugins", added)
+        rerun = self.again("--opencode-model", "m2", answers=[(WRITE_Q, "y")])
+        self.assert_ok(rerun)
+        self.assertIn(f"skip: updraft at {pin[:12]}", rerun.stderr)
 
     def test_opencode_context_asked_when_missing(self):
         """A State from before the context question: the rerun asks it and adds it to the table."""

@@ -513,13 +513,14 @@ class SelectionTest(Case):
         plain = self.common.environment(self.spec, LOCAL_CONTEXT)
         self.assertNotIn("plugin", json.loads(plain["OPENCODE_CONFIG_CONTENT"]))
 
-    def test_container_loads_image_skills_and_host_has_no_image_path(self):
+    def test_container_loads_image_skills_and_host_its_installed_updraft(self):
         container = self.common.inline(self.spec, DOCKER_CONTEXT)
         self.assertEqual(
             container["skills"],
             {"paths": ["/opt/ensemble/plugins", "/opt/windroc/mini-op/skills"]},
         )
-        self.assertNotIn("skills", self.common.inline(self.spec, LOCAL_CONTEXT))
+        host = self.common.inline(self.spec, LOCAL_CONTEXT)
+        self.assertEqual(host["skills"], {"paths": [os.path.expanduser("~/.ensemble/plugins")]})
 
 
 class CompactionTest(Case):

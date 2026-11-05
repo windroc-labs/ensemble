@@ -41,40 +41,40 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 - **Diagrams and tables**: a flow of 3+ steps or with branches, a structure, a sequence or a timeline → a Mermaid diagram (`flowchart`, `sequenceDiagram` or `timeline` only; short node labels); a comparison of several items → a table; anything simpler → a list or `X → Y`, not prose. Right after a diagram, a caption saying only what it can't carry (sources, confidence, what an edge means, reading order), from facts already in that section, never restating its nodes; delete the text the diagram replaces. A research report: its Template's Body rule instead.
 - A verify report is its Template alone: no goal opening, principle citations, diagram or other section.
 - Reports and PRDs, headings and fixed labels included, are in {{language}}; a `<X, translated>` in a template or task is X in {{language}}. Ids (`FR-<n>`, `NFR-<n>`, `[n]`, `primary`, `secondary`, `code`, `high`, `medium`, `low`, `single-source`, `unverified`), proper nouns and acronyms stay English. A term's first mention adds one gloss, its {{language}} rendering (for an acronym, of its full name); none when the term is common in {{language}}, and none in a heading. Later mentions: just the English.
-- Before delivering, check the prose you wrote against `<team>/methods/unslop.md` and rewrite each match. Where it and this section differ, this section wins; required literals, fixed labels and templates keep their exact form.
+- Before delivering, check the prose you wrote against updraft's unslop method, `skills/unslop/SKILL.md`, and rewrite each match. Where it and this section differ, this section wins; required literals, fixed labels and templates keep their exact form.
 
 ## Principle index
 
-Read each principle's file in full before applying it; each entry gives its trigger. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. A principle applying to all of a role's work belongs in that role. Cite one shaping a specific task step only in that step. Never cite it in both a role and one of that role's tasks, and never give a role a principle that conflicts with a task it runs. Apply any other principle when its trigger fits. These rules adapt pstack.
+Read each principle's file in full before applying it; each entry gives its trigger. Each file, and unslop's, is in the updraft plugin at the path given; updraft's `principles` skill (`/updraft:principles` in Claude Code) lists them and shows the plugin's directory. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. A principle applying to all of a role's work belongs in that role. Cite one shaping a specific task step only in that step. Never cite it in both a role and one of that role's tasks, and never give a role a principle that conflicts with a task it runs. Apply any other principle when its trigger fits. These rules adapt pstack.
 
 Resolve upstream principle links through this index, not their original relative paths. Never invoke an unshipped skill or tool mentioned by a leaf; those references are context only. Follow the selected task's steps for the corresponding workflow.
 
 | Principle | When it applies | File |
 |---|---|---|
-| **laziness-protocol** | Refactoring, sizing a diff or considering abstractions; prefer deletion and the smallest solution. | `<team>/principles/laziness-protocol.md` |
-| **foundational-thinking** | Before logic, choose core types, data structures, scaffolding order and shared state. | `<team>/principles/foundational-thinking.md` |
-| **redesign-from-first-principles** | Integrating a requirement; design as if it had been foundational. | `<team>/principles/redesign-from-first-principles.md` |
-| **attack-the-premise** | Two fixes sharing a premise fail the same gate; test that premise before another fix. | `<team>/principles/attack-the-premise.md` |
-| **subtract-before-you-add** | Adding, refactoring or rewriting; remove dead weight first. | `<team>/principles/subtract-before-you-add.md` |
-| **minimize-reader-load** | Shaping or reviewing hard-to-trace code; reduce layers and hidden state. | `<team>/principles/minimize-reader-load.md` |
-| **outcome-oriented-execution** | Phased rewrites or migrations; converge on the target without throwaway compatibility states. | `<team>/principles/outcome-oriented-execution.md` |
-| **experience-first** | Product, UX or scope tradeoffs; choose user delight over implementation convenience. | `<team>/principles/experience-first.md` |
-| **exhaust-the-design-space** | Novel interactions or architectural decisions without precedent; compare competing prototypes. | `<team>/principles/exhaust-the-design-space.md` |
-| **build-the-lever** | Nontrivial work; build the smallest rerunnable tool that does or proves it. | `<team>/principles/build-the-lever.md` |
-| **model-the-domain** | Stateful or branching logic and repeated shape assumptions; encode the domain in a structure. | `<team>/principles/model-the-domain.md` |
-| **boundary-discipline** | Validation, error handling or adapters; guard boundaries and keep business logic pure. | `<team>/principles/boundary-discipline.md` |
-| **type-system-discipline** | Types or signatures; make illegal states unrepresentable and parse external data. | `<team>/principles/type-system-discipline.md` |
-| **make-operations-idempotent** | Commands, lifecycle steps or retrying loops; converge after crashes and retries. | `<team>/principles/make-operations-idempotent.md` |
-| **migrate-callers-then-delete-legacy-apis** | Replacing an internal API; migrate callers and delete the old API in one wave. | `<team>/principles/migrate-callers-then-delete-legacy-apis.md` |
-| **separate-before-serializing-shared-state** | Concurrent actors write the same target; remove sharing first. | `<team>/principles/separate-before-serializing-shared-state.md` |
-| **prove-it-works** | After a task and before declaring done; verify the real artifact. | `<team>/principles/prove-it-works.md` |
-| **fix-root-causes** | Debugging; fix the first wrong state, using guards only for legitimate states. | `<team>/principles/fix-root-causes.md` |
-| **sequence-verifiable-units** | Sweeps, migrations or multi-step work; verify each small unit before the next. | `<team>/principles/sequence-verifiable-units.md` |
-| **test-behavior-not-implementation** | Writing, changing or retaining tests; assert observable behavior. | `<team>/principles/test-behavior-not-implementation.md` |
-| **explain-the-number** | Before measuring or trusting a measured number; identify its limit and rule out confounders. | `<team>/principles/explain-the-number.md` |
-| **guard-the-context-window** | Large outputs, long files or repeated reads; keep summaries. | `<team>/principles/guard-the-context-window.md` |
-| **never-block-on-the-human** | Considering permission for reversible work; proceed and let the user course-correct. | `<team>/principles/never-block-on-the-human.md` |
-| **encode-lessons-in-structure** | Repeating an instruction; encode it in a lint, flag, runtime check or script. | `<team>/principles/encode-lessons-in-structure.md` |
+| **laziness-protocol** | Refactoring, sizing a diff or considering abstractions; prefer deletion and the smallest solution. | `skills/principle-laziness-protocol/SKILL.md` |
+| **foundational-thinking** | Before logic, choose core types, data structures, scaffolding order and shared state. | `skills/principle-foundational-thinking/SKILL.md` |
+| **redesign-from-first-principles** | Integrating a requirement; design as if it had been foundational. | `skills/principle-redesign-from-first-principles/SKILL.md` |
+| **attack-the-premise** | Two fixes sharing a premise fail the same gate; test that premise before another fix. | `skills/principle-attack-the-premise/SKILL.md` |
+| **subtract-before-you-add** | Adding, refactoring or rewriting; remove dead weight first. | `skills/principle-subtract-before-you-add/SKILL.md` |
+| **minimize-reader-load** | Shaping or reviewing hard-to-trace code; reduce layers and hidden state. | `skills/principle-minimize-reader-load/SKILL.md` |
+| **outcome-oriented-execution** | Phased rewrites or migrations; converge on the target without throwaway compatibility states. | `skills/principle-outcome-oriented-execution/SKILL.md` |
+| **experience-first** | Product, UX or scope tradeoffs; choose user delight over implementation convenience. | `skills/principle-experience-first/SKILL.md` |
+| **exhaust-the-design-space** | Novel interactions or architectural decisions without precedent; compare competing prototypes. | `skills/principle-exhaust-the-design-space/SKILL.md` |
+| **build-the-lever** | Nontrivial work; build the smallest rerunnable tool that does or proves it. | `skills/principle-build-the-lever/SKILL.md` |
+| **model-the-domain** | Stateful or branching logic and repeated shape assumptions; encode the domain in a structure. | `skills/principle-model-the-domain/SKILL.md` |
+| **boundary-discipline** | Validation, error handling or adapters; guard boundaries and keep business logic pure. | `skills/principle-boundary-discipline/SKILL.md` |
+| **type-system-discipline** | Types or signatures; make illegal states unrepresentable and parse external data. | `skills/principle-type-system-discipline/SKILL.md` |
+| **make-operations-idempotent** | Commands, lifecycle steps or retrying loops; converge after crashes and retries. | `skills/principle-make-operations-idempotent/SKILL.md` |
+| **migrate-callers-then-delete-legacy-apis** | Replacing an internal API; migrate callers and delete the old API in one wave. | `skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md` |
+| **separate-before-serializing-shared-state** | Concurrent actors write the same target; remove sharing first. | `skills/principle-separate-before-serializing-shared-state/SKILL.md` |
+| **prove-it-works** | After a task and before declaring done; verify the real artifact. | `skills/principle-prove-it-works/SKILL.md` |
+| **fix-root-causes** | Debugging; fix the first wrong state, using guards only for legitimate states. | `skills/principle-fix-root-causes/SKILL.md` |
+| **sequence-verifiable-units** | Sweeps, migrations or multi-step work; verify each small unit before the next. | `skills/principle-sequence-verifiable-units/SKILL.md` |
+| **test-behavior-not-implementation** | Writing, changing or retaining tests; assert observable behavior. | `skills/principle-test-behavior-not-implementation/SKILL.md` |
+| **explain-the-number** | Before measuring or trusting a measured number; identify its limit and rule out confounders. | `skills/principle-explain-the-number/SKILL.md` |
+| **guard-the-context-window** | Large outputs, long files or repeated reads; keep summaries. | `skills/principle-guard-the-context-window/SKILL.md` |
+| **never-block-on-the-human** | Considering permission for reversible work; proceed and let the user course-correct. | `skills/principle-never-block-on-the-human/SKILL.md` |
+| **encode-lessons-in-structure** | Repeating an instruction; encode it in a lint, flag, runtime check or script. | `skills/principle-encode-lessons-in-structure/SKILL.md` |
 
 ## Autonomy
 

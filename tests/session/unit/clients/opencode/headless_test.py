@@ -228,7 +228,8 @@ class LaunchTest(Base):
 
     def test_yolo_approves_tools_and_retains_edit_boundaries(self):
         spec = self.spec(access=Access(cwd=self.cwd, project=True, reads=(self.made("read"),)))
-        permission = self.inline(self.launch(spec, DOCKER_CONTEXT))["permission"]
+        yolo = replace(LOCAL_CONTEXT, permission=Permission.YOLO)
+        permission = self.inline(self.launch(spec, yolo))["permission"]
         for tool in ("bash", "read", "external_directory", "doom_loop"):
             self.assertEqual(permission[tool], "allow", tool)
         self.assertNotIn("*", permission)
@@ -249,11 +250,36 @@ class LaunchTest(Base):
         extra, read = self.made("extra"), self.made("read")
         access = Access(project=True, cwd=self.cwd, dirs=(extra,), reads=(read,))
         permission = self.inline(self.launch(self.spec(access=access)))["permission"]
+        updraft = os.path.expanduser("~/.ensemble/plugins/updraft")
         self.assertEqual(
             permission["external_directory"],
-            {read: "allow", f"{read}/*": "allow", extra: "allow", f"{extra}/*": "allow"},
+            {
+                read: "allow",
+                f"{read}/*": "allow",
+                updraft: "allow",
+                f"{updraft}/*": "allow",
+                extra: "allow",
+                f"{extra}/*": "allow",
+            },
         )
         self.assertNotIn("external_directory", self.inline(self.launch(self.spec()))["permission"])
+
+    def test_a_read_grant_covers_the_updraft_plugin_read_only(self):
+        read = self.made("read")
+        access = Access(project=True, cwd=self.cwd, reads=(read,))
+        for context, updraft in (
+            (LOCAL_CONTEXT, os.path.expanduser("~/.ensemble/plugins/updraft")),
+            (DOCKER_CONTEXT, "/opt/ensemble/plugins/updraft"),
+        ):
+            with self.subTest(updraft=updraft):
+                permission = self.inline(self.launch(self.spec(access=access), context))
+                permission = permission["permission"]
+                if context is LOCAL_CONTEXT:
+                    self.assertEqual(
+                        decide(permission["external_directory"], f"{updraft}/*"), "allow"
+                    )
+                inside = os.path.relpath(os.path.join(updraft, "skills", "x.md"), "/")
+                self.assertEqual(decide(permission["edit"], inside), "deny")
 
     def test_installed_plugin_task_read_through_links_is_preapproved(self):
         cache = self.made("ensemble@git+https:")
