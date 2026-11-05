@@ -78,6 +78,11 @@ OTHER = str(int(PROTOCOL) + 1)
 MARKET = "https://raw.githubusercontent.com/windroc-labs/agent-plugins-marketplace/main/"
 RAW = "https://raw.githubusercontent.com/windroc-labs/ensemble/"
 SPEC = "ensemble@git+https://github.com/windroc-labs/ensemble.git#main"
+PIN = re.search(
+    r"updraft@windroc-labs/updraft#([0-9a-f]{40})",
+    Path(REPO, "src/ensemble/session/config.toml").read_text(),
+)[1]
+UPDRAFT = f"updraft@git+https://github.com/windroc-labs/updraft.git#{PIN}"
 API_CALL = (
     "curl -fsSL -H Accept: application/vnd.github.sha"
     " https://api.github.com/repos/windroc-labs/ensemble/commits/main"
@@ -2280,9 +2285,7 @@ class InstallTest(Case):
         self.assertIn("context = 131072", self.config().read_text())
         self.assertEqual(self.state()["opencode_context"], "131072")
 
-    def test_opencode_gets_the_updraft_commit_the_docker_image_pins(self):
-        config = Path(REPO, "src/ensemble/session/config.toml").read_text()
-        pin = re.search(r"updraft@windroc-labs/updraft#([0-9a-f]{40})", config)[1]
+    def test_opencode_installs_updraft_as_a_plugin_at_the_docker_images_pin(self):
         flags = ("--clients", "claude,opencode", "--no-docker")
         flags += ("--opencode-provider", "lan", "--opencode-url", "http://10.0.0.5:8080/v1")
         flags += ("--opencode-model", "m1", "--opencode-context", "204800", "--opencode-key-stdin")
@@ -2292,14 +2295,19 @@ class InstallTest(Case):
             answers=[(SUDO_Q, PASSWORD), *[(WRITE_Q, "y")] * 6],
         )
         self.assert_ok(result)
-        index = Path(self.ensemble, "plugins/updraft/skills/principles/SKILL.md")
-        self.assertEqual(index.read_text(), f"updraft {pin}\n")
-        self.assertEqual(self.state()["opencode_updraft_commit"], pin)
+        self.assertIn(f"opencode plugin -g -f {UPDRAFT}", self.calls())
+        conf = json.loads(Path(self.home, ".config/opencode/opencode.jsonc").read_text())
+        self.assertIn(UPDRAFT, conf["plugin"])
+        package = Path(self.home, ".cache/opencode/packages", UPDRAFT, "node_modules/updraft")
+        self.assertEqual((package / "REF").read_text(), PIN)
+        self.assertEqual(self.state()["opencode_updraft_commit"], PIN)
+        self.assertFalse(Path(self.ensemble, "plugins").exists())
         added = Path(self.ensemble, "install/added").read_text().splitlines()
-        self.assertIn(f"dir\t{self.ensemble}/plugins", added)
+        cache = Path(self.home, ".cache/opencode/packages/updraft@git+https:")
+        self.assertIn(f"dir\t{cache}", added)
         rerun = self.again("--opencode-model", "m2", answers=[(WRITE_Q, "y")])
         self.assert_ok(rerun)
-        self.assertIn(f"skip: updraft at {pin[:12]}", rerun.stderr)
+        self.assertIn(f"skip: {UPDRAFT} at {PIN[:12]}", rerun.stderr)
 
     def test_opencode_context_asked_when_missing(self):
         """A State from before the context question: the rerun asks it and adds it to the table."""
@@ -2655,7 +2663,7 @@ class InstallTest(Case):
         )
         self.assertIn('[delegate]\nclient = "opencode"\n', self.config().read_text())
         conf = json.loads(Path(self.home, ".config/opencode/opencode.jsonc").read_text())
-        self.assertEqual(conf["plugin"], [SPEC])
+        self.assertEqual(conf["plugin"], [SPEC, UPDRAFT])
         self.assertIn(f"    {self.opencode_package()}\n", result.stderr)
         self.assertEqual((self.opencode_package() / "COMMIT").read_text(), OLD)
         self.assertEqual(self.state()["opencode_plugin_commit"], OLD)
@@ -2664,7 +2672,10 @@ class InstallTest(Case):
         self.assertNotRegex(result.tty, MENU_Q)
         self.assertEqual((self.state()["clients"], self.state()["docker"]), ("opencode", "no"))
         self.assertNotIn("opencode plugin", "\n".join(self.calls()))
-        self.assertIn(f"==> OpenCode plugin\n    skip: {SPEC} at {OLD[:12]}\n", result.stderr)
+        self.assertIn(
+            f"==> OpenCode plugins\n    skip: {SPEC} at {OLD[:12]}\n    skip: {UPDRAFT} at {PIN[:12]}\n",
+            result.stderr,
+        )
 
     def assert_opencode_in_new_shell(self, profile):
         result = subprocess.run(
@@ -3090,7 +3101,7 @@ class InstallTest(Case):
                 result.stderr,
             )
             self.assertIn(
-                "install.sh: OpenCode plugin failed; rerun the same command to continue",
+                "install.sh: OpenCode plugins failed; rerun the same command to continue",
                 result.stderr,
             )
         self.assertNotIn("opencode plugin", "\n".join(self.calls()))
@@ -3104,7 +3115,7 @@ class InstallTest(Case):
         result = self.opencode_rerun()
         self.assertEqual(result.code, 1)
         self.assertIn(
-            "install.sh: OpenCode plugin failed; rerun the same command to continue", result.stderr
+            "install.sh: OpenCode plugins failed; rerun the same command to continue", result.stderr
         )
         self.assertEqual(self.state()["opencode_plugin_commit"], OLD)
         self.assertFalse(self.opencode_package().exists())
@@ -3120,10 +3131,24 @@ class InstallTest(Case):
         (self.fakes / "commit").write_text(NEW)
         result = self.opencode_rerun((WRITE_Q, "n"), (WRITE_Q, "n"))
         self.assert_ok(result)
-        self.assertIn("==> OpenCode plugin\n    skip: declined\n", result.stderr)
+        self.assertIn("==> OpenCode plugins\n    skip: declined\n", result.stderr)
         self.assertNotIn("opencode plugin", "\n".join(self.calls()))
         self.assertEqual((self.opencode_package() / "COMMIT").read_text(), OLD)
         self.assertEqual(self.state()["opencode_plugin_commit"], OLD)
+
+    def test_opencode_declined_updraft_still_updates_listed_ensemble(self):
+        self.assert_ok(self.opencode_only())
+        path = Path(self.home, ".config/opencode/opencode.jsonc")
+        path.write_text(json.dumps({"plugin": [SPEC]}))
+        (self.fakes / "commit").write_text(NEW)
+        result = self.opencode_rerun((WRITE_Q, "n"), (WRITE_Q, "n"))
+        self.assert_ok(result)
+        self.assertIn(f'"plugin": ["{UPDRAFT}"]  (opencode plugin -g -f)', result.tty)
+        self.assertIn("==> OpenCode plugins\n    skip: declined\n", result.stderr)
+        self.assertEqual(self.plugin_calls(), [f"opencode plugin -g -f {SPEC}"])
+        self.assertEqual(json.loads(path.read_text())["plugin"], [SPEC])
+        self.assertEqual((self.opencode_package() / "COMMIT").read_text(), NEW)
+        self.assertEqual(self.state()["opencode_plugin_commit"], NEW)
 
     def test_opencode_ref_outside_cache_deletes_nothing(self):
         victim = Path(self.home, ".cache/opencode/victim")
@@ -3647,7 +3672,7 @@ exec /bin/rm "$@"
         data["plugin"] = [user_spec]
         path.write_text(json.dumps(data))
         self.assert_ok(self.again(answers=[(WRITE_Q, "y")]))
-        self.assertEqual(json.loads(path.read_text())["plugin"], [SPEC])
+        self.assertEqual(json.loads(path.read_text())["plugin"], [SPEC, UPDRAFT])
         self.assert_ok(self.cleanup("--yes", "--password-stdin", stdin=PASSWORD + "\n"))
         self.assertEqual(json.loads(path.read_text()), {"plugin": [user_spec]})
 
@@ -3736,7 +3761,10 @@ exec /bin/rm "$@"
         )
         self.assert_ok(result)
         self.assertNotIn("plugins =", self.config().read_text())
-        self.assertEqual(self.plugin_calls(), [f"opencode plugin -g -f {SPEC}"])
+        self.assertEqual(
+            self.plugin_calls(),
+            [f"opencode plugin -g -f {SPEC}", f"opencode plugin -g -f {UPDRAFT}"],
+        )
         self.assertEqual((self.fakes / "keychain/ensemble-broker-opencode").read_text(), KEY)
         self.assertIn("keychain\tensemble-broker-opencode\tlan", self.ledger())
         self.assertRegex(self.state()["login_opencode"], r"^[0-9a-f]{64} lan$")

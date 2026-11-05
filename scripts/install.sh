@@ -1282,7 +1282,7 @@ broker_plan() {
     if [ "$client" != opencode ]; then
       if [ "${1:-}" = preflight ]; then source=; else source=$(installed_plugin "$client"); fi
     else
-      # OpenCode's copy counts only while it is at the commit $ref names: opencode_plugin downloads it again otherwise.
+      # OpenCode's copy counts only while it is at the commit $ref names: opencode_plugins downloads it again otherwise.
       source=$(opencode_package "$(opencode_spec)" 2>/dev/null) || source=
       commit=$(state_get opencode_plugin_commit)
       if [ -z "$commit" ] || [ "$commit" != "$(ref_commit 2>/dev/null)" ]; then source=; fi
@@ -1562,7 +1562,7 @@ print(path)' "${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages" "$1"
 opencode_package() {
   local dir
   dir=$(opencode_cache_dir "$1") || die "$1: not an OpenCode package dir"
-  printf '%s' "$dir/node_modules/ensemble"
+  printf '%s' "$dir/node_modules/${1%%@*}"
 }
 
 # The commit $ref names on GitHub now.
@@ -1574,32 +1574,59 @@ ref_commit() {
   printf '%s' "$commit"
 }
 
-# ensemble's OpenCode plugin, the way OpenCode installs one: opencode plugin -g, which adds it to the global config
-# and downloads it. The config there before is kept for the cleanup; the files OpenCode adds beside it are recorded.
-# OpenCode never downloads a spec again, so when $ref has moved since the last download its copy is deleted first.
-opencode_plugin() {
-  local spec conf file name dir commit had
-  step "OpenCode plugin"
+# Exit 0 when the OpenCode config in dir $1 lists plugin spec $2.
+opencode_listed() { grep -qsF "\"$2\"" "$1/opencode.json" "$1/opencode.jsonc"; }
+
+# ensemble's OpenCode plugin at $ref and updraft's at the commit the Docker image pins (src/ensemble/session/config.toml
+# at $ref), the way OpenCode installs one: opencode plugin -g, which adds it to the global config and downloads it. One
+# consent covers the entries the config lacks; declined, those already listed are still kept current.
+opencode_plugins() {
+  local conf pin commit missing= declined= i
+  local -a specs commits keys=(opencode_plugin_commit opencode_updraft_commit)
+  step "OpenCode plugins"
   if ! has opencode; then
     skip "OpenCode not chosen"
     return
   fi
-  spec=$(opencode_spec)
   conf=${XDG_CONFIG_HOME:-$HOME/.config}/opencode
-  dir=$(opencode_cache_dir "$spec") && under_home "$dir" || die "$spec: not an OpenCode package dir"
+  pin=$(ensemble_file "$ref" src/ensemble/session/config.toml \
+    | sed -n 's|.*"updraft@windroc-labs/updraft#\([0-9a-f]\{40\}\)[:"].*|\1|p' | sed -n 1p)
+  [ -n "$pin" ] || die "no updraft pin in src/ensemble/session/config.toml at $ref"
   commit=$(ref_commit)
-  had=$(state_get opencode_plugin_commit)
-  if ! grep -qsF "\"$spec\"" "$conf/opencode.json" "$conf/opencode.jsonc"; then
-    if ! consent "$conf/opencode.json(c)" "\"plugin\": [\"$spec\"]  (opencode plugin -g -f)"; then
-      skip declined
+  specs=("$(opencode_spec)" "updraft@git+https://github.com/windroc-labs/updraft.git#$pin")
+  commits=("$commit" "$pin")
+  for i in 0 1; do
+    if ! opencode_listed "$conf" "${specs[i]}"; then missing+="${missing:+, }\"${specs[i]}\""; fi
+  done
+  if [ -n "$missing" ] && ! consent "$conf/opencode.json(c)" "\"plugin\": [$missing]  (opencode plugin -g -f)"; then
+    skip declined
+    declined=1
+  fi
+  for i in 0 1; do
+    if [ -z "$declined" ] || opencode_listed "$conf" "${specs[i]}"; then
+      opencode_plugin "$conf" "${specs[i]}" "${commits[i]}" "${keys[i]}"
+    fi
+  done
+}
+
+# Plugin spec $2 in OpenCode config dir $1, its ref at commit $3; state key $4 holds the commit of OpenCode's copy. The
+# config there before is kept for the cleanup; the files OpenCode adds beside it are recorded. OpenCode never downloads
+# a spec again, so when its ref has moved since the last download its copy is deleted first.
+opencode_plugin() {
+  local conf=$1 spec=$2 commit=$3 key=$4 dir file name had
+  dir=$(opencode_cache_dir "$spec") && under_home "$dir" || die "$spec: not an OpenCode package dir"
+  had=$(state_get "$key")
+  if opencode_listed "$conf" "$spec"; then
+    if [ -d "$dir/node_modules/${spec%%@*}" ] && [ "$had" = "$commit" ]; then
+      skip "$spec at ${commit:0:12}"
       return
     fi
-  elif [ -d "$dir/node_modules/ensemble" ] && [ "$had" = "$commit" ]; then
-    skip "$spec at ${commit:0:12}"
-    return
-  else
     [ -d "$dir" ] && [ -n "$had" ] || had=unknown
-    say "    $spec: $ref is at ${commit:0:12}, OpenCode's copy at ${had:0:12}: downloading it again"
+    if [ "${spec##*#}" = "$commit" ]; then
+      say "    $spec: OpenCode's copy at ${had:0:12}: downloading it again"
+    else
+      say "    $spec: ${spec##*#} is at ${commit:0:12}, OpenCode's copy at ${had:0:12}: downloading it again"
+    fi
   fi
   for file in "$conf/opencode.json" "$conf/opencode.jsonc" "$conf/package.json" "$conf/package-lock.json" "$conf/.gitignore"; do
     if [ -f "$file" ] && ! recorded file "$file" && ! recorded opencode-config "$file"; then
@@ -1615,37 +1642,8 @@ opencode_plugin() {
   record_dir "${XDG_CACHE_HOME:-$HOME/.cache}/opencode/packages/${spec%%//*}"
   rm -rf -- "$dir"
   "$opencode_executable" plugin -g -f "$spec" </dev/null >&2
-  [ -d "$dir/node_modules/ensemble" ] || die "OpenCode did not download $spec"
-  state_set opencode_plugin_commit "$commit"
-}
-
-# updraft for OpenCode: the commit the Docker image pins (src/ensemble/session/config.toml at $ref), unpacked into
-# ~/.ensemble/plugins/updraft, where the opencode client loads skills from.
-opencode_updraft() {
-  local commit dir=$HOME/.ensemble/plugins/updraft archive
-  step "OpenCode updraft"
-  if ! has opencode; then
-    skip "OpenCode not chosen"
-    return
-  fi
-  commit=$(ensemble_file "$ref" src/ensemble/session/config.toml \
-    | sed -n 's|.*"updraft@windroc-labs/updraft#\([0-9a-f]\{40\}\)[:"].*|\1|p' | sed -n 1p)
-  [ -n "$commit" ] || die "no updraft pin in src/ensemble/session/config.toml at $ref"
-  if [ -d "$dir/skills" ] && [ "$(state_get opencode_updraft_commit)" = "$commit" ]; then
-    skip "updraft at ${commit:0:12}"
-    return
-  fi
-  record_dir "$HOME/.ensemble/plugins"
-  record_dir "$dir"
-  archive="$state_dir/updraft.tar.gz"
-  mkdir -p "$state_dir"
-  curl -fsSL "https://codeload.github.com/windroc-labs/updraft/tar.gz/$commit" </dev/null >"$archive" \
-    || die "cannot download updraft $commit from github.com/windroc-labs/updraft"
-  rm -rf -- "$dir"
-  mkdir -p "$dir"
-  tar -xzf "$archive" --strip-components=1 -C "$dir" || die "cannot unpack updraft $commit into $dir"
-  rm -f -- "$archive"
-  state_set opencode_updraft_commit "$commit"
+  [ -d "$dir/node_modules/${spec%%@*}" ] || die "OpenCode did not download $spec"
+  state_set "$key" "$commit"
 }
 
 # Shared with install-cleanup.sh; edits JSONC values without rewriting unrelated text, and shows a configured
@@ -3003,8 +3001,7 @@ main() {
   if has claude || has codex; then broker_plan; fi
   if has claude || has codex; then plugin_dir; fi
   opencode_install
-  opencode_plugin
-  opencode_updraft
+  opencode_plugins
   if ! has claude && ! has codex; then plugin_dir; fi
   opencode_provider
   docker_steps

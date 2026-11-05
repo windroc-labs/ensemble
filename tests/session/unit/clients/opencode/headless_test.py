@@ -250,7 +250,7 @@ class LaunchTest(Base):
         extra, read = self.made("extra"), self.made("read")
         access = Access(project=True, cwd=self.cwd, dirs=(extra,), reads=(read,))
         permission = self.inline(self.launch(self.spec(access=access)))["permission"]
-        updraft = os.path.expanduser("~/.ensemble/plugins/updraft")
+        updraft = os.path.expanduser("~/.cache/opencode/packages/updraft@git+https:")
         self.assertEqual(
             permission["external_directory"],
             {
@@ -267,17 +267,21 @@ class LaunchTest(Base):
     def test_a_read_grant_covers_the_updraft_plugin_read_only(self):
         read = self.made("read")
         access = Access(project=True, cwd=self.cwd, reads=(read,))
-        for context, updraft in (
-            (LOCAL_CONTEXT, os.path.expanduser("~/.ensemble/plugins/updraft")),
-            (DOCKER_CONTEXT, "/opt/ensemble/plugins/updraft"),
+        cache = self.made("cache")
+        # Where `opencode plugin -g` puts updraft's git spec at any commit.
+        package = "opencode/packages/updraft@git+https:/github.com/windroc-labs/updraft.git#"
+        package += "a" * 40 + "/node_modules/updraft"
+        for context, env, updraft in (
+            (LOCAL_CONTEXT, {}, os.path.expanduser(f"~/.cache/{package}")),
+            (LOCAL_CONTEXT, {"XDG_CACHE_HOME": cache}, f"{cache}/{package}"),
+            (DOCKER_CONTEXT, {}, "/opt/ensemble/plugins/updraft"),
         ):
-            with self.subTest(updraft=updraft):
+            with self.subTest(updraft=updraft), mock.patch.dict(os.environ, env):
                 permission = self.inline(self.launch(self.spec(access=access), context))
                 permission = permission["permission"]
                 if context is LOCAL_CONTEXT:
-                    self.assertEqual(
-                        decide(permission["external_directory"], f"{updraft}/*"), "allow"
-                    )
+                    reference = os.path.join(updraft, "references", "review-round.md")
+                    self.assertEqual(decide(permission["external_directory"], reference), "allow")
                 inside = os.path.relpath(os.path.join(updraft, "skills", "x.md"), "/")
                 self.assertEqual(decide(permission["edit"], inside), "deny")
 

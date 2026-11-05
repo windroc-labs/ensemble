@@ -224,16 +224,20 @@ jobs:
                   installed = root / f"{client}-plugins/plugins/cache" / market / source["name"]
                   assert any(installed.iterdir()), f"{client} {source}: missing installation"
                   print(client, source["name"], "verified", actual)'
-      - name: Check OpenCode discovers the image skills
+      - name: Check OpenCode loads the image's updraft plugin
         if: ${{ steps.inputs.outputs.build != 'false' }}
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$IMAGE" python3 -c '
           import json, os, subprocess
-          env = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps({"skills": {"paths": ["/opt/ensemble/plugins"]}})}
-          result = subprocess.run(["opencode", "debug", "skill"], env=env, capture_output=True, text=True, check=True)
-          assert any(skill["name"] == "light-build" for skill in json.loads(result.stdout))'
+          env = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps({"plugin": ["file:///opt/ensemble/plugins/updraft"]})}
+          def debug(*args):
+              return json.loads(subprocess.run(["opencode", "debug", *args], env=env, capture_output=True, text=True, check=True).stdout)
+          assert any(skill["name"] == "light-build" for skill in debug("skill"))
+          config = debug("config")
+          assert "updraft:light-build" in config["command"], sorted(config["command"])
+          assert "updraft:correctness-reviewer" in config["agent"], sorted(config["agent"])'
       - name: Check Codex volatile authentication and history mounts
         if: ${{ steps.inputs.outputs.build != 'false' }}
         env:
