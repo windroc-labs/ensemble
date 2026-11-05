@@ -41,14 +41,14 @@ Build the requirement with `/updraft:light-build`, then open a pull request.
 
 ## Result
 
-[Engineer › Finish › Done](#finish).
+[Engineer › Finish](#finish).
 
 - `done`: the build converged and the PR's checks pass or none run; deliverable the PR description; `title`, `summary`, `url` the PR, `updraft`.
-- `needs_input`: step 3's finished build with no user requirement, or a stop in [Engineer › Repo](#repo).
+- `needs_input`: step 3's finished build with no user requirement, or a stop in [Engineer › Repo](#repo) or [Output › Destination](#destination).
 
 ## Failure
 
-[Engineer › Finish › Failure](#finish): the build stopped or capped, an action denied, or the PR's checks still failing or pending at Done's limits. Also `failed` at [Engineer › Repo](#repo) step 1 (checkout exit 1, no push permission).
+[Engineer › Finish › Failure](#finish): the build stopped or capped, an action denied, or the PR's checks still failing or pending at Done's limits. Also `failed` at [Engineer › Repo](#repo) step 1 (checkout exit 1, no push permission) and at a push [Output › Destination](#destination) denies.
 
 ## Resume
 

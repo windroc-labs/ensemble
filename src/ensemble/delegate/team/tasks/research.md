@@ -12,7 +12,7 @@ No updraft capability: one round of subagents, restricted per [Researcher › Ty
 
 ## Role limits
 
-- One round of step 4's agents; agents restricted, worktree code never run ([Researcher › Type and target](#type-and-target)).
+- Agents: step 4; worktree code never run ([Researcher › Type and target](#type-and-target)).
 - No retry or replacement outside Resume ([Researcher › Failure](#failure)).
 
 ## Steps

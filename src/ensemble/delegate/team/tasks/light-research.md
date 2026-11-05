@@ -12,7 +12,7 @@ No updraft capability: your own web search and fetch and worktree reads.
 
 ## Role limits
 
-- Step 4's one pass: you alone, no private detail in web queries.
+- Subagents, workflows and web queries: step 4.
 - Worktree code never run ([Researcher › Type and target](#type-and-target)).
 
 ## Steps

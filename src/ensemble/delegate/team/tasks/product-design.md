@@ -16,8 +16,8 @@ The **brief** (the request), the **user's later words** (their messages after th
 
 ## Role limits
 
-- Research: web per [PM › Boundaries](#boundaries); the target repo read-only (step 4).
-- One fresh subagent per self-grill round (step 5); a question that changes external state or can't be undone stays for the user (step 8).
+- [PM › Boundaries](#boundaries).
+- Research and the target repo: step 4; subagents: step 5; questions left for the user: step 8.
 
 ## Steps
 
@@ -39,7 +39,7 @@ The **brief** (the request), the **user's later words** (their messages after th
 
 ## Failure
 
-None of its own: a failed checkout goes under Risks (step 4); a capped, `needs-author` or stopped review still ships the PRD (step 7).
+None of its own: steps 4 and 7 say what ships when a checkout or review fails.
 
 ## Resume
 

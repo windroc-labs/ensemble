@@ -15,7 +15,7 @@ The source PRD (`<PRD>`, its identifier), the target repos it names, and the doc
 ## Role limits
 
 - Target repos: read-only checkouts (step 1).
-- Board writes: only step 3's command; no question to the user, no implementation (Method overrides, Steps 4–5).
+- Board writes: only step 3's command; no approval asked for the breakdown, no implementation (Method overrides, Steps 4–5).
 - [Engineer › Rules](#rules): **Scenarios are acceptance**.
 
 ## Steps
@@ -35,14 +35,14 @@ The source PRD (`<PRD>`, its identifier), the target repos it names, and the doc
 
 ## Result
 
-No deliverable: the host writes back from the outcome.
+No deliverable ([Engineer › Input processing](#input-processing)).
 
 - `done`: the tickets published; `title`: the PRD's product name; `summary`: `Created <identifiers>; reused none`.
 - `needs_input`: a scenario judged wrong ([Engineer › Rules](#rules)).
 
 ## Failure
 
-Nothing published → `failed` ([Output](#output)), `summary` what failed.
+[Output](#output): `failed` when nothing usable, `summary` what failed.
 
 ## Resume
 
