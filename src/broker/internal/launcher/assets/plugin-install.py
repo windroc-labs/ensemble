@@ -57,8 +57,22 @@ def verify(client, repo, expected, checkout, env):
     return actual
 
 
-def marketplace(checkout, names, plugins=()):
+def marketplace(checkout, names, plugins=(), *, client="claude"):
     manifest_path = checkout / ".claude-plugin/marketplace.json"
+    if client == "codex":
+        manifest_path = next(
+            (
+                checkout / path
+                for path in (
+                    ".agents/plugins/marketplace.json",
+                    ".agents/plugins/api_marketplace.json",
+                    ".claude-plugin/marketplace.json",
+                    ".cursor-plugin/marketplace.json",
+                )
+                if (checkout / path).is_file()
+            ),
+            manifest_path,
+        )
     manifest = json.loads(manifest_path.read_text())
     market = manifest.get("name")
     if not isinstance(market, str) or NAME.fullmatch(market) is None:
@@ -113,7 +127,7 @@ def prepare(repo, commit, names, homes, *, markets, env, plugins=()):
             )
             command(["git", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"], env)
             verify(client, repo, commit, checkout, env)
-            actual_market = marketplace(checkout, names, plugins)
+            actual_market = marketplace(checkout, names, plugins, client=client)
         except (ValueError, OSError) as error:
             raise ValueError(
                 f"plugin-install: {client} {repo} expected {commit}: {error}"

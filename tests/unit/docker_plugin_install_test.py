@@ -152,6 +152,72 @@ class PluginInstall(Case):
                     self.install([self.remote], run=wrong_source)
                 self.assertFalse(any(argv[0] in ("claude", "codex") for argv, _ in self.calls))
 
+    def test_codex_pins_its_preferred_catalogue_even_when_it_has_a_stale_ref(self):
+        native = ".agents/plugins/marketplace.json"
+        api = ".agents/plugins/api_marketplace.json"
+        for index, paths in enumerate(((native,), (api,), (native, api))):
+            with self.subTest(paths=paths):
+                self.root = Path(self.home, f"native-{index}")
+                actual = "c" * 40
+
+                def native_catalogue(argv, *, paths=paths, **kw):
+                    nonlocal actual
+                    result = self.remote_run(argv, **kw)
+                    if argv[0] == "git" and "fetch" in argv:
+                        checkout = Path(argv[2])
+                        data = json.loads(
+                            (checkout / ".claude-plugin/marketplace.json").read_text()
+                        )
+                        data["plugins"][0]["source"] = {
+                            "source": "url",
+                            "url": "https://github.com/windroc-labs/updraft.git",
+                            "ref": "main",
+                        }
+                        for path in paths:
+                            manifest = checkout / path
+                            manifest.parent.mkdir(parents=True, exist_ok=True)
+                            manifest.write_text(json.dumps(data))
+                    if argv[:3] == ["codex", "plugin", "add"]:
+                        checkout = self.root / "codex-plugins/sources" / self.remote["repo"]
+                        data = json.loads((checkout / paths[0]).read_text())
+                        source = data["plugins"][0]["source"]
+                        actual = "c" * 40 if "ref" in source else source.get("sha", "c" * 40)
+                    if argv[0] == "git" and "cache" in Path(argv[2]).parts:
+                        return SimpleNamespace(stdout=actual, returncode=0)
+                    return result
+
+                output = self.install([self.remote], run=native_catalogue)
+                self.assertEqual(output.count("commit=" + "b" * 40), 2)
+
+    def test_codex_catalogue_is_validated_before_registration(self):
+        for case, error in (
+            ("repo", "source must name windroc-labs/updraft"),
+            ("name", "client marketplace names differ"),
+        ):
+            with self.subTest(case=case):
+                self.root = Path(self.home, f"native-invalid-{case}")
+                self.calls = []
+
+                def invalid_catalogue(argv, *, case=case, **kw):
+                    result = self.remote_run(argv, **kw)
+                    if argv[0] == "git" and "fetch" in argv:
+                        checkout = Path(argv[2])
+                        data = json.loads(
+                            (checkout / ".claude-plugin/marketplace.json").read_text()
+                        )
+                        if case == "repo":
+                            data["plugins"][0]["source"]["repo"] = "other/plugin"
+                        else:
+                            data["name"] = "other-market"
+                        manifest = checkout / ".agents/plugins/marketplace.json"
+                        manifest.parent.mkdir(parents=True)
+                        manifest.write_text(json.dumps(data))
+                    return result
+
+                with self.assertRaisesRegex(ValueError, error):
+                    self.install([self.remote], run=invalid_catalogue)
+                self.assertFalse(any(argv[0] in ("claude", "codex") for argv, _ in self.calls))
+
     def test_shared_catalogue_can_mix_pinned_remote_and_local_sources(self):
         local = {key: self.remote[key] for key in ("repo", "commit")}
         self.install([self.remote, {"name": "beta", **local}], run=self.remote_run)
