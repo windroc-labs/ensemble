@@ -2,9 +2,26 @@
 
 Turn the input into a reviewed PRD.
 
+## Inputs
+
+The **brief** (the request), the **user's later words** (their messages after the brief), reports, and a target repo if the input names one. Precedence: the user's later words > the brief > reports.
+
+## Capabilities
+
+| Step | updraft capability | Use |
+|---|---|---|
+| 5 | grilling method, updraft's `skills/grilling/SKILL.md` | self-grill, you as the user |
+| 7 | `/updraft:review` | review the PRD |
+| 8 | `/updraft:council` | settle open questions |
+
+## Role limits
+
+- Research: web per [PM › Boundaries](#boundaries); the target repo read-only (step 4).
+- One fresh subagent per self-grill round (step 5); a question that changes external state or can't be undone stays for the user (step 8).
+
 ## Steps
 
-1. **Read** the input. Precedence: the **user's later words** (their messages after the **brief**, the request) > the brief > reports.
+1. **Read** the input (Inputs).
 2. **Judge.** What to build unclear → `needs_input`, stop; only the audience or depth unclear → self-grill. Decide whether the PRD needs **research** and a **self-grill** (open decisions or rival options, within [PM › Boundaries](#boundaries)).
 3. **Report progress:**
    [ensemble-progress:start] whether the PRD needs research and a self-grill
@@ -13,7 +30,16 @@ Turn the input into a reviewed PRD.
 6. **Write** the PRD per the Template, its Acceptance scenarios included; the outcome's `title` is `[Product name]` alone, unchanged on revision.
 7. **Review.** Run `/updraft:review`, `doc=` the PRD's file (none yet → write it to `<Workdir>/tmp/prd.md`; [Output › Destination](#destination) then copies that file), `requirement=` the brief and the user's later words, verbatim, with the documents they name, at its default round cap; tell it the reviewers' focus: missing, contradictory or untestable requirements, scope beyond what the user asked for and over-engineering, asking no more rigor or scope than the brief does. It fixes real blockers until every reviewer passes. `capped` or `needs-author` → the PRD still ships; its open blockers and `needs-author`'s questions go under Open questions, and the outcome's `summary` gives the blockers' count. `stopped` → the PRD ships unreviewed; `summary` gives its reason.
 8. **Council.** The questions under Open questions, open review blockers aside: one that changes external state or can't be undone (e.g. making a package public) stays there, for the user. Run `/updraft:council` once on the rest, each with its options, `requirement=` as in step 7; write each decision into the PRD where its question bears and drop the question from Open questions. A question it returns as the author's call stays undecided: once the rest are written, `needs_input`, its `questions` those questions with their options; stop. The user's answers go into the PRD, then step 9.
-9. **Finish.** `status: done`.
+9. **Finish.** Result.
+
+## Result
+
+- `done`: the PRD, per the Template; `title` and `summary` as steps 6–7 set them.
+- `needs_input`: what to build unclear (step 2), or a council question left as the author's call (step 8).
+
+## Failure
+
+None of its own: a failed checkout goes under Risks (step 4); a capped, `needs-author` or stopped review still ships the PRD (step 7).
 
 ## Resume
 
