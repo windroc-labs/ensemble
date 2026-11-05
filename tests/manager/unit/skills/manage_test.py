@@ -194,7 +194,7 @@ class Manage(Case):
     def test_a_shared_flakes_owner_fixes_its_root_cause_by_the_principle(self):
         flake = rule("A flake or bug that several PRs hit has one owner")
         self.assertIn(
-            "fixes its root cause (updraft's `skills/principle-fix-root-causes/SKILL.md`); ",
+            "fixes its root cause (`/updraft:principle-fix-root-causes`); ",
             flake,
         )
         self.assertNotIn("› Rules", flake)

@@ -54,9 +54,8 @@ HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOCKER_CONFIG_FILE = "opencode.json"
 STORE = f"{STATE}/sessions/opencode"
-# Plugin dirs whose skills OpenCode loads: the image's, else where install.sh puts updraft.
 IMAGE_PLUGINS = "/opt/ensemble/plugins"
-HOST_PLUGINS = f"{STATE}/plugins"
+HOST_PLUGINS = f"{STATE}/plugins"  # install.sh puts updraft here
 BINDING_KEYS = frozenset({"version", "cwd", "sid", "native"})
 BINDING_MAX = 4096
 OLLAMA_PORT = 11434
@@ -387,9 +386,7 @@ class OpenCodeCommon:
         return exe
 
     def inline(self, spec: Spec, context: ClientContext, plugin: str | None = None) -> dict:
-        """Providers, permissions, plugin; API keys from broker files, else auth.json. A read grant
-        also covers the updraft plugin, whose files role runs read.
-        """
+        """Providers, permissions, plugin; API keys from broker files, else auth.json."""
         access = spec.access
         plugins = IMAGE_PLUGINS if context.container else os.path.expanduser(HOST_PLUGINS)
         updraft = os.path.join(plugins, "updraft")
