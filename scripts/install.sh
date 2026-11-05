@@ -305,7 +305,7 @@ ledger_valid() {
     agent-tree:2) [ "$2" = "$HOME/.ensemble" ] ;;
     config:2) case $2 in created | backup) true ;; *) false ;; esac ;;
     formula:2) case $2 in gh | tmux | git | python | go | node) true ;; *) false ;; esac ;;
-    cask:2) case $2 in iterm2 | claude-code | codex | docker-desktop) true ;; *) false ;; esac ;;
+    cask:2) case $2 in claude-code | codex | docker-desktop) true ;; *) false ;; esac ;;
     claude-marketplace:2 | codex-marketplace:2) case $2 in windroc) true ;; *) false ;; esac ;;
     claude-plugin:2 | codex-plugin:2) case $2 in ensemble@windroc | updraft@windroc) true ;; *) false ;; esac ;;
     login:2) case $2 in gh | claude | codex) true ;; *) false ;; esac ;;
@@ -372,7 +372,7 @@ record_dir() { if absent "$1"; then ledger_add dir "$1"; fi; }
 # Records file $1 when it is confirmed missing.
 record_file() { if absent "$1"; then ledger_add file "$1"; fi; }
 
-# Per-user files under ~/Library that Docker Desktop and iTerm2 write once running, from their casks' zap stanzas:
+# Per-user files under ~/Library that Docker Desktop writes once running, from its cask's zap stanza:
 # directories, then files (preferences plists, cookies).
 docker_dirs=("Application Support/Docker Desktop" "Application Support/docker-secrets-engine"
   "Application Support/com.docker.docker" "Application Support/com.bugsnag.Bugsnag"
@@ -384,12 +384,6 @@ docker_dirs=("Application Support/Docker Desktop" "Application Support/docker-se
   "Saved Application State/com.electron.dockerdesktop.savedState")
 docker_files=("HTTPStorages/com.docker.docker.binarycookies" "Preferences/com.docker.docker.plist"
   "Preferences/com.electron.docker-frontend.plist" "Preferences/com.electron.dockerdesktop.plist")
-iterm_dirs=("Application Support/iTerm2" "Application Support/iTerm" "Caches/com.googlecode.iterm2"
-  "HTTPStorages/com.googlecode.iterm2" "WebKit/com.googlecode.iterm2" "Saved Application State/com.googlecode.iterm2.savedState"
-  "Containers/com.googlecode.iterm2.iTermFileProvider" "Containers/iTermAI"
-  "Application Scripts/com.googlecode.iterm2.iTermFileProvider")
-iterm_files=("Preferences/com.googlecode.iterm2.plist" "Preferences/com.googlecode.iterm2.private.plist"
-  "Cookies/com.googlecode.iterm2.binarycookies" "HTTPStorages/com.googlecode.iterm2.binarycookies")
 # What Docker Desktop and Codex write in the parents they share with other tools (~/.docker, CODEX_HOME), recorded
 # when install.sh installs them: directories parent first, then files. The context is desktop-linux's (sha256 of it).
 docker_home_dirs=(bin buildx cli-plugins contexts contexts/meta
@@ -619,12 +613,6 @@ dependencies() {
   formula git
   if python_ok; then skip "python3 is 3.11+"; else brew_install python; fi
   record_dir "$HOME/.config"
-  if [ ! -e "$root/Applications/iTerm.app" ]; then
-    record_dir "$HOME/.config/iterm2"
-    record_in dir "$HOME/Library" "${iterm_dirs[@]}"
-    record_in file "$HOME/Library" "${iterm_files[@]}"
-  fi
-  cask iterm2 "" "$root/Applications/iTerm.app"
 }
 
 # What an existing config.local.toml says: "<[session.hosts] default>\t<[delegate] client>\t<[orchestrator] tracker>".
