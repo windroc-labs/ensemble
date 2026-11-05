@@ -13,7 +13,7 @@ A persona with standards and boundaries (researcher, pm, engineer, verifier), de
 _Avoid_: agent, persona
 
 **Task**:
-One job a role can do (deep research, research, light research, product design, build, light build, verify), defined by its task file's steps and listed in its role's task index.
+One job a role can do (deep research, research, light research, product design, build, light build, verify), defined by its task file, a playbook (inputs, the updraft capabilities its steps use, role limits, steps, result, failure, resume), and listed in its role's task index.
 _Avoid_: skill, job
 
 **Principles**:

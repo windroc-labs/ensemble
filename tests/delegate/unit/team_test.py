@@ -287,6 +287,23 @@ class Acceptance(Packaged):
             self.assertEqual(len(START.findall(text)), 1, name)
             self.assertIn("## Resume", [line.rstrip() for _, line in unfenced(text)], name)
 
+    def test_each_shipped_task_is_a_playbook(self):
+        playbook = ["Inputs", "Capabilities", "Role limits", "Steps", "Result", "Failure", "Resume"]
+        for name in os.listdir(TASKS):
+            text = task_text(name.removesuffix(".md"))
+            heads = [line[3:].rstrip() for _, line in unfenced(text) if line.startswith("## ")]
+            self.assertEqual([h for h in heads if h in playbook], playbook, name)
+            capabilities = section(text, "Capabilities").strip()
+            self.assertTrue(
+                capabilities.startswith(
+                    ("| Step | updraft capability | Use |", "No updraft capability: ")
+                ),
+                name,
+            )
+            steps = section(text, "Steps")
+            for row in re.findall(r"^\| (\d+) \|", capabilities, re.M):
+                self.assertRegex(steps, rf"(?m)^{row}\. \*\*", (name, row))
+
 
 class Shipped(Packaged):
     def test_text_holds_only_the_placeholders_render_fills(self):
@@ -336,22 +353,26 @@ class Shipped(Packaged):
         text = task_text("verify")
         self.assertIn("the `mini-op` skill", text)
         self.assertNotIn("/mini-op:run", text)
-        steps = text.split("## Steps", 1)[1].split("## Resume", 1)[0]
+        steps, result, failure = (section(text, name) for name in ("Steps", "Result", "Failure"))
+        self.assertIn("No clear check → `needs_input`", steps)
         for literal in (
-            "No clear check → `needs_input`",
             "The check ran to its end, passing or not → `status: done`",
             "`summary` opens with the report's Verdict mark, ✅, ❌ or ⚠️",
-            "The check could not run (the mini unreachable, the runbook broke midway, "
-            "the `mini-op` skill missing) → `status: failed`",
             "The request is still unclear → `needs_input`",
             "The `done` deliverable is the report, per the Template.",
             "/run/ensemble/secrets/",
         ):
-            self.assertIn(literal, steps)
-        self.assertNotIn("full text", steps)
+            self.assertIn(literal, result)
+        self.assertIn(
+            "The check could not run (the mini unreachable, the runbook broke midway, "
+            "the `mini-op` skill missing) → `status: failed`",
+            failure,
+        )
+        for part in (steps, result, failure):
+            self.assertNotIn("full text", part)
 
     def test_verify_runs_ops_scenarios_and_reports_each_then(self):
-        steps = task_text("verify").split("## Steps", 1)[1].split("## Resume", 1)[0]
+        steps = section(task_text("verify"), "Steps")
         self.assertIn(
             "`@ops` scenarios, quoted or listed by id (`S-<n>`, then read from the PRD the input "
             "links)",
