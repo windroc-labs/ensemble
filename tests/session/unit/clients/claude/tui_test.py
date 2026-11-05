@@ -240,6 +240,7 @@ class SessionTuiTest(Base):
                         "--allowedTools",
                         "Bash(ls)",
                         "Read(//r1/**)",
+                        f"Read(/{self.config_dir}/plugins/cache/windroc/updraft/**)",
                         "Read",
                         "Edit(/x)",
                         *flags,

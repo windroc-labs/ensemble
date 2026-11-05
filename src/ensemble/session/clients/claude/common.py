@@ -66,6 +66,8 @@ STATE_MAX = 1 << 20
 SETTINGS_MAX = 2 * 1024 * 1024
 TAIL = 4 << 20
 HOME = ClientHome("claude_dir", "claude", "CLAUDE_CONFIG_DIR", "claude-setup-token")
+# Where `claude plugin install updraft@windroc` keeps its versions, under the config dir.
+UPDRAFT = os.path.join("plugins", "cache", "windroc", "updraft")
 DOCKER_DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docker-settings.json")
 # Written over the Docker config: a container worker runs unattended, so no prompt may stop it,
 # none is suggested, and a full context compacts rather than ending the run.
@@ -518,6 +520,7 @@ class ClaudeCommon:
                 dirs=tuple(state["dirs"]),
                 commands=tuple(state["commands"]),
                 reads=tuple(state["reads"]),
+                config_dir=self.config_dir(state["env"]),
                 model=state["model"],
                 effort=state["effort"],
                 name=state["name"],
@@ -573,6 +576,7 @@ class ClaudeCommon:
             dirs=access.dirs,
             commands=access.commands,
             reads=access.reads,
+            config_dir=self.config_dir(merged),
             model=model,
             effort=effort,
             name=spec.name,
@@ -600,6 +604,7 @@ class ClaudeCommon:
         dirs: tuple[str, ...],
         commands: tuple[str, ...],
         reads: tuple[str, ...],
+        config_dir: str,
         model: str | None,
         effort: str | None,
         name: str | None,
@@ -610,6 +615,7 @@ class ClaudeCommon:
     ) -> tuple[str, ...]:
         """One merged --settings (config, mode, `flags`, `hooks`): a repeated one is undefined.
         --mcp-config keeps a project's .mcp.json that --strict-mcp-config would drop.
+        A read grant also covers `config_dir`'s updraft plugin, whose files role runs read.
         """
         if any(flag.word == "--setting-sources" for flag in scan(flags)):
             raise ConfigError("--setting-sources is set by the Claude client: use Access.project")
@@ -619,7 +625,7 @@ class ClaudeCommon:
         mcp = os.path.join(cwd, ".mcp.json")
         allow = (
             *(f"Bash({command})" for command in commands),
-            *_read_rules(reads),
+            *_read_rules((*reads, os.path.join(config_dir, UPDRAFT)) if reads else ()),
             *self.allow,
         )
         strict = any(flag.arg == "--strict-mcp-config" for flag in scan(flags))

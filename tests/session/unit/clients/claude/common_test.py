@@ -430,14 +430,36 @@ class ReadRulesTest(Base):
     def both(self, *, resume=False, config=None, **access) -> list[tuple[str, ...]]:
         return [launch().argv for launch in self.modes(resume=resume, config=config, **access)]
 
+    def updraft(self):
+        return f"Read(/{self.config_dir}/plugins/cache/windroc/updraft/**)"
+
     def test_reads_alone_are_allowed_tools_never_added_dirs(self):
         for argv in self.both(reads=("/r",)):
-            self.assertEqual(argv[-4:], ("--allowedTools", "Read(//r/**)", "--", "hi"))
+            self.assertEqual(
+                argv[-5:], ("--allowedTools", "Read(//r/**)", self.updraft(), "--", "hi")
+            )
             self.assertNotIn("--add-dir", argv)
+
+    def test_a_read_grant_holds_the_accounts_updraft_plugin_and_no_grant_none(self):
+        account = os.path.join(self.tmp, "account")
+        for argv in self.both(reads=("/r",)):
+            self.assertIn(self.updraft(), argv)
+        spec = Spec(
+            workdir=self.work,
+            sid=SID,
+            access=Access(cwd=self.work, reads=("/r",), env={"CLAUDE_CONFIG_DIR": account}),
+            prompt="hi",
+        )
+        argv = ClaudeClient({}).headless().launch(spec).argv
+        self.assertIn(f"Read(/{account}/plugins/cache/windroc/updraft/**)", argv)
+        for argv in self.both():
+            self.assertNotIn("--allowedTools", argv)
 
     def test_the_root_is_one_rule(self):
         for argv in self.both(reads=("/", "//")):
-            self.assertEqual(argv[-4:], ("--allowedTools", "Read(//**)", "--", "hi"))
+            self.assertEqual(
+                argv[-5:], ("--allowedTools", "Read(//**)", self.updraft(), "--", "hi")
+            )
 
     def test_a_symlinked_read_dir_gets_a_rule_for_both_spellings_each_once(self):
         target = os.path.join(self.tmp, "target")
@@ -452,16 +474,31 @@ class ReadRulesTest(Base):
             with self.subTest(reads=reads):
                 for argv in self.both(reads=reads):
                     self.assertEqual(
-                        argv[-5:],
-                        ("--allowedTools", *(f"Read(/{d}/**)" for d in dirs), "--", "hi"),
+                        argv[-6:],
+                        (
+                            "--allowedTools",
+                            *(f"Read(/{d}/**)" for d in dirs),
+                            self.updraft(),
+                            "--",
+                            "hi",
+                        ),
                     )
 
     def test_a_resume_keeps_the_rules(self):
         for argv in self.both(resume=True, config=CONFIG, commands=("ls",), reads=("/r",)):
             self.assertEqual(argv[1 + argv.index("--resume")], SID)
             self.assertEqual(
-                argv[-7:],
-                ("--allowedTools", "Bash(ls)", "Read(//r/**)", "Read", "Edit(/x)", "--", "hi"),
+                argv[-8:],
+                (
+                    "--allowedTools",
+                    "Bash(ls)",
+                    "Read(//r/**)",
+                    self.updraft(),
+                    "Read",
+                    "Edit(/x)",
+                    "--",
+                    "hi",
+                ),
             )
 
     def test_a_read_dir_a_rule_cannot_hold_literally_is_refused_before_any_launch(self):
@@ -896,7 +933,10 @@ class ResumeTest(Base):
         self.client = ClaudeClient({**self.client.config, "allow": ["Read"]})
         access = dataclasses.replace(self.spec.access, commands=("git status",), reads=("/r",))
         argv = self.resumed_argv(access=access)
-        self.assertEqual(argv[-4:], ["--allowedTools", "Bash(git status)", "Read(//r/**)", "Read"])
+        updraft = f"Read(/{self.config_dir}/plugins/cache/windroc/updraft/**)"
+        self.assertEqual(
+            argv[-5:], ["--allowedTools", "Bash(git status)", "Read(//r/**)", updraft, "Read"]
+        )
 
     def test_the_resume_merges_the_runs_settings_without_its_hooks(self):
         self.client = ClaudeClient({**self.client.config, "flags": ["--settings", PLUGIN]})
