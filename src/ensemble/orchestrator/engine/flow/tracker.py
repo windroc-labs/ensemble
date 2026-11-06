@@ -48,8 +48,10 @@ class Tracker(ABC):
         """Raises the adapter's error: none, or another's."""
 
     @abstractmethod
-    def search(self, words: Sequence[str], idents: Sequence[str]) -> tuple[Found, ...]:
-        """Archived too; idents: this board's."""
+    def search(
+        self, words: Sequence[str], idents: Sequence[str], *, home: str | None
+    ) -> tuple[Found, ...]:
+        """This home's issues, archived too; None: unfiled. idents: this board's."""
 
     @abstractmethod
     def description(self, ident: str) -> str | None: ...

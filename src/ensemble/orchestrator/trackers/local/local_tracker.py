@@ -194,7 +194,7 @@ class LocalTracker(Tracker):
             handoff=parse_handoff(found.description),
         )
 
-    def search(self, words, idents):
+    def search(self, words, idents, *, home):
         files = self.files().values()
         lower = [w.lower() for w in words]
         matched = [

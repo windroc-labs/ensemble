@@ -272,7 +272,14 @@ class ClaimLinear(FakeLinear):
 
 
 def searched(*words):
-    return ("search", HARNESS, {"t": " ".join(words), "f": {"team": {"id": {"eq": TEAM}}}})
+    return (
+        "search",
+        HARNESS,
+        {
+            "t": " ".join(words),
+            "f": {"team": {"id": {"eq": TEAM}}, "project": {"id": {"eq": PROJECT}}},
+        },
+    )
 
 
 def two():

@@ -1,4 +1,4 @@
-"""An issue's first-claim search: the board's issues (through the engine Tracker), docs and merged PRs
+"""An issue's first-claim search: its home's issues (through the engine Tracker), docs and merged PRs
 its title words or the ids its description names match, minus its upstream chain; inputs.render
 lists them as Related work.
 """
@@ -151,7 +151,7 @@ def search(tracker, issue, cfg, *, target, run) -> Related:
     words, ids = keywords(issue.title), _mentioned(issue)
     if not words and not ids:
         return Related()
-    nodes = tracker.search(words, ids)
+    nodes = tracker.search(words, ids, home=issue.home)
     chain = _chain(tracker, issue)
     excluded, found = {issue.identifier, *chain}, {}
     for n in nodes:

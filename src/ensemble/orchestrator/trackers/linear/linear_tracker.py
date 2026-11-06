@@ -572,10 +572,13 @@ class LinearTracker(Tracker):
             labels=tuple(n["id"] for n in node["labels"]["nodes"]),
         )
 
-    def search(self, words, idents):
+    def search(self, words, idents, *, home):
         if not words and not idents:
             return ()
-        f = {"team": {"id": {"eq": _need("team_id", self.team_id)}}}
+        f = {
+            "team": {"id": {"eq": _need("team_id", self.team_id)}},
+            "project": {"null": True} if home is None else {"id": {"eq": home}},
+        }
         n = {**f, "number": {"in": [int(i.rsplit("-", 1)[1]) for i in idents]}}
         if words and idents:
             data = self.gql(Q_SEARCH_IDS, t=" ".join(words), f=f, n=n)

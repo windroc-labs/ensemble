@@ -30,7 +30,7 @@ DOCS = Docs("windroc/team-docs", "main", {"researcher": "Research/", "pm": "Prod
 CFG = SimpleNamespace(docs=DOCS)
 BASE = "https://github.com/windroc/team-docs/blob/main/"
 TARGET = Target("acme", "ensemble")
-TEAM_F = {"team": {"id": {"eq": TEAM}}}
+PROJECT_F = {"team": {"id": {"eq": TEAM}}, "project": {"id": {"eq": "p-1"}}}
 RESEARCH = ("gh", "api", "repos/windroc/team-docs/contents/Research?ref=main")
 DESIGN = ("gh", "api", "repos/windroc/team-docs/contents/Product%20Design?ref=main")
 PRS = ("gh", "search", "prs")
@@ -145,7 +145,11 @@ class Search(Case):
             [
                 (
                     linear_tracker.Q_SEARCH_IDS,
-                    {"t": "queue backends", "f": TEAM_F, "n": {**TEAM_F, "number": {"in": [30]}}},
+                    {
+                        "t": "queue backends",
+                        "f": PROJECT_F,
+                        "n": {**PROJECT_F, "number": {"in": [30]}},
+                    },
                 )
             ],
         )
@@ -155,8 +159,31 @@ class Search(Case):
         gql = Gql(found=[node("TASK-3")])
         search(issue(), gql, run())
         self.assertEqual(
-            gql.calls, [(linear_tracker.Q_SEARCH, {"t": "queue backends", "f": TEAM_F})]
+            gql.calls, [(linear_tracker.Q_SEARCH, {"t": "queue backends", "f": PROJECT_F})]
         )
+
+    def test_search_scope_follows_the_issue_project(self):
+        for project in ("p-2", None):
+            with self.subTest(project=project):
+                gql = Gql()
+                search(issue(project=project, description="See TASK-30"), gql, run())
+                scope = {
+                    "team": {"id": {"eq": TEAM}},
+                    "project": {"null": True} if project is None else {"id": {"eq": project}},
+                }
+                self.assertEqual(
+                    gql.calls,
+                    [
+                        (
+                            linear_tracker.Q_SEARCH_IDS,
+                            {
+                                "t": "queue backends",
+                                "f": scope,
+                                "n": {**scope, "number": {"in": [30]}},
+                            },
+                        )
+                    ],
+                )
 
     def test_candidate_fields_come_from_the_search(self):
         gql = Gql(
@@ -365,7 +392,7 @@ class Search(Case):
         gh = run()
         got = search(issue(title="Of the", description="see TASK-30"), gql, gh, TARGET)
         self.assertEqual(
-            gql.calls, [(linear_tracker.Q_IDS, {"n": {**TEAM_F, "number": {"in": [30]}}})]
+            gql.calls, [(linear_tracker.Q_IDS, {"n": {**PROJECT_F, "number": {"in": [30]}}})]
         )
         self.assertEqual([f.identifier for f in got.issues], ["TASK-30"])
         self.assertEqual(gh.calls, [(RESEARCH, SHORT), (DESIGN, SHORT)])

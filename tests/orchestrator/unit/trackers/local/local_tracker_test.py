@@ -359,7 +359,7 @@ class Reads(Board):
         )
         self.write("pm/review", "LOC-3", description="nothing", comments=canceled)
         self.write("me/backlog", "LOC-4", description="parser")
-        got = self.tracker.search(["parser", "Bug"], ["LOC-3"])
+        got = self.tracker.search(["parser", "Bug"], ["LOC-3"], home=None)
         self.assertEqual(
             got,
             (
@@ -370,9 +370,9 @@ class Reads(Board):
                 ),
             ),
         )
-        self.assertEqual(self.tracker.search([], []), ())
+        self.assertEqual(self.tracker.search([], [], home=None), ())
         self.assertEqual(
-            [(f.identifier, f.group) for f in self.tracker.search(["title"], [])],
+            [(f.identifier, f.group) for f in self.tracker.search(["title"], [], home=None)],
             [
                 ("LOC-2", Group.CANCELED),
                 ("LOC-4", Group.BACKLOG),
@@ -384,14 +384,16 @@ class Reads(Board):
     def test_search_caps_matches_at_ten(self):
         for n in range(1, 13):
             self.write("pm/ready", f"LOC-{n}")
-        self.assertEqual(len(self.tracker.search(["title"], [])), 10)
-        self.assertEqual(len(self.tracker.search(["title"], ["LOC-1", "LOC-2"])), 12)
+        self.assertEqual(len(self.tracker.search(["title"], [], home=None)), 10)
+        self.assertEqual(len(self.tracker.search(["title"], ["LOC-1", "LOC-2"], home=None)), 12)
 
     def test_search_groups(self):
         for n, rel in enumerate(("pm/running", "pm/approved", "pm/done", "pm/backlog"), 1):
             self.write(rel, f"LOC-{n}")
         self.write("archive", "LOC-5")
-        got = {f.identifier: (f.state, f.group) for f in self.tracker.search(["title"], [])}
+        got = {
+            f.identifier: (f.state, f.group) for f in self.tracker.search(["title"], [], home=None)
+        }
         self.assertEqual(
             got,
             {
