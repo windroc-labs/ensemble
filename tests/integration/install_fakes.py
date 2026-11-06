@@ -31,7 +31,7 @@ PREFIX = ROOT / "opt/homebrew"
 BROKER = ROOT / "usr/local/libexec/ensemble/ensemble-broker"
 APPS = {"gh": "gh", "tmux": "tmux", "git": "git", "go": "go", "python": "python3", "node": "npm"}
 CASKS = {"claude-code": "claude", "codex": "codex", "docker-desktop": "docker"}
-CASK_APPS = {"docker-desktop": "Docker.app", "iterm2": "iTerm.app"}
+CASK_APPS = {"docker-desktop": "Docker.app"}
 # The ensemble files the installer reads from GitHub: refs/<ref>/<file>, else pkg-src/<file>.
 ENSEMBLE_FILES = (
     ".claude-plugin/plugin.json",

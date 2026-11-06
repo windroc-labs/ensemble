@@ -162,23 +162,6 @@ sudo mkdir -p "$target"
 chmod 755 "$target/ensemble-broker"
 """
 LAUNCHERS_SKIPPED = "    skip: launchers in ~/.ensemble/bin\n"
-ITERM_DIRS = (
-    "Application Support/iTerm2",
-    "Application Support/iTerm",
-    "Caches/com.googlecode.iterm2",
-    "HTTPStorages/com.googlecode.iterm2",
-    "WebKit/com.googlecode.iterm2",
-    "Saved Application State/com.googlecode.iterm2.savedState",
-    "Containers/com.googlecode.iterm2.iTermFileProvider",
-    "Containers/iTermAI",
-    "Application Scripts/com.googlecode.iterm2.iTermFileProvider",
-)
-ITERM_FILES = (
-    "Preferences/com.googlecode.iterm2.plist",
-    "Preferences/com.googlecode.iterm2.private.plist",
-    "Cookies/com.googlecode.iterm2.binarycookies",
-    "HTTPStorages/com.googlecode.iterm2.binarycookies",
-)
 SECRET_Q = r"password data for new item:"
 SLOTS = ("harness", "manager", "researcher", "pm", "engineer")
 STATES = ("Backlog", "Todo", "In Progress", "In Review", "Handoff", "Done", "Canceled")
@@ -783,7 +766,6 @@ class InstallTest(Case):
                 "brew install gh",
                 "brew install tmux",
                 "brew install git",
-                "brew install --cask iterm2",
                 "brew install --cask claude-code",
                 "brew install --cask codex",
             ],
@@ -5060,10 +5042,6 @@ exec /bin/rm "$@"
                 "formula\ttmux",
                 "formula\tgit",
                 f"dir\t{h}/.config",
-                f"dir\t{h}/.config/iterm2",
-                *(f"dir\t{h}/Library/{path}" for path in ITERM_DIRS),
-                *(f"file\t{h}/Library/{path}" for path in ITERM_FILES),
-                "cask\titerm2",
                 "config\tcreated",
                 f"dir\t{h}/.config/gh",
                 f"dir\t{h}/.claude",
@@ -5347,7 +5325,7 @@ exec /bin/rm "$@"
         self.assertEqual(self.snapshot(), files)
 
     def test_cleanup_round_trip_leaves_no_docker_files(self):
-        """Docker Desktop's and iTerm2's own files go; a shell rc there before keeps its own lines."""
+        """Docker Desktop's files go; user iTerm2 files and existing shell rc lines stay."""
         bashrc = Path(self.home, ".bashrc")
         bashrc.write_text("export EDITOR=vim\n")
         self.assert_ok(self.fresh("--docker", logins=[(PEM_Q, "")]))
@@ -5359,20 +5337,25 @@ exec /bin/rm "$@"
         ]
         self.assertTrue(all(path.exists() for path in written))
         self.assertIn("by Docker Desktop", bashrc.read_text())
-        for path in ("Preferences/com.googlecode.iterm2.plist", "Application Support/iTerm2/x"):
-            (library / path).parent.mkdir(parents=True, exist_ok=True)
-            (library / path).write_text("iTerm2")
+        iterm_files = [
+            library / "Preferences/com.googlecode.iterm2.plist",
+            library / "Application Support/iTerm2/x",
+        ]
+        for path in iterm_files:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("iTerm2")
         self.assertIn(f"profile-file\t{self.home}/.zshrc", self.ledger())
         self.assertIn(f"docker-block\t{bashrc}", self.ledger())
         result = self.cleanup("--yes")
         self.assert_ok(result)
-        for path in [*written, library / "Preferences/com.googlecode.iterm2.plist"]:
+        for path in written:
             self.assertFalse(path.exists(), path)
         self.assertFalse((library / "Application Support/Docker Desktop").exists())
-        self.assertFalse((library / "Application Support/iTerm2").exists())
+        for path in iterm_files:
+            self.assertEqual(path.read_text(), "iTerm2")
         self.assertEqual(bashrc.read_text(), "export EDITOR=vim\n")
         self.assertIn("defaults delete com.docker.docker", self.calls())
-        self.assertIn("defaults delete com.googlecode.iterm2", self.calls())
+        self.assertNotIn("defaults delete com.googlecode.iterm2", self.calls())
 
     def test_cl2_cleanup_removes_installed_egress(self):
         """The egress proxy install.sh created goes; worker images and workspace volumes stay."""
