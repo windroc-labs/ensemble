@@ -1879,29 +1879,29 @@ def candidate(ident, state, kind, *, urls=(), comment=None):
     }
 
 
-TEAM_F = {"team": {"id": {"eq": TEAM}}}
+PROJECT_F = {"team": {"id": {"eq": TEAM}}, "project": {"id": {"eq": "p-1"}}}
 
 
 class Search(Case):
-    def search(self, words, idents, **replies):
+    def search(self, words, idents, *, home="p-1", **replies):
         gql = Gql(**replies)
-        return gql, LinearTracker(gql, states=STATES, team_id=TEAM).search(words, idents)
+        return gql, LinearTracker(gql, states=STATES, team_id=TEAM).search(words, idents, home=home)
 
     def test_the_query_follows_words_and_idents(self):
         found = {"searchIssues": {"nodes": [candidate("TASK-3", STATES["done"], "completed")]}}
         named = {"issues": {"nodes": [candidate("TASK-30", STATES["done"], "completed")]}}
         both = found | named
-        numbers = {**TEAM_F, "number": {"in": [30, 4]}}
+        numbers = {**PROJECT_F, "number": {"in": [30, 4]}}
         cases = (
             (
                 ("a", "b"),
                 ("TASK-30", "TASK-4"),
                 {"Q_SEARCH_IDS": both},
                 "Q_SEARCH_IDS",
-                {"t": "a b", "f": TEAM_F, "n": numbers},
+                {"t": "a b", "f": PROJECT_F, "n": numbers},
                 ["TASK-3", "TASK-30"],
             ),
-            (("a",), (), {"Q_SEARCH": found}, "Q_SEARCH", {"t": "a", "f": TEAM_F}, ["TASK-3"]),
+            (("a",), (), {"Q_SEARCH": found}, "Q_SEARCH", {"t": "a", "f": PROJECT_F}, ["TASK-3"]),
             ((), ("TASK-30", "TASK-4"), {"Q_IDS": named}, "Q_IDS", {"n": numbers}, ["TASK-30"]),
         )
         for words, idents, replies, name, variables, idents_found in cases:
