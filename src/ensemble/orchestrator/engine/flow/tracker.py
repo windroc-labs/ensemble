@@ -51,7 +51,7 @@ class Tracker(ABC):
     def search(
         self, words: Sequence[str], idents: Sequence[str], *, home: str | None
     ) -> tuple[Found, ...]:
-        """This home's issues, archived too; None: unfiled. idents: this board's."""
+        """Home's issues, archived too; None: unfiled. Board idents."""
 
     @abstractmethod
     def description(self, ident: str) -> str | None: ...
