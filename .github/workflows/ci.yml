@@ -100,10 +100,7 @@ jobs:
         if: ${{ !cancelled() && matrix.group == 'style' }}
         env:
           BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || github.event.before }}
-        run: |
-          scope=(--base "$BASE_REF")
-          if grep -q '^\.github/checks/python/' <<< "$(git diff --name-only "$BASE_REF"...HEAD)"; then scope=(--all); fi
-          python3 .github/checks/python/comment-budget/comment_budget.py "${scope[@]}"
+        run: python3 .github/checks/python/comment-budget/comment_budget.py --base "$BASE_REF"
       - name: Ruff
         if: ${{ !cancelled() && matrix.group == 'style' }}
         run: |
