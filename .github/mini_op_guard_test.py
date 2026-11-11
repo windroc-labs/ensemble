@@ -344,13 +344,13 @@ class PullRequestTest(Tree):
                 self.assertNotIn("main; id", out)
 
 
-WORKFLOW = guard.ROOT / ".github/workflows/test.yml"
+WORKFLOW = guard.ROOT / ".github/workflows/ci.yml"
 PR_TEXT = guard.ROOT / ".github/workflows/mini-op-pr-text.yml"
 
 
 def job_block(text, name):
     found = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  \S|\Z)", text)
-    assert found, f"test.yml has no job {name}"
+    assert found, f"ci.yml has no job {name}"
     return found[1]
 
 

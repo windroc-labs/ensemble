@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Test commands and tool pins: [verification workflow](.github/workflows/test.yml); Python test selection: `python3 .github/run_tests.py --help`.
+Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); Python test selection: `python3 .github/run_tests.py --help`.
 
 ## Gotchas
 

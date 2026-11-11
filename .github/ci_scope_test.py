@@ -25,7 +25,7 @@ MANIFESTS = {
     ".codex-plugin/plugin.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "interface": {"version": "1"}\n}\n',
     "package.json": '{\n  "name": "ensemble",\n  "version": "0.3.0",\n  "private": true\n}\n',
 }
-WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/test.yml"
+WORKFLOW = Path(scope.__file__).resolve().parent / "workflows/ci.yml"
 
 
 def bumped(text, version="0.4.0"):
@@ -238,7 +238,7 @@ class Repository(unittest.TestCase):
             (["src/ensemble/session/cli.py"], "pull_request", True),
             (["src/broker/main.go"], "pull_request", True),
             (["src/broker/protocol/docker-broker/request.schema.json"], "pull_request", True),
-            ([".github/workflows/test.yml"], "pull_request", True),
+            ([".github/workflows/ci.yml"], "pull_request", True),
             (["README.md", "src/broker/go.mod"], "pull_request", True),
             ([], "pull_request", True),
             (["README.md"], "push", True),
@@ -650,7 +650,7 @@ PUSH_ADVISORY = "continue-on-error: ${{ github.event_name == 'push' }}\n"
 
 def job(name):
     found = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  \S|\Z)", WORKFLOW.read_text())
-    assert found, f"test.yml has no job {name}"
+    assert found, f"ci.yml has no job {name}"
     return found[1]
 
 

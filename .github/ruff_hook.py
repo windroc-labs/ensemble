@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-WORKFLOW = Path(__file__).resolve().parent / "workflows" / "test.yml"
+WORKFLOW = Path(__file__).resolve().parent / "workflows" / "ci.yml"
 PIN = re.compile(r"\bruff==([0-9][\w.+-]*)")
 REGULAR = {b"100644", b"100755"}
 

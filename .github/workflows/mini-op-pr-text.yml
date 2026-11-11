@@ -1,6 +1,6 @@
 name: mini-op PR text
 
-# Apart from CI (test.yml), so a PR title or body edit reruns only this scan. Skipped on queue
+# Apart from CI (ci.yml), so a PR title or body edit reruns only this scan. Skipped on queue
 # groups, which have no PR text; a skipped required check passes.
 on:
   pull_request:
