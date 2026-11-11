@@ -1,0 +1,4 @@
+source_percent = 10
+test_percent = 5
+allowance_chars = 300
+test_paths = ["**/tests/**", "**/*_test.py"]
