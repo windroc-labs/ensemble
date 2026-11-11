@@ -150,7 +150,6 @@
   "tests.integration.cli_help_integration_test.HelpSafety.test_orchestrator_help_without_credentials_services_terminal_or_manager": 16.7005,
   "tests.integration.cli_help_integration_test.HelpSafety.test_session_help_with_malformed_test_owned_configuration": 13.3952,
   "tests.integration.cli_help_integration_test.HelpSafety.test_session_help_without_credentials_services_terminal_or_manager": 16.0798,
-  "tests.integration.comment_budget_integration_test.Main.test_each_changed_file_is_judged_alone": 0.1207,
   "tests.integration.github_runner_integration_test.Supervise.test_a_crash_after_all_tests_pass_is_annotated_with_the_last_test_and_stack": 0.2215,
   "tests.integration.github_runner_integration_test.Supervise.test_a_crash_in_a_test_names_that_test": 0.1518,
   "tests.integration.github_runner_integration_test.Supervise.test_a_plain_failure_or_success_adds_no_crash_annotation": 0.7301,

@@ -14,6 +14,10 @@ select = [
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
+[tool.ruff.lint.per-file-ignores]
+# Checks copied verbatim from windroc-labs/repo-guards: fix upstream, not here.
+".github/checks/**" = ["FBT003"]
+
 [tool.ruff.format]
 
 [tool.pyright]
