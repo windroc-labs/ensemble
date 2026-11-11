@@ -83,11 +83,27 @@ jobs:
       - name: Protect shipped source
         if: ${{ !cancelled() }}
         run: chmod -R a-w src
+      - name: Workflow changes in their own PR
+        if: ${{ !cancelled() && matrix.group == 'style' && github.event_name != 'push' }}
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE_REF"...HEAD)
+          workflows=$(grep '^\.github/workflows/' <<< "$changed" || true)
+          others=$(grep -v '^\.github/workflows/' <<< "$changed" || true)
+          if [[ -n "$workflows" && -n "$others" ]]; then
+            echo "::error::A PR that changes .github/workflows/ must change nothing else"
+            printf 'Workflow files:\n%s\nOther files:\n%s\n' "$workflows" "$others"
+            exit 1
+          fi
       - name: Comment budget
         if: ${{ !cancelled() && matrix.group == 'style' }}
         env:
           BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || github.event.before }}
-        run: python3 .github/checks/python/comment-budget/comment_budget.py --base "$BASE_REF"
+        run: |
+          scope=(--base "$BASE_REF")
+          if grep -q '^\.github/checks/python/' <<< "$(git diff --name-only "$BASE_REF"...HEAD)"; then scope=(--all); fi
+          python3 .github/checks/python/comment-budget/comment_budget.py "${scope[@]}"
       - name: Ruff
         if: ${{ !cancelled() && matrix.group == 'style' }}
         run: |
