@@ -53,7 +53,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 Add verbatim, placeholders filled in:
 
 ```
-Work only in `<worktree>` on branch `<branch>`, with absolute paths; create no other clone, worktree or branch.
+Work only in `<worktree>` on branch `<branch>`, with absolute paths; create no other clone, worktree or branch of this repo. You may clone other repos read-only into `<Workdir>/tmp/` for reference; never commit, create a branch or push in them.
 Commits merged from `origin/<base>` are not this build's work.
 Your and your producers' local checks, in every phase: only lint and the unit tests of the projects you changed; never integration tests or full suites: the verification reviewer runs them, on the PR's CI when the repo has a `pull_request` workflow, else locally.
 Ask for no pull request: the caller opens it, onto `<base>`.

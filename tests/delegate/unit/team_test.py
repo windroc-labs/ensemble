@@ -520,7 +520,8 @@ class Shipped(Packaged):
         lines = (
             (
                 "Work only in `<worktree>` on branch `<branch>`, with absolute paths; create no other clone, worktree "
-                "or branch."
+                "or branch of this repo. You may clone other repos read-only into `<Workdir>/tmp/` for reference; "
+                "never commit, create a branch or push in them."
             ),
             "Commits merged from `origin/<base>` are not this build's work.",
             "Your and your producers' local checks, in every phase: only lint and the unit tests of the projects "
