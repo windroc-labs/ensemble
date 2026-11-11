@@ -7,7 +7,7 @@ from unittest import mock
 
 import ruff_hook
 
-WORKFLOW = Path(__file__).resolve().parent / "workflows" / "test.yml"
+WORKFLOW = Path(__file__).resolve().parent / "workflows" / "ci.yml"
 
 
 class PinnedVersion(unittest.TestCase):

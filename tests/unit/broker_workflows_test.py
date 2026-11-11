@@ -20,25 +20,25 @@ def steps(block):
 
 class BrokerJob(Case):
     def test_broker_job_runs_pinned_staticcheck_unswallowed(self):
-        for workflow in ("test.yml", "broker-macos.yml"):
+        for workflow in ("ci.yml", "broker-macos.yml"):
             with self.subTest(workflow=workflow):
                 block = job(workflow, "broker")
                 found = steps(block)
                 names = list(found)
                 for name in ("Go vet", "Go test"):
                     self.assertIn(name, names)
-                self.assertEqual("Gofmt" in names, workflow == "test.yml")
+                self.assertEqual("Gofmt" in names, workflow == "ci.yml")
                 self.assertEqual(names.index("Staticcheck"), names.index("Go vet") + 1)
                 self.assertIn(f"        run: {STATICCHECK}\n", found["Staticcheck"])
                 self.assertNotIn("continue-on-error", block)
 
     def test_broker_jobs_skip_runners_and_gate_outside_scope(self):
-        block = job("test.yml", "broker")
+        block = job("ci.yml", "broker")
         self.assertIn("    needs: [changes]\n", block)
         self.assertIn("    if: ${{ needs.changes.outputs.broker == 'true' }}", block)
-        self.assertRegex(job("test.yml", "ci"), r"needs:.*\bbroker\b")
+        self.assertRegex(job("ci.yml", "ci"), r"needs:.*\bbroker\b")
         self.assertIn("    runs-on: ubuntu-24.04", block)
-        self.assertIn("broker: ${{ steps.scope.outputs.broker }}", job("test.yml", "changes"))
+        self.assertIn("broker: ${{ steps.scope.outputs.broker }}", job("ci.yml", "changes"))
         found = steps(block)
         self.assertIn(
             'run: sh with-go-state.sh go build -trimpath -o "$RUNNER_TEMP/ensemble-broker" .',

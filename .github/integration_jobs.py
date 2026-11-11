@@ -16,7 +16,7 @@ import ci_scope
 import run_tests
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / ".github/workflows/test.yml"
+WORKFLOW = ROOT / ".github/workflows/ci.yml"
 DURATIONS = ROOT / ".github/integration_durations.json"
 
 
