@@ -7,7 +7,12 @@ from pathlib import Path
 import comment_budget as budget
 from comment_budget import Config, Counts, Error, Options, chars, glob, measure, parse
 
-DEFAULT = (Path(__file__).resolve().parent.parent / "comment-budget.toml").read_text()
+DEFAULT = """\
+source_percent = 10
+test_percent = 5
+allowance_chars = 300
+test_paths = ["**/tests/**", "**/test_*.py", "**/*_test.py"]
+"""
 
 
 def counts(comment, code):
@@ -15,7 +20,7 @@ def counts(comment, code):
 
 
 def source(text):
-    m = measure(text, False)
+    m = measure(text, whole_file_is_test=False)
     assert m.tests == Counts(), text
     return m.source
 
@@ -54,15 +59,15 @@ class Measuring(unittest.TestCase):
     def test_unparsable_files_are_errors(self):
         for text in ('"""open', "x = (", "def f(:\n"):
             with self.subTest(text=text):
-                self.assertRaises(Error, measure, text, False)
+                self.assertRaises(Error, measure, text, whole_file_is_test=False)
 
     def test_a_test_path_counts_the_whole_file_as_tests(self):
-        m = measure("x = 1  # a\n", True)
+        m = measure("x = 1  # a\n", whole_file_is_test=True)
         self.assertEqual((m.source, m.tests), (Counts(), counts("# a", "x = 1")))
 
 
 class Configuring(unittest.TestCase):
-    def test_the_template_config_parses(self):
+    def test_a_config_with_the_default_values_parses(self):
         self.assertEqual(
             budget.parse_config(DEFAULT),
             Config(10, 5, 300, ["**/tests/**", "**/test_*.py", "**/*_test.py"]),
@@ -113,10 +118,10 @@ class Configuring(unittest.TestCase):
         self.assertTrue(glob("*é*", "xéy"))
 
     def test_arguments_have_defaults_and_overrides(self):
-        self.assertEqual(parse([]), Options("origin/main", None, False))
+        self.assertEqual(parse([]), Options("origin/main", None, all=False))
         self.assertEqual(
             parse(["--base", "HEAD", "--config", "c.toml", "--all"]),
-            Options("HEAD", "c.toml", True),
+            Options("HEAD", "c.toml", all=True),
         )
         for bad in ("--base", "--config", "--source-limit 1", "--nope"):
             with self.subTest(bad=bad):
