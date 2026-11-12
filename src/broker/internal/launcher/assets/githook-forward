@@ -1,0 +1,5 @@
+#!/bin/sh
+# core.hooksPath names this file's directory: run the repository's own .githooks/<name>, as hooksPath .githooks did.
+hook=".githooks/${0##*/}"
+[ -f "$hook" ] && [ -x "$hook" ] || exit 0
+exec "./$hook" "$@"

@@ -26,7 +26,7 @@ COPY src/ensemble/delegate /opt/ensemble/src/ensemble/delegate
 COPY src/ensemble/orchestrator /opt/ensemble/src/ensemble/orchestrator
 COPY plugin-sources.json /opt/ensemble/plugin-sources.json
 COPY .claude-plugin/plugin.json /opt/ensemble/version.json
-COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble /opt/ensemble/lib/
+COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble pre-push-scan repo-guards-scan githook-forward /opt/ensemble/lib/
 COPY claude.json /opt/ensemble/templates/.claude.json
 ARG CLAUDE_VERSION
 ARG CODEX_VERSION
@@ -57,9 +57,15 @@ RUN python3 -m venv --system-site-packages /opt/ensemble/venv && mkdir -p /opt/e
     && ln -s /opt/ensemble/lib/gh /opt/ensemble/bin/gh \
     && ln -s /opt/ensemble/lib/git-credential-ensemble /opt/ensemble/bin/git-credential-ensemble \
     && printf '%s\n' '[credential]' 'helper = /opt/ensemble/bin/git-credential-ensemble' 'useHttpPath = true' >> /etc/gitconfig \
-    && printf '%s\n' '[core]' 'hooksPath = .githooks' >> /etc/gitconfig \
+    && mkdir /opt/ensemble/githooks && ln -s /opt/ensemble/lib/pre-push-scan /opt/ensemble/githooks/pre-push \
+    && for name in applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg \
+         post-commit pre-rebase post-checkout post-merge pre-receive update proc-receive post-receive post-update \
+         reference-transaction push-to-checkout pre-auto-gc post-rewrite sendemail-validate post-index-change; do \
+         ln -s /opt/ensemble/lib/githook-forward "/opt/ensemble/githooks/$name" || exit 1; \
+       done \
+    && printf '%s\n' '[core]' 'hooksPath = /opt/ensemble/githooks' >> /etc/gitconfig \
     && printf '%s\n' 'PATH=/opt/ensemble/bin:$PATH' > /etc/profile.d/ensemble.sh \
-    && chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/ensemble-orchestrator /opt/ensemble/bin/python3 /opt/ensemble/lib/with-secrets /opt/ensemble/lib/hook-stub /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble \
+    && chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/ensemble-orchestrator /opt/ensemble/bin/python3 /opt/ensemble/lib/with-secrets /opt/ensemble/lib/hook-stub /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble /opt/ensemble/lib/pre-push-scan /opt/ensemble/lib/githook-forward \
     && chmod -R a+rX /opt/ensemble/codex-plugins \
     && chmod -R a+rX /opt/ensemble/claude-plugins \
     && chmod -R a+rX /opt/ensemble/plugins \
