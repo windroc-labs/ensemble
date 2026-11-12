@@ -148,11 +148,11 @@ def prompt(name: str, source: str, *, manual: bool = False, guidelines: str | No
     return text if guidelines is None else text + GUIDELINES.format(path=guidelines)
 
 
-def guidelines() -> str | None:
+def guidelines_path() -> str | None:
     try:
         with open(os.path.expanduser(LOCAL), "rb") as f:
             table = tomllib.load(f).get("manager")
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     path = table.get("guidelines") if isinstance(table, dict) else None
     if not isinstance(path, str) or not path or UNSAFE.search(path):
@@ -232,8 +232,8 @@ def main(argv: tuple[str, ...] = ()) -> int:
         if name is None:
             text = hint
         else:
-            guide = guidelines() if source == "compact" else None
-            text = prompt(name, source, manual="--mode" in found, guidelines=guide)
+            path = guidelines_path() if source == "compact" else None
+            text = prompt(name, source, manual="--mode" in found, guidelines=path)
         context = {"hookEventName": "SessionStart", "additionalContext": text}
         data = (json.dumps({"hookSpecificOutput": context}) + "\n").encode()
         while data:

@@ -301,6 +301,7 @@ class GuidelinesTest(Case):
             "backtick": f"[manager]\nguidelines = {json.dumps(self.guide('a`b.md'))}\n",
             "newline": f"[manager]\nguidelines = {json.dumps(self.guide('a' + chr(10) + 'b.md'))}\n",
             "malformed": "[manager\n",
+            "deep nesting": "a = " + "[" * 100_000,
             "not UTF-8": b'[manager]\nguidelines = "\xff"\n',
         }
         for label, text in cases.items():
