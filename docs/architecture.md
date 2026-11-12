@@ -70,6 +70,12 @@ without `env`, no environment secret is delivered. The broker audits their injec
 Session saves both declarations on the host for resume/reopen; later configuration
 changes affect new runs. The removed environment and manifest `secrets` fields have no compatibility path.
 
+A worker image's system git config sets `core.hooksPath` to `/opt/ensemble/githooks`. Its `pre-push`
+([`pre-push-scan`](../src/broker/internal/launcher/assets/pre-push-scan)) runs the vendored repo-guards
+scanner's leak checks over the blobs, messages and emails a push adds, unless GitHub reports the target private
+or internal, and reads the private-name list from the `env` item `repo-guards-private-names`. Every other hook
+name forwards to the repository's own `.githooks/<name>`, as does the scan's `pre-push` once clean.
+
 GitHub container tokens use the same merged request, with a `github` declaration (`app`, `permissions`); its token
 reaches every repository of the App's installations. Without `github`, no GitHub token is delivered.
 The broker signs, renews and revokes the declared tokens and returns the App bot's commit/PR identity in its start

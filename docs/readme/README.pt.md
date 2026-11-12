@@ -81,6 +81,27 @@ Gere uma chave privada, anote o App ID e importe-os:
 
 Exclua o PEM após a importação. A [rotação de credenciais](../upgrading.md#credential-rotation) explica a substituição e a revogação.
 
+### Varredura de vazamentos no push
+
+Num worker Docker, todo `git push` para um repositório que o GitHub não informa como private ou internal é recusado se os commits enviados tiverem um caminho de home, um email que não seja noreply, um nome privado ou um arquivo lixo (`__pycache__`, `node_modules`, `*.pyc`). Sem sua lista de nomes privados, todo push assim é recusado. Configuração única, como dono:
+
+1. Escreva a lista num arquivo fora de qualquer checkout: um literal por linha (nomes, hosts, repos privados), até 16 KiB. Ids do tracker podem ser públicos; uma chave de time sozinha na lista ainda bloqueia seus ids.
+2. Guarde-a e apague o arquivo:
+
+   ```sh
+   /usr/local/libexec/ensemble/ensemble-broker login env repo-guards-private-names < LIST
+   ```
+
+3. Declare-a em `~/.ensemble/config.local.toml`; um ambiente com sua própria lista `env` (como `mini-op`) substitui esta, então repita a entrada lá para os runs dele que fazem push:
+
+   ```toml
+   [[delegate.environment.docker.credentials.env]]
+   item = "ensemble-broker-env/repo-guards-private-names"
+   file = "repo-guards-private-names"
+   ```
+
+`git push --no-verify` e `git -c core.hooksPath=…` pulam a varredura.
+
 <a id="quick-start"></a>
 ## Início rápido
 

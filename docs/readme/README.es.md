@@ -81,6 +81,27 @@ Genera una clave privada, anota el App ID e impórtalos:
 
 Elimina el PEM después de importarlo. [Rotación de credenciales](../upgrading.md#credential-rotation) explica la sustitución y la revocación.
 
+### Escaneo de fugas al hacer push
+
+En un worker de Docker, todo `git push` a un repositorio que GitHub no informa como private o internal se rechaza si los commits enviados llevan una ruta de home, un email que no es noreply, un nombre privado o un archivo basura (`__pycache__`, `node_modules`, `*.pyc`). Sin tu lista de nombres privados, se rechaza todo push así. Configuración única, como propietario:
+
+1. Escribe la lista en un archivo fuera de todo checkout: un literal por línea (nombres, hosts, repos privados), hasta 16 KiB. Los ids del tracker pueden ser públicos; una clave de equipo sola en la lista sigue bloqueando sus ids.
+2. Guárdala y borra el archivo:
+
+   ```sh
+   /usr/local/libexec/ensemble/ensemble-broker login env repo-guards-private-names < LIST
+   ```
+
+3. Declárala en `~/.ensemble/config.local.toml`; un entorno con su propia lista `env` (como `mini-op`) reemplaza esta, así que repite la entrada allí para sus runs que hacen push:
+
+   ```toml
+   [[delegate.environment.docker.credentials.env]]
+   item = "ensemble-broker-env/repo-guards-private-names"
+   file = "repo-guards-private-names"
+   ```
+
+`git push --no-verify` y `git -c core.hooksPath=…` se saltan el escaneo.
+
 <a id="quick-start"></a>
 ## Inicio rápido
 

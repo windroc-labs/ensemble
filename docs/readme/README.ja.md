@@ -80,6 +80,27 @@ webhook を無効にしてください。リポジトリの権限は、インス
 
 取り込み後は PEM を削除してください。交換と失効については、[認証情報のローテーション](../upgrading.md#credential-rotation)を参照してください。
 
+### プッシュ漏洩スキャン
+
+Docker ワーカーで、GitHub が private または internal と報告しないリポジトリへの `git push` は、プッシュするコミットにホームパス、noreply 以外のメール、非公開名、ゴミファイル（`__pycache__`、`node_modules`、`*.pyc`）が含まれると拒否されます。非公開名リストがなければ、こうしたプッシュはすべて拒否されます。オーナーの一度きりの設定:
+
+1. どのチェックアウトの外にもリストのファイルを書きます: 1 行に 1 リテラル（名前、ホスト、非公開リポジトリ名）、最大 16 KiB。トラッカー ID は公開してかまいません。リストにチームキーだけを書くと、その ID も止まります。
+2. 保存してファイルを削除します:
+
+   ```sh
+   /usr/local/libexec/ensemble/ensemble-broker login env repo-guards-private-names < LIST
+   ```
+
+3. `~/.ensemble/config.local.toml` で宣言します。独自の `env` リストを持つ環境（`mini-op` など）はこれを置き換えるので、プッシュする実行のためにそこにも同じ項目を書きます:
+
+   ```toml
+   [[delegate.environment.docker.credentials.env]]
+   item = "ensemble-broker-env/repo-guards-private-names"
+   file = "repo-guards-private-names"
+   ```
+
+`git push --no-verify` と `git -c core.hooksPath=…` はスキャンを飛ばします。
+
 <a id="quick-start"></a>
 ## クイックスタート
 

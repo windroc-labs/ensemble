@@ -81,6 +81,32 @@ Generate a private key, note the App ID and import them:
 
 Delete the PEM after import. [Credential rotation](docs/upgrading.md#credential-rotation) covers replacement and revocation.
 
+### Push leak scan
+
+In a Docker worker, every `git push` to a repository GitHub does not report private or internal is refused
+when the pushed commits carry a home path, a non-noreply email, a private name or a junk file
+(`__pycache__`, `node_modules`, `*.pyc`). Without your private-name list, every such push is refused.
+One-time setup, as the owner:
+
+1. Write the list to a file outside any checkout: one literal per line (names, hosts, private repo names),
+   at most 16 KiB. Tracker ids may go public; a bare team key in the list still blocks its ids.
+2. Store it and delete the file:
+
+   ```sh
+   /usr/local/libexec/ensemble/ensemble-broker login env repo-guards-private-names < LIST
+   ```
+
+3. Declare it in `~/.ensemble/config.local.toml`; an environment with its own `env` list (such as `mini-op`)
+   replaces this one, so repeat the entry there for its runs that push:
+
+   ```toml
+   [[delegate.environment.docker.credentials.env]]
+   item = "ensemble-broker-env/repo-guards-private-names"
+   file = "repo-guards-private-names"
+   ```
+
+`git push --no-verify` and `git -c core.hooksPath=…` skip the scan.
+
 <a id="quick-start"></a>
 ## Quick start
 

@@ -1,5 +1,12 @@
 # Upgrading
 
+## Pushes to public repositories are leak-scanned
+
+Docker containers started after this upgrade refuse a `git push` to a repository GitHub does not report private
+or internal when the pushed commits carry a leak, and refuse every such push while no private-name list is
+declared. Do the README's [push leak scan](../README.md#push-leak-scan) setup once. A repository's own
+`.githooks/<name>` hooks still run.
+
 ## OpenCode loads updraft as a plugin
 
 OpenCode now gets updraft the way it gets ensemble: an

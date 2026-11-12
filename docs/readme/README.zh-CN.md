@@ -80,6 +80,27 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
 
 导入后删除 PEM。[凭据轮换](../upgrading.md#credential-rotation)介绍了替换和吊销方法。
 
+### 推送泄漏扫描
+
+在 Docker 工作者中，向 GitHub 未报告为 private 或 internal 的仓库执行 `git push` 时，若推送的提交含有主目录路径、非 noreply 邮箱、私有名称或垃圾文件（`__pycache__`、`node_modules`、`*.pyc`），推送会被拒绝。没有你的私有名称清单时，这类推送一律被拒绝。所有者一次性设置：
+
+1. 在任何 checkout 之外写好清单文件：每行一个字面量（名称、主机、私有仓库名），最多 16 KiB。Tracker id 可以公开；清单里的裸团队键仍会拦下它的 id。
+2. 存入并删除该文件：
+
+   ```sh
+   /usr/local/libexec/ensemble/ensemble-broker login env repo-guards-private-names < LIST
+   ```
+
+3. 在 `~/.ensemble/config.local.toml` 中声明；自带 `env` 列表的环境（如 `mini-op`）会替换这一项，需要推送的运行要在那里重复该条目：
+
+   ```toml
+   [[delegate.environment.docker.credentials.env]]
+   item = "ensemble-broker-env/repo-guards-private-names"
+   file = "repo-guards-private-names"
+   ```
+
+`git push --no-verify` 和 `git -c core.hooksPath=…` 会跳过扫描。
+
 <a id="quick-start"></a>
 ## 快速开始
 

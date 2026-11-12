@@ -80,6 +80,27 @@ GitHub Settings › Developer settings › GitHub Apps에서 자신의 계정에
 
 가져온 뒤 PEM을 삭제하세요. [자격 증명 교체](../upgrading.md#credential-rotation)에서 교체와 폐기를 설명합니다.
 
+### 푸시 유출 검사
+
+Docker 워커에서 GitHub가 private 또는 internal로 보고하지 않는 저장소로 `git push`하면, 푸시하는 커밋에 홈 경로, noreply가 아닌 이메일, 비공개 이름, 정크 파일(`__pycache__`, `node_modules`, `*.pyc`)이 있을 때 거부됩니다. 비공개 이름 목록이 없으면 이런 푸시는 모두 거부됩니다. 소유자의 1회 설정:
+
+1. 어떤 체크아웃에도 속하지 않는 곳에 목록 파일을 씁니다: 한 줄에 리터럴 하나(이름, 호스트, 비공개 저장소 이름), 최대 16 KiB. 트래커 ID는 공개해도 됩니다. 목록에 팀 키만 넣으면 그 ID도 막힙니다.
+2. 저장한 뒤 파일을 지웁니다:
+
+   ```sh
+   /usr/local/libexec/ensemble/ensemble-broker login env repo-guards-private-names < LIST
+   ```
+
+3. `~/.ensemble/config.local.toml`에 선언합니다. 자체 `env` 목록이 있는 환경(예: `mini-op`)은 이것을 대체하므로, 푸시하는 실행을 위해 그곳에도 같은 항목을 넣습니다:
+
+   ```toml
+   [[delegate.environment.docker.credentials.env]]
+   item = "ensemble-broker-env/repo-guards-private-names"
+   file = "repo-guards-private-names"
+   ```
+
+`git push --no-verify`와 `git -c core.hooksPath=…`는 검사를 건너뜁니다.
+
 <a id="quick-start"></a>
 ## 빠른 시작
 
