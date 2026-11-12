@@ -82,7 +82,7 @@ webhook を無効にしてください。リポジトリの権限は、インス
 
 ### プッシュ漏洩スキャン
 
-Docker ワーカーで、GitHub が private または internal と報告しないリポジトリへの `git push` は、プッシュするコミットにホームパス、noreply 以外のメール、非公開名、ゴミファイル（`__pycache__`、`node_modules`、`*.pyc`）が含まれると拒否されます。非公開名リストがなければ、こうしたプッシュはすべて拒否されます。オーナーの一度きりの設定:
+Docker ワーカーで、GitHub が private または internal と報告しないリポジトリへの `git push` は、プッシュで公開されるもの（コミット、注釈付きタグ、参照名）にホームパス、noreply 以外のメール、非公開名、ゴミファイル（`__pycache__`、`node_modules`、`*.pyc`）が含まれると拒否されます。非公開名リストがなければ、こうしたプッシュはすべて拒否されます。オーナーの一度きりの設定:
 
 1. どのチェックアウトの外にもリストのファイルを書きます: 1 行に 1 リテラル（名前、ホスト、非公開リポジトリ名）、最大 16 KiB。トラッカー ID は公開してかまいません。リストにチームキーだけを書くと、その ID も止まります。
 2. 保存してファイルを削除します:
@@ -99,7 +99,7 @@ Docker ワーカーで、GitHub が private または internal と報告しな�
    file = "repo-guards-private-names"
    ```
 
-`git push --no-verify` と `git -c core.hooksPath=…` はスキャンを飛ばします。
+リポジトリ自身の `core.hooksPath`（husky など）ではスキャンは飛ばず、そのフックも動きます。`git push --no-verify`、`git -c core.hooksPath=…`、パス指定での git 実行はスキャンを飛ばします。
 
 <a id="quick-start"></a>
 ## クイックスタート

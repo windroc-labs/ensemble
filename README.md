@@ -84,7 +84,7 @@ Delete the PEM after import. [Credential rotation](docs/upgrading.md#credential-
 ### Push leak scan
 
 In a Docker worker, every `git push` to a repository GitHub does not report private or internal is refused
-when the pushed commits carry a home path, a non-noreply email, a private name or a junk file
+when what it publishes (commits, annotated tags, ref names) carries a home path, a non-noreply email, a private name or a junk file
 (`__pycache__`, `node_modules`, `*.pyc`). Without your private-name list, every such push is refused.
 One-time setup, as the owner:
 
@@ -105,7 +105,8 @@ One-time setup, as the owner:
    file = "repo-guards-private-names"
    ```
 
-`git push --no-verify` and `git -c core.hooksPath=…` skip the scan.
+A repository's own `core.hooksPath` (husky and the like) does not skip it; its hooks still run.
+`git push --no-verify`, `git -c core.hooksPath=…` and calling a git binary by its path skip the scan.
 
 <a id="quick-start"></a>
 ## Quick start

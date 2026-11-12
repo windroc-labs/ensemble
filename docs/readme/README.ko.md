@@ -82,7 +82,7 @@ GitHub Settings › Developer settings › GitHub Apps에서 자신의 계정에
 
 ### 푸시 유출 검사
 
-Docker 워커에서 GitHub가 private 또는 internal로 보고하지 않는 저장소로 `git push`하면, 푸시하는 커밋에 홈 경로, noreply가 아닌 이메일, 비공개 이름, 정크 파일(`__pycache__`, `node_modules`, `*.pyc`)이 있을 때 거부됩니다. 비공개 이름 목록이 없으면 이런 푸시는 모두 거부됩니다. 소유자의 1회 설정:
+Docker 워커에서 GitHub가 private 또는 internal로 보고하지 않는 저장소로 `git push`하면, 푸시가 공개하는 것(커밋, 주석 태그, 참조 이름)에 홈 경로, noreply가 아닌 이메일, 비공개 이름, 정크 파일(`__pycache__`, `node_modules`, `*.pyc`)이 있을 때 거부됩니다. 비공개 이름 목록이 없으면 이런 푸시는 모두 거부됩니다. 소유자의 1회 설정:
 
 1. 어떤 체크아웃에도 속하지 않는 곳에 목록 파일을 씁니다: 한 줄에 리터럴 하나(이름, 호스트, 비공개 저장소 이름), 최대 16 KiB. 트래커 ID는 공개해도 됩니다. 목록에 팀 키만 넣으면 그 ID도 막힙니다.
 2. 저장한 뒤 파일을 지웁니다:
@@ -99,7 +99,7 @@ Docker 워커에서 GitHub가 private 또는 internal로 보고하지 않는 저
    file = "repo-guards-private-names"
    ```
 
-`git push --no-verify`와 `git -c core.hooksPath=…`는 검사를 건너뜁니다.
+저장소 자체의 `core.hooksPath`(husky 등)로는 검사를 건너뛰지 않으며, 그 훅도 실행됩니다. `git push --no-verify`, `git -c core.hooksPath=…`, 경로로 git을 직접 호출하면 검사를 건너뜁니다.
 
 <a id="quick-start"></a>
 ## 빠른 시작

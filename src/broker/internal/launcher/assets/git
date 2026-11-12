@@ -1,0 +1,13 @@
+#!/bin/sh
+# git with the worker image's hooks directory set above every config file, so a repository's own
+# core.hooksPath (husky and the like) cannot skip the pre-push leak scan; a later -c still wins.
+self=${0%/*}
+set -f
+IFS=:
+for dir in $PATH; do
+    if [ -n "$dir" ] && [ "$dir" != "$self" ] && [ -x "$dir/git" ]; then
+        exec "$dir/git" -c core.hooksPath=/opt/ensemble/githooks "$@"
+    fi
+done
+echo "git: no git on PATH" >&2
+exit 127

@@ -83,7 +83,7 @@ Supprimez le PEM après l’importation. La [rotation des identifiants](../upgra
 
 ### Analyse des fuites au push
 
-Dans un worker Docker, tout `git push` vers un dépôt que GitHub ne signale pas comme private ou internal est refusé si les commits poussés contiennent un chemin de home, un email autre que noreply, un nom privé ou un fichier parasite (`__pycache__`, `node_modules`, `*.pyc`). Sans votre liste de noms privés, tout push de ce type est refusé. Configuration unique, par le propriétaire :
+Dans un worker Docker, tout `git push` vers un dépôt que GitHub ne signale pas comme private ou internal est refusé si ce qu'il publie (commits, tags annotés, noms de refs) contient un chemin de home, un email autre que noreply, un nom privé ou un fichier parasite (`__pycache__`, `node_modules`, `*.pyc`). Sans votre liste de noms privés, tout push de ce type est refusé. Configuration unique, par le propriétaire :
 
 1. Écrivez la liste dans un fichier hors de tout checkout : un littéral par ligne (noms, hôtes, dépôts privés), 16 Kio au plus. Les ids du tracker peuvent être publics ; une clé d'équipe seule dans la liste bloque quand même ses ids.
 2. Enregistrez-la, puis supprimez le fichier :
@@ -100,7 +100,7 @@ Dans un worker Docker, tout `git push` vers un dépôt que GitHub ne signale pas
    file = "repo-guards-private-names"
    ```
 
-`git push --no-verify` et `git -c core.hooksPath=…` contournent l'analyse.
+Le `core.hooksPath` propre à un dépôt (husky et autres) ne contourne pas l'analyse ; ses hooks s'exécutent toujours. `git push --no-verify`, `git -c core.hooksPath=…` et l'appel d'un binaire git par son chemin la contournent.
 
 <a id="quick-start"></a>
 ## Démarrage rapide

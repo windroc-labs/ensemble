@@ -578,17 +578,18 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 	for _, want := range []string{
 		"chmod 755 /opt/ensemble/bin/ensemble-session /opt/ensemble/bin/ensemble-orchestrator /opt/ensemble/bin/python3 ",
 		"install -d -o agent -g agent -m 0700 /run/ensemble\n",
-		"COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble pre-push-scan repo-guards-scan githook-forward /opt/ensemble/lib/",
+		"COPY bootstrap.py credential-batch.py codex-probe.py opencode-install.py plugin-install.py hook-stub with-secrets workspace-check gh git-credential-ensemble pre-push-scan repo-guards-scan githook-forward git /opt/ensemble/lib/",
 		`python3 -I /opt/ensemble/lib/opencode-install.py "$(dpkg --print-architecture)" /opt/ensemble/clients`,
 		"ln -s /opt/ensemble/clients/bin/opencode /opt/ensemble/bin/opencode",
 		"python3 -I /opt/ensemble/lib/codex-probe.py /opt/ensemble/clients/bin/codex ",
 		"ln -s /opt/ensemble/clients/bin/codex /opt/ensemble/bin/codex",
 		"ln -s /opt/ensemble/lib/gh /opt/ensemble/bin/gh",
 		"ln -s /opt/ensemble/lib/git-credential-ensemble /opt/ensemble/bin/git-credential-ensemble",
-		" /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble /opt/ensemble/lib/pre-push-scan /opt/ensemble/lib/githook-forward \\\n",
+		" /opt/ensemble/lib/workspace-check /opt/ensemble/lib/gh /opt/ensemble/lib/git-credential-ensemble /opt/ensemble/lib/pre-push-scan /opt/ensemble/lib/githook-forward /opt/ensemble/lib/git \\\n",
 		`printf '%s\n' '[credential]' 'helper = /opt/ensemble/bin/git-credential-ensemble' 'useHttpPath = true' >> /etc/gitconfig`,
 		`printf '%s\n' '[core]' 'hooksPath = /opt/ensemble/githooks' >> /etc/gitconfig`,
 		"ln -s /opt/ensemble/lib/pre-push-scan /opt/ensemble/githooks/pre-push",
+		"ln -s /opt/ensemble/lib/git /opt/ensemble/bin/git",
 		`ln -s /opt/ensemble/lib/githook-forward "/opt/ensemble/githooks/$name"`,
 		"ENV PATH=/opt/ensemble/bin:",
 		`printf '%s\n' 'PATH=/opt/ensemble/bin:$PATH' > /etc/profile.d/ensemble.sh`,
@@ -606,7 +607,7 @@ func TestWorkerImageHasItsScripts(t *testing.T) {
 			t.Errorf("Dockerfile lacks %q", want)
 		}
 	}
-	for _, gone := range []string{"/opt/ensemble/runtime", "COPY codex ", "codex-update", "relay", "hooksPath = .githooks"} {
+	for _, gone := range []string{"/opt/ensemble/runtime", "COPY codex ", "codex-update", "relay", "hooksPath = .githooks", "push-to-checkout"} {
 		if strings.Contains(string(data), gone) {
 			t.Errorf("Dockerfile still has %q", gone)
 		}

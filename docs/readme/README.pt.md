@@ -83,7 +83,7 @@ Exclua o PEM após a importação. A [rotação de credenciais](../upgrading.md#
 
 ### Varredura de vazamentos no push
 
-Num worker Docker, todo `git push` para um repositório que o GitHub não informa como private ou internal é recusado se os commits enviados tiverem um caminho de home, um email que não seja noreply, um nome privado ou um arquivo lixo (`__pycache__`, `node_modules`, `*.pyc`). Sem sua lista de nomes privados, todo push assim é recusado. Configuração única, como dono:
+Num worker Docker, todo `git push` para um repositório que o GitHub não informa como private ou internal é recusado se o que ele publica (commits, tags anotadas, nomes de refs) tiver um caminho de home, um email que não seja noreply, um nome privado ou um arquivo lixo (`__pycache__`, `node_modules`, `*.pyc`). Sem sua lista de nomes privados, todo push assim é recusado. Configuração única, como dono:
 
 1. Escreva a lista num arquivo fora de qualquer checkout: um literal por linha (nomes, hosts, repos privados), até 16 KiB. Ids do tracker podem ser públicos; uma chave de time sozinha na lista ainda bloqueia seus ids.
 2. Guarde-a e apague o arquivo:
@@ -100,7 +100,7 @@ Num worker Docker, todo `git push` para um repositório que o GitHub não inform
    file = "repo-guards-private-names"
    ```
 
-`git push --no-verify` e `git -c core.hooksPath=…` pulam a varredura.
+O `core.hooksPath` próprio de um repositório (husky e afins) não pula a varredura; seus hooks continuam rodando. `git push --no-verify`, `git -c core.hooksPath=…` e chamar um binário do git pelo caminho a pulam.
 
 <a id="quick-start"></a>
 ## Início rápido

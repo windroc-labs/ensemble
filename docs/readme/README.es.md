@@ -83,7 +83,7 @@ Elimina el PEM después de importarlo. [Rotación de credenciales](../upgrading.
 
 ### Escaneo de fugas al hacer push
 
-En un worker de Docker, todo `git push` a un repositorio que GitHub no informa como private o internal se rechaza si los commits enviados llevan una ruta de home, un email que no es noreply, un nombre privado o un archivo basura (`__pycache__`, `node_modules`, `*.pyc`). Sin tu lista de nombres privados, se rechaza todo push así. Configuración única, como propietario:
+En un worker de Docker, todo `git push` a un repositorio que GitHub no informa como private o internal se rechaza si lo que publica (commits, tags anotados, nombres de refs) lleva una ruta de home, un email que no es noreply, un nombre privado o un archivo basura (`__pycache__`, `node_modules`, `*.pyc`). Sin tu lista de nombres privados, se rechaza todo push así. Configuración única, como propietario:
 
 1. Escribe la lista en un archivo fuera de todo checkout: un literal por línea (nombres, hosts, repos privados), hasta 16 KiB. Los ids del tracker pueden ser públicos; una clave de equipo sola en la lista sigue bloqueando sus ids.
 2. Guárdala y borra el archivo:
@@ -100,7 +100,7 @@ En un worker de Docker, todo `git push` a un repositorio que GitHub no informa c
    file = "repo-guards-private-names"
    ```
 
-`git push --no-verify` y `git -c core.hooksPath=…` se saltan el escaneo.
+El `core.hooksPath` propio de un repositorio (husky y similares) no se salta el escaneo; sus hooks siguen ejecutándose. `git push --no-verify`, `git -c core.hooksPath=…` y llamar a un binario de git por su ruta se lo saltan.
 
 <a id="quick-start"></a>
 ## Inicio rápido

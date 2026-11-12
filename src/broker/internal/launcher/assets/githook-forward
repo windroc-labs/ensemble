@@ -1,5 +1,16 @@
 #!/bin/sh
-# core.hooksPath names this file's directory: run the repository's own .githooks/<name>, as hooksPath .githooks did.
-hook=".githooks/${0##*/}"
+# Runs the repository's own hook of this name: from the last core.hooksPath that is not this
+# directory (a repository's own setting), else .githooks, the worker image's former hooksPath.
+name=${ENSEMBLE_GITHOOK_NAME:-${0##*/}}
+own=$(cd "${ENSEMBLE_GITHOOK_DIR:-${0%/*}}" && pwd -P)
+unset ENSEMBLE_GITHOOK_NAME ENSEMBLE_GITHOOK_DIR
+dir=.githooks
+while IFS= read -r configured; do
+    [ -n "$configured" ] && [ "$(cd "$configured" 2>/dev/null && pwd -P)" != "$own" ] && dir=$configured
+done <<CONFIGURED
+$(git config --type=path --get-all core.hooksPath 2>/dev/null)
+CONFIGURED
+hook=$dir/$name
 [ -f "$hook" ] && [ -x "$hook" ] || exit 0
-exec "./$hook" "$@"
+case $hook in /*) ;; *) hook=./$hook ;; esac
+exec "$hook" "$@"

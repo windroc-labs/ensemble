@@ -82,7 +82,7 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
 
 ### 推送泄漏扫描
 
-在 Docker 工作者中，向 GitHub 未报告为 private 或 internal 的仓库执行 `git push` 时，若推送的提交含有主目录路径、非 noreply 邮箱、私有名称或垃圾文件（`__pycache__`、`node_modules`、`*.pyc`），推送会被拒绝。没有你的私有名称清单时，这类推送一律被拒绝。所有者一次性设置：
+在 Docker 工作者中，向 GitHub 未报告为 private 或 internal 的仓库执行 `git push` 时，若推送发布的内容（提交、附注标签、引用名）含有主目录路径、非 noreply 邮箱、私有名称或垃圾文件（`__pycache__`、`node_modules`、`*.pyc`），推送会被拒绝。没有你的私有名称清单时，这类推送一律被拒绝。所有者一次性设置：
 
 1. 在任何 checkout 之外写好清单文件：每行一个字面量（名称、主机、私有仓库名），最多 16 KiB。Tracker id 可以公开；清单里的裸团队键仍会拦下它的 id。
 2. 存入并删除该文件：
@@ -99,7 +99,7 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
    file = "repo-guards-private-names"
    ```
 
-`git push --no-verify` 和 `git -c core.hooksPath=…` 会跳过扫描。
+仓库自己的 `core.hooksPath`（husky 等）不会跳过扫描，其钩子照常运行。`git push --no-verify`、`git -c core.hooksPath=…` 以及按路径调用 git 程序会跳过扫描。
 
 <a id="quick-start"></a>
 ## 快速开始
