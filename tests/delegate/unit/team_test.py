@@ -1117,6 +1117,7 @@ class Principles(Packaged):
         self.assertNotRegex(index, r"(?m)^\|")
         self.assertNotRegex(index, r"skills/principle-[\w-]+/SKILL\.md")
         self.assertIn("updraft's `principles` skill (`/updraft:principles`", index)
+        self.assertIn("relative to the updraft plugin's root, two levels above", index)
         self.assertEqual(len(UPDRAFT_PRINCIPLES), 24)
         for role in roles():
             prompt, run = composed(role)
