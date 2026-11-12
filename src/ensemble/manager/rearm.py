@@ -5,6 +5,8 @@ terminal gets it even without a manager identity.
 A manager needs valid ENSEMBLE_MANAGER, ENSEMBLE_HOLDER_ID, no ENSEMBLE_AGENT_SESSION, and an
 ancestor ENSEMBLE_HOLDER_PID: variables alone leak to later tmux windows.
 Bad record fields or writes skip only recording. Other events stay silent. Always exits 0.
+A manager's `compact` prompt also names ~/.ensemble/config.local.toml's [manager] guidelines
+file when it is an absolute or ~ path to a readable regular file.
 Standalone, standard library only. --mode manual selects turn-based monitoring.
 """
 
@@ -15,6 +17,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections.abc import Mapping
 from functools import cached_property
 
@@ -24,6 +27,8 @@ PID = re.compile(r"[1-9][0-9]*")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
 OPTIONS = frozenset({"--mode", "--client", "--client-pid", "--require-terminal"})
 MANAGERS = "~/.ensemble/managers"
+LOCAL = "~/.ensemble/config.local.toml"
+UNSAFE = re.compile(r"[\x00-\x1f\x7f`]")  # breaks the code span
 PS = (
     "ps",
     "-A",
@@ -76,6 +81,12 @@ without `--follow`. After handling and acking each event, run `ensemble-crew att
 use its newly printed `next-event:` command. Never arm from a line number you remember or from \
 the last line printed. On reader exit, notification failure or expiration, \
 repeat from step 1; without a notifying tool, keep Manual monitoring.
+"""
+
+GUIDELINES = """
+Before step 3 handles any event, read your manager guidelines file whole, every line (in parts \
+if it is long): `{path}`. Compaction dropped it from your context; the summary does not replace \
+it.
 """
 
 
@@ -132,8 +143,25 @@ def manager(environ: Mapping[str, str], processes: Processes) -> str | None:
     return name if int(hold) in processes.ancestors(os.getpid()) else None
 
 
-def prompt(name: str, source: str, *, manual: bool = False) -> str:
-    return PROMPT.format(name=name, source=source, monitoring=MANUAL if manual else AUTOMATIC)
+def prompt(name: str, source: str, *, manual: bool = False, guidelines: str | None = None) -> str:
+    text = PROMPT.format(name=name, source=source, monitoring=MANUAL if manual else AUTOMATIC)
+    return text if guidelines is None else text + GUIDELINES.format(path=guidelines)
+
+
+def guidelines() -> str | None:
+    try:
+        with open(os.path.expanduser(LOCAL), "rb") as f:
+            table = tomllib.load(f).get("manager")
+    except (OSError, ValueError):
+        return None
+    path = table.get("guidelines") if isinstance(table, dict) else None
+    if not isinstance(path, str) or not path or UNSAFE.search(path):
+        return None
+    path = os.path.expanduser(path)
+    # Checked, never opened: opening a FIFO would hang the hook.
+    if not os.path.isabs(path) or not os.path.isfile(path) or not os.access(path, os.R_OK):
+        return None
+    return path
 
 
 def options(argv: tuple[str, ...]) -> dict[str, str] | None:
@@ -201,7 +229,11 @@ def main(argv: tuple[str, ...] = ()) -> int:
             return 0
         if name is not None and (entry := record(found, event)) is not None:
             save(name, entry)
-        text = hint if name is None else prompt(name, source, manual="--mode" in found)
+        if name is None:
+            text = hint
+        else:
+            guide = guidelines() if source == "compact" else None
+            text = prompt(name, source, manual="--mode" in found, guidelines=guide)
         context = {"hookEventName": "SessionStart", "additionalContext": text}
         data = (json.dumps({"hookSpecificOutput": context}) + "\n").encode()
         while data:
