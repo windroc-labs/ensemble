@@ -134,7 +134,8 @@ class MainTest(Case):
         for argv in MODES:
             for source in ("startup", "resume", "compact", "clear"):
                 with self.subTest(source, argv=argv):
-                    code, out, err = _run(MANAGER, _start(source), argv=argv)
+                    environ = {**MANAGER, "HOME": self.home}
+                    code, out, err = _run(environ, _start(source), argv=argv)
                     self.assertEqual((code, err), (0, ""))
                     self.assertTrue(out.endswith("\n"))
                     self.assertEqual(
@@ -225,11 +226,109 @@ class MainTest(Case):
             with self.subTest(label):
                 self.assertEqual(_run(MANAGER, _start("startup"), ps=ps), (0, "", ""))
 
-    def test_opens_nothing(self):
-        with mock.patch("builtins.open", side_effect=AssertionError("opened a file")):
-            code, out, err = _run(MANAGER, _start("compact"))
+    def test_opens_nothing_outside_compaction(self):
+        for source in ("startup", "resume", "clear"):
+            with (
+                self.subTest(source),
+                mock.patch("builtins.open", side_effect=AssertionError("opened a file")),
+            ):
+                code, out, err = _run(MANAGER, _start(source))
+            self.assertEqual((code, err), (0, ""))
+            self.assertIn(source, json.loads(out)["hookSpecificOutput"]["additionalContext"])
+
+
+class GuidelinesTest(Case):
+    """[manager] guidelines in ~/.ensemble/config.local.toml under the case's HOME: compaction's
+    prompt names that file after the unchanged re-arm steps; anything else keeps today's prompt.
+    """
+
+    def configure(self, text: str | bytes) -> None:
+        path = Path(self.ensemble, "config.local.toml")
+        if isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text, encoding="utf-8")
+
+    def guide(self, name: str = "guidelines.md") -> str:
+        path = os.path.join(self.home, name)
+        Path(path).write_text("rules\n", encoding="utf-8")
+        return path
+
+    def context(self, source: str, argv: tuple[str, ...] = ()) -> str:
+        code, out, err = _run({**MANAGER, "HOME": self.home}, _start(source), argv=argv)
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("compact", json.loads(out)["hookSpecificOutput"]["additionalContext"])
+        return json.loads(out)["hookSpecificOutput"]["additionalContext"]
+
+    def test_compaction_names_the_file_after_the_unchanged_prompt(self):
+        path = self.guide()
+        self.configure(f"[manager]\nguidelines = {json.dumps(path)}\n")
+        for argv in MODES:
+            with self.subTest(argv=argv):
+                text = self.context("compact", argv)
+                today = rearm.prompt("mgr", "compact", manual=bool(argv))
+                self.assertEqual(
+                    text, rearm.prompt("mgr", "compact", manual=bool(argv), guidelines=path)
+                )
+                self.assertTrue(text.startswith(today))
+                added = text.removeprefix(today)
+                self.assertIn(f"`{path}`", added)
+                self.assertIn("whole", added)
+                self.assertTrue(added.endswith("\n"))
+
+    def test_home_relative_path_expands(self):
+        path = self.guide()
+        self.configure('[manager]\nguidelines = "~/guidelines.md"\n')
+        self.assertEqual(self.context("compact"), rearm.prompt("mgr", "compact", guidelines=path))
+
+    def test_other_sources_keep_todays_prompt(self):
+        self.configure(f"[manager]\nguidelines = {json.dumps(self.guide())}\n")
+        for source in ("startup", "resume", "clear"):
+            with self.subTest(source):
+                self.assertEqual(self.context(source), rearm.prompt("mgr", source))
+
+    def test_unset_or_unusable_setting_keeps_todays_prompt(self):
+        path = self.guide()
+        cases: dict[str, str | bytes | None] = {
+            "no config file": None,
+            "no manager table": "[session]\n",
+            "manager not a table": "manager = 1\n",
+            "no key": "[manager]\n",
+            "empty": '[manager]\nguidelines = ""\n',
+            "not a string": "[manager]\nguidelines = 1\n",
+            "relative": '[manager]\nguidelines = "guidelines.md"\n',
+            "missing file": f"[manager]\nguidelines = {json.dumps(path + '.gone')}\n",
+            "directory": f"[manager]\nguidelines = {json.dumps(self.home)}\n",
+            "backtick": f"[manager]\nguidelines = {json.dumps(self.guide('a`b.md'))}\n",
+            "newline": f"[manager]\nguidelines = {json.dumps(self.guide('a' + chr(10) + 'b.md'))}\n",
+            "malformed": "[manager\n",
+            "deep nesting": "a = " + "[" * 100_000,
+            "not UTF-8": b'[manager]\nguidelines = "\xff"\n',
+        }
+        for label, text in cases.items():
+            if text is not None:
+                self.configure(text)
+            for argv in MODES:
+                with self.subTest(label, argv=argv):
+                    today = rearm.prompt("mgr", "compact", manual=bool(argv))
+                    self.assertEqual(self.context("compact", argv), today)
+
+    def test_unreadable_file_or_config_keeps_todays_prompt(self):
+        path = self.guide()
+        self.configure(f"[manager]\nguidelines = {json.dumps(path)}\n")
+        today = rearm.prompt("mgr", "compact")
+        with mock.patch("os.access", return_value=False) as access:
+            self.assertEqual(self.context("compact"), today)
+        access.assert_called_once_with(path, os.R_OK)
+        with mock.patch("builtins.open", side_effect=PermissionError("config")):
+            self.assertEqual(self.context("compact"), today)
+
+    def test_hint_reads_no_setting(self):
+        self.configure(f"[manager]\nguidelines = {json.dumps(self.guide())}\n")
+        environ = {**MANAGER, "HOME": self.home}
+        with mock.patch("builtins.open", side_effect=AssertionError("opened a file")):
+            code, out, err = _run(environ, _start("compact"), argv=_hinted(777))
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(out)["hookSpecificOutput"]["additionalContext"], HINT)
 
 
 def _with_pid(argv: tuple[str, ...], pid: int | str) -> tuple[str, ...]:

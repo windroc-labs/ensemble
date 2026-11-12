@@ -105,6 +105,14 @@ Use `codex --no-daemon` or `opencode` instead of `claude` if that is your client
 
 Describe the work and desired deliverable. The commander coordinates workers and role runs through Crew.
 To come back to `work` later, run `ensemble list` in a terminal and pick it: you return to its session and conversation.
+If you keep your own guidelines for the commander in a file, name it once in `~/.ensemble/config.local.toml` (an absolute or `~` path):
+
+```toml
+[manager]
+guidelines = "~/path/to/your-guidelines.md"
+```
+
+After each compaction the commander is then told to read that file whole before handling events. Unset, missing or unreadable, nothing is added.
 For board work, `/ensemble:board` operates issues; [workflow customization](docs/customizing-roles-and-tasks.md#on-the-board)
 explains how to choose stages.
 
