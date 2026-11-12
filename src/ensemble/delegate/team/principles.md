@@ -45,36 +45,9 @@ Prose you write, including documents, prompts, replies, PR descriptions, commits
 
 ## Principle index
 
-Read each principle's file in full before applying it; each entry gives its trigger. Each file, and unslop's, is in the updraft plugin at the path given; updraft's `principles` skill (`/updraft:principles` in Claude Code) lists them and shows the plugin's directory. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. A principle applying to all of a role's work belongs in that role. Cite one shaping a specific task step only in that step. Never cite it in both a role and one of that role's tasks, and never give a role a principle that conflicts with a task it runs. Apply any other principle when its trigger fits. These rules adapt pstack.
+Find principles with updraft's `principles` skill (`/updraft:principles` in Claude Code): it gives each one's trigger and file. Every `skills/…/SKILL.md` path in this prompt, unslop's included, is relative to the updraft plugin's root, two levels above the directory that skill shows. Read each principle's file in full before applying it. These six apply to every task when triggered: `guard-the-context-window`, `never-block-on-the-human`, `attack-the-premise`, `build-the-lever`, `prove-it-works`, `explain-the-number`. A principle applying to all of a role's work belongs in that role. Cite one shaping a specific task step only in that step. Never cite it in both a role and one of that role's tasks, and never give a role a principle that conflicts with a task it runs. Apply any other principle when its trigger fits. These rules adapt pstack.
 
 Resolve upstream principle links through this index, not their original relative paths. Never invoke an unshipped skill or tool mentioned by a leaf; those references are context only. Follow the selected task's steps for the corresponding workflow.
-
-| Principle | When it applies | File |
-|---|---|---|
-| **laziness-protocol** | Refactoring, sizing a diff or considering abstractions; prefer deletion and the smallest solution. | `skills/principle-laziness-protocol/SKILL.md` |
-| **foundational-thinking** | Before logic, choose core types, data structures, scaffolding order and shared state. | `skills/principle-foundational-thinking/SKILL.md` |
-| **redesign-from-first-principles** | Integrating a requirement; design as if it had been foundational. | `skills/principle-redesign-from-first-principles/SKILL.md` |
-| **attack-the-premise** | Two fixes sharing a premise fail the same gate; test that premise before another fix. | `skills/principle-attack-the-premise/SKILL.md` |
-| **subtract-before-you-add** | Adding, refactoring or rewriting; remove dead weight first. | `skills/principle-subtract-before-you-add/SKILL.md` |
-| **minimize-reader-load** | Shaping or reviewing hard-to-trace code; reduce layers and hidden state. | `skills/principle-minimize-reader-load/SKILL.md` |
-| **outcome-oriented-execution** | Phased rewrites or migrations; converge on the target without throwaway compatibility states. | `skills/principle-outcome-oriented-execution/SKILL.md` |
-| **experience-first** | Product, UX or scope tradeoffs; choose user delight over implementation convenience. | `skills/principle-experience-first/SKILL.md` |
-| **exhaust-the-design-space** | Novel interactions or architectural decisions without precedent; compare competing prototypes. | `skills/principle-exhaust-the-design-space/SKILL.md` |
-| **build-the-lever** | Nontrivial work; build the smallest rerunnable tool that does or proves it. | `skills/principle-build-the-lever/SKILL.md` |
-| **model-the-domain** | Stateful or branching logic and repeated shape assumptions; encode the domain in a structure. | `skills/principle-model-the-domain/SKILL.md` |
-| **boundary-discipline** | Validation, error handling or adapters; guard boundaries and keep business logic pure. | `skills/principle-boundary-discipline/SKILL.md` |
-| **type-system-discipline** | Types or signatures; make illegal states unrepresentable and parse external data. | `skills/principle-type-system-discipline/SKILL.md` |
-| **make-operations-idempotent** | Commands, lifecycle steps or retrying loops; converge after crashes and retries. | `skills/principle-make-operations-idempotent/SKILL.md` |
-| **migrate-callers-then-delete-legacy-apis** | Replacing an internal API; migrate callers and delete the old API in one wave. | `skills/principle-migrate-callers-then-delete-legacy-apis/SKILL.md` |
-| **separate-before-serializing-shared-state** | Concurrent actors write the same target; remove sharing first. | `skills/principle-separate-before-serializing-shared-state/SKILL.md` |
-| **prove-it-works** | After a task and before declaring done; verify the real artifact. | `skills/principle-prove-it-works/SKILL.md` |
-| **fix-root-causes** | Debugging; fix the first wrong state, using guards only for legitimate states. | `skills/principle-fix-root-causes/SKILL.md` |
-| **sequence-verifiable-units** | Sweeps, migrations or multi-step work; verify each small unit before the next. | `skills/principle-sequence-verifiable-units/SKILL.md` |
-| **test-behavior-not-implementation** | Writing, changing or retaining tests; assert observable behavior. | `skills/principle-test-behavior-not-implementation/SKILL.md` |
-| **explain-the-number** | Before measuring or trusting a measured number; identify its limit and rule out confounders. | `skills/principle-explain-the-number/SKILL.md` |
-| **guard-the-context-window** | Large outputs, long files or repeated reads; keep summaries. | `skills/principle-guard-the-context-window/SKILL.md` |
-| **never-block-on-the-human** | Considering permission for reversible work; proceed and let the user course-correct. | `skills/principle-never-block-on-the-human/SKILL.md` |
-| **encode-lessons-in-structure** | Repeating an instruction; encode it in a lint, flag, runtime check or script. | `skills/principle-encode-lessons-in-structure/SKILL.md` |
 
 ## Autonomy
 

@@ -32,7 +32,7 @@ SOFTWARE.
 
 ## pstack
 
-`src/ensemble/delegate/team/principles.md`'s Principle index adapts, in our own words with no copied text, the principle skills (`pstack/skills/principle-*/SKILL.md`) of [pstack](https://github.com/cursor/plugins/tree/c742dd61706fbacc1b95f1a20b7b988cf096ce6c/pstack) in [cursor/plugins](https://github.com/cursor/plugins) at commit `c742dd61706fbacc1b95f1a20b7b988cf096ce6c`. The principles and unslop themselves ship in the updraft plugin, which carries their notice.
+`src/ensemble/delegate/team/principles.md`'s Principle index adapts, in our own words with no copied text, pstack's rules for applying its principle skills (`pstack/skills/principle-*/SKILL.md`) of [pstack](https://github.com/cursor/plugins/tree/c742dd61706fbacc1b95f1a20b7b988cf096ce6c/pstack) in [cursor/plugins](https://github.com/cursor/plugins) at commit `c742dd61706fbacc1b95f1a20b7b988cf096ce6c`. The principles and unslop themselves ship in the updraft plugin, which carries their notice.
 
 ```
 MIT License
