@@ -236,6 +236,13 @@ class PrePushScan(Case):
         proc = self.push()
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    def test_replace_refs_do_not_hide_what_the_push_sends(self):
+        leak = self.commit({"notes.txt": HOME_PATH + "\n"}, "Add notes")
+        self.git(self.work, "reset", "-q", "--hard", "HEAD~1")
+        clean = self.commit({"notes.txt": "clean\n"}, "Add notes")
+        self.git(self.work, "replace", leak, clean)
+        self.refused(self.push(f"{leak}:refs/heads/main"), "local-path")
+
     def test_annotated_tag_message_and_tagger_are_scanned(self):
         env = {**self.env, "GIT_COMMITTER_EMAIL": "me@personal.dev"}
         self.git(self.work, "tag", "-a", "v1", "-m", f"built in {HOME_PATH}", env=env)
@@ -327,10 +334,11 @@ class PrePushScan(Case):
         self.assertEqual(status, 1)
         self.assertIn("private-name (leak)", err)
 
-    def test_the_environment_list_wins_over_the_run_secret_file(self):
-        self.commit({}, "Fix the zorblax thing")
+    def test_the_environment_list_adds_to_the_run_secret_file(self):
+        self.commit({}, "Fix the zorblax and widgetco thing")
         status, err = self.run_with_names_file("zorblax\n")
-        self.assertEqual((status, err), (0, ""))
+        self.assertEqual(status, 1)
+        self.assertEqual(err.count("private-name (leak)"), 2)
 
     def test_private_and_internal_repositories_skip_the_scan(self):
         self.commit({"notes.txt": HOME_PATH + "\n"}, "Fix the widgetco thing")

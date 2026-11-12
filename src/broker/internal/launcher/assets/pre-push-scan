@@ -37,6 +37,8 @@ JUNK_DIRS = ("__pycache__", "node_modules")
 JUNK_SUFFIXES = (".pyc", ".pyo", ".whl", ".egg", ".egg-info")
 GITLINK = "160000"
 HINT = "fix: rewrite the listed commits or tags without these hits, then push again"
+# The push sends the original objects, so the scan must not read replace refs' substitutes.
+GIT = ("git", "--no-replace-objects", "-c", "i18n.logOutputEncoding=UTF-8")
 
 
 @dataclass(frozen=True)
@@ -76,7 +78,7 @@ def load_scanner():
 
 
 def git(*args: str, stdin: bytes = b"") -> bytes:
-    return subprocess.run(["git", *args], input=stdin, capture_output=True, check=True).stdout
+    return subprocess.run([*GIT, *args], input=stdin, capture_output=True, check=True).stdout
 
 
 def lines(items) -> bytes:
@@ -117,7 +119,10 @@ def object_types(shas: list[str]) -> dict[str, str]:
 
 def destination_tips(url: str, updates: list[RefUpdate]) -> list[str]:
     """The destination's ref tips this repository has: what they reach needs no scan."""
-    advertised = {line.split("\t")[0] for line in git("ls-remote", url).decode().splitlines()}
+    advertised = {
+        line.split("\t")[0]
+        for line in git("ls-remote", "--end-of-options", url).decode().splitlines()
+    }
     advertised |= {u.remote_sha for u in updates if not absent(u.remote_sha)}
     types = object_types(sorted(advertised))
     return [sha for sha, kind in types.items() if kind != "missing"]
@@ -180,7 +185,7 @@ def pushed_files(commits: list[str]) -> list[PushedFile]:
 def blob_contents(oids: list[str]) -> Iterator[tuple[str, bytes]]:
     """Each blob in turn, so memory holds one blob at a time."""
     proc = subprocess.Popen(
-        ["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE
+        [*GIT, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE
     )
     stdin, stdout = proc.stdin, proc.stdout
     assert stdin is not None and stdout is not None
@@ -203,9 +208,17 @@ def blob_contents(oids: list[str]) -> Iterator[tuple[str, bytes]]:
 
 
 def load_names(scanner) -> list[str] | None:
-    if NAMES_ENV in os.environ or not os.path.isfile(NAMES_FILE):
-        return scanner.load_names(None, os.getcwd())
-    return scanner.load_names(NAMES_FILE, os.getcwd())
+    """The run secret file's names plus REPO_GUARDS_PRIVATE_NAMES'; None when neither is readable,
+    or when the file exists but cannot be read."""
+    found = None
+    if os.path.isfile(NAMES_FILE):
+        found = scanner.load_names(NAMES_FILE, os.getcwd())
+        if found is None:
+            return None
+    if NAMES_ENV in os.environ:
+        extra = scanner.load_names(None, os.getcwd())
+        found = None if found is None and extra is None else [*(found or []), *(extra or [])]
+    return found
 
 
 def is_junk(path: str) -> bool:
