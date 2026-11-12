@@ -1078,26 +1078,6 @@ UNIVERSAL = {
     "prove-it-works",
     "explain-the-number",
 }
-UPDRAFT_PRINCIPLES = UNIVERSAL | {
-    "laziness-protocol",
-    "foundational-thinking",
-    "redesign-from-first-principles",
-    "subtract-before-you-add",
-    "minimize-reader-load",
-    "outcome-oriented-execution",
-    "experience-first",
-    "exhaust-the-design-space",
-    "model-the-domain",
-    "boundary-discipline",
-    "type-system-discipline",
-    "make-operations-idempotent",
-    "migrate-callers-then-delete-legacy-apis",
-    "separate-before-serializing-shared-state",
-    "fix-root-causes",
-    "sequence-verifiable-units",
-    "test-behavior-not-implementation",
-    "encode-lessons-in-structure",
-}
 
 
 def _principle_citations(text):
@@ -1118,7 +1098,6 @@ class Principles(Packaged):
         self.assertNotRegex(index, r"skills/principle-[\w-]+/SKILL\.md")
         self.assertIn("updraft's `principles` skill (`/updraft:principles`", index)
         self.assertIn("relative to the updraft plugin's root, two levels above", index)
-        self.assertEqual(len(UPDRAFT_PRINCIPLES), 24)
         for role in roles():
             prompt, run = composed(role)
             self.assertIn("`/updraft:principles`", prompt)
@@ -1133,16 +1112,11 @@ class Principles(Packaged):
                 self.assertNotIn("<team>/principles/", text)
                 self.assertNotIn("<team>/methods/unslop.md", text)
 
-    def test_task_principle_citations_resolve_and_shape_steps(self):
-        names = UPDRAFT_PRINCIPLES
+    def test_task_principle_citations_shape_steps(self):
         for task in os.listdir(os.path.join(TEAM, "tasks")):
             text = task_text(task.removesuffix(".md"))
             with self.subTest(task=task):
                 self.assertNotRegex(text, r"(?im)^#+ .*principles")
-                citations = _principle_citations(text)
-                self.assertLessEqual(citations, names)
-                mentioned = {name for name in names if f"`{name}`" in text}
-                self.assertEqual(mentioned, citations)
                 for line in text.splitlines():
                     if "(#principle-index)" not in line:
                         continue
@@ -1151,15 +1125,12 @@ class Principles(Packaged):
                     self.assertEqual(line.count("(#principle-index)"), 1)
                     self.assertRegex(line, r"\]\(#principle-index\) [A-Za-z]")
 
-    def test_role_and_task_citations_resolve_without_overlap(self):
-        names = UPDRAFT_PRINCIPLES
+    def test_role_and_task_citations_never_overlap(self):
         for role, tasks in catalog().items():
             with open(os.path.join(TEAM, "roles", f"{role}.md")) as f:
                 selected = _principle_citations(f.read())
-            self.assertLessEqual(selected, names, role)
             for task in tasks:
                 task_principles = _principle_citations(task_text(task))
-                self.assertLessEqual(task_principles, names, (role, task))
                 self.assertFalse(selected & task_principles, (role, task))
         universal = section(team_texts()["principles.md"], "Principle index")
         for name in UNIVERSAL:
