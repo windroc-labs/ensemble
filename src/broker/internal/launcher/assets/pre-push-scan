@@ -1,0 +1,239 @@
+#!/usr/bin/env -S python3 -I
+"""git pre-push hook: refuse a push to a public repository when the pushed commits carry a leak.
+
+Runs the pinned repo-guards scanner's leak checks (private-name, local-path, email) over what the
+pushed commits add: each changed file's path and content, binary content included, and each commit's
+message and author and committer emails. A junk path (__pycache__, node_modules, *.pyc) also hits.
+Only a repository GitHub reports private
+or internal skips the scan; any other answer or failure scans. Without the private-name list a
+public push is refused. Output gives positions, never the matched text. Then it runs the
+repository's own .githooks/pre-push, as core.hooksPath = .githooks did.
+"""
+
+import importlib.machinery
+import importlib.util
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+SCANNER = Path(__file__).resolve().parent / "repo-guards-scan"
+NAMES_ENV = "REPO_GUARDS_PRIVATE_NAMES"
+NAMES_FILE = "/run/ensemble/secrets/env/repo-guards-private-names"
+REPO_HOOK = ".githooks/pre-push"
+GITHUB = re.compile(
+    r"(?:https?://(?:[^@/]+@)?github\.com/|ssh://(?:[^@/]+@)?github\.com(?::\d+)?/"
+    r"|(?:[^@/:]+@)?github\.com:)([^/]+)/([^/]+?)(?:\.git)?/?"
+)
+NOT_PUBLIC = ("private", "internal")
+JUNK_DIRS = ("__pycache__", "node_modules")
+JUNK_SUFFIXES = (".pyc", ".pyo")
+GITLINK = "160000"
+HINT = "fix: rewrite the listed commits without these hits, then push again"
+
+
+@dataclass(frozen=True)
+class RefUpdate:
+    local_ref: str
+    local_sha: str
+    remote_ref: str
+    remote_sha: str
+
+
+@dataclass(frozen=True)
+class PushedFile:
+    """A blob a pushed commit adds; `index` numbers it across the push, 1-based."""
+
+    index: int
+    commit: str
+    path: str
+    oid: str
+
+
+def load_scanner():
+    loader = importlib.machinery.SourceFileLoader("repo_guards_scan", str(SCANNER))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[loader.name] = module
+    loader.exec_module(module)
+    return module
+
+
+def git(*args: str, stdin: bytes = b"") -> bytes:
+    return subprocess.run(["git", *args], input=stdin, capture_output=True, check=True).stdout
+
+
+def absent(sha: str) -> bool:
+    return not sha.strip("0")
+
+
+def parse_updates(text: str) -> list[RefUpdate]:
+    return [RefUpdate(*line.split(" ")) for line in text.splitlines() if line]
+
+
+def is_public(url: str) -> bool:
+    match = GITHUB.fullmatch(url)
+    if not match:
+        return True
+    try:
+        proc = subprocess.run(
+            ["gh", "api", "repos/{}/{}".format(*match.groups()), "--jq", ".visibility"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    return proc.returncode != 0 or proc.stdout.strip() not in NOT_PUBLIC
+
+
+def has_commit(sha: str) -> bool:
+    proc = subprocess.run(
+        ["git", "cat-file", "-e", sha + "^{commit}"], capture_output=True, check=False
+    )
+    return proc.returncode == 0
+
+
+def pushed_commits(remote: str, updates: list[RefUpdate]) -> list[str]:
+    """Commits the push publishes: reachable from a pushed sha, not from the remote's known refs."""
+    found: dict[str, None] = {}
+    for update in updates:
+        if absent(update.local_sha):
+            continue
+        args = [
+            "rev-list",
+            "--topo-order",
+            "--reverse",
+            update.local_sha,
+            "--not",
+            "--remotes=" + remote,
+        ]
+        if not absent(update.remote_sha) and has_commit(update.remote_sha):
+            args.append(update.remote_sha)
+        found.update(dict.fromkeys(git(*args).decode().split()))
+    return list(found)
+
+
+def pushed_files(commits: list[str]) -> list[PushedFile]:
+    """Blobs each commit adds; a merge's are those differing from every parent (diff-tree -c)."""
+    files: list[PushedFile] = []
+    for commit in commits:
+        fields = git("diff-tree", "-r", "-z", "--no-commit-id", "--root", "-c", commit).split(b"\0")
+        for meta, raw in zip(fields[0::2], fields[1::2], strict=False):
+            parts = meta.decode().lstrip(":").split()
+            parents = len(parts) // 2 - 1
+            mode, oid = parts[parents], parts[2 * parents + 1]
+            if absent(oid) or mode == GITLINK:
+                continue
+            files.append(PushedFile(len(files) + 1, commit, os.fsdecode(raw), oid))
+    return files
+
+
+def blob_texts(oids: list[str]) -> dict[str, str]:
+    """Each blob's content as text; bytes that are not UTF-8 become U+FFFD, so ASCII inside binaries still scans."""
+    out = git("cat-file", "--batch", stdin="".join(oid + "\n" for oid in oids).encode())
+    texts, pos = {}, 0
+    for oid in oids:
+        end = out.index(b"\n", pos)
+        size = int(out[pos:end].split()[2])
+        texts[oid] = out[end + 1 : end + 1 + size].decode("utf-8", "replace")
+        pos = end + 1 + size + 1
+    return texts
+
+
+def commit_records(scanner, commits: list[str]) -> list:
+    if not commits:
+        return []
+    out = git(
+        "log",
+        "--no-walk=unsorted",
+        "--stdin",
+        "-z",
+        "--format=%H%x00%ae%x00%ce%x00%B",
+        stdin="".join(sha + "\n" for sha in commits).encode(),
+    )
+    fields = out.decode("utf-8", "replace").split("\0")
+    return [scanner.Commit(*fields[i : i + 4]) for i in range(0, len(fields) - 3, 4)]
+
+
+def load_names(scanner) -> list[str] | None:
+    if NAMES_ENV in os.environ or not os.path.isfile(NAMES_FILE):
+        return scanner.load_names(None, os.getcwd())
+    return scanner.load_names(NAMES_FILE, os.getcwd())
+
+
+def is_junk(path: str) -> bool:
+    parts = path.split("/")
+    return any(part in JUNK_DIRS for part in parts[:-1]) or parts[-1].endswith(JUNK_SUFFIXES)
+
+
+def scan(remote: str, updates: list[RefUpdate]) -> str | None:
+    """The refusal text, or None when the push is clean."""
+    scanner = load_scanner()
+    junk = scanner.Check(name="junk", klass=scanner.LEAK, in_paths=True)
+    checks = [c for c in scanner.CHECKS.values() if c.klass == scanner.LEAK] + [junk]
+    report = scanner.Report(checks)
+    finders = {
+        check: scanner.TEXT_FINDERS[check.name]
+        for check in checks
+        if check.name in scanner.TEXT_FINDERS
+    }
+    names = load_names(scanner)
+    if names is None:
+        report.unavailable = True
+    else:
+        finders[scanner.CHECKS["private-name"]] = scanner.private_name_finder(names)
+    commits = pushed_commits(remote, updates)
+    files = pushed_files(commits)
+    texts = blob_texts(sorted({f.oid for f in files}))
+    for f in files:
+        if is_junk(f.path):
+            report.add(junk, scanner.Where(f.path, f.index, field="path"))
+    tracked = [scanner.TrackedFile(f.index, f.path, texts[f.oid]) for f in files]
+    scanner.scan_files(report, finders, tracked)
+    scanner.scan_commits(report, finders, commit_records(scanner, commits))
+    if not report.failed():
+        return None
+    lines = [
+        line for line in report.render(public=False).splitlines() if line != scanner.LEAK_NOTICE
+    ]
+    hit = sorted({where.index for _, where in report.hits if where.index})
+    by_index = {f.index: f for f in files}
+    lines += [
+        f"file #{i}: changed in commit {by_index[i].commit} (diff-tree -r --root -c order)"
+        for i in hit
+    ]
+    return "\n".join(
+        ["pre-push: refused, this push to a public repository has hits:", *lines, HINT]
+    )
+
+
+def run_repo_hook(argv: list[str], stdin: bytes) -> int:
+    if not (os.path.isfile(REPO_HOOK) and os.access(REPO_HOOK, os.X_OK)):
+        return 0
+    return subprocess.run(["./" + REPO_HOOK, *argv], input=stdin, check=False).returncode
+
+
+def main(argv: list[str], stdin: bytes) -> int:
+    try:
+        if is_public(argv[1]):
+            refusal = scan(argv[0], parse_updates(stdin.decode()))
+            if refusal is not None:
+                print(refusal, file=sys.stderr)
+                return 1
+    except Exception as error:  # Any failure refuses the push.
+        name = type(error).__name__
+        print(
+            f"pre-push: refused, the leak scan failed ({name}); fix it, then push again",
+            file=sys.stderr,
+        )
+        return 1
+    return run_repo_hook(argv, stdin)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:], sys.stdin.buffer.read()))

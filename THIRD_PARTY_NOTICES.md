@@ -2,6 +2,10 @@
 
 Our own, with no upstream: `src/ensemble/delegate/team/methods/deep-research.md`, `src/ensemble/delegate/team/methods/ultracode.md` and every other file under `src/ensemble/delegate/team/` this file does not name.
 
+## repo-guards
+
+`src/broker/internal/launcher/assets/repo-guards-scan` is [repo-guards](https://github.com/windroc-labs/repo-guards)' `scanner/scan.py` at commit `74c2a5f83a7fe28a26ec78cd38b937e4b80c52c0`, unchanged (sha256 `75acf1514caee7440ce6959f7f3329374f06c3148dcc76ecede8e64a01a5eadc`). repo-guards is our own organization's repository; it carries no license file.
+
 ## CodexBar
 
 `src/ensemble/session/clients/claude/usage.py` is ported from [CodexBar](https://github.com/steipete/CodexBar) at commit `6480977b47f6e4ffd5dcaae1cb0c7fdf34ee449e`: the Claude `/usage` output parser (`ClaudeStatusProbe.parse`, `ClaudeUsageFetcher.makeSnapshot`, `ClaudeStatusProbe.parseResetDate`). `ClaudeCommon.PROBE` and `ClaudeCommon.probe` in `src/ensemble/session/clients/claude/common.py` follow its direct `/usage` probe launch (`ClaudeUsageFetcher.loadViaDirectCLI`, `ClaudeCLISession.probeSettingsArguments`, `ClaudeCLISession.launchEnvironment`).
