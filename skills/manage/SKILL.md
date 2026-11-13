@@ -195,7 +195,7 @@ In tmux, with a tmux client showing your session, the panes you launch form a gr
 - Tell review and audit sub-agents in their prompt: write only inside your own `mktemp -d` sandbox, disclose any write outside it, clean it up.
 - A sub-agent's live test that needs a trusted folder runs in one already trusted (e.g. under `~/.ensemble`), so it writes no user config; if it can't avoid a config write, it stops and reports.
 - Isolate live-check tmux: drop `$TMUX` (`env -u TMUX -u TMUX_PANE TMUX_TMPDIR=<dir> tmux …`) or name the socket (`tmux -S <socket>`), in a short dir (`mktemp -d /tmp/apm.XXXX`). Never `kill-server` without `-S`: inside tmux `$TMUX` beats `TMUX_TMPDIR`, so a bare `kill-server` kills the user's whole server.
-- No mutation testing: while building, reviewing or testing, never modify the source to see what happens: no manual or tool-driven mutation testing (mutmut etc.), not even briefly or in a throwaway copy that is then run; never put a known-wrong value into shipped code to force a branch. Every brief to a sub-agent (producer, reviewer) carries this rule.
+- No mutation testing: while building, reviewing or testing, never modify the source to see what happens: no manual or tool-driven mutation testing (mutmut etc.), not even briefly or in a throwaway copy that is then run; never put a known-wrong value into shipped code to force a branch. Every brief to a reviewer sub-agent carries this rule.
 
 ## Git and reviews
 

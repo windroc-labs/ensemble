@@ -12,7 +12,7 @@ Pick the task below that fits the input; unsure → `build` (`<tasks>/build.md`)
 
 ## Rules
 
-- **No mutation testing**, whatever a spec, plan or reviewer asks: while building, reviewing or testing, never modify the source to see what happens: no manual or tool-driven mutation testing (mutmut etc.), not even briefly or in a throwaway copy that is then run; never put a known-wrong value into shipped code to force a branch. A test's red step is its failure before its code exists. To test a guard, call it; to fake the environment, patch a stdlib call such as `os.listdir`, leaving the code under test unmodified. Every brief to a sub-agent (producer, reviewer) carries this rule.
+- **No mutation testing**, whatever a spec, plan or reviewer asks: while building, reviewing or testing, never modify the source to see what happens: no manual or tool-driven mutation testing (mutmut etc.), not even briefly or in a throwaway copy that is then run; never put a known-wrong value into shipped code to force a branch. A test's red step is its failure before its code exists. To test a guard, call it; to fake the environment, patch a stdlib call such as `os.listdir`, leaving the code under test unmodified. Every brief to a reviewer sub-agent carries this rule.
 - **Scenarios are acceptance**: the Gherkin scenarios (`@S-<n>`) an input quotes are its acceptance. Never change one, in a ticket, spec, plan, test or code. One you judge wrong → `needs_input` quoting it and why. An `@ops` one is a verifier's to run on the test Mac mini: never claim it passes, and lacking the mini is no reason for `needs_input`.
 - **Fix root causes**: when debugging, read and follow updraft's `skills/principle-fix-root-causes/SKILL.md`.
 - **Subtract before you add**: for every change, read and follow updraft's `skills/principle-subtract-before-you-add/SKILL.md`.
@@ -55,7 +55,7 @@ Add verbatim, placeholders filled in:
 ```
 Work only in `<worktree>` on branch `<branch>`, with absolute paths; create no other clone, worktree or branch of this repo. You may clone other repos read-only into `<Workdir>/tmp/` for reference; never commit, create a branch or push in them.
 Commits merged from `origin/<base>` are not this build's work.
-Your and your producers' local checks, in every phase: only lint and the unit tests of the projects you changed; never integration tests or full suites: the verification reviewer runs them, on the PR's CI when the repo has a `pull_request` workflow, else locally.
+Your local checks, in every phase: only lint and the unit tests of the projects you changed; never integration tests or full suites: the verification reviewer runs them, on the PR's CI when the repo has a `pull_request` workflow, else locally.
 Ask for no pull request: the caller opens it, onto `<base>`.
 After <your task's push points>, run exactly `git -C <worktree> push -u origin <branch>`.
 ```
