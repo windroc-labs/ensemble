@@ -200,7 +200,8 @@ def live_sessions(cfg, entries, *, say):
         if entry.role not in live:
             continue
         try:
-            if LinearRun.attach(ident, cfg=cfg, sid=entry.sid).delegate.alive():
+            view = LinearRun.attach(ident, cfg=cfg, sid=entry.sid, entries=entries)
+            if view.delegate.alive():
                 live[entry.role].append(ident)
         except (ConfigError, delegate.ConfigError) as error:
             say("recover-skip", ident, once=True, sid=entry.sid, reason=one_line(error))

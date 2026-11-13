@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import replace
 
 from ensemble.delegate import Delegate, Spec
@@ -108,17 +109,21 @@ class LinearRun:
         cfg: Config,
         delegate_cls: type | None = None,
         sid: str | None = None,
+        entries: Sequence[runs.Entry] | None = None,
     ) -> LinearRun:
+        """`entries`: runs.jsonl already parsed, so a caller attaching many runs reads it once."""
         cls._identity(issue, sid)
-        entries = [entry for entry in runs.parse_log(cfg.runs_log) if entry.issue == issue]
+        logged = runs.parse_log(cfg.runs_log) if entries is None else entries
+        entries = [entry for entry in logged if entry.issue == issue]
         if not entries:
             raise ConfigError(f"{issue}: no recorded run")
         latest = runs.latest(entries)[issue]
         if sid is not None and sid != latest.sid:
             raise ConfigError(f"{issue}: session {sid} is no longer the latest run")
-        failed = [f.ts for f in runs.failures(cfg.runs_log) if f.issue == issue]
-        if sid is None and failed and max(failed) >= latest.ts:
-            raise ConfigError(f"{issue}: its latest launch failed at {max(failed).isoformat()}")
+        if sid is None:
+            failed = [f.ts for f in runs.failures(cfg.runs_log) if f.issue == issue]
+            if failed and max(failed) >= latest.ts:
+                raise ConfigError(f"{issue}: its latest launch failed at {max(failed).isoformat()}")
         view = cls.__new__(cls)
         view.issue, view.sid = issue, latest.sid
         view.delegate_kind = runs.delegate_of(entries, latest.sid)

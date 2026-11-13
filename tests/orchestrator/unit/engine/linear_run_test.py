@@ -354,6 +354,22 @@ class Runs(RunCase):
             LinearRun.attach("TASK-1", cfg=self.cfg)
         self.assertEqual(LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID).sid, SID)
 
+    def test_given_parsed_entries_an_attach_by_sid_reads_no_log(self):
+        self.start()
+        entries = runs.parse_log(self.cfg.runs_log)
+        with mock.patch.object(runs, "_lines", side_effect=AssertionError("log read")):
+            self.assertEqual(
+                LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID, entries=entries).sid, SID
+            )
+
+    def test_given_parsed_entries_the_latest_sid_still_wins(self):
+        self.start()
+        newer = "abcdef12-0000-4000-8000-000000000000"
+        self.start(sid=newer)
+        entries = runs.parse_log(self.cfg.runs_log)
+        with self.assertRaisesRegex(ConfigError, "no longer the latest"):
+            LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID, entries=entries)
+
     def test_nonlatest_sid_is_refused_before_attaching_the_wrong_view(self):
         self.start()
         newer = "abcdef12-0000-4000-8000-000000000000"
