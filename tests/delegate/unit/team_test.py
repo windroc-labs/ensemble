@@ -92,7 +92,12 @@ class Acceptance(Packaged):
             "Verifier tickets list the ids of the `@ops` scenarios they run and link the PRD", draft
         )
         self.assertNotIn("acceptance cell", draft)
-        self.assertIn("at most 8 requirement identifiers on an engineer ticket", draft)
+        self.assertNotIn("at most 8", draft)
+        self.assertIn(
+            "A documentation requirement goes on the ticket that implements the behaviour it "
+            "documents, never on a documentation-only ticket.",
+            draft,
+        )
 
     def test_the_team_ships_no_grilling_or_to_tickets_copy_and_names_updraft_skills(self):
         for name in ("grilling", "to-tickets"):
