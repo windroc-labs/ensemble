@@ -4549,6 +4549,54 @@ class RoleApps(Base):
 
 
 class SessionInventory(Base):
+    def counted(self, roles):
+        """This test's cfg with a Delegate that attaches without reading runs.jsonl; each
+        attach and alive call is appended to the returned list as (call, issue).
+        """
+        cfg = self.cfg()
+        scenario = cfg.delegates[cfg.delegate_kind]
+        calls = []
+
+        class Counted(scenario):
+            @classmethod
+            def attach(cls, record_or_workdir, *, sid=None):
+                view = cls.__new__(cls)
+                view.issue = os.path.basename(record_or_workdir)
+                view.role = roles[view.issue]
+                calls.append(("attach", view.issue))
+                return view
+
+            def alive(self):
+                calls.append(("alive", self.issue))
+                return super().alive()
+
+        return replace(cfg, delegates={**cfg.delegates, cfg.delegate_kind: Counted}), calls
+
+    def test_one_check_reads_the_run_log_no_more_often_as_history_grows(self):
+        reads = []
+        for count in (2, 20):
+            self.lines = []
+            roles = {f"TASK-{n}": "engineer" for n in range(1, count + 1)}
+            for ident, role in roles.items():
+                self.add(kind="start", ident=ident, sid=ident, minutes_ago=60, role=role)
+            self.write_runs()
+            cfg, calls = self.counted(roles)
+            for ident in roles:
+                os.makedirs(cfg.issue_workdir(ident), exist_ok=True)
+            entries = runs.parse_log(self.runs)
+            self.api.live = ["ensemble-engineer-TASK-1"]
+            with (
+                mock.patch.object(runs, "parse_log", wraps=runs.parse_log) as parsed,
+                mock.patch.object(runs, "failures", wraps=runs.failures) as failed,
+            ):
+                live = router.live_sessions(cfg, entries, say=SAY)
+            reads.append(parsed.call_count + failed.call_count)
+            self.assertEqual(live["engineer"], ["TASK-1"])
+            self.assertEqual(
+                calls, [(call, ident) for ident in sorted(roles) for call in ("attach", "alive")]
+            )
+        self.assertEqual(reads, [0, 0])
+
     def test_only_recorded_alive_runs_count_once(self):
         self.api.live = [
             "ensemble-engineer-TASK-2",

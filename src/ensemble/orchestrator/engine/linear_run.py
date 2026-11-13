@@ -108,17 +108,22 @@ class LinearRun:
         cfg: Config,
         delegate_cls: type | None = None,
         sid: str | None = None,
+        entries: list[runs.Entry] | None = None,
     ) -> LinearRun:
+        """entries: runs.parse_log(cfg.runs_log) when the caller already holds it; None reads it."""
         cls._identity(issue, sid)
-        entries = [entry for entry in runs.parse_log(cfg.runs_log) if entry.issue == issue]
+        if entries is None:
+            entries = runs.parse_log(cfg.runs_log)
+        entries = [entry for entry in entries if entry.issue == issue]
         if not entries:
             raise ConfigError(f"{issue}: no recorded run")
         latest = runs.latest(entries)[issue]
         if sid is not None and sid != latest.sid:
             raise ConfigError(f"{issue}: session {sid} is no longer the latest run")
-        failed = [f.ts for f in runs.failures(cfg.runs_log) if f.issue == issue]
-        if sid is None and failed and max(failed) >= latest.ts:
-            raise ConfigError(f"{issue}: its latest launch failed at {max(failed).isoformat()}")
+        if sid is None:
+            failed = [f.ts for f in runs.failures(cfg.runs_log) if f.issue == issue]
+            if failed and max(failed) >= latest.ts:
+                raise ConfigError(f"{issue}: its latest launch failed at {max(failed).isoformat()}")
         view = cls.__new__(cls)
         view.issue, view.sid = issue, latest.sid
         view.delegate_kind = runs.delegate_of(entries, latest.sid)
