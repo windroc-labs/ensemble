@@ -13,8 +13,8 @@ permissions:
 
 jobs:
   broker:
-    name: Broker macos-15
-    runs-on: macos-15
+    name: Broker macOS
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 15
     defaults:
       run:

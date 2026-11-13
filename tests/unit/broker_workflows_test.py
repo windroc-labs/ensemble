@@ -72,8 +72,15 @@ class BrokerJob(Case):
         self.assertEqual(
             re.findall(r"(?m)^  (\w+):", events), ["push", "pull_request", "workflow_dispatch"]
         )
-        self.assertIn("    runs-on: macos-15", job("broker-macos.yml", "broker"))
         self.assertIn("Upload darwin/arm64 binary", steps(job("broker-macos.yml", "broker")))
+
+    def test_macos_jobs_run_on_the_self_hosted_macos_runner(self):
+        for workflow, name in (
+            ("broker-macos.yml", "broker"),
+            ("installer-macos.yml", "installer"),
+        ):
+            with self.subTest(workflow=workflow):
+                self.assertIn("    runs-on: [self-hosted, macOS, ARM64]\n", job(workflow, name))
 
     def test_macos_build_step_builds_and_signs_with_build_script(self):
         step = steps(job("broker-macos.yml", "broker"))["Build darwin/arm64 binary with cgo"]

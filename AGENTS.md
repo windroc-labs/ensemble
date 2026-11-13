@@ -36,12 +36,15 @@ On pushes to `main` coverage is advisory: the unit jobs' coverage install and up
 Latest `main` coverage, from the newest of the last 20 push runs that has it (a run lacks it when it changed only docs or the version, a unit test failed, or a coverage step failed; its Unit and `Coverage` jobs show which): `for run in $(gh run list --repo windroc-labs/ensemble --workflow CI --branch main --event push --limit 20 --json databaseId --jq '.[].databaseId'); do gh run download "$run" --repo windroc-labs/ensemble --pattern 'unit-coverage-merged-*' && break; done`.
 
 `CI` requires every applicable job and, when broker scope is selected, `Broker ubuntu-24.04`.
-The main CI workflow has no macOS job. Installer PRs run the separate `Installer macOS`
-workflow with fake credentials. The independent `Broker macOS` workflow
-(`.github/workflows/broker-macos.yml`) runs on pushes to `main` and pull requests that change
-`src/broker/` or the workflow, and on manual dispatch, preserving macOS checks (gofmt runs on
-ubuntu only) and the darwin/arm64 build artifact without blocking required CI.
-Require `CI` and `mini-op PR text` (`.github/workflows/mini-op-pr-text.yml`, the PR title, body and commits scan, which a title or body edit reruns alone), never `Broker macos-15` separately.
+The main CI workflow has no macOS job. Both macOS workflows run on the self-hosted
+`[self-hosted, macOS, ARM64]` runner: a clean macOS 26 VM per job (Cirrus `macos-tahoe-base`),
+one job at a time, with fewer preinstalled tools than GitHub's `macos-15`, so each workflow
+installs what it uses. Installer PRs run the separate `Installer macOS` workflow with fake
+credentials. The independent `Broker macOS` workflow (`.github/workflows/broker-macos.yml`)
+runs on pushes to `main` and pull requests that change `src/broker/` or the workflow, and on
+manual dispatch, preserving macOS checks (gofmt runs on ubuntu only) and the darwin/arm64 build
+artifact without blocking required CI.
+Require `CI` and `mini-op PR text` (`.github/workflows/mini-op-pr-text.yml`, the PR title, body and commits scan, which a title or body edit reruns alone), never `Broker macOS` or `Installer macOS` separately.
 A base change alone reruns no CI: push to the branch, or close and reopen the PR.
 
 ## Releasing
