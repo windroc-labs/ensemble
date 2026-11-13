@@ -123,14 +123,37 @@ class Acceptance(Packaged):
             "Step 3",
             "task step 2's fields and scenario acceptance",
             "Step 4",
-            "numbered list",
-            "title, blockers and end-to-end behaviour",
-            "too coarse or too fine",
-            "each dependency genuinely gates its ticket",
-            "merged or split further",
             "Do not ask the user or wait for approval",
         ):
             self.assertIn(text, overrides)
+
+    def test_decompose_checks_each_prd_guess_outside_the_target_repo(self):
+        explore = item(
+            section(task_text("decompose"), "Method overrides"), "Step 2, Explore the codebase."
+        )
+        for text in (
+            "each feasibility claim the PRD marks as a guess or unverified",
+            "run a check in `<Workdir>/tmp/`",
+            "leaving the target repos unmodified",
+            "put its command and result in the ticket the claim affects",
+            "say `unverified` there and why",
+        ):
+            self.assertIn(text, explore)
+
+    def test_decompose_has_a_fresh_subagent_review_the_breakdown(self):
+        review = item(section(task_text("decompose"), "Method overrides"), "Step 4, Quiz the user.")
+        for text in (
+            "A fresh subagent reviews the breakdown",
+            "only the PRD and a numbered list of each ticket's title, blockers and the "
+            "behaviour that runs end to end once it is done",
+            "can fewer stages (a shorter dependency chain) deliver the PRD",
+            "does each ticket run end to end once done, or is one a placeholder or a single layer",
+            "does each dependency genuinely block its ticket",
+            "Revise per its answers, then publish",
+        ):
+            self.assertIn(text, review)
+        self.assertNotIn("yourself", review)
+        self.assertNotIn("too coarse or too fine", review)
 
     def test_decompose_publishes_with_the_task_command_and_stops_at_publication(self):
         overrides = section(task_text("decompose"), "Method overrides")
