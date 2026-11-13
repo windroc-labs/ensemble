@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from enum import Enum, auto
 from typing import Protocol, runtime_checkable
@@ -22,6 +22,7 @@ from typing import Protocol, runtime_checkable
 import ensemble.utils as utils_package
 from ensemble.delegate import config
 from ensemble.delegate.composer import Composer, DelegateConfig, RunConfig, Team, teams
+from ensemble.delegate.engine import open_runs
 from ensemble.delegate.engine.base import Delegate
 from ensemble.delegate.engine.callback import EventCallback, sweep
 from ensemble.delegate.engine.config import module_roots, packaged_environments, read_config
@@ -404,7 +405,13 @@ class HarnessDelegate(Delegate):
             raise ConfigError(str(error)) from None
 
     def _save(self, state: DelegateState) -> None:
-        RunRecord(self.layout, self.store).save(state)
+        record = RunRecord(self.layout, self.store)
+        if not _may_revive(state):
+            record.save(state)
+            return
+        open_runs.add(self.workdir)
+        record.save(state)
+        open_runs.add(self.workdir)
 
     def _read(self) -> DelegateState:
         return self._parse(self.store.read())
@@ -472,6 +479,55 @@ class HarnessDelegate(Delegate):
     @classmethod
     def trusted_dirs(cls) -> frozenset[str]:
         return Composer().trusted_dirs()
+
+    @classmethod
+    def open_runs(cls, *, seed: Iterable[str] = ()) -> frozenset[str]:
+        """Each listed run checked once, its entry removed once it cannot come alive again."""
+        try:
+            for workdir in seed:
+                if cls._open(workdir, listed=False):
+                    open_runs.add(workdir)
+            return frozenset(w for w in open_runs.listed() if cls._open(w, listed=True))
+        except OSError as error:
+            raise SessionError(f"open runs: {_why(error)}") from None
+
+    @classmethod
+    def _open(cls, workdir: str, *, listed: bool) -> bool:
+        """Whether its run may be alive or come alive without another save. A listed one that
+        cannot loses its entry; re-added if its state changed meanwhile, since `_save` adds the
+        entry both before and after it writes.
+        """
+        store = RunState(Layout(workdir))
+        payload = store.read()
+        if payload is None and os.path.lexists(store.record):
+            return True
+        settled = payload is None
+        if not settled:
+            try:
+                view = cls.attach(workdir)
+                settled = view._settled(view._state)
+            except ConfigError:
+                settled = False
+        if settled and listed:
+            open_runs.remove(workdir)
+            if store.read() != payload:
+                open_runs.add(workdir)
+                return True
+        return not settled
+
+    def _settled(self, state: DelegateState) -> bool:
+        """It is not alive and cannot come alive without another save: completed, its drive and
+        run lock let go, and an owned one closing or its agent session (a follow-up's source)
+        gone.
+        """
+        try:
+            if not state.completed or self._alive(state):
+                return False
+            if owned(state.plan) and not state.closing:
+                return self._agent(state) is None
+        except (ConfigError, Unanswered):
+            return False
+        return True
 
     @classmethod
     def _bare(cls, layout: Layout) -> HarnessDelegate:
@@ -1400,7 +1456,7 @@ class HarnessDelegate(Delegate):
                 if (agent := self._input_agent(state)) is not None:
                     # its worker's TurnStarted opens the follow-up attempt
                     if state.closing:
-                        RunRecord(self.layout, self.store).save(replace(state, closing=False))
+                        self._save(replace(state, closing=False))
                     RunLog(state.plan.session.workdir).note("input", text=input)
                     agent.send(input)
                     return self._record(state)
@@ -1475,6 +1531,11 @@ class HarnessDelegate(Delegate):
             record = self._launch(previous, state)
         self._started(self._state)
         return record
+
+
+def _may_revive(state: DelegateState) -> bool:
+    """By its state alone: an owned run's worker may open a follow-up until it closes."""
+    return not state.completed or state.detached or owned(state.plan) and not state.closing
 
 
 def _why(error: OSError) -> str:

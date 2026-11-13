@@ -5,7 +5,7 @@ instruct write no state; owner overlays shape its run; resume continues a run in
 records or in the one it is given, and a run whose process died, its tui agent session left open,
 at once; replace, resume and detach first kill the callback group a dead harness left; checkouts
 lists its agent dir's real checkouts and clean deletes that dir, refusing a live run or a dir out of
-place.
+place; open_runs lists every run that may be alive.
 """
 
 import contextlib
@@ -27,10 +27,11 @@ from unittest import mock
 
 from ensemble.delegate import ConfigError, Delegate, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
+from ensemble.delegate.engine import open_runs
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import COLOR_WAIT, DRAIN_WAIT, HarnessDelegate
-from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord
+from ensemble.delegate.engine.record import CLOSED, HANDLER, RunRecord, owned
 from ensemble.delegate.engine.runner import STOP_LIMIT, report
 from ensemble.delegate.engine.state import RunState
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Result
@@ -53,6 +54,7 @@ from ensemble.session import Spec as SessionSpec
 from ensemble.session.engine.types import Liveness, SessionRow
 from ensemble.utils import OutcomeStatus, StatusState, Stopped
 from tests.delegate.fakes.callback_child import CallbackChild
+from tests.delegate.fakes.delegate import FakeDelegate
 from tests.delegate.fakes.harness_session import (
     DrivenDelegate,
     FailingSession,
@@ -750,14 +752,15 @@ class RunDirTest(HarnessCase):
         with open(self.record(), "w", encoding="utf-8") as file:
             file.write(text)
 
-    def test_the_run_record_is_the_runs_only_state(self):
+    def test_the_run_record_and_its_open_run_entry_are_the_runs_only_state(self):
         self.make()
         self.assertEqual(sorted(os.listdir(self.work)), ["agent", "run"])
         self.assertEqual(self.stored()["spec"]["sid"], SID)
         self.assertEqual(
             sorted(os.listdir(os.path.join(self.work, "run"))), ["delegate.json", "delegate.lock"]
         )
-        self.assertEqual(os.listdir(self.ensemble), ["config.local.toml"])
+        self.assertEqual(sorted(os.listdir(self.ensemble)), ["config.local.toml", "delegate"])
+        self.assertEqual(open_runs.listed(), [os.path.realpath(self.work)])
 
     def test_refused_start_creates_nothing(self):
         top = os.path.join(self.home, "a")
@@ -3429,3 +3432,128 @@ class OwnedRun(HarnessCase):
             again._read = replaced
             again._settle()
         self.assertEqual(held, [True])
+
+
+STOPPED = Result(0, None, "stopped")
+
+
+class OpenRunsTest(HarnessCase):
+    """open_runs lists a saved run until it completes and can no longer come alive (its drive and
+    run lock let go; an owned one closing or its agent session gone), seeded runs from before the
+    index, and a run whose state changed during its check.
+    """
+
+    def listed(self):
+        return DrivenDelegate.open_runs()
+
+    def here(self):
+        return frozenset({os.path.realpath(self.work)})
+
+    def headless(self):
+        spec = Spec("input", self.work, task="light-research", client="fake", sid=SID)
+        return self.make(spec=spec)
+
+    def complete(self, result=STOPPED):
+        self.assertTrue(RunRecord(Layout(self.work)).complete(1, result, sid=SID))
+
+    def test_a_delegate_without_an_index_lists_none(self):
+        self.assertIsNone(FakeDelegate.open_runs())
+
+    def test_a_created_run_is_listed(self):
+        self.headless()
+        self.assertEqual(self.listed(), self.here())
+
+    def test_a_completed_headless_run_leaves_the_index(self):
+        self.headless()
+        self.complete()
+        self.assertEqual(self.listed(), frozenset())
+        self.assertEqual(open_runs.listed(), [])
+
+    def test_a_detached_run_stays_listed_while_its_drive_runs(self):
+        self.headless().detach()
+        self.complete()
+        self.assertEqual(self.listed(), self.here())
+        FakeControl(self.metadata()["drive"]).close()
+        self.assertEqual(self.listed(), frozenset())
+
+    def test_a_crashed_run_never_completed_stays_listed(self):
+        view, _name = crashed(self)
+        self.assertFalse(view.alive())
+        self.assertEqual(self.listed(), self.here())
+
+    def test_an_owned_completed_run_stays_listed_while_its_agent_session_lives(self):
+        view, name = crashed(self)
+        self.assertTrue(owned(view._state.plan))
+        self.complete()
+        self.assertFalse(view.alive())
+        self.assertEqual(self.listed(), self.here())
+        HarnessSession.live[name].liveness = Liveness.UNKNOWN
+        self.assertEqual(self.listed(), self.here())
+        HarnessSession.live[name].close()
+        self.assertEqual(self.listed(), frozenset())
+
+    def test_an_owned_run_a_close_completed_leaves_the_index_with_its_agent_session_live(self):
+        _view, name = crashed(self)
+        RunRecord(Layout(self.work)).stop(CLOSED, sid=SID)
+        self.assertTrue(HarnessSession.live[name].alive())
+        self.assertEqual(self.listed(), frozenset())
+
+    def test_a_resume_lists_a_run_again(self):
+        _view, name = crashed(self)
+        self.complete()
+        HarnessSession.live[name].close()
+        self.assertEqual(self.listed(), frozenset())
+        DrivenDelegate.attach(self.work, session_cls=HarnessSession).resume()
+        self.assertEqual(self.listed(), self.here())
+
+    def test_a_run_saved_during_its_check_stays_listed(self):
+        self.headless()
+        self.complete()
+        record, unlink = RunRecord(Layout(self.work)), os.unlink
+
+        def revived_first(path):
+            record.save(replace(record.read(), completed=False))
+            unlink(path)
+
+        with mock.patch("os.unlink", side_effect=revived_first):
+            self.assertEqual(self.listed(), self.here())
+        self.assertEqual(open_runs.listed(), [os.path.realpath(self.work)])
+
+    def test_a_run_whose_record_cannot_be_read_stays_listed(self):
+        self.headless()
+        with mock.patch("os.open", side_effect=PermissionError("denied")):
+            self.assertEqual(self.listed(), self.here())
+
+    def test_a_deleted_run_leaves_the_index(self):
+        self.headless()
+        os.unlink(RunRecord(Layout(self.work)).store.record)
+        self.assertEqual(self.listed(), frozenset())
+
+    def test_seeding_records_a_run_from_before_the_index_that_may_be_alive(self):
+        crashed(self)
+        open_runs.remove(self.work)
+        other = os.path.join(self.home, "other")
+        finished = os.path.join(self.home, "finished")
+        self.make(spec=Spec("input", finished, task="light-research", client="fake", sid=SID))
+        RunRecord(Layout(finished)).complete(1, STOPPED, sid=SID)
+        open_runs.remove(finished)
+        self.assertEqual(self.listed(), frozenset())
+        self.assertEqual(DrivenDelegate.open_runs(seed=[self.work, other, finished]), self.here())
+        self.assertEqual(self.listed(), self.here())
+
+    def test_an_index_it_cannot_read_is_a_session_error(self):
+        self.headless()
+        with (
+            mock.patch("os.listdir", side_effect=PermissionError("denied")),
+            self.assertRaisesRegex(SessionError, "open runs: denied"),
+        ):
+            self.listed()
+
+    def test_a_save_it_cannot_index_fails_before_writing_the_run(self):
+        index = os.path.expanduser(open_runs.ROOT)
+        os.makedirs(os.path.dirname(index), exist_ok=True)
+        with open(index, "w", encoding="utf-8"):
+            pass
+        with self.assertRaises(ConfigError):
+            self.headless()
+        self.assertFalse(os.path.exists(RunRecord(Layout(self.work)).store.record))

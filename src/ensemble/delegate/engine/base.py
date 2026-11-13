@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 
 from ensemble.delegate.composer import RunConfig
 from ensemble.delegate.engine.types import Event, Outer, Result, Spec
@@ -11,7 +11,9 @@ from ensemble.utils import Display, Record, Status
 
 
 class Delegate(ABC):
-    """One role run and its view. It touches only the entries it creates in its workdir W."""
+    """One role run and its view. It touches only the entries it creates in its workdir W and its
+    own state outside any workdir.
+    """
 
     @classmethod
     @abstractmethod
@@ -43,6 +45,14 @@ class Delegate(ABC):
     @classmethod
     @abstractmethod
     def trusted_dirs(cls) -> frozenset[str]: ...
+
+    @classmethod
+    def open_runs(cls, *, seed: Iterable[str] = ()) -> frozenset[str] | None:
+        """Real workdir paths holding every run whose alive() may be true, after recording each
+        `seed` workdir's run (one from before the index) that may be; SessionError when it cannot
+        tell. None: no such index, so ask each run.
+        """
+        return None
 
     @classmethod
     @abstractmethod
