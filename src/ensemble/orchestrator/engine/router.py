@@ -69,6 +69,7 @@ from ensemble.utils import (
     nested_start,
     one_line,
     printable,
+    save,
 )
 
 HELP = """Claim or resume issue work with one scheduler tick or an explicit issue.
@@ -193,11 +194,56 @@ def attempt_count(entries, issue, since=None):
     return sum(1 for e in entries if e.issue == issue and (since is None or e.ts > since))
 
 
+SEEDED = "live-index.json"  # {"seeded": [Delegate kinds whose open-run index holds every run]}
+
+
+def _seeded(cfg) -> set[str]:
+    """Unreadable: none, so each kind seeds again."""
+    try:
+        with open(os.path.join(cfg.logs_dir, SEEDED), encoding="utf-8") as file:
+            kinds = json.load(file)["seeded"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return set()
+    return {kind for kind in kinds if isinstance(kind, str)} if isinstance(kinds, list) else set()
+
+
+def open_workdirs(cfg, workdirs, *, say):
+    """Real paths of the workdirs whose run may be alive, by each configured Delegate kind's
+    open-run index, a kind not yet seeded first seeded with `workdirs`; None: a kind keeps none.
+    """
+    seeded, found = _seeded(cfg), set()
+    for kind, cls in sorted(cfg.delegates.items()):
+        listed = cls.open_runs(seed=() if kind in seeded else workdirs)
+        if listed is None:
+            return None
+        found |= listed
+    if not set(cfg.delegates) <= seeded:
+        try:
+            save(
+                os.path.join(cfg.logs_dir, SEEDED),
+                json.dumps({"seeded": sorted(seeded | set(cfg.delegates))}) + "\n",
+            )
+        except OSError as error:
+            say("live-index-error", once=True, reason=one_line(error))
+    return found
+
+
 def live_sessions(cfg, entries, *, say):
-    """A run whose view cannot load counts as not alive, logged once; inventory unknown: None."""
+    """A run whose view cannot load counts as not alive, logged once; inventory unknown: None.
+    Asks only the runs its Delegate kind's open-run index lists, else every recorded run.
+    """
     live = {role: [] for role in cfg.roles}
-    for ident, entry in sorted(latest(entries).items()):
-        if entry.role not in live:
+    recorded = {i: e for i, e in sorted(latest(entries).items()) if e.role in live}
+    try:
+        listed = open_workdirs(cfg, [cfg.issue_workdir(i) for i in recorded], say=say)
+    except (delegate.SessionError, delegate.ConfigError):
+        return None
+    for ident, entry in recorded.items():
+        if (
+            listed is not None
+            and entry.delegate_kind in cfg.delegates
+            and os.path.realpath(cfg.issue_workdir(ident)) not in listed
+        ):
             continue
         try:
             view = LinearRun.attach(ident, cfg=cfg, sid=entry.sid, entries=entries)

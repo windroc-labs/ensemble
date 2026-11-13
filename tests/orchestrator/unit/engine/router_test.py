@@ -4605,6 +4605,142 @@ class SessionInventory(Base):
         )
 
 
+class OpenRunIndex(Base):
+    """A Delegate keeping an open-run index is asked only about the runs it lists once its index
+    is seeded: the check's runs.jsonl reads and Delegate calls stay the same as finished runs pile
+    up; a kind first seen seeds its index with every recorded run; an index it cannot read leaves
+    the runs unknown.
+    """
+
+    LIVE = ("ensemble-researcher-TASK-1", "ensemble-engineer-TASK-2")
+
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+
+    def indexed(self):
+        cfg, api, calls = self.cfg(), self.api, self.calls
+        base = cfg.delegates[cfg.delegate_kind]
+
+        class Indexed(base):
+            @classmethod
+            def open_runs(cls, *, seed=()):
+                calls.append(("open_runs", len(tuple(seed))))
+                if api.live is None:
+                    raise SessionError("open runs: unreadable")
+                return frozenset(
+                    os.path.realpath(cfg.issue_workdir("-".join(name.split("-")[-2:])))
+                    for name in api.live
+                )
+
+            @classmethod
+            def attach(cls, record_or_workdir, *, sid=None):
+                calls.append(("attach", os.path.basename(record_or_workdir)))
+                return super().attach(record_or_workdir, sid=sid)
+
+            def alive(self):
+                calls.append(("alive", self.issue))
+                return super().alive()
+
+        return replace(cfg, delegates={cfg.delegate_kind: Indexed})
+
+    def history(self, finished):
+        self.lines = []
+        self.add(kind="start", ident="TASK-1", sid="TASK-1", minutes_ago=60, role="researcher")
+        self.add(kind="start", ident="TASK-2", sid="TASK-2", minutes_ago=60, role="engineer")
+        for n in range(finished):
+            ident = f"TASK-{100 + n}"
+            self.add(kind="start", ident=ident, sid=ident, minutes_ago=90, role="pm")
+        self.write_runs()
+
+    def check(self, cfg):
+        """live_sessions' result, its runs.jsonl reads and its Delegate calls."""
+        self.calls.clear()
+        real_open, reads = open, []
+
+        def counted(path, *args, **kwargs):
+            if os.fspath(path) == self.runs:
+                reads.append(path)
+            return real_open(path, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=counted):
+            live = router.live_sessions(cfg, runs.parse_log(self.runs), say=SAY)
+        return live, len(reads), sorted(self.calls)
+
+    def test_a_seeded_checks_cost_does_not_grow_with_finished_runs(self):
+        self.api.live = list(self.LIVE)
+        seen = []
+        for finished in (10, 200):
+            self.history(finished)
+            cfg = self.indexed()
+            self.check(cfg)
+            seen.append(self.check(cfg))
+        self.assertEqual(seen[0], seen[1])
+        live, reads, calls = seen[0]
+        self.assertEqual(live, {"researcher": ["TASK-1"], "pm": [], "engineer": ["TASK-2"]})
+        self.assertEqual(
+            calls,
+            [
+                ("alive", "TASK-1"),
+                ("alive", "TASK-2"),
+                ("attach", "TASK-1"),
+                ("attach", "TASK-2"),
+                ("open_runs", 0),
+            ],
+        )
+
+    def test_the_first_check_seeds_the_index_with_every_recorded_run(self):
+        self.api.live = list(self.LIVE)
+        self.history(3)
+        cfg = self.indexed()
+        live, _reads, calls = self.check(cfg)
+        self.assertEqual(live, {"researcher": ["TASK-1"], "pm": [], "engineer": ["TASK-2"]})
+        self.assertIn(("open_runs", 5), calls)
+        with open(os.path.join(cfg.logs_dir, router.SEEDED), encoding="utf-8") as file:
+            self.assertEqual(json.load(file), {"seeded": [cfg.delegate_kind]})
+        self.assertIn(("open_runs", 0), self.check(cfg)[2])
+
+    def test_an_index_it_cannot_read_leaves_the_runs_unknown(self):
+        self.history(3)
+        cfg = self.indexed()
+        self.api.live = None
+        self.assertEqual(self.check(cfg)[0], None)
+
+    def test_an_unreadable_seed_mark_seeds_again(self):
+        self.api.live = list(self.LIVE)
+        self.history(3)
+        cfg = self.indexed()
+        os.makedirs(cfg.logs_dir, exist_ok=True)
+        with open(os.path.join(cfg.logs_dir, router.SEEDED), "w", encoding="utf-8") as file:
+            file.write("not json")
+        self.assertIn(("open_runs", 5), self.check(cfg)[2])
+
+    def test_a_delegate_without_an_index_is_asked_about_every_run(self):
+        self.api.live = list(self.LIVE)
+        self.history(3)
+        cfg = self.cfg()
+        live = router.live_sessions(cfg, runs.parse_log(self.runs), say=SAY)
+        self.assertEqual(live, {"researcher": ["TASK-1"], "pm": [], "engineer": ["TASK-2"]})
+        self.assertFalse(os.path.exists(os.path.join(cfg.logs_dir, router.SEEDED)))
+
+    def test_a_run_of_a_kind_no_longer_configured_is_still_reported(self):
+        self.api.live = list(self.LIVE)
+        self.history(1)
+        self.lines.append(self.row("start", "TASK-9", "TASK-9").replace('"harness"', '"gone"'))
+        self.write_runs()
+        cfg = self.indexed()
+        with redirect_stderr(io.StringIO()), self.log_dir(again=False):
+            self.check(cfg)
+        self.raw = ""
+        self.assertEqual(
+            self.said(),
+            [
+                "recover-skip TASK-9 sid=TASK-9 reason=ConfigError: delegate kind 'gone' is no"
+                " longer configured"
+            ],
+        )
+
+
 class RetainedLiveRuns(TickBase):
     def test_eight_day_live_run_counts_on_second_tick(self):
         self.add(kind="start", ident="TASK-1", sid="old", minutes_ago=8 * 24 * 60)
