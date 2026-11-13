@@ -350,9 +350,22 @@ class Runs(RunCase):
         self.start()
         failed = "abcdef12-0000-4000-8000-000000000000"
         runs.note(self.cfg.runs_log, "failed", issue="TASK-1", sid=failed)
-        with self.assertRaisesRegex(ConfigError, "TASK-1: its latest launch failed at "):
-            LinearRun.attach("TASK-1", cfg=self.cfg)
+        entries = runs.parse_log(self.cfg.runs_log)
+        for given in (None, entries):
+            with (
+                self.subTest(entries=given),
+                self.assertRaisesRegex(ConfigError, "TASK-1: its latest launch failed at "),
+            ):
+                LinearRun.attach("TASK-1", cfg=self.cfg, entries=given)
         self.assertEqual(LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID).sid, SID)
+
+    def test_given_run_rows_and_a_sid_attach_reads_no_run_log(self):
+        self.start()
+        entries = runs.parse_log(self.cfg.runs_log)
+        with mock.patch("builtins.open", wraps=open) as opened:
+            view = LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID, entries=entries)
+        reads = [c for c in opened.call_args_list if c.args[:1] == (self.cfg.runs_log,)]
+        self.assertEqual((view.sid, reads), (SID, []))
 
     def test_nonlatest_sid_is_refused_before_attaching_the_wrong_view(self):
         self.start()

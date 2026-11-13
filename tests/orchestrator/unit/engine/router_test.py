@@ -4549,6 +4549,69 @@ class RoleApps(Base):
 
 
 class SessionInventory(Base):
+    def counted(self, roles):
+        """This test's cfg with a Delegate that attaches without reading runs.jsonl; each
+        attach and alive call is appended to the returned list as (call, issue).
+        """
+        cfg = self.cfg()
+        scenario = cfg.delegates[cfg.delegate_kind]
+        calls = []
+
+        class Counted(scenario):
+            @classmethod
+            def attach(cls, record_or_workdir, *, sid=None):
+                view = cls.__new__(cls)
+                view.issue = os.path.basename(record_or_workdir)
+                view.role = roles[view.issue]
+                calls.append(("attach", view.issue))
+                return view
+
+            def alive(self):
+                calls.append(("alive", self.issue))
+                return super().alive()
+
+        return replace(cfg, delegates={**cfg.delegates, cfg.delegate_kind: Counted}), calls
+
+    def test_one_check_reads_the_run_log_no_more_often_as_history_grows(self):
+        reads = []
+        for count in (2, 20):
+            self.lines = []
+            roles = {f"TASK-{n}": "engineer" for n in range(1, count + 1)}
+            for ident, role in roles.items():
+                self.add(kind="start", ident=ident, sid=ident, minutes_ago=60, role=role)
+            self.write_runs()
+            cfg, calls = self.counted(roles)
+            entries = runs.parse_log(self.runs)
+            self.api.live = ["ensemble-engineer-TASK-1"]
+            with mock.patch("builtins.open", wraps=open) as opened:
+                live = router.live_sessions(cfg, entries, say=SAY)
+            reads.append(sum(c.args[:1] == (self.runs,) for c in opened.call_args_list))
+            self.assertEqual(live["engineer"], ["TASK-1"])
+            self.assertEqual(
+                calls, [(call, ident) for ident in sorted(roles) for call in ("attach", "alive")]
+            )
+        self.assertEqual(reads, [0, 0])
+
+    def test_a_run_whose_work_dir_is_gone_is_not_attached_and_one_with_it_is_asked(self):
+        roles = {"TASK-1": "engineer", "TASK-2": "engineer", "TASK-3": "researcher"}
+        for ident, role in roles.items():
+            self.add(kind="start", ident=ident, sid=ident, minutes_ago=60, role=role)
+        self.write_runs()
+        cfg, calls = self.counted(roles)
+        for ident in ("TASK-1", "TASK-3"):
+            os.rmdir(cfg.issue_workdir(ident))
+        self.api.live = [
+            "ensemble-engineer-TASK-1",
+            "ensemble-engineer-TASK-2",
+            "ensemble-researcher-TASK-3",
+        ]
+        with redirect_stderr(io.StringIO()), self.log_dir(again=False):
+            live = router.live_sessions(cfg, runs.parse_log(self.runs), say=SAY)
+        self.assertEqual(live, {"researcher": [], "pm": [], "engineer": ["TASK-2"]})
+        self.assertEqual(calls, [("attach", "TASK-2"), ("alive", "TASK-2")])
+        self.raw = ""
+        self.assertEqual(self.said(), [])
+
     def test_only_recorded_alive_runs_count_once(self):
         self.api.live = [
             "ensemble-engineer-TASK-2",

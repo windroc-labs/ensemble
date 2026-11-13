@@ -430,6 +430,7 @@ class Base(run_fixtures.Base):
         )
 
     def add(self, *, kind, ident, sid, minutes_ago, role="researcher", client=None, task=None):
+        os.makedirs(os.path.join(self.work, "work", ident), exist_ok=True)
         self.lines.append(
             self.row(
                 kind,
