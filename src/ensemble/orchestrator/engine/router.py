@@ -194,10 +194,12 @@ def attempt_count(entries, issue, since=None):
 
 
 def live_sessions(cfg, entries, *, say):
-    """A run whose view cannot load counts as not alive, logged once; inventory unknown: None."""
+    """A run whose view cannot load counts as not alive, logged once; inventory unknown: None.
+    A run whose work dir is gone is not alive and is not asked.
+    """
     live = {role: [] for role in cfg.roles}
     for ident, entry in sorted(latest(entries).items()):
-        if entry.role not in live:
+        if entry.role not in live or not os.path.isdir(cfg.issue_workdir(ident)):
             continue
         try:
             if LinearRun.attach(ident, cfg=cfg, sid=entry.sid, entries=entries).delegate.alive():

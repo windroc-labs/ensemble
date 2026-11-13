@@ -430,6 +430,8 @@ class Base(run_fixtures.Base):
         )
 
     def add(self, *, kind, ident, sid, minutes_ago, role="researcher", client=None, task=None):
+        """Records a run row; its issue gets a work dir, as a recorded run has until cleaned."""
+        os.makedirs(os.path.join(self.work, "work", ident), exist_ok=True)
         self.lines.append(
             self.row(
                 kind,

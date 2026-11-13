@@ -4581,8 +4581,6 @@ class SessionInventory(Base):
                 self.add(kind="start", ident=ident, sid=ident, minutes_ago=60, role=role)
             self.write_runs()
             cfg, calls = self.counted(roles)
-            for ident in roles:
-                os.makedirs(cfg.issue_workdir(ident), exist_ok=True)
             entries = runs.parse_log(self.runs)
             self.api.live = ["ensemble-engineer-TASK-1"]
             with (
@@ -4596,6 +4594,26 @@ class SessionInventory(Base):
                 calls, [(call, ident) for ident in sorted(roles) for call in ("attach", "alive")]
             )
         self.assertEqual(reads, [0, 0])
+
+    def test_a_run_whose_work_dir_is_gone_is_not_attached_and_one_with_it_is_asked(self):
+        roles = {"TASK-1": "engineer", "TASK-2": "engineer", "TASK-3": "researcher"}
+        for ident, role in roles.items():
+            self.add(kind="start", ident=ident, sid=ident, minutes_ago=60, role=role)
+        self.write_runs()
+        cfg, calls = self.counted(roles)
+        for ident in ("TASK-1", "TASK-3"):
+            os.rmdir(cfg.issue_workdir(ident))
+        self.api.live = [
+            "ensemble-engineer-TASK-1",
+            "ensemble-engineer-TASK-2",
+            "ensemble-researcher-TASK-3",
+        ]
+        with redirect_stderr(io.StringIO()), self.log_dir(again=False):
+            live = router.live_sessions(cfg, runs.parse_log(self.runs), say=SAY)
+        self.assertEqual(live, {"researcher": [], "pm": [], "engineer": ["TASK-2"]})
+        self.assertEqual(calls, [("attach", "TASK-2"), ("alive", "TASK-2")])
+        self.raw = ""
+        self.assertEqual(self.said(), [])
 
     def test_only_recorded_alive_runs_count_once(self):
         self.api.live = [
