@@ -4583,12 +4583,9 @@ class SessionInventory(Base):
             cfg, calls = self.counted(roles)
             entries = runs.parse_log(self.runs)
             self.api.live = ["ensemble-engineer-TASK-1"]
-            with (
-                mock.patch.object(runs, "parse_log", wraps=runs.parse_log) as parsed,
-                mock.patch.object(runs, "failures", wraps=runs.failures) as failed,
-            ):
+            with mock.patch("builtins.open", wraps=open) as opened:
                 live = router.live_sessions(cfg, entries, say=SAY)
-            reads.append(parsed.call_count + failed.call_count)
+            reads.append(sum(c.args[:1] == (self.runs,) for c in opened.call_args_list))
             self.assertEqual(live["engineer"], ["TASK-1"])
             self.assertEqual(
                 calls, [(call, ident) for ident in sorted(roles) for call in ("attach", "alive")]

@@ -108,7 +108,7 @@ class LinearRun:
         cfg: Config,
         delegate_cls: type | None = None,
         sid: str | None = None,
-        entries: list[runs.Entry] | None = None,
+        entries: list | None = None,
     ) -> LinearRun:
         """entries: runs.parse_log(cfg.runs_log) when the caller already holds it; None reads it."""
         cls._identity(issue, sid)

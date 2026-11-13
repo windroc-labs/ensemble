@@ -362,12 +362,10 @@ class Runs(RunCase):
     def test_given_run_rows_and_a_sid_attach_reads_no_run_log(self):
         self.start()
         entries = runs.parse_log(self.cfg.runs_log)
-        with (
-            mock.patch.object(runs, "parse_log") as parsed,
-            mock.patch.object(runs, "failures") as failed,
-        ):
+        with mock.patch("builtins.open", wraps=open) as opened:
             view = LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID, entries=entries)
-        self.assertEqual((view.sid, parsed.call_count, failed.call_count), (SID, 0, 0))
+        reads = [c for c in opened.call_args_list if c.args[:1] == (self.cfg.runs_log,)]
+        self.assertEqual((view.sid, reads), (SID, []))
 
     def test_nonlatest_sid_is_refused_before_attaching_the_wrong_view(self):
         self.start()
