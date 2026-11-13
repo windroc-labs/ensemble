@@ -109,7 +109,7 @@ class LinearRun:
         cfg: Config,
         delegate_cls: type | None = None,
         sid: str | None = None,
-        entries: Sequence[runs.Entry] | None = None,
+        entries: Sequence | None = None,
     ) -> LinearRun:
         """`entries`: runs.jsonl already parsed, so a caller attaching many runs reads it once."""
         cls._identity(issue, sid)

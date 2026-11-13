@@ -1,6 +1,7 @@
 """LinearRun owns exact plans and forwards views to the saved Delegate."""
 
 import json
+import os
 from dataclasses import replace
 from unittest import mock
 
@@ -357,10 +358,10 @@ class Runs(RunCase):
     def test_given_parsed_entries_an_attach_by_sid_reads_no_log(self):
         self.start()
         entries = runs.parse_log(self.cfg.runs_log)
-        with mock.patch.object(runs, "_lines", side_effect=AssertionError("log read")):
-            self.assertEqual(
-                LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID, entries=entries).sid, SID
-            )
+        os.unlink(self.cfg.runs_log)
+        self.assertEqual(
+            LinearRun.attach("TASK-1", cfg=self.cfg, sid=SID, entries=entries).sid, SID
+        )
 
     def test_given_parsed_entries_the_latest_sid_still_wins(self):
         self.start()
