@@ -19,6 +19,7 @@ Test commands and tool pins: [verification workflow](.github/workflows/ci.yml); 
 - Docker implementation: `src/ensemble/session/hosts/docker/` (`DockerHost`: `host.py`; a tui or headless worker's `DockerWorker`, the guard, its container's main process, over one `docker attach`: `worker.py`; maintenance, hooks, the broker client, daemon, mounts and stub beside them).
 - The session's and delegate's public interfaces are frozen: `tests/guard_checks/exports.py` `session_interface_snapshot` and `delegate_interface_snapshot` (who may change `tests/session_interface.json` and `tests/delegate_interface.json`: their docstrings).
 - Keep `<work_dir>/logs/runs.jsonl`: deleting it breaks resume, Recover, write-back and first-claim search.
+- The router's liveness check asks only the runs in the Delegate's open-run index (`~/.ensemble/delegate/open`, `src/ensemble/delegate/engine/open_runs.py`); `live-index.json` beside `runs.jsonl` names the Delegate kinds it seeded. Deleting either makes the next non-dry check ask every recorded run once.
 - A `[local_clones]` clone must not move: that breaks its worktrees. Run `git -C <new path> worktree repair`, then update the entry.
 
 ## Merging

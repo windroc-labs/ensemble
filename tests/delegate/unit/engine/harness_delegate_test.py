@@ -27,7 +27,7 @@ from unittest import mock
 
 from ensemble.delegate import ConfigError, Delegate, Outcome, Spec
 from ensemble.delegate.composer import Composer, RunParams
-from ensemble.delegate.engine import open_runs
+from ensemble.delegate.engine import open_runs as index
 from ensemble.delegate.engine.config import module_roots
 from ensemble.delegate.engine.drivers import AgentDriver
 from ensemble.delegate.engine.harness_delegate import COLOR_WAIT, DRAIN_WAIT, HarnessDelegate
@@ -760,7 +760,7 @@ class RunDirTest(HarnessCase):
             sorted(os.listdir(os.path.join(self.work, "run"))), ["delegate.json", "delegate.lock"]
         )
         self.assertEqual(sorted(os.listdir(self.ensemble)), ["config.local.toml", "delegate"])
-        self.assertEqual(open_runs.listed(), [os.path.realpath(self.work)])
+        self.assertEqual(index.listed(), [os.path.realpath(self.work)])
 
     def test_refused_start_creates_nothing(self):
         top = os.path.join(self.home, "a")
@@ -3443,6 +3443,10 @@ class OpenRunsTest(HarnessCase):
     index, and a run whose state changed during its check.
     """
 
+    def setUp(self):
+        super().setUp()
+        DrivenDelegate.open_runs(seed=())
+
     def listed(self):
         return DrivenDelegate.open_runs()
 
@@ -3459,6 +3463,19 @@ class OpenRunsTest(HarnessCase):
     def test_a_delegate_without_an_index_lists_none(self):
         self.assertIsNone(FakeDelegate.open_runs())
 
+    def test_an_index_never_seeded_or_lost_lists_nothing_known(self):
+        self.headless()
+        shutil.rmtree(os.path.expanduser(index.ROOT))
+        self.assertIsNone(self.listed())
+        self.assertEqual(DrivenDelegate.open_runs(seed=[self.work]), self.here())
+        self.assertEqual(self.listed(), self.here())
+
+    def test_a_listing_without_pruning_keeps_an_ended_runs_entry(self):
+        self.headless()
+        self.complete()
+        self.assertEqual(DrivenDelegate.open_runs(prune=False), frozenset())
+        self.assertEqual(index.listed(), [os.path.realpath(self.work)])
+
     def test_a_created_run_is_listed(self):
         self.headless()
         self.assertEqual(self.listed(), self.here())
@@ -3467,7 +3484,7 @@ class OpenRunsTest(HarnessCase):
         self.headless()
         self.complete()
         self.assertEqual(self.listed(), frozenset())
-        self.assertEqual(open_runs.listed(), [])
+        self.assertEqual(index.listed(), [])
 
     def test_a_detached_run_stays_listed_while_its_drive_runs(self):
         self.headless().detach()
@@ -3517,7 +3534,7 @@ class OpenRunsTest(HarnessCase):
 
         with mock.patch("os.unlink", side_effect=revived_first):
             self.assertEqual(self.listed(), self.here())
-        self.assertEqual(open_runs.listed(), [os.path.realpath(self.work)])
+        self.assertEqual(index.listed(), [os.path.realpath(self.work)])
 
     def test_a_run_whose_record_cannot_be_read_stays_listed(self):
         self.headless()
@@ -3531,12 +3548,12 @@ class OpenRunsTest(HarnessCase):
 
     def test_seeding_records_a_run_from_before_the_index_that_may_be_alive(self):
         crashed(self)
-        open_runs.remove(self.work)
+        index.remove(self.work)
         other = os.path.join(self.home, "other")
         finished = os.path.join(self.home, "finished")
         self.make(spec=Spec("input", finished, task="light-research", client="fake", sid=SID))
         RunRecord(Layout(finished)).complete(1, STOPPED, sid=SID)
-        open_runs.remove(finished)
+        index.remove(finished)
         self.assertEqual(self.listed(), frozenset())
         self.assertEqual(DrivenDelegate.open_runs(seed=[self.work, other, finished]), self.here())
         self.assertEqual(self.listed(), self.here())
@@ -3550,9 +3567,9 @@ class OpenRunsTest(HarnessCase):
             self.listed()
 
     def test_a_save_it_cannot_index_fails_before_writing_the_run(self):
-        index = os.path.expanduser(open_runs.ROOT)
-        os.makedirs(os.path.dirname(index), exist_ok=True)
-        with open(index, "w", encoding="utf-8"):
+        root = os.path.expanduser(index.ROOT)
+        shutil.rmtree(root)
+        with open(root, "w", encoding="utf-8"):
             pass
         with self.assertRaises(ConfigError):
             self.headless()

@@ -194,11 +194,11 @@ def attempt_count(entries, issue, since=None):
     return sum(1 for e in entries if e.issue == issue and (since is None or e.ts > since))
 
 
-SEEDED = "live-index.json"  # {"seeded": [Delegate kinds whose open-run index holds every run]}
+SEEDED = "live-index.json"
 
 
 def _seeded(cfg) -> set[str]:
-    """Unreadable: none, so each kind seeds again."""
+    """{"seeded": [Delegate kinds whose index got every recorded run]}; unreadable: none."""
     try:
         with open(os.path.join(cfg.logs_dir, SEEDED), encoding="utf-8") as file:
             kinds = json.load(file)["seeded"]
@@ -207,17 +207,20 @@ def _seeded(cfg) -> set[str]:
     return {kind for kind in kinds if isinstance(kind, str)} if isinstance(kinds, list) else set()
 
 
-def open_workdirs(cfg, workdirs, *, say):
-    """Real paths of the workdirs whose run may be alive, by each configured Delegate kind's
-    open-run index, a kind not yet seeded first seeded with `workdirs`; None: a kind keeps none.
+def open_workdirs(cfg, issues, *, say, seed):
+    """Real paths of the workdirs whose run may be alive, by each Delegate kind's open-run index;
+    an unseeded kind seeded with every recorded issue's workdir unless `seed` is false (a dry run
+    writes nothing); None: some kind's runs must each be asked.
     """
     seeded, found = _seeded(cfg), set()
     for kind, cls in sorted(cfg.delegates.items()):
-        listed = cls.open_runs(seed=() if kind in seeded else workdirs)
+        listed = cls.open_runs(prune=seed) if kind in seeded else None
+        if listed is None and seed:
+            listed = cls.open_runs(seed=[cfg.issue_workdir(i) for i in issues])
         if listed is None:
             return None
         found |= listed
-    if not set(cfg.delegates) <= seeded:
+    if seed and not set(cfg.delegates) <= seeded:
         try:
             save(
                 os.path.join(cfg.logs_dir, SEEDED),
@@ -228,21 +231,24 @@ def open_workdirs(cfg, workdirs, *, say):
     return found
 
 
-def live_sessions(cfg, entries, *, say):
+def live_sessions(cfg, entries, *, say, seed=True):
     """A run whose view cannot load counts as not alive, logged once; inventory unknown: None.
     Asks only the runs its Delegate kind's open-run index lists, else every recorded run.
     """
     live = {role: [] for role in cfg.roles}
-    recorded = {i: e for i, e in sorted(latest(entries).items()) if e.role in live}
+    newest = latest(entries)
     try:
-        listed = open_workdirs(cfg, [cfg.issue_workdir(i) for i in recorded], say=say)
+        listed = open_workdirs(cfg, sorted(newest), say=say, seed=seed)
     except (delegate.SessionError, delegate.ConfigError):
         return None
-    for ident, entry in recorded.items():
+    names = None if listed is None else {os.path.basename(path) for path in listed}
+    for ident, entry in sorted(newest.items()):
+        if entry.role not in live:
+            continue
         if (
-            listed is not None
+            names is not None
             and entry.delegate_kind in cfg.delegates
-            and os.path.realpath(cfg.issue_workdir(ident)) not in listed
+            and (ident not in names or os.path.realpath(cfg.issue_workdir(ident)) not in listed)
         ):
             continue
         try:
@@ -1073,7 +1079,7 @@ def tick(opts, cfg, gql, *, start, keychain, wiring, clock=datetime.now, launch_
             say("skip", reason=STARTS)
             return 0
         entries = parse_log(runs)
-        live = live_sessions(cfg, entries, say=say)
+        live = live_sessions(cfg, entries, say=say, seed=not dry)
         if live is None:
             say("skip", reason="agent runs unknown")
             return 0
@@ -1119,7 +1125,9 @@ def run_issue(opts, cfg, gql, start, *, keychain, wiring, clock=datetime.now, la
                 print(f"router.py: {BUSY}; try again", file=sys.stderr)
                 return stop
             entries = parse_log(runs)
-            live = live_sessions(cfg, entries, say=functools.partial(log, "router", dry=dry))
+            live = live_sessions(
+                cfg, entries, say=functools.partial(log, "router", dry=dry), seed=not dry
+            )
             if live is None:
                 print("router.py: agent runs unknown; try again", file=sys.stderr)
                 return 0 if dry else 1

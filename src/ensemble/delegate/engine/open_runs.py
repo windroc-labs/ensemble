@@ -1,7 +1,5 @@
-"""The open-run index: one file in ROOT per run that may still be alive, named for its workdir's
-real path and holding that path. A run adds its entry before it saves a state that can make it
-alive; only a check finding the run unable to come alive again without another save removes it.
-Its OSErrors propagate.
+"""The open-run index: one file in ROOT per run that may be alive, named for its workdir's real
+path and holding it; MARK once seeded with the runs from before it. OSErrors propagate.
 """
 
 import contextlib
@@ -12,6 +10,7 @@ import re
 from ensemble.utils import STATE, save
 
 ROOT = f"{STATE}/delegate/open"
+MARK = ".seeded"
 _ENTRY = re.compile(r"[0-9a-f]{32}")
 
 
@@ -31,8 +30,15 @@ def remove(workdir: str) -> None:
         os.unlink(_path(workdir))
 
 
+def mark() -> None:
+    save(os.path.join(os.path.expanduser(ROOT), MARK), "", durable=True)
+
+
+def marked() -> bool:
+    return os.path.isfile(os.path.join(os.path.expanduser(ROOT), MARK))
+
+
 def listed() -> list[str]:
-    """The workdirs of the index's entries; none before the first entry."""
     root = os.path.expanduser(ROOT)
     try:
         names = os.listdir(root)

@@ -22,7 +22,7 @@ from typing import Protocol, runtime_checkable
 import ensemble.utils as utils_package
 from ensemble.delegate import config
 from ensemble.delegate.composer import Composer, DelegateConfig, RunConfig, Team, teams
-from ensemble.delegate.engine import open_runs
+from ensemble.delegate.engine import open_runs as index
 from ensemble.delegate.engine.base import Delegate
 from ensemble.delegate.engine.callback import EventCallback, sweep
 from ensemble.delegate.engine.config import module_roots, packaged_environments, read_config
@@ -409,9 +409,9 @@ class HarnessDelegate(Delegate):
         if not _may_revive(state):
             record.save(state)
             return
-        open_runs.add(self.workdir)
+        index.add(self.workdir)
         record.save(state)
-        open_runs.add(self.workdir)
+        index.add(self.workdir)
 
     def _read(self) -> DelegateState:
         return self._parse(self.store.read())
@@ -481,22 +481,25 @@ class HarnessDelegate(Delegate):
         return Composer().trusted_dirs()
 
     @classmethod
-    def open_runs(cls, *, seed: Iterable[str] = ()) -> frozenset[str]:
-        """Each listed run checked once, its entry removed once it cannot come alive again."""
+    def open_runs(
+        cls, *, seed: Iterable[str] | None = None, prune: bool = True
+    ) -> frozenset[str] | None:
+        """None until a seed marks the index; prune drops runs that cannot revive."""
         try:
-            for workdir in seed:
-                if cls._open(workdir, listed=False):
-                    open_runs.add(workdir)
-            return frozenset(w for w in open_runs.listed() if cls._open(w, listed=True))
+            if seed is not None:
+                for workdir in seed:
+                    if cls._open(workdir, prune=False):
+                        index.add(workdir)
+                index.mark()
+            elif not index.marked():
+                return None
+            return frozenset(w for w in index.listed() if cls._open(w, prune=prune))
         except OSError as error:
             raise SessionError(f"open runs: {_why(error)}") from None
 
     @classmethod
-    def _open(cls, workdir: str, *, listed: bool) -> bool:
-        """Whether its run may be alive or come alive without another save. A listed one that
-        cannot loses its entry; re-added if its state changed meanwhile, since `_save` adds the
-        entry both before and after it writes.
-        """
+    def _open(cls, workdir: str, *, prune: bool) -> bool:
+        """Re-added if its state changed while pruned: _save adds before and after writing."""
         store = RunState(Layout(workdir))
         payload = store.read()
         if payload is None and os.path.lexists(store.record):
@@ -508,18 +511,14 @@ class HarnessDelegate(Delegate):
                 settled = view._settled(view._state)
             except ConfigError:
                 settled = False
-        if settled and listed:
-            open_runs.remove(workdir)
+        if settled and prune:
+            index.remove(workdir)
             if store.read() != payload:
-                open_runs.add(workdir)
+                index.add(workdir)
                 return True
         return not settled
 
     def _settled(self, state: DelegateState) -> bool:
-        """It is not alive and cannot come alive without another save: completed, its drive and
-        run lock let go, and an owned one closing or its agent session (a follow-up's source)
-        gone.
-        """
         try:
             if not state.completed or self._alive(state):
                 return False
@@ -1534,7 +1533,6 @@ class HarnessDelegate(Delegate):
 
 
 def _may_revive(state: DelegateState) -> bool:
-    """By its state alone: an owned run's worker may open a follow-up until it closes."""
     return not state.completed or state.detached or owned(state.plan) and not state.closing
 
 
