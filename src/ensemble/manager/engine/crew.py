@@ -638,7 +638,7 @@ class Crew:
             raise RuntimeError(f"{name}: {entry.state}: no Record")
         return entry.record
 
-    def _pane(self, name: str) -> tuple[str, str]:
+    def _session(self, name: str) -> tuple[str, str]:
         """The one session the entry's Record names, with the sid that guards its identity."""
         record = self._record(name)
         if len(record.sessions) != 1:
@@ -661,7 +661,7 @@ class Crew:
             if not delegated or record.workdir is None:
                 raise ValueError(f"{name}: no run outcome; --outcome reads role and issue runs")
             return (LayerCommand.DELEGATE, "outcome", record.workdir)
-        session, sid = self._pane(name)
+        session, sid = self._session(name)
         if reply:
             return (LayerCommand.SESSION, "reply", session, "--sid", sid)
         shown = () if lines is None else ("--lines", str(lines))
@@ -671,7 +671,7 @@ class Crew:
         self, name: str, *, text: str | None = None, keys: Sequence[str] = ()
     ) -> tuple[str, ...]:
         """The command pasting text, then Enter, else pressing keys, in the entry's session."""
-        session, sid = self._pane(name)
+        session, sid = self._session(name)
         sent = ("--key", *keys) if text is None else ("--", text)
         return (LayerCommand.SESSION, "send", session, "--sid", sid, *sent)
 

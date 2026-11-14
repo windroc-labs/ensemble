@@ -1661,7 +1661,7 @@ class Read(CliCase):
         self.record = own(self.roster, replace(self.fake_record("w1"), sessions=("w1",)))
         self.execvpe = self.enterContext(mock.patch("os.execvpe"))
 
-    def test_read_hands_off_to_the_entrys_session(self):
+    def test_read_hands_off_to_the_session_of_the_entry(self):
         for options, tail in (
             ((), ("read", "w1", "--sid", self.record.sid)),
             (("--lines", "5"), ("read", "w1", "--sid", self.record.sid, "--lines", "5")),

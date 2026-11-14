@@ -566,7 +566,7 @@ class Close(Entries):
 
 
 class ReadSend(RosterCase):
-    """read_argv and send_argv: an entry's pane is its Record's one session, guarded by its sid; a
+    """read_argv and send_argv: an entry's session is the one its Record names, guarded by its sid; a
     role or issue run's outcome is read from its delegate workdir.
     """
 
@@ -600,7 +600,7 @@ class ReadSend(RosterCase):
         self.live(record.name, record=record)
         return record
 
-    def test_read_hands_off_to_the_panes_screen(self):
+    def test_read_hands_off_to_the_sessions_screen(self):
         self.assertEqual(
             self.crew.read_argv("w1"),
             ("ensemble-session", "read", "w1", "--sid", self.worker.sid),
@@ -612,7 +612,7 @@ class ReadSend(RosterCase):
             ("ensemble-session", "read", "w1", "--sid", self.worker.sid, "--lines", "5"),
         )
 
-    def test_reply_hands_off_to_the_panes_reply(self):
+    def test_reply_hands_off_to_the_sessions_reply(self):
         self.assertEqual(
             self.crew.read_argv("w1", reply=True),
             ("ensemble-session", "reply", "w1", "--sid", self.worker.sid),
@@ -626,7 +626,7 @@ class ReadSend(RosterCase):
                     ("ensemble-delegate", "outcome", record.workdir),
                 )
 
-    def test_an_issue_runs_pane_is_its_tui_not_its_id(self):
+    def test_an_issue_runs_session_is_its_tui_not_its_id(self):
         self.assertEqual(self.crew.read_argv("TASK-1")[2], "pm-TASK-1-abcdef12")
 
     def test_unknown_entry_is_refused(self):
