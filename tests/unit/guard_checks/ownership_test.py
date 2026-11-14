@@ -627,23 +627,9 @@ class ManagerBoundaries(Sample):
     def test_display_is_opaque(self):
         base = "src/ensemble/manager/engine/crew.py"
         root = self.tree({base: 'def f(pane): return "@opener"\n'})
-        self.assertEqual(len(ownership.manager_display(root, allowed={})), 2)
+        self.assertEqual(len(ownership.manager_display(root)), 2)
         clean = self.tree({base: 'def f(display): return display.split(":")\n'})
-        self.assertEqual(ownership.manager_display(clean, allowed={}), [])
-
-    def test_display_text_exceptions_are_exact_and_never_stale(self):
-        base = "src/ensemble/manager/cli.py"
-        root = self.tree({base: 'HELP = "parts: <opener>"\nOTHER = "<opener>/x"\n'})
-        allowed = {(base, "parts: <opener>"): "reason"}
-        self.assertEqual(
-            ownership.manager_display(root, allowed=allowed),
-            [f"{base}:2: interprets display '<opener>/x'"],
-        )
-        stale = {**allowed, (base, "gone <opener>"): "reason"}
-        self.assertIn(
-            f"{base}: stale display text exception 'gone <opener>'",
-            ownership.manager_display(root, allowed=stale),
-        )
+        self.assertEqual(ownership.manager_display(clean), [])
 
     def test_exports_require_a_literal_all_of_names_and_reject_functions_and_modules(self):
         base = "src/ensemble/manager/"

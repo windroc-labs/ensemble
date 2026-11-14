@@ -8,14 +8,6 @@ ENTRY_MODULES = {
 STANDALONE = frozenset({"src/ensemble/manager/rearm.py"})
 
 
-DISPLAY_TEXT_ALLOWED = {
-    (
-        "src/ensemble/manager/cli.py",
-        "  tmux display parts: <opener>[/<split>[/<split_from>]]\n",
-    ): "crew start --help names tmux's display parts for the manager; no lower layer's help prints them.",
-}
-
-
 NO_COVER_ALLOWED = {
     (
         "src/ensemble/manager/engine/holder.py",
