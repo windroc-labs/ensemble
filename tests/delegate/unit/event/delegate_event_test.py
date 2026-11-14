@@ -72,7 +72,6 @@ class EventLine(Case):
             for key, value in (
                 ("status", "x"),
                 ("title", 1),
-                ("title", "T" * 201),
                 ("title", "two\nlines"),
                 ("summary", None),
                 ("questions", [1]),
@@ -87,19 +86,18 @@ class EventLine(Case):
             with self.subTest(data=data), self.assertRaises(DelegateEventError):
                 DelegateEvent.parse(line(v=1, kind="finished", returncode=0, outcome=data, **RUN))
 
-    def test_a_finished_summary_over_300_characters_is_refused(self):
-        # A run begun before the limit fell from 4000 may still send one.
-        outcome = {**FULL, "summary": "S" * 300}
+    def test_a_finished_outcome_over_its_length_caps_parses_verbatim(self):
+        outcome = {
+            **FULL,
+            "status": "needs_input",
+            "title": "T" * 201,
+            "summary": "S" * 301,
+            "questions": ["Q" * 1001],
+        }
         parsed = DelegateEvent.parse(
             line(v=1, kind="finished", returncode=0, outcome=outcome, **RUN)
         )
-        self.assertEqual(parsed.outcome.summary, "S" * 300)
-        self.refused(
-            line(
-                v=1, kind="finished", returncode=0, outcome={**outcome, "summary": "S" * 301}, **RUN
-            ),
-            "summary is longer than 300 characters",
-        )
+        self.assertEqual(json.loads(parsed.to_line())["outcome"], outcome)
 
     def refused(self, text, message):
         with self.assertRaises(DelegateEventError) as caught:

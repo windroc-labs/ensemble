@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import tomllib
@@ -9,6 +10,7 @@ from ensemble.delegate.composer import Composer
 from ensemble.delegate.composer.base import TEAM, outline
 from ensemble.delegate.composer.teams import START
 from ensemble.delegate.engine.config import read_config
+from ensemble.delegate.event.outcome import SCHEMA
 from ensemble.utils import unfenced
 from tests.delegate.case import REPO
 from tests.delegate.unit.composer.prompts import (
@@ -276,7 +278,10 @@ class Acceptance(Packaged):
 
     def test_a_publishing_prompts_output_rules_lack_only_the_two_deliverable_fields(self):
         fields = (
-            "- `deliverable`: the document, when [Output › Destination](#destination) says so.\n",
+            (
+                "- `deliverable`: the document, when [Output › Destination](#destination) says so; "
+                "≤ 2,000,000 characters.\n"
+            ),
             (
                 "- `deliverable_file`: a `.md` file in `<Workdir>` holding the deliverable, in place "
                 "of `deliverable`, when [Output › Destination](#destination) says so.\n"
@@ -289,6 +294,26 @@ class Acceptance(Packaged):
         for output in PUBLISHING:
             with self.subTest(output=output["type"]):
                 self.assertEqual(output_rules(destined("researcher", output)), returning)
+
+    def test_the_output_rules_state_each_outcome_fields_length_cap(self):
+        with open(SCHEMA) as f:
+            fields = json.load(f)["properties"]
+        with open(os.path.join(TEAM, "output", "output.md")) as f:
+            rules = f.read()
+        capped = {
+            name: rule.get("maxLength", rule.get("items", {}).get("maxLength"))
+            for name, rule in fields.items()
+        }
+        capped = {name: cap for name, cap in capped.items() if cap is not None}
+        self.assertEqual(
+            set(capped), {"title", "summary", "questions", "url", "files", "deliverable"}
+        )
+        for name, cap in capped.items():
+            with self.subTest(field=name):
+                line = re.search(rf"^- `{name}`: .*$", rules, re.M)[0]
+                self.assertIn(f"≤ {cap:,} characters", line)
+        files = re.search(r"^- `files`: .*$", rules, re.M)[0]
+        self.assertIn(f"at most {fields['files']['maxItems']}", files)
 
     def test_every_destination_has_the_write_once_rule(self):
         for output in ({"type": "local"}, *PUBLISHING):
