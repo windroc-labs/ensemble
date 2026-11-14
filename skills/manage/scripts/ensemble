@@ -112,7 +112,24 @@ hold_pane() {
     2>/dev/null | grep -E -- "/ensemble[\"']? $1 -- ") || return
   [ "$(printf '%s\n' "$panes" | wc -l)" -eq 1 ] && printf '%s\n' "$panes"
 }
+# workers_window NAME: the window of session NAME's newest pane its manager NAME opened for a worker.
+workers_window() {
+  local opener id window newest=-1 found=
+  while read -r opener id window; do
+    [ "$opener" = "$1" ] && [ "${id#%}" -gt "$newest" ] && newest=${id#%} found=$window
+  done < <(tmux list-panes -s -t "=$1" -F '#{@worker-opener} #{pane_id} #{window_id}' 2>/dev/null)
+  [ -n "$found" ] && printf '%s\n' "$found"
+}
+# beside WINDOW DIR COMMAND...: print the id of a new full-height pane in DIR running COMMAND, left
+# of WINDOW's panes, where a manager's pane sits when it opens its first worker.
+beside() {
+  local window=$1 dir=$2
+  shift 2
+  tmux split-window -b -f -h -P -F '#{pane_id}' -t "$window" -c "${dir//\#/##}" "$@"
+}
+# attach NAME [PANE]: show session NAME, at PANE when given.
 attach() {
+  [ -z "${2:-}" ] || tmux select-window -t "$2" \; select-pane -t "$2"
   if [ -n "$TMUX" ]; then
     exec tmux switch-client -t "=$1"
   elif [ "$TERM_PROGRAM" = iTerm.app ] || [ "$LC_TERMINAL" = iTerm2 ]; then # LC_TERMINAL survives ssh
@@ -139,10 +156,10 @@ if [ "$1" = list ]; then
     openable "$s"
     held=("$self" "$s" -- /bin/sh -c '"$@"; exec "${SHELL:-/bin/sh}" -l' ensemble "$self" resume)
     if tmux has -t "=$s" 2>/dev/null; then
-      tmux new-window -d -t "=$s:" -c "${PWD//\#/##}" "${held[@]}"
-    else
-      start "$s" "$PWD" "${held[@]}"
+      window=$(workers_window "$s") || window="=$s:"
+      pane=$(beside "$window" "$PWD" "${held[@]}") && attach "$s" "$pane"
     fi
+    start "$s" "$PWD" "${held[@]}"
     attach "$s"
     ;;
   attach | resume-held)
@@ -150,10 +167,10 @@ if [ "$1" = list ]; then
       echo "ensemble: manager $s is held by $s outside tmux session $s; nothing opened" >&2
       exit 1
     }
-    [ "$verb" = attach ] && attach "$s"
+    read -r id running _ <<<"$pane"
+    [ "$verb" = attach ] && attach "$s" "$id"
     # A login shell may reset PATH, so ensemble is typed by path: quoted only when it must be, and
     # not at all when no shell could take it.
-    read -r id running _ <<<"$pane"
     shell=${SHELL:-/bin/sh} resume="$self resume"
     case $self in
     *[\'\\]*) running="a shell that cannot take $self" ;;
@@ -165,7 +182,7 @@ if [ "$1" = list ]; then
       echo "ensemble: $s's pane runs $(printf '%s' "$running" | tr -cd '[:print:]');" \
         "resume there with: $resume" >&2
     fi
-    attach "$s"
+    attach "$s" "$id"
     ;;
   *)
     echo "ensemble: unknown plan: $plan" >&2
@@ -174,8 +191,17 @@ if [ "$1" = list ]; then
   esac
 fi
 s=$1
-tmux has -t "=$s" 2>/dev/null || {
-  require_side
-  start "$s" "$PWD" "$self" "$s" -- "${SHELL:-/bin/sh}" -l
-}
+hold=("$self" "$s" -- "${SHELL:-/bin/sh}" -l)
+if tmux has -t "=$s" 2>/dev/null; then
+  if pane=$(hold_pane "$s"); then
+    attach "$s" "${pane%% *}"
+  elif window=$(workers_window "$s"); then
+    # Its workers outlived its hold shell: a new one goes back beside them.
+    require_side
+    pane=$(beside "$window" "$PWD" "${hold[@]}") && attach "$s" "$pane"
+  fi
+  attach "$s"
+fi
+require_side
+start "$s" "$PWD" "${hold[@]}"
 attach "$s"
