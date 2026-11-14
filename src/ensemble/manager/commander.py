@@ -10,6 +10,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 
+from ensemble.manager import Roster
 from ensemble.manager.engine import managers
 from ensemble.manager.engine.holder import Holder, inherited
 from ensemble.manager.engine.types import (
@@ -38,13 +39,18 @@ def takeover(manager: str, holder: str | None) -> str:
     return f"use {commander}; only the user takes over, on purpose: {recovery(manager, force=True)}"
 
 
+def refused(error: Held, roster: Roster) -> None:
+    """Add the takeover to error, raised because another holder keeps roster's place."""
+    with contextlib.suppress(OSError, RosterError):
+        error.add_note(takeover(os.path.basename(roster.directory), roster.lease_state()[2]))
+
+
 def hold(name: str, command: tuple[str, ...], *, force: bool) -> int:
     roster = managers.roster(name, f"invalid manager name {printable(name)}")
     try:
         return Holder(roster).run(command, session=name, force=force)
     except Held as error:
-        with contextlib.suppress(OSError, RosterError):
-            error.add_note(takeover(name, roster.lease_state()[2]))
+        refused(error, roster)
         raise
 
 

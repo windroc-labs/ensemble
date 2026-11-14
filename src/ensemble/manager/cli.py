@@ -886,10 +886,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _report_error(error)
         return 1
     except Held as error:
-        with contextlib.suppress(OSError, RosterError, ValueError):
-            roster = _roster(args)
-            manager = os.path.basename(roster.directory)
-            error.add_note(commander.takeover(manager, roster.lease_state()[2]))
+        with contextlib.suppress(ValueError):
+            commander.refused(error, _roster(args))
         _report_error(error)
         return 1
     except (OSError, RosterError, RuntimeError) as error:

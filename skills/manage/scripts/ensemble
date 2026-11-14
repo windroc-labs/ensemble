@@ -22,7 +22,10 @@ usage() {
     'examples:' \
     '  ensemble demo -- <client> [<arg> ...]        start a client holding demo, outside tmux too' \
     '  ensemble --force demo -- <client resume command>' \
-    '                     take demo over and resume its conversation in this terminal'
+    '                     take demo over and resume its conversation in this terminal' \
+    '<client resume command>: the client command resuming the manager'"'"'s conversation;' \
+    '                     ensemble-session resume-argv <client> <sid> prints it, with the' \
+    '                     client and sid in ~/.ensemble/managers/<name>/session.json'
 }
 usage_error() {
   usage >&2
@@ -61,28 +64,35 @@ if [ "$1" = --install ]; then
   exit
 fi
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd) || exit
-case $root in
-  *:*) # PATH and PYTHONPATH split on ":" (OpenCode's plugin cache path holds one): run through a link without it
-    link=$HOME/.ensemble/links/$(printf '%s' "$root" | cksum | cut -d' ' -f1)
-    mkdir -p "$HOME/.ensemble/links" || exit
-    [ "$(readlink "$link" 2>/dev/null)" = "$root" ] || ln -sfn "$root" "$link" || exit
-    root=$link
-    ;;
-esac
 self=$root/skills/manage/scripts/ensemble
 side=$root/src/ensemble/manager/commander.py
-manager=(env "PATH=$root/bin:$PATH" "PYTHONPATH=$root/src" python3 -P -m ensemble.manager.commander)
-present() {
+paths=$root
+case $root in
+  *:*) # PATH and PYTHONPATH split on ":" (OpenCode's plugin cache path holds one): name the root through a link without it
+    paths=$HOME/.ensemble/links/$(printf '%s' "$root" | cksum | cut -d' ' -f1)
+    mkdir -p "$HOME/.ensemble/links" || exit
+    [ "$(readlink "$paths" 2>/dev/null)" = "$root" ] || ln -sfn "$root" "$paths" || exit
+    ;;
+esac
+manager=(env "PATH=$paths/bin:$PATH" "PYTHONPATH=$paths/src" python3 -P -m ensemble.manager.commander)
+require_commander() {
   [ -f "$side" ] || { echo "ensemble: no $side" >&2; exit 1; }
 }
+# openable NAME: refuse a manager the <name> form cannot hold, such as one an older ensemble
+# named resume; its new session's shell would exit at once.
+openable() {
+  case $1 in -* | list | resume) ;; *) valid_name "$1" && return ;; esac
+  echo "ensemble: manager $1 cannot be opened by ensemble; nothing opened" >&2
+  exit 1
+}
 if [ $# -gt 1 ] && [ "$1" != list ]; then
-  present
+  require_commander
   s=$1
   shift 2
   exec "${manager[@]}" hold ${force:+"$force"} "$s" -- "$@"
 fi
 if [ "$1" = resume ]; then
-  present
+  require_commander
   exec "${manager[@]}" resume
 fi
 # start NAME DIR COMMAND...: a detached session NAME in DIR running COMMAND.
@@ -111,7 +121,7 @@ attach() {
   exec tmux attach -t "=$1"
 }
 if [ "$1" = list ]; then
-  present
+  require_commander
   shift
   [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] || exec "${manager[@]}" list "$@"
   # Ctrl-C at the prompt cancels: the list exits 0, and bash must not die of the SIGINT meanwhile.
@@ -121,8 +131,12 @@ if [ "$1" = list ]; then
   [ -n "$plan" ] || exit 0
   read -r verb s <<<"$plan"
   case $verb in
-  open) set -- "$s" ;;
+  open)
+    openable "$s"
+    set -- "$s"
+    ;;
   resume-new)
+    openable "$s"
     held=("$self" "$s" -- /bin/sh -c '"$@"; exec "${SHELL:-/bin/sh}" -l' ensemble "$self" resume)
     if tmux has -t "=$s" 2>/dev/null; then
       tmux new-window -d -t "=$s:" -c "${PWD//\#/##}" "${held[@]}"
@@ -161,7 +175,7 @@ if [ "$1" = list ]; then
 fi
 s=$1
 tmux has -t "=$s" 2>/dev/null || {
-  present
+  require_commander
   start "$s" "$PWD" "$self" "$s" -- "${SHELL:-/bin/sh}" -l
 }
 attach "$s"

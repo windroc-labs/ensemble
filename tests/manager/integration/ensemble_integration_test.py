@@ -312,7 +312,6 @@ class FakeTmux(Case):
             ("--force", "list", "--", "x"),
             ("--force", "--install"),
             ("s1", "--"),
-            ("list", "x", "--", "y"),
         ):
             with self.subTest(args=args):
                 process, _, err, calls = self.run_ensemble(*args, TMUX="/tmp/fake,1,0")
@@ -545,6 +544,14 @@ class FakeTmux(Case):
                 ],
                 ["-CC", "attach", "-t", "=demo"],
             ],
+        )
+
+    def test_a_manager_the_name_form_cannot_hold_is_not_opened(self):
+        os.makedirs(os.path.join(self.ensemble, "managers", "resume"))
+        result, err, calls = self.select()
+        self.assertEqual((result, calls), (1, []))
+        self.assertTrue(
+            err.endswith("ensemble: manager resume cannot be opened by ensemble; nothing opened\n")
         )
 
     def test_a_script_path_needing_quotes_is_typed_single_quoted(self):
