@@ -268,6 +268,13 @@ class ListTest(ListCase):
         )
 
 
+def _mode(fd: int) -> list:
+    """fd's terminal attributes but PENDIN, which BSD sets itself on a return to canonical input."""
+    mode = termios.tcgetattr(fd)
+    mode[3] &= ~termios.PENDIN
+    return mode
+
+
 def _dead(pid, _signal):
     raise ProcessLookupError(pid)
 
@@ -407,7 +414,7 @@ class MenuTest(ListCase):
         master, slave = pty.openpty()
         self.addCleanup(os.close, master)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, columns, 0, 0))
-        before = termios.tcgetattr(slave)
+        before = _mode(slave)
         shown = bytearray()
         caller = threading.get_ident()
 
@@ -446,7 +453,7 @@ class MenuTest(ListCase):
             ):
                 typist.start()
                 result = main(("list", "--select"))
-                self.assertEqual(termios.tcgetattr(slave), before, "terminal mode restored")
+                self.assertEqual(_mode(slave), before, "terminal mode restored")
         finally:
             signal.signal(signal.SIGINT, handler)
             typist.join(timeout=30)

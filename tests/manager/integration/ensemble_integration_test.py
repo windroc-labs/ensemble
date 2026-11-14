@@ -180,6 +180,13 @@ def beside(window: str, cwd: str, command: list[str]) -> list[str]:
     ]
 
 
+def _mode(fd: int) -> list:
+    """fd's terminal attributes but PENDIN, which BSD sets itself on a return to canonical input."""
+    mode = termios.tcgetattr(fd)
+    mode[3] &= ~termios.PENDIN
+    return mode
+
+
 def on_terminal(cwd: str, env: dict, answer: bytes, script: str = ENSEMBLE) -> tuple[int, str]:
     """ensemble list with stdin and stdout on a terminal, answering its prompt: exit, stderr."""
     master, slave = pty.openpty()
@@ -532,7 +539,7 @@ class FakeTmux(Case):
     def test_arrow_keys_select_on_a_terminal_and_its_mode_is_restored(self):
         self.demo()
         master, slave = pty.openpty()
-        before = termios.tcgetattr(slave)
+        before = _mode(slave)
         try:
             process = subprocess.Popen(
                 (ENSEMBLE, "list"),
@@ -554,7 +561,7 @@ class FakeTmux(Case):
                 if select.select([master], [], [], 0.1)[0]:
                     os.read(master, 4096)
             self.assertEqual(process.wait(timeout=1), 0)
-            self.assertEqual(termios.tcgetattr(slave), before)
+            self.assertEqual(_mode(slave), before)
         finally:
             os.close(slave)
             os.close(master)
