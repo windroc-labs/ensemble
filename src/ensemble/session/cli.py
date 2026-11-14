@@ -33,6 +33,7 @@ import ensemble.session.engine.types
 import ensemble.utils
 from ensemble.session.engine.base import Session, hosted_viewer
 from ensemble.session.engine.config import read_config
+from ensemble.session.engine.delivery import POLL, deliver
 from ensemble.session.engine.types import (
     ACCOUNT_SET_BY,
     COMMAND,
@@ -40,6 +41,7 @@ from ensemble.session.engine.types import (
     SESSION_NAME,
     SESSION_NAME_RULE,
     ConfigError,
+    Delivery,
     EnvironmentSpec,
     Hosts,
     KeyPress,
@@ -51,7 +53,7 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.engine.worker import Worker
-from ensemble.session.hosts.base import Host, stored_record, worker_state
+from ensemble.session.hosts.base import Host, activity, stored_record, worker_state
 from ensemble.session.modes import tui_hook
 from ensemble.session.modes.tui import TuiMode
 from ensemble.session.viewer import display as displays
@@ -90,6 +92,18 @@ def _lines(value: str) -> int:
     if not value.isdigit() or int(value) < 1:
         raise argparse.ArgumentTypeError(f"want a positive int, not {value!r:.80}")
     return int(value)
+
+
+def _seconds(value: str) -> float:
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"want a positive number of seconds, got {value!r}"
+        ) from None
+    if not 0 < seconds < float("inf"):
+        raise argparse.ArgumentTypeError(f"want a positive number of seconds, got {value!r}")
+    return seconds
 
 
 def _env(item: str) -> tuple[str, str]:
@@ -391,7 +405,11 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         epilog="Prerequisites and effects\n"
         "  Requires a live session and configured Host. Supply exactly one of TEXT\n"
         "  or --key; no stdin input. All keys are validated before sending any.\n"
-        "  Sends to the running program, prints nothing. Scalar repeats: last wins.\n\n"
+        "  Sends to the running program; without --wait prints nothing. Scalar\n"
+        "  repeats: last wins.\n"
+        "  --wait S, TEXT only: then prints delivered (a turn started with it within\n"
+        "  S seconds), queued (a turn already open holds it) or undelivered (exit 1;\n"
+        "  also, nothing sent, for a stopped client or an open dialog).\n\n"
         "Examples (live session helper)\n"
         "  ensemble-session send helper 'hello'\n"
         "  Pastes hello and sends Enter.\n"
@@ -411,6 +429,13 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         nargs="+",
         metavar="K",
         help="one or more keys instead of TEXT; repeated --key: last group wins",
+    )
+    p.add_argument(
+        "--wait",
+        type=_seconds,
+        metavar="S",
+        help="with TEXT: wait up to S seconds for a turn to start with it and print the delivery "
+        "(default: print nothing)",
     )
     p = sub.add_parser(
         "read",
@@ -847,9 +872,25 @@ def _worker(args, start_sid: str | None, worker_cls) -> int:
     return 0
 
 
+def _turn_open(name: str) -> bool:
+    """Its activity mark says working: status says working too for a client with no turn yet."""
+    generation = TuiMode.snapshot(name).get("generation")
+    return isinstance(generation, str) and activity(name, generation) == StatusState.WORKING
+
+
 def _send(args, hosts: Hosts) -> int:
     if (args.text is None) == (args.key is None):
         raise UsageError("send: give TEXT or --key K…, not both")
+    if args.wait is not None:
+        if args.text is None:
+            raise UsageError("send: --wait takes TEXT, not --key")
+        host = _host_of(args.name, hosts)
+        session = Session.attach(args.name, sid=args.sid, host=host, idle_timeout=POLL)
+        found, reason = deliver(session, args.text, open_turn=_turn_open(args.name), wait=args.wait)
+        print(found)
+        if reason is not None:
+            _say(reason)
+        return 1 if found == Delivery.UNDELIVERED else 0
     keys = None if args.key is None else tuple(map(KeyPress.parse, args.key))
     session = Session.attach(args.name, sid=args.sid, host=_host_of(args.name, hosts))
     if keys is None:

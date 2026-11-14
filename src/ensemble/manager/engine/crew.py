@@ -46,6 +46,7 @@ from ensemble.utils import (
 )
 
 TIMEOUT = 30
+SEND_WAIT = 20  # seconds an idle client has to start a turn
 # A start's or resume's: a Docker one may first rebuild its image, which its broker allows 1800 s.
 START_TIMEOUT = 1920
 GRACE = 60  # from SIGTERM to SIGKILL: a Docker start in flight removes its container
@@ -743,8 +744,26 @@ class Crew:
     ) -> tuple[str, ...]:
         """The command pasting text, then Enter, else pressing keys, in the entry's session."""
         session, sid = self._session(name)
-        sent = ("--key", *keys) if text is None else ("--", text)
-        return (LayerCommand.SESSION, "send", session, "--sid", sid, *sent)
+        if text is None:
+            return (LayerCommand.SESSION, "send", session, "--sid", sid, "--key", *keys)
+        waited = ("--sid", sid, "--wait", str(SEND_WAIT))
+        return (LayerCommand.SESSION, "send", *waited, session, "--", text)
+
+    def send_text(self, name: str, text: str) -> tuple[str | None, int]:
+        """The session's delivery word, else None, and exit status."""
+        argv = self.send_argv(name, text=text)
+        try:
+            result = subprocess.run(
+                argv,
+                stdout=subprocess.PIPE,
+                text=True,
+                check=False,
+                env=self._env(events=False),
+            )
+        except OSError as error:
+            raise RuntimeError(f"{shlex.join(argv)}: {error}") from error
+        words = result.stdout.split()
+        return (words[0] if words else None), result.returncode
 
     def resume(self, name: str, *, input: str | None = None) -> Record | None:
         self._listed = None

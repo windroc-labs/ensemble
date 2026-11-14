@@ -10,14 +10,22 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _run_start, hand_off
+from ensemble.manager.engine.crew import (
+    GRACE,
+    HEADER,
+    SEND_WAIT,
+    START_TIMEOUT,
+    Crew,
+    _run_start,
+    hand_off,
+)
 from ensemble.manager.engine.types import RosterError, Spec, State
-from ensemble.utils import Record, save_reply
+from ensemble.utils import EVENTS_ENV, Record, save_reply
 from tests.manager.case import status
 from tests.manager.roster_case import RosterCase, mark
 from tests.manager.starters import answered, finished
 from tests.utils.jsonl import read_jsonl
-from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
+from tests.utils.process_fixtures import DEVNULL, PIPE, CompletedProcess, TimeoutExpired
 
 ARGV = ("fake-ctl", "start", "x")
 
@@ -947,13 +955,52 @@ class ReadSend(RosterCase):
         with self.assertRaisesRegex(ValueError, "^bare: no workdir to read its run outcome$"):
             self.outcome("bare")
 
-    def test_send_pastes_text_after_a_separator(self):
+    def test_send_pastes_text_after_a_separator_and_waits_for_its_delivery(self):
         for text in ("answer", "-x"):
             with self.subTest(text=text):
                 self.assertEqual(
                     self.crew.send_argv("w1", text=text),
-                    ("ensemble-session", "send", "w1", "--sid", self.worker.sid, "--", text),
+                    (
+                        "ensemble-session",
+                        "send",
+                        "--sid",
+                        self.worker.sid,
+                        "--wait",
+                        str(SEND_WAIT),
+                        "w1",
+                        "--",
+                        text,
+                    ),
                 )
+
+    def test_send_text_returns_the_sessions_word_and_exit(self):
+        for stdout, code, found in (
+            ("delivered\n", 0, ("delivered", 0)),
+            ("undelivered\n", 1, ("undelivered", 1)),
+            ("", 2, (None, 2)),
+        ):
+            with (
+                self.subTest(stdout=stdout),
+                mock.patch(
+                    "subprocess.run",
+                    return_value=CompletedProcess((), code, stdout=stdout),
+                ) as run,
+            ):
+                self.assertEqual(self.crew.send_text("w1", "answer"), found)
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0], self.crew.send_argv("w1", text="answer"))
+            options = run.call_args.kwargs
+            self.assertEqual(options["stdout"], PIPE)
+            self.assertNotIn("stderr", options)
+            self.assertNotIn("timeout", options)
+            self.assertNotIn(EVENTS_ENV, options["env"])
+
+    def test_send_text_reports_a_missing_session_command(self):
+        with (
+            mock.patch("subprocess.run", side_effect=FileNotFoundError("ensemble-session")),
+            self.assertRaisesRegex(RuntimeError, "ensemble-session"),
+        ):
+            self.crew.send_text("w1", "answer")
 
     def test_send_keys(self):
         for keys in (("Escape",), ("Down", "Enter")):
@@ -965,8 +1012,8 @@ class ReadSend(RosterCase):
 
     def test_send_to_an_issue_run_reaches_its_tui(self):
         self.assertEqual(
-            self.crew.send_argv("TASK-1", text="answer")[2:5],
-            ("pm-TASK-1-abcdef12", "--sid", self.issue.sid),
+            self.crew.send_argv("TASK-1", text="answer")[2:7],
+            ("--sid", self.issue.sid, "--wait", str(SEND_WAIT), "pm-TASK-1-abcdef12"),
         )
 
     def test_send_needs_one_session_and_its_sid(self):

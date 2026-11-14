@@ -16,6 +16,7 @@ from unittest import mock
 
 from ensemble.manager import Roster, Spec, State, cli
 from ensemble.manager.cli import main
+from ensemble.manager.engine.crew import SEND_WAIT
 from ensemble.manager.engine.pr import VIEW_FIELDS
 from ensemble.utils import Record, append_line
 from tests.manager.case import HERE, Case, own, status
@@ -24,6 +25,7 @@ from tests.manager.roster_case import mark
 from tests.manager.starters import answered, finished
 from tests.utils.cli_help import check_examples, help_text, parse_only
 from tests.utils.fakes import ctl
+from tests.utils.process_fixtures import CompletedProcess
 
 
 class CliTest(CliCase):
@@ -1925,17 +1927,48 @@ class Send(CliCase):
         self.record = own(self.roster, replace(self.fake_record("w1"), sessions=("w1",)))
         self.execvpe = self.enterContext(mock.patch("os.execvpe"))
 
-    def test_send_hands_off_text_or_keys(self):
-        guard = ("ensemble-session", "send", "w1", "--sid", self.record.sid)
-        for argv, tail in (
-            (("w1", "answer"), ("--", "answer")),
-            (("w1", "--", "-x"), ("--", "-x")),
-            (("w1", "--key", "Down", "Enter"), ("--key", "Down", "Enter")),
+    def test_send_hands_off_keys(self):
+        self.assertEqual(
+            self.invoke("send", "--manager", "mgr", "w1", "--key", "Down", "Enter"), (None, "", "")
+        )
+        self.assertEqual(
+            self.execvpe.call_args.args[1],
+            ("ensemble-session", "send", "w1", "--sid", self.record.sid, "--key", "Down", "Enter"),
+        )
+
+    def test_send_prints_the_delivery_of_text(self):
+        argv = (
+            "ensemble-session",
+            "send",
+            "--sid",
+            self.record.sid,
+            "--wait",
+            str(SEND_WAIT),
+            "w1",
+        )
+        for given, stdout, code, line, exit_code in (
+            (("w1", "answer"), "delivered\n", 0, "已送达 (delivered)", 0),
+            (("w1", "--", "-x"), "queued\n", 0, "排队中 (queued)", 0),
+            (("w1", "answer"), "undelivered\n", 1, "未送达 (undelivered)", 1),
+            (("w1", "answer"), "", 2, "未送达 (undelivered)", 2),
+            (("w1", "answer"), "", 0, "未送达 (undelivered)", 1),
         ):
-            with self.subTest(argv=argv):
-                self.execvpe.reset_mock()
-                self.assertEqual(self.invoke("send", "--manager", "mgr", *argv), (None, "", ""))
-                self.assertEqual(self.execvpe.call_args.args[1], (*guard, *tail))
+            with (
+                self.subTest(stdout=stdout, code=code),
+                mock.patch(
+                    "subprocess.run",
+                    return_value=CompletedProcess((), code, stdout=stdout),
+                ) as run,
+            ):
+                found = self.invoke("send", "--manager", "mgr", *given)
+                self.assertEqual(found, (exit_code, line + "\n", ""))
+                self.assertEqual(run.call_args.args[0], (*argv, "--", given[-1]))
+        self.execvpe.assert_not_called()
+
+    def test_send_help_states_its_outputs_and_wait(self):
+        text = help_text(self, main, ["send", "--help"])
+        for part in ("已送达", "排队中", "未送达", f"{SEND_WAIT} seconds", "--key prints nothing"):
+            self.assertIn(part, text)
 
     def test_send_takes_text_or_keys_not_both(self):
         for argv in (("w1",), ("w1", "answer", "--key", "Enter")):
