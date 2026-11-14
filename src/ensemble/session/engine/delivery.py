@@ -1,4 +1,4 @@
-"""Whether a tui client took a sent text, told by its session's events after the send."""
+"""Whether a tui client took a sent text."""
 
 from __future__ import annotations
 
@@ -18,11 +18,11 @@ from ensemble.session.engine.types import (
     TurnFailed,
     TurnStarted,
 )
-from ensemble.session.hosts.base import activity
-from ensemble.session.modes.tui import TuiMode
 from ensemble.utils import StatusState
 
 POLL = 0.1
+# lets a stale working mark (interrupt, closed dialog) still see a turn start
+GRACE = 2.0
 
 Event = SessionEvent | Stderr | IdleTimeout
 
@@ -39,23 +39,20 @@ def fold(event: Event, *, open_turn: bool) -> tuple[Delivery | None, bool]:
 
 
 def deliver(
-    name: str, *, sid: str | None, host: str | None, text: str, wait: float
+    session: Session, text: str, *, open_turn: bool, wait: float
 ) -> tuple[Delivery, str | None]:
-    """Sends `text` unless its client is down or a dialog waits; then the delivery and, when
-    undelivered, why. A turn already open when the send returns holds the text: queued at once.
-    Attach and send failures raise.
+    """Sends `text` unless its client is down or a dialog waits: the delivery and why not. A turn
+    still open GRACE s after the send holds it: queued. Send failures raise.
     """
-    session = Session.attach(name, sid=sid, host=host, idle_timeout=POLL)
+    name = session.name or session.sid
     status = session.status()
     if not status.alive:
         return Delivery.UNDELIVERED, f"session {name}: client not running"
     if status.state == StatusState.BLOCKED:
         return Delivery.UNDELIVERED, f"session {name}: a dialog waits; answer it with --key"
-    # status says working for a client with no turn yet; only its activity mark means one is open
-    generation = TuiMode.snapshot(name).get("generation")
-    open_turn = isinstance(generation, str) and activity(name, generation) == StatusState.WORKING
     session.send(text)
-    deadline = time.monotonic() + wait
+    sent = time.monotonic()
+    deadline, queued = sent + wait, sent + min(GRACE, wait)
     found: queue.Queue[Event | SessionError] = queue.Queue()
 
     def drain() -> None:
@@ -65,7 +62,7 @@ def deliver(
         except SessionError as error:
             found.put(error)
 
-    # a view whose dialog shows yields nothing, not even IdleTimeout: the deadline is kept here
+    # a blocked view yields not even IdleTimeout
     threading.Thread(target=drain, daemon=True).start()
     while True:
         try:
@@ -75,7 +72,7 @@ def deliver(
         if isinstance(event, SessionError):
             return Delivery.UNDELIVERED, str(event)
         if isinstance(event, IdleTimeout):
-            if open_turn:
+            if open_turn and time.monotonic() >= queued:
                 return Delivery.QUEUED, None
             if time.monotonic() >= deadline:
                 return Delivery.UNDELIVERED, f"session {name}: no turn started within {wait:g} s"

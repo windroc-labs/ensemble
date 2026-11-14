@@ -11,13 +11,13 @@ from unittest import mock
 
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import ConfigError, Delivery, Hosts, Liveness, SessionError
+from ensemble.session.engine.types import ConfigError, Hosts, Liveness, SessionError
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes.tui import TuiStore
 from ensemble.session.viewer import display as displays
-from ensemble.utils import ACCOUNT_ENV, Record
+from ensemble.utils import ACCOUNT_ENV, Record, StatusState
 from tests.session import harnesses
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
@@ -502,41 +502,38 @@ class RecordControl(ControlBase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("turn interruption", err)
 
-    def test_send_wait_prints_the_delivery_word(self):
-        self.tui(name="w1", sid=SID)
-        for word, reason, code, err in (
-            (Delivery.DELIVERED, None, 0, ""),
-            (Delivery.QUEUED, None, 0, ""),
-            (
-                Delivery.UNDELIVERED,
-                "session w1: client not running",
-                1,
-                "session w1: client not running\n",
-            ),
-        ):
-            with (
-                self.subTest(word=word),
-                mock.patch.object(cli, "deliver", return_value=(word, reason)) as deliver,
-            ):
-                found = self.invoke("send", "--sid", SID, "--wait", "20", "w1", "--", "-text")
-                self.assertEqual(found, (code, f"{word}\n", err))
-                deliver.assert_called_once_with(
-                    "w1", sid=SID, host=mock.ANY, text="-text", wait=20.0
-                )
+    def mark(self, name, word):
+        generation = json.loads(Path(self.root, name, "session.json").read_text())["generation"]
+        TuiStore.attach(name, host=self.host).set_activity(generation, word, None)
 
-    def test_send_wait_failure_prints_no_word(self):
+    def test_send_wait_with_no_turn_start_is_undelivered(self):
         self.tui(name="w1", sid=SID)
-        failure = SessionError("session w1: expected sid 'x'")
-        with mock.patch.object(cli, "deliver", side_effect=failure):
-            code, out, err = self.invoke("send", "--wait", "5", "w1", "hello")
+        process = self.host.processes["w1"]
+        code, out, err = self.invoke("send", "--sid", SID, "--wait", "0.3", "w1", "--", "-text")
+        self.assertEqual((code, out), (1, "undelivered\n"))
+        self.assertIn("session w1: no turn started within 0.3 s", err)
+        process.calls.send.assert_called()
+
+    def test_send_wait_to_an_open_turn_is_queued(self):
+        self.tui(name="w1", sid=SID)
+        self.mark("w1", StatusState.WORKING)
+        self.assertEqual(self.invoke("send", "--wait", "0.3", "w1", "hello"), (0, "queued\n", ""))
+
+    def test_send_wait_to_a_stopped_client_sends_nothing(self):
+        owner = self.owned("w1", held=False)
+        self.addCleanup(self.ended)
+        self.ended()
+        self.assertFalse(json.loads(self.invoke("status", "w1")[1])["alive"])
+        code, out, err = self.invoke("send", "--wait", "5", "w1", "hello")
+        self.assertEqual((code, out), (1, "undelivered\n"))
+        self.assertIn("session w1: client not running", err)
+        self.assertEqual(owner.channel.pending(), [])
+
+    def test_send_wait_identity_failure_prints_no_word(self):
+        self.tui(name="w1", sid="replacement")
+        code, out, err = self.invoke("send", "--sid", SID, "--wait", "5", "w1", "hello")
         self.assertEqual((code, out), (1, ""))
-        self.assertIn("expected sid", err)
-
-    def test_send_without_wait_prints_nothing(self):
-        self.tui(name="w1", sid=SID)
-        with mock.patch.object(cli, "deliver") as deliver:
-            self.assertEqual(self.invoke("send", "w1", "hello")[:2], (0, ""))
-        deliver.assert_not_called()
+        self.assertIn("replacement", err)
 
     def test_malformed_record_is_usage_error(self):
         self.assertEqual(self.invoke("status", stdin="{}\n")[:2], (2, ""))

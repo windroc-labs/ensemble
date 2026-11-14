@@ -7,7 +7,6 @@ import os
 import re
 import shlex
 import shutil
-import subprocess
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -26,6 +25,7 @@ from tests.manager.roster_case import mark
 from tests.manager.starters import answered, finished
 from tests.utils.cli_help import check_examples, help_text, parse_only
 from tests.utils.fakes import ctl
+from tests.utils.process_fixtures import CompletedProcess
 
 
 class CliTest(CliCase):
@@ -1751,7 +1751,7 @@ class Send(CliCase):
                 self.subTest(stdout=stdout, code=code),
                 mock.patch(
                     "subprocess.run",
-                    return_value=subprocess.CompletedProcess((), code, stdout=stdout),
+                    return_value=CompletedProcess((), code, stdout=stdout),
                 ) as run,
             ):
                 found = self.invoke("send", "--manager", "mgr", *given)

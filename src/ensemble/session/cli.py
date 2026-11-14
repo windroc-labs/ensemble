@@ -33,7 +33,7 @@ import ensemble.session.engine.types
 import ensemble.utils
 from ensemble.session.engine.base import Session, hosted_viewer
 from ensemble.session.engine.config import read_config
-from ensemble.session.engine.delivery import deliver
+from ensemble.session.engine.delivery import POLL, deliver
 from ensemble.session.engine.types import (
     ACCOUNT_SET_BY,
     COMMAND,
@@ -53,7 +53,7 @@ from ensemble.session.engine.types import (
     Unanswered,
 )
 from ensemble.session.engine.worker import Worker
-from ensemble.session.hosts.base import Host, stored_record, worker_state
+from ensemble.session.hosts.base import Host, activity, stored_record, worker_state
 from ensemble.session.modes import tui_hook
 from ensemble.session.modes.tui import TuiMode
 from ensemble.session.viewer import display as displays
@@ -867,6 +867,12 @@ def _worker(args, start_sid: str | None, worker_cls) -> int:
     return 0
 
 
+def _turn_open(name: str) -> bool:
+    """Its activity mark says working: status says working too for a client with no turn yet."""
+    generation = TuiMode.snapshot(name).get("generation")
+    return isinstance(generation, str) and activity(name, generation) == StatusState.WORKING
+
+
 def _send(args, hosts: Hosts) -> int:
     if (args.text is None) == (args.key is None):
         raise UsageError("send: give TEXT or --key K…, not both")
@@ -874,7 +880,8 @@ def _send(args, hosts: Hosts) -> int:
         if args.text is None:
             raise UsageError("send: --wait takes TEXT, not --key")
         host = _host_of(args.name, hosts)
-        found, reason = deliver(args.name, sid=args.sid, host=host, text=args.text, wait=args.wait)
+        session = Session.attach(args.name, sid=args.sid, host=host, idle_timeout=POLL)
+        found, reason = deliver(session, args.text, open_turn=_turn_open(args.name), wait=args.wait)
         print(found)
         if reason is not None:
             _say(reason)

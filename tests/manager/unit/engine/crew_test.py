@@ -5,7 +5,6 @@ Crew.attach shows each live entry but a hidden one, whose view column says so.
 import contextlib
 import io
 import os
-import subprocess
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -18,7 +17,7 @@ from tests.manager.case import status
 from tests.manager.roster_case import RosterCase, mark
 from tests.manager.starters import answered, finished
 from tests.utils.jsonl import read_jsonl
-from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
+from tests.utils.process_fixtures import DEVNULL, PIPE, CompletedProcess, TimeoutExpired
 
 ARGV = ("fake-ctl", "start", "x")
 
@@ -702,14 +701,14 @@ class ReadSend(RosterCase):
                 self.subTest(stdout=stdout),
                 mock.patch(
                     "subprocess.run",
-                    return_value=subprocess.CompletedProcess((), code, stdout=stdout),
+                    return_value=CompletedProcess((), code, stdout=stdout),
                 ) as run,
             ):
                 self.assertEqual(self.crew.send_text("w1", "answer"), found)
             run.assert_called_once()
             self.assertEqual(run.call_args.args[0], self.crew.send_argv("w1", text="answer"))
             options = run.call_args.kwargs
-            self.assertEqual(options["stdout"], subprocess.PIPE)
+            self.assertEqual(options["stdout"], PIPE)
             self.assertNotIn("stderr", options)
             self.assertNotIn("timeout", options)
             self.assertNotIn(EVENTS_ENV, options["env"])
