@@ -563,3 +563,132 @@ class Close(Entries):
         self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="boom\n")
         self.close_all(dry_run=True)
         self.assertEqual(self.failures(), [])
+
+
+class ReadSend(RosterCase):
+    """read_argv and send_argv: an entry's pane is its Record's one session, guarded by its sid; a
+    role or issue run's outcome is read from its delegate workdir.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.worker = replace(self.record, kind="worker", name="w1", sessions=("w1",), sid=None)
+        self.issue = replace(
+            self.record,
+            kind="pipeline",
+            name="TASK-1",
+            sessions=("pm-TASK-1-abcdef12",),
+            workdir=os.path.join(self.home, "work", "TASK-1"),
+            ctl=("ensemble-orchestrator",),
+            resume=("ensemble-orchestrator", "resume", "TASK-1"),
+        )
+        self.role = replace(
+            self.issue,
+            kind="role",
+            name="planner",
+            sessions=("planner",),
+            workdir=os.path.join(self.home, "adhoc", "planner"),
+            ctl=("ensemble-delegate",),
+            resume=("ensemble-delegate", "resume", "planner"),
+        )
+        self.worker, self.issue, self.role = map(self.own, (self.worker, self.issue, self.role))
+        self.crew = Crew(self.roster)
+
+    def own(self, record, **changes):
+        """record, with changes and a fresh sid, committed as a live entry."""
+        record = replace(record, **{"sid": str(uuid.uuid4()), **changes})
+        self.live(record.name, record=record)
+        return record
+
+    def test_read_hands_off_to_the_panes_screen(self):
+        self.assertEqual(
+            self.crew.read_argv("w1"),
+            ("ensemble-session", "read", "w1", "--sid", self.worker.sid),
+        )
+
+    def test_read_with_lines_adds_them(self):
+        self.assertEqual(
+            self.crew.read_argv("w1", lines=5),
+            ("ensemble-session", "read", "w1", "--sid", self.worker.sid, "--lines", "5"),
+        )
+
+    def test_reply_hands_off_to_the_panes_reply(self):
+        self.assertEqual(
+            self.crew.read_argv("w1", reply=True),
+            ("ensemble-session", "reply", "w1", "--sid", self.worker.sid),
+        )
+
+    def test_outcome_reads_a_role_or_issue_runs_workdir(self):
+        for record in (self.role, self.issue):
+            with self.subTest(kind=record.kind):
+                self.assertEqual(
+                    self.crew.read_argv(record.name, outcome=True),
+                    ("ensemble-delegate", "outcome", record.workdir),
+                )
+
+    def test_an_issue_runs_pane_is_its_tui_not_its_id(self):
+        self.assertEqual(self.crew.read_argv("TASK-1")[2], "pm-TASK-1-abcdef12")
+
+    def test_unknown_entry_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "^not in roster: nobody$"):
+            self.crew.read_argv("nobody")
+
+    def test_an_entry_without_record_is_refused(self):
+        self.begin("pending")
+        with self.assertRaisesRegex(RuntimeError, "^pending: starting: no Record$"):
+            self.crew.read_argv("pending")
+
+    def test_a_record_naming_no_single_session_is_refused(self):
+        for name, sessions in (("headless", ()), ("pair", ("s1", "s2"))):
+            self.own(self.role, name=name, sessions=sessions)
+            with self.subTest(sessions=sessions):
+                for options in ({}, {"reply": True}):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        f"^{name}: no single session to read or send to "
+                        rf"\(sessions: {len(sessions)}\)$",
+                    ):
+                        self.crew.read_argv(name, **options)
+
+    def test_a_record_without_sid_is_refused(self):
+        # The roster commits only Records carrying their launch sid; a damaged one may not.
+        entries = self.roster.entries()
+        entries["w1"] = replace(entries["w1"], record=replace(self.worker, sid=None))
+        for options in ({}, {"reply": True}):
+            with (
+                self.subTest(options=options),
+                mock.patch.object(self.roster, "entries", return_value=entries),
+                self.assertRaisesRegex(ValueError, "^w1: no sid to guard its session$"),
+            ):
+                self.crew.read_argv("w1", **options)
+
+    def test_a_worker_or_a_run_without_workdir_has_no_run_outcome(self):
+        self.own(self.role, name="bare", workdir=None)
+        for name in ("w1", "bare"):
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(
+                    ValueError, f"^{name}: no run outcome; --outcome reads role and issue runs$"
+                ),
+            ):
+                self.crew.read_argv(name, outcome=True)
+
+    def test_reading_writes_no_roster_file(self):
+        before = Path(self.roster.path).read_bytes()
+        self.crew.read_argv("w1")
+        self.crew.read_argv("planner", outcome=True)
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
+
+    def test_hand_off_execs_with_crews_child_environment(self):
+        argv = ("ensemble-session", "read", "w1", "--sid", self.worker.sid)
+        polluted = {"ENSEMBLE_SID": "other", "ENSEMBLE_EVENTS": "/events", "KEEP": "1"}
+        with (
+            mock.patch.dict(os.environ, polluted),
+            mock.patch("os.execvpe") as execvpe,
+        ):
+            self.crew.hand_off(argv)
+        execvpe.assert_called_once()
+        file, called, env = execvpe.call_args.args
+        self.assertEqual((file, called), ("ensemble-session", argv))
+        self.assertEqual(env["KEEP"], "1")
+        self.assertFalse({"ENSEMBLE_SID", "ENSEMBLE_EVENTS"} & env.keys())

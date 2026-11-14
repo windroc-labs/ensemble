@@ -45,6 +45,16 @@ def _number(value: str) -> int:
     return number
 
 
+def _positive(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("want a positive integer") from error
+    if number < 1:
+        raise argparse.ArgumentTypeError("want a positive integer")
+    return number
+
+
 def _sid(value: str) -> str:
     try:
         identity = uuid.UUID(value)
@@ -366,6 +376,13 @@ def _report_error(error: Exception) -> None:
 def _report(args) -> int:
     print(_crew(args).report(), end="")
     return 0
+
+
+def _read(args) -> int:
+    crew = _crew(args)
+    crew.hand_off(
+        crew.read_argv(args.name, lines=args.lines, reply=args.reply, outcome=args.outcome)
+    )
 
 
 def _resume(args) -> int:
@@ -837,6 +854,40 @@ ensemble-crew status --help for individual status queries.
 """,
     )
     report.set_defaults(func=_report)
+    read = page(
+        "read",
+        "Print an entry's screen, latest reply or outcome",
+        """Reads the one session the entry's Record names: a worker's own; a role
+run's tui; an issue run's tui, ROLE-ID-<sid8>. A headless run has none.
+Session commands carry the Record's sid, so a session that reused the name
+is refused. --outcome prints a role or issue run's outcome
+JSON, null without one. Output and exit status are the session's or the
+delegate's own. Needs no holder lease and changes nothing.
+
+Examples:
+  ensemble-crew read --manager demo helper --lines 20
+  ensemble-crew read --manager demo helper --reply
+  ensemble-crew read --manager demo TASK-1 --outcome
+
+Recovery and next help:
+  Entry names and states: ensemble-crew status --help
+  Screen and reply: ensemble-session read --help, ensemble-session reply --help
+  Outcome: ensemble-delegate outcome --help
+""",
+    )
+    read.add_argument("name", metavar="NAME", help="entry name")
+    shown = read.add_mutually_exclusive_group()
+    shown.add_argument(
+        "--lines",
+        type=_positive,
+        metavar="N",
+        help="the screen's last N lines, history included; default: the visible screen",
+    )
+    shown.add_argument("--reply", action="store_true", help="the latest reply, not the screen")
+    shown.add_argument(
+        "--outcome", action="store_true", help="a role or issue run's outcome JSON, or null"
+    )
+    read.set_defaults(func=_read)
     resume = page(
         "resume",
         "Recover gone entries or answer one waiting entry; print Records",
