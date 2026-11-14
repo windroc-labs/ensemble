@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _run_start
+from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _run_start, hand_off
 from ensemble.manager.engine.types import RosterError, Spec, State
 from ensemble.utils import Record, save_reply
 from tests.manager.case import status
@@ -222,6 +222,136 @@ class ResumeInput(RosterCase):
                     Crew(self.roster).resume("x", input="answer")
                 run.assert_not_called()
                 self.assertEqual(self.roster.entries(), before)
+
+
+class Restart(RosterCase):
+    def setUp(self):
+        super().setUp()
+        self.worker = replace(
+            self.record,
+            kind="worker",
+            name="w1",
+            sessions=("w1",),
+            resume=("ensemble-session", "resume", "w1"),
+        )
+        self.restarted = replace(self.worker, display="restarted")
+        self.live("w1", record=self.worker)
+
+    def restart(self, *, code=0, output=None):
+        started = []
+
+        def run(argv, **options):
+            started.append(tuple(argv))
+            self.assertEqual(options["env"]["ENSEMBLE_SID"], self.worker.sid)
+            self.assertIs(self.roster.entries()["w1"].state, State.RESUMING)
+            text = self.restarted.to_line() + "\n" if output is None else output
+            os.write(options["stdout"].fileno(), text.encode())
+            return mock.Mock(returncode=code, stderr="no session to restart" if code else "")
+
+        with (
+            mock.patch("subprocess.Popen", side_effect=answered(run)),
+            mock.patch("subprocess.run") as query,
+        ):
+            try:
+                return Crew(self.roster).restart("w1"), started
+            finally:
+                query.assert_not_called()
+
+    def test_a_live_or_gone_worker_restarts_in_place_and_records_its_new_record(self):
+        for state in (State.LIVE, State.GONE):
+            with self.subTest(state=state):
+                mark(self.roster, "w1", state)
+                record, started = self.restart()
+                self.assertEqual(record, self.restarted)
+                self.assertEqual(started, [("ensemble-session", "restart", "w1")])
+                entry = self.roster.entries()["w1"]
+                self.assertEqual((entry.state, entry.record), (State.LIVE, self.restarted))
+                self.roster.remove("w1")
+                self.live("w1", record=self.worker)
+
+    def test_a_failed_restart_leaves_the_entry_gone_with_its_old_record(self):
+        for code, output in ((1, ""), (0, "not a Record\n")):
+            with self.subTest(code=code, output=output):
+                with self.assertRaises((RosterError, RuntimeError)):
+                    self.restart(code=code, output=output)
+                entry = self.roster.entries()["w1"]
+                self.assertEqual((entry.state, entry.record), (State.GONE, self.worker))
+
+    def refused(self, name, error, message):
+        before = Path(self.roster.path).read_bytes()
+        with (
+            mock.patch("subprocess.Popen") as popen,
+            mock.patch("subprocess.run") as query,
+            self.assertRaisesRegex(error, message),
+        ):
+            Crew(self.roster).restart(name)
+        popen.assert_not_called()
+        query.assert_not_called()
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
+
+    def test_other_kinds_are_refused_and_left_unchanged(self):
+        role = replace(
+            self.record,
+            sid=str(uuid.uuid4()),
+            kind="role",
+            name="planner",
+            sessions=("planner",),
+            ctl=("ensemble-delegate",),
+            resume=("ensemble-delegate", "resume", "/work"),
+        )
+        self.live("planner", record=role)
+        self.refused(
+            "planner",
+            ValueError,
+            r"^planner: restart restarts session workers only \(kind role, ctl ensemble-delegate\)$",
+        )
+        issue = replace(
+            self.worker,
+            sid=str(uuid.uuid4()),
+            name="TASK-1",
+            ctl=("ensemble-orchestrator",),
+            resume=("ensemble-orchestrator", "resume", "TASK-1"),
+        )
+        self.live("TASK-1", record=issue)
+        self.refused(
+            "TASK-1",
+            ValueError,
+            r"^TASK-1: restart restarts session workers only \(kind worker, ctl ensemble-orchestrator\)$",
+        )
+        self.roster.begin(Spec("pending", ("start",), None), sid=str(uuid.uuid4()))
+        self.refused("pending", RuntimeError, "^pending: starting: no Record$")
+        self.refused("nobody", ValueError, "^nobody: not in roster$")
+
+    def test_a_worker_record_without_one_session_and_sid_is_refused(self):
+        for name, record in (
+            ("two", replace(self.worker, sid=str(uuid.uuid4()), name="two", sessions=("a", "b"))),
+            ("nosid", replace(self.worker, name="nosid", sessions=("nosid",), sid=None)),
+        ):
+            with self.subTest(name=name):
+                entries = {
+                    **self.roster.entries(),
+                    name: replace(self.roster.entries()["w1"], record=record),
+                }
+                with (
+                    mock.patch.object(self.roster, "entries", return_value=entries),
+                    self.assertRaisesRegex(ValueError, f"^{name}: no "),
+                ):
+                    Crew(self.roster).restart(name)
+        self.assertIs(self.roster.entries()["w1"].state, State.LIVE)
+
+    def test_other_states_are_refused_and_left_unchanged(self):
+        for state in (State.WAITING, State.DONE, State.RESUMING):
+            with self.subTest(state=state):
+                self.roster.remove("w1")
+                self.live("w1", record=self.worker)
+                mark(self.roster, "w1", State.GONE if state == State.RESUMING else state)
+                if state == State.RESUMING:
+                    self.roster.claim_resume("w1")
+                self.refused("w1", RosterError, f"^w1: cannot restart {state}$")
+
+    def test_a_non_holder_changes_nothing(self):
+        with self.roster.hold("another commander"):
+            self.refused("w1", RosterError, "")
 
 
 class ResumeLive(RosterCase):
@@ -865,7 +995,7 @@ class ReadSend(RosterCase):
             mock.patch.dict(os.environ, polluted),
             mock.patch("os.execvpe") as execvpe,
         ):
-            self.crew.hand_off(argv)
+            hand_off(argv)
         execvpe.assert_called_once()
         file, called, env = execvpe.call_args.args
         self.assertEqual((file, called), ("ensemble-session", argv))

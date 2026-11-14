@@ -229,7 +229,8 @@ class TileTest(Base):
     def layout(self, target: str) -> str:
         return self.tmux("display-message", "-p", "-t", target, "#{window_layout}")
 
-    def test_tile_lays_out_the_window_it_names_and_no_other(self):
+    def dragged(self) -> tuple[str, str, dict[str, str]]:
+        """The manager's window with w1, w2 and a dragged grid; its grid; other windows' layouts."""
         self.record(self.start("w1"))
         self.record(self.start("w2"))
         window = self.tmux("display-message", "-p", "-t", f"={MANAGER}:", "#{window_id}")
@@ -249,11 +250,31 @@ class TileTest(Base):
             self.tmux("resize-pane", "-t", pane, way, "3")
         dragged = self.layout(window)
         self.assertNotEqual(dragged, grid)
-        untouched = {target: self.layout(target) for target in (other, "=x1:")}
+        return window, grid, {target: self.layout(target) for target in (other, "=x1:")}
+
+    def test_tile_lays_out_the_window_it_names_and_no_other(self):
+        window, grid, untouched = self.dragged()
         res = self.ok(self.session("tile", window))
         self.assertEqual((res.stdout, res.stderr), ("", ""))
         self.assertEqual(self.layout(window), grid)
         self.assertEqual({target: self.layout(target) for target in untouched}, untouched)
+
+    def test_tile_without_a_window_lays_out_the_callers_own_and_no_other(self):
+        window, grid, untouched = self.dragged()
+        res = self.ok(self.session("tile"))
+        self.assertEqual((res.stdout, res.stderr), ("", ""))
+        self.assertEqual(self.layout(window), grid)
+        self.assertEqual({target: self.layout(target) for target in untouched}, untouched)
+
+    def test_tile_without_a_window_outside_tmux_exits_1_and_changes_nothing(self):
+        window, _grid, _untouched = self.dragged()
+        dragged = self.layout(window)
+        res = self.session("tile", inside=None, TMUX=None, TMUX_PANE=None)
+        self.assertEqual(
+            (res.returncode, res.stdout, res.stderr),
+            (1, "", "ensemble-session: tile: not in tmux: give WINDOW or run it in a tmux pane\n"),
+        )
+        self.assertEqual(self.layout(window), dragged)
 
     def test_a_bad_window_id_exits_1_with_the_tmux_error(self):
         res = self.session("tile", "3")

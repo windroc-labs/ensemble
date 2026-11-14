@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State, commander
 from ensemble.manager.engine import managers
+from ensemble.manager.engine.crew import hand_off
 from ensemble.manager.engine.holder import Holder, inherited
 from ensemble.manager.engine.types import (
     Held,
@@ -269,12 +270,11 @@ def _read(args) -> int:
     if args.outcome:
         print(crew.outcome(args.name))
         return 0
-    crew.hand_off(crew.read_argv(args.name, lines=args.lines, reply=args.reply))
+    hand_off(crew.read_argv(args.name, lines=args.lines, reply=args.reply))
 
 
 def _send(args) -> int:
-    crew = _crew(args)
-    crew.hand_off(crew.send_argv(args.name, text=args.text, keys=args.key or ()))
+    hand_off(_crew(args).send_argv(args.name, text=args.text, keys=args.key or ()))
 
 
 def _resume(args) -> int:
@@ -293,7 +293,14 @@ def _resume(args) -> int:
     return failed
 
 
+def _restart(args) -> int:
+    print(_crew(args).restart(args.name).to_line())
+    return 0
+
+
 def _view(args) -> int:
+    if getattr(args, "tile", False):
+        return hand_off((LayerCommand.SESSION, "tile"))
     failures = _crew(args).view(args.verb, args.names)
     for name, failure in failures.items():
         print(f"crew: {name}: {failure}", file=sys.stderr)
@@ -301,6 +308,10 @@ def _view(args) -> int:
 
 
 def _close(args) -> int:
+    if getattr(args, "all", False):
+        return _close_all(args)
+    if getattr(args, "forget", False):
+        return _forget(args)
     _crew(args).close(args.name)
     return 0
 
@@ -511,7 +522,7 @@ Prerequisites and effects:
   SessionStart re-arm prompt goes only to a client in its process tree.
   Keep the pair together. An active holder fences ownership-sensitive roster
   updates; run those from its commander environment.
-  ENSEMBLE_AGENT_SESSION blocks hold/start/resume and resume-commander and
+  ENSEMBLE_AGENT_SESSION blocks hold/start/resume/restart, resume-commander and
   the old start forms; use a user-started commander. Help and start --list
   still work.
   State: ~/.ensemble/managers/NAME/.
@@ -823,10 +834,35 @@ reconcile interrupted bookkeeping with ensemble-crew attach --help.
     resume.add_argument("names", nargs="+", metavar="NAME", help="one or more existing entry names")
     resume.add_argument("--input", metavar="TEXT", help="answer exactly one waiting role entry")
     resume.set_defaults(func=_resume)
+    restart = page(
+        "restart",
+        "Restart a worker entry's session in place; print and record its new Record",
+        """Only for a worker entry (what start worker prints) that is live or gone; it
+continues the same conversation with the same options, as ensemble-session
+restart does, ending the worker's current client. The entry then holds the
+new Record, live. Requires lease access. Other kinds exit 2 and other states
+exit 1, both unchanged; a failed restart exits 1 and leaves the entry gone,
+for ensemble-crew resume.
+
+Examples:
+  With helper's client exited:
+  ensemble-crew restart --manager demo helper
+
+Recovery: ensemble-crew status --help; ensemble-crew resume --help
+""",
+    )
+    restart.add_argument("name", metavar="NAME", help="an existing worker entry")
+    restart.set_defaults(func=_restart)
     for verb, text in (
         ("hide", "close each entry's panes; its work runs on"),
         ("show", "show each entry as at its launch; print attach commands its layer gives"),
     ):
+        tile = (
+            "show --tile instead lays out this manager's window again by its [viewer]\n"
+            "grid, as ensemble-session tile does; it needs no manager or roster.\n"
+            if verb == "show"
+            else ""
+        )
         view = page(
             verb,
             text,
@@ -834,50 +870,93 @@ reconcile interrupted bookkeeping with ensemble-crew attach --help.
 Uses saved placement; no new --display is accepted. Work survives hide.
 Requires the owning controllers; no holder lease is needed.
 Partial failures exit 1.
-
+{tile}
 Examples:
   With a live helper entry:
   ensemble-crew {verb} --manager demo helper
-
+"""
+            + ("  ensemble-crew show --tile\n" if verb == "show" else "")
+            + """
 Recovery: show can print owning-layer attachment commands; run the printed
 command when placement fails. Placement: ensemble-session --help
 """,
         )
         view.add_argument("names", nargs="*", metavar="NAME", help="existing roster entry names")
         view.add_argument("--all", action="store_true", help="every live entry")
-        view.set_defaults(func=_view, verb=verb)
-    for name, handler in (("close", _close), ("forget", _forget)):
-        command = page(
-            name,
-            "Terminate an entry's work and remove its roster entry"
-            if name == "close"
-            else "Remove a stopped entry's bookkeeping",
-            (
-                "close calls the owning controller before removing the entry; a session\n"
-                "name owned by an entry also selects it. Requires lease access. Removes\n"
-                "the entry only once its owner confirmed the work ended; a failed close\n"
-                "keeps it, exits 1 and appends a line to the manager's\n"
-                "close-failures.jsonl. A locked run's environment lock goes only once\n"
-                "its container is confirmed removed.\n"
-                if name == "close"
-                else "By default refuses live work. --force skips controller checks and removes\n"
-                "bookkeeping only; work may remain alive. Requires lease access.\n"
-            )
-            + f"\nExamples:\n  With helper {'tracked' if name == 'close' else 'stopped'}:\n"
-            f"  ensemble-crew {name} --manager demo helper\n"
-            "\nRecovery: inspect entries with ensemble-crew status --help\n",
-        )
-        command.add_argument("name", metavar="NAME", help="existing entry name")
-        if name == "forget":
-            command.add_argument(
-                "--force",
+        if verb == "show":
+            view.add_argument(
+                "--tile",
                 action="store_true",
-                help="drop bookkeeping without ctl; work may remain alive",
+                help="lay out this manager's window again by its [viewer] grid",
             )
-        command.set_defaults(func=handler)
+        view.set_defaults(func=_view, verb=verb)
+    close = page(
+        "close",
+        "Terminate an entry's work and remove its roster entry",
+        """close calls the owning controller before removing the entry; a session
+name owned by an entry also selects it. Requires lease access. Removes
+the entry only once its owner confirmed the work ended; a failed close
+keeps it, exits 1 and appends a line to the manager's
+close-failures.jsonl. A locked run's environment lock goes only once
+its container is confirmed removed.
+
+--all instead closes every entry and the caller's untracked descendants:
+it requires ensemble-session listing, prints the selected names or nothing
+to close, removes each entry closed and keeps a failed one, logged to
+close-failures.jsonl. Partial listing or controller failures exit 1 and
+may leave work running. --dry-run only prints the names.
+
+--forget instead closes no work: it removes a stopped entry's bookkeeping,
+refusing live work unless --force, which skips controller checks; that
+work may remain alive.
+
+Examples:
+  With helper tracked:
+  ensemble-crew close --manager demo helper
+  From the intended commander's terminal, preview first:
+  ensemble-crew close --manager demo --all --dry-run
+  With helper stopped:
+  ensemble-crew close --manager demo helper --forget
+
+Recovery: inspect entries with ensemble-crew status --help;
+after a partial --all: ensemble-crew attach --help
+""",
+    )
+    close.add_argument("name", nargs="?", metavar="NAME", help="existing entry name")
+    close.add_argument("--all", action="store_true", help="every entry and untracked descendant")
+    close.add_argument(
+        "--dry-run", action="store_true", help="with --all: list targets without closing/removing"
+    )
+    close.add_argument("--forget", action="store_true", help="remove the entry only; close no work")
+    close.add_argument(
+        "--force",
+        action="store_true",
+        help="with --forget: drop bookkeeping without ctl; work may remain alive",
+    )
+    close.set_defaults(func=_close)
+    forget = page(
+        "forget",
+        "Remove a stopped entry's bookkeeping; older spelling of close NAME --forget",
+        """By default refuses live work. --force skips controller checks and removes
+bookkeeping only; work may remain alive. Requires lease access.
+
+Examples:
+  With helper stopped:
+  ensemble-crew close --manager demo helper --forget
+
+Recovery: inspect entries with ensemble-crew status --help
+""",
+    )
+    forget.add_argument("name", metavar="NAME", help="existing entry name")
+    forget.add_argument(
+        "--force",
+        action="store_true",
+        help="drop bookkeeping without ctl; work may remain alive",
+    )
+    forget.set_defaults(func=_forget)
     close_all = page(
         "close-all",
-        "Terminate roster entries and the caller's descendant work",
+        "Terminate roster entries and the caller's descendant work; older spelling of close --all",
         """Requires lease access and ensemble-session listing. Also includes untracked
 descendants opened by this caller. Prints selected names or nothing to close.
 Without --dry-run closes work and removes successful entries; a failed one is
@@ -886,7 +965,7 @@ exit 1 and may leave work running.
 
 Examples:
   From the intended commander's terminal, preview first:
-  ensemble-crew close-all --manager demo --dry-run
+  ensemble-crew close --manager demo --all --dry-run
 
 Recovery: ensemble-crew attach --help
 """,
@@ -1076,11 +1155,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("start takes a kind or --list")
     if args.func is _send and (args.text is None) == (args.key is None):
         parser.error("send takes TEXT or --key K…, not both")
-    if args.func is _view and bool(args.names) == args.all:
+    if args.func is _view and args.verb == "show":
+        if [bool(args.names), args.all, args.tile].count(True) != 1:
+            parser.error("show takes entry names, --all or --tile")
+    elif args.func is _view and bool(args.names) == args.all:
         parser.error(f"{args.verb} takes entry names or --all")
+    if args.func is _close:
+        if (args.name is None) != args.all:
+            parser.error("close takes NAME or --all")
+        if args.forget and args.all:
+            parser.error("close --forget takes NAME, not --all")
+        if args.dry_run and not args.all:
+            parser.error("close --dry-run requires --all")
+        if args.force and not args.forget:
+            parser.error("close --force requires --forget")
     if args.func is _resume and args.input is not None and len(args.names) != 1:
         parser.error("resume --input requires exactly one name")
-    if args.func in {_run, _hold, _resume, _launch, _resume_commander} and (
+    if args.func in {_run, _hold, _resume, _restart, _launch, _resume_commander} and (
         refused := nested_start()
     ):
         print(f"crew: {refused}", file=sys.stderr)

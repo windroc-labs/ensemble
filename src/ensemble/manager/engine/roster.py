@@ -605,7 +605,7 @@ class Roster:
         entry = self._get(data, name)
         allowed = {
             State.STARTING: {State.LOST},
-            State.LIVE: {State.DONE, State.WAITING, State.GONE},
+            State.LIVE: {State.DONE, State.WAITING, State.GONE, State.RESUMING},
             State.GONE: {State.LIVE, State.DONE, State.WAITING, State.RESUMING},
             State.RESUMING: {State.GONE, State.WAITING},
             State.DONE: set(),
@@ -645,6 +645,19 @@ class Roster:
                 return None
             if entry.state != state:
                 raise RosterError(f"{name}: cannot resume {entry.state}")
+            return self._mark(data, name, State.RESUMING)
+
+    def claim_restart(self, name: str, expected: Entry) -> Entry:
+        """`expected`, still unchanged and live or gone, marked resuming for a restart; its sid
+        is kept.
+        """
+        with self._locked() as data:
+            self._lease(data)
+            value = data["entries"].get(name)
+            if value is None or _entry(value) != expected:
+                raise RosterError(f"{name}: entry changed; retry")
+            if expected.state not in {State.LIVE, State.GONE}:
+                raise RosterError(f"{name}: cannot restart {expected.state}")
             return self._mark(data, name, State.RESUMING)
 
     def remove(self, name: str) -> None:

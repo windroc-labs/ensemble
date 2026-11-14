@@ -746,6 +746,11 @@ class HelpTest(Case):
     def help(self, argv):
         return help_text(self, cli.main, argv)
 
+    def test_tile_help_makes_the_window_optional_its_own_by_default(self):
+        text = self.help(["tile", "--help"])
+        self.assertIn("ensemble-session tile [WINDOW]", text)
+        self.assertIn("Without WINDOW, lays out the caller's own window.", text)
+
     def test_every_surface_is_safe_with_unavailable_configuration(self):
         for command in (None, *COMMANDS):
             for flag in ("--help", "-h"):
@@ -889,6 +894,7 @@ class HelpTest(Case):
             ["send", "helper", "--key", "C-c"],
             ["read", "helper", "--lines", "20"],
             ["tile", "@1"],
+            ["tile"],
             ["hook", "/absolute/session", "stop"],
             ["client-resume", "codex", "resume", "conversation-id"],
             ["resume-argv", "codex", "conversation-id"],
