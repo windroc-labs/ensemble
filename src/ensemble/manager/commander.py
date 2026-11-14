@@ -137,11 +137,9 @@ def listing(*, select: bool) -> int:
     return _select(chosen) if chosen is not None else 1 if failed else 0
 
 
-def resume(manager: str | None) -> int:
-    """Replace this process with the held manager's recorded client; manager: else
-    ENSEMBLE_MANAGER.
-    """
-    roster = managers.roster(manager or os.environ.get("ENSEMBLE_MANAGER"), NOT_HELD)
+def resume() -> int:
+    """Replace this process with the recorded client of the held manager ENSEMBLE_MANAGER names."""
+    roster = managers.roster(os.environ.get("ENSEMBLE_MANAGER"), NOT_HELD)
     lease = inherited()
     if lease is None:
         raise ValueError(NOT_HELD)
@@ -192,7 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return hold(args.name, command, force=args.force)
         if args.verb == "list":
             return listing(select=args.select)
-        return resume(None)
+        return resume()
     except ValueError as error:
         _report(error)
         return 2

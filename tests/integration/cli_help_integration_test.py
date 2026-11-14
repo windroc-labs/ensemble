@@ -10,24 +10,22 @@ SURFACES = {
     "crew": (
         "manager",
         [
-            "hold",
-            "run",
-            "worker",
-            "issue",
-            "role",
+            "start",
             "attach",
             "status",
             "report",
+            "read",
+            "send",
             "resume",
+            "restart",
             "hide",
             "show",
             "close",
-            "forget",
-            "close-all",
             "note",
             "release",
+            "pending",
+            "ack",
             "next-event",
-            "resume-commander",
         ],
     ),
     "session": (
@@ -148,7 +146,7 @@ class HelpSafety(Case):
             self.assertIn("ensemble-", out)
 
     def matrix(self, root):
-        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 59)
+        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 57)
         before = self.snapshot()
         package, commands = SURFACES[root]
         for leaf in [None, *commands]:

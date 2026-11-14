@@ -167,7 +167,7 @@ class Commands(InstalledCrewCase):
         orphan = self.fake_record("orphan")
         ctl.set_session(self.ctl_dir, "orphan", alive=True)
         fake_session.set_records(self.sessions, [orphan])
-        self.succeeded("close-all", "--manager", "mgr")
+        self.succeeded("close", "--all", "--manager", "mgr")
         closed = [call["names"] for call in ctl.calls(self.ctl_dir) if call["argv"] == ["close"]]
         self.assertEqual(closed, [["a", "orphan"]])
         self.assertEqual(crew.roster.entries(), {})
