@@ -49,8 +49,8 @@ from ensemble.session.hosts.docker.broker import (
 )
 from ensemble.session.hosts.docker.daemon import CLEARED, RUN_TIMEOUT, docker_call
 from ensemble.session.hosts.docker.host import (
+    FILES_STAGE,
     KEPT_RETRY,
-    PROMPT_STAGE,
     DockerHost,
 )
 from ensemble.session.hosts.docker.types import Maintained, Started
@@ -578,33 +578,33 @@ class StartTest(StartBase):
                 json.load(f)["mounts"], [{"path": self.home_dir + "/sessions", "rw": True}]
             )
 
-    def test_a_prompt_file_is_staged_in_the_container_before_the_guard(self):
-        path, text = "/run/ensemble/prompt/prompt.md", "雪\n" * 50_000
-        self.start(prompt_file=path, prompt=text)
-        staged = [i for i, call in enumerate(self.order) if PROMPT_STAGE in call]
+    def test_staged_files_are_written_in_the_container_before_the_guard(self):
+        files = {"/run/ensemble/prompt/prompt.md": "雪\n" * 50_000, f"{self.cwd}/inputs/a.md": "a"}
+        self.start(staged_files=json.dumps(files))
+        staged = [i for i, call in enumerate(self.order) if FILES_STAGE in call]
         self.assertEqual(len(staged), 1)
         self.assertLess(staged[0], self.order.index("guard"))
         self.assertEqual(
             self.order[staged[0]],
-            ["exec", "-i", "--user", "agent", CONTAINER, PYTHON, "-I", "-c", PROMPT_STAGE, path],
+            ["exec", "-i", "--user", "agent", CONTAINER, PYTHON, "-I", "-c", FILES_STAGE],
         )
         calls = [call for call in self.order if isinstance(call, list)]
-        self.assertEqual(self.docker.inputs[calls.index(self.order[staged[0]])], text)
+        self.assertEqual(json.loads(self.docker.inputs[calls.index(self.order[staged[0]])]), files)
 
-    def test_no_prompt_file_stages_nothing(self):
+    def test_no_staged_files_stages_nothing(self):
         self.start()
-        self.assertFalse(any(PROMPT_STAGE in call for call in self.order if isinstance(call, list)))
+        self.assertFalse(any(FILES_STAGE in call for call in self.order if isinstance(call, list)))
 
-    def test_prompt_staging_errors_name_the_step(self):
-        metadata = {"prompt_file": "/run/ensemble/prompt/prompt.md", "prompt": "private"}
+    def test_staging_errors_name_the_step(self):
+        metadata = {"staged_files": json.dumps({"/run/ensemble/prompt/prompt.md": "private"})}
         for result, want in (
-            (done(1, "", ""), "^staging prompt file: exit status 1$"),
+            (done(1, "", ""), "^staging files: exit status 1$"),
             (
                 done(1, "", "Traceback (most recent call last):\nOSError: [Errno 28] No space\n"),
-                r"^staging prompt file: OSError: \[Errno 28\] No space$",
+                r"^staging files: OSError: \[Errno 28\] No space$",
             ),
-            (OSError("unavailable"), "^staging prompt file: unavailable$"),
-            (TimeoutExpired("exec", 1), "^staging prompt file: "),
+            (OSError("unavailable"), "^staging files: unavailable$"),
+            (TimeoutExpired("exec", 1), "^staging files: "),
         ):
             with (
                 self.subTest(result=type(result).__name__),
@@ -619,15 +619,15 @@ class StartTest(StartBase):
                 ),
                 self.assertRaisesRegex(SessionError, want) as raised,
             ):
-                self.host._stage_prompt(CONTAINER, metadata)
+                self.host._stage_staged_files(CONTAINER, metadata)
             self.assertNotIn("private", str(raised.exception))
 
     def test_a_failed_stage_rolls_the_start_back(self):
         for stage, message, options in (
             (
-                "_stage_prompt",
+                "_stage_staged_files",
                 "no room",
-                {"prompt_file": "/run/ensemble/prompt/prompt.md", "prompt": "x"},
+                {"staged_files": json.dumps({"/run/ensemble/prompt/prompt.md": "x"})},
             ),
             ("_stage_files", "projection failed", {}),
         ):

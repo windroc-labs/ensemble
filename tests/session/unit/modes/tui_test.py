@@ -2934,7 +2934,7 @@ class PromptFileTest(Base):
             self.assertEqual(f.read(), BIG)
         self.assertEqual(stat.S_IMODE(os.stat(self.path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(self.path)).st_mode), 0o700)
-        self.assertNotIn("prompt_file", self.host.calls.worker.call_args.kwargs["metadata"])
+        self.assertNotIn("staged_files", self.host.calls.worker.call_args.kwargs["metadata"])
 
     def test_a_resume_s_over_budget_prompt_is_a_pointer_too(self):
         self.start(run=self.seen, prompt=BIG, resume=True)
@@ -2952,7 +2952,7 @@ class PromptFileTest(Base):
             self.start(run=self.seen, prompt=BIG)
         metadata = self.host.calls.worker.call_args.kwargs["metadata"]
         path = "/run/state/prompt/prompt.md"
-        self.assertEqual((metadata["prompt_file"], metadata["prompt"]), (path, BIG))
+        self.assertEqual(json.loads(metadata["staged_files"]), {path: BIG})
         self.assertEqual(self.seen.spec.prompt, self.pointer(path))
         self.assertEqual(self.seen.spec.access.reads, ("/run/state/prompt",))
         self.assertFalse(os.path.lexists(os.path.dirname(self.path)))
@@ -2984,7 +2984,7 @@ class PromptFileTest(Base):
         real = os.open
 
         def refusing(path, *args, **kwargs):
-            if str(path).endswith("prompt.md"):
+            if ".tmp-" in str(path):
                 raise OSError(errno.EACCES, "Permission denied")
             return real(path, *args, **kwargs)
 
@@ -2992,7 +2992,7 @@ class PromptFileTest(Base):
             mock.patch("os.open", refusing),
             self.assertRaisesRegex(
                 SessionError,
-                f"^cannot start tui session {NAME}: prompt file {re.escape(self.path)}: "
+                f"^cannot start tui session {NAME}: staged file {re.escape(self.path)}: "
                 "Permission denied$",
             ),
         ):

@@ -761,7 +761,7 @@ class ThroughItsHost(Base):
         self.assertEqual(spec.access.reads, (os.path.dirname(path),))
         with open(path, encoding="utf-8") as f:
             self.assertEqual(f.read(), big)
-        self.assertNotIn("prompt_file", host.starts[0][2])
+        self.assertNotIn("staged_files", host.starts[0][2])
 
     def test_a_container_context_puts_the_prompt_in_metadata_not_on_disk(self):
         context = ClientContext(
@@ -774,7 +774,7 @@ class ThroughItsHost(Base):
         with mock.patch.object(host, "_client_context", return_value=context):
             self.start_on(host, prompt=big, name="w")
         metadata = host.starts[0][2]
-        self.assertEqual((metadata["prompt_file"], metadata["prompt"]), (path, big))
+        self.assertEqual(json.loads(metadata["staged_files"]), {path: big})
         self.assertEqual(StubRun.specs[0].prompt, POINTER.format(path=path))
         self.assertFalse(os.path.lexists(os.path.join(self.dir, "prompt")))
 
@@ -794,14 +794,14 @@ class ThroughItsHost(Base):
         real = os.open
 
         def refusing(path, *args, **kwargs):
-            if str(path).endswith("prompt.md"):
+            if ".tmp-" in str(path):
                 raise OSError(errno.EACCES, "Permission denied")
             return real(path, *args, **kwargs)
 
         host = WorkerHost()
         with (
             mock.patch("os.open", refusing),
-            self.assertRaisesRegex(SessionError, "^prompt file .*prompt.md: Permission denied$"),
+            self.assertRaisesRegex(SessionError, "^staged file .*prompt.md: Permission denied$"),
         ):
             self.start_on(host, prompt="雪" * 40_000)
         self.assertEqual((host.starts, self.recorded), ([], []))

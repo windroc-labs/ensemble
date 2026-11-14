@@ -31,6 +31,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.hosts.base import (
     GUARD_HOOK_SOCKET,
     GUARD_LEASE_FD,
+    STAGED,
     Host,
     InteractiveProcess,
     host_resume,
@@ -46,6 +47,7 @@ from ensemble.utils import (
     command_path,
     nested_start,
     over_argv,
+    write_beneath,
 )
 
 POINTER = (
@@ -327,14 +329,29 @@ class BaseMode(ABC):
         return replace(spec, prompt=pointer, access=access), (path, spec.prompt)
 
     @staticmethod
-    def _write_prompt(path: str, text: str) -> None:
-        try:
-            os.makedirs(os.path.dirname(path), 0o700, exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(text)
-        except OSError as error:
-            raise SessionError(f"prompt file {path}: {error.strerror}") from error
+    def _staged(
+        prompt_file: tuple[str, str] | None, local_dir: str
+    ) -> tuple[tuple[str, str, str], ...]:
+        """(root, path, text) of each file written before the worker starts."""
+        return ((local_dir, *prompt_file),) if prompt_file else ()
+
+    @staticmethod
+    def _contained(
+        staged: Sequence[tuple[str, str, str]], metadata: Mapping[str, str] | None
+    ) -> Mapping[str, str] | None:
+        """metadata for a container start, its Host writing `staged`."""
+        if not staged:
+            return metadata
+        return {**(metadata or {}), STAGED: json.dumps({path: text for _, path, text in staged})}
+
+    @staticmethod
+    def _write_staged(staged: Sequence[tuple[str, str, str]]) -> None:
+        for root, path, text in staged:
+            try:
+                os.makedirs(root, 0o700, exist_ok=True)
+                write_beneath(root, path, text)
+            except OSError as error:
+                raise SessionError(f"staged file {path}: {error.strerror or error}") from error
 
     @staticmethod
     def _launched(

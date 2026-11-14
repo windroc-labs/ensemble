@@ -172,9 +172,9 @@ class HeadlessMode(BaseMode):
         host: Host,
         display: Display,
         generation: str,
-    ) -> tuple[Prepared, Headless, Mapping[str, str] | None, tuple[str, str] | None]:
-        """metadata: a named run's, for its Host; None: a nameless run's. Last, the prompt file this
-        mode writes.
+    ) -> tuple[Prepared, Headless, Mapping[str, str] | None, tuple[tuple[str, str, str], ...]]:
+        """metadata: a named run's, for its Host; None: a nameless run's. Last, the files this mode
+        writes (a container's Host writes them instead).
         """
         run = client.headless()
         if run is None:
@@ -192,13 +192,13 @@ class HeadlessMode(BaseMode):
         spec = cls._noted(spec, client)
         run._context = host._client_context()
         spec, prompt_file = cls._pointed(spec, run._context, spec.workdir)
-        if prompt_file and run._context.container:
-            path, text = prompt_file
-            metadata, prompt_file = {**(metadata or {}), "prompt_file": path, "prompt": text}, None
+        staged = cls._staged(prompt_file, spec.workdir)
+        if run._context.container:
+            metadata, staged = cls._contained(staged, metadata), ()
         prepared = cls._launched(spec, run.launch, drop, inherit=host._inherit_env)
         if name is not None:
             prepared = cls._host_resume(prepared, host, name)
-        return prepared, run, metadata, prompt_file
+        return prepared, run, metadata, staged
 
     @classmethod
     def start(
@@ -214,11 +214,10 @@ class HeadlessMode(BaseMode):
         owner: str | None = None,
         generation: str,
     ) -> Self:
-        prepared, run, metadata, prompt_file = cls._prepare(
+        prepared, run, metadata, staged = cls._prepare(
             spec, client, registry=registry, host=host, display=display, generation=generation
         )
-        if prompt_file:
-            cls._write_prompt(*prompt_file)
+        cls._write_staged(staged)
         run.commit()
         record(prepared.info)
         metadata = {**(metadata or {}), "generation": generation}

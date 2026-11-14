@@ -48,6 +48,7 @@ from ensemble.session.engine.types import (
 from ensemble.session.harness import guard
 from ensemble.session.hosts.base import (
     HARNESS_ROOT,
+    STAGED,
     TUI_DIR,
     TUI_STATE,
     Host,
@@ -106,10 +107,13 @@ BUSY = "previous worker generation (live or unknown)"
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 STATE_ROOT = "/run/ensemble"  # Container.state_root
 _ARG_STRLEN_MAX = 131072  # Linux exec's limit on one argument, its NUL included
-PROMPT_STAGE = """import os, sys
-os.makedirs(os.path.dirname(sys.argv[1]), 0o700, exist_ok=True)
-fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-with os.fdopen(fd, 'wb') as f: f.write(sys.stdin.buffer.read())"""
+FILES_STAGE = """import json, os, sys
+for path, text in json.load(sys.stdin).items():
+    os.makedirs(os.path.dirname(path), 0o700, exist_ok=True)
+    temp = os.path.join(os.path.dirname(path), '.tmp-' + os.urandom(8).hex())
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as f: f.write(text)
+    os.replace(temp, path)"""
 LABEL = "ensemble.session"
 PS_FORMAT = "\t".join(
     (
@@ -961,7 +965,7 @@ class DockerHost(Host):
         try:
             stops.check()
             self._stage_files(container, metadata)
-            self._stage_prompt(container, metadata)
+            self._stage_staged_files(container, metadata)
             _save_record(
                 name,
                 {
@@ -1147,24 +1151,24 @@ class DockerHost(Host):
         if result.returncode:
             raise SessionError("staging client runtime failed")
 
-    def _stage_prompt(self, container: str, metadata: Mapping[str, str]) -> None:
+    def _stage_staged_files(self, container: str, metadata: Mapping[str, str]) -> None:
         """As the container's agent user."""
-        path = metadata.get("prompt_file")
-        if path is None:
+        files = metadata.get(STAGED)
+        if files is None:
             return
         argv, env = docker_call(
             self.docker,
             *("exec", "-i", "--user", "agent", container),
-            *(IMAGE_PYTHON, "-I", "-c", PROMPT_STAGE, path),
+            *(IMAGE_PYTHON, "-I", "-c", FILES_STAGE),
         )
         try:
-            result = self.run(argv, env, input=metadata["prompt"], timeout=RUN_TIMEOUT)
+            result = self.run(argv, env, input=files, timeout=RUN_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise SessionError(f"staging prompt file: {error}") from None
+            raise SessionError(f"staging files: {error}") from None
         if result.returncode:
             why = (result.stderr or "").strip().splitlines()
             raise SessionError(
-                f"staging prompt file: {why[-1] if why else f'exit status {result.returncode}'}"
+                f"staging files: {why[-1] if why else f'exit status {result.returncode}'}"
             )
 
     def _roll_back(self, container: str) -> str:

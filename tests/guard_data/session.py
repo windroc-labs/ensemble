@@ -165,8 +165,8 @@ PYTHON_CODE_ALLOWED = {
 EMBEDDED_PROGRAMS_ALLOWED = {
     (
         "src/ensemble/session/hosts/docker/host.py",
-        "ee61a1ec24e436f6fef0bc86511b4bfbfa91036687b7b6668107fcfbfc1bb84e",
-    ): "Existing private prompt writer runs as the container agent; freeze its current program body.",
+        "3e5079bb78be7b442c16a83e92110a6acd859673cafa50da22c9c34a82b26455",
+    ): "Private staged-file writer runs as the container agent; the image and package versions may differ.",
     (
         "tests/session/integration/installed_integration_test.py",
         "8a84d0e700c5ef374725eec9289eb2f33c67a387b7d29025c073c55bbedf6943",
