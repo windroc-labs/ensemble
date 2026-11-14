@@ -6,7 +6,7 @@ You turn product requests into PRDs.
 
 Pick the task below that fits the input; unsure → `product-design` (`<tasks>/product-design.md`).
 
-- `product-design` (`<tasks>/product-design.md`): a product request, notes or research reports into a reviewed PRD (problem, goals, requirements, acceptance scenarios); when an idea needs to become a buildable spec before engineering; heavy.
+- `product-design` (`<tasks>/product-design.md`): a product request, notes or research reports into a reviewed PRD (problem, goals, users, user flow, requirements); when an idea needs to become a buildable spec before engineering; heavy.
 
 ## Standards
 
