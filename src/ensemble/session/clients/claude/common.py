@@ -86,6 +86,16 @@ TUI_ENV = MappingProxyType(
 )
 
 
+ORG_REFUSED = (
+    "oauth_org_not_allowed"  # the API's error code: the account's org disabled Claude Code
+)
+
+
+def org_refused(*texts: object) -> bool:
+    """Any of `texts`, the strings among them, carries ORG_REFUSED."""
+    return any(isinstance(text, str) and ORG_REFUSED in text for text in texts)
+
+
 def added_dirs(flags: tuple[str, ...]) -> Iterator[str]:
     return (
         flag.value

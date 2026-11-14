@@ -611,6 +611,32 @@ class StopFailureTest(Base):
                     events,
                 )
 
+    def test_an_oauth_org_not_allowed_stop_failure_is_an_account_rejection(self):
+        refused = (
+            'API Error: 403 {"type":"error","error":{"type":"permission_error","details":'
+            '{"error_code":"oauth_org_not_allowed"}}}'
+        )
+        rows = (
+            ({"error": "authentication_failed", "error_details": refused}, refused),
+            ({"error": "unknown", "last_assistant_message": refused}, refused),
+            ({"error": "rate_limit", "last_assistant_message": refused}, refused),
+            ({"error": "oauth_org_not_allowed"}, ""),
+            (
+                {
+                    "error": "authentication_failed",
+                    "error_details": "403",
+                    "last_assistant_message": refused,
+                },
+                "403",
+            ),
+        )
+        for payload, detail in rows:
+            with self.subTest(payload=payload), mock.patch("time.time", return_value=NOW):
+                self.assertEqual(
+                    self.launched().hook_events("StopFailure", {"session_id": SID, **payload}),
+                    [TurnFailed("account_rejected", detail)],
+                )
+
     def test_a_failure_is_not_sticky(self):
         run = self.launched()
         self.assertEqual(

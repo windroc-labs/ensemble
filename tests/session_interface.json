@@ -1,4 +1,5 @@
 {
+ "ensemble.session.ACCOUNT_REJECTED": "value 'account_rejected'",
  "ensemble.session.Access": "class(builtins.object)(dirs:KEYWORD_ONLY=tuple(), commands:KEYWORD_ONLY=tuple(), cwd:KEYWORD_ONLY, project:KEYWORD_ONLY=False, reads:KEYWORD_ONLY=tuple(), env:KEYWORD_ONLY=_HAS_DEFAULT_FACTORY_CLASS)",
  "ensemble.session.Access.commands": "attribute",
  "ensemble.session.Access.cwd": "attribute",

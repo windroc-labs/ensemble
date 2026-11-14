@@ -19,12 +19,14 @@ from ensemble.session.clients.claude.common import (
     TAIL,
     TUI_ENV,
     ClaudeCommon,
+    org_refused,
     read,
     size,
     texts,
 )
 from ensemble.session.clients.common import UUID
 from ensemble.session.engine.types import (
+    ACCOUNT_REJECTED,
     ClientBound,
     ConfigError,
     HookCall,
@@ -306,11 +308,18 @@ class ClaudeTui(Tui):
         return _first(payload, "tool_name", "message")
 
     def failure(self, payload):
-        """StopFailure's typed error: rate_limit is the usage limit, any other a failed turn."""
+        """StopFailure's typed error: an org refusal is a rejected account, rate_limit the usage
+        limit, any other a failed turn.
+        """
+        detail = _first(payload, "error_details", "last_assistant_message")
+        if org_refused(
+            *(payload.get(key) for key in ("error", "error_details", "last_assistant_message"))
+        ):
+            return [TurnFailed(ACCOUNT_REJECTED, detail)]
         error = _first(payload, "error") or "unknown"
         if error == "rate_limit":
             return self._limit(_resets_in(_first(payload, "last_assistant_message")))
-        return [TurnFailed(error, _first(payload, "error_details", "last_assistant_message"))]
+        return [TurnFailed(error, detail)]
 
     def shows(self, dialog, screen):
         if dialog != "Quick safety check":

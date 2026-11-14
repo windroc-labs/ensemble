@@ -26,6 +26,7 @@ __all__ = [
     "Activity",
     "MARKS",
     "PROCESS_EXIT",
+    "ACCOUNT_REJECTED",
     "Blocked",
     "ClientBound",
     "ClientHome",
@@ -599,6 +600,7 @@ class TurnFailed:
 
 
 PROCESS_EXIT = "process_exit"  # TurnFailed.error
+ACCOUNT_REJECTED = "account_rejected"  # TurnFailed.error: its account was refused service
 
 
 @dataclass(frozen=True)
