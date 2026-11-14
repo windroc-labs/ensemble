@@ -110,12 +110,11 @@ def _reconciled(entry: Entry, status: Status) -> State:
 
 def _written(reply: str) -> dict | None:
     """The outcome block in `reply` when its body is a JSON object, else None."""
-    if (body := outcome_block(reply)) is None:
-        return None
+    body = outcome_block(reply)
     try:
-        found = json.loads(body)
+        found = None if body is None else json.loads(body)
     except (ValueError, RecursionError):
-        return None
+        found = None
     return found if isinstance(found, dict) else None
 
 
@@ -714,10 +713,13 @@ class Crew:
             or record.sid is None
         ):
             return text
-        reply = self._call(
-            (LayerCommand.SESSION, "reply", record.sessions[0], "--sid", record.sid), ""
-        )
-        written = None if reply.returncode else _written(reply.stdout)
+        try:
+            reply = self._execute(
+                (LayerCommand.SESSION, "reply", record.sessions[0], "--sid", record.sid)
+            )
+        except RuntimeError:  # its tui gone, replaced or not answering: the recorded one stands
+            return text
+        written = _written(reply)
         if written is None or _asked_again(written, recorded):
             return text
         return json.dumps(written, separators=(",", ":"))

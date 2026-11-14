@@ -636,7 +636,10 @@ class ReadSend(RosterCase):
 
         def run(argv, **_options):
             calls.append(tuple(argv))
-            code, out, err = recorded if argv[0] == "ensemble-delegate" else reply
+            answer = recorded if argv[0] == "ensemble-delegate" else reply
+            if isinstance(answer, BaseException):
+                raise answer
+            code, out, err = answer
             return mock.Mock(returncode=code, stdout=out, stderr=err)
 
         with mock.patch("subprocess.run", side_effect=run):
@@ -697,6 +700,8 @@ class ReadSend(RosterCase):
             (0, self.block("[1]"), ""),
             (0, self.block("not json"), ""),
             (1, "", "no such session"),
+            TimeoutExpired(("ensemble-session",), 30),
+            OSError("not found"),
         ):
             with self.subTest(reply=reply):
                 result, _ = self.outcome("TASK-1", recorded=(0, self.NEEDS + "\n", ""), reply=reply)
@@ -719,7 +724,7 @@ class ReadSend(RosterCase):
                 self.assertEqual(result, self.NEEDS)
                 self.assertEqual(len(calls), 1)
 
-    def test_a_workers_outcome_is_its_latest_replys_last_block_else_null(self):
+    def test_a_workers_outcome_is_the_last_block_of_its_latest_reply_else_null(self):
         two = self.block('{"status": "needs_input"}') + self.block('{"status": "done"}')
         for reply, printed in (
             (self.block('{"status": "done", "url": "u"}'), '{"status":"done","url":"u"}'),
