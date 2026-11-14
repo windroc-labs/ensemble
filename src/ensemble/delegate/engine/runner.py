@@ -30,8 +30,8 @@ from ensemble.delegate.event.outcome import drop_files
 from ensemble.delegate.event.outcome import read as read_outcome
 from ensemble.delegate.event.reply import OUTCOME, marks, outcome_block, outcome_only
 from ensemble.delegate.event.types import InvalidOutcome, Outcome, Updraft
-from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import (
+    ACCOUNT_REJECTED,
     Exited,
     IdleTimeout,
     LimitHit,
@@ -45,6 +45,7 @@ from ensemble.session import (
     TurnEnd,
     TurnFailed,
 )
+from ensemble.session import ConfigError as SessionConfigError
 from ensemble.utils import EXIT_BUSY, holds, printable, save
 
 STOP_LIMIT = 3
@@ -354,7 +355,7 @@ class Attempt:
         if self.limit:
             return Result(rc, None, f"usage limit; {_resets(self.limit.resets_at)}", self.limit)
         if self.failed:
-            if self.policy.stops_client:
+            if self.policy.stops_client or self.failed.error == ACCOUNT_REJECTED:
                 self.stop()
             if rc and self.failed.error == PROCESS_EXIT:
                 return Result(rc, None, diagnostic)

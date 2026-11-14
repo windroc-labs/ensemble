@@ -279,6 +279,34 @@ class ParseTest(Base):
                 self.assertIsInstance(found[0], TurnFailed)
                 self.assertEqual(found[0].error, kind)
 
+    def test_an_oauth_org_not_allowed_result_is_an_account_rejection(self):
+        refused = (
+            'API Error: 403 {"type":"error","error":{"type":"permission_error","message":'
+            '"Claude Code is not enabled for this organization","details":'
+            '{"error_code":"oauth_org_not_allowed"}}}'
+        )
+        rows = (
+            ({"subtype": "success", "is_error": True, "result": refused}, refused),
+            ({"subtype": "error_during_execution", "is_error": True, "errors": [refused]}, refused),
+            (
+                {"subtype": "error_during_execution", "errors": ["x"], "result": refused},
+                "x",
+            ),
+        )
+        for fields, detail in rows:
+            with self.subTest(fields=fields):
+                self.assertEqual(
+                    self.parse({"type": "result", **fields}),
+                    [TurnFailed("account_rejected", detail)],
+                )
+        for said in ("no", "The oauth_org_not_allowed case is handled."):
+            self.assertEqual(
+                self.parse(
+                    {"type": "result", "subtype": "success", "is_error": True, "result": said}
+                ),
+                [TurnFailed("success", said)],
+            )
+
     def test_native_initialization_starts_one_accepted_headless_turn(self):
         self.assertEqual(self.parse(INIT), [ClientBound(SID), TurnStarted()])
         self.assertFalse(any(isinstance(e, TurnStarted) for e in self.parse(INIT)))

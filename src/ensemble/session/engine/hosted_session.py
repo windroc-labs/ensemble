@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -19,9 +20,10 @@ import sys
 import time
 import uuid
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from dataclasses import fields as dataclass_fields
+from datetime import datetime
 from typing import Any, ClassVar, NamedTuple, cast
 
 import ensemble.utils
@@ -32,6 +34,7 @@ from ensemble.session.engine.base import Session
 from ensemble.session.engine.capacity import Admission
 from ensemble.session.engine.records import RunLog
 from ensemble.session.engine.types import (
+    ACCOUNT_REJECTED,
     Access,
     ClientBound,
     ConfigError,
@@ -57,6 +60,7 @@ from ensemble.session.engine.types import (
     Spec,
     StatusState,
     Stderr,
+    TurnFailed,
     Unanswered,
     Usage,
 )
@@ -81,6 +85,8 @@ from ensemble.utils import (
     module_roots,
     printable_abs,
     probe,
+    read_regular,
+    save,
     sid_error,
     source_path,
     summary,
@@ -105,6 +111,9 @@ HARNESS = "ensemble.session.harness.process"
 LOG = logging.getLogger("session")
 PROBE_DIR = f"{STATE}/probe"
 PROBE_TIMEOUT = 120
+REJECTED_DIR = f"{STATE}/rejected"
+REJECTED_HOLD = 24 * 3600
+HOLD_MAX = 4096
 UNCONFIGURED = "session not configured: call Session.configure first"
 MODES: dict[Mode, type[BaseMode]] = {
     mode.kind: mode for mode in (headless.HeadlessMode, tui.TuiMode, in_process.InProcessMode)
@@ -217,6 +226,42 @@ def _read_usage(
         return None
 
 
+def _hold_path(client: str, account: str) -> str:
+    return os.path.join(os.path.expanduser(REJECTED_DIR), client, f"{account}.json")
+
+
+def _hold(client: str, account: str, now: float) -> None:
+    """Holds `account` unusable for REJECTED_HOLD; best effort."""
+    until = now + REJECTED_HOLD
+    with contextlib.suppress(OSError):
+        save(_hold_path(client, account), json.dumps({"until": until}))
+        print(f"{client} account {account}: rejected; held until {_local(until)}", file=sys.stderr)
+
+
+def _held(client: str, names: Iterable[str], now: float) -> dict[str, float]:
+    """Each of `names` held now: its until; a bad one, or one past REJECTED_HOLD, is none."""
+    found = {}
+    for name in names:
+        data = read_regular(_hold_path(client, name), limit=HOLD_MAX + 1)
+        if data is None or len(data) > HOLD_MAX:
+            continue
+        try:
+            hold = json.loads(data)
+            until = hold.get("until") if isinstance(hold, dict) else None
+            if isinstance(until, bool) or not isinstance(until, (int, float)):
+                continue
+            until = float(until)
+        except (ValueError, RecursionError, OverflowError):
+            continue
+        if math.isfinite(until) and now < until <= now + REJECTED_HOLD:
+            found[name] = until
+    return found
+
+
+def _local(at: float) -> str:
+    return datetime.fromtimestamp(at).astimezone().isoformat(timespec="seconds")
+
+
 def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) -> Spec:
     """The start check of a client with accounts: each registered account read live once, the
     start on the wanted one (--account, else the client's account; a local resume: its
@@ -240,20 +285,32 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
     if wanted:
         spec = replace(spec, env={**spec.env, ACCOUNT_ENV: wanted})
         select_account(spec, client)
+    held = _held(name, registered, time.time())
     readings = accounts.live(
-        client._usage_probes() or {},
+        {a: p for a, p in (client._usage_probes() or {}).items() if a not in held},
         lambda launch: _read_usage(setup, client, launch, container=container),
     )
-    for account, reading in sorted(readings.items()):
-        print(f"{name} account {account}: {summary(reading)}", file=sys.stderr)
+    for account in sorted({*readings, *held}):
+        if account in held:
+            print(
+                f"{name} account {account}: rejected; held until {_local(held[account])}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"{name} account {account}: {summary(readings[account])}", file=sys.stderr)
     left = {
-        account: accounts.left(reading, client._max_usage(account))
-        for account, reading in readings.items()
+        account: None
+        if account in held
+        else accounts.left(readings[account], client._max_usage(account))
+        for account in {*readings, *held}
     }
     if conversation and not wanted:
         left = {conversation: left[conversation]}
     if (account := accounts.choose(left, wanted)) is None:
-        raise SessionError("usage: no available account")
+        rejected = ", ".join(sorted(held.keys() & ({wanted} if wanted else left.keys())))
+        raise SessionError(
+            "usage: no available account" + (f"; rejected: {rejected}" if rejected else "")
+        )
     print(f"{name} account {account}: picked", file=sys.stderr)
     spec = replace(spec, env={**spec.env, ACCOUNT_ENV: account})
     if recorded is not None and recorded.transcript:
@@ -482,6 +539,7 @@ class HostedSession(Session):
         self._capacity: Admission | None = None
         self._capacity_hosts: Mapping[str, Host] = {}
         self._read_only = False  # a view's attach: no run records
+        self._account: str | None = None
 
     @classmethod
     def configure(
@@ -807,6 +865,7 @@ class HostedSession(Session):
         viewer = cls.viewer()
         displays.validate_display(display, on)
         spec = _picked(setup, spec, client_name, client, on)
+        account = spec.env.get(ACCOUNT_ENV) or None
         name = tui.TuiMode.resolve_name(spec) if mode == Mode.TUI else spec.name
 
         def check_name(name: str) -> None:
@@ -868,6 +927,7 @@ class HostedSession(Session):
                 raise
             session._capacity = capacity
             session._capacity_hosts = {_host_key(setup, selected_host): on}
+            session._account = account
             return session
 
     @classmethod
@@ -1259,6 +1319,8 @@ class HostedSession(Session):
             )
         elif isinstance(event, Stderr):
             self._log.note("stderr", best_effort=True, text=event.text)
+        elif isinstance(event, TurnFailed) and event.error == ACCOUNT_REJECTED and self._account:
+            _hold(self.client, self._account, time.time())
         self._fold(event)
         if isinstance(event, ClientBound):
             self._refresh_metadata()

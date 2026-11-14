@@ -5,8 +5,9 @@ and rate-limit records into events, one LimitHit per run.
 
 import os
 
-from ensemble.session.clients.claude.common import ClaudeCommon
+from ensemble.session.clients.claude.common import ClaudeCommon, org_refused
 from ensemble.session.engine.types import (
+    ACCOUNT_REJECTED,
     Activity,
     Blocked,
     ClientBound,
@@ -82,15 +83,17 @@ class ClaudeHeadless(JsonHeadless):
                 yield TurnFailed("permission_required", "headless permission denied")
             elif record.get("is_error") is True or subtype != "success":
                 errors = record.get("errors")
-                detail = (
-                    "\n".join(e for e in errors if isinstance(e, str))
-                    if isinstance(errors, list)
-                    else ""
+                errors = (
+                    [e for e in errors if isinstance(e, str)] if isinstance(errors, list) else []
                 )
-                yield TurnFailed(
-                    subtype if isinstance(subtype, str) and subtype else "incomplete_result",
-                    detail or (result if isinstance(result, str) else ""),
-                )
+                detail = "\n".join(errors) or (result if isinstance(result, str) else "")
+                if org_refused(*errors, said=result):
+                    yield TurnFailed(ACCOUNT_REJECTED, detail)
+                else:
+                    yield TurnFailed(
+                        subtype if isinstance(subtype, str) and subtype else "incomplete_result",
+                        detail,
+                    )
             elif isinstance(result, str):
                 yield TurnEnd(result, 0)
             else:

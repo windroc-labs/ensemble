@@ -1565,12 +1565,12 @@ class AccountPoolTest(Base):
         self.assertEqual(self.refused(), "usage: no available account")
         self.probe.assert_not_called()
 
-    def run_on(self, **env):
-        """An in_process run selecting `env`'s account, drained."""
+    def run_on(self, said=None, **env):
+        """An in_process run selecting `env`'s account, drained; its stderr to `said`."""
         spec = self.spec(client="pool", mode=Mode.IN_PROCESS, env=env)
         with (
             mock.patch.object(PoolClient, "in_process", fake_client.InProcessFakeClient.in_process),
-            contextlib.redirect_stderr(io.StringIO()),
+            contextlib.redirect_stderr(said or io.StringIO()),
         ):
             session = self.session.start(spec)
             self.addCleanup(session.stop)
@@ -1614,6 +1614,40 @@ class AccountPoolTest(Base):
             self.drain(session)
             self.session.inspect(dataclasses.replace(spec, sid=session.info().sid))
         self.probe.assert_not_called()
+
+    def hold_of(self, account):
+        """The rejection hold on pool `account`: its until, None without one."""
+        path = os.path.join(self.ensemble, "rejected", "pool", f"{account}.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)["until"]
+        except FileNotFoundError:
+            return None
+
+    def test_a_rejected_turn_holds_its_session_account(self):
+        self.steps({"out": {"type": "failed", "error": "account_rejected", "detail": "403"}})
+        now = time.time()
+        said = io.StringIO()
+        self.run_on(said, **{ACCOUNT_ENV: "work"})
+        self.assertAlmostEqual(self.hold_of("work"), now + 24 * 3600, delta=60)
+        self.assertIsNone(self.hold_of("default"))
+        self.assertRegex(said.getvalue(), r"pool account work: rejected; held until \S+")
+
+    def test_no_hold_for_another_failure_or_a_session_without_an_account(self):
+        self.steps({"out": {"type": "failed", "error": "server_error", "detail": "500"}})
+        self.run_on(**{ACCOUNT_ENV: "work"})
+        self.assertIsNone(self.hold_of("work"))
+        self.pool({"default": "/d", "work": "/w"}, container=False)
+        self.steps({"out": {"type": "failed", "error": "account_rejected"}})
+        self.run_on()
+        self.assertEqual(os.listdir(self.ensemble).count("rejected"), 0)
+
+    def test_a_hold_that_cannot_be_written_is_skipped(self):
+        os.makedirs(self.ensemble, exist_ok=True)
+        open(os.path.join(self.ensemble, "rejected"), "w").close()
+        self.steps({"out": {"type": "failed", "error": "account_rejected"}})
+        self.run_on(**{ACCOUNT_ENV: "work"})
+        self.assertTrue(os.path.isfile(os.path.join(self.ensemble, "rejected")))
 
 
 class NoAccountsTest(Base):
@@ -1722,14 +1756,14 @@ class ClaudeStartCase(Base):
     def read(self, **outputs):
         self.outputs = {f"{self.root}/{name}": out for name, out in outputs.items()}
 
-    def start(self, *, spec=None, **env):
+    def start(self, *, spec=None, said=None, **env):
         """The account a headless start's Host got ("": none, the user's own config), None when
-        refused before it; the error.
+        refused before it; the error. Its stderr goes to `said`.
         """
         host = self.session.host()
         before = len(host.headless)
         spec = spec or self.spec(client="claude", mode=Mode.HEADLESS, name="w1", env=env)
-        with contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stderr(said or io.StringIO()):
             try:
                 self.session.start(spec)
             except (SessionError, ConfigError) as caught:
@@ -1761,6 +1795,23 @@ class ClaudeStartCase(Base):
         self.assertIsNone(account)
         self.assertIsInstance(error, SessionError)
         self.assertEqual(str(error), "usage: no available account")
+
+    def hold(self, account, until=None, text=None):
+        """A rejection hold on Claude `account`, until `until` (default: an hour on), or `text`."""
+        path = os.path.join(self.ensemble, "rejected", "claude", f"{account}.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(
+                json.dumps({"until": time.time() + 3600 if until is None else until})
+                if text is None
+                else text
+            )
+
+    def assert_rejected(self, result, names):
+        account, error = result
+        self.assertIsNone(account)
+        self.assertIsInstance(error, SessionError)
+        self.assertEqual(str(error), f"usage: no available account; rejected: {names}")
 
 
 class StartCheckTest(ClaudeStartCase):
@@ -1875,6 +1926,66 @@ class StartCheckTest(ClaudeStartCase):
             with open(os.path.join(old, name), encoding="utf-8") as f:
                 self.assertEqual(f.read(), text)
 
+    def test_a_held_account_is_skipped_unprobed(self):
+        self.claude({"home": {}, "work": {}})
+        self.hold("home")
+        self.read(home=panel(10), work=panel(50))
+        said = io.StringIO()
+        self.assertEqual(self.start(said=said), ("work", None))
+        self.assertEqual(self.probed(), ["/acct/work"])
+        self.assertRegex(said.getvalue(), r"claude account home: rejected; held until \S+")
+        self.assertNotIn("claude account home: five_hour", said.getvalue())
+        resume = self.spec(client="claude", mode=Mode.HEADLESS, name="w1", sid=SID, resume=True)
+        self.assertEqual(self.start(spec=resume), ("work", None))
+
+    def test_every_account_held_or_spent_names_the_rejected(self):
+        self.claude({"home": {}, "work": {}, "zed": {}})
+        self.hold("zed")
+        self.hold("home")
+        self.read(work=panel(100))
+        self.assert_rejected(self.start(), "home, zed")
+        self.assertEqual(self.probed(), ["/acct/work"])
+
+    def test_a_held_wanted_account_fails_the_start(self):
+        self.claude({"home": {}, "work": {}}, account="home")
+        self.hold("home")
+        self.read(home=panel(10), work=panel(10))
+        self.assert_rejected(self.start(), "home")
+        self.assert_rejected(self.start(**{ACCOUNT_ENV: "home"}), "home")
+        self.assertEqual(self.start(**{ACCOUNT_ENV: "work"}), ("work", None))
+        self.read(home=panel(10), work=panel(100))
+        self.assert_usage_error(self.start(**{ACCOUNT_ENV: "work"}))
+
+    def test_a_bad_or_stale_hold_is_no_hold(self):
+        now = time.time()
+        for text in (
+            json.dumps({"until": now - 1}),
+            json.dumps({"until": True}),
+            json.dumps({"until": "soon"}),
+            json.dumps({}),
+            json.dumps([now + 60]),
+            '{"until": NaN}',
+            '{"until": Infinity}',
+            '{"until": 1' + "0" * 400 + "}",
+            "not json",
+            json.dumps({"until": now + 60, "pad": "x" * 5000}),
+        ):
+            with self.subTest(text=text[:40]):
+                self.probe.reset_mock()
+                self.claude({"home": {}, "work": {}})
+                self.hold("home", text=text)
+                self.read(home=panel(10), work=panel(50))
+                self.assertEqual(self.start(), ("home", None))
+                self.assertEqual(self.probed(), ["/acct/home", "/acct/work"])
+
+    def test_a_hold_ending_past_a_day_is_no_hold(self):
+        self.claude({"home": {}, "work": {}})
+        self.read(home=panel(10), work=panel(50))
+        self.hold("home", until=time.time() + 24 * 3600 - 60)
+        self.assertEqual(self.start(), ("work", None))
+        self.hold("home", until=time.time() + 24 * 3600 + 60)
+        self.assertEqual(self.start(), ("home", None))
+
     def test_a_hard_choice_never_switches(self):
         self.claude({"home": {"max_usage": 80}, "work": {"max_usage": 80}}, account="work")
         self.read(home=panel(20), work=panel(80))
@@ -1975,6 +2086,13 @@ class ResumeCheckTest(ClaudeStartCase):
         self.assertEqual(self.probed(), [f"{self.root}/home", f"{self.root}/work"])
         self.read(home=panel(100), work=panel(10))
         self.assert_usage_error(self.start(spec=spec))
+
+    def test_a_local_resume_on_a_held_account_fails(self):
+        self.claude({"home": {}, "work": {}}, host="tmux")
+        spec = self.conversation(os.path.join(self.root, "home"))
+        self.hold("home")
+        self.read(home=panel(10), work=panel(10))
+        self.assert_rejected(self.start(spec=spec), "home")
 
     def test_local_account_yields_to_the_conversations_account(self):
         self.claude({"home": {}, "work": {}}, host="tmux", local_account="work")

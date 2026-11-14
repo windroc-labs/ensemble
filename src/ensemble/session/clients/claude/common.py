@@ -86,6 +86,16 @@ TUI_ENV = MappingProxyType(
 )
 
 
+ORG_REFUSED = "oauth_org_not_allowed"
+
+
+def org_refused(*fields: object, said: object = None) -> bool:
+    """An error field, or an API error reply, names it."""
+    return any(isinstance(text, str) and ORG_REFUSED in text for text in fields) or (
+        isinstance(said, str) and said.startswith("API Error") and ORG_REFUSED in said
+    )
+
+
 def added_dirs(flags: tuple[str, ...]) -> Iterator[str]:
     return (
         flag.value

@@ -2548,6 +2548,14 @@ class FinishedEvents(Events):
         )
         self.assertEqual(self.ledger()[RUN_SID]["steps"], ["running:1"])
 
+    def test_an_account_rejected_end_is_left_for_recover(self):
+        self.assertTrue(self.deliver(delegate_event("begun")))
+        error = "the client's turn failed: account_rejected (API Error: 403)"
+        self.assertTrue(self.deliver(self.finished(0, error=error)))
+        self.assertEqual(self.linear.state, self.cfg.linear.states["in_progress"])
+        self.assertIn(f"writeback no-outcome {RUN_ISSUE} sid={RUN_SID} error={error}", self.said())
+        self.assertEqual(self.ledger()[RUN_SID]["steps"], ["running:1"])
+
     def test_a_clean_exit_without_an_outcome_ends_the_session_as_no_outcome(self):
         self.assertTrue(self.deliver(delegate_event("begun")))
         self.assertTrue(self.deliver(self.finished(0, error="the agent run returned no outcome")))
