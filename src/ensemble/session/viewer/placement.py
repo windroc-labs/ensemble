@@ -537,7 +537,7 @@ class Placement:
         return name
 
     def own_window(self) -> str | None:
-        """$TMUX_PANE's window id; None outside tmux."""
+        """The own window; None outside tmux."""
         if not os.environ.get("TMUX"):
             return None
         pane = os.environ.get("TMUX_PANE", "")

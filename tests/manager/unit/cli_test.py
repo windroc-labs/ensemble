@@ -14,11 +14,11 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from ensemble.manager import Crew, Roster, Spec, State, cli
+from ensemble.manager import Roster, Spec, State, cli
 from ensemble.manager.cli import main
 from ensemble.manager.engine.pr import VIEW_FIELDS
 from ensemble.utils import Record, append_line
-from tests.manager.case import Case, own, status
+from tests.manager.case import HERE, Case, own, status
 from tests.manager.cli_case import CliCase
 from tests.manager.roster_case import mark
 from tests.manager.starters import answered, finished
@@ -216,36 +216,59 @@ class CliTest(CliCase):
             self.assertEqual(stdout, "nothing to close\n")
             self.assertFalse(os.path.exists(self.directory))
 
-    def test_close_all_and_forget_are_close_options_and_older_spellings(self):
-        for new, old, method, kwargs in (
-            (("close", "--all"), ("close-all",), "close_all", {"dry_run": False}),
-            (
-                ("close", "--all", "--dry-run"),
-                ("close-all", "--dry-run"),
-                "close_all",
-                {"dry_run": True},
-            ),
-            (("close", "w1", "--forget"), ("forget", "w1"), "forget", {"force": False}),
-            (
-                ("close", "w1", "--forget", "--force"),
-                ("forget", "w1", "--force"),
-                "forget",
-                {"force": True},
-            ),
-        ):
-            results = []
-            for argv in (new, old):
-                with (
-                    self.subTest(argv=argv),
-                    mock.patch.object(Crew, method, return_value=["a", "b"]) as called,
-                    mock.patch.object(Crew, "close") as close,
-                ):
-                    results.append(self.invoke(*argv, "--manager", "mgr"))
-                    called.assert_called_once_with(
-                        *(("w1",) if method == "forget" else ()), **kwargs
-                    )
-                    close.assert_not_called()
-            self.assertEqual(results[0], results[1])
+    def crew_run(self, *, alive):
+        """subprocess.run for entries a and b: listing finds nothing more; ctl status answers
+        `alive`; ctl close succeeds. Records each ctl verb in self.verbs.
+        """
+        self.verbs = []
+
+        def run(argv, **options):
+            argv = tuple(argv)
+            if argv in (HERE, (*HERE, "--descendants")):
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            self.verbs.append(argv[-1])
+            names = [Record.parse(line).name for line in options["input"].splitlines()]
+            answers = [status(name, alive=alive).to_line() + "\n" for name in names]
+            stdout = "".join(answers) if argv[-1] == "status" else ""
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        return mock.patch("subprocess.run", side_effect=run)
+
+    def test_close_all_is_a_close_option_and_close_all_its_older_spelling(self):
+        for name in ("a", "b"):
+            own(self.roster, self.fake_record(name))
+        before = Path(self.roster.path).read_bytes()
+        with self.crew_run(alive=True):
+            new = self.invoke("close", "--all", "--dry-run", "--manager", "mgr")
+            old = self.invoke("close-all", "--dry-run", "--manager", "mgr")
+        self.assertEqual(new, (0, "a\nb\n", ""))
+        self.assertEqual(old, new)
+        self.assertEqual(self.verbs, [])
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
+        with self.crew_run(alive=True):
+            self.assertEqual(self.invoke("close", "--all", "--manager", "mgr"), (0, "a\nb\n", ""))
+        self.assertEqual(self.verbs, ["close"])
+        self.assertEqual(self.roster.entries(), {})
+
+    def test_close_forget_is_a_close_option_and_forget_its_older_spelling(self):
+        for argv in (("close", "a", "--forget"), ("forget", "a")):
+            with self.subTest(argv=argv):
+                own(self.roster, self.fake_record("a"))
+                with self.crew_run(alive=True):
+                    result, stdout, stderr = self.invoke(*argv, "--manager", "mgr")
+                self.assertEqual((result, stdout), (1, ""))
+                self.assertIn("still alive; close it before forgetting", stderr)
+                self.assertIn("a", self.roster.entries())
+                with self.crew_run(alive=True):
+                    forced = self.invoke(*argv, "--force", "--manager", "mgr")
+                self.assertEqual(forced, (0, "", ""))
+                self.assertEqual(self.verbs, [])
+                self.assertEqual(self.roster.entries(), {})
+                own(self.roster, self.fake_record("a"))
+                with self.crew_run(alive=False):
+                    self.assertEqual(self.invoke(*argv, "--manager", "mgr"), (0, "", ""))
+                self.assertEqual(self.verbs, ["status"])
+                self.assertEqual(self.roster.entries(), {})
 
     def test_close_option_combinations_are_usage_errors(self):
         for argv, message in (
