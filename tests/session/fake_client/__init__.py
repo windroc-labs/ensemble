@@ -1,7 +1,7 @@
 """The test-only Client, client `fake`, importing only ensemble.session.extension; caller-owned
 loader tables supply it; its mode objects keep it. Config keys: scenario, log, tui (true: a Tui).
 Its client is client.py (CLIENT), run by this Python; a limit record {resets_at} parses to
-LimitHit, an exit record to Exited(99), which the session drops. InProcessFakeClient, in_process
+LimitHit, a failed record {error, detail} to TurnFailed, an exit record to Exited(99), which the session drops. InProcessFakeClient, in_process
 only, logs {prompt, sid, resume, pid, thread} and runs out, err, sleep, exit and raise steps.
 """
 
@@ -31,6 +31,7 @@ from ensemble.session.extension import (
     Stderr,
     Tui,
     TurnEnd,
+    TurnFailed,
 )
 
 CLIENT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "client.py")
@@ -98,6 +99,8 @@ def _parse(record):
         yield TurnEnd(record.get("text", ""), record.get("pending", 0))
     elif kind == "limit":
         yield LimitHit(record.get("resets_at"))
+    elif kind == "failed":
+        yield TurnFailed(record["error"], record.get("detail", ""))
     elif kind == "exit":
         yield Exited(99)
 
