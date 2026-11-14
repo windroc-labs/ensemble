@@ -76,7 +76,7 @@ class Acceptance(Packaged):
         read = re.search(r"^1\. \*\*Read\*\*.*$", decompose, re.M)[0]
         # a document over the input's inline budget is only a link there, but tickets quote
         # its scenarios verbatim
-        self.assertIn("fetch in full each document the input links but did not inline", read)
+        self.assertIn("fetch in full each document the input links but names no file for", read)
         # write-back's DECOMPOSED pattern reads this summary
         self.assertIn("`summary`: `Created <identifiers>; reused none`", decompose)
 
