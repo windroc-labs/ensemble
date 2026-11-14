@@ -66,7 +66,7 @@ def _query_help(command):
             "A completed run starts nothing and says so on stderr: resume delivers no\n"
             "answer to a needs_input run. Send the answer to its open TUI session\n"
             "(ensemble-session send); that gone, continue its conversation:\n"
-            "ensemble-crew reopen --help.\n"
+            "ensemble-crew start reopen --help.\n"
             "--input is rejected: record answers on the issue board.\n"
             "Run outside an agent session. ENSEMBLE_SID, if supplied, must match\n"
             "the recorded session and is read once and removed.\n"
@@ -263,7 +263,7 @@ def main(argv=None):
         if not alive and outcome is not None:
             print(
                 f"ensemble-orchestrator: {view.issue}: run ended ({outcome.status}); nothing"
-                f" resumed; its conversation: ensemble-crew reopen {view.issue}",
+                f" resumed; its conversation: ensemble-crew start reopen {view.issue}",
                 file=sys.stderr,
             )
         return record
