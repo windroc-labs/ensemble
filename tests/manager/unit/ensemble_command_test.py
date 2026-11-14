@@ -467,6 +467,11 @@ class MenuTest(ListCase):
             with self.subTest(keys=keys):
                 self.assertEqual(self.menu(keys)[:2], (0, f"open {chosen}\n"))
 
+    def test_an_all_digit_name_opens_the_manager_it_names(self):
+        self.manager("3")
+        self.assertEqual(self.menu(b"\x1b[B\r")[:2], (0, "open 3\n"))
+        self.assertEqual(self.menu(b"3\r")[:2], (0, "open demo\n"))
+
     def test_the_prompt_line_shows_the_selected_name(self):
         result, _, shown = self.menu(b"\x1b[B", b"\x1b[B", b"\r")
         self.assertEqual(result, 0)
@@ -490,12 +495,21 @@ class MenuTest(ListCase):
                 self.assertEqual(self.menu(keys)[:2], (0, f"open {chosen}\n"))
 
     def test_typing_edits_the_selected_name(self):
-        self.assertEqual(self.menu(b"\x1b[B\x7f\x7f\x7f\x7f\x7f3\r")[:2], (0, "open zeta\n"))
-        self.assertEqual(self.menu(b"\x1b[A\x15demo\r")[:2], (0, "open demo\n"))
+        cases = {
+            b"\x1b[B\x7f\x7f\x7f\x7f\x7f3\r": "zeta",
+            b"\x1b[A\x15demo\r": "demo",
+            b"x\b2\r": "demo",
+            b"1\x04\r": "alpha",
+            b"z\x1b[B\x1b[B\r": "demo",
+        }
+        for keys, chosen in cases.items():
+            with self.subTest(keys=keys):
+                self.assertEqual(self.menu(keys)[:2], (0, f"open {chosen}\n"))
 
     def test_keys_that_are_not_arrows_are_ignored(self):
         self.assertEqual(self.menu(b"\x1b[C\x1b[D\x01\t1\r")[:2], (0, "open alpha\n"))
         self.assertEqual(self.menu(b"\x1b", b"1\r")[:2], (0, "open alpha\n"))
+        self.assertEqual(self.menu(b"\x1b2\r")[:2], (0, "open demo\n"))
 
     def test_an_unknown_answer_prompts_again(self):
         result, stdout, shown = self.menu(b"9\r", b"\xc3\xa9\r", b"\x1b[B\r")

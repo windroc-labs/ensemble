@@ -95,35 +95,39 @@ def _rows(found: list[Manager | Unreadable], out, *, numbered: bool) -> bool:
 def _keys(fd: int) -> Iterator[str]:
     """fd's keys: UP, DOWN or one character; other sequences dropped."""
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
-    while byte := os.read(fd, 1):
-        if byte != b"\x1b":
-            if key := decoder.decode(byte):
-                yield key
+    byte = os.read(fd, 1)
+    while byte:
+        if byte == b"\x1b" and select.select([fd], [], [], ESCAPE_WAIT)[0]:
+            byte = os.read(fd, 1)
+            if byte in (b"[", b"O"):
+                final = os.read(fd, 1)
+                while final and not 0x40 <= final[0] <= 0x7E:
+                    final = os.read(fd, 1)
+                if arrow := ARROWS.get(final):
+                    yield arrow
+                byte = os.read(fd, 1)
             continue
-        if not select.select([fd], [], [], ESCAPE_WAIT)[0] or os.read(fd, 1) not in (b"[", b"O"):
-            continue
-        final = os.read(fd, 1)
-        while final and not 0x40 <= final[0] <= 0x7E:
-            final = os.read(fd, 1)
-        if arrow := ARROWS.get(final):
-            yield arrow
+        if key := decoder.decode(byte):
+            yield key
+        byte = os.read(fd, 1)
 
 
-def _edit(keys: Iterator[str], names: list[str], show: Callable[[str], None]) -> str:
-    """The line typed with keys; UP and DOWN put a name from names in it."""
+def _edit(
+    keys: Iterator[str], names: list[str], show: Callable[[str], None]
+) -> tuple[str, int | None]:
+    """The line typed with keys, and the index of the name UP or DOWN left in it unedited."""
     text, shown = "", None
     show(text)
     for key in keys:
-        if key in ("\r", "\n"):
-            return text
+        if key in ("\r", "\n") or (key == "\x04" and not text):  # Ctrl-D ends an empty line
+            return text, shown
         if key in (UP, DOWN):
-            shown = (-1 if key == DOWN else 0) if shown is None else shown
-            shown = (shown + (1 if key == DOWN else -1)) % len(names)
+            step = 1 if key == DOWN else -1
+            if shown is None:
+                shown = 0 if step == 1 else len(names) - 1
+            else:
+                shown = (shown + step) % len(names)
             text = names[shown]
-        elif key == "\x04":  # Ctrl-D
-            if not text:
-                return text
-            continue
         elif key in ("\x7f", "\b"):
             text, shown = text[:-1], None
         elif key == "\x15":  # Ctrl-U
@@ -133,7 +137,7 @@ def _edit(keys: Iterator[str], names: list[str], show: Callable[[str], None]) ->
         else:
             continue
         show(text)
-    return ""
+    return "", None
 
 
 def _show(prompt: str, text: str) -> None:
@@ -171,13 +175,16 @@ def _choose(found: list[Manager | Unreadable]) -> Manager | Unreadable | None:
             try:
                 if keys is None:
                     print(prompt, end="", file=sys.stderr, flush=True)
-                    answer = sys.stdin.readline().strip()
+                    answer, shown = sys.stdin.readline(), None
                 else:
-                    answer = _edit(keys, names, lambda text: _show(prompt, text)).strip()
+                    answer, shown = _edit(keys, names, lambda text: _show(prompt, text))
                     print(file=sys.stderr)
             except KeyboardInterrupt:
                 print(file=sys.stderr)
                 return None
+            if shown is not None:
+                return found[shown]
+            answer = answer.strip()
             if not answer:
                 return None
             if answer.isdecimal() and 1 <= int(answer) <= len(found):

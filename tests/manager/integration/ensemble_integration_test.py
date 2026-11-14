@@ -9,12 +9,14 @@ import json
 import os
 import pty
 import re
+import select
 import shutil
 import signal
 import stat
 import subprocess
 import sys
 import termios
+import time
 import uuid
 from pathlib import Path
 
@@ -546,7 +548,12 @@ class FakeTmux(Case):
                 self.assertTrue(chunk, shown)
                 shown += chunk
             os.write(master, b"\x1b[B\r")
-            self.assertEqual(process.wait(timeout=30), 0)
+            deadline = time.monotonic() + 30
+            while process.poll() is None and time.monotonic() < deadline:
+                # A terminal reads its output; restoring its mode waits for that on macOS.
+                if select.select([master], [], [], 0.1)[0]:
+                    os.read(master, 4096)
+            self.assertEqual(process.wait(timeout=1), 0)
             self.assertEqual(termios.tcgetattr(slave), before)
         finally:
             os.close(slave)
