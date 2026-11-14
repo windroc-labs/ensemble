@@ -63,6 +63,10 @@ class SessionNames(Sample):
                 ],
             ),
             (
+                {probe: "from ensemble.utils import OUTCOME, outcome_block\n"},
+                [probe + ": names OUTCOME", probe + ": names outcome_block"],
+            ),
+            (
                 {
                     probe: "import json\n",
                     "src/ensemble/delegate/probe.py": "import tomllib\n",
