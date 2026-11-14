@@ -779,6 +779,17 @@ class HelpTest(Case):
     def help(self, argv):
         return help_text(self, cli.main, argv)
 
+    def test_send_help_documents_wait(self):
+        text = " ".join(self.help(["send", "--help"]).split())
+        for part in (
+            "--wait S",
+            "without --wait prints nothing",
+            "delivered",
+            "queued",
+            "undelivered (exit 1",
+        ):
+            self.assertIn(part, text)
+
     def test_tile_help_makes_the_window_optional_its_own_by_default(self):
         text = self.help(["tile", "--help"])
         self.assertIn("ensemble-session tile [WINDOW]", text)
