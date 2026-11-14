@@ -1296,7 +1296,7 @@ PAIR = ("ENSEMBLE_HOLDER_ID", "ENSEMBLE_HOLDER_GENERATION")
 
 
 class StaleHolderRecovery(CliCase):
-    """A commander whose holder ended keeps its pair: the error prints runnable recovery."""
+    """A manager whose holder ended keeps its pair: the error prints runnable recovery."""
 
     def setUp(self):
         super().setUp()
@@ -1332,7 +1332,7 @@ class StaleHolderRecovery(CliCase):
                 f"crew: {self.directory}: stale holder generation; start a new manager holder",
                 "crew: this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an"
                 " ended holder; no holder is active; handled N=0 GEN=0",
-                "crew: lasting fix: restart the commander's client under a new holder, then"
+                "crew: lasting fix: restart the manager's client under a new holder, then"
                 " attach and arm its monitor: command: ensemble mgr -- <client resume command>"
                 " (ensemble --help)",
                 f"crew: handled events after N=0? first: {LEASE_FREE} ack --manager mgr"
@@ -1442,7 +1442,7 @@ class StaleHolderRecovery(CliCase):
             [
                 "crew: this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an"
                 " ended holder; new holds manager mgr now; handled N=0 GEN=0",
-                "crew: use new's commander; only the user takes over, on purpose: ensemble"
+                "crew: use new's manager; only the user takes over, on purpose: ensemble"
                 " --force mgr -- <client resume command> (ensemble --help)",
             ],
         )
@@ -1470,7 +1470,7 @@ class StaleHolderRecovery(CliCase):
             (
                 1,
                 f"crew: {self.directory}: held by new\n"
-                "crew: use new's commander; only the user takes over, on purpose: ensemble"
+                "crew: use new's manager; only the user takes over, on purpose: ensemble"
                 " --force mgr -- <client resume command> (ensemble --help)\n",
             ),
         )
@@ -1697,7 +1697,7 @@ class Report(CliCase):
             "r1", record=self.delegate_record("engineer-ab12"), alive=False, outcome="needs_input"
         )
         self.answers[("ensemble-delegate", "outcome")] = (0, "null\n", "")
-        with self.roster.hold("another commander"):
+        with self.roster.hold("another manager"):
             before = Path(self.roster.path).read_bytes()
             result, stdout, stderr = self.report()
             after = Path(self.roster.path).read_bytes()

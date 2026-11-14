@@ -90,7 +90,7 @@ def _lease_free_recovery(
         ack = f"handled events after N={cursor}? first: {ack}, then attach; unacknowledged events replay"
     monitor = ("--after", str(cursor), "--gen", str(generation), "--content", "--follow")
     return [
-        "lasting fix: restart the commander's client under a new holder, then attach and arm its"
+        "lasting fix: restart the manager's client under a new holder, then attach and arm its"
         f" monitor: command: {ensemble_command.recovery(manager)}",
         ack,
         "until then, attach without a lease, keeping the prefix on the commands it prints:"
@@ -517,9 +517,9 @@ Prerequisites and effects:
   ENSEMBLE_HOLDER_PID, the hold's pid: the SessionStart re-arm prompt goes
   only to a client in its process tree.
   Keep the pair together. An active holder fences ownership-sensitive roster
-  updates; run those from its commander environment.
+  updates; run those from its manager environment.
   ENSEMBLE_AGENT_SESSION blocks start/resume/restart; use a user-started
-  commander. Help and start --list still work.
+  manager. Help and start --list still work.
   State: ~/.ensemble/managers/NAME/.
   start gives starters empty stdin; supply literal input.
   Exit 0: success; 2: usage/invalid value; 1: operational/lease failure;
@@ -678,7 +678,7 @@ Examples:
 
 Recovery and next help:
   Follow the printed monitor command to read events. Reading events alone
-  does not verify notification delivery to a commander.
+  does not verify notification delivery to a manager.
   On monitor expiry, use its printed monitor expired command, then rearm
   from the returned handled N and GEN. Confirm handling with ack.
   Acquire a holder: ensemble --help
@@ -878,7 +878,7 @@ work may remain alive.
 Examples:
   With helper tracked:
   ensemble-crew close --manager demo helper
-  From the intended commander's terminal, preview first:
+  From the intended manager's terminal, preview first:
   ensemble-crew close --manager demo --all --dry-run
   With helper stopped:
   ensemble-crew close --manager demo helper --forget

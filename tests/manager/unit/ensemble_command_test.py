@@ -21,7 +21,7 @@ TAKEOVER = (
 )
 
 
-class CommanderCase(CliCase):
+class EnsembleCommandCase(CliCase):
     def invoke(self, *argv):
         stdout, stderr = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -29,7 +29,7 @@ class CommanderCase(CliCase):
         return result, stdout.getvalue(), stderr.getvalue()
 
 
-class RecoveryTest(CommanderCase):
+class RecoveryTest(EnsembleCommandCase):
     def test_the_recovery_command_is_ensemble_with_the_name(self):
         self.assertEqual(
             ensemble_command.recovery("demo"),
@@ -41,15 +41,13 @@ class RecoveryTest(CommanderCase):
         )
 
     def test_a_takeover_names_the_holder_and_leaves_it_to_the_user(self):
+        self.assertEqual(ensemble_command.takeover("mgr", "new"), f"use new's manager; {TAKEOVER}")
         self.assertEqual(
-            ensemble_command.takeover("mgr", "new"), f"use new's commander; {TAKEOVER}"
-        )
-        self.assertEqual(
-            ensemble_command.takeover("mgr", None), f"use the holding commander; {TAKEOVER}"
+            ensemble_command.takeover("mgr", None), f"use the holding manager; {TAKEOVER}"
         )
 
 
-class HoldTest(CommanderCase):
+class HoldTest(EnsembleCommandCase):
     def started(self, seen):
         """A Popen stand-in recording the command, its manager and the active holder."""
 
@@ -81,7 +79,7 @@ class HoldTest(CommanderCase):
         self.assertEqual((result, stdout), (1, ""))
         self.assertEqual(
             stderr,
-            f"ensemble: {self.directory}: held by new\nensemble: use new's commander; {TAKEOVER}\n",
+            f"ensemble: {self.directory}: held by new\nensemble: use new's manager; {TAKEOVER}\n",
         )
 
     def test_an_invalid_name_exits_2_and_writes_nothing(self):
@@ -128,7 +126,7 @@ def _record(kind: str, name: str) -> Record:
     )
 
 
-class ListCase(CommanderCase):
+class ListCase(EnsembleCommandCase):
     def setUp(self):
         super().setUp()
         self.root = os.path.join(self.ensemble, "managers")
@@ -381,7 +379,7 @@ class SelectTest(ListCase):
         )
 
 
-class ResumeTest(CommanderCase):
+class ResumeTest(EnsembleCommandCase):
     def setUp(self):
         super().setUp()
         os.makedirs(self.directory, mode=0o700)

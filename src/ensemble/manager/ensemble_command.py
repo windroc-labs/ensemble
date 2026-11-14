@@ -35,8 +35,8 @@ def recovery(manager: str, *, force: bool = False) -> str:
 
 def takeover(manager: str, holder: str | None) -> str:
     """What to do when holder, None when unknown, keeps manager's place."""
-    commander = "the holding commander" if holder is None else f"{holder}'s commander"
-    return f"use {commander}; only the user takes over, on purpose: {recovery(manager, force=True)}"
+    owner = "the holding manager" if holder is None else f"{holder}'s manager"
+    return f"use {owner}; only the user takes over, on purpose: {recovery(manager, force=True)}"
 
 
 def refused(error: Held, roster: Roster) -> None:

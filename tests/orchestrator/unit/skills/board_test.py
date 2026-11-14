@@ -85,6 +85,6 @@ class BoardSkill(Case):
         self.assertNotIn("\n## ", linear)
         self.assertIn("lookup", linear)
 
-    def test_the_commander_can_load_it(self):
+    def test_the_manager_can_load_it(self):
         self.assertIn("name: board\n", front())
         self.assertNotIn("disable-model-invocation", front())
