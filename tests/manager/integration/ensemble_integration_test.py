@@ -38,7 +38,10 @@ import json, os, sys
 with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
     f.write(json.dumps([os.getcwd(), os.getpid(), *sys.argv[1:]]) + "\\n")
 if sys.argv[1] == "list-panes":
-    sys.stdout.write(os.environ.get("PANES", ""))
+    workers = any("@worker-opener" in arg for arg in sys.argv)
+    sys.stdout.write(os.environ.get("WORKERS" if workers else "PANES", ""))
+if sys.argv[1] == "split-window":
+    sys.stdout.write(os.environ.get("SPLIT", "%9") + "\\n")
 rc = {{"has": "HAS_RC", "start-server": "START_RC"}}
 code = rc.get(sys.argv[1], "ATTACH_RC" if sys.argv[1] in ("-CC", "attach", "switch-client") else "")
 sys.exit(int(os.environ.get(code, "0")))
@@ -127,14 +130,51 @@ def panes(command: str, name: str = "demo", script: str = ENSEMBLE) -> str:
     return f"%3 {command} {hold}\n%4 python3 {attach}\n"
 
 
-LIST_PANES = [
-    "list-panes",
-    "-s",
-    "-t",
-    "=demo",
-    "-F",
-    "#{pane_id} #{pane_current_command} #{pane_start_command}",
-]
+def list_panes(name: str) -> list[str]:
+    return [
+        "list-panes",
+        "-s",
+        "-t",
+        f"={name}",
+        "-F",
+        "#{pane_id} #{pane_current_command} #{pane_start_command}",
+    ]
+
+
+LIST_PANES = list_panes("demo")
+
+
+def list_workers(name: str) -> list[str]:
+    return ["list-panes", "-s", "-t", f"={name}", "-F", "#{@worker-opener} #{pane_id} #{window_id}"]
+
+
+def workers(name: str = "demo") -> str:
+    """list-panes rows of session `name`: panes `name` opened for workers in windows @2 and @4 (its
+    newest, %7), a pane another manager opened and a pane no manager opened.
+    """
+    return f"{name} %5 @2\nother %8 @6\n %3 @1\n{name} %7 @4\n"
+
+
+def focus(pane: str) -> list[str]:
+    return ["select-window", "-t", pane, ";", "select-pane", "-t", pane]
+
+
+def beside(window: str, cwd: str, command: list[str]) -> list[str]:
+    """The full-height pane split left of `window`'s panes, running command, its id printed."""
+    return [
+        "split-window",
+        "-b",
+        "-f",
+        "-h",
+        "-P",
+        "-F",
+        "#{pane_id}",
+        "-t",
+        window,
+        "-c",
+        cwd,
+        *command,
+    ]
 
 
 def on_terminal(cwd: str, env: dict, answer: bytes, script: str = ENSEMBLE) -> tuple[int, str]:
@@ -244,10 +284,39 @@ class FakeTmux(Case):
                         self.assertEqual(calls, [])
                         self.assertEqual(sorted(Path(self.home).rglob("*")), before)
 
-    def test_an_existing_session_is_only_attached(self):
-        _, _, _, calls = self.run_ensemble("s1", has_rc=0)
+    def test_an_existing_session_without_its_hold_or_workers_is_only_attached(self):
+        _, _, _, calls = self.run_ensemble("s1", has_rc=0, PANES=panes("zsh"), WORKERS=workers())
         self.assertEqual(
-            [call[2:] for call in calls], [["has", "-t", "=s1"], ["-CC", "attach", "-t", "=s1"]]
+            [call[2:] for call in calls],
+            [
+                ["has", "-t", "=s1"],
+                list_panes("s1"),
+                list_workers("s1"),
+                ["-CC", "attach", "-t", "=s1"],
+            ],
+        )
+
+    def test_an_existing_session_with_its_hold_pane_attaches_to_it(self):
+        _, _, _, calls = self.run_ensemble("demo", has_rc=0, PANES=panes("zsh"))
+        self.assertEqual(
+            [call[2:] for call in calls],
+            [["has", "-t", "=demo"], LIST_PANES, focus("%3"), ["-CC", "attach", "-t", "=demo"]],
+        )
+
+    def test_an_existing_session_with_only_its_workers_gets_a_held_shell_beside_them(self):
+        process, _, err, calls = self.run_ensemble("demo", has_rc=0, WORKERS=workers(), SPLIT="%9")
+        self.assertEqual((process.returncode, err), (0, ""))
+        hold = created("demo", self.cwd, "/bin/zsh")[len(START) + 3 :]
+        self.assertEqual(
+            [call[2:] for call in calls],
+            [
+                ["has", "-t", "=demo"],
+                LIST_PANES,
+                list_workers("demo"),
+                beside("@4", self.cwd, hold),
+                focus("%9"),
+                ["-CC", "attach", "-t", "=demo"],
+            ],
         )
 
     def test_the_attach_fits_the_terminal(self):
@@ -269,7 +338,13 @@ class FakeTmux(Case):
                 self.assertEqual(process.returncode, 5)
                 self.assertEqual(calls[-1][1], process.pid)
                 self.assertEqual(
-                    [call[2:] for call in calls], [["has", "-t", "=s1"], [*attach, "-t", "=s1"]]
+                    [call[2:] for call in calls],
+                    [
+                        ["has", "-t", "=s1"],
+                        list_panes("s1"),
+                        list_workers("s1"),
+                        [*attach, "-t", "=s1"],
+                    ],
                 )
 
     def test_an_absent_session_starts_from_home_in_the_callers_directory_with_its_shell_held(self):
@@ -498,15 +573,20 @@ class FakeTmux(Case):
                 ["-CC", "attach", "-t", "=demo"],
             ],
         )
-        result, _, calls = self.select(has_rc=0)
-        self.assertEqual(
-            calls,
-            [
-                ["has", "-t", "=demo"],
-                ["new-window", "-d", "-t", "=demo:", "-c", self.cwd, *held("demo")],
-                ["-CC", "attach", "-t", "=demo"],
-            ],
-        )
+        for rows, window in ((workers(), "@4"), ("", "=demo:")):
+            with self.subTest(window=window):
+                result, _, calls = self.select(has_rc=0, WORKERS=rows, SPLIT="%9")
+                self.assertEqual(result, 0)
+                self.assertEqual(
+                    calls,
+                    [
+                        ["has", "-t", "=demo"],
+                        list_workers("demo"),
+                        beside(window, self.cwd, held("demo")),
+                        focus("%9"),
+                        ["-CC", "attach", "-t", "=demo"],
+                    ],
+                )
 
     def test_a_lost_create_race_still_attaches(self):
         self.demo(cwd="/home/user/project")
@@ -527,7 +607,9 @@ class FakeTmux(Case):
         roster = self.demo(pid=os.getpid())
         with roster.hold("demo"):
             result, _, calls = self.select(PANES=panes("node"))
-        self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
+        self.assertEqual(
+            (result, calls), (0, [LIST_PANES, focus("%3"), ["-CC", "attach", "-t", "=demo"]])
+        )
 
     def test_hold_only_types_the_resume_command_into_its_idle_shell(self):
         roster = self.demo(cwd="/home/user/project")
@@ -542,6 +624,7 @@ class FakeTmux(Case):
                     *("send-keys", "-t", "%3", "-l", typed(), ";"),
                     *("send-keys", "-t", "%3", "Enter"),
                 ],
+                focus("%3"),
                 ["-CC", "attach", "-t", "=demo"],
             ],
         )
@@ -567,7 +650,9 @@ class FakeTmux(Case):
         roster = self.demo(cwd="/home/user/project")
         with roster.hold("demo"):
             result, err, calls = self.select(PANES=panes("vim"))
-        self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
+        self.assertEqual(
+            (result, calls), (0, [LIST_PANES, focus("%3"), ["-CC", "attach", "-t", "=demo"]])
+        )
         self.assertIn(
             f"ensemble: demo's pane runs vim; resume there with: {typed()}\n",
             err,
@@ -1125,6 +1210,73 @@ class PrivateServer(Case):
         self.assertEqual(sessions, ["demo"])
         with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold("contender"):
             pass
+
+    def worker_session(self, name: str = "demo") -> str:
+        """Session `name` whose one pane is a worker pane its manager opened: that pane's id."""
+        subprocess.run(
+            (self.proxy, "new-session", "-d", "-s", name, *live_tmux.IDLE),
+            cwd=self.home,
+            env=self.env,
+            timeout=30,
+            check=True,
+        )
+        pane = self.server.tmux("display-message", "-p", "-t", f"={name}:", "#{pane_id}")
+        worker = pane.stdout.strip()
+        self.server.tmux(
+            *("set-option", "-p", "-t", worker, "@worker", "review-eval", ";"),
+            *("set-option", "-p", "-t", worker, "@worker-opener", name),
+        )
+        return worker
+
+    def shown(self, name: str = "demo") -> str:
+        """The pane an attach to session `name` shows: its current window's active pane."""
+        return self.server.tmux(
+            "display-message", "-p", "-t", f"={name}:", "#{pane_id}"
+        ).stdout.strip()
+
+    def assert_held_beside(self, worker: str, name: str = "demo") -> None:
+        """The shown pane is `name`'s hold, left of `worker` in one window, each full height."""
+        rows = self.server.tmux(
+            *("list-panes", "-s", "-t", f"={name}", "-F"),
+            "#{pane_id}\t#{window_id}\t#{pane_left}\t#{pane_top}\t#{window_height}\t#{pane_height}"
+            "\t#{pane_start_command}",
+        ).stdout.splitlines()
+        found = {row.split("\t")[0]: row.split("\t")[1:] for row in rows}
+        shown = self.shown(name)
+        self.assertEqual(set(found), {shown, worker}, rows)
+        self.assertRegex(found[shown][5], f"/ensemble[\"']? {name} -- ")
+        self.assertEqual(found[shown][0], found[worker][0])
+        self.assertLess(int(found[shown][1]), int(found[worker][1]))
+        for pane in (shown, worker):
+            self.assertEqual((found[pane][2], found[pane][4]), ("0", found[pane][3]))
+
+    def test_a_resumed_manager_is_shown_left_of_the_worker_that_kept_its_session(self):
+        worker = self.worker_session()
+        work = self.client()
+        result, err = on_terminal(self.cwd, self.env, b"1\n")
+        self.assertEqual(result, 0, err)
+        starts = live_tmux.wait(self.starts, what="the resumed client")
+        self.assertEqual(starts[0][:3], [work, "resume t-1 --no-daemon", "demo"])
+        self.assertEqual(self.attaches(), [["-CC", "attach", "-t", "=demo"]])
+        self.assert_held_beside(worker)
+
+    def test_ensemble_name_shows_a_held_shell_left_of_its_workers(self):
+        worker = self.worker_session()
+        done = self.run_ensemble("demo")
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        self.assertEqual(
+            live_tmux.wait(self.shell_report, what="the held shell's report")[2], "demo"
+        )
+        self.assert_held_beside(worker)
+
+    def test_ensemble_name_shows_its_hold_pane_from_another_window(self):
+        self.assertEqual(self.run_ensemble("demo").returncode, 0)
+        hold = self.shown()
+        self.server.tmux("new-window", "-t", "=demo:", *live_tmux.IDLE)
+        self.assertNotEqual(self.shown(), hold)
+        done = self.run_ensemble("demo")
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        self.assertEqual(self.shown(), hold)
 
     @staticmethod
     def free(roster):
