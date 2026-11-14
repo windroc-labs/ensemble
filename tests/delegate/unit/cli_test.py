@@ -1278,7 +1278,11 @@ class Open(Base):
             code, out, err = self.cli("open", "dummy-1", "--environment", "dummy")
             self.assertEqual((code, out), (2, ""))
             self.assertIn("refused inside an agent session", err)
-            self.assertEqual(self.cli("open", "--help")[0], 0)
+            code, out, _ = self.cli("open", "--help")
+            self.assertEqual(code, 0)
+            self.assertIn(
+                "ensemble-crew start command dummy-1 -- ensemble-delegate open dummy-1", out
+            )
         self.opened.assert_not_called()
 
 

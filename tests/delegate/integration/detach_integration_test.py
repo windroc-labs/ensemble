@@ -86,7 +86,8 @@ class Detach(RunReads, Case):
         **scenario,
     ):
         """launcher: the events file and sid come as $ENSEMBLE_EVENTS and $ENSEMBLE_SID, as
-        ensemble-crew run gives them. A tui run starts the tmux server; a headless one has none.
+        ensemble-crew start command gives them. A tui run starts the tmux server; a headless one
+        has none.
         """
         if mode == "tui" or inside:
             self.tmux()

@@ -295,7 +295,7 @@ class Wirings(run_fixtures.Base):
             "Restart exactly one interrupted recorded run",
             "delivers no answer to a needs_input run",
             "ensemble-session send",
-            "ensemble-crew reopen --help",
+            "ensemble-crew start reopen --help",
         ):
             self.assertIn(phrase, text)
         self.assertNotIn("then resume", text)
@@ -580,7 +580,7 @@ class Queries(RunCase):
             result, output, errors = _call(["resume", "TASK-1"])
             ended = (
                 "ensemble-orchestrator: TASK-1: run ended (done); nothing resumed; its"
-                " conversation: ensemble-crew reopen TASK-1\n"
+                " conversation: ensemble-crew start reopen TASK-1\n"
             )
             self.assertEqual((result, errors), (0, ended if state == "completed" else ""))
             self.assertEqual(Record.parse(output), record)

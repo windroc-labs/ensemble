@@ -92,8 +92,10 @@ class LivePipeline(LiveCrew):
         return super().env(inside=inside, **{**fakes, **extra})
 
     def pipeline(self, name: str, steps) -> Record:
-        """crew run `name` -- ROUTER; its Record and entry, checked."""
-        record = self.record(self.crew("run", name, "--", *ROUTER, **self.scene(name, steps)))
+        """crew start command `name` -- ROUTER; its Record and entry, checked."""
+        record = self.record(
+            self.crew("start", "command", name, "--", *ROUTER, **self.scene(name, steps))
+        )
         tui = f"engineer-{ID}-{record.sid[:8]}"
         self.assertEqual(
             (record.kind, record.name, record.sessions, record.workdir, record.ctl, record.resume),

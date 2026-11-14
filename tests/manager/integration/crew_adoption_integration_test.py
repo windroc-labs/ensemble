@@ -1,7 +1,7 @@
 """attach over the real ensemble-session ls --here --records (tests/manager/live_crew.py) adopts
-only a Record its roster launched: a crew run killed after its starter printed the Record but
-before the commit; never an orphan started by the layer commands themselves, nor a Record an agent
-forged on the manager's tmux session through an inherited $TMUX.
+only a Record its roster launched: a crew start command killed after its starter printed the
+Record but before the commit; never an orphan started by the layer commands themselves, nor a
+Record an agent forged on the manager's tmux session through an inherited $TMUX.
 """
 
 import json

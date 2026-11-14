@@ -1,4 +1,4 @@
-"""Role runs through `ensemble-crew run -- ensemble-delegate run … --detach`
+"""Role runs through `ensemble-crew start command -- ensemble-delegate run … --detach`
 on the real commands (tests/manager/live_crew.py). Ports main's
 test_killed_role_run_gone_then_recovered, test_close_a_role_run_by_its_tui_session and
 test_a_role_run_ended_on_needs_input_is_waiting_and_left_alone_by_attach_resume.
@@ -30,7 +30,7 @@ def _snapshot(directory: str) -> dict[str, bytes]:
 
 class RoleCase(LiveCrew):
     def started(self, name: str, *, mode: str = "tui", **kw) -> Record:
-        """crew run `name` -- a role run; its Record, checked, and its entry live."""
+        """crew start command `name` -- a role run; its Record, checked, and its entry live."""
         record = self.record(self.role(name, mode=mode, **kw))
         tui = f"{ROLE}-{record.sid[:8]}"
         work = self.workdir(name)
@@ -127,7 +127,7 @@ class RoleTest(RoleCase):
         run_dir = os.path.join(work, "run")
         before = _snapshot(run_dir)
         self.assertIn("delegate.json", before)
-        reopen = ("reopen", "--work-dir", board, "TASK-9", "--display", "none")
+        reopen = ("start", "reopen", "--work-dir", board, "TASK-9", "--display", "none")
         reopened = self.record(self.crew(*reopen, **self.scene("TASK-9")))
         self.assertEqual((reopened.name, reopened.sid), (tui, record.sid))
         self.until(lambda: self.live(tui), f"{tui} back")

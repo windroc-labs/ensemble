@@ -261,7 +261,7 @@ Examples:
 
 Recovery and next help:
   Track with crew:
-  ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy
+  ensemble-crew start command dummy-1 -- ensemble-delegate open dummy-1 --environment dummy
   Close/release its lock: ensemble-session close dummy-1
   Resume its saved environment: ensemble-session resume dummy-1
   Placement and Record controls: ensemble-session --help

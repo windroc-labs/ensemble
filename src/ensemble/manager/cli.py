@@ -5,11 +5,13 @@ import contextlib
 import os
 import re
 import shlex
+import subprocess
 import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import NamedTuple
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State
 from ensemble.manager.engine import managers
@@ -28,6 +30,8 @@ from ensemble.manager.engine.types import (
 from ensemble.utils import EXIT_BUSY, STATE, LayerCommand, nested_start, printable
 
 LEASE_FREE = ("env", "-u", "ENSEMBLE_HOLDER_ID", "-u", "ENSEMBLE_HOLDER_GENERATION")
+HELP_TIMEOUT = 20
+HOST_DISPLAY = "display (--display D)"
 ENDED = "this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an ended holder"
 
 
@@ -244,8 +248,58 @@ def _resume_commander(args) -> int:
 
 
 def _run(args) -> int:
-    print(_crew(args).run(Spec(args.name, args.command, args.note), resume=args.resume).to_line())
+    print(_crew(args).run(Spec(args.key, args.command, args.note), resume=args.resume).to_line())
     return 0
+
+
+def _host_displays(text: str) -> list[str]:
+    """The per-Host lines under session help's display header: two-space indented NAME: FORM."""
+    lines = text.splitlines()
+    headers = [number for number, line in enumerate(lines) if line.startswith(HOST_DISPLAY)]
+    found = []
+    for line in lines[headers[0] + 1 :] if headers else ():
+        if not line.startswith("  "):
+            break
+        if re.match(r"  \S[^:]*: ", line):
+            found.append(line)
+    return found
+
+
+def _placement() -> str:
+    """Each configured Host's --display form, as ensemble-session --help prints it."""
+    try:
+        result = subprocess.run(
+            (LayerCommand.SESSION, "--help"),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=HELP_TIMEOUT,
+            check=False,
+        )
+        hosts = _host_displays(result.stdout) if result.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired):
+        hosts = []
+    if not hosts:
+        return (
+            "Placement (--display D): ensemble-session --help could not list the configured\n"
+            "Hosts; run it for each Host's form.\n"
+        )
+    lines = "".join(f"{line}\n" for line in hosts)
+    return f"Placement (--display D), per configured Host, from ensemble-session --help:\n{lines}"
+
+
+class _StartHelp(argparse.Action):
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, **options):
+        super().__init__(option_strings, dest=dest, default=argparse.SUPPRESS, nargs=0, **options)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.print_help()
+        print(_placement(), end="")
+        parser.exit()
+
+
+def _start_list(_args) -> int:
+    os.execvp(LayerCommand.DELEGATE, (LayerCommand.DELEGATE, "run", "--list"))
 
 
 def _launch(args) -> int:
@@ -397,10 +451,143 @@ def _ack(args) -> int:
     return 0
 
 
+class StartKind(NamedTuple):
+    """A kind of work crew starts; old: its top-level subcommand; owner: its downstream help."""
+
+    kind: str
+    old: str
+    key: str
+    purpose: str
+    owner: str
+    details: str
+
+
+START_KINDS = (
+    StartKind(
+        "worker",
+        "worker",
+        "NAME",
+        "Start a named worker and track its Record",
+        f"{LayerCommand.SESSION} start",
+        """NAME is both the worker's session name and roster entry name.
+Session options go after NAME; --client CLIENT is required there.
+Session passes CLIENT_FLAGS after its -- verbatim to the client.
+--resume SID resumes conversation SID (ensemble-session start --resume SID)
+under that same session identity.
+
+Examples:
+  With Codex configured and no helper session/entry:
+  ensemble-crew start worker --manager demo helper --client codex --display none
+  Starts a hidden worker, records it in demo and prints its Record.
+  Form: start worker [CREW_OPTIONS] NAME [SESSION_OPTIONS] [-- CLIENT_FLAGS]
+  Client flag help: use the configured client executable with --help.
+  Placement: ensemble-crew start --help
+""",
+    ),
+    StartKind(
+        "role",
+        "role",
+        "ROLE",
+        "Start a detached role run and track its Record",
+        f"{LayerCommand.DELEGATE} run",
+        """ROLE selects a persona; --task before ROLE optionally selects its work type.
+Crew supplies --role ROLE --detach --name NAME, identity and events file.
+Requires configured role/client and downstream --input. Prints a Record.
+Without --credentials JSON before ROLE, resolves the role/task's orchestrator declaration.
+An explicit value replaces that declaration entirely; resumes reuse the saved value.
+
+Examples:
+  With the built-in pm role and its client configured:
+  ensemble-crew start role --manager demo --name planner --task product-design pm \\
+    --input 'Plan a feature'
+  Form: start role [CREW_OPTIONS] ROLE [DELEGATE_OPTIONS]
+  There is no client-flags delimiter at this boundary.
+  Discover roles/tasks: ensemble-crew start --list
+  Placement: ensemble-crew start --help
+""",
+    ),
+    StartKind(
+        "issue",
+        "issue",
+        "ISSUE",
+        "Start an attended issue run and track its Record",
+        f"{LayerCommand.ORCHESTRATOR} router",
+        """ISSUE is a configured board issue identifier and the roster entry name.
+Crew supplies router --issue ISSUE --tui, a session identity and events file.
+Requires board credentials, a configured role/client and an eligible issue;
+execution can claim/change the board and launch agent/harness sessions.
+
+Examples:
+  With configured board access and eligible test issue TASK-123:
+  ensemble-crew start issue --manager demo TASK-123 --display none
+  Starts the run hidden and prints its Record.
+  Form: start issue [CREW_OPTIONS] ISSUE [ROUTER_OPTIONS]
+  There is no client-flags delimiter at this boundary.
+  Placement: ensemble-crew start --help
+""",
+    ),
+    StartKind(
+        "reopen",
+        "reopen",
+        "ISSUE",
+        "Resume a closed issue run's conversation as a worker and track its Record",
+        f"{LayerCommand.SESSION} start",
+        """ISSUE is a board issue identifier with a recorded run.
+Crew reads the run's client, session id, cwd, agent name and Host from its run
+record, WORK_DIR/work/ISSUE/run/delegate.json, then starts worker AGENT, the
+agent name: ensemble-session start AGENT --host HOST --client CLIENT --cwd CWD
+--resume SID, under that session identity, so a Docker run comes back on the
+Docker Host; its Claude account is the session's choice unless SESSION_OPTIONS
+give --account. No record or session id: exit 1.
+SESSION_OPTIONS naming --client, --cwd, --host or --resume, abbreviated
+or not: exit 2. A run still alive
+(roster entry ISSUE or AGENT, or a session listed here or below with its
+session id) or one whose liveness is unknown (its status or the session listing
+failed): exit 2, so its conversation gets no second client. Where its start is
+owned (every built-in client's tui on tmux or Docker), it runs under a session
+harness of its own with no handlers, tracked like any other worker; the board is
+not touched.
+
+Examples:
+  With TASK-123's run closed:
+  ensemble-crew start reopen --manager demo TASK-123 --display none
+  Form: start reopen [CREW_OPTIONS] ISSUE [SESSION_OPTIONS] [-- CLIENT_FLAGS]
+  Placement: ensemble-crew start --help
+""",
+    ),
+    StartKind(
+        "command",
+        "run",
+        "NAME",
+        "Run a Record-producing starter and track it as NAME",
+        "",
+        """Prerequisites and effects:
+  COMMAND [ARG ...] after -- is required; no shell expansion is performed.
+  The starter must finish with a Record on stdout and honor ENSEMBLE_SID.
+  Crew supplies an identity (--resume SID, else a new one) and roster events
+  file, records launch intent before executing, then prints the Record.
+  A failed launch may remain lost.
+  Put Crew options before NAME, then --, then the starter and its options.
+  Outer help: ensemble-crew start command --help. Help after -- runs the starter
+  path.
+
+Examples:
+  With Codex configured and no helper entry or session:
+  ensemble-crew start command --manager demo helper -- \\
+    ensemble-session start helper --client codex --display none
+
+Recovery and next help:
+  Inspect/reconcile failed launches: ensemble-crew attach --help
+  Starter options: ensemble-session start --help
+""",
+    ),
+)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ensemble-crew",
-        description="Launch workers and role/issue runs; manage their persistent roster.",
+        description="Start workers and role/issue runs; manage their persistent roster.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Manager: roster selected by --manager, else ENSEMBLE_MANAGER; required,
 but by list, which reads every manager without a lease.
@@ -415,22 +602,24 @@ Prerequisites and effects:
   SessionStart re-arm prompt goes only to a client in its process tree.
   Keep the pair together. An active holder fences ownership-sensitive roster
   updates; run those from its commander environment.
-  ENSEMBLE_AGENT_SESSION blocks hold/run/worker/reopen/issue/role/resume and
-  resume-commander; use a user-started commander. Help still works. State: ~/.ensemble/managers/NAME/.
-  run/worker/reopen/issue/role give starters empty stdin; supply literal input.
+  ENSEMBLE_AGENT_SESSION blocks hold/start/resume and resume-commander and
+  the old start forms; use a user-started commander. Help and start --list
+  still work.
+  State: ~/.ensemble/managers/NAME/.
+  start gives starters empty stdin; supply literal input.
   hold instead inherits the caller's input for its foreground command.
   Exit 0: success; 2: usage/invalid value; 1: operational/lease failure;
-  75: run/role starter busy, before any stdout.
+  75: start command/role starter busy, before any stdout.
   hold instead propagates its child's status, signals as 128 + signal number.
   Scalar options use the last value; boolean flags may repeat.
 
 Examples:
-  ensemble-crew worker --help
+  ensemble-crew start --help
   ensemble-crew hold --help
 
 Next help:
   ensemble-session --help          workers, clients, hosts and placement
-  ensemble-delegate run --help     roles and tasks
+  ensemble-crew start --list       roles and tasks
   ensemble-orchestrator router --help    issue runs
 """,
     )
@@ -440,17 +629,44 @@ Next help:
     )
     subs = parser.add_subparsers(required=True)
 
-    def page(name, purpose, details, *, manager=True, **options):
-        return subs.add_parser(
+    def page(name, purpose, details, *, manager=True, into=None, summary=None, **options):
+        return (into or subs).add_parser(
             name,
             parents=[common] if manager else [],
-            help=purpose,
+            help=summary or purpose,
             description=purpose + ".",
             epilog=details + "\nRoster, environment and exits: ensemble-crew --help\n",
             formatter_class=argparse.RawDescriptionHelpFormatter,
             **options,
         )
 
+    start = page(
+        "start",
+        "Start a worker, role run, issue run, reopened issue run or command; track it",
+        """The first word is the kind; its options: ensemble-crew start KIND --help.
+Each kind prints the Record of what it started and tracks it as a roster entry.
+--list instead lists roles and their tasks, exactly as ensemble-delegate run
+--list does; it needs no manager and works inside an agent session.
+
+Examples:
+  ensemble-crew start worker --manager demo helper --client codex --display none
+  ensemble-crew start --list
+""",
+        manager=False,
+        add_help=False,
+        usage="%(prog)s KIND [KIND_OPTIONS] | %(prog)s --list",
+    )
+    start.add_argument(
+        "-h",
+        "--help",
+        action=_StartHelp,
+        help="show this help and each configured Host's --display form, and exit",
+    )
+    start.add_argument(
+        "--list", action="store_true", help="list roles and their tasks instead of starting"
+    )
+    start.set_defaults(func=_start_list)
+    starts = start.add_subparsers(dest="start_kind", metavar="KIND")
     hold = page(
         "hold",
         "Keep a manager's holder lease while COMMAND runs in the foreground",
@@ -480,139 +696,35 @@ Recovery and next help:
     hold.add_argument("--session", metavar="LABEL", help="optional holder display label")
     hold.add_argument("--force", action="store_true", help="take over and fence the old holder")
     hold.set_defaults(func=_hold)
-    run = page(
-        "run",
-        "Run a Record-producing starter and track it as NAME",
-        """Prerequisites and effects:
-  COMMAND [ARG ...] after -- is required; no shell expansion is performed.
-  The starter must finish with a Record on stdout and honor ENSEMBLE_SID.
-  Crew supplies an identity (--resume SID, else a new one) and roster events
-  file, records launch intent before executing, then prints the Record.
-  A failed launch may remain lost.
-  Put Crew options before NAME, then --, then the starter and its options.
-  Outer help: ensemble-crew run --help. Help after -- runs the starter path.
 
-Examples:
-  With Codex configured and no helper entry or session:
-  ensemble-crew run --manager demo helper -- \\
-    ensemble-session start helper --client codex --display none
-
-Recovery and next help:
-  Inspect/reconcile failed launches: ensemble-crew attach --help
-  Starter options: ensemble-session start --help
-""",
-        usage="%(prog)s [--manager MANAGER] [--note TEXT] [--resume SID] NAME -- COMMAND [ARG ...]",
-    )
-    run.add_argument("name", metavar="NAME", help="new roster entry name")
-    run.add_argument("--note", metavar="TEXT", help="optional roster note; default: none")
-    run.add_argument(
-        "--resume",
-        type=_sid,
-        metavar="SID",
-        help="ENSEMBLE_SID to give the starter; default: a new one",
-    )
-    run.set_defaults(func=_run)
-    for kind, key, purpose, owner, details in (
-        (
-            "worker",
-            "NAME",
-            "Start a named worker and track its Record",
-            f"{LayerCommand.SESSION} start",
-            """NAME is both the worker's session name and roster entry name.
-Session options go after NAME; --client CLIENT is required there.
-Session passes CLIENT_FLAGS after its -- verbatim to the client.
---resume SID resumes conversation SID (ensemble-session start --resume SID)
-under that same session identity.
-
-Examples:
-  With Codex configured and no helper session/entry:
-  ensemble-crew worker --manager demo helper --client codex --display none
-  Starts a hidden worker, records it in demo and prints its Record.
-  Form: worker [CREW_OPTIONS] NAME [SESSION_OPTIONS] [-- CLIENT_FLAGS]
-  Client flag help: use the configured client executable with --help.
-  Placement: ensemble-session --help
-""",
-        ),
-        (
-            "reopen",
-            "ISSUE",
-            "Resume a closed issue run's conversation as a worker and track its Record",
-            f"{LayerCommand.SESSION} start",
-            """ISSUE is a board issue identifier with a recorded run.
-Crew reads the run's client, session id, cwd, agent name and Host from its run
-record, WORK_DIR/work/ISSUE/run/delegate.json, then starts worker AGENT, the
-agent name: ensemble-session start AGENT --host HOST --client CLIENT --cwd CWD
---resume SID, under that session identity, so a Docker run comes back on the
-Docker Host; its Claude account is the session's choice unless SESSION_OPTIONS
-give --account. No record or session id: exit 1.
-SESSION_OPTIONS naming --client, --cwd, --host or --resume, abbreviated
-or not: exit 2. A run still alive
-(roster entry ISSUE or AGENT, or a session listed here or below with its
-session id) or one whose liveness is unknown (its status or the session listing
-failed): exit 2, so its conversation gets no second client. Where its start is
-owned (every built-in client's tui on tmux or Docker), it runs under a session
-harness of its own with no handlers, tracked like any other worker; the board is
-not touched.
-
-Examples:
-  With TASK-123's run closed:
-  ensemble-crew reopen --manager demo TASK-123 --display none
-  Form: reopen [CREW_OPTIONS] ISSUE [SESSION_OPTIONS] [-- CLIENT_FLAGS]
-  Placement: ensemble-session --help
-""",
-        ),
-        (
-            "issue",
-            "ISSUE",
-            "Start an attended issue run and track its Record",
-            f"{LayerCommand.ORCHESTRATOR} router",
-            """ISSUE is a configured board issue identifier and the roster entry name.
-Crew supplies router --issue ISSUE --tui, a session identity and events file.
-Requires board credentials, a configured role/client and an eligible issue;
-execution can claim/change the board and launch agent/harness sessions.
-
-Examples:
-  With configured board access and eligible test issue TASK-123:
-  ensemble-crew issue --manager demo TASK-123 --display none
-  Starts the run hidden and prints its Record.
-  Form: issue [CREW_OPTIONS] ISSUE [ROUTER_OPTIONS]
-  There is no client-flags delimiter at this boundary.
-  Placement: ensemble-session --help
-""",
-        ),
-        (
-            "role",
-            "ROLE",
-            "Start a detached role run and track its Record",
-            f"{LayerCommand.DELEGATE} run",
-            """ROLE selects a persona; --task before ROLE optionally selects its work type.
-Crew supplies --role ROLE --detach --name NAME, identity and events file.
-Requires configured role/client and downstream --input. Prints a Record.
-Without --credentials JSON before ROLE, resolves the role/task's orchestrator declaration.
-An explicit value replaces that declaration entirely; resumes reuse the saved value.
-
-Examples:
-  With the built-in pm role and its client configured:
-  ensemble-crew role --manager demo --name planner --task product-design pm --input 'Plan a feature'
-  Form: role [CREW_OPTIONS] ROLE [DELEGATE_OPTIONS]
-  There is no client-flags delimiter at this boundary.
-  Discover roles/tasks: ensemble-delegate run --list
-  Placement: ensemble-session --help
-""",
-        ),
-    ):
-        launch = page(
-            kind,
-            purpose,
-            f"Crew options go before {key}; downstream options go after it.\n"
-            f"Get outer help before supplying {key}: ensemble-crew {kind} --help\n"
-            "Forwarded --help belongs to the destination and may enter Crew's launch\n"
-            "path, which records intent. Use the owning help directly.\n\n"
-            + details
-            + f"\nDownstream options: {owner} --help\n",
-        )
+    def start_page(into, kind: StartKind, name: str, summary: str | None = None):
+        if kind.kind == "command":
+            launch = page(
+                name,
+                kind.purpose,
+                kind.details,
+                into=into,
+                summary=summary,
+                usage="%(prog)s [--manager MANAGER] [--note TEXT] [--resume SID] NAME -- COMMAND"
+                " [ARG ...]",
+            )
+        else:
+            launch = page(
+                name,
+                kind.purpose,
+                f"Crew options go before {kind.key}; downstream options go after it.\n"
+                f"Get outer help before supplying {kind.key}: ensemble-crew start {kind.kind} --help\n"
+                "Forwarded --help belongs to the destination and may enter Crew's launch\n"
+                "path, which records intent. Use the owning help directly.\n\n"
+                + kind.details
+                + f"\nDownstream options: {kind.owner} --help\n",
+                into=into,
+                summary=summary,
+            )
+        if kind.kind == "command":
+            launch.add_argument("key", metavar="NAME", help="new roster entry name")
         launch.add_argument("--note", metavar="TEXT", help="optional roster note; default: none")
-        if kind == "role":
+        if kind.kind == "role":
             launch.add_argument(
                 "--task", metavar="TASK", help="role task; default: the role's default task"
             )
@@ -627,36 +739,49 @@ Examples:
                 metavar="NAME",
                 help="roster/session name; default: ROLE-<new session id's first 8 characters>",
             )
-        if kind == "worker":
+        if kind.kind == "command":
+            launch.add_argument(
+                "--resume",
+                type=_sid,
+                metavar="SID",
+                help="ENSEMBLE_SID to give the starter; default: a new one",
+            )
+            launch.set_defaults(func=_run)
+            return
+        if kind.kind == "worker":
             launch.add_argument(
                 "--resume",
                 type=_sid,
                 metavar="SID",
                 help="resume conversation SID; default: a new one",
             )
-        if kind == "reopen":
+        if kind.kind == "reopen":
             launch.add_argument(
                 "--work-dir",
                 metavar="WORK_DIR",
                 default=STATE,
                 help=f"the board's configured work_dir; default: {STATE}",
             )
-        launch.add_argument("key", metavar=key, help=f"required {key.lower()}; see below")
+        launch.add_argument("key", metavar=kind.key, help=f"required {kind.key.lower()}; see below")
         launch.add_argument(
             "arguments",
             nargs=argparse.REMAINDER,
             metavar="DOWNSTREAM_OPTIONS",
-            help=f"forwarded verbatim to {owner}; defaults/values: its --help",
+            help=f"forwarded verbatim to {kind.owner}; defaults/values: its --help",
         )
         launch.set_defaults(
             func=_launch,
-            kind=kind,
+            kind=kind.kind,
             entry_name=None,
             resume=None,
             work_dir=STATE,
             task=None,
             credentials=None,
         )
+
+    for kind in START_KINDS:
+        start_page(starts, kind, kind.kind)
+        start_page(subs, kind, kind.old, f"old form of: start {kind.kind}")
     attach = page(
         "attach",
         "Reconcile a roster and print recovery/monitoring commands",
@@ -720,7 +845,7 @@ their Record; gone entries run their saved resume command. An entry already
 resuming may print nothing. --input requires exactly one waiting entry;
 without it, waiting entries are refused. Issue answers belong on the board.
 A closed entry is no longer in the roster: a closed issue run's conversation
-comes back with ensemble-crew reopen --help.
+comes back with ensemble-crew start reopen --help.
 
 Examples:
   With helper gone and its saved conversation available:
@@ -967,7 +1092,8 @@ Recovery and next help:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     command = ()
-    if arguments and arguments[0] in {"run", "hold"} and "--" in arguments:
+    takes_command = arguments[:1] in (["run"], ["hold"]) or arguments[:2] == ["start", "command"]
+    if takes_command and "--" in arguments:
         delimiter = arguments.index("--")
         command = tuple(arguments[delimiter + 1 :])
         arguments = arguments[:delimiter]
@@ -975,10 +1101,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(arguments)
     if args.func in {_run, _hold}:
         if not command:
-            parser.error("run and hold require -- followed by a command")
+            parser.error("start command, run and hold require -- followed by a command")
         args.command = command
     elif command:
-        parser.error("only run and hold accept a command after --")
+        parser.error("only start command, run and hold accept a command after --")
+    if getattr(args, "list", False) and args.start_kind is not None:
+        parser.error("start takes a kind or --list, not both")
+    if args.func is _start_list and not args.list:
+        parser.error("start takes a kind or --list")
     if args.func is _view and bool(args.names) == args.all:
         parser.error(f"{args.verb} takes entry names or --all")
     if args.func is _resume and args.input is not None and len(args.names) != 1:

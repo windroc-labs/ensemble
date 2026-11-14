@@ -191,7 +191,7 @@ installation created: a configuration, the plugin's added files, and new OpenTUI
 
 Set each provider's `context` and `[clients.opencode] ollama_context` to the server's real context window (Ollama's `OLLAMA_CONTEXT_LENGTH`): a smaller value compacts early, a larger one lets a request overflow. Both default to 65536.
 
-A crew worker's cwd is always trusted (you pick it), so `ensemble-crew worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`. Board client prerequisites: [Board configuration](../src/ensemble/orchestrator/config.toml).
+A crew worker's cwd is always trusted (you pick it), so `ensemble-crew start worker NAME --client opencode --cwd DIR` starts on tmux in any `DIR`. Board client prerequisites: [Board configuration](../src/ensemble/orchestrator/config.toml).
 
 On the tmux Host OpenCode needs the host's Ollama for `ollama/` models ([OpenCode operating limits](customizing-roles-and-tasks.md#opencode-operating-limits)) and an OpenCode 1.x. With none on PATH, `npm install -g opencode-ai@1.19.3`; ignore npm's warning that its postinstall did not run. Beside a 2.x, install 1.x under its own prefix, leaving the 2.x as it is, and point `executable` at it:
 
