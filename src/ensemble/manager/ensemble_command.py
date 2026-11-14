@@ -3,11 +3,15 @@ place while a command runs, list every manager, and resume a held manager's reco
 """
 
 import argparse
+import codecs
 import contextlib
 import os
+import select
 import shlex
 import sys
-from collections.abc import Sequence
+import termios
+import tty
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 
 from ensemble.manager import Roster
@@ -25,6 +29,9 @@ from ensemble.manager.engine.types import (
 from ensemble.utils import nested_start, printable
 
 NOT_HELD = "run ensemble resume under the manager's hold: ensemble list"
+UP, DOWN = "up", "down"
+ARROWS = {b"A": UP, b"B": DOWN}
+ESCAPE_WAIT = 0.25  # seconds a sequence may trail its Esc
 
 
 def recovery(manager: str, *, force: bool = False) -> str:
@@ -85,26 +92,102 @@ def _rows(found: list[Manager | Unreadable], out, *, numbered: bool) -> bool:
     return failed
 
 
+def _keys(fd: int) -> Iterator[str]:
+    """fd's keys: UP, DOWN or one character; other sequences dropped."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    while byte := os.read(fd, 1):
+        if byte != b"\x1b":
+            if key := decoder.decode(byte):
+                yield key
+            continue
+        if not select.select([fd], [], [], ESCAPE_WAIT)[0] or os.read(fd, 1) not in (b"[", b"O"):
+            continue
+        final = os.read(fd, 1)
+        while final and not 0x40 <= final[0] <= 0x7E:
+            final = os.read(fd, 1)
+        if arrow := ARROWS.get(final):
+            yield arrow
+
+
+def _edit(keys: Iterator[str], names: list[str], show: Callable[[str], None]) -> str:
+    """The line typed with keys; UP and DOWN put a name from names in it."""
+    text, shown = "", None
+    show(text)
+    for key in keys:
+        if key in ("\r", "\n"):
+            return text
+        if key in (UP, DOWN):
+            shown = (-1 if key == DOWN else 0) if shown is None else shown
+            shown = (shown + (1 if key == DOWN else -1)) % len(names)
+            text = names[shown]
+        elif key == "\x04":  # Ctrl-D
+            if not text:
+                return text
+            continue
+        elif key in ("\x7f", "\b"):
+            text, shown = text[:-1], None
+        elif key == "\x15":  # Ctrl-U
+            text, shown = "", None
+        elif key.isprintable():
+            text, shown = text + key, None
+        else:
+            continue
+        show(text)
+    return ""
+
+
+def _show(prompt: str, text: str) -> None:
+    """Redraw the prompt line with the end of text that fits."""
+    try:
+        columns = os.get_terminal_size(sys.stderr.fileno()).columns
+    except (OSError, ValueError):
+        columns = 0
+    if columns:  # 0: the width is unknown
+        text = text[len(text) - max(columns - len(prompt) - 1, 0) :]
+    print(f"\r\x1b[K{prompt}{text}", end="", file=sys.stderr, flush=True)
+
+
+def _terminal_keys(stack: contextlib.ExitStack) -> Iterator[str] | None:
+    """stdin's keys in cbreak mode until stack closes, when stdin and stderr are terminals."""
+    if not (sys.stderr.isatty() and sys.stdin.isatty()):
+        return None
+    try:
+        fd = sys.stdin.fileno()
+        saved = termios.tcgetattr(fd)
+        tty.setcbreak(fd, termios.TCSANOW)  # TCSAFLUSH drops typeahead
+    except (OSError, ValueError, termios.error):
+        return None
+    stack.callback(termios.tcsetattr, fd, termios.TCSADRAIN, saved)
+    return _keys(fd)
+
+
 def _choose(found: list[Manager | Unreadable]) -> Manager | Unreadable | None:
     names = [manager.name for manager in found]
-    prompt = f"select a manager [1-{len(found)}], Enter cancels: "
-    while True:
-        try:
-            print(prompt, end="", file=sys.stderr, flush=True)
-            answer = sys.stdin.readline().strip()
-        except KeyboardInterrupt:
-            print(file=sys.stderr)
-            return None
-        if not answer:
-            return None
-        if answer.isdecimal() and 1 <= int(answer) <= len(found):
-            return found[int(answer) - 1]
-        if answer in names:
-            return found[names.index(answer)]
-        print(
-            f"ensemble: no manager {printable(answer)}; give 1-{len(found)} or a name",
-            file=sys.stderr,
-        )
+    with contextlib.ExitStack() as stack:
+        keys = _terminal_keys(stack)
+        arrows = "" if keys is None else " or up/down"
+        prompt = f"select a manager [1-{len(found)}]{arrows}, Enter cancels: "
+        while True:
+            try:
+                if keys is None:
+                    print(prompt, end="", file=sys.stderr, flush=True)
+                    answer = sys.stdin.readline().strip()
+                else:
+                    answer = _edit(keys, names, lambda text: _show(prompt, text)).strip()
+                    print(file=sys.stderr)
+            except KeyboardInterrupt:
+                print(file=sys.stderr)
+                return None
+            if not answer:
+                return None
+            if answer.isdecimal() and 1 <= int(answer) <= len(found):
+                return found[int(answer) - 1]
+            if answer in names:
+                return found[names.index(answer)]
+            print(
+                f"ensemble: no manager {printable(answer)}; give 1-{len(found)} or a name",
+                file=sys.stderr,
+            )
 
 
 def _select(manager: Manager | Unreadable) -> int:

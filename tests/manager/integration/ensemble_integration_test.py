@@ -14,6 +14,7 @@ import signal
 import stat
 import subprocess
 import sys
+import termios
 import uuid
 from pathlib import Path
 
@@ -525,6 +526,41 @@ class FakeTmux(Case):
             os.close(master)
             os.close(errors)
         self.assertFalse(os.path.exists(self.log))
+
+    def test_arrow_keys_select_on_a_terminal_and_its_mode_is_restored(self):
+        self.demo()
+        master, slave = pty.openpty()
+        before = termios.tcgetattr(slave)
+        try:
+            process = subprocess.Popen(
+                (ENSEMBLE, "list"),
+                cwd=self.cwd,
+                env={**self.env, "HAS_RC": "1"},
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+            )
+            shown = b""
+            while not shown.endswith(b"up/down, Enter cancels: "):
+                chunk = os.read(master, 4096)
+                self.assertTrue(chunk, shown)
+                shown += chunk
+            os.write(master, b"\x1b[B\r")
+            self.assertEqual(process.wait(timeout=30), 0)
+            self.assertEqual(termios.tcgetattr(slave), before)
+        finally:
+            os.close(slave)
+            os.close(master)
+        with open(self.log, encoding="utf-8") as f:
+            calls = [json.loads(line)[2:] for line in f]
+        self.assertEqual(
+            calls,
+            [
+                ["has", "-t", "=demo"],
+                created("demo", self.cwd, "/bin/zsh"),
+                ["-CC", "attach", "-t", "=demo"],
+            ],
+        )
 
     def test_list_with_stdout_piped_prints_without_a_prompt(self):
         self.demo()
