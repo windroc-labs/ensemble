@@ -31,7 +31,17 @@ class CliTest(CliCase):
     def test_empty_run_note_and_note_command_store_null(self):
         command = self.setup_ctl()
         result, _, stderr = self.invoke(
-            "run", "worker", "--manager", "mgr", "--note", "", "--", command, "start", "worker"
+            "start",
+            "command",
+            "worker",
+            "--manager",
+            "mgr",
+            "--note",
+            "",
+            "--",
+            command,
+            "start",
+            "worker",
         )
         self.assertEqual(result, 0, stderr)
         self.assertIsNone(self.roster.entries()["worker"].note)
@@ -67,7 +77,15 @@ class CliTest(CliCase):
                 ),
             ):
                 result, stdout, stderr = self.invoke(
-                    "run", "worker", "--manager", "mgr", "--", command, "start", "worker"
+                    "start",
+                    "command",
+                    "worker",
+                    "--manager",
+                    "mgr",
+                    "--",
+                    command,
+                    "start",
+                    "worker",
                 )
             self.assertEqual(result, 1, stderr)
             self.assertEqual(stdout, "")

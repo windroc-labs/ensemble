@@ -634,7 +634,7 @@ class Crew:
         entries = self.roster.entries()
         if name not in entries:
             manager = os.path.basename(self.roster.directory)
-            reopen = ("ensemble-crew", "reopen", f"--manager={manager}", name)
+            reopen = ("ensemble-crew", "start", "reopen", f"--manager={manager}", name)
             raise ValueError(f"{name}: not in roster; a closed issue run: {shlex.join(reopen)}")
         entry = entries[name]
         status = None
