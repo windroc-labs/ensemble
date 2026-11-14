@@ -219,8 +219,7 @@ class Files(Case):
         files = {"/w/inputs/a.md": "a", "/d/b.md": "b"}
         spec = Spec(workdir="/r", access=Access(cwd="/w", dirs=("/d",)), files=files)
         self.assertEqual(dict(spec.files), files)
-        with self.assertRaises(TypeError):
-            spec.files["/w/x"] = "x"  # type: ignore[index]
+        self.assertIsInstance(spec.files, MappingProxyType)
         self.assertEqual(dict(Spec(workdir="/r", access=Access(cwd="/w")).files), {})
 
     def test_bad_files_are_config_errors(self):
@@ -236,8 +235,9 @@ class Files(Case):
             {"/w/a.md": None},
             [("/w/a.md", "a")],
         ):
+            given: dict[str, typing.Any] = {"files": files}
             with self.subTest(files=files), self.assertRaises(ConfigError) as caught:
-                Spec(workdir="/r", access=Access(cwd="/w"), files=files)  # type: ignore[arg-type]
+                Spec(workdir="/r", access=Access(cwd="/w"), **given)
             self.assertEqual(str(caught.exception), message)
 
     def test_in_process_takes_no_files(self):
