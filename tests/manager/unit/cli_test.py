@@ -664,6 +664,77 @@ class Launch(CliCase):
                 self.roster.remove(name)
 
 
+class StartForm(Launch):
+    SID = "0f6b3e4c-2c1d-4f8a-9b7e-5d6c7b8a9e10"
+
+    def test_each_old_form_parses_like_its_start_kind(self):
+        sid = self.SID
+        for old, kind, tail in (
+            (
+                "worker",
+                "worker",
+                ("--note", "n", "--resume", sid, "w1", "--client", "c", "--", "-x"),
+            ),
+            ("role", "role", ("--task", "t", "--credentials", "{}", "--name", "r", "pm", "-i")),
+            ("issue", "issue", ("TASK-1", "--display", "none")),
+            ("reopen", "reopen", ("--work-dir", "/w", "TASK-1", "--account", "a")),
+            ("run", "command", ("--note", "n", "--resume", sid, "r1", "--", "starter")),
+        ):
+            with self.subTest(old=old):
+                before = vars(parse_only(cli.main, [old, "--manager", "m", *tail]))
+                after = vars(parse_only(cli.main, ["start", kind, "--manager", "m", *tail]))
+                self.assertEqual(after.pop("start_kind"), kind)
+                self.assertEqual(before, after)
+
+    def test_start_kinds_launch_their_layer_command(self):
+        for kind, tail, name, argv in (
+            (
+                "worker",
+                ("--resume", self.SID, "w1", "--client", "claude", "--", "--x"),
+                "w1",
+                ("ensemble-session", "start", "w1", "--resume", self.SID, "--client", "claude"),
+            ),
+            (
+                "issue",
+                ("TASK-12", "--display", "none"),
+                "TASK-12",
+                ("ensemble-orchestrator", "router", "--issue", "TASK-12", "--tui"),
+            ),
+            ("command", ("c1", "--", "fake", "c1"), "c1", ("fake", "c1")),
+        ):
+            with self.subTest(kind=kind):
+                result, stdout, stderr = self.start("start", kind, "--manager", "mgr", *tail)
+                self.assertEqual(result, 0, stderr)
+                self.assertEqual(self.calls[0][0][: len(argv)], argv)
+                self.assertEqual(self.roster.entries()[name].record, Record.parse(stdout))
+
+    def test_start_worker_forwards_client_flags_after_double_dash(self):
+        parsed = cli._parser().parse_args(
+            ["start", "worker", "--manager", "demo", "helper", "--client", "codex", "--", "--m"]
+        )
+        self.assertEqual(parsed.arguments, ["--client", "codex", "--", "--m"])
+
+    def test_a_start_command_without_a_record_exits_one_and_is_lost(self):
+        result, stdout, stderr = self.start(
+            "start", "command", "--manager", "mgr", "plain", "--", "true", output=""
+        )
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertEqual(self.roster.entries()["plain"].state, State.LOST)
+
+    def test_start_command_needs_a_command_after_double_dash(self):
+        for tail in ((), ("--",)):
+            with self.subTest(tail=tail):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(["start", "command", "--manager", "mgr", "c1", *tail])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(
+                    "start command, run and hold require -- followed by a command",
+                    stderr.getvalue(),
+                )
+                self.assertFalse(os.path.exists(self.directory))
+
+
 class Reopen(CliCase):
     start = Launch.start
 
@@ -1860,6 +1931,11 @@ class InsideAnAgentSession(CliCase):
             ("issue", "--manager", "mgr", "TASK-12"),
             ("role", "--manager", "mgr", "pm", "--input", "x"),
             ("resume-commander", "--manager", "mgr"),
+            ("start", "command", "--manager", "mgr", "w1", "--", "true"),
+            ("start", "worker", "--manager", "mgr", "w1", "--client", "claude"),
+            ("start", "reopen", "--manager", "mgr", "TASK-12"),
+            ("start", "issue", "--manager", "mgr", "TASK-12"),
+            ("start", "role", "--manager", "mgr", "pm", "--input", "x"),
         ):
             with (
                 self.subTest(argv=argv),
@@ -1876,13 +1952,22 @@ class InsideAnAgentSession(CliCase):
             self.assertNotIn("refused", self.invoke("status", "--manager", "mgr")[2])
 
 
+START_KINDS = {
+    "worker": "worker",
+    "role": "role",
+    "issue": "issue",
+    "reopen": "reopen",
+    "run": "command",
+}
+START_PAGES = [f"start {kind}" for kind in START_KINDS.values()]
 HELP_COMMANDS = [
+    "start",
     "hold",
-    "run",
     "worker",
-    "reopen",
-    "issue",
     "role",
+    "issue",
+    "reopen",
+    "run",
     "attach",
     "status",
     "report",
@@ -1933,12 +2018,12 @@ class HelpContracts(Case):
         check_examples(
             self,
             self.help,
-            [None, *HELP_COMMANDS],
+            [None, *HELP_COMMANDS, *START_PAGES],
             check=lambda command: parse_only(cli.main, command[1:]),
         )
 
     def help(self, command=None, flag="--help"):
-        return help_text(self, cli.main, ([] if command is None else [command]) + [flag])
+        return help_text(self, cli.main, ([] if command is None else command.split()) + [flag])
 
     def test_every_surface_has_purpose_and_safe_help_under_invalid_runtime_context(self):
         before = sorted(Path(self.home).rglob("*"))
@@ -1953,7 +2038,7 @@ class HelpContracts(Case):
             mock.patch("subprocess.run") as run,
             mock.patch("subprocess.Popen") as popen,
         ):
-            for command in [None, *HELP_COMMANDS]:
+            for command in [None, *HELP_COMMANDS, *START_PAGES]:
                 for flag in ("--help", "-h"):
                     with self.subTest(command=command, flag=flag):
                         text = self.help(command, flag)
@@ -1969,6 +2054,20 @@ class HelpContracts(Case):
         text = self.help()
         self.assertEqual(text.split("{")[1].split("}")[0].split(","), HELP_COMMANDS)
         self.assertEqual(re.findall(r"^    (\S+) +\S", text, re.MULTILINE), HELP_COMMANDS)
+        for old, kind in START_KINDS.items():
+            self.assertRegex(text, rf"\n    {old} +old form of: start {kind}\n")
+
+    def test_start_lists_each_kind_and_its_pages_use_the_start_form(self):
+        text = self.help("start")
+        listed = re.findall(r"^    (\S+) +\S", text, re.MULTILINE)
+        self.assertEqual(listed, list(START_KINDS.values()))
+        for page in START_PAGES:
+            with self.subTest(page=page):
+                examples = [
+                    line for line in self.help(page).splitlines() if "ensemble-crew" in line
+                ]
+                self.assertIn(f"ensemble-crew {page} --help", "\n".join(examples))
+                self.assertIn(f"  ensemble-crew {page} --manager demo", "\n".join(examples))
 
     def test_boundary_help_and_recovery_are_explicit(self):
         for verb, owner in (
