@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # A manager's place. ensemble <name> opens tmux session <name>, whose shell holds manager <name>'s
 # place while it lives (this script's <name> -- form); start the client there. The holding, listing
-# and resuming run in this plugin's ensemble.manager.commander, so no manager can be named list or
-# resume here. On a terminal list then opens the selected manager: attach to its session, resume
-# its recorded client under its hold (ensemble resume typed into the hold's idle shell, or as a new
-# hold's command), or ensemble <name>.
+# and resuming run in this plugin's ensemble.manager.ensemble_command, so no manager can be named
+# list or resume here. On a terminal list then opens the selected manager: attach to its session,
+# resume its recorded client under its hold (ensemble resume typed into the hold's idle shell, or as
+# a new hold's command), or ensemble <name>.
 # --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
 usage() {
   printf '%s\n' \
@@ -65,7 +65,7 @@ if [ "$1" = --install ]; then
 fi
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd) || exit
 self=$root/skills/manage/scripts/ensemble
-side=$root/src/ensemble/manager/commander.py
+side=$root/src/ensemble/manager/ensemble_command.py
 paths=$root
 case $root in
   *:*) # PATH and PYTHONPATH split on ":" (OpenCode's plugin cache path holds one): name the root through a link without it
@@ -74,8 +74,8 @@ case $root in
     [ "$(readlink "$paths" 2>/dev/null)" = "$root" ] || ln -sfn "$root" "$paths" || exit
     ;;
 esac
-manager=(env "PATH=$paths/bin:$PATH" "PYTHONPATH=$paths/src" python3 -P -m ensemble.manager.commander)
-require_commander() {
+manager=(env "PATH=$paths/bin:$PATH" "PYTHONPATH=$paths/src" python3 -P -m ensemble.manager.ensemble_command)
+require_side() {
   [ -f "$side" ] || { echo "ensemble: no $side" >&2; exit 1; }
 }
 # openable NAME: refuse a manager the <name> form cannot hold, such as one an older ensemble
@@ -86,13 +86,13 @@ openable() {
   exit 1
 }
 if [ $# -gt 1 ] && [ "$1" != list ]; then
-  require_commander
+  require_side
   s=$1
   shift 2
   exec "${manager[@]}" hold ${force:+"$force"} "$s" -- "$@"
 fi
 if [ "$1" = resume ]; then
-  require_commander
+  require_side
   exec "${manager[@]}" resume
 fi
 # start NAME DIR COMMAND...: a detached session NAME in DIR running COMMAND.
@@ -121,7 +121,7 @@ attach() {
   exec tmux attach -t "=$1"
 }
 if [ "$1" = list ]; then
-  require_commander
+  require_side
   shift
   [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] || exec "${manager[@]}" list "$@"
   # Ctrl-C at the prompt cancels: the list exits 0, and bash must not die of the SIGINT meanwhile.
@@ -175,7 +175,7 @@ if [ "$1" = list ]; then
 fi
 s=$1
 tmux has -t "=$s" 2>/dev/null || {
-  require_commander
+  require_side
   start "$s" "$PWD" "$self" "$s" -- "${SHELL:-/bin/sh}" -l
 }
 attach "$s"

@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Sequence
 from typing import NamedTuple
 
-from ensemble.manager import Crew, Roster, RosterError, Spec, State, commander
+from ensemble.manager import Crew, Roster, RosterError, Spec, State, ensemble_command
 from ensemble.manager.engine import managers
 from ensemble.manager.engine.crew import SEND_WAIT, hand_off
 from ensemble.manager.engine.holder import inherited
@@ -91,7 +91,7 @@ def _lease_free_recovery(
     monitor = ("--after", str(cursor), "--gen", str(generation), "--content", "--follow")
     return [
         "lasting fix: restart the commander's client under a new holder, then attach and arm its"
-        f" monitor: command: {commander.recovery(manager)}",
+        f" monitor: command: {ensemble_command.recovery(manager)}",
         ack,
         "until then, attach without a lease, keeping the prefix on the commands it prints:"
         f" {_lease_free('attach', *named)}",
@@ -109,7 +109,7 @@ def _stale_holder_notes(args, reader: tuple[int, int] | None = None) -> list[str
     if holder is not None:
         return [
             f"{ENDED}; {holder} holds manager {manager} now; {state}",
-            commander.takeover(manager, holder),
+            ensemble_command.takeover(manager, holder),
         ]
     return [
         f"{ENDED}; no holder is active; {state}",
@@ -1063,7 +1063,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except Held as error:
         with contextlib.suppress(ValueError):
-            commander.refused(error, _roster(args))
+            ensemble_command.refused(error, _roster(args))
         _report_error(error)
         return 1
     except (OSError, RosterError, RuntimeError) as error:

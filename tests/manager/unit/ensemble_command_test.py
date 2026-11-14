@@ -9,8 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from ensemble.manager import Roster, Spec, State, commander
-from ensemble.manager.commander import main
+from ensemble.manager import Roster, Spec, State, ensemble_command
+from ensemble.manager.ensemble_command import main
 from ensemble.utils import Record
 from tests.manager.cli_case import CliCase
 from tests.manager.roster_case import mark
@@ -32,17 +32,21 @@ class CommanderCase(CliCase):
 class RecoveryTest(CommanderCase):
     def test_the_recovery_command_is_ensemble_with_the_name(self):
         self.assertEqual(
-            commander.recovery("demo"),
+            ensemble_command.recovery("demo"),
             "ensemble demo -- <client resume command> (ensemble --help)",
         )
         self.assertEqual(
-            commander.recovery("demo", force=True),
+            ensemble_command.recovery("demo", force=True),
             "ensemble --force demo -- <client resume command> (ensemble --help)",
         )
 
     def test_a_takeover_names_the_holder_and_leaves_it_to_the_user(self):
-        self.assertEqual(commander.takeover("mgr", "new"), f"use new's commander; {TAKEOVER}")
-        self.assertEqual(commander.takeover("mgr", None), f"use the holding commander; {TAKEOVER}")
+        self.assertEqual(
+            ensemble_command.takeover("mgr", "new"), f"use new's commander; {TAKEOVER}"
+        )
+        self.assertEqual(
+            ensemble_command.takeover("mgr", None), f"use the holding commander; {TAKEOVER}"
+        )
 
 
 class HoldTest(CommanderCase):
