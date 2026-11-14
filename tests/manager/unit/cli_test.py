@@ -2157,17 +2157,19 @@ class HelpContracts(Case):
                 text = self.help("start", flag)
             self.assertEqual(run.call_args.args[0], ("ensemble-session", "--help"))
             self.assertEqual(run.call_args.kwargs["stdin"], cli.subprocess.DEVNULL)
-            for line in (
-                "  tmux: [OPENER][/SPLIT[/ANCHOR]] or none\n",
-                "  docker: [OPENER][/SPLIT[/ANCHOR]] or none\n",
-                "  remote: as given\n",
-                "<opener>[/<split>[/<split_from>]]\n",
-            ):
-                self.assertIn(line, text)
+            self.assertTrue(
+                text.endswith(
+                    "Placement (--display D), per configured Host, from ensemble-session --help:\n"
+                    "  tmux: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+                    "  docker: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+                    "  remote: as given\n"
+                ),
+                text,
+            )
+            self.assertNotIn("<opener>", text)
             self.assertNotIn("OPENER: tmux session name", text)
-            self.assertNotIn("could not list", text)
 
-    def test_start_help_without_session_host_lines_still_names_the_forms(self):
+    def test_start_help_without_session_host_lines_points_at_session_help(self):
         failed = SimpleNamespace(returncode=2, stdout="", stderr="config error\n")
         unreadable = SimpleNamespace(
             returncode=0,
@@ -2187,8 +2189,13 @@ class HelpContracts(Case):
             )
             with self.subTest(outcome=outcome), mock.patch("subprocess.run", **effect):
                 text = self.help("start")
-            self.assertIn("ensemble-session --help could not list", text)
-            self.assertIn("<opener>[/<split>[/<split_from>]]\n", text)
+            self.assertTrue(
+                text.endswith(
+                    "Placement (--display D): ensemble-session --help could not list the configured\n"
+                    "Hosts; run it for each Host's form.\n"
+                ),
+                text,
+            )
 
     def test_start_lists_each_kind_and_its_pages_use_the_start_form(self):
         text = self.help("start")

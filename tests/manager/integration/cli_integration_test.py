@@ -35,7 +35,6 @@ class StartHelp(Case):
         self.assertTrue(any(line.startswith("  tmux: ") for line in hosts), session)
         for line in hosts:
             self.assertIn(line + "\n", crew)
-        self.assertIn("<opener>[/<split>[/<split_from>]]", crew)
 
 
 class PathsAndArguments(InstalledCrewCase):

@@ -32,7 +32,6 @@ from ensemble.utils import EXIT_BUSY, STATE, LayerCommand, nested_start, printab
 LEASE_FREE = ("env", "-u", "ENSEMBLE_HOLDER_ID", "-u", "ENSEMBLE_HOLDER_GENERATION")
 HELP_TIMEOUT = 20
 HOST_DISPLAY = "display (--display D)"
-TMUX_DISPLAY = "  tmux display parts: <opener>[/<split>[/<split_from>]]\n"
 ENDED = "this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an ended holder"
 
 
@@ -283,10 +282,10 @@ def _placement() -> str:
     if not hosts:
         return (
             "Placement (--display D): ensemble-session --help could not list the configured\n"
-            "Hosts; run it for each Host's form.\n" + TMUX_DISPLAY
+            "Hosts; run it for each Host's form.\n"
         )
     lines = "".join(f"{line}\n" for line in hosts)
-    return f"Placement (--display D), per configured Host, from ensemble-session --help:\n{lines}{TMUX_DISPLAY}"
+    return f"Placement (--display D), per configured Host, from ensemble-session --help:\n{lines}"
 
 
 class _StartHelp(argparse.Action):
