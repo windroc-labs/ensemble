@@ -40,6 +40,7 @@ from ensemble.utils import (
     Status,
     StatusState,
     one_line,
+    outcome_block,
     printable,
     read_reply,
 )
@@ -131,6 +132,28 @@ def _reconciled(entry: Entry, status: Status) -> State:
     if status.outcome == OutcomeStatus.NEEDS_INPUT:
         return State.WAITING
     return State.GONE
+
+
+def _written(reply: str) -> dict | None:
+    """The outcome block in `reply` when its body is a JSON object, else None."""
+    body = outcome_block(reply)
+    try:
+        found = None if body is None else json.loads(body)
+    except (ValueError, RecursionError):
+        found = None
+    return found if isinstance(found, dict) else None
+
+
+def _asked_again(written: dict, recorded: dict) -> bool:
+    """Whether `written` asks for input again with the questions the delegate recorded, normalized
+    as the delegate records them.
+    """
+    questions = written.get("questions") or []
+    return (
+        written.get("status") == OutcomeStatus.NEEDS_INPUT
+        and isinstance(questions, list)
+        and [str(q) for q in questions] == recorded.get("questions")
+    )
 
 
 def _closed_run(work_dir: str, issue: str) -> tuple[str, str, str, str, str, str]:
@@ -664,22 +687,56 @@ class Crew:
         return _one_session(name, self._record(name))
 
     def read_argv(
-        self, name: str, *, lines: int | None = None, reply: bool = False, outcome: bool = False
+        self, name: str, *, lines: int | None = None, reply: bool = False
     ) -> tuple[str, ...]:
-        """The command printing the entry's screen (its last `lines`), latest reply or outcome.
-        An issue run's ctl has no outcome verb: its Record's workdir is its delegate's.
-        """
-        if outcome:
-            record = self._record(name)
-            delegated = record.ctl[0] in (LayerCommand.DELEGATE, LayerCommand.ORCHESTRATOR)
-            if not delegated or record.workdir is None:
-                raise ValueError(f"{name}: no run outcome; --outcome reads role and issue runs")
-            return (LayerCommand.DELEGATE, "outcome", record.workdir)
+        """The command printing the entry's screen (its last `lines`) or latest reply."""
         session, sid = self._session(name)
         if reply:
             return (LayerCommand.SESSION, "reply", session, "--sid", sid)
         shown = () if lines is None else ("--lines", str(lines))
         return (LayerCommand.SESSION, "read", session, "--sid", sid, *shown)
+
+    def outcome(self, name: str) -> str:
+        """The entry's latest outcome as one JSON line, "null" without one. A role or issue run's
+        is the one its delegate recorded, unless that asks for input and its tui's latest reply
+        holds another outcome block: the run went on without its harness. A worker's, a reopened
+        run's included, is the outcome block in its latest reply. Only the latest reply is read.
+        An issue run's ctl has no outcome verb: its Record's workdir is its delegate's.
+        """
+        record = self._record(name)
+        if record.ctl[0] not in (LayerCommand.DELEGATE, LayerCommand.ORCHESTRATOR):
+            session, sid = self._session(name)
+            written = _written(
+                self._execute((LayerCommand.SESSION, "reply", session, "--sid", sid))
+            )
+            return json.dumps(written, separators=(",", ":"))
+        if record.workdir is None:
+            raise ValueError(f"{name}: no workdir to read its run outcome")
+        argv = (LayerCommand.DELEGATE, "outcome", record.workdir)
+        text = self._execute(argv).strip()
+        try:
+            recorded = json.loads(text)
+        except (ValueError, RecursionError):
+            recorded = text
+        if recorded is not None and not isinstance(recorded, dict):
+            raise RuntimeError(f"{shlex.join(argv)}: not an outcome: {text!r:.80}")
+        if (
+            recorded is None
+            or recorded.get("status") != OutcomeStatus.NEEDS_INPUT
+            or len(record.sessions) != 1
+            or record.sid is None
+        ):
+            return text
+        try:
+            reply = self._execute(
+                (LayerCommand.SESSION, "reply", record.sessions[0], "--sid", record.sid)
+            )
+        except RuntimeError:  # its tui gone, replaced or not answering: the recorded one stands
+            return text
+        written = _written(reply)
+        if written is None or _asked_again(written, recorded):
+            return text
+        return json.dumps(written, separators=(",", ":"))
 
     def send_argv(
         self, name: str, *, text: str | None = None, keys: Sequence[str] = ()
