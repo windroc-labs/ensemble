@@ -61,6 +61,11 @@ class Commands(InstalledCrewCase):
         self.assertEqual(Path(seen).read_text(), "run --list\n")
         self.assertFalse(Path(self.directory).exists())
 
+    def test_a_start_command_printing_no_record_exits_one_and_stays_lost(self):
+        result = self.invoke("start", "command", "--manager", "mgr", "plain", "--", "true")
+        self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
+        self.assertEqual(Roster(self.directory).entries()["plain"].state, State.LOST)
+
     def test_an_invalid_manager_name_writes_nowhere(self):
         before = sorted(Path(self.home).rglob("*"))
         result = self.invoke("attach", "--manager=../outside")

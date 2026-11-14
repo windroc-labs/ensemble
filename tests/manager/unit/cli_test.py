@@ -7,7 +7,6 @@ import os
 import re
 import shlex
 import shutil
-import subprocess
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -2066,7 +2065,7 @@ HELP_COMMANDS = [
 class HelpContracts(Case):
     def setUp(self):
         super().setUp()
-        unlisted = subprocess.CompletedProcess((), 1, stdout="", stderr="")
+        unlisted = SimpleNamespace(returncode=1, stdout="", stderr="")
         self.enterContext(mock.patch("subprocess.run", return_value=unlisted))
 
     def test_role_options_are_owned_before_role_and_remainder_is_opaque(self):
@@ -2152,12 +2151,12 @@ class HelpContracts(Case):
             "    SPLIT: right or below.\n"
             "  remote: as given\n"
         )
-        answer = subprocess.CompletedProcess((), 0, stdout=session_help, stderr="")
+        answer = SimpleNamespace(returncode=0, stdout=session_help, stderr="")
         for flag in ("--help", "-h"):
             with self.subTest(flag=flag), mock.patch("subprocess.run", return_value=answer) as run:
                 text = self.help("start", flag)
             self.assertEqual(run.call_args.args[0], ("ensemble-session", "--help"))
-            self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual(run.call_args.kwargs["stdin"], cli.subprocess.DEVNULL)
             for line in (
                 "  tmux: [OPENER][/SPLIT[/ANCHOR]] or none\n",
                 "  docker: [OPENER][/SPLIT[/ANCHOR]] or none\n",
@@ -2169,16 +2168,15 @@ class HelpContracts(Case):
             self.assertNotIn("could not list", text)
 
     def test_start_help_without_session_host_lines_still_names_the_forms(self):
-        failed = subprocess.CompletedProcess((), 2, stdout="", stderr="config error\n")
-        unreadable = subprocess.CompletedProcess(
-            (),
-            0,
+        failed = SimpleNamespace(returncode=2, stdout="", stderr="config error\n")
+        unreadable = SimpleNamespace(
+            returncode=0,
             stdout="display (--display D): the session config could not be read.\n",
             stderr="",
         )
         for outcome in (
             OSError(2, "No such file or directory"),
-            subprocess.TimeoutExpired(("ensemble-session", "--help"), 20),
+            cli.subprocess.TimeoutExpired(("ensemble-session", "--help"), 20),
             failed,
             unreadable,
         ):

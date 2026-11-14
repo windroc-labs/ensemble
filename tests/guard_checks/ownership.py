@@ -15,6 +15,7 @@ from tests.guard_checks.common import (
     _strings,
 )
 from tests.guard_data.delegate import CONFIG_FILE, DELEGATE_SRC
+from tests.guard_data.manager import DISPLAY_TEXT_ALLOWED
 from tests.guard_data.orchestrator import (
     CLIENT_LIMIT_TABLES,
     HANDOFF_HOME,
@@ -215,8 +216,9 @@ def manager_lease(repo: str) -> list[str]:
     )
 
 
-def manager_display(repo: str) -> list[str]:
-    found = set()
+def manager_display(repo: str, *, allowed=None) -> list[str]:
+    allowed = DISPLAY_TEXT_ALLOWED if allowed is None else allowed
+    found, used = set(), set()
     base = "src/ensemble/manager/"
     forbidden = re.compile(
         r"(?<![a-zA-Z0-9_])(?:pane|opener|split_from)(?![a-zA-Z0-9_])|--split|@record"
@@ -235,8 +237,15 @@ def manager_display(repo: str) -> list[str]:
                 if isinstance(node, ast.Constant) and isinstance(node.value, str)
                 else ""
             )
-            if forbidden.search(value):
+            if not forbidden.search(value):
+                continue
+            if (key := (f"{base}{rel}", value)) in allowed:
+                used.add(key)
+            else:
                 found.add(f"{base}{rel}:{node.lineno}: interprets display {value!r}")
+    found.update(
+        f"{path}: stale display text exception {value!r}" for path, value in allowed.keys() - used
+    )
     return sorted(found)
 
 
