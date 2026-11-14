@@ -122,7 +122,7 @@ The Linear orchestrator's mapping of an agent run's start and progress marks and
 The core run keys the Linear orchestrator adds to its own agent runs, in `src/ensemble/orchestrator/config.toml`'s `[core]` table (its comment).
 
 **Manager**:
-The top layer: the commander session you talk to (`/ensemble:manage`) and its crew. In code: `src/ensemble/manager/`.
+The top layer: the manager session you talk to (`/ensemble:manage`) and its crew. In code: `src/ensemble/manager/`.
 
 **Crew**:
 A manager's command executor. It owns a Roster, starts opaque argv and uses each Record's control and resume commands. In code: `src/ensemble/manager/engine/crew.py`; command entry: `src/ensemble/manager/cli.py`.

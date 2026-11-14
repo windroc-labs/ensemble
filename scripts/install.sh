@@ -2940,7 +2940,7 @@ celebrate() {
 
 EOF
   say "ensemble is installed (ref $ref, clients $clients, Docker $docker)."
-  say "Welcome onboard, and congrats: your crew is ready. Open a commander with ensemble <name>."
+  say "Welcome onboard, and congrats: your crew is ready. Open a manager with ensemble <name>."
 }
 
 main() {

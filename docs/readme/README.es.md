@@ -2,7 +2,7 @@
 
 [English](../../README.md) · [Français](README.fr.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Português](README.pt.md) · [简体中文](README.zh-CN.md)
 
-Ensemble te permite trabajar con agentes de programación como un equipo. Habla con un comandante, delega una tarea a un rol
+Ensemble te permite trabajar con agentes de programación como un equipo. Habla con un manager, delega una tarea a un rol
 o deja que un tablero distribuya el trabajo entre roles. Claude Code, Codex y OpenCode comparten los mismos controles de sesión.
 
 <a id="what"></a>
@@ -16,9 +16,9 @@ un tablero programa ejecuciones de roles y registra sus resultados en las incide
 <a id="why"></a>
 ## Por qué trabajar en equipo
 
-![Un agente, varios agentes coordinados a mano y equipos de ensemble coordinados por comandantes](../images/compare.svg)
+![Un agente, varios agentes coordinados a mano y equipos de ensemble coordinados por managers](../images/compare.svg)
 
-Las ejecuciones independientes de agentes necesitan a alguien que distribuya el trabajo y siga sus respuestas. Un comandante usa Crew para iniciar,
+Las ejecuciones independientes de agentes necesitan a alguien que distribuya el trabajo y siga sus respuestas. Un manager usa Crew para iniciar,
 inspeccionar y reanudar esas ejecuciones desde una sola conversación. Tú sigues decidiendo qué trabajo autorizar y revisar.
 
 <a id="how-it-works"></a>
@@ -90,7 +90,7 @@ Para una sola tarea, en una conversación del cliente instalado:
 /ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
-Para un equipo, abre un shell de comandante e inicia tu cliente:
+Para un equipo, abre un shell de manager e inicia tu cliente:
 
 ```sh
 ensemble work
@@ -103,7 +103,7 @@ Usa `codex --no-daemon` u `opencode` en lugar de `claude` si ese es tu cliente. 
 /ensemble:manage
 ```
 
-Describe el trabajo y el entregable deseado. El comandante coordina los trabajadores y las ejecuciones de roles mediante Crew.
+Describe el trabajo y el entregable deseado. El manager coordina los trabajadores y las ejecuciones de roles mediante Crew.
 Para volver a `work` más tarde, ejecuta `ensemble list` en una terminal y elígelo: vuelves a su sesión y su conversación.
 Para trabajar con un tablero, `/ensemble:board` opera sobre las incidencias; la [personalización del flujo de trabajo](../customizing-roles-and-tasks.md#on-the-board)
 explica cómo elegir las etapas.

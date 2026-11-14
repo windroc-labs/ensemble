@@ -2,7 +2,7 @@
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [日本語](README.ja.md) · [Português](README.pt.md) · [简体中文](README.zh-CN.md)
 
-Ensemble을 사용하면 코딩 에이전트와 팀으로 일할 수 있습니다. 커맨더와 대화하거나, 역할에 작업을 위임하거나,
+Ensemble을 사용하면 코딩 에이전트와 팀으로 일할 수 있습니다. manager와 대화하거나, 역할에 작업을 위임하거나,
 보드가 역할 간에 작업을 배분하도록 할 수 있습니다. Claude Code, Codex, OpenCode는 같은 세션 제어 기능을 공유합니다.
 
 <a id="what"></a>
@@ -16,9 +16,9 @@ Ensemble을 사용하면 코딩 에이전트와 팀으로 일할 수 있습니�
 <a id="why"></a>
 ## 팀을 사용하는 이유
 
-![단일 에이전트, 수동으로 조율하는 여러 에이전트, 커맨더가 조율하는 ensemble 팀](../images/compare.svg)
+![단일 에이전트, 수동으로 조율하는 여러 에이전트, manager가 조율하는 ensemble 팀](../images/compare.svg)
 
-에이전트를 따로 실행하면 누군가 작업을 배분하고 응답을 추적해야 합니다. 커맨더는 Crew를 사용해 하나의 대화에서
+에이전트를 따로 실행하면 누군가 작업을 배분하고 응답을 추적해야 합니다. manager는 Crew를 사용해 하나의 대화에서
 이러한 실행을 시작하고, 살펴보고, 재개합니다. 어떤 작업을 승인하고 검토할지는 여전히 사용자가 결정합니다.
 
 <a id="how-it-works"></a>
@@ -89,7 +89,7 @@ GitHub Settings › Developer settings › GitHub Apps에서 자신의 계정에
 /ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
-팀을 사용하려면 커맨더 셸을 열고 클라이언트를 시작하세요.
+팀을 사용하려면 manager 셸을 열고 클라이언트를 시작하세요.
 
 ```sh
 ensemble work
@@ -102,7 +102,7 @@ claude
 /ensemble:manage
 ```
 
-할 일과 원하는 결과물을 설명하세요. 커맨더는 Crew를 통해 워커와 역할 실행을 조율합니다.
+할 일과 원하는 결과물을 설명하세요. manager는 Crew를 통해 워커와 역할 실행을 조율합니다.
 나중에 `work`로 돌아오려면 터미널에서 `ensemble list`를 실행하고 고르세요. 그 세션과 대화로 돌아갑니다.
 보드 작업에서는 `/ensemble:board`가 이슈를 조작합니다. 단계 선택 방법은
 [워크플로 사용자 지정](../customizing-roles-and-tasks.md#on-the-board)에서 설명합니다.

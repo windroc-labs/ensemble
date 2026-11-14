@@ -168,7 +168,7 @@ context = 204800                          # its context window in tokens; defaul
 
 Its API key, on the tmux Host, stays OpenCode's: run `opencode auth login` once, pick Other and enter the provider's name (`strata`), and OpenCode keeps the key in its `auth.json`. The availability probe reads the selected provider's API entry and sends it only in the HTTP Authorization header; it returns no key or response body. On the Docker Host the broker keeps it: `ensemble-broker login opencode strata` once, for every configured provider ([OpenCode operating limits](customizing-roles-and-tasks.md#opencode-operating-limits)). A name is up to 64 letters, digits, `.`, `_` or `-`.
 
-`scripts/install.sh --docker` with OpenCode selected configures both local OpenCode (including a commander) and
+`scripts/install.sh --docker` with OpenCode selected configures both local OpenCode (including a manager) and
 the broker from one key entry: paste it once at `opencode auth login`, or pass one line with `--opencode-key-stdin`;
 it stores it in `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json`, then imports that API entry into the broker.
 Reruns skip a usable local API entry and a broker item whose recorded broker binary fingerprint still matches; a
@@ -225,8 +225,8 @@ not its destination. Use Docker containment for untrusted work rather than relyi
 Write through a directory alias using its resolved path; read grants cover both spellings, write grants only the resolved one.
 
 OpenCode's own permissions apply to ensemble commands; skill `allowed-tools` and `disable-model-invocation`
-do not. Commander monitoring is manual: OpenCode has no Monitor, background shell or completion notification
-to wake an idle commander. Follow `/ensemble:manage`'s monitoring contract.
+do not. Manager monitoring is manual: OpenCode has no Monitor, background shell or completion notification
+to wake an idle manager. Follow `/ensemble:manage`'s monitoring contract.
 
 To set host Ollama's context window, use `launchctl setenv OLLAMA_CONTEXT_LENGTH 65536` (or the required
 larger window), reopen the app, and pull every configured model.

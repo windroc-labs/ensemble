@@ -829,7 +829,7 @@ credentials and requesting any missing logins ([broker command usage](../src/bro
 account in: see [Broker protocol 38](#broker-protocol-38-named-claude-accounts-only).
 It does not edit config keys a release renames.
 
-For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a commander,
+For OpenCode with `--docker`, rerunning the installer also ensures the local `auth.json` entry for a manager,
 then imports it into the broker without a second key entry. A broker-only install needs one local login;
 existing local API entries are reused, including after a broker reinstall. Both entries follow the install ledger's
 cleanup ownership ([OpenCode sessions](customizing-roles-and-tasks.md#opencode-sessions)).
