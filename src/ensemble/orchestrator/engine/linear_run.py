@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import replace
 
 from ensemble.delegate import Delegate, Spec
@@ -41,7 +42,9 @@ class LinearRun:
         delegate_kind: str | None = None,
         delegate_cls: type | None = None,
         tier: int | None = None,
+        files: Mapping[str, str] | None = None,
     ):
+        """files: agent-dir-relative path -> text, written there before the run starts."""
         self._identity(issue, sid)
         self.issue, self.sid = issue, sid
         self.delegate_kind = delegate_kind or cfg.delegate_kind
@@ -76,6 +79,7 @@ class LinearRun:
                     if stage and not resume
                     else None
                 ),
+                files=files,
             ),
             display=display,
             callback=["ensemble-orchestrator", "writeback", "--issue", issue, "--workdir", workdir],

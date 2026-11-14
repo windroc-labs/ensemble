@@ -73,6 +73,10 @@ def lines(*ls):
     return "\n".join(ls)
 
 
+def saved(name):
+    return f"File: `<Workdir>/inputs/{name}`"
+
+
 def fenced(text, fence=FENCE):
     return f"{fence}markdown\n{text}\n{fence}"
 
@@ -190,7 +194,7 @@ class LocalDocuments(Case):
             inputs.listing(self.run, self.docs, str(self.root))
         with self.assertRaises(inputs.InputError):
             inputs._read(self.run, self.docs, str(self.root / "outside.md"))
-        self.assertEqual(inputs._doc_fence(src.docs[0], ""), "(not found on local filesystem)")
+        self.assertEqual(inputs._doc_fence(src.docs[0], "", {}), "(not found on local filesystem)")
 
     def test_earlier_listing_stat_failure_becomes_input_error(self):
         with (
@@ -396,11 +400,15 @@ class BuildInputs(Case):
                 "",
                 "## PRD: `Product Design/2026-09-05-PM-9-q.md`",
                 "",
+                saved("2026-09-05-PM-9-q.md"),
+                "",
                 fenced("# PRD"),
                 "",
                 "## Linked documents (context)",
                 "",
                 "### `Research/r.md`",
+                "",
+                saved("r.md"),
                 "",
                 fenced("r"),
                 "",
@@ -508,6 +516,8 @@ class BuildInputs(Case):
         self.assertIn("## PRD: `Product Design/2026-09-05-PM-9-q.md`", got)
         self.assertIn(
             "## Linked documents (context)\n\n### `Research/r.md`\n\n"
+            + saved("r.md")
+            + "\n\n"
             + fenced("r")
             + "\n\n### `Product Design/2026-09-06-PM-10-z.md`",
             got,
@@ -836,7 +846,13 @@ class DocumentGathering(Case):
             target=target.Target("o", "r", "ENG-7-x"),
             docs=DOCS,
         )
-        self.assertIn("## PRD: `Product Design/2026-08-01-PM-1-x.md`\n\n" + fenced("p1"), got)
+        self.assertIn(
+            "## PRD: `Product Design/2026-08-01-PM-1-x.md`\n\n"
+            + saved("2026-08-01-PM-1-x.md")
+            + "\n\n"
+            + fenced("p1"),
+            got,
+        )
         self.assertIn(f"Links: https://linear.app/t/issue/ENG-7, {url}\n", got)
 
     def test_comments_header_with_crlf(self):
@@ -1035,9 +1051,13 @@ class ResearchInputs(Case):
                 "",
                 "### `Research/2026-08-01-RES-2-queues.md`",
                 "",
+                saved("2026-08-01-RES-2-queues.md"),
+                "",
                 fenced("# Queues"),
                 "",
                 "## Earlier version: `Research/2026-09-01-RES-4-q.md`",
+                "",
+                saved("2026-09-01-RES-4-q.md"),
                 "",
                 fenced("# Earlier"),
             ),
@@ -1135,7 +1155,7 @@ class DocumentFences(Case):
             with self.subTest(text=text):
                 self.assertTrue(
                     self.render_doc(text).endswith(
-                        f"### `Research/a.md`\n\n{fence}markdown\n{shown}\n{fence}"
+                        f"### `Research/a.md`\n\n{saved('a.md')}\n\n{fence}markdown\n{shown}\n{fence}"
                     )
                 )
 
@@ -1158,7 +1178,7 @@ class LinkedDocumentBudget(Case):
     def listed(self, name):
         return (
             f"### `Research/{name}.md`\n\n(not inlined: over the 50000-byte budget for linked "
-            f"documents; read it at {BASE}Research/{name}.md)"
+            f"documents; read it at `<Workdir>/inputs/{name}.md`)"
         )
 
     def test_linked_documents_inline_up_to_the_budget_then_list_the_rest(self):
@@ -1172,7 +1192,7 @@ class LinkedDocumentBudget(Case):
             with self.subTest(role=role):
                 got = self.render(role, docs)
                 self.assertIn(
-                    f"{heading}\n\n### `Research/a.md`\n\n{fenced(a)}\n\n"
+                    f"{heading}\n\n### `Research/a.md`\n\n{saved('a.md')}\n\n{fenced(a)}\n\n"
                     "### `Research/gone.md`\n\n(not found on main)\n\n" + self.listed("b"),
                     got,
                 )
@@ -1184,7 +1204,9 @@ class LinkedDocumentBudget(Case):
         got = self.render(
             "researcher", [self.doc(n, t) for n, t in zip("abc", (a, b, c), strict=True)]
         )
-        self.assertIn(self.listed("b") + f"\n\n### `Research/c.md`\n\n{fenced(c)}", got)
+        self.assertIn(
+            self.listed("b") + f"\n\n### `Research/c.md`\n\n{saved('c.md')}\n\n{fenced(c)}", got
+        )
 
     def test_prd_and_earlier_version_are_never_capped(self):
         big, fill = "p" * 60_000, "f" * 50_000
@@ -1196,6 +1218,78 @@ class LinkedDocumentBudget(Case):
         got = self.render("researcher", [self.doc("f", fill)], earlier)
         self.assertIn(fenced(big), got)
         self.assertIn(fenced(fill), got)
+
+
+class InputFiles(Case):
+    """Each gathered doc with text is also a file in the agent dir, which the input names."""
+
+    def doc(self, path, text="t"):
+        return inputs.Doc(BASE + path, path, text)
+
+    def test_each_doc_with_text_is_one_file_earlier_first(self):
+        earlier = self.doc("Research/e.md", "e")
+        docs = (self.doc("Research/a.md", "a"), self.doc("Research/gone.md", None))
+        self.assertEqual(
+            inputs.files(inputs.Sources(docs, earlier)),
+            {"inputs/e.md": "e", "inputs/a.md": "a"},
+        )
+        self.assertEqual(inputs.files(inputs.Sources((), None)), {})
+
+    def test_a_doc_over_the_cap_gets_no_file_and_keeps_its_url(self):
+        big = "雪" * (inputs.MAX_LOCAL_DOC // 3 + 1)
+        src = inputs.Sources((self.doc("Research/big.md", big),), None)
+        self.assertEqual(inputs.files(src), {})
+        got = inputs.render(issue("Q", ident="RES-4"), "researcher", src, target=None, docs=DOCS)
+        self.assertIn(f"read it at {BASE}Research/big.md)", got)
+        self.assertNotIn("File:", got)
+
+    def test_names_are_sanitized_and_unique(self):
+        docs = tuple(
+            self.doc(p)
+            for p in (
+                "Research/a.md",
+                "x/a.md",
+                "Research/2-a.md",
+                "/abs/dir/My Doc (v2).md",
+                "Research/..hidden.md",
+                "Research/...",
+            )
+        )
+        self.assertEqual(
+            list(inputs.files(inputs.Sources(docs, None))),
+            [
+                "inputs/a.md",
+                "inputs/2-a.md",
+                "inputs/2-2-a.md",
+                "inputs/My-Doc--v2-.md",
+                "inputs/hidden.md",
+                "inputs/doc.md",
+            ],
+        )
+
+    def test_texts_lose_nul_and_lone_surrogates(self):
+        src = inputs.Sources((self.doc("Research/a.md", "a\x00b\ud800c"),), None)
+        self.assertEqual(inputs.files(src), {"inputs/a.md": "ab?c"})
+
+    def test_each_inlined_or_listed_doc_names_its_file(self):
+        small, big = "s", "b" * 50_001
+        docs = [self.doc("Research/s.md", small), self.doc("Research/b.md", big)]
+        got = inputs.render(
+            issue("Q", ident="RES-4"),
+            "researcher",
+            inputs.Sources(tuple(docs), self.doc("Research/e.md", "e")),
+            target=None,
+            docs=DOCS,
+        )
+        self.assertIn(
+            f"### `Research/s.md`\n\nFile: `<Workdir>/inputs/s.md`\n\n{fenced(small)}", got
+        )
+        self.assertIn(
+            "### `Research/b.md`\n\n(not inlined: over the 50000-byte budget for linked "
+            "documents; read it at `<Workdir>/inputs/b.md`)",
+            got,
+        )
+        self.assertIn("File: `<Workdir>/inputs/e.md`", got)
 
 
 class DesignInputs(Case):
@@ -1268,6 +1362,8 @@ class DesignInputs(Case):
                 "",
                 "### `Research/2026-09-01-RES-4-queues.md`",
                 "",
+                saved("2026-09-01-RES-4-queues.md"),
+                "",
                 fenced("# Report"),
                 "",
                 "## Linked issues (context)",
@@ -1288,6 +1384,8 @@ class DesignInputs(Case):
                 "  > PRD started: https://x",
                 "",
                 "## Earlier version: `Product Design/2026-09-05-PM-9-q.md`",
+                "",
+                saved("2026-09-05-PM-9-q.md"),
                 "",
                 fenced("# Mine"),
             ),

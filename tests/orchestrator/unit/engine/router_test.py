@@ -2925,6 +2925,19 @@ class RunLaunching(OuterBase):
         self.assertEqual(self.outer(mode="resume"), 0)
         self.assertEqual(self.detached(tier=3), self.expected(resume=True))
 
+    def test_each_gathered_doc_reaches_the_run_as_a_file_on_start_and_resume(self):
+        doc = inputs.Doc("https://x/Research/r.md", "Research/r.md", "r\x00")
+        sources = inputs.Sources((doc,), None)
+        for kw in ({}, {"mode": "resume", "started_task": "build"}):
+            with self.subTest(**kw), mock.patch.object(inputs, "gather", return_value=sources):
+                self.api.detached.clear()
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(self.runs)
+                self.assertEqual(self.outer(**kw), 0)
+                spec = self.detached()
+                self.assertEqual(spec.files, {"inputs/r.md": "r"})
+                self.assertIn("File: `<Workdir>/inputs/r.md`", spec.input)
+
     def test_a_long_input_reaches_run_py_intact(self):
         big = "".join(
             f"Requirement {i}: keep the session registry small.\n" for i in range(500)

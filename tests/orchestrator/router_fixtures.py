@@ -736,7 +736,15 @@ class OuterBase(TickBase):
         return spec
 
     def expected(
-        self, role="engineer", *, task=None, sid=SID, client="a", resume=False, text=INPUT
+        self,
+        role="engineer",
+        *,
+        task=None,
+        sid=SID,
+        client="a",
+        resume=False,
+        text=INPUT,
+        files=None,
     ):
         return DelegateSpec(
             text,
@@ -749,6 +757,7 @@ class OuterBase(TickBase):
             credentials=None
             if resume
             else json.dumps(config.credentials(config.load(path=self.config_path), role, task)),
+            files=files or {},
         )
 
     def input(self, **kw):
