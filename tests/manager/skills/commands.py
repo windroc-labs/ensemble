@@ -13,7 +13,6 @@ FLAG = re.compile(r"(?<![\w-])--[a-z][a-z-]*")
 REFERENCE = re.compile(r"\[([A-Z][a-z]+)\]\(#[a-z-]+\)")
 RULES = re.compile(r"^  - Bash\((.+)\)$", re.M)
 SKILL_DIR = "${CLAUDE_SKILL_DIR}"
-# Each `ensemble-crew start` kind: its key word, then the layer command its tail goes to.
 LAUNCHES = {
     "worker": ("<name>", "ensemble-session", "start", "<name>"),
     "reopen": ("<ID>", "ensemble-session", "start", "<ID>"),
@@ -82,7 +81,7 @@ def examples(source: str) -> list[list[str]]:
 
 
 def written(source: str) -> list[list[str]]:
-    """Each backticked command as written, up to a bare `--`: no launch tail mapped to its layer."""
+    """Each backticked command up to a bare `--`."""
     found = []
     for span in COMMAND.findall(source):
         words = span.split()
@@ -118,8 +117,10 @@ def paths(skill: str) -> list[str]:
 
 
 def example(skill: str, prefix: str, *having: str) -> str:
-    """skill's one backticked command starting with prefix and holding each of having."""
+    """skill's command prefix, else its one starting with prefix and holding having."""
     spans = COMMAND.findall(body(skill))
+    if not having and prefix in spans:
+        return prefix
     [found] = sorted({s for s in spans if s.startswith(prefix) and all(h in s for h in having)})
     return found
 
