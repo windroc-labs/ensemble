@@ -763,6 +763,41 @@ class ThroughItsHost(Base):
             self.assertEqual(f.read(), big)
         self.assertNotIn("staged_files", host.starts[0][2])
 
+    def test_a_local_start_writes_its_files_before_the_worker_and_again_on_restart(self):
+        path = os.path.join(self.dir, "inputs", "a.md")
+        seen = []
+        host = WorkerHost()
+        real = host.worker
+
+        def worker(*args, **kwargs):
+            with open(path, encoding="utf-8") as f:
+                seen.append(f.read())
+            return real(*args, **kwargs)
+
+        with mock.patch.object(host, "worker", worker):
+            self.start_on(host, files={path: "first"})
+        self.mode.close()
+        with mock.patch.object(host, "worker", worker):
+            self.start_on(host, files={path: "second"}, generation="g2")
+        self.assertEqual(seen, ["first", "second"])
+        self.assertNotIn("staged_files", host.starts[0][2])
+
+    def test_a_container_start_passes_its_files_with_the_prompt_in_metadata(self):
+        context = ClientContext(
+            "host.docker.internal",
+            Permission.YOLO,
+            Container("/image/bin", "/image/python", "/image/modules", "/run/state"),
+        )
+        doc = os.path.join(self.dir, "inputs", "a.md")
+        host = WorkerHost()
+        with mock.patch.object(host, "_client_context", return_value=context):
+            self.start_on(host, prompt="雪" * 40_000, name="w", files={doc: "doc"})
+        self.assertEqual(
+            json.loads(host.starts[0][2]["staged_files"]),
+            {"/run/state/prompt/prompt.md": "雪" * 40_000, doc: "doc"},
+        )
+        self.assertFalse(os.path.lexists(os.path.dirname(doc)))
+
     def test_a_container_context_puts_the_prompt_in_metadata_not_on_disk(self):
         context = ClientContext(
             "host.docker.internal",

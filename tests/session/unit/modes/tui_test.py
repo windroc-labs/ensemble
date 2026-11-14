@@ -2936,6 +2936,20 @@ class PromptFileTest(Base):
         self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(self.path)).st_mode), 0o700)
         self.assertNotIn("staged_files", self.host.calls.worker.call_args.kwargs["metadata"])
 
+    def test_a_local_start_writes_its_files_before_the_worker(self):
+        doc = os.path.join(self.tmp, "inputs", "a.md")
+        seen = []
+
+        def worker(*_, **__):
+            with open(doc, encoding="utf-8") as f:
+                seen.append(f.read())
+            return mock.DEFAULT
+
+        self.host.calls.worker.side_effect = worker
+        self.start(run=self.seen, files={doc: "doc"}, access=Access(cwd=self.tmp))
+        self.assertEqual(seen, ["doc"])
+        self.assertNotIn("staged_files", self.host.calls.worker.call_args.kwargs["metadata"])
+
     def test_a_resume_s_over_budget_prompt_is_a_pointer_too(self):
         self.start(run=self.seen, prompt=BIG, resume=True)
         self.assertEqual(self.seen.spec.prompt, self.pointer(self.path))

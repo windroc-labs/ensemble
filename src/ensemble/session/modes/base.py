@@ -330,10 +330,17 @@ class BaseMode(ABC):
 
     @staticmethod
     def _staged(
-        prompt_file: tuple[str, str] | None, local_dir: str
+        spec: Spec, prompt_file: tuple[str, str] | None, local_dir: str
     ) -> tuple[tuple[str, str, str], ...]:
-        """(root, path, text) of each file written before the worker starts."""
-        return ((local_dir, *prompt_file),) if prompt_file else ()
+        """(root, path, text) of each file written before the worker starts: the prompt's below
+        local_dir, each of spec.files below its access root.
+        """
+        roots = (spec.access.cwd, *spec.access.dirs)
+        staged = [
+            (next(r for r in roots if path.startswith(r.rstrip("/") + "/")), path, text)
+            for path, text in spec.files.items()
+        ]
+        return ((local_dir, *prompt_file), *staged) if prompt_file else tuple(staged)
 
     @staticmethod
     def _contained(

@@ -192,7 +192,7 @@ class HeadlessMode(BaseMode):
         spec = cls._noted(spec, client)
         run._context = host._client_context()
         spec, prompt_file = cls._pointed(spec, run._context, spec.workdir)
-        staged = cls._staged(prompt_file, spec.workdir)
+        staged = cls._staged(spec, prompt_file, spec.workdir)
         if run._context.container:
             metadata, staged = cls._contained(staged, metadata), ()
         prepared = cls._launched(spec, run.launch, drop, inherit=host._inherit_env)

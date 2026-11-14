@@ -723,7 +723,7 @@ class TuiMode(BaseMode):
         spec = cls._noted(spec, client)
         run._context = host._client_context()
         spec, prompt_file = cls._pointed(spec, run._context, store.dir)
-        staged = cls._staged(prompt_file, store.dir)
+        staged = cls._staged(spec, prompt_file, store.dir)
         if run._context.container:
             metadata, staged = cls._contained(staged, metadata) or {}, ()
         hook = store.hook_argv()

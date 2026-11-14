@@ -214,6 +214,37 @@ class WhatToStart(Case):
             self.assertEqual(str(caught.exception), message)
 
 
+class Files(Case):
+    def test_files_below_cwd_or_an_access_dir_are_kept_read_only(self):
+        files = {"/w/inputs/a.md": "a", "/d/b.md": "b"}
+        spec = Spec(workdir="/r", access=Access(cwd="/w", dirs=("/d",)), files=files)
+        self.assertEqual(dict(spec.files), files)
+        with self.assertRaises(TypeError):
+            spec.files["/w/x"] = "x"  # type: ignore[index]
+        self.assertEqual(dict(Spec(workdir="/r", access=Access(cwd="/w")).files), {})
+
+    def test_bad_files_are_config_errors(self):
+        message = "files must map absolute paths below cwd or an access dir to text"
+        for files in (
+            {"inputs/a.md": "a"},
+            {"/w": "a"},
+            {"/w/../x/a.md": "a"},
+            {"/w//a.md": "a"},
+            {"/x/a.md": "a"},
+            {"/wide/a.md": "a"},
+            {"/w/a\nb.md": "a"},
+            {"/w/a.md": None},
+            [("/w/a.md", "a")],
+        ):
+            with self.subTest(files=files), self.assertRaises(ConfigError) as caught:
+                Spec(workdir="/r", access=Access(cwd="/w"), files=files)  # type: ignore[arg-type]
+            self.assertEqual(str(caught.exception), message)
+
+    def test_in_process_takes_no_files(self):
+        with self.assertRaisesRegex(ConfigError, "^files: in_process mode runs on no Host$"):
+            Spec(workdir="/r", access=Access(cwd="/w"), mode="in_process", files={"/w/a": "a"})
+
+
 class Handlers(Case):
     def test_a_spec_keeps_its_handlers_in_order(self):
         first, second = HookCallback("a.first", {"k": 1}), HookCallback("b", roots=("/r",))
