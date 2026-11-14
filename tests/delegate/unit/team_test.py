@@ -140,18 +140,26 @@ class Acceptance(Packaged):
         ):
             self.assertIn(text, explore)
 
-    def test_decompose_has_a_fresh_subagent_review_the_breakdown(self):
-        review = item(section(task_text("decompose"), "Method overrides"), "Step 4, Quiz the user.")
+    def test_decompose_has_a_fresh_subagent_review_the_written_tickets(self):
+        decompose = task_text("decompose")
+        read = re.search(r"^1\. \*\*Read\*\*.*$", decompose, re.M)[0]
+        draft = re.search(r"^2\. \*\*Draft\*\*.*$", decompose, re.M)[0]
+        review = item(section(decompose, "Method overrides"), "Step 4, Quiz the user.")
+        # a subagent sees none of the input, so the PRD and the tickets reach it as files
+        self.assertIn("the file the input names for it", read)
+        self.assertIn("Write each ticket's full description to its own file", draft)
         for text in (
-            "A fresh subagent reviews the breakdown",
-            "only the PRD and a numbered list of each ticket's title, blockers and the "
-            "behaviour that runs end to end once it is done",
+            "Once every description file is written and before publishing",
+            "a fresh subagent reviews the tickets",
+            "only the path of the PRD's file and of each description file, never a summary",
             "can fewer stages (a shorter dependency chain) deliver the PRD",
             "does each ticket run end to end once done, or is one a placeholder or a single layer",
             "does each dependency genuinely block its ticket",
-            "Revise per its answers, then publish",
+            "is any ticket too big for one run to finish",
+            "Revise the description files per its answers, then publish",
         ):
             self.assertIn(text, review)
+        self.assertNotIn("numbered list", review)
         self.assertNotIn("yourself", review)
         self.assertNotIn("too coarse or too fine", review)
 
@@ -163,7 +171,7 @@ class Acceptance(Packaged):
             "dependency order (blockers first)",
             "native blocking and sub-issue relationships",
             "`--state ready` replaces the `ready-for-agent` label",
-            "Do not publish local ticket files",
+            "Write none of the method's `.scratch/` ticket files",
             "Stop after publishing",
         ):
             self.assertIn(text, overrides)
