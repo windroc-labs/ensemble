@@ -1,7 +1,7 @@
 {
   "name": "ensemble",
   "version": "0.9.9",
-  "description": "Guidelines for your commander session (the manage skill), and ensemble's core roles and tasks, researcher, pm and engineer, run in this conversation (the act-as skill), and fixed board issue commands (the board skill).",
+  "description": "Guidelines for your manager session (the manage skill), and ensemble's core roles and tasks, researcher, pm and engineer, run in this conversation (the act-as skill), and fixed board issue commands (the board skill).",
   "author": {
     "name": "Windroc"
   },

@@ -300,6 +300,48 @@ class TileTest(TileFixture):
         with self.assertRaisesRegex(SessionError, "^tile @3: tmux: boom$"):
             self.tile(FakeTmux(fail=("display-message",)), "@3")
 
+    def test_tile_without_a_window_lays_out_the_callers_own_window(self):
+        fake = self.fake(*self.WIDE)
+        given = fake.results.get("display-message")
+
+        def display(argv):
+            if argv[-1] == "#{window_id}":
+                return (0, "@3\n")
+            return given(argv) if callable(given) else given
+
+        fake.results["display-message"] = display
+        with environ(TMUX="/tmp/tmux-501/default,1,0", TMUX_PANE="%0"):
+            self.tile(fake, None)
+        own = ["tmux", "display-message", "-p", "-t", "%0", "#{window_id}"]
+        self.assertEqual(
+            fake.calls,
+            [
+                own,
+                self.SOCKET,
+                self.READ,
+                self.PANES,
+                WORKERS,
+                NAMES,
+                *self.applied(self.WIDE_SENT),
+            ],
+        )
+
+    def test_tile_without_a_window_outside_tmux_is_a_session_error(self):
+        fake = FakeTmux()
+        with (
+            environ(),
+            self.assertRaisesRegex(
+                SessionError, "^tile: not in tmux: give WINDOW or run it in a tmux pane$"
+            ),
+        ):
+            self.tile(fake, None)
+        self.assertEqual(fake.calls, [])
+        with (
+            environ(TMUX="/tmp/tmux-501/default,1,0", TMUX_PANE="%0"),
+            self.assertRaisesRegex(SessionError, "^tile: tmux: boom$"),
+        ):
+            self.tile(FakeTmux(fail=("display-message",)), None)
+
 
 def _plain_host(rows=()):
     plain = mock.create_autospec(Host, instance=True)

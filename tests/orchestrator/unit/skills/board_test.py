@@ -1,6 +1,6 @@
 """skills/board/SKILL.md: every issue command it shows is one
-ensemble-orchestrator issue accepts, it shows every one, it pre-approves none, and only its Linear
-section names Linear.
+ensemble-orchestrator issue accepts, it shows every one, it pre-approves none, a local board's
+promote is its one other command, and only its Linear section names Linear.
 """
 
 import contextlib
@@ -56,7 +56,7 @@ class BoardSkill(Case):
         for phrase in (
             "An issue without a task label: its role's run picks a task from its own list",
             "its default when none fits better (a researcher's: `research`)",
-            "`ensemble-delegate run --list` gives each role's tasks and when each is chosen",
+            "`ensemble-crew start --list` gives each role's tasks and when each is chosen",
             "only to force",
         ):
             self.assertIn(phrase, text)
@@ -66,12 +66,25 @@ class BoardSkill(Case):
         self.assertTrue(tasks)
         self.assertEqual(set(tasks), {"<task>"})
 
+    def test_it_names_no_delegate_and_promote_lives_in_the_local_board(self):
+        self.assertNotIn("ensemble-delegate", front() + body())
+        local = body().split("\n## Local board\n", 1)[1].split("\n## ", 1)[0]
+        for phrase in (
+            "No job runs promote on a local board",
+            "`ensemble-orchestrator promote` (it prunes too)",
+            "once an approved issue's 10-minute undo window has passed, or when the user asks",
+        ):
+            self.assertIn(phrase, local)
+        self.assertIn("promote", front())
+        self.assertIn("`ensemble-orchestrator promote`", body().split("\n## ", 1)[0])
+        self.assertIn("${CLAUDE_SKILL_DIR}/../../bin/<command>", body())
+
     def test_only_its_linear_section_names_linear(self):
         general, linear = body().split("\n## Linear\n", 1)
         self.assertNotIn("linear", (front() + general).lower())
         self.assertNotIn("\n## ", linear)
         self.assertIn("lookup", linear)
 
-    def test_the_commander_can_load_it(self):
+    def test_the_manager_can_load_it(self):
         self.assertIn("name: board\n", front())
         self.assertNotIn("disable-model-invocation", front())

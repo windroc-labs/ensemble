@@ -99,6 +99,28 @@ class PaneAnchorTest(PaneFixture):
         ):
             placed(fake).own_session()
 
+    def test_own_window(self):
+        window = ["tmux", "display-message", "-p", "-t", "%3", "#{window_id}"]
+        fake = FakeTmux(results={"display-message": (0, "@7\n")})
+        with environ(**INSIDE):
+            self.assertEqual(placed(fake).own_window(), "@7")
+        self.assertEqual(fake.calls, [window])
+        fake = FakeTmux()
+        with environ():
+            self.assertIsNone(placed(fake).own_window())
+        self.assertEqual(fake.calls, [])
+        for env, results, message in (
+            ({**INSIDE, "TMUX_PANE": "%3;"}, {}, "TMUX_PANE"),
+            (INSIDE, {"display-message": (0, "%3\n")}, "own tmux window '%3': want @"),
+            (INSIDE, {"display-message": (1, "", "boom\n")}, "boom"),
+        ):
+            with (
+                self.subTest(env=env, results=results),
+                environ(**env),
+                self.assertRaisesRegex(tmux_cli.TuiError, message),
+            ):
+                placed(FakeTmux(results=results)).own_window()
+
     def test_bad_tmux_pane(self):
         for env in (
             {**INSIDE, "TMUX_PANE": pane} for pane in ("", "3", "%3;", "%x", "%3 ", "#{x}")

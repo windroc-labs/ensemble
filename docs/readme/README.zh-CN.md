@@ -2,7 +2,7 @@
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Português](README.pt.md)
 
-Ensemble 让你与编程智能体以团队方式协作。你可以与指挥官对话、向角色委派任务，
+Ensemble 让你与编程智能体以团队方式协作。你可以与 manager 对话、向角色委派任务，
 或让看板在角色之间分派工作。Claude Code、Codex 和 OpenCode 共用同一套会话控制功能。
 
 <a id="what"></a>
@@ -16,9 +16,9 @@ Ensemble 让你与编程智能体以团队方式协作。你可以与指挥官�
 <a id="why"></a>
 ## 为什么使用团队
 
-![单个代理、手动协调多个代理，以及由指挥官协调的 ensemble 团队](../images/compare.svg)
+![单个代理、手动协调多个代理，以及由 manager 协调的 ensemble 团队](../images/compare.svg)
 
-分别运行智能体时，需要有人分派工作并跟进回复。指挥官通过 Crew，在一段对话中启动、
+分别运行智能体时，需要有人分派工作并跟进回复。manager 通过 Crew，在一段对话中启动、
 检查和恢复这些运行。哪些工作可以授权、哪些需要审查，仍由你决定。
 
 <a id="how-it-works"></a>
@@ -89,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/windroc-labs/ensemble/<tag>/scripts
 /ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
-要使用团队，请打开指挥官 shell 并启动客户端：
+要使用团队，请打开 manager shell 并启动客户端：
 
 ```sh
 ensemble work
@@ -102,7 +102,7 @@ claude
 /ensemble:manage
 ```
 
-描述工作内容和期望的交付物。指挥官通过 Crew 协调工作者和角色运行。
+描述工作内容和期望的交付物。manager 通过 Crew 协调工作者和角色运行。
 之后要回到 `work` 时，在终端运行 `ensemble list` 并选中它：即可回到它的会话和对话。
 使用看板时，`/ensemble:board` 用于操作 issue；[自定义工作流](../customizing-roles-and-tasks.md#on-the-board)
 说明了如何选择阶段。

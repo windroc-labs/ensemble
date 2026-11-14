@@ -1,5 +1,5 @@
 // ensemble's OpenCode plugin: each skill of package.json's
-// `skills` as the command /ensemble:<skill>, this plugin's bin/ on the shell's PATH, and a commander's
+// `skills` as the command /ensemble:<skill>, this plugin's bin/ on the shell's PATH, and a manager's
 // SessionStart re-arm prompt (src/ensemble/manager/rearm.py --mode manual) in the system prompt
 // of a root session's turn after a start, resume or compaction, that call also recording the root
 // session as the manager's (its id, OpenCode's pid, the instance's directory). The session this
@@ -178,7 +178,7 @@ async function system(session, output, directory) {
   if (text) output.system.push(text);
 }
 
-export const EnsembleCommander = async (input) => {
+export const EnsembleManager = async (input) => {
   if (process.env.ENSEMBLE_AGENT_SESSION !== undefined) return {};
   client = input?.client ?? client;
   const directory = input?.directory; // per instance: OpenCode builds one per project directory

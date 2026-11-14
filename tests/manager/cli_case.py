@@ -1,4 +1,4 @@
-"""Manager CLI setup and captured invocation; the installed ensemble-crew run with executable fakes."""
+"""Manager CLI setup and captured invocation; the installed ensemble-crew over executable fakes."""
 
 import contextlib
 import io

@@ -35,11 +35,36 @@ class Commands(InstalledCrewCase):
             ("unknown",),
             ("start",),
             ("attach", "--resume"),
-            ("run", "r"),
+            ("start", "command", "r"),
             ("resume", "--all"),
         ):
             with self.subTest(args=args):
                 self.assertEqual(self.invoke(*args).returncode, 2)
+
+    def test_start_list_prints_exactly_what_delegate_listing_prints(self):
+        seen = os.path.join(self.home, "delegate-argv")
+        fake = Path(os.path.dirname(self.crew_bin), "ensemble-delegate")
+        fake.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" > {shlex.quote(seen)}\n'
+            "printf 'pm\\n  product-design\\n'\n"
+            "printf 'listing note\\n' >&2\n"
+            "exit 3\n"
+        )
+        fake.chmod(0o755)
+        self.assertNotIn("ENSEMBLE_MANAGER", os.environ)
+        result = self.invoke("start", "--list")
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (3, "pm\n  product-design\n", "listing note\n"),
+        )
+        self.assertEqual(Path(seen).read_text(), "run --list\n")
+        self.assertFalse(Path(self.directory).exists())
+
+    def test_a_start_command_printing_no_record_exits_one_and_stays_lost(self):
+        result = self.invoke("start", "command", "--manager", "mgr", "plain", "--", "true")
+        self.assertEqual((result.returncode, result.stdout), (1, ""), result.stderr)
+        self.assertEqual(Roster(self.directory).entries()["plain"].state, State.LOST)
 
     def test_an_invalid_manager_name_writes_nowhere(self):
         before = sorted(Path(self.home).rglob("*"))
@@ -59,7 +84,7 @@ class Commands(InstalledCrewCase):
 
     def test_a_valid_manager_name_from_the_environment_works(self):
         with mock.patch.dict(os.environ, {"ENSEMBLE_MANAGER": "A_9-z"}):
-            result = self.invoke("run", "sample", "--", self.command, "start", "w")
+            result = self.invoke("start", "command", "sample", "--", self.command, "start", "w")
         self.assertEqual(result.returncode, 0, result.stderr)
         path = Path(self.ensemble, "managers", "A_9-z", "roster.json")
         self.assertEqual(
@@ -70,7 +95,8 @@ class Commands(InstalledCrewCase):
     def test_run_status_resume_and_close_with_executable_fake(self):
         self.succeeded("attach", "--manager", "mgr")
         raw = self.succeeded(
-            "run",
+            "start",
+            "command",
             "r",
             "--manager",
             "mgr",
@@ -141,7 +167,7 @@ class Commands(InstalledCrewCase):
         orphan = self.fake_record("orphan")
         ctl.set_session(self.ctl_dir, "orphan", alive=True)
         fake_session.set_records(self.sessions, [orphan])
-        self.succeeded("close-all", "--manager", "mgr")
+        self.succeeded("close", "--all", "--manager", "mgr")
         closed = [call["names"] for call in ctl.calls(self.ctl_dir) if call["argv"] == ["close"]]
         self.assertEqual(closed, [["a", "orphan"]])
         self.assertEqual(crew.roster.entries(), {})
@@ -281,7 +307,9 @@ class Commands(InstalledCrewCase):
         )
         starter.chmod(0o755)
         for worker in ("one", "two"):
-            self.succeeded("run", worker, "--manager", "mgr", "--", self.command, "start", worker)
+            self.succeeded(
+                "start", "command", worker, "--manager", "mgr", "--", self.command, "start", worker
+            )
         path = Path(Roster(self.directory).events)
         path.write_text("12:00:00 history done\n" * 3320)
         identity = path.stat().st_ino
@@ -352,7 +380,7 @@ class Commands(InstalledCrewCase):
             for worker in ("one", "two"):
                 self.succeeded("close", worker, "--manager", "mgr")
             for issue in ("TASK-852", "TASK-853"):
-                self.succeeded("issue", "--manager", "mgr", issue)
+                self.succeeded("start", "issue", "--manager", "mgr", issue)
             # A partial final append must wait, then become exactly one physical line.
             append("23:56:58 engineer-TASK-850-5d2a1a93 done")
             self.assertFalse(select.select([reader.stdout], [], [], 0.6)[0])

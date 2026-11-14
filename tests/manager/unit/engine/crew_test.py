@@ -10,14 +10,22 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _run_start
+from ensemble.manager.engine.crew import (
+    GRACE,
+    HEADER,
+    SEND_WAIT,
+    START_TIMEOUT,
+    Crew,
+    _run_start,
+    hand_off,
+)
 from ensemble.manager.engine.types import RosterError, Spec, State
-from ensemble.utils import Record, save_reply
+from ensemble.utils import EVENTS_ENV, Record, save_reply
 from tests.manager.case import status
 from tests.manager.roster_case import RosterCase, mark
 from tests.manager.starters import answered, finished
 from tests.utils.jsonl import read_jsonl
-from tests.utils.process_fixtures import DEVNULL, TimeoutExpired
+from tests.utils.process_fixtures import DEVNULL, PIPE, CompletedProcess, TimeoutExpired
 
 ARGV = ("fake-ctl", "start", "x")
 
@@ -222,6 +230,136 @@ class ResumeInput(RosterCase):
                     Crew(self.roster).resume("x", input="answer")
                 run.assert_not_called()
                 self.assertEqual(self.roster.entries(), before)
+
+
+class Restart(RosterCase):
+    def setUp(self):
+        super().setUp()
+        self.worker = replace(
+            self.record,
+            kind="worker",
+            name="w1",
+            sessions=("w1",),
+            resume=("ensemble-session", "resume", "w1"),
+        )
+        self.restarted = replace(self.worker, display="restarted")
+        self.live("w1", record=self.worker)
+
+    def restart(self, *, code=0, output=None):
+        started = []
+
+        def run(argv, **options):
+            started.append(tuple(argv))
+            self.assertEqual(options["env"]["ENSEMBLE_SID"], self.worker.sid)
+            self.assertIs(self.roster.entries()["w1"].state, State.RESUMING)
+            text = self.restarted.to_line() + "\n" if output is None else output
+            os.write(options["stdout"].fileno(), text.encode())
+            return mock.Mock(returncode=code, stderr="no session to restart" if code else "")
+
+        with (
+            mock.patch("subprocess.Popen", side_effect=answered(run)),
+            mock.patch("subprocess.run") as query,
+        ):
+            try:
+                return Crew(self.roster).restart("w1"), started
+            finally:
+                query.assert_not_called()
+
+    def test_a_live_or_gone_worker_restarts_in_place_and_records_its_new_record(self):
+        for state in (State.LIVE, State.GONE):
+            with self.subTest(state=state):
+                mark(self.roster, "w1", state)
+                record, started = self.restart()
+                self.assertEqual(record, self.restarted)
+                self.assertEqual(started, [("ensemble-session", "restart", "w1")])
+                entry = self.roster.entries()["w1"]
+                self.assertEqual((entry.state, entry.record), (State.LIVE, self.restarted))
+                self.roster.remove("w1")
+                self.live("w1", record=self.worker)
+
+    def test_a_failed_restart_leaves_the_entry_gone_with_its_old_record(self):
+        for code, output in ((1, ""), (0, "not a Record\n")):
+            with self.subTest(code=code, output=output):
+                with self.assertRaises((RosterError, RuntimeError)):
+                    self.restart(code=code, output=output)
+                entry = self.roster.entries()["w1"]
+                self.assertEqual((entry.state, entry.record), (State.GONE, self.worker))
+
+    def refused(self, name, error, message):
+        before = Path(self.roster.path).read_bytes()
+        with (
+            mock.patch("subprocess.Popen") as popen,
+            mock.patch("subprocess.run") as query,
+            self.assertRaisesRegex(error, message),
+        ):
+            Crew(self.roster).restart(name)
+        popen.assert_not_called()
+        query.assert_not_called()
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
+
+    def test_other_kinds_are_refused_and_left_unchanged(self):
+        role = replace(
+            self.record,
+            sid=str(uuid.uuid4()),
+            kind="role",
+            name="planner",
+            sessions=("planner",),
+            ctl=("ensemble-delegate",),
+            resume=("ensemble-delegate", "resume", "/work"),
+        )
+        self.live("planner", record=role)
+        self.refused(
+            "planner",
+            ValueError,
+            r"^planner: restart restarts session workers only \(kind role, ctl ensemble-delegate\)$",
+        )
+        issue = replace(
+            self.worker,
+            sid=str(uuid.uuid4()),
+            name="TASK-1",
+            ctl=("ensemble-orchestrator",),
+            resume=("ensemble-orchestrator", "resume", "TASK-1"),
+        )
+        self.live("TASK-1", record=issue)
+        self.refused(
+            "TASK-1",
+            ValueError,
+            r"^TASK-1: restart restarts session workers only \(kind worker, ctl ensemble-orchestrator\)$",
+        )
+        self.roster.begin(Spec("pending", ("start",), None), sid=str(uuid.uuid4()))
+        self.refused("pending", RuntimeError, "^pending: starting: no Record$")
+        self.refused("nobody", ValueError, "^nobody: not in roster$")
+
+    def test_a_worker_record_without_one_session_and_sid_is_refused(self):
+        for name, record in (
+            ("two", replace(self.worker, sid=str(uuid.uuid4()), name="two", sessions=("a", "b"))),
+            ("nosid", replace(self.worker, name="nosid", sessions=("nosid",), sid=None)),
+        ):
+            with self.subTest(name=name):
+                entries = {
+                    **self.roster.entries(),
+                    name: replace(self.roster.entries()["w1"], record=record),
+                }
+                with (
+                    mock.patch.object(self.roster, "entries", return_value=entries),
+                    self.assertRaisesRegex(ValueError, f"^{name}: no "),
+                ):
+                    Crew(self.roster).restart(name)
+        self.assertIs(self.roster.entries()["w1"].state, State.LIVE)
+
+    def test_other_states_are_refused_and_left_unchanged(self):
+        for state in (State.WAITING, State.DONE, State.RESUMING):
+            with self.subTest(state=state):
+                self.roster.remove("w1")
+                self.live("w1", record=self.worker)
+                mark(self.roster, "w1", State.GONE if state == State.RESUMING else state)
+                if state == State.RESUMING:
+                    self.roster.claim_resume("w1")
+                self.refused("w1", RosterError, f"^w1: cannot restart {state}$")
+
+    def test_a_non_holder_changes_nothing(self):
+        with self.roster.hold("another manager"):
+            self.refused("w1", RosterError, "")
 
 
 class ResumeLive(RosterCase):
@@ -563,3 +701,350 @@ class Close(Entries):
         self.answers["a"] = mock.Mock(returncode=1, stdout="", stderr="boom\n")
         self.close_all(dry_run=True)
         self.assertEqual(self.failures(), [])
+
+
+class ReadSend(RosterCase):
+    """read_argv and send_argv: an entry's session is the one its Record names, guarded by its sid.
+    outcome: a role or issue run's recorded outcome, or after a recorded needs_input a different
+    outcome block in its tui's latest reply; a worker's is the block in its latest reply.
+    """
+
+    NEEDS = (
+        '{"status":"needs_input","title":"t","summary":"s","questions":["Which?"],'
+        '"url":"","files":[],"deliverable":""}'
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.worker = replace(self.record, kind="worker", name="w1", sessions=("w1",), sid=None)
+        self.issue = replace(
+            self.record,
+            kind="pipeline",
+            name="TASK-1",
+            sessions=("pm-TASK-1-abcdef12",),
+            workdir=os.path.join(self.home, "work", "TASK-1"),
+            ctl=("ensemble-orchestrator",),
+            resume=("ensemble-orchestrator", "resume", "TASK-1"),
+        )
+        self.role = replace(
+            self.issue,
+            kind="role",
+            name="planner",
+            sessions=("planner",),
+            workdir=os.path.join(self.home, "adhoc", "planner"),
+            ctl=("ensemble-delegate",),
+            resume=("ensemble-delegate", "resume", "planner"),
+        )
+        self.worker, self.issue, self.role = map(self.own, (self.worker, self.issue, self.role))
+        self.crew = Crew(self.roster)
+
+    def own(self, record, **changes):
+        """record, with changes and a fresh sid, committed as a live entry."""
+        record = replace(record, **{"sid": str(uuid.uuid4()), **changes})
+        self.live(record.name, record=record)
+        return record
+
+    def test_read_hands_off_to_the_sessions_screen(self):
+        self.assertEqual(
+            self.crew.read_argv("w1"),
+            ("ensemble-session", "read", "w1", "--sid", self.worker.sid),
+        )
+
+    def test_read_with_lines_adds_them(self):
+        self.assertEqual(
+            self.crew.read_argv("w1", lines=5),
+            ("ensemble-session", "read", "w1", "--sid", self.worker.sid, "--lines", "5"),
+        )
+
+    def test_reply_hands_off_to_the_sessions_reply(self):
+        self.assertEqual(
+            self.crew.read_argv("w1", reply=True),
+            ("ensemble-session", "reply", "w1", "--sid", self.worker.sid),
+        )
+
+    @staticmethod
+    def block(body):
+        return f"All set.\n```ensemble-outcome\n{body}\n```\n"
+
+    def outcome(self, name, *, recorded=(0, "null\n", ""), reply=(0, "", "")):
+        """crew.outcome(name) with the delegate's outcome and the session's reply faked; the
+        result and the commands run.
+        """
+        calls = []
+
+        def run(argv, **_options):
+            calls.append(tuple(argv))
+            answer = recorded if argv[0] == "ensemble-delegate" else reply
+            if isinstance(answer, BaseException):
+                raise answer
+            code, out, err = answer
+            return mock.Mock(returncode=code, stdout=out, stderr=err)
+
+        with mock.patch("subprocess.run", side_effect=run):
+            return self.crew.outcome(name), calls
+
+    def reply_argv(self, record):
+        return ("ensemble-session", "reply", record.sessions[0], "--sid", record.sid)
+
+    def test_outcome_after_an_answered_needs_input_is_the_tuis_newer_block(self):
+        newer = (
+            (
+                '{"status": "done", "title": "x", "summary": "y", "deliverable": "d"}',
+                '{"status":"done","title":"x","summary":"y","deliverable":"d"}',
+            ),
+            (
+                '{"status": "needs_input", "title": "t", "summary": "s", "questions": ["Other?"]}',
+                '{"status":"needs_input","title":"t","summary":"s","questions":["Other?"]}',
+            ),
+        )
+        for record in (self.issue, self.role):
+            for body, printed in newer:
+                with self.subTest(kind=record.kind, body=body):
+                    result, calls = self.outcome(
+                        record.name,
+                        recorded=(0, self.NEEDS + "\n", ""),
+                        reply=(0, self.block(body), ""),
+                    )
+                    self.assertEqual(result, printed)
+                    self.assertEqual(
+                        calls,
+                        [("ensemble-delegate", "outcome", record.workdir), self.reply_argv(record)],
+                    )
+
+    def test_outcome_other_than_needs_input_is_the_recorded_one_and_reads_no_reply(self):
+        for recorded in (
+            "null",
+            '{"status":"done","title":"t","summary":"s","questions":[],"url":"","files":[],'
+            '"deliverable":"d"}',
+            '{"status":"failed","title":"t","summary":"s"}',
+        ):
+            with self.subTest(recorded=recorded):
+                result, calls = self.outcome(
+                    "TASK-1",
+                    recorded=(0, recorded + "\n", ""),
+                    reply=(0, self.block('{"status": "done"}'), ""),
+                )
+                self.assertEqual(result, recorded)
+                self.assertEqual(calls, [("ensemble-delegate", "outcome", self.issue.workdir)])
+
+    def test_needs_input_stays_when_the_tui_has_no_newer_outcome(self):
+        same = (
+            '{"status": "needs_input", "title": " t ", "summary": "other", "questions": ["Which?"]}'
+        )
+        for reply in (
+            (0, "", ""),
+            (0, "Still thinking.\n", ""),
+            (0, self.block(same), ""),
+            (0, self.block("[1]"), ""),
+            (0, self.block("not json"), ""),
+            (1, "", "no such session"),
+            TimeoutExpired(("ensemble-session",), 30),
+            OSError("not found"),
+        ):
+            with self.subTest(reply=reply):
+                result, _ = self.outcome("TASK-1", recorded=(0, self.NEEDS + "\n", ""), reply=reply)
+                self.assertEqual(result, self.NEEDS)
+
+    def test_needs_input_stays_for_a_run_naming_no_single_session_or_sid(self):
+        self.own(self.issue, name="headless", sessions=())
+        entries = self.roster.entries()
+        entries["TASK-1"] = replace(entries["TASK-1"], record=replace(self.issue, sid=None))
+        for name in ("headless", "TASK-1"):
+            with (
+                self.subTest(name=name),
+                mock.patch.object(self.roster, "entries", return_value=entries),
+            ):
+                result, calls = self.outcome(
+                    name,
+                    recorded=(0, self.NEEDS + "\n", ""),
+                    reply=(0, self.block('{"status": "done"}'), ""),
+                )
+                self.assertEqual(result, self.NEEDS)
+                self.assertEqual(len(calls), 1)
+
+    def test_a_workers_outcome_is_the_last_block_of_its_latest_reply_else_null(self):
+        two = self.block('{"status": "needs_input"}') + self.block('{"status": "done"}')
+        for reply, printed in (
+            (self.block('{"status": "done", "url": "u"}'), '{"status":"done","url":"u"}'),
+            (two, '{"status":"done"}'),
+            (self.block("not json"), "null"),
+            ("Just prose.\n", "null"),
+            ("", "null"),
+        ):
+            with self.subTest(reply=reply):
+                result, calls = self.outcome("w1", reply=(0, reply, ""))
+                self.assertEqual(result, printed)
+                self.assertEqual(calls, [self.reply_argv(self.worker)])
+
+    def test_a_workers_unreadable_reply_is_an_error(self):
+        argv = " ".join(self.reply_argv(self.worker))
+        for reply, reason in (((1, "", "gone\n"), "gone"), ((3, "", ""), "exit 3")):
+            with (
+                self.subTest(reply=reply),
+                self.assertRaisesRegex(RuntimeError, f"^{argv}: {reason}$"),
+            ):
+                self.outcome("w1", reply=reply)
+
+    def test_a_workers_outcome_needs_its_single_session_and_sid(self):
+        self.own(self.worker, name="pair", sessions=("s1", "s2"))
+        with self.assertRaisesRegex(
+            ValueError, r"^pair: no single session to read or send to \(sessions: 2\)$"
+        ):
+            self.outcome("pair")
+        entries = self.roster.entries()
+        entries["w1"] = replace(entries["w1"], record=replace(self.worker, sid=None))
+        with (
+            mock.patch.object(self.roster, "entries", return_value=entries),
+            self.assertRaisesRegex(ValueError, "^w1: no sid to guard its session$"),
+        ):
+            self.outcome("w1")
+
+    def test_an_unreadable_recorded_outcome_is_an_error(self):
+        argv = f"ensemble-delegate outcome {self.issue.workdir}"
+        for recorded, reason in (
+            ((1, "", "no run\n"), "no run"),
+            ((0, "[]\n", ""), "not an outcome: '\\[\\]'"),
+            ((0, "nope\n", ""), "not an outcome: 'nope'"),
+        ):
+            with (
+                self.subTest(recorded=recorded),
+                self.assertRaisesRegex(RuntimeError, f"^{argv}: {reason}$"),
+            ):
+                self.outcome("TASK-1", recorded=recorded)
+
+    def test_an_issue_runs_session_is_its_tui_not_its_id(self):
+        self.assertEqual(self.crew.read_argv("TASK-1")[2], "pm-TASK-1-abcdef12")
+
+    def test_unknown_entry_is_refused(self):
+        for read in (self.crew.read_argv, self.crew.outcome):
+            with self.assertRaisesRegex(ValueError, "^not in roster: nobody$"):
+                read("nobody")
+
+    def test_an_entry_without_record_is_refused(self):
+        self.begin("pending")
+        for read in (self.crew.read_argv, self.crew.outcome):
+            with self.assertRaisesRegex(RuntimeError, "^pending: starting: no Record$"):
+                read("pending")
+
+    def test_a_record_naming_no_single_session_is_refused(self):
+        for name, sessions in (("headless", ()), ("pair", ("s1", "s2"))):
+            self.own(self.role, name=name, sessions=sessions)
+            with self.subTest(sessions=sessions):
+                for options in ({}, {"reply": True}):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        f"^{name}: no single session to read or send to "
+                        rf"\(sessions: {len(sessions)}\)$",
+                    ):
+                        self.crew.read_argv(name, **options)
+
+    def test_a_record_without_sid_is_refused(self):
+        # The roster commits only Records carrying their launch sid; a damaged one may not.
+        entries = self.roster.entries()
+        entries["w1"] = replace(entries["w1"], record=replace(self.worker, sid=None))
+        for options in ({}, {"reply": True}):
+            with (
+                self.subTest(options=options),
+                mock.patch.object(self.roster, "entries", return_value=entries),
+                self.assertRaisesRegex(ValueError, "^w1: no sid to guard its session$"),
+            ):
+                self.crew.read_argv("w1", **options)
+
+    def test_a_run_without_workdir_has_no_run_outcome(self):
+        self.own(self.role, name="bare", workdir=None)
+        with self.assertRaisesRegex(ValueError, "^bare: no workdir to read its run outcome$"):
+            self.outcome("bare")
+
+    def test_send_pastes_text_after_a_separator_and_waits_for_its_delivery(self):
+        for text in ("answer", "-x"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    self.crew.send_argv("w1", text=text),
+                    (
+                        "ensemble-session",
+                        "send",
+                        "--sid",
+                        self.worker.sid,
+                        "--wait",
+                        str(SEND_WAIT),
+                        "w1",
+                        "--",
+                        text,
+                    ),
+                )
+
+    def test_send_text_returns_the_sessions_word_and_exit(self):
+        for stdout, code, found in (
+            ("delivered\n", 0, ("delivered", 0)),
+            ("undelivered\n", 1, ("undelivered", 1)),
+            ("", 2, (None, 2)),
+        ):
+            with (
+                self.subTest(stdout=stdout),
+                mock.patch(
+                    "subprocess.run",
+                    return_value=CompletedProcess((), code, stdout=stdout),
+                ) as run,
+            ):
+                self.assertEqual(self.crew.send_text("w1", "answer"), found)
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0], self.crew.send_argv("w1", text="answer"))
+            options = run.call_args.kwargs
+            self.assertEqual(options["stdout"], PIPE)
+            self.assertNotIn("stderr", options)
+            self.assertNotIn("timeout", options)
+            self.assertNotIn(EVENTS_ENV, options["env"])
+
+    def test_send_text_reports_a_missing_session_command(self):
+        with (
+            mock.patch("subprocess.run", side_effect=FileNotFoundError("ensemble-session")),
+            self.assertRaisesRegex(RuntimeError, "ensemble-session"),
+        ):
+            self.crew.send_text("w1", "answer")
+
+    def test_send_keys(self):
+        for keys in (("Escape",), ("Down", "Enter")):
+            with self.subTest(keys=keys):
+                self.assertEqual(
+                    self.crew.send_argv("w1", keys=keys),
+                    ("ensemble-session", "send", "w1", "--sid", self.worker.sid, "--key", *keys),
+                )
+
+    def test_send_to_an_issue_run_reaches_its_tui(self):
+        self.assertEqual(
+            self.crew.send_argv("TASK-1", text="answer")[2:7],
+            ("--sid", self.issue.sid, "--wait", str(SEND_WAIT), "pm-TASK-1-abcdef12"),
+        )
+
+    def test_send_needs_one_session_and_its_sid(self):
+        self.own(self.role, name="headless", sessions=())
+        with self.assertRaisesRegex(ValueError, r"^headless: no single session .*\(sessions: 0\)$"):
+            self.crew.send_argv("headless", text="answer")
+        entries = self.roster.entries()
+        entries["w1"] = replace(entries["w1"], record=replace(self.worker, sid=None))
+        with (
+            mock.patch.object(self.roster, "entries", return_value=entries),
+            self.assertRaisesRegex(ValueError, "^w1: no sid to guard its session$"),
+        ):
+            self.crew.send_argv("w1", keys=("Enter",))
+
+    def test_reading_writes_no_roster_file(self):
+        before = Path(self.roster.path).read_bytes()
+        self.crew.read_argv("w1")
+        self.outcome("planner", reply=(0, self.block('{"status": "done"}'), ""))
+        self.outcome("w1", reply=(0, self.block('{"status": "done"}'), ""))
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
+
+    def test_hand_off_execs_with_crews_child_environment(self):
+        argv = ("ensemble-session", "read", "w1", "--sid", self.worker.sid)
+        polluted = {"ENSEMBLE_SID": "other", "ENSEMBLE_EVENTS": "/events", "KEEP": "1"}
+        with (
+            mock.patch.dict(os.environ, polluted),
+            mock.patch("os.execvpe") as execvpe,
+        ):
+            hand_off(argv)
+        execvpe.assert_called_once()
+        file, called, env = execvpe.call_args.args
+        self.assertEqual((file, called), ("ensemble-session", argv))
+        self.assertEqual(env["KEEP"], "1")
+        self.assertFalse({"ENSEMBLE_SID", "ENSEMBLE_EVENTS"} & env.keys())

@@ -17,7 +17,7 @@ from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
 from ensemble.session.modes.tui import TuiStore
 from ensemble.session.viewer import display as displays
-from ensemble.utils import ACCOUNT_ENV, Record
+from ensemble.utils import ACCOUNT_ENV, Record, StatusState
 from tests.session import harnesses
 from tests.session.case import Case
 from tests.session.fakes.terminal import ScreenHost
@@ -502,6 +502,39 @@ class RecordControl(ControlBase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("turn interruption", err)
 
+    def mark(self, name, word):
+        generation = json.loads(Path(self.root, name, "session.json").read_text())["generation"]
+        TuiStore.attach(name, host=self.host).set_activity(generation, word, None)
+
+    def test_send_wait_with_no_turn_start_is_undelivered(self):
+        self.tui(name="w1", sid=SID)
+        process = self.host.processes["w1"]
+        code, out, err = self.invoke("send", "--sid", SID, "--wait", "0.3", "w1", "--", "-text")
+        self.assertEqual((code, out), (1, "undelivered\n"))
+        self.assertIn("session w1: no turn started within 0.3 s", err)
+        process.calls.send.assert_called()
+
+    def test_send_wait_to_an_open_turn_is_queued(self):
+        self.tui(name="w1", sid=SID)
+        self.mark("w1", StatusState.WORKING)
+        self.assertEqual(self.invoke("send", "--wait", "0.3", "w1", "hello"), (0, "queued\n", ""))
+
+    def test_send_wait_to_a_stopped_client_sends_nothing(self):
+        owner = self.owned("w1", held=False)
+        self.addCleanup(self.ended)
+        self.ended()
+        self.assertFalse(json.loads(self.invoke("status", "w1")[1])["alive"])
+        code, out, err = self.invoke("send", "--wait", "5", "w1", "hello")
+        self.assertEqual((code, out), (1, "undelivered\n"))
+        self.assertIn("session w1: client not running", err)
+        self.assertEqual(owner.channel.pending(), [])
+
+    def test_send_wait_identity_failure_prints_no_word(self):
+        self.tui(name="w1", sid="replacement")
+        code, out, err = self.invoke("send", "--sid", SID, "--wait", "5", "w1", "hello")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("replacement", err)
+
     def test_malformed_record_is_usage_error(self):
         self.assertEqual(self.invoke("status", stdin="{}\n")[:2], (2, ""))
 
@@ -746,6 +779,22 @@ class HelpTest(Case):
     def help(self, argv):
         return help_text(self, cli.main, argv)
 
+    def test_send_help_documents_wait(self):
+        text = " ".join(self.help(["send", "--help"]).split())
+        for part in (
+            "--wait S",
+            "without --wait prints nothing",
+            "delivered",
+            "queued",
+            "undelivered (exit 1",
+        ):
+            self.assertIn(part, text)
+
+    def test_tile_help_makes_the_window_optional_its_own_by_default(self):
+        text = self.help(["tile", "--help"])
+        self.assertIn("ensemble-session tile [WINDOW]", text)
+        self.assertIn("Without WINDOW, lays out the caller's own window.", text)
+
     def test_every_surface_is_safe_with_unavailable_configuration(self):
         for command in (None, *COMMANDS):
             for flag in ("--help", "-h"):
@@ -871,7 +920,7 @@ class HelpTest(Case):
             self.assertEqual(cli.main(["start", "helper", "--client", "codex", "--", "--help"]), 2)
         self.assertIn("refused inside an agent session", err.getvalue())
         self.assertEqual(out.getvalue(), "")
-        for display in ("none", "/below/commander"):
+        for display in ("none", "/below/manager"):
             args = cli._parser(None).parse_args(
                 ["start", "helper", "--client", "codex", "--display", display]
             )
@@ -889,6 +938,7 @@ class HelpTest(Case):
             ["send", "helper", "--key", "C-c"],
             ["read", "helper", "--lines", "20"],
             ["tile", "@1"],
+            ["tile"],
             ["hook", "/absolute/session", "stop"],
             ["client-resume", "codex", "resume", "conversation-id"],
             ["resume-argv", "codex", "conversation-id"],
@@ -922,10 +972,16 @@ class HelpTest(Case):
             (["ls", "--descendants"], cli._ls),
             (["send", "helper"], cli._send),
             (["send", "helper", "hello", "--key", "Enter"], cli._send),
+            (["send", "helper", "--key", "Enter", "--wait", "5"], cli._send),
         ):
             with self.subTest(argv=argv), self.assertRaises(cli.UsageError):
                 operation(parser.parse_args(argv), mock.Mock())
-        for argv in (["ls", "--here", "--display", "none"], ["read", "helper", "--lines", "0"]):
+        for argv in (
+            ["ls", "--here", "--display", "none"],
+            ["read", "helper", "--lines", "0"],
+            ["send", "helper", "hello", "--wait", "0"],
+            ["send", "helper", "hello", "--wait", "soon"],
+        ):
             with (
                 self.subTest(argv=argv),
                 contextlib.redirect_stderr(io.StringIO()),

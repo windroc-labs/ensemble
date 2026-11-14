@@ -2,7 +2,7 @@
 
 [English](../../README.md) · [Español](README.es.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Português](README.pt.md) · [简体中文](README.zh-CN.md)
 
-Ensemble permet de travailler avec des agents de programmation en équipe. Discutez avec un commandant, déléguez une tâche à un rôle
+Ensemble permet de travailler avec des agents de programmation en équipe. Discutez avec un manager, déléguez une tâche à un rôle
 ou laissez un tableau répartir le travail entre les rôles. Claude Code, Codex et OpenCode partagent les mêmes commandes de session.
 
 <a id="what"></a>
@@ -16,9 +16,9 @@ un tableau planifie les exécutions des rôles et reporte leurs résultats dans 
 <a id="why"></a>
 ## Pourquoi une équipe
 
-![Un agent, plusieurs agents coordonnés manuellement et des équipes ensemble coordonnées par des commandants](../images/compare.svg)
+![Un agent, plusieurs agents coordonnés manuellement et des équipes ensemble coordonnées par des managers](../images/compare.svg)
 
-Des exécutions d’agents indépendantes demandent à quelqu’un de répartir le travail et de suivre leurs réponses. Un commandant utilise Crew pour lancer,
+Des exécutions d’agents indépendantes demandent à quelqu’un de répartir le travail et de suivre leurs réponses. Un manager utilise Crew pour lancer,
 inspecter et reprendre ces exécutions depuis une seule conversation. Vous décidez toujours du travail à autoriser et à vérifier.
 
 <a id="how-it-works"></a>
@@ -90,7 +90,7 @@ Pour une seule tâche, dans une conversation de votre client installé :
 /ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
-Pour une équipe, ouvrez un shell de commandant et démarrez votre client :
+Pour une équipe, ouvrez un shell de manager et démarrez votre client :
 
 ```sh
 ensemble work
@@ -103,7 +103,7 @@ Utilisez `codex --no-daemon` ou `opencode` à la place de `claude` si c’est vo
 /ensemble:manage
 ```
 
-Décrivez le travail et le livrable souhaité. Le commandant coordonne les agents exécutants et les exécutions des rôles via Crew.
+Décrivez le travail et le livrable souhaité. Le manager coordonne les agents exécutants et les exécutions des rôles via Crew.
 Pour revenir à `work` plus tard, lancez `ensemble list` dans un terminal et choisissez-le : vous retrouvez sa session et sa conversation.
 Pour travailler avec un tableau, `/ensemble:board` agit sur les tickets ; la [personnalisation du flux de travail](../customizing-roles-and-tasks.md#on-the-board)
 explique comment choisir les étapes.

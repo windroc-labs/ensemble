@@ -791,7 +791,7 @@ def worker(args: Args) -> int:
     start_after = drained(w.events, after.group(1))
     removed = None
     try:
-        crew = [os.path.join(BIN, "ensemble-crew"), "worker", "--manager", manager, w.name]
+        crew = [os.path.join(BIN, "ensemble-crew"), "start", "worker", "--manager", manager, w.name]
         first = w.launch(
             "start",
             [*crew, "--client", w.client, "--cwd", w.cwd, "--display", "none", "--prompt", PROMPT],
