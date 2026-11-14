@@ -118,7 +118,10 @@ def _schema() -> dict:
 
 
 def _conform(value, schema: Mapping, where: str) -> None:
-    """Only the outcome schema's JSON Schema subset; `where` is empty at the root."""
+    """Only the outcome schema's JSON Schema subset; `where` is empty at the root. `maxLength` is
+    the cap the prompt states, never enforced: tokens spent on an over-long value are spent, and
+    the kept value shows the overrun.
+    """
     kind = schema.get("type")
     if kind == "object":
         if not isinstance(value, dict):
@@ -139,8 +142,6 @@ def _conform(value, schema: Mapping, where: str) -> None:
             raise InvalidOutcome(f"{where} must be text")
         if len(value) < schema.get("minLength", 0):
             raise InvalidOutcome(f"{where} is shorter than {schema['minLength']} characters")
-        if len(value) > schema.get("maxLength", len(value)):
-            raise InvalidOutcome(f"{where} is longer than {schema['maxLength']} characters")
         if "pattern" in schema and not re.fullmatch(schema["pattern"], value):
             raise InvalidOutcome(f"{where} must match {schema['pattern']}")
     elif kind == "array":

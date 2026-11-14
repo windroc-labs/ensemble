@@ -97,8 +97,6 @@ class Validate(Base):
             ({**DONE, "deliverable": ["x"]}, "must be text"),
             ({**DONE, "files": "x.md"}, "must be lists"),
             ({**DONE, "extra": 1}, "unknown field 'extra'"),
-            ({**DONE, "title": "x" * 201}, "title is longer than 200"),
-            ({**DONE, "summary": "x" * 301}, "summary is longer than 300"),
             ({**DONE, "status": "needs_input", "questions": [3]}, "questions[0] must be text"),
             ({**DONE, "files": None}, "files must be a list"),
             ({**DONE, "url": None}, "url must be text"),
@@ -110,8 +108,19 @@ class Validate(Base):
             with self.subTest(msg=msg, data=data):
                 self.fails(data, msg)
 
-    def test_a_summary_of_up_to_300_characters_holds(self):
-        self.assertEqual(self.check({**DONE, "summary": "x" * 300}).summary, "x" * 300)
+    def test_a_field_over_its_length_cap_is_kept_verbatim(self):
+        fields = schema()["properties"]
+        title = "t" * (fields["title"]["maxLength"] + 1)
+        summary = "s" * (fields["summary"]["maxLength"] + 1)
+        question = "q" * (fields["questions"]["items"]["maxLength"] + 1)
+        deliverable = "d" * (fields["deliverable"]["maxLength"] + 1)
+        done = self.check({**DONE, "title": title, "summary": summary, "deliverable": deliverable})
+        self.assertEqual((done.title, done.summary), (title, summary))
+        self.assertEqual(done.deliverable, deliverable)
+        body = json.dumps({**DONE, "status": "needs_input", "questions": [question]})
+        self.assertEqual(read(body, LOCAL, self.work, GH)[0].questions, [question])
+        url = "https://github.com/o/r/pull/1?" + "u" * fields["url"]["maxLength"]
+        self.assertEqual(self.check({**DONE, "url": url}, {"type": "pull-request"}).url, url)
 
     def test_the_status_is_one_of_the_outcome_statuses(self):
         for status in STATUSES:
@@ -418,7 +427,6 @@ class FieldPaths(Base):
             ),
             (7, {"type": "string"}, "{path} must be text"),
             ("", {"type": "string", "minLength": 1}, "{path} is shorter than 1 characters"),
-            ("xx", {"type": "string", "maxLength": 1}, "{path} is longer than 1 characters"),
             ("x", {"type": "string", "pattern": "[a-z]{2}"}, "{path} must match [a-z]{{2}}"),
             ("x", {"type": "string", "enum": ["y", "z"]}, "{path} 'x' is not one of y, z"),
             (7, {"type": "array"}, "{path} must be a list"),
@@ -450,6 +458,16 @@ class FieldPaths(Base):
                     with self.assertRaises(InvalidOutcome) as cm:
                         outcome._conform({"detail": wrapped}, s, "")
                     self.assertEqual(str(cm.exception), message.format(path=path))
+
+    def test_max_length_is_stated_never_enforced(self):
+        capped = {"type": "string", "maxLength": 1}
+        for value, rule in (
+            ("xx", capped),
+            (["xx"], {"type": "array", "items": capped}),
+        ):
+            with self.subTest(rule=rule):
+                s = {"type": "object", "properties": {"detail": rule}}
+                self.assertIsNone(outcome._conform({"detail": value}, s, ""))
 
     def test_root_errors_keep_their_original_text(self):
         for data, s, message in (

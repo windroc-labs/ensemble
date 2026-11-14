@@ -3,13 +3,13 @@
 Your result is an **outcome**, returned per [Output › Return](#return), plus a **deliverable** (the document itself). The outcome's fields:
 
 - `status`: `done` | `needs_input` | `failed`.
-- `title`: one line.
+- `title`: one line, ≤ 200 characters.
 - `summary`: 1–2 short lines (≤ 300 characters); every detail goes in the deliverable.
-- `questions`: `needs_input` only, 1–4.
-- `url`: the delivered link, when [Output › Destination](#destination) gives one.
-- `files`: absolute paths, when your task asks for them.
+- `questions`: `needs_input` only, 1–4, each ≤ 1,000 characters.
+- `url`: the delivered link, when [Output › Destination](#destination) gives one; ≤ 2,000 characters.
+- `files`: absolute paths, when your task asks for them; at most 20, each ≤ 1,000 characters.
 - `updraft`: `{"status", "head"}`, when your task asks for it.
-- `deliverable`: the document, when [Output › Destination](#destination) says so.
+- `deliverable`: the document, when [Output › Destination](#destination) says so; ≤ 2,000,000 characters.
 - `deliverable_file`: a `.md` file in `<Workdir>` holding the deliverable, in place of `deliverable`, when [Output › Destination](#destination) says so.
 
 Statuses:
