@@ -1716,6 +1716,49 @@ class Tile(CliCase):
         self.assertIn("--tile", help_text(self, main, ["show", "--help"]))
 
 
+class Restart(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.worker = own(
+            self.roster,
+            replace(
+                self.fake_record("w1"),
+                kind="worker",
+                sessions=("w1",),
+                ctl=("ensemble-session",),
+                resume=("ensemble-session", "resume", "w1"),
+            ),
+        )
+        self.restarted = replace(self.worker, display="restarted")
+
+    def test_restart_prints_the_new_record_and_the_entry_holds_it(self):
+        def run(argv, **options):
+            self.assertEqual(tuple(argv), ("ensemble-session", "restart", "w1"))
+            os.write(options["stdout"].fileno(), (self.restarted.to_line() + "\n").encode())
+            return mock.Mock(returncode=0, stderr="")
+
+        with mock.patch("subprocess.Popen", side_effect=answered(run)):
+            result = self.invoke("restart", "--manager", "mgr", "w1")
+        self.assertEqual(result, (0, self.restarted.to_line() + "\n", ""))
+        entry = self.roster.entries()["w1"]
+        self.assertEqual((entry.state, entry.record), (State.LIVE, self.restarted))
+
+    def test_restart_refuses_a_non_worker_or_unknown_name_with_2_and_changes_nothing(self):
+        own(self.roster, self.fake_record("planner"))
+        before = Path(self.roster.path).read_bytes()
+        with mock.patch("subprocess.Popen") as popen:
+            for name, message in (
+                ("planner", "crew: planner: restart restarts session workers only"),
+                ("nobody", "crew: nobody: not in roster"),
+            ):
+                with self.subTest(name=name):
+                    result, stdout, stderr = self.invoke("restart", "--manager", "mgr", name)
+                    self.assertEqual((result, stdout), (2, ""))
+                    self.assertTrue(stderr.startswith(message), stderr)
+        popen.assert_not_called()
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
+
+
 class Read(CliCase):
     def setUp(self):
         super().setUp()
@@ -1820,6 +1863,7 @@ class InsideAnAgentSession(CliCase):
             ("start", "command", "--manager", "mgr", "w1", "--", "true"),
             ("hold", "--manager", "mgr", "--", "true"),
             ("resume", "--manager", "mgr", "w1"),
+            ("restart", "--manager", "mgr", "w1"),
             ("start", "worker", "--manager", "mgr", "w1", "--client", "claude"),
             ("start", "reopen", "--manager", "mgr", "TASK-12"),
             ("start", "issue", "--manager", "mgr", "TASK-12"),
@@ -1863,6 +1907,7 @@ HELP_COMMANDS = [
     "read",
     "send",
     "resume",
+    "restart",
     "hide",
     "show",
     "close",

@@ -57,6 +57,7 @@ DESCENDANTS = (*HERE, "--descendants")
 HEADER = "name\tkind\tsid\tstate\tview\tnote\tcwd\tattach"
 REPORT_HEADER = "name\tkind\tstate\tnote\treply\tpr\tchecks\tmergeable\treview"
 REPLY_WIDTH = 80
+WORKER = "worker"  # the kind of Record ensemble-session start prints
 
 
 def _owner(session: str, entries: dict[str, Entry]) -> str | None:
@@ -82,6 +83,17 @@ def child_env() -> dict[str, str]:
 def hand_off(argv: tuple[str, ...]) -> NoReturn:
     """Become argv, so its output and exit status are the caller's."""
     os.execvpe(argv[0], argv, child_env())
+
+
+def _one_session(name: str, record: Record) -> tuple[str, str]:
+    """The one session entry `name`'s Record names, with the sid that guards its identity."""
+    if len(record.sessions) != 1:
+        raise ValueError(
+            f"{name}: no single session to read or send to (sessions: {len(record.sessions)})"
+        )
+    if record.sid is None:
+        raise ValueError(f"{name}: no sid to guard its session")
+    return record.sessions[0], record.sid
 
 
 def _row(fields: Iterable[str]) -> str:
@@ -649,15 +661,7 @@ class Crew:
         return entry.record
 
     def _session(self, name: str) -> tuple[str, str]:
-        """The one session the entry's Record names, with the sid that guards its identity."""
-        record = self._record(name)
-        if len(record.sessions) != 1:
-            raise ValueError(
-                f"{name}: no single session to read or send to (sessions: {len(record.sessions)})"
-            )
-        if record.sid is None:
-            raise ValueError(f"{name}: no sid to guard its session")
-        return record.sessions[0], record.sid
+        return _one_session(name, self._record(name))
 
     def read_argv(
         self, name: str, *, lines: int | None = None, reply: bool = False, outcome: bool = False
@@ -735,6 +739,37 @@ class Crew:
                 error.add_note(f"{name}: could not mark gone: {mark_error}")
             raise
         return resumed
+
+    def restart(self, name: str) -> Record:
+        """Restart worker entry `name`'s session in place, as `ensemble-session restart` does;
+        its new Record. A failed restart leaves the entry gone, as a failed resume does.
+        """
+        self._listed = None
+        self.roster.check_lease()
+        entry = self.roster.entries().get(name)
+        if entry is None:
+            raise ValueError(f"{name}: not in roster")
+        record = entry.record
+        if record is None:
+            raise RuntimeError(f"{name}: {entry.state}: no Record")
+        if record.kind != WORKER or record.ctl != (LayerCommand.SESSION,):
+            raise ValueError(
+                f"{name}: restart restarts session workers only "
+                f"(kind {record.kind}, ctl {record.ctl[0]})"
+            )
+        session, _ = _one_session(name, record)
+        claimed = self.roster.claim_restart(name, entry)
+        assert claimed.sid is not None
+        try:
+            restarted = self._start((LayerCommand.SESSION, "restart", session), name, claimed.sid)
+            self.roster.commit(name, restarted)
+        except (RosterError, RuntimeError, ValueError) as error:
+            try:
+                self.roster.mark_if(name, claimed, State.GONE)
+            except RosterError as mark_error:
+                error.add_note(f"{name}: could not mark gone: {mark_error}")
+            raise
+        return restarted
 
     def _marked(self, name: str, entry: Entry, state: State) -> Entry:
         """`entry` marked `state`; the roster's entry when another writer changed it first."""

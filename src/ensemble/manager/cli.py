@@ -291,6 +291,11 @@ def _resume(args) -> int:
     return failed
 
 
+def _restart(args) -> int:
+    print(_crew(args).restart(args.name).to_line())
+    return 0
+
+
 def _view(args) -> int:
     if getattr(args, "tile", False):
         return hand_off((LayerCommand.SESSION, "tile"))
@@ -511,7 +516,7 @@ Prerequisites and effects:
   SessionStart re-arm prompt goes only to a client in its process tree.
   Keep the pair together. An active holder fences ownership-sensitive roster
   updates; run those from its commander environment.
-  ENSEMBLE_AGENT_SESSION blocks hold/start/resume and resume-commander and
+  ENSEMBLE_AGENT_SESSION blocks hold/start/resume/restart, resume-commander and
   the old start forms; use a user-started commander. Help and start --list
   still work.
   State: ~/.ensemble/managers/NAME/.
@@ -822,6 +827,25 @@ reconcile interrupted bookkeeping with ensemble-crew attach --help.
     resume.add_argument("names", nargs="+", metavar="NAME", help="one or more existing entry names")
     resume.add_argument("--input", metavar="TEXT", help="answer exactly one waiting role entry")
     resume.set_defaults(func=_resume)
+    restart = page(
+        "restart",
+        "Restart a worker entry's session in place; print and record its new Record",
+        """Only for a worker entry (what start worker prints) that is live or gone; it
+continues the same conversation with the same options, as ensemble-session
+restart does, ending the worker's current client. The entry then holds the
+new Record, live. Requires lease access. Other kinds exit 2 and other states
+exit 1, both unchanged; a failed restart exits 1 and leaves the entry gone,
+for ensemble-crew resume.
+
+Examples:
+  With helper's client exited:
+  ensemble-crew restart --manager demo helper
+
+Recovery: ensemble-crew status --help; ensemble-crew resume --help
+""",
+    )
+    restart.add_argument("name", metavar="NAME", help="an existing worker entry")
+    restart.set_defaults(func=_restart)
     for verb, text in (
         ("hide", "close each entry's panes; its work runs on"),
         ("show", "show each entry as at its launch; print attach commands its layer gives"),
@@ -1096,7 +1120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"{args.verb} takes entry names or --all")
     if args.func is _resume and args.input is not None and len(args.names) != 1:
         parser.error("resume --input requires exactly one name")
-    if args.func in {_run, _hold, _resume, _launch, _resume_commander} and (
+    if args.func in {_run, _hold, _resume, _restart, _launch, _resume_commander} and (
         refused := nested_start()
     ):
         print(f"crew: {refused}", file=sys.stderr)
