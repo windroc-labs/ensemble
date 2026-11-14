@@ -296,6 +296,25 @@ class Refusals(Base):
             ({"resume": True}, "resume: needs a sid"),
             ({"run": nobody}, "unknown role 'nope'"),
             ({"task": "nope"}, f"task 'nope' is not one of researcher's tasks ({tasks})"),
+            *(
+                (
+                    {"files": {key: "x"}},
+                    f"files: {key!r} must be a relative path inside the agent dir",
+                )
+                for key in (
+                    "",
+                    "/abs/a.md",
+                    "../a.md",
+                    "inputs/../../a.md",
+                    "./a.md",
+                    "a//b",
+                    "a\nb",
+                )
+            ),
+            (
+                {"mode": "in_process", "files": {"a.md": "x"}},
+                "files: needs a headless or tui session",
+            ),
         ):
             with self.subTest(want=want):
                 self.assertEqual(self.refused(**kw), want)
@@ -402,6 +421,19 @@ class Planned(Base):
     def test_without_a_client_the_runs_own(self):
         got = self.planned(client=None)[0]
         self.assertEqual(got.spec.client, got.run.client)
+
+    def test_files_are_placed_below_the_agent_dir(self):
+        got, _ = self.planned(files={"inputs/a.md": "a", "b.md": "b"})
+        self.assertEqual(
+            dict(got.session.files),
+            {
+                os.path.join(self.layout.agent, "inputs", "a.md"): "a",
+                os.path.join(self.layout.agent, "b.md"): "b",
+            },
+        )
+        for files in (None, {}):
+            with self.subTest(files=files):
+                self.assertEqual(dict(self.planned(files=files)[0].session.files), {})
 
     def test_in_process_is_planned_as_headless(self):
         got = self.planned(mode="in_process", sid=SID)[0]
@@ -573,6 +605,13 @@ class SessionEnv(Base):
 
 
 class InstructionPlans(InstructionCase):
+    def test_an_instruction_takes_no_files(self):
+        run, spec = self.given(ROLES[0], client=CLIENTS[0][0], mode=CLIENTS[0][1])
+        with self.assertRaisesRegex(ConfigError, "^files: needs a headless or tui session$"):
+            plan(
+                run, replace(spec, files={"a.md": "x"}), driver=self.driver, composition=Composer()
+            )
+
     def test_each_roles_destination_and_prompt_are_the_same_under_any_client(self):
         for local in ("", GITHUB):
             with open(os.path.join(self.ensemble, "config.local.toml"), "w") as f:

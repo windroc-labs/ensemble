@@ -55,6 +55,24 @@ class RunRecordTest(HarnessCase):
         self.assertEqual(self.metadata()["plan"]["session"]["environment"], environment.persisted())
         self.assertEqual(record.read(), full)
 
+    def test_files_round_trip_on_both_specs(self):
+        self.make()
+        record = self.record()
+        state = record.read()
+        doc = os.path.join(Layout(self.work).agent, "inputs", "a.md")
+        carried = replace(
+            state,
+            plan=replace(
+                state.plan,
+                spec=replace(state.plan.spec, files={"inputs/a.md": "雪"}),
+                session=replace(state.plan.session, files={doc: "雪"}),
+            ),
+        )
+        record.save(carried)
+        got = record.read()
+        self.assertEqual(dict(got.plan.spec.files or {}), {"inputs/a.md": "雪"})
+        self.assertEqual(dict(got.plan.session.files), {doc: "雪"})
+
     def test_opaque_values_round_trip_on_both_specs(self):
         self.make()
         record = self.record()

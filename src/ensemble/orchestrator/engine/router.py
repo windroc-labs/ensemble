@@ -840,9 +840,8 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
         related=found,
         task=task,
         project_repos=writers.repos,
-    ).replace("\x00", "")
-    # a lone surrogate cannot be encoded
-    text = text.encode("utf-8", "replace").decode()
+    )
+    text = inputs.clean(text)
     try:
         try:
             linear_run = LinearRun(
@@ -858,6 +857,7 @@ def _outer(a, cfg, *, gql, run, keychain, wiring, now, attended):
                 delegate_kind=kind,
                 # a resume's task is its start row's: the Delegate gets none, the tier stays
                 tier=cfg.task_tier(task),
+                files=inputs.files(sources),
                 **(
                     {"mode": "tui", "display": attended.display, "events": attended.events}
                     if attended

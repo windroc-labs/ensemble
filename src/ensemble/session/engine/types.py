@@ -1,5 +1,6 @@
 """The session layer's shared data types; times are epoch seconds."""
 
+import os
 import re
 import signal
 from collections.abc import Callable, Mapping
@@ -395,6 +396,7 @@ class Spec(ProcessOptions):
     credentials: str | None = None
     environment_credentials: str | None = None
     handlers: tuple[HookCallback, ...] = ()  # ordered on_event modules
+    files: Mapping[str, str] = field(default_factory=dict)  # path -> text, written before start
 
     def __post_init__(self):
         if not printable_abs(self.workdir):
@@ -450,6 +452,22 @@ class Spec(ProcessOptions):
             isinstance(handler, HookCallback) for handler in self.handlers
         ):
             raise ConfigError("handlers must be a tuple of HookCallback")
+        if not _files_ok(self.files, (self.access.cwd, *self.access.dirs)):
+            raise ConfigError("files must map absolute paths below cwd or an access dir to text")
+        if self.files and self.mode == Mode.IN_PROCESS:
+            raise ConfigError("files: in_process mode runs on no Host")
+        object.__setattr__(self, "files", MappingProxyType(dict(self.files)))
+
+
+def _files_ok(files, roots: tuple[str, ...]) -> bool:
+    return isinstance(files, Mapping) and all(
+        isinstance(path, str)
+        and isinstance(text, str)
+        and printable_abs(path)
+        and os.path.normpath(path) == path
+        and any(path.startswith(root.rstrip("/") + "/") for root in roots)
+        for path, text in files.items()
+    )
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 """Public utility modules and functions shared by the layers."""
 
 from ensemble.utils.args import Once
+from ensemble.utils.beneath import write_beneath
 from ensemble.utils.config_file import (
     LOCAL,
     ConfigFileError,
@@ -224,4 +225,5 @@ __all__ = [
     "unfenced",
     "unset",
     "validate_events",
+    "write_beneath",
 ]

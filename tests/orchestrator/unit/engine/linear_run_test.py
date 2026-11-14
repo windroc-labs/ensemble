@@ -269,6 +269,20 @@ class Runs(RunCase):
                     )
                     self.assertEqual(owner.delegate.accepted[2]["overlays"], (self.cfg.core,))
 
+    def test_files_reach_the_spec(self):
+        self.start()
+        owner = LinearRun(
+            "TASK-1",
+            "input",
+            self.cfg.issue_workdir("TASK-1"),
+            cfg=self.cfg,
+            role="researcher",
+            sid=SID,
+            files={"inputs/a.md": "a"},
+            delegate_cls=CapturedDelegate,
+        )
+        self.assertEqual(owner.delegate.accepted[1].files, {"inputs/a.md": "a"})
+
     def test_spec_passes_only_the_workdir(self):
         owner, _ = self.start(delegate_cls=CapturedDelegate)
         spec = owner.delegate.accepted[1]

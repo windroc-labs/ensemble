@@ -62,6 +62,7 @@ GUARD_WAIT = 10  # s for a guard's reply or exit after a close (it gives up afte
 TUI_STATE = "session.json"
 PROMPTED = "prompted"  # "<generation> <begun> <submitted>" sends
 ACTIVITY = "activity"  # "<generation> <word>": its harness's last mark
+STAGED = "staged_files"
 RECORD = "record"  # "<generation>\t<Record line>": its crew Record
 STATE_MAX = 1 << 16
 ACTIVITY_MAX = 256
