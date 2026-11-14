@@ -1,5 +1,16 @@
 # Upgrading
 
+## PRDs: questions go to the user, one reviewer
+
+The `pm` role's `product-design` task changed:
+
+- No self-grill and no council. A point the existing behaviour answers follows it. One that changes requirements or scope comes back as a question (`needs_input`), at most 4 at a time, each with a suggested answer. The pm decides the rest.
+- Each requirement row has a Source column: the user's words, the existing code or the user's answer. A point with none of the three is not a requirement.
+- `/updraft:review` runs the spec-fitness reviewer alone. Review blockers left at the round cap go under Risks.
+- Only Problem and goals, Functional requirements and Acceptance scenarios are always written. Other sections appear only when there is something to put in them.
+
+A team dir that copies `tasks/product-design.md` or `templates/prd.md` keeps the old behaviour until you update or delete the copy.
+
 ## OpenCode loads updraft as a plugin
 
 OpenCode now gets updraft the way it gets ensemble: an
