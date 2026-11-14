@@ -42,8 +42,8 @@ PS = (
 )  # one -o each: text after = is a header
 
 PROMPT = """\
-ensemble: SessionStart `{source}` in manager `{name}`'s session (under \
-`ensemble-crew hold`). Your crew event monitor may have stopped. Re-arm it now, before other \
+ensemble: SessionStart `{source}` in manager `{name}`'s session (held by \
+`ensemble`). Your crew event monitor may have stopped. Re-arm it now, before other \
 work. These steps are complete without /ensemble:manage; they follow its Start step 3, Events \
 and Recover.
 
@@ -53,7 +53,7 @@ and Recover.
 backlog is every event line after N.
    Lease error (`stale holder generation`, `holder no longer alive`, or another holder is \
 active): follow /ensemble:manage › Recover; the error's `crew:` lines give the exact commands. \
-Another holder active: tell the user which. Never run `hold --force` yourself.
+Another holder active: tell the user which. Never run `ensemble --force` yourself.
 3. Read the backlog with `ensemble-crew pending --content`. In line order: an event whose \
 durable result (outcome, sent message, issue state or existing pull request) shows it already \
 handled, ack at once; otherwise handle it, then ack. Ack: \
