@@ -1,6 +1,5 @@
 """The reply protocol's progress mark tag (PROGRESS); a reply's progress mark lines outside code
-fences (marks) and the reply as shown (outcome_only). The outcome fence info (OUTCOME) and a reply's
-outcome block (outcome_block) live in ensemble.utils, shared with the manager.
+fences (marks) and the reply as shown (outcome_only).
 """
 
 import re
