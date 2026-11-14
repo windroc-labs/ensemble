@@ -830,7 +830,7 @@ Examples:
         "resume-commander",
         "Resume the manager's recorded client session under this holder",
         """Requires this environment's holder pair for the manager's live holder: run it
-in the shell its hold keeps (ensemble list types or runs it there). Reads
+in the shell its hold keeps; ensemble resume is the same command. Reads
 ~/.ensemble/managers/NAME/session.json, refuses while its client still runs
 or when its cwd is gone, gets the client's resume command from
 ensemble-session resume-argv, records its own pid as the client's, then
