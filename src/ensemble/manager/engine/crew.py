@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from typing import NoReturn
 
@@ -666,6 +666,14 @@ class Crew:
             return (LayerCommand.SESSION, "reply", session, "--sid", sid)
         shown = () if lines is None else ("--lines", str(lines))
         return (LayerCommand.SESSION, "read", session, "--sid", sid, *shown)
+
+    def send_argv(
+        self, name: str, *, text: str | None = None, keys: Sequence[str] = ()
+    ) -> tuple[str, ...]:
+        """The command pasting text, then Enter, else pressing keys, in the entry's session."""
+        session, sid = self._pane(name)
+        sent = ("--key", *keys) if text is None else ("--", text)
+        return (LayerCommand.SESSION, "send", session, "--sid", sid, *sent)
 
     def hand_off(self, argv: tuple[str, ...]) -> NoReturn:
         """Become argv, so its output and exit status are the caller's."""

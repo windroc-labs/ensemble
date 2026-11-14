@@ -1709,6 +1709,35 @@ class Read(CliCase):
         self.execvpe.assert_not_called()
 
 
+class Send(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.record = own(self.roster, replace(self.fake_record("w1"), sessions=("w1",)))
+        self.execvpe = self.enterContext(mock.patch("os.execvpe"))
+
+    def test_send_hands_off_text_or_keys(self):
+        guard = ("ensemble-session", "send", "w1", "--sid", self.record.sid)
+        for argv, tail in (
+            (("w1", "answer"), ("--", "answer")),
+            (("w1", "--", "-x"), ("--", "-x")),
+            (("w1", "--key", "Down", "Enter"), ("--key", "Down", "Enter")),
+        ):
+            with self.subTest(argv=argv):
+                self.execvpe.reset_mock()
+                self.assertEqual(self.invoke("send", "--manager", "mgr", *argv), (None, "", ""))
+                self.assertEqual(self.execvpe.call_args.args[1], (*guard, *tail))
+
+    def test_send_takes_text_or_keys_not_both(self):
+        for argv in (("w1",), ("w1", "answer", "--key", "Enter")):
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(["send", "--manager", "mgr", *argv])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("send takes TEXT or --key K…, not both", stderr.getvalue())
+        self.execvpe.assert_not_called()
+
+
 def _record(kind: str, name: str) -> Record:
     return Record(
         1,
@@ -2101,6 +2130,7 @@ HELP_COMMANDS = [
     "status",
     "report",
     "read",
+    "send",
     "resume",
     "hide",
     "show",

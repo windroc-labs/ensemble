@@ -673,6 +673,40 @@ class ReadSend(RosterCase):
             ):
                 self.crew.read_argv(name, outcome=True)
 
+    def test_send_pastes_text_after_a_separator(self):
+        for text in ("answer", "-x"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    self.crew.send_argv("w1", text=text),
+                    ("ensemble-session", "send", "w1", "--sid", self.worker.sid, "--", text),
+                )
+
+    def test_send_keys(self):
+        for keys in (("Escape",), ("Down", "Enter")):
+            with self.subTest(keys=keys):
+                self.assertEqual(
+                    self.crew.send_argv("w1", keys=keys),
+                    ("ensemble-session", "send", "w1", "--sid", self.worker.sid, "--key", *keys),
+                )
+
+    def test_send_to_an_issue_run_reaches_its_tui(self):
+        self.assertEqual(
+            self.crew.send_argv("TASK-1", text="answer")[2:5],
+            ("pm-TASK-1-abcdef12", "--sid", self.issue.sid),
+        )
+
+    def test_send_needs_one_session_and_its_sid(self):
+        self.own(self.role, name="headless", sessions=())
+        with self.assertRaisesRegex(ValueError, r"^headless: no single session .*\(sessions: 0\)$"):
+            self.crew.send_argv("headless", text="answer")
+        entries = self.roster.entries()
+        entries["w1"] = replace(entries["w1"], record=replace(self.worker, sid=None))
+        with (
+            mock.patch.object(self.roster, "entries", return_value=entries),
+            self.assertRaisesRegex(ValueError, "^w1: no sid to guard its session$"),
+        ):
+            self.crew.send_argv("w1", keys=("Enter",))
+
     def test_reading_writes_no_roster_file(self):
         before = Path(self.roster.path).read_bytes()
         self.crew.read_argv("w1")
