@@ -511,6 +511,23 @@ class Shipped(Packaged):
             write,
         )
 
+    def test_prd_template_requires_only_problem_requirements_and_scenarios(self):
+        template = team_texts()["templates/prd.md"]
+        required = {
+            "Problem and goals",
+            "Requirements",
+            "Functional requirements",
+            "Acceptance scenarios",
+        }
+        headings = re.findall(r"^#{2,3} (.+)\n(?=(.*))", template, re.M)
+        self.assertLessEqual(required, {name for name, _ in headings})
+        for name, first in headings:
+            with self.subTest(heading=name):
+                if name in required:
+                    self.assertNotIn("Optional", first)
+                else:
+                    self.assertTrue(first.startswith("Optional; omit when "), first)
+
     def test_prd_acceptance_is_gherkin_scenarios_the_pm_writes(self):
         pm = composed("pm", "product-design")[0]
         requirements = section(pm, "Requirements")
@@ -826,8 +843,12 @@ class Real(RealConfig):
         requirements = section(pm, "Requirements")
         self.assertIn("Functional and non-functional requirements are each one table", requirements)
         self.assertIn("fills the Module cell of its first row only", requirements)
-        for row in ("`| FR-<n> | <module> | <the requirement> |`", "`| NFR-<n> | <module> | "):
+        for row in (
+            "`| FR-<n> | <module> | <the requirement> | <its source> |`",
+            "`| NFR-<n> | <module> | ",
+        ):
             self.assertIn(row, pm)
+        self.assertIn("| <Source, translated> |`", pm)
         self.assertIn("> **<one-sentence answer>** (<overall confidence>)", light)
         self.assertIn(point, section(light, "Comparison table"))
         findings = section(light, "Findings")
