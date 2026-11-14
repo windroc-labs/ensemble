@@ -29,8 +29,8 @@ from ensemble.delegate.engine.runner import (
 )
 from ensemble.delegate.engine.types import Begun, Finished, Layout, Limit, Plan, Result
 from ensemble.delegate.event.reply import marks
-from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session import (
+    ACCOUNT_REJECTED,
     EnvironmentSpec,
     Exited,
     IdleTimeout,
@@ -43,6 +43,7 @@ from ensemble.session import (
     TurnEnd,
     TurnFailed,
 )
+from ensemble.session import ConfigError as SessionConfigError
 from ensemble.session.engine.types import Activity
 from ensemble.utils import Stopped
 from tests.delegate.case import SID, Case
@@ -891,10 +892,18 @@ class AttemptCore(Handles):
         self.assertEqual(
             found, [Result(0, None, "the client's turn failed: server_overloaded (busy)")]
         )
+        self.assertEqual(self.handle.calls, [])
         attempt = self.attempt()
         found = self.fed(attempt, LimitHit(None))
         self.assertEqual(found, [Result(0, None, "usage limit; reset time unknown", Limit(None))])
         self.assertEqual(self.handle.calls, [])
+
+    def test_a_rejected_account_stops_its_tui_client(self):
+        found = self.fed(self.attempt(), TurnFailed(ACCOUNT_REJECTED, "403"))
+        self.assertEqual(
+            found, [Result(0, None, "the client's turn failed: account_rejected (403)")]
+        )
+        self.assertEqual(self.handle.calls, [("stop",)])
 
     def test_turn_ends_without_an_outcome_are_nudged_then_given_up(self):
         attempt = self.attempt()
