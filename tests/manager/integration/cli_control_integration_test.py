@@ -151,7 +151,7 @@ class CliTest(CliCase):
                 self.assertEqual(result, 1, stderr)
                 self.assertEqual(stdout, "")
                 self.assertIn("listing unavailable", stderr)
-                self.assertIn("close-all partial", stderr)
+                self.assertIn("close --all partial", stderr)
                 with Path(self.ctl_dir, ctl.SESSIONS).open(encoding="utf-8") as stream:
                     sessions = json.load(stream)
                 self.assertTrue(sessions["unknown"]["alive"])

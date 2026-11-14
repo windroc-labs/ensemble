@@ -909,7 +909,7 @@ class Crew:
                     self._traced(name, entry, failures[ctl], error)
                 raise error
         if here is None:
-            raise RuntimeError("close-all partial: unlisted work may still be running")
+            raise RuntimeError("close --all partial: unlisted work may still be running")
         return names
 
     def forget(self, name: str, *, force: bool = False) -> None:
