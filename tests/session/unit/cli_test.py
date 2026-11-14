@@ -920,7 +920,7 @@ class HelpTest(Case):
             self.assertEqual(cli.main(["start", "helper", "--client", "codex", "--", "--help"]), 2)
         self.assertIn("refused inside an agent session", err.getvalue())
         self.assertEqual(out.getvalue(), "")
-        for display in ("none", "/below/commander"):
+        for display in ("none", "/below/manager"):
             args = cli._parser(None).parse_args(
                 ["start", "helper", "--client", "codex", "--display", display]
             )

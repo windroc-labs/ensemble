@@ -227,7 +227,7 @@ class OpenCodePluginTest(Case):
         played = self.manager([created("ses_1"), event("session.idle", "ses_1"), system("ses_1")])
         self.assertIn("SessionStart `startup`", played[2][0])
 
-    def test_child_sessions_and_non_commanders_get_no_rearm(self):
+    def test_child_sessions_and_non_managers_get_no_rearm(self):
         os.makedirs(os.path.join(self.ensemble, "managers", "mgr"))
         child = [created("ses_1"), created("ses_c", parent="ses_1"), system("ses_c")]
         child.append(event("session.compacted", "ses_c"))

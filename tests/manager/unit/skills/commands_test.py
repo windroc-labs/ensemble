@@ -1,4 +1,4 @@
-"""skills/manage/SKILL.md (/ensemble:manage): the commander runs only ensemble-crew commands and
+"""skills/manage/SKILL.md (/ensemble:manage): the manager runs only ensemble-crew commands and
 pre-approves only crew reads; it launches all three kinds through crew start, handles every
 event word, answers dialogs with keys and recovers one entry at a time, through no retired path.
 """
@@ -62,7 +62,7 @@ class Commands(Case):
         self.assertIn("[--prompt '<text>']", launch)
         self.assertNotIn("--cwd <work dir>/agent", body("manage"))
 
-    def test_the_commander_runs_only_crew_commands(self):
+    def test_the_manager_runs_only_crew_commands(self):
         forwarded = rule("**Issue updates**")
         own = body("manage").replace(forwarded, "")
         commands = [c for c in written(own) if len(c) > 1]
@@ -170,7 +170,7 @@ class Names(Case):
             self.assertIn(key, viewer)
             self.assertIn(f"`{key}`", body("manage"))
 
-    def test_only_the_commander_has_it_as_the_session_config_turns_it_off(self):
+    def test_only_the_manager_has_it_as_the_session_config_turns_it_off(self):
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
         self.assertIn(
             "refuse inside them (exit 2: each session's client gets `ENSEMBLE_AGENT_SESSION=1`)",
@@ -225,7 +225,7 @@ class Flows(Case):
             self.assertIn(phrase, start)
         self.assertIn("Monitoring mode", start)
         self.assertIn(
-            "qualifies only when its runtime contract promises a notification to this commander",
+            "qualifies only when its runtime contract promises a notification to this manager",
             start,
         )
         self.assertNotIn("marks each printed event handled", body("manage"))

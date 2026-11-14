@@ -1,4 +1,4 @@
-"""skills/manage/SKILL.md as a commander reads them."""
+"""skills/manage/SKILL.md as a manager reads them."""
 
 import os
 import re

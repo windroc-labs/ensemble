@@ -1,7 +1,7 @@
 """The manager layer's guard data (tests/guard_data/__init__.py)."""
 
 ENTRY_MODULES = {
-    "manager": {"commander.py", "rearm.py"},
+    "manager": {"ensemble_command.py", "rearm.py"},
 }
 
 

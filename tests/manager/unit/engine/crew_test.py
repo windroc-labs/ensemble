@@ -358,7 +358,7 @@ class Restart(RosterCase):
                 self.refused("w1", RosterError, f"^w1: cannot restart {state}$")
 
     def test_a_non_holder_changes_nothing(self):
-        with self.roster.hold("another commander"):
+        with self.roster.hold("another manager"):
             self.refused("w1", RosterError, "")
 
 

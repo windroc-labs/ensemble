@@ -1,4 +1,4 @@
-"""The commands /ensemble:manage writes, filled in as a commander would, run on
+"""The commands /ensemble:manage writes, filled in as a manager would, run on
 the real commands (tests/manager/live_crew.py): a worker's launch, reply, note, status,
 gone-then-resume and close; a role run that ends waiting, answered in its own session.
 """
@@ -15,7 +15,7 @@ from tests.manager.skills.commands import example, fill
 class SkillFlows(LiveCrew):
     def written(self, skill, prefix, *having, keep=(), env=None, **values):
         """skill's one command starting with prefix (and holding having), filled with values, run
-        as the commander runs it.
+        as the manager runs it.
         """
         argv = fill(example(skill, prefix, *having), *keep, **values)
         crew = self.crew_env() if argv[0] == "ensemble-crew" else {}

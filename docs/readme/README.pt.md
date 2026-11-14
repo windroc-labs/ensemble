@@ -2,7 +2,7 @@
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md)
 
-O Ensemble permite trabalhar com agentes de programação como uma equipe. Converse com um comandante, delegue uma tarefa a um papel
+O Ensemble permite trabalhar com agentes de programação como uma equipe. Converse com um manager, delegue uma tarefa a um papel
 ou deixe um quadro distribuir o trabalho entre os papéis. Claude Code, Codex e OpenCode compartilham os mesmos controles de sessão.
 
 <a id="what"></a>
@@ -16,9 +16,9 @@ um quadro agenda execuções de papéis e registra seus resultados nas issues. O
 <a id="why"></a>
 ## Por que uma equipe
 
-![Um agente, vários agentes coordenados manualmente e equipes ensemble coordenadas por comandantes](../images/compare.svg)
+![Um agente, vários agentes coordenados manualmente e equipes ensemble coordenadas por managers](../images/compare.svg)
 
-Execuções separadas de agentes precisam de alguém para distribuir o trabalho e acompanhar as respostas. Um comandante usa Crew para iniciar,
+Execuções separadas de agentes precisam de alguém para distribuir o trabalho e acompanhar as respostas. Um manager usa Crew para iniciar,
 inspecionar e retomar essas execuções a partir de uma única conversa. Você continua decidindo qual trabalho autorizar e revisar.
 
 <a id="how-it-works"></a>
@@ -90,7 +90,7 @@ Para uma única tarefa, na conversa do cliente instalado:
 /ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
-Para uma equipe, abra um shell de comandante e inicie seu cliente:
+Para uma equipe, abra um shell de manager e inicie seu cliente:
 
 ```sh
 ensemble work
@@ -103,7 +103,7 @@ Use `codex --no-daemon` ou `opencode` em vez de `claude` se esse for seu cliente
 /ensemble:manage
 ```
 
-Descreva o trabalho e a entrega desejada. O comandante coordena trabalhadores e execuções de papéis por meio de Crew.
+Descreva o trabalho e a entrega desejada. O manager coordena trabalhadores e execuções de papéis por meio de Crew.
 Para voltar a `work` depois, execute `ensemble list` em um terminal e escolha-o: você volta à sessão e à conversa dele.
 Para trabalhar com um quadro, `/ensemble:board` opera sobre as issues; a [personalização do fluxo de trabalho](../customizing-roles-and-tasks.md#on-the-board)
 explica como escolher as etapas.

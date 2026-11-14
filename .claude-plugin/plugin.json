@@ -2,7 +2,7 @@
   "name": "ensemble",
   "displayName": "Ensemble",
   "version": "0.9.9",
-  "description": "Guidelines for your commander session (/ensemble:manage), and ensemble's core roles and tasks, researcher, pm and engineer, run in this conversation (/ensemble:act-as), and fixed board issue commands (/ensemble:board).",
+  "description": "Guidelines for your manager session (/ensemble:manage), and ensemble's core roles and tasks, researcher, pm and engineer, run in this conversation (/ensemble:act-as), and fixed board issue commands (/ensemble:board).",
   "author": {
     "name": "Windroc"
   },

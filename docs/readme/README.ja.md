@@ -2,7 +2,7 @@
 
 [English](../../README.md) · [Español](README.es.md) · [Français](README.fr.md) · [한국어](README.ko.md) · [Português](README.pt.md) · [简体中文](README.zh-CN.md)
 
-Ensemble を使うと、コーディングエージェントをチームとして扱えます。コマンダーと会話する、ロールにタスクを委任する、
+Ensemble を使うと、コーディングエージェントをチームとして扱えます。manager と会話する、ロールにタスクを委任する、
 ボードにロール間の作業振り分けを任せる、といった使い方ができます。Claude Code、Codex、OpenCode は共通のセッション操作を使います。
 
 <a id="what"></a>
@@ -16,9 +16,9 @@ Ensemble を使うと、コーディングエージェントをチームとし�
 <a id="why"></a>
 ## チームを使う理由
 
-![単独のエージェント、手動で調整する複数のエージェント、コマンダーが調整する ensemble のチーム](../images/compare.svg)
+![単独のエージェント、手動で調整する複数のエージェント、manager が調整する ensemble のチーム](../images/compare.svg)
 
-エージェントを個別に実行すると、誰かが作業を振り分け、返答を追う必要があります。コマンダーは Crew を使い、
+エージェントを個別に実行すると、誰かが作業を振り分け、返答を追う必要があります。manager は Crew を使い、
 1 つの会話からこれらの実行を開始、確認、再開します。どの作業を許可し、レビューするかは引き続きあなたが決めます。
 
 <a id="how-it-works"></a>
@@ -89,7 +89,7 @@ webhook を無効にしてください。リポジトリの権限は、インス
 /ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
-チームを使うには、コマンダーのシェルを開き、クライアントを起動します。
+チームを使うには、manager のシェルを開き、クライアントを起動します。
 
 ```sh
 ensemble work
@@ -102,7 +102,7 @@ claude
 /ensemble:manage
 ```
 
-作業内容と希望する成果物を伝えてください。コマンダーは Crew を通じて、ワーカーとロールの実行を調整します。
+作業内容と希望する成果物を伝えてください。manager は Crew を通じて、ワーカーとロールの実行を調整します。
 後で `work` に戻るときは、ターミナルで `ensemble list` を実行して選びます。そのセッションと会話に戻れます。
 ボードで作業する場合、`/ensemble:board` で issue を操作します。ステージの選び方は、
 [ワークフローのカスタマイズ](../customizing-roles-and-tasks.md#on-the-board)で説明しています。

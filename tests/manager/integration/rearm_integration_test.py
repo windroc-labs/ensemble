@@ -178,7 +178,7 @@ class HoldTreeTest(Case):
         env.pop("ENSEMBLE_AGENT_SESSION", None)
         return self.enterContext(
             terminal.process(
-                (*PY, "-m", "ensemble.manager.commander", "hold", "mgr", "--", *argv),
+                (*PY, "-m", "ensemble.manager.ensemble_command", "hold", "mgr", "--", *argv),
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

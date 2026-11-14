@@ -76,7 +76,7 @@ Environment and options:
   run --sid overrides ENSEMBLE_SID only when equal; otherwise refused.
   resume refuses another ENSEMBLE_SID. These and ENSEMBLE_EVENTS are consumed
   by this command. ENSEMBLE_AGENT_SESSION refuses real run/resume; use a
-  user-started commander. Help, --list and --dry-run remain available.
+  user-started manager. Help, --list and --dry-run remain available.
   Options --role/--out/--workdir/--cwd/--client/--mode/--name/--on-event accept
   one occurrence only. Other scalars use the last value; flags may repeat.
 

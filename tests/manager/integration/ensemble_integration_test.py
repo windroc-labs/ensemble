@@ -894,7 +894,7 @@ class FakeTmux(Case):
         copy = shutil.copy2(ENSEMBLE, os.path.join(away, "ensemble"))
         process, out, err, calls = self.run_ensemble("s1", script=copy)
         self.assertEqual((process.returncode, out), (1, ""))
-        self.assertRegex(err, r"\Aensemble: no /.*/src/ensemble/manager/commander.py\n\Z")
+        self.assertRegex(err, r"\Aensemble: no /.*/src/ensemble/manager/ensemble_command.py\n\Z")
         self.assertEqual([call[2] for call in calls], ["has"])
 
     def test_with_no_install_a_launcher_fails_naming_where_it_looked(self):
