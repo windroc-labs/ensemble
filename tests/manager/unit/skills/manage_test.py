@@ -1,4 +1,4 @@
-"""skills/manage/SKILL.md: command references, closing permissions, Codex issues,
+"""skills/manage/SKILL.md: command references, closing permissions, board runs,
 decision markers, board proposals and the one commit exception agree.
 """
 
@@ -34,7 +34,7 @@ class Manage(Case):
             f"`{lease_free}`",
             "those `attach` prints",
             "exit this client and run `ensemble list`",
-            "never run `hold --force` yourself",
+            "never run `ensemble --force` yourself",
             "Manual",
             "polling loop",
         ):
@@ -101,15 +101,6 @@ class Manage(Case):
         self.assertIn("Close through Crew (Direct)", close)
         self.assertRegex(close, r"tmux only for sessions outside the Roster")
 
-    def test_a_codex_issue_worker_starts_by_name_with_its_prompt_and_closes_on_merge(self):
-        codex = rule("An issue for Codex")
-        self.assertRegex(
-            codex,
-            r"`ensemble-crew worker <name> --client codex "
-            r"--cwd <work dir>/agent --prompt 'Read <work dir>/agent/prompt\.md[^`]+'",
-        )
-        self.assertRegex(codex, r"[Cc]lose it .*PR merges")
-
     def test_one_decision_marker_and_one_commit_exception(self):
         self.assertIn("`(the user, <YYYY-MM-DD>)`", rule("Record each decision"))
         self.assertNotIn("<the user's name>", body("manage"))
@@ -120,19 +111,27 @@ class Manage(Case):
         board = section("manage", "The task board")
         issues = rule("**Issue operations**")
         self.assertIn(issues, board)
-        for literal in (
-            "`/ensemble:board`",
-            "`ensemble-orchestrator issue`",
-            "never a hand-written query",
-        ):
+        for literal in ("the commands `/ensemble:board` lists", "never a hand-written query"):
             self.assertIn(literal, issues)
+        self.assertNotIn("ensemble-orchestrator", issues)
+
+    def test_local_board_promote_is_triggered_here_and_run_through_board(self):
+        promote = rule("**Promote on a local board**")
+        self.assertIn(promote, section("manage", "The task board"))
+        for literal in (
+            "no job runs promote there",
+            "through `/ensemble:board`",
+            "once an approved issue's 10-minute undo window has passed, or when the user asks",
+        ):
+            self.assertIn(literal, promote)
+        self.assertNotIn("ensemble-orchestrator", promote)
 
     def test_issue_work_goes_to_the_board_by_id_and_the_router_picks_its_model(self):
         runs = rule("**Board runs**")
         self.assertIn(runs, section("manage", "The task board"))
         for literal in (
             "by its ID",
-            "`ensemble-crew issue <ID>`",
+            "`ensemble-crew start issue <ID>`",
             "moving the issue to Todo",
             "the router picks its model, tier and effort",
             "never read an issue to choose a model, tier or effort",
@@ -159,7 +158,7 @@ class Manage(Case):
         labels = rule("**Task labels**")
         self.assertIn("only names Board runs allows", labels)
         self.assertIn("leave it unset", labels)
-        self.assertEqual(body("manage").count("`ensemble-delegate run --list`"), 1)
+        self.assertEqual(body("manage").count("`ensemble-crew start --list`"), 1)
 
     def test_approved_board_proposals_run_after_a_state_reread(self):
         board = section("manage", "The task board")
@@ -231,25 +230,26 @@ class Manage(Case):
         recover = section("manage", "Recover")
         [steps] = re.findall(r"^- \*\*Pipeline needs_input\*\*.*?(?=^- |\Z)", recover, re.M | re.S)
         order = [
-            "`ensemble-delegate outcome <work_dir>/work/<ID>`",
-            "`ensemble-orchestrator issue comment <ID> --body-file <file>`",
-            "`ensemble-orchestrator issue move <ID> running`",
-            "`ensemble-session ls --match '.*-<ID>-[0-9a-f]{8}'`",
-            "`ensemble-session send <session> '<answer>'`",
+            "1. Read its questions: `ensemble-crew read <ID> --outcome`",
+            "2. Record the answer on the issue as a comment, through `/ensemble:board`",
+            "3. Move the issue to In Progress (Continue issue work), through `/ensemble:board`",
+            "4. Check its tui is live: `ensemble-crew status <ID>`",
+            "`ensemble-crew send <ID> '<answer>'`",
             "transcript",
             "`ensemble-crew close <ID>`",
-            "`ensemble-crew reopen --work-dir <work_dir> <ID>`",
+            "`ensemble-crew start reopen --work-dir <work_dir> <ID>`",
+            "`ensemble-crew read <agent name> --outcome`",
         ]
         found = [steps.find(step) for step in order]
         self.assertNotIn(-1, found, steps)
         self.assertEqual(found, sorted(found))
         for phrase in (
-            "`ensemble-orchestrator resume <ID>`",
+            "`ensemble-crew resume <ID>` delivers no answer",
             "`resume` field",
-            "delivers no answer",
             "Never re-run the issue for an answer",
         ):
             self.assertIn(phrase, steps)
+        self.assertNotIn("ensemble-orchestrator", steps)
         self.assertNotIn("/work/<ID>/run`", steps)
         self.assertRegex(recover, r"(?m)^- \*\*Waiting role run\*\*")
         events = section("manage", "Events")
@@ -257,33 +257,31 @@ class Manage(Case):
         self.assertIn("a pipeline run: Recover › Pipeline needs_input", events)
         self.assertIn("the router's reason", section("manage", "Launch"))
 
-    def test_a_pipeline_answer_is_confirmed_per_client_and_its_tui_still_reports(self):
+    def test_a_pipeline_answer_is_confirmed_by_crew_send_and_its_tui_still_reports(self):
         [step] = re.findall(r"^  5\. .*?(?=^  6\. )", section("manage", "Recover"), re.M | re.S)
-        reader = "${CLAUDE_SKILL_DIR}/../../src/ensemble/session/clients/opencode/transcript.py"
         found = [
             step.find(phrase)
             for phrase in (
-                "transcript",
-                f"`{reader}`",
-                "`client_id` in `<work_dir>/work/<ID>/run/run.jsonl`",
+                "`ensemble-crew read <ID>`",
+                "`ensemble-crew send <ID> '<answer>'`",
+                "reached its transcript",
                 "Its tui still sends",
                 "`blocked` and `done` events",
                 "per Events",
                 "for this one call only, never",
-                "Once it finishes",
-                "shows the new outcome when its harness still owns the tui",
+                "Once it finishes, `ensemble-crew read <ID> --outcome` prints its new outcome",
                 "write-back has posted that result and moved the issue",
-                "still shows the old `needs_input` (no harness)",
-                "its last outcome block",
+                "still In Progress",
                 "`deliverable` for a `local` destination",
                 "`<work_dir>/work/<ID>/agent/tmp/deliverable.md`",
                 "else its `url`",
-                "its normal end state, In Review:",
-                "`ensemble-orchestrator issue move <ID> review`",
+                "its normal end state, In Review, through `/ensemble:board`",
             )
         ]
         self.assertNotIn(-1, found, step)
         self.assertEqual(found, sorted(found))
+        for gone in ("transcript.py", "client_id", "ensemble-session", "ensemble-delegate"):
+            self.assertNotIn(gone, step)
         self.assertIn(
             "A client that does not expand `${CLAUDE_SKILL_DIR}` (Codex, OpenCode) writes every"
             " `${CLAUDE_SKILL_DIR}` in this file as this file's directory",
