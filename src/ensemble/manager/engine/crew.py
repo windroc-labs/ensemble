@@ -45,6 +45,7 @@ from ensemble.utils import (
 )
 
 TIMEOUT = 30
+SEND_WAIT = 20  # seconds an idle client has to start a turn with sent text
 # A start's or resume's: a Docker one may first rebuild its image, which its broker allows 1800 s.
 START_TIMEOUT = 1920
 GRACE = 60  # from SIGTERM to SIGKILL: a Docker start in flight removes its container
@@ -672,8 +673,30 @@ class Crew:
     ) -> tuple[str, ...]:
         """The command pasting text, then Enter, else pressing keys, in the entry's session."""
         session, sid = self._session(name)
-        sent = ("--key", *keys) if text is None else ("--", text)
-        return (LayerCommand.SESSION, "send", session, "--sid", sid, *sent)
+        if text is None:
+            return (LayerCommand.SESSION, "send", session, "--sid", sid, "--key", *keys)
+        # options before the session name: argparse takes no option between it and TEXT
+        waited = ("--sid", sid, "--wait", str(SEND_WAIT))
+        return (LayerCommand.SESSION, "send", *waited, session, "--", text)
+
+    def send_text(self, name: str, text: str) -> tuple[str | None, int]:
+        """Pastes `text` in the entry's session and waits for its delivery: the session's word
+        (delivered, queued, undelivered; None without one) and exit status. Its stderr passes
+        through. No timeout: the session bounds its own wait.
+        """
+        argv = self.send_argv(name, text=text)
+        try:
+            result = subprocess.run(
+                argv,
+                stdout=subprocess.PIPE,
+                text=True,
+                check=False,
+                env=self._env(events=False),
+            )
+        except OSError as error:
+            raise RuntimeError(f"{shlex.join(argv)}: {error}") from error
+        words = result.stdout.split()
+        return (words[0] if words else None), result.returncode
 
     def hand_off(self, argv: tuple[str, ...]) -> NoReturn:
         """Become argv, so its output and exit status are the caller's."""

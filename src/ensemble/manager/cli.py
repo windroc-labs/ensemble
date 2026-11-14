@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State, commander
 from ensemble.manager.engine import managers
+from ensemble.manager.engine.crew import SEND_WAIT
 from ensemble.manager.engine.holder import Holder, inherited
 from ensemble.manager.engine.types import (
     Held,
@@ -271,9 +272,21 @@ def _read(args) -> int:
     )
 
 
+DELIVERIES = {"delivered": "已送达 (delivered)", "queued": "排队中 (queued)"}
+UNDELIVERED = "未送达 (undelivered)"
+
+
 def _send(args) -> int:
     crew = _crew(args)
-    crew.hand_off(crew.send_argv(args.name, text=args.text, keys=args.key or ()))
+    if args.key is not None:
+        crew.hand_off(crew.send_argv(args.name, keys=args.key))
+    else:
+        word, code = crew.send_text(args.name, args.text)
+        if word in DELIVERIES and code == 0:
+            print(DELIVERIES[word])
+            return 0
+        print(UNDELIVERED)
+        return code or 1
 
 
 def _resume(args) -> int:
@@ -782,10 +795,14 @@ Recovery and next help:
     send = page(
         "send",
         "Paste text then Enter, or press keys, in an entry's session",
-        """Sends to the one session the entry's Record names, as ensemble-crew read
+        f"""Sends to the one session the entry's Record names, as ensemble-crew read
 --help says, guarded by the Record's sid. Give TEXT or --key K…, not both;
 TEXT starting with - goes after --. Key names: ensemble-session send --help.
-Prints nothing; exit status is the session's. Needs no holder lease.
+TEXT prints one line: 已送达 (delivered), a turn started with it; 排队中
+(queued), a running turn holds it, printed without waiting for that turn;
+未送达 (undelivered), exit 1 or the session's code: its client stopped, a
+dialog waits (answer it with --key), or no turn started within {SEND_WAIT} seconds.
+--key prints nothing; exit status is the session's. Needs no holder lease.
 
 Examples:
   ensemble-crew send --manager demo helper 'Run the tests again'
