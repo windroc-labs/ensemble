@@ -22,18 +22,21 @@ from ensemble.session.engine.types import (
 from ensemble.utils import Status, StatusState
 from tests.session.case import Case
 
+CLIENTS = ("claude", "codex", "opencode")
 NEVER = object()  # ends a fake's event list: its stream then waits without yielding
 
 
 class FakeSession:
     """status, send and events of one attached tui session; events after the send only."""
 
-    def __init__(self, *, alive=True, state=StatusState.DONE, events=(), raises=None):
-        self.name, self.sid = "w1", "s1"
+    def __init__(
+        self, *, client="claude", alive=True, state=StatusState.DONE, events=(), raises=None
+    ):
+        self.name, self.sid, self.client = "w1", "s1", client
         self._status = Status(
             name="w1", alive=alive, state=state, outcome=None, attach=None, hidden=False
         )
-        self._events, self._raises = list(events), raises
+        self._events, self._raises = events, raises
         self.sent: list[str] = []
         self.failure: SessionError | None = None
         self._stop = threading.Event()
@@ -77,7 +80,7 @@ class Fold(Case):
 
 
 class Deliver(Case):
-    """deliver reads no client: claude, codex and opencode sessions give these same events."""
+    """Each outcome for each client's session: deliver reads only its status and events."""
 
     def deliver(self, session, *, open_turn=False, wait=5.0):
         """deliver to `session`; (result, seconds taken)."""
@@ -89,45 +92,64 @@ class Deliver(Case):
         return found, time.monotonic() - began
 
     def test_turn_start_after_send_is_delivered(self):
-        for state in (StatusState.DONE, StatusState.WORKING):
-            with self.subTest(state=state):
-                session = FakeSession(state=state, events=[Activity(), TurnStarted()])
-                found, _ = self.deliver(session)
-                self.assertEqual(found, (Delivery.DELIVERED, None))
-                self.assertEqual(session.sent, ["marker"])
+        for client in CLIENTS:
+            for state in (StatusState.DONE, StatusState.WORKING):
+                with self.subTest(client=client, state=state):
+                    session = FakeSession(
+                        client=client, state=state, events=[Activity(), TurnStarted()]
+                    )
+                    found, _ = self.deliver(session)
+                    self.assertEqual(found, (Delivery.DELIVERED, None))
+                    self.assertEqual(session.sent, ["marker"])
 
     def test_open_turn_still_open_is_queued_without_waiting_for_it(self):
-        session = FakeSession(state=StatusState.WORKING, events=[Activity(), NEVER])
-        found, took = self.deliver(session, open_turn=True, wait=20)
-        self.assertEqual(found, (Delivery.QUEUED, None))
-        self.assertGreaterEqual(took, delivery.GRACE)
-        self.assertLess(took, delivery.GRACE + 2)
-        self.assertEqual(session.sent, ["marker"])
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                session = FakeSession(
+                    client=client, state=StatusState.WORKING, events=[Activity(), NEVER]
+                )
+                found, took = self.deliver(session, open_turn=True, wait=20)
+                self.assertEqual(found, (Delivery.QUEUED, None))
+                self.assertGreaterEqual(took, delivery.GRACE)
+                self.assertLess(took, delivery.GRACE + 2)
+                self.assertEqual(session.sent, ["marker"])
 
     def test_turn_start_within_grace_of_a_stale_open_mark_is_delivered(self):
-        session = FakeSession(state=StatusState.WORKING, events=[IdleTimeout(1), TurnStarted()])
-        found, took = self.deliver(session, open_turn=True, wait=20)
-        self.assertEqual(found, (Delivery.DELIVERED, None))
-        self.assertLess(took, delivery.GRACE)
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                session = FakeSession(
+                    client=client, state=StatusState.WORKING, events=[IdleTimeout(1), TurnStarted()]
+                )
+                found, took = self.deliver(session, open_turn=True, wait=20)
+                self.assertEqual(found, (Delivery.DELIVERED, None))
+                self.assertLess(took, delivery.GRACE)
 
     def test_turn_ended_during_send_then_started_is_delivered(self):
         """Codex interrupts an open turn before it sends: that turn ends, then the text's starts."""
         for ended in (TurnEnd(interrupted=True), TurnFailed("interrupted")):
             with self.subTest(ended=ended):
-                session = FakeSession(state=StatusState.WORKING, events=[ended, TurnStarted()])
+                session = FakeSession(
+                    client="codex", state=StatusState.WORKING, events=[ended, TurnStarted()]
+                )
                 found, _ = self.deliver(session, open_turn=True)
                 self.assertEqual(found, (Delivery.DELIVERED, None))
 
     def test_turn_ended_and_none_started_is_undelivered(self):
-        session = FakeSession(state=StatusState.WORKING, events=[TurnEnd(), NEVER])
+        session = FakeSession(client="codex", state=StatusState.WORKING, events=[TurnEnd(), NEVER])
         found, _ = self.deliver(session, open_turn=True, wait=0.5)
         self.assertEqual(found[0], Delivery.UNDELIVERED)
 
     def test_no_turn_start_within_wait_is_undelivered(self):
-        session = FakeSession(events=[Activity(), IdleTimeout(delivery.POLL), NEVER])
-        found, took = self.deliver(session, wait=0.3)
-        self.assertEqual(found, (Delivery.UNDELIVERED, "session w1: no turn started within 0.3 s"))
-        self.assertGreaterEqual(took, 0.3)
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                session = FakeSession(
+                    client=client, events=[Activity(), IdleTimeout(delivery.POLL), NEVER]
+                )
+                found, took = self.deliver(session, wait=0.3)
+                self.assertEqual(
+                    found, (Delivery.UNDELIVERED, "session w1: no turn started within 0.3 s")
+                )
+                self.assertGreaterEqual(took, 0.3)
 
     def test_wait_is_bounded_with_no_events(self):
         session = FakeSession(events=[NEVER])
@@ -135,27 +157,47 @@ class Deliver(Case):
         self.assertEqual(found[0], Delivery.UNDELIVERED)
         self.assertLess(took, 0.5 + 2)
 
+    def test_wait_is_bounded_while_other_events_keep_coming(self):
+        def busy():
+            for _ in range(200):  # 5 s, then the stream waits
+                time.sleep(delivery.POLL / 4)
+                yield Activity()
+
+        for open_turn, want in ((False, Delivery.UNDELIVERED), (True, Delivery.QUEUED)):
+            with self.subTest(open_turn=open_turn):
+                session = FakeSession(state=StatusState.WORKING, events=busy())
+                found, took = self.deliver(session, open_turn=open_turn, wait=0.5)
+                self.assertEqual(found[0], want)
+                self.assertLess(took, 0.5 + 2)
+
     def test_dead_client_is_undelivered_without_send(self):
-        for state in (StatusState.GONE, StatusState.DEAD):
-            with self.subTest(state=state):
-                session = FakeSession(alive=False, state=state)
-                found, _ = self.deliver(session)
-                self.assertEqual(found, (Delivery.UNDELIVERED, "session w1: client not running"))
-                self.assertEqual(session.sent, [])
+        for client in CLIENTS:
+            for state in (StatusState.GONE, StatusState.DEAD):
+                with self.subTest(client=client, state=state):
+                    session = FakeSession(client=client, alive=False, state=state)
+                    found, _ = self.deliver(session)
+                    self.assertEqual(
+                        found, (Delivery.UNDELIVERED, "session w1: client not running")
+                    )
+                    self.assertEqual(session.sent, [])
 
     def test_blocked_session_is_undelivered_without_send(self):
-        session = FakeSession(state=StatusState.BLOCKED)
-        found, _ = self.deliver(session, open_turn=True)
-        self.assertEqual(
-            found,
-            (Delivery.UNDELIVERED, "session w1: a dialog waits; answer it with --key"),
-        )
-        self.assertEqual(session.sent, [])
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                session = FakeSession(client=client, state=StatusState.BLOCKED)
+                found, _ = self.deliver(session, open_turn=True)
+                self.assertEqual(
+                    found,
+                    (Delivery.UNDELIVERED, "session w1: a dialog waits; answer it with --key"),
+                )
+                self.assertEqual(session.sent, [])
 
     def test_exit_during_wait_is_undelivered(self):
-        session = FakeSession(events=[Exited(1)])
-        found, _ = self.deliver(session)
-        self.assertEqual(found, (Delivery.UNDELIVERED, "session w1: client exited"))
+        for client in CLIENTS:
+            with self.subTest(client=client):
+                session = FakeSession(client=client, events=[Exited(1)])
+                found, _ = self.deliver(session)
+                self.assertEqual(found, (Delivery.UNDELIVERED, "session w1: client exited"))
 
     def test_stream_failure_during_wait_is_undelivered(self):
         session = FakeSession(raises=SessionError("session w1: its harness is gone"))

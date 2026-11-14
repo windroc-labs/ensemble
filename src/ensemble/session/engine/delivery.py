@@ -71,14 +71,12 @@ def deliver(
             event = IdleTimeout(POLL)
         if isinstance(event, SessionError):
             return Delivery.UNDELIVERED, str(event)
-        if isinstance(event, IdleTimeout):
-            if open_turn and time.monotonic() >= queued:
-                return Delivery.QUEUED, None
-            if time.monotonic() >= deadline:
-                return Delivery.UNDELIVERED, f"session {name}: no turn started within {wait:g} s"
-            continue
         decided, open_turn = fold(event, open_turn=open_turn)
         if decided == Delivery.UNDELIVERED:
             return decided, f"session {name}: client exited"
         if decided is not None:
             return decided, None
+        if open_turn and time.monotonic() >= queued:
+            return Delivery.QUEUED, None
+        if time.monotonic() >= deadline:
+            return Delivery.UNDELIVERED, f"session {name}: no turn started within {wait:g} s"

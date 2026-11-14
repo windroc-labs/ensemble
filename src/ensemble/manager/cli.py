@@ -799,8 +799,8 @@ Recovery and next help:
 --help says, guarded by the Record's sid. Give TEXT or --key K…, not both;
 TEXT starting with - goes after --. Key names: ensemble-session send --help.
 TEXT prints one line. Exit 0: 已送达 (delivered), a turn started with it, or
-排队中 (queued), a running turn holds it, printed without waiting for that
-turn. Exit 1 or the session's code: 未送达 (undelivered), its client stopped,
+排队中 (queued), a running turn holds it, printed within seconds, not after
+that turn. Exit 1 or the session's code: 未送达 (undelivered), client stopped,
 a dialog waits (answer it with --key), or no turn started within {SEND_WAIT} seconds.
 --key prints nothing; exit status is the session's. Needs no holder lease.
 
