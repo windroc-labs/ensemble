@@ -800,6 +800,13 @@ class Launch(CliCase):
 class StartForm(Launch):
     SID = "0f6b3e4c-2c1d-4f8a-9b7e-5d6c7b8a9e10"
 
+    def test_command_tail_is_not_interpreted_as_outer_help(self):
+        result, _, stderr = self.start(
+            "start", "command", "--manager", "mgr", "c1", "--", "fake", "--help"
+        )
+        self.assertEqual(result, 0, stderr)
+        self.assertEqual(self.calls[0][0], ("fake", "--help"))
+
     def test_start_kinds_launch_their_layer_command(self):
         for kind, tail, name, argv in (
             (
@@ -2186,12 +2193,3 @@ class HelpContracts(Case):
         self.assertEqual(
             parser.parse_args(["start", "worker", "helper", "--help"]).arguments, ["--help"]
         )
-
-    def test_command_tail_is_not_interpreted_as_outer_help(self):
-        with (
-            mock.patch.object(cli.Crew, "run") as run,
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            argv = ["start", "command", "--manager", "demo", "w1", "--", "codex", "--help"]
-            self.assertEqual(cli.main(argv), 0)
-        self.assertEqual(run.call_args.args[0], Spec("w1", ("codex", "--help")))
