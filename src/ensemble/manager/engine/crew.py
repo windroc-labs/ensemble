@@ -70,6 +70,20 @@ def _owner(session: str, entries: dict[str, Entry]) -> str | None:
     )
 
 
+def child_env() -> dict[str, str]:
+    """The caller's environment without crew's sid, events and lease variables."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {SID_ENV, EVENTS_ENV, *LEASE_ENV}
+    }
+
+
+def hand_off(argv: tuple[str, ...]) -> NoReturn:
+    """Become argv, so its output and exit status are the caller's."""
+    os.execvpe(argv[0], argv, child_env())
+
+
 def _row(fields: Iterable[str]) -> str:
     return "\t".join(printable(field).replace("\t", " ") for field in fields)
 
@@ -141,11 +155,7 @@ class Crew:
         roster.bind(lease)
 
     def _env(self, *, events: bool) -> dict[str, str]:
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if key not in {SID_ENV, EVENTS_ENV, *LEASE_ENV}
-        }
+        env = child_env()
         if events:
             env[EVENTS_ENV] = self.roster.events
         return env
@@ -674,10 +684,6 @@ class Crew:
         session, sid = self._session(name)
         sent = ("--key", *keys) if text is None else ("--", text)
         return (LayerCommand.SESSION, "send", session, "--sid", sid, *sent)
-
-    def hand_off(self, argv: tuple[str, ...]) -> NoReturn:
-        """Become argv, so its output and exit status are the caller's."""
-        os.execvpe(argv[0], argv, self._env(events=False))
 
     def resume(self, name: str, *, input: str | None = None) -> Record | None:
         self._listed = None

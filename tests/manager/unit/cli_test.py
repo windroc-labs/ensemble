@@ -1659,6 +1659,63 @@ class View(CliCase):
         self.assertEqual(stderr, f"crew: a: {ctl.COMMAND} hide: exit 1\n")
 
 
+class Tile(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.execvpe = self.enterContext(mock.patch("os.execvpe"))
+        self.run = self.enterContext(mock.patch("subprocess.run"))
+
+    def test_show_tile_hands_off_to_session_tile_without_a_roster(self):
+        polluted = {
+            "ENSEMBLE_SID": "other",
+            "ENSEMBLE_EVENTS": "/events",
+            "ENSEMBLE_MANAGER": "mgr",
+            "ENSEMBLE_HOLDER_ID": "h",
+            "ENSEMBLE_HOLDER_GENERATION": "1",
+            "KEEP": "1",
+        }
+        for argv in (("show", "--tile"), ("show", "--tile", "--manager", "other")):
+            with self.subTest(argv=argv), mock.patch.dict(os.environ, polluted):
+                self.execvpe.reset_mock()
+                self.assertEqual(self.invoke(*argv), (None, "", ""))
+                file, called, env = self.execvpe.call_args.args
+                self.assertEqual((file, called), ("ensemble-session", ("ensemble-session", "tile")))
+                self.assertEqual(env["KEEP"], "1")
+                self.assertFalse(
+                    {
+                        "ENSEMBLE_SID",
+                        "ENSEMBLE_EVENTS",
+                        "ENSEMBLE_MANAGER",
+                        "ENSEMBLE_HOLDER_ID",
+                        "ENSEMBLE_HOLDER_GENERATION",
+                    }
+                    & env.keys()
+                )
+        self.run.assert_not_called()
+        self.assertFalse(os.path.exists(self.directory))
+
+    def test_tile_goes_with_show_alone(self):
+        own(self.roster, self.fake_record("a"))
+        for argv, message in (
+            (("show", "--tile", "a"), "show takes entry names, --all or --tile"),
+            (("show", "--tile", "--all"), "show takes entry names, --all or --tile"),
+            (("show",), "show takes entry names, --all or --tile"),
+            (("hide", "--tile"), "unrecognized arguments: --tile"),
+            (("hide",), "hide takes entry names or --all"),
+        ):
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main([*argv, "--manager", "mgr"])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(message, stderr.getvalue())
+        self.execvpe.assert_not_called()
+        self.run.assert_not_called()
+
+    def test_show_help_names_tile(self):
+        self.assertIn("--tile", help_text(self, main, ["show", "--help"]))
+
+
 class Read(CliCase):
     def setUp(self):
         super().setUp()

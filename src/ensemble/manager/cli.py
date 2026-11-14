@@ -13,6 +13,7 @@ from typing import NamedTuple
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State, commander
 from ensemble.manager.engine import managers
+from ensemble.manager.engine.crew import hand_off
 from ensemble.manager.engine.holder import Holder, inherited
 from ensemble.manager.engine.types import (
     Held,
@@ -265,15 +266,13 @@ def _report(args) -> int:
 
 
 def _read(args) -> int:
-    crew = _crew(args)
-    crew.hand_off(
-        crew.read_argv(args.name, lines=args.lines, reply=args.reply, outcome=args.outcome)
+    hand_off(
+        _crew(args).read_argv(args.name, lines=args.lines, reply=args.reply, outcome=args.outcome)
     )
 
 
 def _send(args) -> int:
-    crew = _crew(args)
-    crew.hand_off(crew.send_argv(args.name, text=args.text, keys=args.key or ()))
+    hand_off(_crew(args).send_argv(args.name, text=args.text, keys=args.key or ()))
 
 
 def _resume(args) -> int:
@@ -293,6 +292,8 @@ def _resume(args) -> int:
 
 
 def _view(args) -> int:
+    if getattr(args, "tile", False):
+        return hand_off((LayerCommand.SESSION, "tile"))
     failures = _crew(args).view(args.verb, args.names)
     for name, failure in failures.items():
         print(f"crew: {name}: {failure}", file=sys.stderr)
@@ -825,6 +826,12 @@ reconcile interrupted bookkeeping with ensemble-crew attach --help.
         ("hide", "close each entry's panes; its work runs on"),
         ("show", "show each entry as at its launch; print attach commands its layer gives"),
     ):
+        tile = (
+            "show --tile instead lays out this manager's window again by its [viewer]\n"
+            "grid, as ensemble-session tile does; it needs no manager or roster.\n"
+            if verb == "show"
+            else ""
+        )
         view = page(
             verb,
             text,
@@ -832,17 +839,25 @@ reconcile interrupted bookkeeping with ensemble-crew attach --help.
 Uses saved placement; no new --display is accepted. Work survives hide.
 Requires the owning controllers; no holder lease is needed.
 Partial failures exit 1.
-
+{tile}
 Examples:
   With a live helper entry:
   ensemble-crew {verb} --manager demo helper
-
+"""
+            + ("  ensemble-crew show --tile\n" if verb == "show" else "")
+            + """
 Recovery: show can print owning-layer attachment commands; run the printed
 command when placement fails. Placement: ensemble-session --help
 """,
         )
         view.add_argument("names", nargs="*", metavar="NAME", help="existing roster entry names")
         view.add_argument("--all", action="store_true", help="every live entry")
+        if verb == "show":
+            view.add_argument(
+                "--tile",
+                action="store_true",
+                help="lay out this manager's window again by its [viewer] grid",
+            )
         view.set_defaults(func=_view, verb=verb)
     for name, handler in (("close", _close), ("forget", _forget)):
         command = page(
@@ -1074,7 +1089,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("start takes a kind or --list")
     if args.func is _send and (args.text is None) == (args.key is None):
         parser.error("send takes TEXT or --key K…, not both")
-    if args.func is _view and bool(args.names) == args.all:
+    if args.func is _view and args.verb == "show":
+        if [bool(args.names), args.all, args.tile].count(True) != 1:
+            parser.error("show takes entry names, --all or --tile")
+    elif args.func is _view and bool(args.names) == args.all:
         parser.error(f"{args.verb} takes entry names or --all")
     if args.func is _resume and args.input is not None and len(args.names) != 1:
         parser.error("resume --input requires exactly one name")

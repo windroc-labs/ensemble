@@ -10,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _run_start
+from ensemble.manager.engine.crew import GRACE, HEADER, START_TIMEOUT, Crew, _run_start, hand_off
 from ensemble.manager.engine.types import RosterError, Spec, State
 from ensemble.utils import Record, save_reply
 from tests.manager.case import status
@@ -720,7 +720,7 @@ class ReadSend(RosterCase):
             mock.patch.dict(os.environ, polluted),
             mock.patch("os.execvpe") as execvpe,
         ):
-            self.crew.hand_off(argv)
+            hand_off(argv)
         execvpe.assert_called_once()
         file, called, env = execvpe.call_args.args
         self.assertEqual((file, called), ("ensemble-session", argv))
