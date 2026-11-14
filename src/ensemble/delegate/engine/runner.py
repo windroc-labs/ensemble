@@ -355,7 +355,6 @@ class Attempt:
         if self.limit:
             return Result(rc, None, f"usage limit; {_resets(self.limit.resets_at)}", self.limit)
         if self.failed:
-            # A refused account serves no later turn, and its open session would block a resume.
             if self.policy.stops_client or self.failed.error == ACCOUNT_REJECTED:
                 self.stop()
             if rc and self.failed.error == PROCESS_EXIT:

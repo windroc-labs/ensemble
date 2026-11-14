@@ -92,8 +92,7 @@ DECOMPOSED = re.compile(
 LIMIT = "Usage limit,"
 # a failed attempt's own steps; a later valid outcome keeps the normal ones
 NO_OUTCOME = "no-outcome:"
-# a no-outcome end Recover resumes, never written back as failed: an interruption, or a turn
-# whose account was refused (the next start runs on another account)
+# no-outcome ends left for Recover, never failed: interruptions, a refused account
 LEFT_FOR_RECOVER = (
     "stopped: Stopped",
     "stopped: KeyboardInterrupt",

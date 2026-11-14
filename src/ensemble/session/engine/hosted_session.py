@@ -111,7 +111,7 @@ HARNESS = "ensemble.session.harness.process"
 LOG = logging.getLogger("session")
 PROBE_DIR = f"{STATE}/probe"
 PROBE_TIMEOUT = 120
-REJECTED_DIR = f"{STATE}/rejected"  # <client>/<account>.json: {"until": epoch seconds}
+REJECTED_DIR = f"{STATE}/rejected"
 REJECTED_HOLD = 24 * 3600
 HOLD_MAX = 4096
 UNCONFIGURED = "session not configured: call Session.configure first"
@@ -231,9 +231,7 @@ def _hold_path(client: str, account: str) -> str:
 
 
 def _hold(client: str, account: str, now: float) -> None:
-    """Holds `account`, its service refused, unusable for REJECTED_HOLD, said on stderr; a hold
-    that cannot be written is skipped.
-    """
+    """Holds `account` unusable for REJECTED_HOLD; best effort."""
     until = now + REJECTED_HOLD
     with contextlib.suppress(OSError):
         save(_hold_path(client, account), json.dumps({"until": until}))
@@ -241,9 +239,7 @@ def _hold(client: str, account: str, now: float) -> None:
 
 
 def _held(client: str, names: Iterable[str], now: float) -> dict[str, float]:
-    """Each of `names` held now: its until. One unreadable, or ending past REJECTED_HOLD from now (no
-    hold is written so), is none.
-    """
+    """Each of `names` held now: its until; a bad one, or one past REJECTED_HOLD, is none."""
     found = {}
     for name in names:
         data = read_regular(_hold_path(client, name), limit=HOLD_MAX + 1)
@@ -541,7 +537,7 @@ class HostedSession(Session):
         self._capacity: Admission | None = None
         self._capacity_hosts: Mapping[str, Host] = {}
         self._read_only = False  # a view's attach: no run records
-        self._account: str | None = None  # the account it started on, held once refused service
+        self._account: str | None = None
 
     @classmethod
     def configure(

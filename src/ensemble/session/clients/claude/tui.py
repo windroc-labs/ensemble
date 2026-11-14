@@ -308,9 +308,7 @@ class ClaudeTui(Tui):
         return _first(payload, "tool_name", "message")
 
     def failure(self, payload):
-        """StopFailure's typed error: an org refusal is a rejected account, rate_limit the usage
-        limit, any other a failed turn.
-        """
+        """StopFailure's error: an org refusal, the usage limit (rate_limit), else a failed turn."""
         detail = _first(payload, "error_details", "last_assistant_message")
         if org_refused(
             *(payload.get(key) for key in ("error", "error_details", "last_assistant_message"))
