@@ -1,11 +1,12 @@
 # Upgrading
 
-## PRDs: questions go to the user, one reviewer
+## PRDs: no self-grill, one reviewer
 
 The `pm` role's `product-design` task changed:
 
-- No self-grill and no council. A point the existing behaviour answers follows it. One that changes requirements or scope comes back as a question (`needs_input`), at most 4 at a time, each with a suggested answer. The pm decides the rest.
-- Each requirement row has a Source column: the user's words, the existing code or the user's answer. A point with none of the three is not a requirement.
+- No self-grill. A point the existing behaviour answers follows it. One that changes requirements or scope goes under Open questions, with a suggested answer. The pm decides the rest.
+- After review, `/updraft:council` decides the Open questions once, except those that change external state or can't be undone. Those, and the ones the council leaves to the author, come back as questions (`needs_input`), at most 4 at a time.
+- Each requirement row has a Source column: the user's words, the existing code, the user's answer or the council's decision. A point with none of these is not a requirement.
 - `/updraft:review` runs the spec-fitness reviewer alone. Review blockers left at the round cap go under Risks.
 - Only Problem and goals, Functional requirements and Acceptance scenarios are always written. Users and scenarios, User flow, Approach and trade-offs and System diagram appear only when the request or the user's later messages give them content; the other optional sections only when they have any.
 

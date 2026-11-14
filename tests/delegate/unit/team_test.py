@@ -488,10 +488,27 @@ class Shipped(Packaged):
             text.split("## Resume", 1)[1],
         )
 
-    def test_product_design_has_no_self_grill_or_council(self):
-        text = task_text("product-design").lower()
-        for word in ("grill", "council"):
-            self.assertNotIn(word, text)
+    def test_product_design_has_no_self_grill(self):
+        self.assertNotIn("grill", task_text("product-design").lower())
+
+    def test_product_design_settles_open_questions_with_updraft_council_before_asking(self):
+        text = task_text("product-design")
+        step = text.split("7. **Council.**", 1)[1].split("\n8.", 1)[0]
+        for literal in (
+            "`/updraft:council` once",
+            "changes external state or can't be undone",
+            "stays there, for the user",
+            "`requirement=` as in step 6",
+            "write each decision into the PRD",
+            "drop the question from Open questions",
+            "the author's call stays under Open questions, for the user",
+        ):
+            self.assertIn(literal, step)
+        self.assertIn(
+            "Council decided this session → keep its decisions; never run it again on those "
+            "questions.",
+            text.split("## Resume", 1)[1],
+        )
 
     def test_product_design_asks_the_user_what_existing_behaviour_cannot_answer(self):
         text = task_text("product-design")
@@ -502,28 +519,29 @@ class Shipped(Packaged):
             "Else decide it yourself.",
         ):
             self.assertIn(literal, write)
-        ask = text.split("7. **Ask.**", 1)[1].split("\n8.", 1)[0]
-        self.assertIn("\n8. **Finish.**", text)
+        ask = text.split("8. **Ask.**", 1)[1].split("\n9.", 1)[0]
+        self.assertIn("\n9. **Finish.**", text)
         for literal in (
             "`needs_input`",
             "at most 4",
             "each with its suggested answer",
             "The user's answers go into the PRD",
             "Then Open questions left → `needs_input`",
-            "None left → step 8.",
+            "None left → step 9.",
         ):
             self.assertIn(literal, ask)
         self.assertIn(
             "`needs_input` written this session, with no answer in the input since → stop. "
-            "Answers to step 2's question → step 2; to step 7's → step 7.",
+            "Answers to step 2's question → step 2; to step 8's → step 8.",
             text.split("## Resume", 1)[1],
         )
 
     def test_product_design_writes_only_sourced_requirements(self):
         write = task_text("product-design").split("5. **Write**", 1)[1].split("\n6.", 1)[0]
         self.assertIn(
-            "each requirement comes from the user's words, the existing code or the user's answer "
-            "to a question. A point with none of the three is no requirement.",
+            "each requirement comes from the user's words, the existing code, the user's answer "
+            "to a question or the council's decision (step 7). A point with none of these is no "
+            "requirement.",
             write,
         )
 

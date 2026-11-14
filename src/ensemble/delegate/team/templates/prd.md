@@ -29,7 +29,7 @@ Optional; omit when the brief and the user's later words name no structure to dr
 ## Requirements
 Ids (`FR-<n>`, `NFR-<n>`, `S-<n>`) are never renumbered on revision. Functional and non-functional requirements are each one table: the header row shown, then one row per requirement, split finer when one spans modules. Rows of one functional module are adjacent; its name fills the Module cell of its first row only, left empty on the rest (no HTML).
 ### Functional requirements
-Header `| ID | <Module, translated> | <Requirement, translated> | <Source, translated> |`; a row `| FR-<n> | <module> | <the requirement> | <its source> |`, the source being the user's words, the existing code (its path) or the user's answer to a question.
+Header `| ID | <Module, translated> | <Requirement, translated> | <Source, translated> |`; a row `| FR-<n> | <module> | <the requirement> | <its source> |`, the source being the user's words, the existing code (its path), the user's answer to a question or the council's decision.
 ### Non-functional requirements
 Optional; omit when none. Header `| ID | <Module, translated> | <Constraint, translated> | <Source, translated> |`; a row `| NFR-<n> | <module> | <a constraint this product actually has, with its threshold> | <its source> |`.
 ### Acceptance scenarios
