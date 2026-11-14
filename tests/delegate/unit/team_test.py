@@ -85,14 +85,17 @@ class Acceptance(Packaged):
     def test_decompose_engineer_tickets_quote_scenarios_and_verifier_tickets_list_ops_ones(self):
         draft = re.search(r"^2\. \*\*Draft\*\*.*$", task_text("decompose"), re.M)[0]
         # the gate and requirement-fidelity review judge an engineer ticket by its text alone
-        self.assertIn(
-            "acceptance quoting, verbatim and in full, every PRD scenario tagged with a requirement "
-            "in its `Covers:`",
-            draft,
-        )
-        self.assertIn(
-            "Verifier tickets list the ids of the `@ops` scenarios they run and link the PRD", draft
-        )
+        for text in (
+            "acceptance quoting, verbatim and in full, the PRD scenarios that are this ticket's",
+            "Every requirement in scope is in exactly one engineer ticket's `Covers:`, whole",
+            "Every scenario is quoted in exactly one engineer ticket, the one that covers the "
+            "first requirement in the scenario's tags",
+            "Verifier tickets: exactly one for each engineer ticket that quotes `@ops` scenarios, "
+            "blocked by it and blocking nothing; it lists the ids of those scenarios and links "
+            "the PRD instead of quoting them",
+            "a ticket it calls last is blocked by every other engineer ticket",
+        ):
+            self.assertIn(text, draft)
         self.assertNotIn("acceptance cell", draft)
         self.assertNotIn("at most 8", draft)
         self.assertIn(
@@ -153,7 +156,10 @@ class Acceptance(Packaged):
         for text in (
             "Once every description file is written and before publishing",
             "a fresh subagent reviews the tickets",
-            "only the path of the PRD's file and of each description file, never a summary",
+            "only the path of the PRD's file and of each description file and the check command "
+            "above, never a summary or the command's result",
+            "It runs that command itself and reports what fails",
+            "do two tickets with no blocking path between them edit the same region of a file",
             "can fewer stages (a shorter dependency chain) deliver the PRD",
             "does each ticket run end to end once done, or is one a placeholder or a single layer",
             "does each dependency genuinely block its ticket",
@@ -164,6 +170,21 @@ class Acceptance(Packaged):
         self.assertNotIn("numbered list", review)
         self.assertNotIn("yourself", review)
         self.assertNotIn("too coarse or too fine", review)
+
+    def test_decompose_checks_the_ticket_files_with_the_team_script(self):
+        draft = re.search(r"^2\. \*\*Draft\*\*.*$", task_text("decompose"), re.M)[0]
+        for text in (
+            "`python3 -P <team>/tools/tickets_check.py scenario <the PRD's file> <S-id> …`",
+            "`python3 -P <team>/tools/tickets_check.py check <the PRD's file> "
+            "<Workdir>/tmp/tickets --edges <Workdir>/tmp/edges.txt "
+            "[--drop <requirement the input takes out of scope> …]`",
+            "fix what it prints until it exits 0",
+            "write no check of your own for those",
+        ):
+            self.assertIn(text, draft)
+        self.assertIn(
+            "python3 -P {{team}}/tools/tickets_check.py *", composed("engineer")[1].commands
+        )
 
     def test_decompose_publishes_with_the_task_command_and_stops_at_publication(self):
         overrides = section(task_text("decompose"), "Method overrides")
