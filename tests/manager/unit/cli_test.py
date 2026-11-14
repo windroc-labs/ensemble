@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import uuid
 from dataclasses import replace
 from pathlib import Path
@@ -2024,6 +2025,11 @@ HELP_COMMANDS = [
 
 
 class HelpContracts(Case):
+    def setUp(self):
+        super().setUp()
+        unlisted = subprocess.CompletedProcess((), 1, stdout="", stderr="")
+        self.enterContext(mock.patch("subprocess.run", return_value=unlisted))
+
     def test_role_options_are_owned_before_role_and_remainder_is_opaque(self):
         parsed = cli._parser().parse_args(
             [
@@ -2082,7 +2088,10 @@ class HelpContracts(Case):
                         if command is not None:
                             self.assertIn("Examples:", text)
                             self.assertIn("ensemble-crew --help", text)
-            run.assert_not_called()
+            # start's help alone reads each configured Host's display form from session's help
+            self.assertEqual(
+                [call.args[0] for call in run.call_args_list], [("ensemble-session", "--help")] * 2
+            )
             popen.assert_not_called()
         self.assertEqual(sorted(Path(self.home).rglob("*")), before)
 
@@ -2092,6 +2101,56 @@ class HelpContracts(Case):
         self.assertEqual(re.findall(r"^    (\S+) +\S", text, re.MULTILINE), HELP_COMMANDS)
         for old, kind in START_KINDS.items():
             self.assertRegex(text, rf"\n    {old} +old form of: start {kind}\n")
+
+    def test_start_help_copies_each_host_display_line_from_session_help(self):
+        session_help = (
+            "usage: ensemble-session [-h] COMMAND ...\n\n"
+            "display (--display D), per configured Host:\n"
+            "  tmux: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+            "    OPENER: tmux session name; empty means caller.\n"
+            "  docker: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+            "    SPLIT: right or below.\n"
+            "  remote: as given\n"
+        )
+        answer = subprocess.CompletedProcess((), 0, stdout=session_help, stderr="")
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag), mock.patch("subprocess.run", return_value=answer) as run:
+                text = self.help("start", flag)
+            self.assertEqual(run.call_args.args[0], ("ensemble-session", "--help"))
+            self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+            for line in (
+                "  tmux: [OPENER][/SPLIT[/ANCHOR]] or none\n",
+                "  docker: [OPENER][/SPLIT[/ANCHOR]] or none\n",
+                "  remote: as given\n",
+                "<opener>[/<split>[/<split_from>]]\n",
+            ):
+                self.assertIn(line, text)
+            self.assertNotIn("OPENER: tmux session name", text)
+            self.assertNotIn("could not list", text)
+
+    def test_start_help_without_session_host_lines_still_names_the_forms(self):
+        failed = subprocess.CompletedProcess((), 2, stdout="", stderr="config error\n")
+        unreadable = subprocess.CompletedProcess(
+            (),
+            0,
+            stdout="display (--display D): the session config could not be read.\n",
+            stderr="",
+        )
+        for outcome in (
+            OSError(2, "No such file or directory"),
+            subprocess.TimeoutExpired(("ensemble-session", "--help"), 20),
+            failed,
+            unreadable,
+        ):
+            effect = (
+                {"side_effect": outcome}
+                if isinstance(outcome, Exception)
+                else {"return_value": outcome}
+            )
+            with self.subTest(outcome=outcome), mock.patch("subprocess.run", **effect):
+                text = self.help("start")
+            self.assertIn("ensemble-session --help could not list", text)
+            self.assertIn("<opener>[/<split>[/<split_from>]]\n", text)
 
     def test_start_lists_each_kind_and_its_pages_use_the_start_form(self):
         text = self.help("start")

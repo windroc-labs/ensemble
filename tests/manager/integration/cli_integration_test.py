@@ -1,9 +1,41 @@
 """Crew's printed shell commands preserve HOME paths and invalid cursors perform no writes."""
 
+import os
+import re
 import shlex
+import subprocess
 from pathlib import Path
 
+from tests.manager.case import REPO, Case, child_env
 from tests.manager.cli_case import InstalledCrewCase
+
+
+class StartHelp(Case):
+    def test_start_help_has_each_configured_host_display_line_session_help_has(self):
+        bin_dir = os.path.join(REPO, "bin")
+        env = child_env(dict(os.environ, PATH=os.pathsep.join((bin_dir, os.environ["PATH"]))))
+
+        def helped(*argv):
+            result = subprocess.run(
+                (os.path.join(bin_dir, argv[0]), *argv[1:]),
+                cwd=self.home,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        session = helped("ensemble-session", "--help")
+        crew = helped("ensemble-crew", "start", "--help")
+        section = session.split("display (--display D), per configured Host:\n")[1]
+        hosts = re.findall(r"^  \S[^:]*: .*$", section, re.MULTILINE)
+        self.assertTrue(any(line.startswith("  tmux: ") for line in hosts), session)
+        for line in hosts:
+            self.assertIn(line + "\n", crew)
+        self.assertIn("<opener>[/<split>[/<split_from>]]", crew)
 
 
 class PathsAndArguments(InstalledCrewCase):

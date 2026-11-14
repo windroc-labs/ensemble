@@ -5,6 +5,7 @@ import contextlib
 import os
 import re
 import shlex
+import subprocess
 import sys
 import uuid
 from collections.abc import Sequence
@@ -29,6 +30,9 @@ from ensemble.manager.engine.types import (
 from ensemble.utils import EXIT_BUSY, STATE, LayerCommand, nested_start, printable
 
 LEASE_FREE = ("env", "-u", "ENSEMBLE_HOLDER_ID", "-u", "ENSEMBLE_HOLDER_GENERATION")
+HELP_TIMEOUT = 20
+HOST_DISPLAY = "display (--display D)"
+TMUX_DISPLAY = "  tmux display parts: <opener>[/<split>[/<split_from>]]\n"
 ENDED = "this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an ended holder"
 
 
@@ -247,6 +251,52 @@ def _resume_commander(args) -> int:
 def _run(args) -> int:
     print(_crew(args).run(Spec(args.key, args.command, args.note), resume=args.resume).to_line())
     return 0
+
+
+def _host_displays(text: str) -> list[str]:
+    """The per-Host lines under session help's display header: two-space indented NAME: FORM."""
+    lines = text.splitlines()
+    headers = [number for number, line in enumerate(lines) if line.startswith(HOST_DISPLAY)]
+    found = []
+    for line in lines[headers[0] + 1 :] if headers else ():
+        if not line.startswith("  "):
+            break
+        if re.match(r"  \S[^:]*: ", line):
+            found.append(line)
+    return found
+
+
+def _placement() -> str:
+    """Each configured Host's --display form, as ensemble-session --help prints it."""
+    try:
+        result = subprocess.run(
+            (LayerCommand.SESSION, "--help"),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=HELP_TIMEOUT,
+            check=False,
+        )
+        hosts = _host_displays(result.stdout) if result.returncode == 0 else []
+    except (OSError, subprocess.TimeoutExpired):
+        hosts = []
+    if not hosts:
+        return (
+            "Placement (--display D): ensemble-session --help could not list the configured\n"
+            "Hosts; run it for each Host's form.\n" + TMUX_DISPLAY
+        )
+    lines = "".join(f"{line}\n" for line in hosts)
+    return f"Placement (--display D), per configured Host, from ensemble-session --help:\n{lines}{TMUX_DISPLAY}"
+
+
+class _StartHelp(argparse.Action):
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, **options):
+        super().__init__(option_strings, dest=dest, default=argparse.SUPPRESS, nargs=0, **options)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.print_help()
+        print(_placement(), end="")
+        parser.exit()
 
 
 def _start_list(_args) -> int:
@@ -604,7 +654,14 @@ Examples:
   ensemble-crew start --list
 """,
         manager=False,
+        add_help=False,
         usage="%(prog)s KIND [KIND_OPTIONS] | %(prog)s --list",
+    )
+    start.add_argument(
+        "-h",
+        "--help",
+        action=_StartHelp,
+        help="show this help and each configured Host's --display form, and exit",
     )
     start.add_argument(
         "--list", action="store_true", help="list roles and their tasks instead of starting"
