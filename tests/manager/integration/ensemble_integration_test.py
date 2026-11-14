@@ -9,11 +9,14 @@ import json
 import os
 import pty
 import re
+import select
 import shutil
 import signal
 import stat
 import subprocess
 import sys
+import termios
+import time
 import uuid
 from pathlib import Path
 
@@ -175,6 +178,13 @@ def beside(window: str, cwd: str, command: list[str]) -> list[str]:
         cwd,
         *command,
     ]
+
+
+def _mode(fd: int) -> list:
+    """fd's terminal attributes but PENDIN, which BSD sets itself on a return to canonical input."""
+    mode = termios.tcgetattr(fd)
+    mode[3] &= ~termios.PENDIN
+    return mode
 
 
 def on_terminal(cwd: str, env: dict, answer: bytes, script: str = ENSEMBLE) -> tuple[int, str]:
@@ -525,6 +535,46 @@ class FakeTmux(Case):
             os.close(master)
             os.close(errors)
         self.assertFalse(os.path.exists(self.log))
+
+    def test_arrow_keys_select_on_a_terminal_and_its_mode_is_restored(self):
+        self.demo()
+        master, slave = pty.openpty()
+        before = _mode(slave)
+        try:
+            process = subprocess.Popen(
+                (ENSEMBLE, "list"),
+                cwd=self.cwd,
+                env={**self.env, "HAS_RC": "1"},
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+            )
+            shown = b""
+            while not shown.endswith(b"up/down, Enter cancels: "):
+                chunk = os.read(master, 4096)
+                self.assertTrue(chunk, shown)
+                shown += chunk
+            os.write(master, b"\x1b[B\r")
+            deadline = time.monotonic() + 30
+            while process.poll() is None and time.monotonic() < deadline:
+                # A terminal reads its output; restoring its mode waits for that on macOS.
+                if select.select([master], [], [], 0.1)[0]:
+                    os.read(master, 4096)
+            self.assertEqual(process.wait(timeout=1), 0)
+            self.assertEqual(_mode(slave), before)
+        finally:
+            os.close(slave)
+            os.close(master)
+        with open(self.log, encoding="utf-8") as f:
+            calls = [json.loads(line)[2:] for line in f]
+        self.assertEqual(
+            calls,
+            [
+                ["has", "-t", "=demo"],
+                created("demo", self.cwd, "/bin/zsh"),
+                ["-CC", "attach", "-t", "=demo"],
+            ],
+        )
 
     def test_list_with_stdout_piped_prints_without_a_prompt(self):
         self.demo()

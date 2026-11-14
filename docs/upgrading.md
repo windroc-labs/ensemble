@@ -309,9 +309,10 @@ scrollback, and from then on its pane attaches directly.
 ## ensemble list
 
 `ensemble list` prints every manager in `~/.ensemble/managers/`, with its holder state, client, cwd and entries. On a
-terminal it then asks which manager to open, and attaches to its session or resumes its recorded conversation under its
-hold. A manager named `list` can no longer be opened with `ensemble list`: attach to its session with
-`tmux attach -t =list`, or start it under another name.
+terminal it then asks which manager to open (the up and down arrow keys step through the managers, or type a number or
+name; Enter opens it, Enter on an empty line or Ctrl-C cancels), and attaches to its session or resumes its recorded
+conversation under its hold. A manager named `list` can no longer be opened with `ensemble list`: attach to its session
+with `tmux attach -t =list`, or start it under another name.
 
 ## ctmux is now ensemble
 

@@ -1,9 +1,17 @@
 """ensemble's manager side: hold, list and resume, and the recovery text crew points at."""
 
 import contextlib
+import fcntl
 import io
 import json
 import os
+import pty
+import select
+import signal
+import struct
+import termios
+import threading
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -260,6 +268,13 @@ class ListTest(ListCase):
         )
 
 
+def _mode(fd: int) -> list:
+    """fd's terminal attributes but PENDIN, which BSD sets itself on a return to canonical input."""
+    mode = termios.tcgetattr(fd)
+    mode[3] &= ~termios.PENDIN
+    return mode
+
+
 def _dead(pid, _signal):
     raise ProcessLookupError(pid)
 
@@ -377,6 +392,149 @@ class SelectTest(ListCase):
                 " its session is not resumed\n"
             )
         )
+
+
+class MenuTest(ListCase):
+    """list --select with stdin and stderr on a terminal and stdout captured, as ensemble runs it."""
+
+    PROMPT = "select a manager [1-{}] or up/down, Enter cancels: "
+
+    def setUp(self):
+        super().setUp()
+        for name in ("alpha", "demo", "zeta"):
+            self.manager(name)
+
+    def menu(
+        self, *chunks: bytes, interrupt: bool = False, columns: int = 0
+    ) -> tuple[int, str, str]:
+        """Type chunks once the prompt shows, pausing between them: exit, stdout, terminal output.
+
+        interrupt sends SIGINT to this thread once the prompt shows, as a terminal's Ctrl-C would.
+        """
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, columns, 0, 0))
+        before = _mode(slave)
+        shown = bytearray()
+        caller = threading.get_ident()
+
+        def terminal():
+            with contextlib.suppress(OSError):  # EIO once every slave end is closed
+                while not shown.endswith(b"Enter cancels: "):
+                    if not (chunk := os.read(master, 4096)):
+                        return
+                    shown.extend(chunk)
+                if interrupt:
+                    signal.pthread_kill(caller, signal.SIGINT)
+                for index, chunk in enumerate(chunks):
+                    if index:
+                        time.sleep(0.5)  # longer than a lone Esc's wait for its sequence
+                    os.write(master, chunk)
+                deadline = time.monotonic() + 20
+                while time.monotonic() < deadline:
+                    if not select.select([master], [], [], 2)[0]:
+                        os.write(master, b"\x04")  # still waiting for keys: end its input
+                    elif not (chunk := os.read(master, 4096)):
+                        return
+                    else:
+                        shown.extend(chunk)
+
+        typist = threading.Thread(target=terminal)
+        stdout = io.StringIO()
+        handler = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            with (
+                open(slave, encoding="utf-8") as stdin,
+                open(os.dup(slave), "w", encoding="utf-8") as stderr,
+                mock.patch("sys.stdin", stdin),
+                mock.patch("sys.stderr", stderr),
+                mock.patch("os.kill", side_effect=_dead),
+                contextlib.redirect_stdout(stdout),
+            ):
+                typist.start()
+                result = main(("list", "--select"))
+                self.assertEqual(_mode(slave), before, "terminal mode restored")
+        finally:
+            signal.signal(signal.SIGINT, handler)
+            typist.join(timeout=30)
+        self.assertFalse(typist.is_alive())
+        return result, stdout.getvalue(), shown.decode(errors="replace")
+
+    def test_down_and_up_move_through_the_managers_and_wrap(self):
+        cases = {
+            b"\x1b[B\r": "alpha",
+            b"\x1b[B\x1b[B\r": "demo",
+            b"\x1b[B\x1b[B\x1b[B\x1b[B\r": "alpha",
+            b"\x1b[A\r": "zeta",
+            b"\x1b[A\x1b[A\x1b[A\x1b[A\r": "zeta",
+            b"\x1bOB\x1bOB\r": "demo",
+            b"\x1b[1;5B\r": "alpha",
+        }
+        for keys, chosen in cases.items():
+            with self.subTest(keys=keys):
+                self.assertEqual(self.menu(keys)[:2], (0, f"open {chosen}\n"))
+
+    def test_an_all_digit_name_opens_the_manager_it_names(self):
+        self.manager("3")
+        self.assertEqual(self.menu(b"\x1b[B\r")[:2], (0, "open 3\n"))
+        self.assertEqual(self.menu(b"3\r")[:2], (0, "open demo\n"))
+
+    def test_the_prompt_line_shows_the_selected_name(self):
+        result, _, shown = self.menu(b"\x1b[B", b"\x1b[B", b"\r")
+        self.assertEqual(result, 0)
+        self.assertIn("1) alpha\tnot-held\t-\t-\r\n  -\r\n2) demo", shown)
+        self.assertIn("\r\x1b[K" + self.PROMPT.format(3) + "alpha", shown)
+        self.assertIn("\r\x1b[K" + self.PROMPT.format(3) + "demo", shown)
+        self.assertNotIn("^[", shown)
+
+    def test_a_narrow_terminal_shows_the_end_of_the_line_that_fits(self):
+        prompt = self.PROMPT.format(3)
+        result, _, shown = self.menu(b"\x1b[A", b"\r", columns=len(prompt) + 3)
+        self.assertEqual(result, 0)
+        self.assertIn(f"\r\x1b[K{prompt}ta\r\n", shown)
+        result, _, shown = self.menu(b"\x1b[A", b"\r", columns=40)
+        self.assertEqual(result, 0)
+        self.assertIn(f"\r\x1b[K{prompt}\r\n", shown)
+
+    def test_a_typed_number_or_name_still_selects(self):
+        for keys, chosen in ((b"2\r", "demo"), (b"zeta\r", "zeta"), (b"\x1b[Bx\x7f\r", "alpha")):
+            with self.subTest(keys=keys):
+                self.assertEqual(self.menu(keys)[:2], (0, f"open {chosen}\n"))
+
+    def test_typing_edits_the_selected_name(self):
+        cases = {
+            b"\x1b[B\x7f\x7f\x7f\x7f\x7f3\r": "zeta",
+            b"\x1b[A\x15demo\r": "demo",
+            b"x\b2\r": "demo",
+            b"1\x04\r": "alpha",
+            b"z\x1b[B\x1b[B\r": "demo",
+        }
+        for keys, chosen in cases.items():
+            with self.subTest(keys=keys):
+                self.assertEqual(self.menu(keys)[:2], (0, f"open {chosen}\n"))
+
+    def test_keys_that_are_not_arrows_are_ignored(self):
+        self.assertEqual(self.menu(b"\x1b[C\x1b[D\x01\t1\r")[:2], (0, "open alpha\n"))
+        self.assertEqual(self.menu(b"\x1b", b"1\r")[:2], (0, "open alpha\n"))
+        self.assertEqual(self.menu(b"\x1b2\r")[:2], (0, "open demo\n"))
+
+    def test_an_unknown_answer_prompts_again(self):
+        result, stdout, shown = self.menu(b"9\r", b"\xc3\xa9\r", b"\x1b[B\r")
+        self.assertEqual((result, stdout), (0, "open alpha\n"))
+        self.assertIn("ensemble: no manager 9; give 1-3 or a name\r\n", shown)
+        self.assertIn("ensemble: no manager é; give 1-3 or a name\r\n", shown)
+
+    def test_enter_with_nothing_typed_ctrl_d_or_ctrl_c_cancels(self):
+        for keys in (b"\r", b"\x04", b"\x1b[B\x15\r"):
+            with self.subTest(keys=keys):
+                self.assertEqual(self.menu(keys)[:2], (0, ""))
+        self.assertEqual(self.menu(interrupt=True)[:2], (0, ""))
+
+    def test_a_terminal_mode_that_cannot_be_set_falls_back_to_the_line_prompt(self):
+        with mock.patch("tty.setcbreak", side_effect=termios.error(25, "not a tty")):
+            result, stdout, shown = self.menu(b"2\r")
+        self.assertEqual((result, stdout), (0, "open demo\n"))
+        self.assertIn(SelectTest.PROMPT.format(3), shown)
 
 
 class ResumeTest(EnsembleCommandCase):
