@@ -92,7 +92,13 @@ DECOMPOSED = re.compile(
 LIMIT = "Usage limit,"
 # a failed attempt's own steps; a later valid outcome keeps the normal ones
 NO_OUTCOME = "no-outcome:"
-INTERRUPTED = ("stopped: Stopped", "stopped: KeyboardInterrupt")
+# a no-outcome end Recover resumes, never written back as failed: an interruption, or a turn
+# whose account was refused (the next start runs on another account)
+LEFT_FOR_RECOVER = (
+    "stopped: Stopped",
+    "stopped: KeyboardInterrupt",
+    "the client's turn failed: account_rejected",
+)
 # what a failed tracker read or write raises
 ERRORS = (
     LinearError,
@@ -696,7 +702,7 @@ def _deliver(ctx, cfg, claim, event, *, now) -> bool:
         outcome is None
         and event.limit is None
         and event.error
-        and not event.error.startswith(INTERRUPTED)
+        and not event.error.startswith(LEFT_FOR_RECOVER)
     ):
         failed = Outcome(OutcomeStatus.FAILED, "The agent run failed", event.error)
         steps = f"{NO_OUTCOME}{attempt}:"
