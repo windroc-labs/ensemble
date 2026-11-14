@@ -297,7 +297,7 @@ class Acceptance(Packaged):
                     self.assertIn(
                         WRITE_ONCE, output_rules(destined("researcher", output, docker=docker))
                     )
-        step = task_text("product-design").split("7. **Review.**", 1)[1].split("\n8.", 1)[0]
+        step = task_text("product-design").split("6. **Review.**", 1)[1].split("\n7.", 1)[0]
         self.assertIn("`<Workdir>/tmp/prd.md`", step)
         self.assertIn("copies that file", step)
 
@@ -464,7 +464,7 @@ class Shipped(Packaged):
 
     def test_product_design_reviews_the_prd_with_updraft_review_to_its_default_cap(self):
         text = task_text("product-design")
-        step = text.split("7. **Review.**", 1)[1].split("\n8.", 1)[0]
+        step = text.split("6. **Review.**", 1)[1].split("\n7.", 1)[0]
         for literal in (
             "`/updraft:review`",
             "`doc=` the PRD's file",
@@ -479,34 +479,39 @@ class Shipped(Packaged):
         self.assertNotRegex(text, r"(?<!/)updraft:")
         self.assertIn("`/updraft:review` again with the same `doc`", text.split("## Resume", 1)[1])
 
-    def test_product_design_self_grills_by_updraft_grilling_skill_for_at_most_3_rounds(self):
+    def test_product_design_never_self_grills(self):
         text = task_text("product-design")
-        step = text.split("5. **Self-grill**", 1)[1].split("\n6.", 1)[0]
-        for literal in (
-            "updraft's `skills/grilling/SKILL.md`",
-            "at most 3 rounds",
-            "minor details",
-            "what you can't settle → Open questions",
-        ):
-            self.assertIn(literal, step)
-        self.assertNotIn("in one round", step)
-        self.assertIn("never rerun", text.split("## Resume", 1)[1])
+        self.assertNotIn("grill", text.lower())
+        self.assertIn("[ensemble-progress:start] whether the PRD needs research\n", text)
+        judge = re.search(r"^2\. \*\*Judge\.\*\*.*$", text, re.M)[0]
+        self.assertIn(
+            "only the audience or depth unclear → an Open question with its suggested answer", judge
+        )
 
     def test_product_design_settles_open_questions_with_updraft_council_before_finishing(self):
         text = task_text("product-design")
-        step = text.split("8. **Council.**", 1)[1].split("\n9.", 1)[0]
-        self.assertIn("\n9. **Finish.**", text)
+        step = text.split("7. **Council.**", 1)[1].split("\n8.", 1)[0]
+        self.assertIn("\n8. **Finish.**", text)
         for literal in (
             "`/updraft:council`",
             "changes external state or can't be undone",
             "stays there, for the user",
             "write each decision into the PRD",
+            "and under Approach and trade-offs, per the Template",
             "the author's call",
             "`needs_input`",
         ):
             self.assertIn(literal, step)
-        self.assertIn("what you can't settle → Open questions", text.split("5. **Self-grill**")[1])
         self.assertIn("never run it again", text.split("## Resume", 1)[1])
+
+    def test_prd_records_each_council_decision_under_approach_and_trade_offs(self):
+        approach = section(composed("pm", "product-design")[0], "Approach and trade-offs")
+        for literal in (
+            "Optional; omit when nothing is compared and the council decided nothing.",
+            "each council decision: what it decided and why",
+            "never its question or its votes",
+        ):
+            self.assertIn(literal, approach)
 
     def test_prd_acceptance_is_gherkin_scenarios_the_pm_writes(self):
         pm = composed("pm", "product-design")[0]
@@ -529,7 +534,7 @@ class Shipped(Packaged):
         # verify runs `@ops` scenarios, so the template never claims none runs
         self.assertNotIn("nothing executes", pm)
         # the template is the acceptance rule's one home; the pm's task only points to it
-        write = re.search(r"^6\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
+        write = re.search(r"^5\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
         self.assertIn("per the Template, its Acceptance scenarios included;", write)
         self.assertNotIn("acceptance", write)
 

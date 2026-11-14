@@ -20,7 +20,7 @@ What the user must decide, each with a suggested answer; until the user answers,
 Unknowns, and the low-confidence or single-source findings the PRD relies on.
 
 ## Approach and trade-offs
-Optional; omit when nothing is compared. 2–3 viable product or scope options, or architecture options only when the requirement is itself an architecture or layering decision ([PM › Boundaries](#boundaries)), and their trade-offs as a table ([Principles › Writing › Diagrams and tables](#writing)), which one is chosen and why.
+Optional; omit when nothing is compared and the council decided nothing. 2–3 viable product or scope options, or architecture options only when the requirement is itself an architecture or layering decision ([PM › Boundaries](#boundaries)), and their trade-offs as a table ([Principles › Writing › Diagrams and tables](#writing)), which one is chosen and why. Then each council decision: what it decided and why, never its question or its votes.
 
 ## System diagram
 Optional; omit when the change has no structure worth drawing. The existing components the change touches and how they connect or flow, plus the chosen architecture under the exception in [PM › Boundaries](#boundaries), as a diagram ([Principles › Writing › Diagrams and tables](#writing)).

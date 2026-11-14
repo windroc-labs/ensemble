@@ -1,5 +1,15 @@
 # Upgrading
 
+## PRDs: no self-grill
+
+The `pm` role's `product-design` task no longer self-grills. v0.9.8 also dropped the council, cut review to one reviewer, asked the user directly and changed the PRD template; this release restores v0.9.7's behaviour for all of those:
+
+- An unclear audience or depth goes under Open questions with a suggested answer.
+- After `/updraft:review` with its default reviewers, `/updraft:council` decides the Open questions, except one that changes external state or can't be undone; that one, and any the council leaves to the author, comes back as a question (`needs_input`).
+- The PRD template is v0.9.7's: no Source column, and its sections required as before. Its Approach and trade-offs section now also gives each council decision: what it decided and why, without the question or the votes.
+
+A team dir that copies `tasks/product-design.md` or `templates/prd.md` keeps the old behaviour until you update or delete the copy.
+
 ## OpenCode loads updraft as a plugin
 
 OpenCode now gets updraft the way it gets ensemble: an
