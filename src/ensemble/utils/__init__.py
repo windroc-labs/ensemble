@@ -42,6 +42,7 @@ from ensemble.utils.files import (
     save,
     sync_directory,
     validate_events,
+    write_beneath,
 )
 from ensemble.utils.git import (
     GUARD,
@@ -224,4 +225,5 @@ __all__ = [
     "unfenced",
     "unset",
     "validate_events",
+    "write_beneath",
 ]
