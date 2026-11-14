@@ -107,7 +107,9 @@ def _code_words(text, tree):
 
 
 def session_names(repo: str) -> list[str]:
-    """Only engine/config.py forwards configuration reads; no parser, reply tag or team text."""
+    """Only engine/config.py forwards configuration reads; no parser, reply tag, outcome block
+    finder or team text.
+    """
     forbidden = (
         "config_file",
         "tomllib",
@@ -115,6 +117,8 @@ def session_names(repo: str) -> list[str]:
         "read_project",
         "ensemble-progress",
         "ensemble-outcome",
+        "OUTCOME",
+        "outcome_block",
         "team/",
     )
     return sorted(

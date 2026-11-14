@@ -1,14 +1,13 @@
-"""The reply protocol's progress mark tag (PROGRESS) and outcome fence info (OUTCOME); a reply's
-progress mark lines outside code fences (marks), its outcome block (outcome_block) and the reply as
-shown (outcome_only).
+"""The reply protocol's progress mark tag (PROGRESS); a reply's progress mark lines outside code
+fences (marks) and the reply as shown (outcome_only). The outcome fence info (OUTCOME) and a reply's
+outcome block (outcome_block) live in ensemble.utils, shared with the manager.
 """
 
 import re
 
-from ensemble.utils import fenced, unfenced
+from ensemble.utils import OUTCOME, outcome_block, unfenced
 
 PROGRESS = "ensemble-progress"
-OUTCOME = "ensemble-outcome"
 MARK = re.compile(rf"^\s*(?:[-*] )?\[{PROGRESS}:(?P<name>[^\]\s]*)\](?P<text>.*)$")
 NAME = re.compile(r"[\w-]+")
 TICKS = re.compile(r"`+")
@@ -27,11 +26,6 @@ def marks(text: str) -> list[tuple[str, str]]:
         ):
             out.append((m["name"], said))
     return out
-
-
-def outcome_block(text: str) -> str | None:
-    """The body of the last block fenced as OUTCOME, else None."""
-    return next((body for info, body in reversed(fenced(text)) if info == OUTCOME), None)
 
 
 def outcome_only(text: str) -> str:
