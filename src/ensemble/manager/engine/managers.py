@@ -30,6 +30,15 @@ CLIENT = re.compile(r"[a-z][a-z0-9-]*")
 RESUME_TIMEOUT = 30
 
 
+def roster(name: str | None, error: str) -> Roster:
+    """Manager name's roster under ROOT; error: the ValueError message for an absent or invalid
+    name, which names no directory and so writes nothing.
+    """
+    if not name or not NAME.fullmatch(name):
+        raise ValueError(error)
+    return Roster(os.path.join(os.path.expanduser(ROOT), name))
+
+
 def read_record(path: str) -> SessionRecord | None:
     """None when absent; ValueError naming the path and the bad field otherwise."""
     if not os.path.lexists(path):

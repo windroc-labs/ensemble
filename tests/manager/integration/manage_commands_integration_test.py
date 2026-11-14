@@ -44,8 +44,8 @@ class Examples(Case):
         self.assertEqual(self.refused(body("manage")), [])
 
     def test_a_misspelt_subcommand_or_flag_is_refused(self):
-        source = "`ensemble-crew close-all --dryrun` and `ensemble-session sendkeys w`"
+        source = "`ensemble-crew close --all --dryrun` and `ensemble-crew sendkeys w`"
         self.assertEqual(
             self.refused(source),
-            [("ensemble-crew", "close-all", "--dryrun"), ("ensemble-session", "sendkeys")],
+            [("ensemble-crew", "close", "--dryrun"), ("ensemble-crew", "sendkeys")],
         )

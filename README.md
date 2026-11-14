@@ -2,7 +2,7 @@
 
 [Español](docs/readme/README.es.md) · [Français](docs/readme/README.fr.md) · [日本語](docs/readme/README.ja.md) · [한국어](docs/readme/README.ko.md) · [Português](docs/readme/README.pt.md) · [简体中文](docs/readme/README.zh-CN.md)
 
-Ensemble lets you work with coding agents as a crew. Talk to a commander, delegate a task to a role,
+Ensemble lets you work with coding agents as a crew. Talk to a manager, delegate a task to a role,
 or let a board route work across roles. Claude Code, Codex and OpenCode share the same session controls.
 
 <a id="what"></a>
@@ -18,7 +18,7 @@ a board schedules role runs and writes their results back to issues. The board c
 
 ![One agent, many agents coordinated by hand, and managers coordinating ensemble crews](docs/images/compare.svg)
 
-Separate agent runs need someone to route work and follow their replies. A commander uses Crew to launch,
+Separate agent runs need someone to route work and follow their replies. A manager uses Crew to launch,
 inspect and resume those runs from one conversation. You still decide what work to authorize and review.
 
 <a id="how-it-works"></a>
@@ -90,7 +90,7 @@ For one task in your installed client's conversation:
 /ensemble:act-as researcher:light-research What does tmux's remain-on-exit option do?
 ```
 
-For a crew, open a commander shell and start your client:
+For a crew, open a manager shell and start your client:
 
 ```sh
 ensemble work
@@ -103,16 +103,16 @@ Use `codex --no-daemon` or `opencode` instead of `claude` if that is your client
 /ensemble:manage
 ```
 
-Describe the work and desired deliverable. The commander coordinates workers and role runs through Crew.
+Describe the work and desired deliverable. The manager coordinates workers and role runs through Crew.
 To come back to `work` later, run `ensemble list` in a terminal and pick it: you return to its session and conversation.
-If you keep your own guidelines for the commander in a file, name it once in `~/.ensemble/config.local.toml` (an absolute or `~` path):
+If you keep your own guidelines for the manager in a file, name it once in `~/.ensemble/config.local.toml` (an absolute or `~` path):
 
 ```toml
 [manager]
 guidelines = "~/path/to/your-guidelines.md"
 ```
 
-After each compaction the commander is then told to read that file whole before handling events. Unset, missing or unreadable, nothing is added.
+After each compaction the manager is then told to read that file whole before handling events. Unset, missing or unreadable, nothing is added.
 For board work, `/ensemble:board` operates issues; [workflow customization](docs/customizing-roles-and-tasks.md#on-the-board)
 explains how to choose stages.
 

@@ -1,10 +1,11 @@
 """Markdown code fences: 3+ backticks or tildes, closed by a line of only that char, as many or
-more; an unclosed one runs to the end.
+more; an unclosed one runs to the end. OUTCOME is the reply protocol's outcome fence info string.
 """
 
 import re
 
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
+OUTCOME = "ensemble-outcome"
 
 
 def _scan(text: str) -> tuple[list[tuple[int, str]], list[tuple[str, str]]]:
@@ -34,3 +35,8 @@ def unfenced(text: str) -> list[tuple[int, str]]:
 def fenced(text: str) -> list[tuple[str, str]]:
     """(info string, body) of each fenced block."""
     return _scan(text)[1]
+
+
+def outcome_block(text: str) -> str | None:
+    """The body of the last block fenced as OUTCOME, else None."""
+    return next((body for info, body in reversed(fenced(text)) if info == OUTCOME), None)

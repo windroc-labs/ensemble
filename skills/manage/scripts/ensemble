@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
-# A tmux session for the manager. Its shell runs under
-# this plugin's bin/ensemble-crew hold, which keeps the manager's lease while the shell lives; start
-# the client there.
-# list prints every manager (ensemble-crew list), so no manager can be named list here. On a
-# terminal it then opens the selected one: attach to its session, resume its recorded client under
-# its hold (typed into the hold's idle shell, or as a new hold's command), or ensemble <name>.
+# A manager's place. ensemble <name> opens tmux session <name>, whose shell holds manager <name>'s
+# place while it lives (this script's <name> -- form); start the client there. The holding, listing
+# and resuming run in this plugin's ensemble.manager.ensemble_command, so no manager can be named
+# list or resume here. On a terminal list then opens the selected manager: attach to its session,
+# resume its recorded client under its hold (ensemble resume typed into the hold's idle shell, or as
+# a new hold's command), or ensemble <name>.
 # --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
 usage() {
-  printf '%s\n' 'usage: ensemble <session-name> | ensemble list | ensemble --install' \
-    '       ensemble -h | ensemble --help' \
-    'session-name: letters, digits, _ and -; must not start with -'
+  printf '%s\n' \
+    'usage: ensemble <name> | ensemble [--force] <name> -- <command> [<arg> ...]' \
+    '       ensemble list | ensemble resume | ensemble --install | ensemble -h | ensemble --help' \
+    '<name>: letters, digits, _ and -; must not start with -; not list or resume' \
+    'ensemble <name>      open tmux session <name>, whose shell holds manager <name>'"'"'s place' \
+    '                     while it lives; start the client there' \
+    'ensemble <name> -- <command>' \
+    '                     hold <name>'"'"'s place while <command> runs in this terminal, in or' \
+    '                     outside tmux; a place another holder keeps is refused' \
+    '  --force            take that place over and fence its holder, e.g. a stuck one' \
+    'ensemble list        print every manager; on a terminal, select one to attach or resume' \
+    'ensemble resume      in a held shell, resume the manager'"'"'s recorded client; exit 2 unheld' \
+    'examples:' \
+    '  ensemble demo -- <client> [<arg> ...]        start a client holding demo, outside tmux too' \
+    '  ensemble --force demo -- <client resume command>' \
+    '                     take demo over and resume its conversation in this terminal' \
+    '<client resume command>: the client command resuming the manager'"'"'s conversation;' \
+    '                     ensemble-session resume-argv <client> <sid> prints it, with the' \
+    '                     client and sid in ~/.ensemble/managers/<name>/session.json'
 }
 usage_error() {
   usage >&2
@@ -20,13 +36,22 @@ valid_name() {
   [[ $1 =~ ^[A-Za-z0-9_-]+$ ]]
 }
 for argument in "$@"; do
-  case $argument in -h | --help) usage; exit 0 ;; esac
+  case $argument in --) break ;; -h | --help) usage; exit 0 ;; esac
 done
+force=
 case ${1:-} in
---install) [ $# -eq 1 ] || usage_error ;;
+--install | resume) [ $# -eq 1 ] || usage_error ;;
 list) ;;
--*) usage_error ;;
-*) [ $# -eq 1 ] && valid_name "$1" || usage_error ;;
+*)
+  [ "${1:-}" = --force ] && { force=--force; shift; }
+  case ${1:-} in -* | list | resume) usage_error ;; esac
+  valid_name "${1:-}" || usage_error
+  if [ $# -eq 1 ]; then
+    [ -z "$force" ] || usage_error
+  else
+    [ "$2" = -- ] && [ $# -gt 2 ] || usage_error
+  fi
+  ;;
 esac
 if [ "$1" = --install ]; then
   root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd -P) || exit
@@ -38,7 +63,38 @@ if [ "$1" = --install ]; then
   "$(dirname -- "$0")/launcher" --select "$root" || exit
   exit
 fi
-crew=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)/bin/ensemble-crew
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd) || exit
+self=$root/skills/manage/scripts/ensemble
+side=$root/src/ensemble/manager/ensemble_command.py
+paths=$root
+case $root in
+  *:*) # PATH and PYTHONPATH split on ":" (OpenCode's plugin cache path holds one): name the root through a link without it
+    paths=$HOME/.ensemble/links/$(printf '%s' "$root" | cksum | cut -d' ' -f1)
+    mkdir -p "$HOME/.ensemble/links" || exit
+    [ "$(readlink "$paths" 2>/dev/null)" = "$root" ] || ln -sfn "$root" "$paths" || exit
+    ;;
+esac
+manager=(env "PATH=$paths/bin:$PATH" "PYTHONPATH=$paths/src" python3 -P -m ensemble.manager.ensemble_command)
+require_side() {
+  [ -f "$side" ] || { echo "ensemble: no $side" >&2; exit 1; }
+}
+# openable NAME: refuse a manager the <name> form cannot hold, such as one an older ensemble
+# named resume; its new session's shell would exit at once.
+openable() {
+  case $1 in -* | list | resume) ;; *) valid_name "$1" && return ;; esac
+  echo "ensemble: manager $1 cannot be opened by ensemble; nothing opened" >&2
+  exit 1
+}
+if [ $# -gt 1 ] && [ "$1" != list ]; then
+  require_side
+  s=$1
+  shift 2
+  exec "${manager[@]}" hold ${force:+"$force"} "$s" -- "$@"
+fi
+if [ "$1" = resume ]; then
+  require_side
+  exec "${manager[@]}" resume
+fi
 # start NAME DIR COMMAND...: a detached session NAME in DIR running COMMAND.
 start() {
   local s=$1 dir=$2
@@ -49,11 +105,11 @@ start() {
     \; new -d -s "$s" -c "${dir//\#/##}" "$@")
 }
 # hold_pane NAME: "ID COMMAND START" of the one pane in session NAME whose command is NAME's own
-# hold (tmux prints a tab in a format as _, so fields are space-separated).
+# hold, ensemble NAME -- … (tmux prints a tab in a format as _, so fields are space-separated).
 hold_pane() {
   local panes
   panes=$(tmux list-panes -s -t "=$1" -F '#{pane_id} #{pane_current_command} #{pane_start_command}' \
-    2>/dev/null | grep -F -- " hold --manager=$1 --session=$1 -- ") || return
+    2>/dev/null | grep -E -- "/ensemble[\"']? $1 -- ") || return
   [ "$(printf '%s\n' "$panes" | wc -l)" -eq 1 ] && printf '%s\n' "$panes"
 }
 attach() {
@@ -65,20 +121,23 @@ attach() {
   exec tmux attach -t "=$1"
 }
 if [ "$1" = list ]; then
-  [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
+  require_side
   shift
-  [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] || exec "$crew" list "$@"
-  # Ctrl-C at the prompt cancels: crew exits 0, and bash must not die of the SIGINT meanwhile.
+  [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] || exec "${manager[@]}" list "$@"
+  # Ctrl-C at the prompt cancels: the list exits 0, and bash must not die of the SIGINT meanwhile.
   trap : INT
-  plan=$("$crew" list --select) || exit
+  plan=$("${manager[@]}" list --select) || exit
   trap - INT
   [ -n "$plan" ] || exit 0
   read -r verb s <<<"$plan"
   case $verb in
-  open) set -- "$s" ;;
+  open)
+    openable "$s"
+    set -- "$s"
+    ;;
   resume-new)
-    held=("$crew" hold "--manager=$s" "--session=$s" -- /bin/sh -c '"$@"; exec "${SHELL:-/bin/sh}" -l'
-      ensemble "$crew" resume-commander)
+    openable "$s"
+    held=("$self" "$s" -- /bin/sh -c '"$@"; exec "${SHELL:-/bin/sh}" -l' ensemble "$self" resume)
     if tmux has -t "=$s" 2>/dev/null; then
       tmux new-window -d -t "=$s:" -c "${PWD//\#/##}" "${held[@]}"
     else
@@ -92,10 +151,14 @@ if [ "$1" = list ]; then
       exit 1
     }
     [ "$verb" = attach ] && attach "$s"
-    # A login shell may reset PATH, so the crew is typed by path; quoted for any shell, or not at all.
+    # A login shell may reset PATH, so ensemble is typed by path: quoted only when it must be, and
+    # not at all when no shell could take it.
     read -r id running _ <<<"$pane"
-    shell=${SHELL:-/bin/sh} resume="'$crew' resume-commander"
-    case $crew in *[\'\\]*) running="a shell that cannot take $crew" ;; esac
+    shell=${SHELL:-/bin/sh} resume="$self resume"
+    case $self in
+    *[\'\\]*) running="a shell that cannot take $self" ;;
+    *[!A-Za-z0-9_./:@,+-]*) resume="'$self' resume" ;;
+    esac
     if [ "$running" = "${shell##*/}" ]; then
       tmux send-keys -t "$id" C-u \; send-keys -t "$id" -l "$resume" \; send-keys -t "$id" Enter
     else
@@ -112,7 +175,7 @@ if [ "$1" = list ]; then
 fi
 s=$1
 tmux has -t "=$s" 2>/dev/null || {
-  [ -x "$crew" ] || { echo "ensemble: no $crew" >&2; exit 1; }
-  start "$s" "$PWD" "$crew" hold "--manager=$s" "--session=$s" -- "${SHELL:-/bin/sh}" -l
+  require_side
+  start "$s" "$PWD" "$self" "$s" -- "${SHELL:-/bin/sh}" -l
 }
 attach "$s"

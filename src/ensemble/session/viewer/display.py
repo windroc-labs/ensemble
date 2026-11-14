@@ -68,9 +68,9 @@ def display_help(host: Host) -> str:
         "    attach command. Start in tmux, use a visible ANCHOR or --display none.\n"
         "    No anchor: use a visible terminal/ANCHOR or start with --display none.\n"
         "    Example prerequisites: Codex configured, default Host tmux, no helper\n"
-        "    session, and tmux session commander visible:\n"
-        "      ensemble-session start helper --client codex --display /below/commander\n"
-        "    Requests placement below commander; an existing grid can control it.\n"
+        "    session, and tmux session manager visible:\n"
+        "      ensemble-session start helper --client codex --display /below/manager\n"
+        "    Requests placement below manager; an existing grid can control it.\n"
         "      ensemble-session hide helper\n"
         "      ensemble-session show helper\n"
         "    Hide closes the pane while work runs; show uses saved display, with no\n"
@@ -113,7 +113,17 @@ def layout(viewer: Viewer, host: Host, display: Display) -> str | None:
     return fold(opener, split, split_from)
 
 
-def tile(viewer: Viewer, window: str, *, wait: bool = True, if_panes_changed: bool = False) -> None:
+def tile(
+    viewer: Viewer, window: str | None, *, wait: bool = True, if_panes_changed: bool = False
+) -> None:
+    """Lays out `window`; None: the caller's own tmux window."""
+    if window is None:
+        try:
+            window = viewer._placement.own_window()
+        except TuiError as e:
+            raise SessionError(f"tile: {e}") from None
+        if window is None:
+            raise SessionError("tile: not in tmux: give WINDOW or run it in a tmux pane")
     try:
         viewer._grid.tile(window, wait=wait, if_panes_changed=if_panes_changed)
     except TuiError as e:

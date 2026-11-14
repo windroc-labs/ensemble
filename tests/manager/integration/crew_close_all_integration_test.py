@@ -1,7 +1,7 @@
-"""close-all on the real commands (tests/manager/live_crew.py): main's
-test_close_all_closes_what_mgr_opened_and_only_that with crew run. What mgr opened, what a manager
-it opened opened, and a matching orphan close; another manager's work stays. A worker whose
-display was killed is still closed.
+"""close --all on the real commands (tests/manager/live_crew.py): main's
+test_close_all_closes_what_mgr_opened_and_only_that with crew start command. What mgr opened,
+what a manager it opened opened, and a matching orphan close; another manager's work stays. A
+worker whose display was killed is still closed.
 """
 
 from tests.delegate.replies import mark
@@ -25,11 +25,11 @@ class CloseAllTest(LiveCrew):
         self.orphan("o1", OTHER)
         sessions = ("w1", "w2", "w3", "o2", *role.sessions)
         entries = self.roster()
-        res = self.ok(self.crew("close-all", "--dry-run"))
+        res = self.ok(self.crew("close", "--all", "--dry-run"))
         self.assertEqual(res.stdout.splitlines(), sorted(("o2", "r", role.name, "w1", "w2", "w3")))
         self.assertTrue(self.live(*sessions, "o1"))
         self.assertEqual(self.roster(), entries)
-        res = self.ok(self.crew("close-all"))
+        res = self.ok(self.crew("close", "--all"))
         self.assertEqual(res.stdout.splitlines(), sorted(("o2", "r", role.name, "w1", "w2", "w3")))
         self.until(
             lambda: self.gone(*sessions) and not self.drive_running(role),
@@ -37,7 +37,7 @@ class CloseAllTest(LiveCrew):
         )
         self.assertTrue(self.live("mgr", OTHER, "o1"))
         self.assertEqual(self.roster(), {})
-        self.assertEqual(self.ok(self.crew("close-all")).stdout, "nothing to close\n")
+        self.assertEqual(self.ok(self.crew("close", "--all")).stdout, "nothing to close\n")
 
     def test_close_all_closes_a_worker_whose_display_was_killed(self):
         self.record(self.worker("w1"))
@@ -45,6 +45,6 @@ class CloseAllTest(LiveCrew):
         pane = live_tmux.wait(lambda: self.server.pane_of("w1"), what="w1's worker pane")
         self.ok(self.server.tmux("kill-pane", "-t", pane))
         self.assertTrue(owner.alive())
-        self.assertEqual(self.ok(self.crew("close-all")).stdout.splitlines(), ["w1"])
+        self.assertEqual(self.ok(self.crew("close", "--all")).stdout.splitlines(), ["w1"])
         self.until(lambda: not owner.alive(), "w1's harness gone")
         self.assertEqual(self.roster(), {})

@@ -1,5 +1,5 @@
 """SessionStart through real sh and python3 on an isolated controlling terminal.
-RearmHookTest uses a stand-in hold; HoldTreeTest uses ensemble-crew hold.
+RearmHookTest uses a stand-in hold; HoldTreeTest uses ensemble's hold.
 """
 
 import json
@@ -178,7 +178,7 @@ class HoldTreeTest(Case):
         env.pop("ENSEMBLE_AGENT_SESSION", None)
         return self.enterContext(
             terminal.process(
-                (*PY, "-m", "ensemble.manager.cli", "hold", "--manager", "mgr", "--", *argv),
+                (*PY, "-m", "ensemble.manager.ensemble_command", "hold", "mgr", "--", *argv),
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

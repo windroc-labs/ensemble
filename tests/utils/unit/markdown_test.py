@@ -1,8 +1,8 @@
-"""utils/markdown.py: unfenced lines and fenced blocks."""
+"""utils/markdown.py: unfenced lines, fenced blocks and the outcome block."""
 
 import unittest
 
-from ensemble.utils.markdown import fenced, unfenced
+from ensemble.utils.markdown import OUTCOME, fenced, outcome_block, unfenced
 from tests.utils.case import Case
 
 
@@ -41,6 +41,19 @@ class Fenced(Case):
         ):
             with self.subTest(text=text):
                 self.assertEqual(fenced(text), want)
+
+
+class OutcomeBlock(Case):
+    def test_the_last_outcome_fenced_block_else_none(self):
+        self.assertEqual(OUTCOME, "ensemble-outcome")
+        for text, want in (
+            ('```ensemble-outcome\n{"a":1}\n```\nx\n```ensemble-outcome\n{"b":2}\n```', '{"b":2}'),
+            ('```ensemble-outcome\n{"a":1}\n```\n```json\n{"c":3}\n```', '{"a":1}'),
+            ("```json\n{}\n```\nplain", None),
+            ("", None),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(outcome_block(text), want)
 
 
 if __name__ == "__main__":

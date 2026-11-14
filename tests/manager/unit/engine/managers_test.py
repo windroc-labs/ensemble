@@ -15,6 +15,7 @@ from ensemble.manager.engine.managers import (
     read,
     read_record,
     resume_target,
+    roster,
     write_record,
 )
 from ensemble.manager.engine.roster import Roster
@@ -40,6 +41,17 @@ LIVE, DEAD = 4101, 4102
 def _kill(pid: int, _signal: int) -> None:
     if pid != LIVE:
         raise ProcessLookupError(pid)
+
+
+class RosterLookupTest(RosterCase):
+    def test_a_valid_name_is_its_roster_under_the_managers_root(self):
+        self.assertEqual(roster("manager", "no").directory, self.directory)
+
+    def test_an_absent_or_invalid_name_is_the_given_error_and_writes_nothing(self):
+        for name in (None, "", "/tmp/x", "..", "a/b", "a b"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "^name one$"):
+                roster(name, "name one")
+        self.assertFalse(os.path.exists(os.path.join(self.ensemble, "managers")))
 
 
 class RecordTest(RosterCase):

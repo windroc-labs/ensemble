@@ -1,24 +1,21 @@
-"""The commands /ensemble:manage writes, filled in as a commander would, run on
+"""The commands /ensemble:manage writes, filled in as a manager would, run on
 the real commands (tests/manager/live_crew.py): a worker's launch, reply, note, status,
-gone-then-resume and close; a role run that ends waiting, answered in
-its own session; manage's Codex issue worker launch.
+gone-then-resume and close; a role run that ends waiting, answered in its own session.
 """
 
 import json
-import os
 
 from ensemble.manager import State
 from tests.delegate.integration.cli import ASKING, DONE
 from tests.delegate.replies import block
 from tests.manager.live_crew import ROLE, LiveCrew, has_pair, logged
 from tests.manager.skills.commands import example, fill
-from tests.session.integration.clients.codex import fake_tui
 
 
 class SkillFlows(LiveCrew):
     def written(self, skill, prefix, *having, keep=(), env=None, **values):
         """skill's one command starting with prefix (and holding having), filled with values, run
-        as the commander runs it.
+        as the manager runs it.
         """
         argv = fill(example(skill, prefix, *having), *keep, **values)
         crew = self.crew_env() if argv[0] == "ensemble-crew" else {}
@@ -28,7 +25,7 @@ class SkillFlows(LiveCrew):
         record = self.record(
             self.written(
                 "manage",
-                "ensemble-crew worker",
+                "ensemble-crew start worker",
                 "--client <client>",
                 keep=("--prompt",),
                 env=self.scene("w1"),
@@ -39,7 +36,7 @@ class SkillFlows(LiveCrew):
         )
         self.assertEqual(self.roster()["w1"].state, State.LIVE)
         self.wait_event("w1", "done")
-        reply = self.ok(self.written("manage", "ensemble-session reply", name="w1"))
+        reply = self.ok(self.written("manage", "ensemble-crew read <name> --reply", name="w1"))
         self.assertIn("Hi from w1.", reply.stdout)
         self.ok(self.written("manage", "ensemble-crew note", name="w1", text="TASK-1 it's"))
         self.assertEqual(self.roster()["w1"].note, "TASK-1 it's")
@@ -64,7 +61,7 @@ class SkillFlows(LiveCrew):
     def test_a_waiting_role_run_is_answered_in_its_session_as_written(self):
         work = self.workdir("r")
         launch = fill(
-            example("manage", "ensemble-crew role"),
+            example("manage", "ensemble-crew start role"),
             "--workdir",
             "--name",
             "--mode",
@@ -98,25 +95,3 @@ class SkillFlows(LiveCrew):
         self.assertTrue(has_pair(logged(self.log("r"))[-1]["argv"], "--resume", record.sid))
         status = json.loads(self.ok(self.crew("status", "r")).stdout)
         self.assertEqual(status["outcome"], "done")
-
-    def test_manages_codex_issue_worker_launches_by_name_with_its_prompt(self):
-        fake_tui.install(self.server.bin)
-        never, scenario = (os.path.join(self.root, n) for n in ("never", "c1.codex.json"))
-        with open(scenario, "w", encoding="utf-8") as f:
-            json.dump({"tui_turns": [[{"kind": "pause", "file": never}]]}, f)
-        log = os.path.join(self.root, "c1.codex.jsonl")
-        agent = os.path.join(self.cwd, "agent")
-        os.mkdir(agent)  # made by the prompt step's --out <work dir>/agent/prompt.md
-        record = self.record(
-            self.written(
-                "manage",
-                "ensemble-crew worker",
-                "--client codex",
-                env={"FAKE_SCENARIO": scenario, "FAKE_LOG": log},
-                name="c1",
-                work_dir=self.cwd,
-            )
-        )
-        self.assertEqual((record.kind, record.name, record.detail), ("worker", "c1", "codex"))
-        [begun] = [start for start in logged(log) if start.get("mode") == "tui"]
-        self.assertEqual(os.path.realpath(begun["cwd"]), os.path.realpath(agent))

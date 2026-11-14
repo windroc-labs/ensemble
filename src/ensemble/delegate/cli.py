@@ -76,7 +76,7 @@ Environment and options:
   run --sid overrides ENSEMBLE_SID only when equal; otherwise refused.
   resume refuses another ENSEMBLE_SID. These and ENSEMBLE_EVENTS are consumed
   by this command. ENSEMBLE_AGENT_SESSION refuses real run/resume; use a
-  user-started commander. Help, --list and --dry-run remain available.
+  user-started manager. Help, --list and --dry-run remain available.
   Options --role/--out/--workdir/--cwd/--client/--mode/--name/--on-event accept
   one occurrence only. Other scalars use the last value; flags may repeat.
 
@@ -261,7 +261,7 @@ Examples:
 
 Recovery and next help:
   Track with crew:
-  ensemble-crew run dummy-1 -- ensemble-delegate open dummy-1 --environment dummy
+  ensemble-crew start command dummy-1 -- ensemble-delegate open dummy-1 --environment dummy
   Close/release its lock: ensemble-session close dummy-1
   Resume its saved environment: ensemble-session resume dummy-1
   Placement and Record controls: ensemble-session --help

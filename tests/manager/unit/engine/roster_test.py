@@ -335,6 +335,40 @@ class RosterTest(RosterCase):
                     with self.subTest(name=name), self.assertRaises(Stale):
                         self.roster.mark_if(name, expected, State.GONE)
 
+    def test_restart_claim_takes_a_live_or_gone_entry_keeping_its_sid(self):
+        for state in (State.LIVE, State.GONE):
+            with self.subTest(state=state):
+                self.live()
+                mark(self.roster, "x", state)
+                before = self.roster.entries()["x"]
+                claimed = self.roster.claim_restart("x", before)
+                self.assertIs(claimed.state, State.RESUMING)
+                self.assertEqual((claimed.sid, claimed.record), (before.sid, before.record))
+                self.assertIsNotNone(claimed.receipt)
+                self.assertEqual(self.roster.entries()["x"], claimed)
+                self.roster.remove("x")
+
+    def test_restart_claim_refuses_other_states_and_a_changed_entry(self):
+        self.live()
+        for state in (State.WAITING, State.RESUMING, State.DONE):
+            with self.subTest(state=state):
+                mark(self.roster, "x", State.GONE if state == State.RESUMING else state)
+                if state == State.RESUMING:
+                    self.roster.claim_resume("x")
+                before = self.roster.entries()["x"]
+                with self.assertRaisesRegex(RosterError, f"^x: cannot restart {state}$"):
+                    self.roster.claim_restart("x", before)
+                self.assertEqual(self.roster.entries()["x"], before)
+                self.roster.remove("x")
+                self.live()
+        before = self.roster.entries()["x"]
+        self.roster.note("x", "changed")
+        with self.assertRaisesRegex(RosterError, "^x: entry changed; retry$"):
+            self.roster.claim_restart("x", before)
+        self.assertIs(self.roster.entries()["x"].state, State.LIVE)
+        with self.assertRaisesRegex(RosterError, "^missing: entry changed; retry$"):
+            self.roster.claim_restart("missing", before)
+
     def test_resume_claim_is_atomic_across_instances(self):
         for state in (State.GONE, State.WAITING):
             with self.subTest(state=state):
@@ -1310,7 +1344,7 @@ class SnapshotTest(RosterCase):
             self.assertEqual(
                 (holder, entries), (ActiveHolder(lease.id, "owner"), self.roster.entries())
             )
-            with self.assertRaises(Held), Roster(self.directory).hold(None):
+            with self.assertRaises(Held), Roster(self.directory).hold("contender"):
                 pass
 
     def test_two_snapshots_while_held_both_see_the_holder(self):
@@ -1333,9 +1367,12 @@ class SnapshotTest(RosterCase):
             self.assertEqual(self.roster.snapshot()[0], ActiveHolder(lease.id, "owner"))
         self.assertIsNone(self.roster.snapshot()[0])
 
-    def test_a_holder_without_a_session_is_known_by_its_id(self):
+    def test_a_recorded_holder_without_a_session_is_known_by_its_id(self):
         self.live()
-        with Roster(self.directory).hold(None) as lease:
+        with Roster(self.directory).hold("owner") as lease:
+            data = self.content()
+            data["holder"]["session"] = None
+            Path(self.roster.path).write_text(json.dumps(data))
             holder = self.roster.snapshot()[0]
         self.assertEqual(holder, ActiveHolder(lease.id, None))
         self.assertEqual(holder.label, lease.id)

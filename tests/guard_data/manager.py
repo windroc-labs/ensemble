@@ -1,7 +1,7 @@
 """The manager layer's guard data (tests/guard_data/__init__.py)."""
 
 ENTRY_MODULES = {
-    "manager": {"rearm.py"},
+    "manager": {"ensemble_command.py", "rearm.py"},
 }
 
 
@@ -23,7 +23,7 @@ PYTHON_CODE_ALLOWED = {
     ): "Crash at each os.replace of Events.rotate/recover (ensemble.manager.engine.events, not re-exported) needs a process killed mid-rename.",
     (
         "tests/manager/integration/holder_integration_test.py",
-        "e95c71f9314d674cc510604958807fd5226f6c820b40fecc12d5cbbc037a5ea3",
+        "de9a401c870e11df3d950f2d3e5af3d98ceb9ca71f263ff70d917f0334f00dd3",
     ): "Holder.run's tty-handoff failure path needs os.tcsetpgrp patched inside the holder's own process; Holder is not re-exported.",
     (
         "tests/manager/integration/events_integration_test.py",

@@ -117,12 +117,14 @@ class LiveCrew(live_tmux.Calls, Case):
     def launch(
         self, name: str, argv, *, steps=None, turns=(), note: str | None = None, **kw
     ) -> subprocess.CompletedProcess:
-        """crew run `name` [--note] -- argv, with `name`'s scenario."""
+        """crew start command `name` [--note] -- argv, with `name`'s scenario."""
         noted = ("--note", note) if note else ()
-        return self.crew("run", name, *noted, "--", *argv, **self.scene(name, steps, turns), **kw)
+        return self.crew(
+            "start", "command", name, *noted, "--", *argv, **self.scene(name, steps, turns), **kw
+        )
 
     def worker(self, name: str, *flags: str, client: str = "claude", **kw):
-        """crew run `name` -- ensemble-session start `name` (fake claude)."""
+        """crew start command `name` -- ensemble-session start `name` (fake claude)."""
         return self.launch(name, self.worker_argv(name, *flags, client=client), **kw)
 
     def worker_argv(self, name: str, *flags: str, client: str = "claude") -> tuple[str, ...]:
@@ -149,10 +151,23 @@ class LiveCrew(live_tmux.Calls, Case):
         return os.path.join(self.root, f"{name}-work")
 
     def crashed(self, name: str, argv, **scene: str) -> Record:
-        """crew run `name` --note keep -- argv, killed after its Record."""
+        """crew start command `name` --note keep -- argv, killed after its Record."""
         emitted, gate = (os.path.join(self.root, f"{name}.{n}") for n in ("emitted", "gate"))
         crew = subprocess.Popen(
-            (*CREW, "run", name, "--note", "keep", "--", *WRAP, "wrap", emitted, gate, *argv),
+            (
+                *CREW,
+                "start",
+                "command",
+                name,
+                "--note",
+                "keep",
+                "--",
+                *WRAP,
+                "wrap",
+                emitted,
+                gate,
+                *argv,
+            ),
             env=self.env(**self.crew_env(), **scene),
             cwd=self.cwd,
             stdin=subprocess.DEVNULL,

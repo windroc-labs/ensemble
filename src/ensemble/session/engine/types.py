@@ -117,6 +117,12 @@ class Resumable(StrEnum):
     UNKNOWN = "unknown"
 
 
+class Delivery(StrEnum):
+    DELIVERED = "delivered"
+    QUEUED = "queued"
+    UNDELIVERED = "undelivered"
+
+
 class HookKind(StrEnum):
     """TURN_STARTED: one TurnStarted per accepted turn, never a replayed record."""
 

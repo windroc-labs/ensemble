@@ -16,14 +16,16 @@ from unittest import mock
 
 from ensemble.manager import Roster, Spec, State, cli
 from ensemble.manager.cli import main
+from ensemble.manager.engine.crew import SEND_WAIT
 from ensemble.manager.engine.pr import VIEW_FIELDS
 from ensemble.utils import Record, append_line
-from tests.manager.case import Case, own, status
+from tests.manager.case import HERE, Case, own, status
 from tests.manager.cli_case import CliCase
 from tests.manager.roster_case import mark
 from tests.manager.starters import answered, finished
 from tests.utils.cli_help import check_examples, help_text, parse_only
 from tests.utils.fakes import ctl
+from tests.utils.process_fixtures import CompletedProcess
 
 
 class CliTest(CliCase):
@@ -163,11 +165,11 @@ class CliTest(CliCase):
             result, _, stderr = self.invoke("attach", "--manager", "mgr")
         self.assertEqual(result, 1, stderr)
 
-    def test_removed_owner_and_missing_holder_command_are_usage_errors(self):
+    def test_removed_owner_and_missing_starter_command_are_usage_errors(self):
         for argv in (
             ("attach", "--manager", "mgr", "--owner", "label"),
-            ("hold", "--manager", "mgr"),
-            ("hold", "--manager", "mgr", "--"),
+            ("start", "command", "--manager", "mgr", "w1"),
+            ("start", "command", "--manager", "mgr", "w1", "--"),
             ("attach", "--manager", "mgr", "--", "unused"),
             ("hide", "--manager", "mgr"),
             ("show", "--manager", "mgr", "a", "--all"),
@@ -183,9 +185,10 @@ class CliTest(CliCase):
             for argv in (
                 ("close",),
                 ("status",),
-                ("forget",),
                 ("resume",),
-                ("forget", "--force"),
+                ("close", "--forget"),
+                ("close", "--forget", "--force"),
+                ("restart",),
                 ("hide",),
                 ("show",),
             ):
@@ -198,7 +201,7 @@ class CliTest(CliCase):
                     self.assertEqual(stdout, "")
                     self.assertIn("not in roster", stderr)
                     self.assertEqual(
-                        "ensemble-crew reopen --manager=mgr missing" in stderr,
+                        "ensemble-crew start reopen --manager=mgr missing" in stderr,
                         command == "resume",
                         stderr,
                     )
@@ -207,10 +210,87 @@ class CliTest(CliCase):
 
     def test_empty_close_all_reports_nothing_without_creating_a_manager(self):
         with self.listed():
-            result, stdout, stderr = self.invoke("close-all", "--manager", "mgr")
+            result, stdout, stderr = self.invoke("close", "--all", "--manager", "mgr")
         self.assertEqual(result, 0, stderr)
         self.assertEqual(stdout, "nothing to close\n")
         self.assertFalse(os.path.exists(self.directory))
+
+    def crew_run(self, *, alive):
+        """subprocess.run for entries a and b: listing finds nothing more; ctl status answers
+        `alive`; ctl close succeeds. Records each ctl verb in self.verbs.
+        """
+        self.verbs = []
+
+        def run(argv, **options):
+            argv = tuple(argv)
+            if argv in (HERE, (*HERE, "--descendants")):
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            self.verbs.append(argv[-1])
+            names = [Record.parse(line).name for line in options["input"].splitlines()]
+            answers = [status(name, alive=alive).to_line() + "\n" for name in names]
+            stdout = "".join(answers) if argv[-1] == "status" else ""
+            return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        return mock.patch("subprocess.run", side_effect=run)
+
+    def test_close_all_previews_then_closes_every_entry(self):
+        for name in ("a", "b"):
+            own(self.roster, self.fake_record(name))
+        before = Path(self.roster.path).read_bytes()
+        with self.crew_run(alive=True):
+            preview = self.invoke("close", "--all", "--dry-run", "--manager", "mgr")
+        self.assertEqual(preview, (0, "a\nb\n", ""))
+        self.assertEqual(self.verbs, [])
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
+        with self.crew_run(alive=True):
+            self.assertEqual(self.invoke("close", "--all", "--manager", "mgr"), (0, "a\nb\n", ""))
+        self.assertEqual(self.verbs, ["close"])
+        self.assertEqual(self.roster.entries(), {})
+
+    def test_close_forget_removes_a_stopped_entry_and_live_work_only_when_forced(self):
+        argv = ("close", "a", "--forget", "--manager", "mgr")
+        own(self.roster, self.fake_record("a"))
+        with self.crew_run(alive=True):
+            result, stdout, stderr = self.invoke(*argv)
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertIn("still alive; close it before forgetting", stderr)
+        self.assertIn("a", self.roster.entries())
+        with self.crew_run(alive=True):
+            forced = self.invoke(*argv, "--force")
+        self.assertEqual(forced, (0, "", ""))
+        self.assertEqual(self.verbs, [])
+        self.assertEqual(self.roster.entries(), {})
+        own(self.roster, self.fake_record("a"))
+        with self.crew_run(alive=False):
+            self.assertEqual(self.invoke(*argv), (0, "", ""))
+        self.assertEqual(self.verbs, ["status"])
+        self.assertEqual(self.roster.entries(), {})
+
+    def test_close_option_combinations_are_usage_errors(self):
+        for argv, message in (
+            (("close", "w1", "--all"), "close takes NAME or --all"),
+            (("close",), "close takes NAME or --all"),
+            (("close", "--all", "--forget"), "--forget takes NAME, not --all"),
+            (("close", "w1", "--dry-run"), "--dry-run requires --all"),
+            (("close", "w1", "--forget", "--dry-run"), "--dry-run requires --all"),
+            (("close", "w1", "--force"), "--force requires --forget"),
+        ):
+            with (
+                self.subTest(argv=argv),
+                mock.patch("subprocess.run") as run,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+                self.assertRaises(SystemExit) as error,
+            ):
+                main([*argv, "--manager", "mgr"])
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn(message, stderr.getvalue())
+            run.assert_not_called()
+            self.assertFalse(os.path.exists(self.directory))
+
+    def test_close_help_names_its_options(self):
+        close = help_text(self, main, ["close", "--help"])
+        for option in ("--all", "--dry-run", "--forget", "--force"):
+            self.assertIn(option, close)
 
 
 class Launch(CliCase):
@@ -237,7 +317,9 @@ class Launch(CliCase):
                 ("sample-environment", (), {"ENSEMBLE_MANAGER": name}),
             ):
                 with self.subTest(name=name, alias=alias), mock.patch.dict(os.environ, env):
-                    result, stdout, stderr = self.start("run", alias, *flag, "--", "fake", alias)
+                    result, stdout, stderr = self.start(
+                        "start", "command", alias, *flag, "--", "fake", alias
+                    )
                     self.assertEqual(result, 0, stderr)
                     path = Path(self.ensemble, "managers", name, "roster.json")
                     self.assertEqual(
@@ -272,7 +354,7 @@ class Launch(CliCase):
         ):
             with self.subTest(verb=verb):
                 result, stdout, stderr = self.start(
-                    verb, "--manager", "mgr", "--note", "Crew note", key, *tail
+                    "start", verb, "--manager", "mgr", "--note", "Crew note", key, *tail
                 )
                 self.assertEqual((result, stderr), (0, "layer message\n"))
                 self.assertEqual(self.calls[0][0], (*prefix, *tail))
@@ -294,6 +376,7 @@ class Launch(CliCase):
                 mock.patch("subprocess.run", return_value=reply) as query,
             ):
                 code, _, err = self.start(
+                    "start",
                     "role",
                     "--manager",
                     "mgr",
@@ -345,7 +428,16 @@ class Launch(CliCase):
         ):
             with self.subTest(options=options), mock.patch("subprocess.run") as query:
                 code, _, err = self.start(
-                    "role", "--manager", "mgr", "--name", "r", *options, "engineer", "--input", "x"
+                    "start",
+                    "role",
+                    "--manager",
+                    "mgr",
+                    "--name",
+                    "r",
+                    *options,
+                    "engineer",
+                    "--input",
+                    "x",
                 )
                 self.assertEqual(code, 0, err)
                 query.assert_not_called()
@@ -374,6 +466,7 @@ class Launch(CliCase):
                 mock.patch("subprocess.run", return_value=reply) as query,
             ):
                 code, _, err = self.start(
+                    "start",
                     "role",
                     "--manager",
                     "mgr",
@@ -398,44 +491,78 @@ class Launch(CliCase):
     def test_role_default_config_failure_starts_nothing(self):
         reply = SimpleNamespace(returncode=2, stdout="", stderr="invalid credentials overlay")
         with mock.patch("subprocess.run", return_value=reply):
-            code, out, err = self.start("role", "--manager", "mgr", "engineer", "--input", "x")
+            code, out, err = self.start(
+                "start", "role", "--manager", "mgr", "engineer", "--input", "x"
+            )
         self.assertEqual((code, out, self.calls), (2, "", []))
         self.assertIn("invalid credentials overlay", err)
         self.assertFalse(Path(self.directory).exists())
 
-    def test_worker_and_run_resume_pass_the_given_sid(self):
+    def test_worker_and_command_resume_pass_the_given_sid(self):
         sid = str(uuid.uuid4())
         for arguments, argv in (
             (
-                ("worker", "--manager", "mgr", "--resume", sid, "w1", "--client", "claude"),
+                (
+                    "start",
+                    "worker",
+                    "--manager",
+                    "mgr",
+                    "--resume",
+                    sid,
+                    "w1",
+                    "--client",
+                    "claude",
+                ),
                 ("ensemble-session", "start", "w1", "--resume", sid, "--client", "claude"),
             ),
             (
-                ("worker", "--manager", "mgr", "--resume", sid, "w2", "--client", "codex"),
+                ("start", "worker", "--manager", "mgr", "--resume", sid, "w2", "--client", "codex"),
                 ("ensemble-session", "start", "w2", "--resume", sid, "--client", "codex"),
             ),
             (
-                ("run", "--manager", "mgr", "--resume", sid, "r1", "--", "start", "--resume", sid),
+                (
+                    "start",
+                    "command",
+                    "--manager",
+                    "mgr",
+                    "--resume",
+                    sid,
+                    "r1",
+                    "--",
+                    "start",
+                    "--resume",
+                    sid,
+                ),
                 ("start", "--resume", sid),
             ),
         ):
-            with self.subTest(verb=arguments[0]):
+            with self.subTest(verb=arguments[1]):
                 result, stdout, stderr = self.start(*arguments)
                 self.assertEqual(result, 0, stderr)
                 self.assertEqual(self.calls[0][0], argv)
                 self.assertEqual(self.calls[0][1]["ENSEMBLE_SID"], sid)
                 self.assertEqual(Record.parse(stdout).sid, sid)
-                self.assertEqual(self.roster.entries()[arguments[5]].sid, sid)
-                self.roster.remove(arguments[5])
+                self.assertEqual(self.roster.entries()[arguments[6]].sid, sid)
+                self.roster.remove(arguments[6])
 
     def test_a_resume_sid_that_is_not_a_canonical_uuid4_is_a_usage_error(self):
         for sid in ("x", str(uuid.uuid1()), str(uuid.uuid4()).upper()):
             for arguments in (
-                ("worker", "--manager", "mgr", "--resume", sid, "w1", "--client", "claude"),
-                ("run", "--manager", "mgr", "--resume", sid, "r1", "--", "start"),
+                (
+                    "start",
+                    "worker",
+                    "--manager",
+                    "mgr",
+                    "--resume",
+                    sid,
+                    "w1",
+                    "--client",
+                    "claude",
+                ),
+                ("start", "command", "--manager", "mgr", "--resume", sid, "r1", "--", "start"),
             ):
                 with (
-                    self.subTest(sid=sid, verb=arguments[0]),
+                    self.subTest(sid=sid, verb=arguments[1]),
                     contextlib.redirect_stderr(io.StringIO()),
                     self.assertRaises(SystemExit) as error,
                 ):
@@ -447,6 +574,7 @@ class Launch(CliCase):
         for explicit in ((), ("--name", "chosen")):
             with self.subTest(explicit=explicit):
                 result, stdout, _ = self.start(
+                    "start",
                     "role",
                     "--manager",
                     "mgr",
@@ -486,6 +614,7 @@ class Launch(CliCase):
         for code, output in ((2, ""), (0, "dry run\n"), (0, "")):
             with self.subTest(code=code, output=output):
                 result, stdout, stderr = self.start(
+                    "start",
                     "worker",
                     "--manager",
                     "mgr",
@@ -504,6 +633,7 @@ class Launch(CliCase):
         for verb, key in (("issue", "TASK-12"), ("role", "pm"), ("worker", "w1")):
             with self.subTest(verb=verb):
                 result, stdout, stderr = self.start(
+                    "start",
                     verb,
                     "--manager",
                     "mgr",
@@ -540,12 +670,12 @@ class Launch(CliCase):
             mock.patch("subprocess.Popen", side_effect=answered(run)),
             mock.patch("os.open", side_effect=open_file),
         ):
-            result, stdout, stderr = self.invoke("issue", "--manager", "mgr", "TASK-12")
+            result, stdout, stderr = self.invoke("start", "issue", "--manager", "mgr", "TASK-12")
         self.assertEqual(len(removed), 1)
         self.assertEqual((result, stdout), (2, ""), stderr)
         self.assertIn(reason, stderr)
         self.assertEqual(self.roster.entries(), {})
-        result, stdout, stderr = self.start("issue", "--manager", "mgr", "TASK-12")
+        result, stdout, stderr = self.start("start", "issue", "--manager", "mgr", "TASK-12")
         self.assertEqual(result, 0, stderr)
         self.assertEqual(self.roster.entries()["TASK-12"].record, Record.parse(stdout))
 
@@ -558,7 +688,7 @@ class Launch(CliCase):
             return SimpleNamespace(returncode=1, stderr="router failed")
 
         with mock.patch("subprocess.Popen", side_effect=answered(run)):
-            result, stdout, stderr = self.invoke("issue", "--manager", "mgr", "TASK-12")
+            result, stdout, stderr = self.invoke("start", "issue", "--manager", "mgr", "TASK-12")
         self.assertEqual((result, stdout), (1, ""))
         self.assertIn("router failed", stderr)
         self.assertEqual(self.roster.entries()["TASK-12"].state, State.LOST)
@@ -573,7 +703,7 @@ class Launch(CliCase):
                     return SimpleNamespace(returncode=code, stderr="router failed")
 
                 with mock.patch("subprocess.Popen", side_effect=answered(run)):
-                    result, stdout, stderr = self.invoke("issue", "--manager", "mgr", name)
+                    result, stdout, stderr = self.invoke("start", "issue", "--manager", "mgr", name)
                 self.assertEqual((result, stdout), (code, ""))
                 self.assertIn("router failed", stderr)
                 self.assertIn(f"{name}: could not {action}", stderr)
@@ -584,6 +714,7 @@ class Launch(CliCase):
     def test_a_busy_role_start_exits_75_and_leaves_no_entry(self):
         busy = "delegate: busy: lock dummy-lock is held by ensemble-x-1 (owner x)"
         result, stdout, stderr = self.start(
+            "start",
             "role",
             "--manager",
             "mgr",
@@ -604,7 +735,8 @@ class Launch(CliCase):
         for resume in ((), ("--resume", str(uuid.uuid4()))):
             with self.subTest(resume=resume):
                 result, stdout, stderr = self.start(
-                    "run",
+                    "start",
+                    "command",
                     "--manager",
                     "mgr",
                     *resume,
@@ -622,7 +754,7 @@ class Launch(CliCase):
                 self.assertEqual((result, stdout, self.roster.entries()), (75, "", {}))
                 self.assertIn(busy, stderr)
                 result, stdout, stderr = self.start(
-                    "run", "--manager", "mgr", *resume, "dummy-1", "--", "starter"
+                    "start", "command", "--manager", "mgr", *resume, "dummy-1", "--", "starter"
                 )
                 self.assertEqual(result, 0, stderr)
                 self.assertEqual(self.roster.entries()["dummy-1"].record, Record.parse(stdout))
@@ -630,7 +762,8 @@ class Launch(CliCase):
 
     def test_a_busy_run_without_stderr_keeps_the_exit_code(self):
         result, stdout, stderr = self.start(
-            "run",
+            "start",
+            "command",
             "--manager",
             "mgr",
             "r1",
@@ -644,17 +777,17 @@ class Launch(CliCase):
         self.assertIn("exit 75", stderr)
 
     def test_failed_starts_exit_one_and_leave_their_entry_lost(self):
-        run = ("run", "--manager", "mgr", "r1", "--", "starter")
-        role = ("role", "--manager", "mgr", "--name", "r1", "--credentials", "{}", "pm")
+        run = ("start", "command", "--manager", "mgr", "r1", "--", "starter")
+        role = ("start", "role", "--manager", "mgr", "--name", "r1", "--credentials", "{}", "pm")
         receipts = (None, "invalid Record\n", " \n")
         for arguments, name, code, output in (
-            (("worker", "--manager", "mgr", "w1"), "w1", 75, ""),
-            (("issue", "--manager", "mgr", "TASK-12"), "TASK-12", 75, ""),
+            (("start", "worker", "--manager", "mgr", "w1"), "w1", 75, ""),
+            (("start", "issue", "--manager", "mgr", "TASK-12"), "TASK-12", 75, ""),
             *((argv, "r1", 75, output) for argv in (run, role) for output in receipts),
             *((run, "r1", code, "") for code in (1, 2, 3, 74, 76)),
-            (("worker", "--manager", "mgr", "a"), "a", 1, ""),
-            (("worker", "--manager", "mgr", "b"), "b", 2, "not empty\n"),
-            (("run", "--manager", "mgr", "c", "--", "fake"), "c", 2, ""),
+            (("start", "worker", "--manager", "mgr", "a"), "a", 1, ""),
+            (("start", "worker", "--manager", "mgr", "b"), "b", 2, "not empty\n"),
+            (("start", "command", "--manager", "mgr", "c", "--", "fake"), "c", 2, ""),
         ):
             with self.subTest(arguments=arguments, code=code, output=output):
                 result, stdout, stderr = self.start(*arguments, code=code, output=output)
@@ -662,6 +795,98 @@ class Launch(CliCase):
                 self.assertIn("layer message", stderr)
                 self.assertEqual(self.roster.entries()[name].state.value, "lost")
                 self.roster.remove(name)
+
+
+class StartForm(Launch):
+    SID = "0f6b3e4c-2c1d-4f8a-9b7e-5d6c7b8a9e10"
+
+    def test_command_tail_is_not_interpreted_as_outer_help(self):
+        result, _, stderr = self.start(
+            "start", "command", "--manager", "mgr", "c1", "--", "fake", "--help"
+        )
+        self.assertEqual(result, 0, stderr)
+        self.assertEqual(self.calls[0][0], ("fake", "--help"))
+
+    def test_start_kinds_launch_their_layer_command(self):
+        for kind, tail, name, argv in (
+            (
+                "worker",
+                ("--resume", self.SID, "w1", "--client", "claude", "--", "--x"),
+                "w1",
+                ("ensemble-session", "start", "w1", "--resume", self.SID, "--client", "claude"),
+            ),
+            (
+                "issue",
+                ("TASK-12", "--display", "none"),
+                "TASK-12",
+                ("ensemble-orchestrator", "router", "--issue", "TASK-12", "--tui"),
+            ),
+            ("command", ("c1", "--", "fake", "c1"), "c1", ("fake", "c1")),
+        ):
+            with self.subTest(kind=kind):
+                result, stdout, stderr = self.start("start", kind, "--manager", "mgr", *tail)
+                self.assertEqual(result, 0, stderr)
+                self.assertEqual(self.calls[0][0][: len(argv)], argv)
+                self.assertEqual(self.roster.entries()[name].record, Record.parse(stdout))
+
+    def test_start_worker_forwards_client_flags_after_double_dash(self):
+        parsed = cli._parser().parse_args(
+            ["start", "worker", "--manager", "demo", "helper", "--client", "codex", "--", "--m"]
+        )
+        self.assertEqual(parsed.arguments, ["--client", "codex", "--", "--m"])
+
+    def test_a_start_command_without_a_record_exits_one_and_is_lost(self):
+        result, stdout, stderr = self.start(
+            "start", "command", "--manager", "mgr", "plain", "--", "true", output=""
+        )
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertEqual(self.roster.entries()["plain"].state, State.LOST)
+
+    def test_start_command_needs_a_command_after_double_dash(self):
+        for tail in ((), ("--",)):
+            with self.subTest(tail=tail):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(["start", "command", "--manager", "mgr", "c1", *tail])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("start command requires -- followed by a command", stderr.getvalue())
+                self.assertFalse(os.path.exists(self.directory))
+
+
+class StartList(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.execvp = self.enterContext(mock.patch("os.execvp"))
+
+    def test_list_runs_delegate_listing_without_a_manager_even_in_an_agent_session(self):
+        for env in ({}, {"ENSEMBLE_AGENT_SESSION": "1"}):
+            with self.subTest(env=env), mock.patch.dict(os.environ, env):
+                self.execvp.reset_mock()
+                _, stdout, stderr = self.invoke("start", "--list")
+                self.assertEqual((stdout, stderr), ("", ""))
+                self.execvp.assert_called_once_with(
+                    "ensemble-delegate", ("ensemble-delegate", "run", "--list")
+                )
+        self.assertFalse(Path(self.ensemble, "managers").exists())
+
+    def test_list_takes_no_kind_and_start_needs_one_or_list(self):
+        for argv, message in (
+            (("start", "--list", "worker", "--manager", "mgr", "w1"), "a kind or --list, not both"),
+            (("start",), "start takes a kind or --list"),
+        ):
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(message, stderr.getvalue())
+        self.execvp.assert_not_called()
+
+    def test_a_missing_delegate_command_exits_one(self):
+        self.execvp.side_effect = FileNotFoundError(2, "No such file or directory")
+        result, stdout, stderr = self.invoke("start", "--list")
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(stderr.startswith("crew: "), stderr)
 
 
 class Reopen(CliCase):
@@ -701,7 +926,7 @@ class Reopen(CliCase):
             return SimpleNamespace(returncode=0, stdout=ctl.lines(*statuses), stderr="")
 
         with mock.patch("subprocess.run", side_effect=run):
-            return self.start("reopen", "--manager", "mgr", *crew, "TASK-9", *extra)
+            return self.start("start", "reopen", "--manager", "mgr", *crew, "TASK-9", *extra)
 
     def test_reopen_resumes_the_recorded_session_with_its_client(self):
         for client, base, option in (
@@ -838,7 +1063,7 @@ class Reopen(CliCase):
         self.assertEqual((closed, self.roster.entries()), ([("close", self.sid)], {}))
         result, _, stderr = self.invoke("resume", "--manager", "mgr", "TASK-9")
         self.assertEqual(result, 2)
-        self.assertIn("ensemble-crew reopen --manager=mgr TASK-9", stderr)
+        self.assertIn("ensemble-crew start reopen --manager=mgr TASK-9", stderr)
         result, stdout, stderr = self.reopen("--display", "none")
         self.assertEqual(result, 0, stderr)
         command = self.calls[0][0]
@@ -1071,7 +1296,7 @@ PAIR = ("ENSEMBLE_HOLDER_ID", "ENSEMBLE_HOLDER_GENERATION")
 
 
 class StaleHolderRecovery(CliCase):
-    """A commander whose holder ended keeps its pair: the error prints runnable recovery."""
+    """A manager whose holder ended keeps its pair: the error prints runnable recovery."""
 
     def setUp(self):
         super().setUp()
@@ -1107,9 +1332,9 @@ class StaleHolderRecovery(CliCase):
                 f"crew: {self.directory}: stale holder generation; start a new manager holder",
                 "crew: this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an"
                 " ended holder; no holder is active; handled N=0 GEN=0",
-                "crew: lasting fix: restart the commander's client under a new holder, then"
-                " attach and arm its monitor: command: ensemble-crew hold --manager mgr"
-                " --session mgr -- <client resume command> (ensemble-crew hold --help)",
+                "crew: lasting fix: restart the manager's client under a new holder, then"
+                " attach and arm its monitor: command: ensemble mgr -- <client resume command>"
+                " (ensemble --help)",
                 f"crew: handled events after N=0? first: {LEASE_FREE} ack --manager mgr"
                 " --through <line> --gen 0, then attach; unacknowledged events replay",
                 "crew: until then, attach without a lease, keeping the prefix on the commands it"
@@ -1118,10 +1343,6 @@ class StaleHolderRecovery(CliCase):
                 f" {LEASE_FREE} next-event --manager mgr --after 0 --gen 0 --content --follow",
             ],
         )
-        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()) as help:
-            main(["hold", "--help"])
-        self.assertIn("-- claude --continue", help.getvalue())
-        self.assertIn("codex resume --last", help.getvalue())
 
     def test_printed_lease_free_commands_run(self):
         _, _, stderr = self.invoke("attach", "--manager", "mgr")
@@ -1221,9 +1442,8 @@ class StaleHolderRecovery(CliCase):
             [
                 "crew: this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an"
                 " ended holder; new holds manager mgr now; handled N=0 GEN=0",
-                "crew: use new's commander; take over only on purpose: ensemble-crew hold --force"
-                " --manager mgr --session mgr -- <client resume command> (ensemble-crew hold"
-                " --help)",
+                "crew: use new's manager; only the user takes over, on purpose: ensemble"
+                " --force mgr -- <client resume command> (ensemble --help)",
             ],
         )
 
@@ -1245,7 +1465,15 @@ class StaleHolderRecovery(CliCase):
         self.assertIn("lasting fix", stderr)
         with self.lease_free(), Roster(self.directory).hold("new"):
             result, _, stderr = self.invoke("attach", "--manager", "mgr")
-        self.assertEqual((result, stderr), (1, f"crew: {self.directory}: held by new\n"))
+        self.assertEqual(
+            (result, stderr),
+            (
+                1,
+                f"crew: {self.directory}: held by new\n"
+                "crew: use new's manager; only the user takes over, on purpose: ensemble"
+                " --force mgr -- <client resume command> (ensemble --help)\n",
+            ),
+        )
 
     def test_notes_create_no_directory(self):
         result, _, stderr = self.invoke("attach", "--manager", "fresh")
@@ -1469,7 +1697,7 @@ class Report(CliCase):
             "r1", record=self.delegate_record("engineer-ab12"), alive=False, outcome="needs_input"
         )
         self.answers[("ensemble-delegate", "outcome")] = (0, "null\n", "")
-        with self.roster.hold("another commander"):
+        with self.roster.hold("another manager"):
             before = Path(self.roster.path).read_bytes()
             result, stdout, stderr = self.report()
             after = Path(self.roster.path).read_bytes()
@@ -1504,362 +1732,244 @@ class View(CliCase):
         self.assertEqual(stderr, f"crew: a: {ctl.COMMAND} hide: exit 1\n")
 
 
-def _record(kind: str, name: str) -> Record:
-    return Record(
-        1,
-        kind,
-        name,
-        (),
-        str(uuid.uuid4()),
-        None,
-        ("ensemble-session",),
-        ("ensemble-session", "resume", name),
-        "opaque",
-        None,
-    )
-
-
-class ListCase(CliCase):
+class Tile(CliCase):
     def setUp(self):
         super().setUp()
-        self.root = os.path.join(self.ensemble, "managers")
+        self.execvpe = self.enterContext(mock.patch("os.execvpe"))
+        self.run = self.enterContext(mock.patch("subprocess.run"))
 
-    def manager(self, name: str, *entries: tuple[str, str, State]) -> Roster:
-        roster = Roster(os.path.join(self.root, name))
-        os.makedirs(roster.directory, mode=0o700, exist_ok=True)
-        for entry, kind, state in entries:
-            record = _record(kind, entry)
-            roster.begin(Spec(entry, ("fake-ctl", "start")), sid=record.sid)
-            roster.commit(entry, record)
-            if state != State.LIVE:
-                mark(roster, entry, state)
-        return roster
+    def test_show_tile_hands_off_to_session_tile_without_a_roster(self):
+        polluted = {
+            "ENSEMBLE_SID": "other",
+            "ENSEMBLE_EVENTS": "/events",
+            "ENSEMBLE_MANAGER": "mgr",
+            "ENSEMBLE_HOLDER_ID": "h",
+            "ENSEMBLE_HOLDER_GENERATION": "1",
+            "KEEP": "1",
+        }
+        for argv in (("show", "--tile"), ("show", "--tile", "--manager", "other")):
+            with self.subTest(argv=argv), mock.patch.dict(os.environ, polluted):
+                self.execvpe.reset_mock()
+                self.assertEqual(self.invoke(*argv), (None, "", ""))
+                file, called, env = self.execvpe.call_args.args
+                self.assertEqual((file, called), ("ensemble-session", ("ensemble-session", "tile")))
+                self.assertEqual(env["KEEP"], "1")
+                self.assertFalse(
+                    {
+                        "ENSEMBLE_SID",
+                        "ENSEMBLE_EVENTS",
+                        "ENSEMBLE_MANAGER",
+                        "ENSEMBLE_HOLDER_ID",
+                        "ENSEMBLE_HOLDER_GENERATION",
+                    }
+                    & env.keys()
+                )
+        self.run.assert_not_called()
+        self.assertFalse(os.path.exists(self.directory))
 
-    def session(self, name: str, **fields) -> None:
-        record = {"client": "kind-a", "sid": "s-1", "pid": 4101, "cwd": "/home/user/project"}
-        Path(self.root, name, "session.json").write_text(json.dumps({**record, **fields}))
-
-
-class ListTest(ListCase):
-    def test_managers_without_records_print_dashes_sorted(self):
-        for name in ("updraft-manager", "ensemble-manager", "agent-usage-manager"):
-            self.manager(name)
-        self.assertEqual(
-            self.invoke("list"),
-            (
-                0,
-                "agent-usage-manager\tnot-held\t-\t-\n  -\n"
-                "ensemble-manager\tnot-held\t-\t-\n  -\n"
-                "updraft-manager\tnot-held\t-\t-\n  -\n",
-                "",
-            ),
-        )
-
-    def test_a_record_prints_its_client_and_cwd(self):
-        self.manager("demo")
-        self.session("demo", cwd="/home/user/other project")
-        self.assertEqual(
-            self.invoke("list"), (0, "demo\tnot-held\tkind-a\t/home/user/other project\n  -\n", "")
-        )
-
-    def test_entries_print_kind_and_state_under_their_manager(self):
-        self.manager("demo", ("w1", "worker", State.LIVE), ("r1", "role", State.GONE))
-        self.assertEqual(
-            self.invoke("list"),
-            (0, "demo\tnot-held\t-\t-\n  r1\trole\tgone\n  w1\tworker\tlive\n", ""),
-        )
-
-    def test_an_entry_without_a_record_has_no_kind(self):
-        roster = self.manager("demo")
-        roster.begin(Spec("s1", ("fake-ctl", "start")), sid=str(uuid.uuid4()))
-        self.assertEqual(self.invoke("list"), (0, "demo\tnot-held\t-\t-\n  s1\t-\tstarting\n", ""))
-
-    def test_no_entries_print_one_dash_row(self):
-        os.makedirs(os.path.join(self.root, "bare"))
-        self.manager("empty")
-        self.assertEqual(
-            self.invoke("list"),
-            (0, "bare\tnot-held\t-\t-\n  -\nempty\tnot-held\t-\t-\n  -\n", ""),
-        )
-
-    def test_a_held_manager_shows_its_state(self):
-        roster = self.manager("demo")
-        self.session("demo", pid=4101)
-        with roster.hold("owner"), mock.patch("os.kill"):
-            self.assertEqual(
-                self.invoke("list")[1].splitlines()[0],
-                "demo\tclient-running\tkind-a\t/home/user/project",
-            )
-
-    def test_a_corrupt_roster_shows_an_error_row_and_exits_1(self):
-        broken = self.manager("broken")
-        self.manager("ok", ("w1", "worker", State.LIVE))
-        Path(broken.path).write_text("{")
-        result, stdout, _ = self.invoke("list")
-        lines = stdout.splitlines()
-        self.assertEqual(result, 1)
-        self.assertTrue(lines[0].startswith(f"broken\tnot-held\t-\t-\terror\t{broken.path}: "))
-        self.assertEqual(lines[1:], ["ok\tnot-held\t-\t-", "  w1\tworker\tlive"])
-
-    def test_an_invalid_record_shows_an_error_row_and_exits_1(self):
-        self.manager("bad", ("w1", "worker", State.LIVE))
-        self.manager("ok")
-        Path(self.root, "bad", "session.json").write_text("[]")
-        path = os.path.join(self.root, "bad", "session.json")
-        self.assertEqual(
-            self.invoke("list"),
-            (
-                1,
-                f"bad\tnot-held\t-\t-\terror\t{path}: want exactly client, sid, pid and cwd\n"
-                "  w1\tworker\tlive\nok\tnot-held\t-\t-\n  -\n",
-                "",
-            ),
-        )
-
-    def test_an_unreadable_manager_prints_dashes_and_its_error(self):
-        self.manager("bad")
-        self.manager("ok")
-        lock = os.path.join(self.root, "bad", "roster.lock")
-        os.mkdir(lock)
-        self.assertEqual(
-            self.invoke("list"),
-            (1, f"bad\t-\t-\t-\terror\t{lock}: not a regular file\nok\tnot-held\t-\t-\n  -\n", ""),
-        )
-
-    def test_no_managers_prints_the_new_manager_usage(self):
-        usage = (0, "no managers yet; start one: ensemble <name>\n", "")
-        self.assertEqual(self.invoke("list"), usage)
-        os.makedirs(self.root)
-        Path(self.root, "file").touch()
-        self.assertEqual(self.invoke("list"), usage)
-
-    def test_list_takes_no_arguments_or_manager(self):
-        for argv in (("list", "extra"), ("list", "--manager", "demo")):
-            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit) as caught:
-                    main(argv)
-                self.assertEqual(caught.exception.code, 2)
-        self.manager("demo")
-        with mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1", "ENSEMBLE_MANAGER": "x"}):
-            self.assertEqual(self.invoke("list"), (0, "demo\tnot-held\t-\t-\n  -\n", ""))
-
-    def test_fields_cannot_break_a_row(self):
-        roster = self.manager("demo")
-        self.session("demo", cwd="/a\tb\x1bc\nd")
-        roster.begin(Spec("s1", ("fake-ctl", "start")), sid=str(uuid.uuid4()))
-        self.assertEqual(
-            self.invoke("list"),
-            (0, "demo\tnot-held\tkind-a\t/a bcd\n  s1\t-\tstarting\n", ""),
-        )
-
-
-def _dead(pid, _signal):
-    raise ProcessLookupError(pid)
-
-
-class _InterruptedFlush(io.StringIO):
-    """A terminal Ctrl-C lands while the prompt is being written."""
-
-    def flush(self):
-        raise KeyboardInterrupt
-
-
-class SelectTest(ListCase):
-    PROMPT = "select a manager [1-{}], Enter cancels: "
-
-    def select(self, answers, *, kill=_dead):
-        with (
-            mock.patch("sys.stdin", io.StringIO(answers)),
-            mock.patch("os.kill", side_effect=kill),
+    def test_tile_goes_with_show_alone(self):
+        own(self.roster, self.fake_record("a"))
+        for argv, message in (
+            (("show", "--tile", "a"), "show takes entry names, --all or --tile"),
+            (("show", "--tile", "--all"), "show takes entry names, --all or --tile"),
+            (("show",), "show takes entry names, --all or --tile"),
+            (("hide", "--tile"), "unrecognized arguments: --tile"),
+            (("hide",), "hide takes entry names or --all"),
         ):
-            return self.invoke("list", "--select")
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main([*argv, "--manager", "mgr"])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(message, stderr.getvalue())
+        self.execvpe.assert_not_called()
+        self.run.assert_not_called()
 
-    def test_rows_are_numbered_on_stderr_and_a_number_selects(self):
-        self.manager("alpha", ("w1", "worker", State.LIVE))
-        self.manager("demo")
-        self.assertEqual(
-            self.select("2\n"),
-            (
-                0,
-                "open demo\n",
-                "1) alpha\tnot-held\t-\t-\n  w1\tworker\tlive\n2) demo\tnot-held\t-\t-\n  -\n"
-                + self.PROMPT.format(2),
-            ),
-        )
-
-    def test_a_listed_name_selects(self):
-        self.manager("alpha")
-        self.manager("demo")
-        self.assertEqual(self.select("demo\n")[:2], (0, "open demo\n"))
-
-    def test_an_empty_line_eof_or_interrupt_cancels(self):
-        self.manager("demo")
-        for answers in ("\n", "", "  \n"):
-            with self.subTest(answers=answers):
-                self.assertEqual(self.select(answers)[:2], (0, ""))
-        with mock.patch("sys.stdin", mock.Mock(readline=mock.Mock(side_effect=KeyboardInterrupt))):
-            self.assertEqual(self.invoke("list", "--select")[:2], (0, ""))
-
-    def test_an_interrupt_while_the_prompt_is_written_cancels(self):
-        self.manager("demo")
-        stdout, stderr = io.StringIO(), _InterruptedFlush()
-        with (
-            mock.patch("sys.stdin", io.StringIO("1\n")),
-            contextlib.redirect_stdout(stdout),
-            contextlib.redirect_stderr(stderr),
-        ):
-            result = main(("list", "--select"))
-        self.assertEqual((result, stdout.getvalue()), (0, ""))
-        self.assertTrue(stderr.getvalue().endswith(self.PROMPT.format(1) + "\n"), stderr.getvalue())
-
-    def test_an_unknown_answer_prompts_again(self):
-        self.manager("demo")
-        result, stdout, stderr = self.select("9\nno\x1bpe\n1\n")
-        self.assertEqual((result, stdout), (0, "open demo\n"))
-        self.assertIn("crew: no manager 9; give 1-1 or a name\n", stderr)
-        self.assertIn("crew: no manager nope; give 1-1 or a name\n", stderr)
-        self.assertEqual(stderr.count(self.PROMPT.format(1)), 3)
-
-    def test_cancel_after_a_listing_error_exits_1(self):
-        Path(self.manager("broken").path).write_text("{")
-        self.assertEqual(self.select("\n")[:2], (1, ""))
-
-    def test_no_managers_prints_the_usage_without_a_prompt(self):
-        self.assertEqual(
-            self.select("1\n"), (0, "", "no managers yet; start one: ensemble <name>\n")
-        )
-
-    def test_each_holder_state_and_record_gives_its_plan(self):
-        roster = self.manager("demo")
-        self.assertEqual(self.select("1\n")[1], "open demo\n")
-        self.session("demo")
-        self.assertEqual(self.select("1\n")[1], "resume-new demo\n")
-        with roster.hold("demo"):
-            self.assertEqual(self.select("1\n")[1], "resume-held demo\n")
-            self.assertEqual(self.select("1\n", kill=None)[1], "attach demo\n")
-
-    def test_refusals_open_nothing_and_exit_1(self):
-        roster = self.manager("demo")
-        self.session("demo")
-        refused = "crew: manager demo: {}; nothing opened\n"
-        result, stdout, stderr = self.select("1\n", kill=None)
-        self.assertEqual((result, stdout), (1, ""))
-        self.assertTrue(
-            stderr.endswith(refused.format("its client 4101 runs without a holder; exit it first"))
-        )
-        with roster.hold("work"):
-            result, stdout, stderr = self.select("1\n")
-        self.assertEqual((result, stdout), (1, ""))
-        self.assertTrue(stderr.endswith(refused.format("held by work")))
-        lock = os.path.join(self.root, "demo", "roster.lock")
-        os.unlink(lock)
-        os.mkdir(lock)
-        result, stdout, stderr = self.select("1\n")
-        self.assertEqual((result, stdout), (1, ""))
-        self.assertTrue(stderr.endswith(refused.format(f"{lock}: not a regular file")))
-
-    def test_an_unreadable_record_warns_and_opens_without_resuming(self):
-        self.manager("demo")
-        Path(self.root, "demo", "session.json").write_text("[]")
-        path = os.path.join(self.root, "demo", "session.json")
-        result, stdout, stderr = self.select("1\n")
-        self.assertEqual((result, stdout), (0, "open demo\n"))
-        self.assertTrue(
-            stderr.endswith(
-                f"crew: manager demo: {path}: want exactly client, sid, pid and cwd;"
-                " its session is not resumed\n"
-            )
-        )
+    def test_show_help_names_tile(self):
+        self.assertIn("--tile", help_text(self, main, ["show", "--help"]))
 
 
-class ResumeCommanderTest(CliCase):
+class Restart(CliCase):
     def setUp(self):
         super().setUp()
-        os.makedirs(self.directory, mode=0o700)
-        self.cwd = os.path.join(self.home, "a b'c\x15d")
-        os.mkdir(self.cwd)
-        record = {"client": "kind-a", "sid": "s-1", "pid": 1 << 40, "cwd": self.cwd}
-        Path(self.directory, "session.json").write_text(json.dumps(record))
-        argv = '["kind-a", "--resume", "s-1"]'
-        self.run = self.enterContext(
-            mock.patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stdout=argv))
+        self.worker = own(
+            self.roster,
+            replace(
+                self.fake_record("w1"),
+                kind="worker",
+                sessions=("w1",),
+                ctl=("ensemble-session",),
+                resume=("ensemble-session", "resume", "w1"),
+            ),
         )
-        self.chdir = self.enterContext(mock.patch("os.chdir"))
-        self.execvp = self.enterContext(mock.patch("os.execvp"))
+        self.restarted = replace(self.worker, display="restarted")
 
-    def under(self, lease):
-        return mock.patch.dict(
-            os.environ,
-            {
-                "ENSEMBLE_MANAGER": "mgr",
-                "ENSEMBLE_HOLDER_ID": lease.id,
-                "ENSEMBLE_HOLDER_GENERATION": str(lease.generation),
-            },
-        )
+    def test_restart_prints_the_new_record_and_the_entry_holds_it(self):
+        def run(argv, **options):
+            self.assertEqual(tuple(argv), ("ensemble-session", "restart", "w1"))
+            os.write(options["stdout"].fileno(), (self.restarted.to_line() + "\n").encode())
+            return mock.Mock(returncode=0, stderr="")
 
-    def test_under_its_hold_it_execs_the_recorded_client_in_its_cwd(self):
-        with self.roster.hold("mgr") as lease, self.under(lease):
-            self.invoke("resume-commander")
-        self.chdir.assert_called_once_with(self.cwd)
-        self.execvp.assert_called_once_with("kind-a", ("kind-a", "--resume", "s-1"))
+        with mock.patch("subprocess.Popen", side_effect=answered(run)):
+            result = self.invoke("restart", "--manager", "mgr", "w1")
+        self.assertEqual(result, (0, self.restarted.to_line() + "\n", ""))
+        entry = self.roster.entries()["w1"]
+        self.assertEqual((entry.state, entry.record), (State.LIVE, self.restarted))
 
-    def test_it_records_its_own_pid_before_it_execs(self):
-        path = Path(self.directory, "session.json")
-        seen = []
-        self.execvp.side_effect = lambda *_: seen.append(json.loads(path.read_text()))
-        with self.roster.hold("mgr") as lease, self.under(lease):
-            self.invoke("resume-commander")
-        self.assertEqual(
-            seen, [{"client": "kind-a", "sid": "s-1", "pid": os.getpid(), "cwd": self.cwd}]
-        )
+    def test_restart_refuses_a_non_worker_or_unknown_name_with_2_and_changes_nothing(self):
+        own(self.roster, self.fake_record("planner"))
+        before = Path(self.roster.path).read_bytes()
+        with mock.patch("subprocess.Popen") as popen:
+            for name, message in (
+                ("planner", "crew: planner: restart restarts session workers only"),
+                ("nobody", "crew: nobody: not in roster"),
+            ):
+                with self.subTest(name=name):
+                    result, stdout, stderr = self.invoke("restart", "--manager", "mgr", name)
+                    self.assertEqual((result, stdout), (2, ""))
+                    self.assertTrue(stderr.startswith(message), stderr)
+        popen.assert_not_called()
+        self.assertEqual(Path(self.roster.path).read_bytes(), before)
 
-    def test_a_failed_record_write_still_execs(self):
-        before = Path(self.directory, "session.json").read_text()
-        with (
-            self.roster.hold("mgr") as lease,
-            self.under(lease),
-            mock.patch("os.replace", side_effect=PermissionError(13, "denied")),
+
+class Read(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.record = own(self.roster, replace(self.fake_record("w1"), sessions=("w1",)))
+        self.execvpe = self.enterContext(mock.patch("os.execvpe"))
+
+    def test_read_hands_off_to_the_session_of_the_entry(self):
+        for options, tail in (
+            ((), ("read", "w1", "--sid", self.record.sid)),
+            (("--lines", "5"), ("read", "w1", "--sid", self.record.sid, "--lines", "5")),
+            (("--reply",), ("reply", "w1", "--sid", self.record.sid)),
         ):
-            self.invoke("resume-commander")
-        self.execvp.assert_called_once_with("kind-a", ("kind-a", "--resume", "s-1"))
-        self.assertEqual(Path(self.directory, "session.json").read_text(), before)
+            with self.subTest(options=options):
+                self.execvpe.reset_mock()
+                self.assertEqual(
+                    self.invoke("read", "--manager", "mgr", "w1", *options), (None, "", "")
+                )
+                file, argv, _ = self.execvpe.call_args.args
+                self.assertEqual((file, argv), ("ensemble-session", ("ensemble-session", *tail)))
 
-    def test_without_a_holder_pair_it_is_a_usage_error(self):
-        result, stdout, stderr = self.invoke("resume-commander", "--manager", "mgr")
-        self.assertEqual((result, stdout), (2, ""))
-        self.assertIn("run resume-commander under the manager's hold: ensemble list", stderr)
-        self.execvp.assert_not_called()
+    def test_outcome_prints_crews_line_and_exits_0(self):
+        worker = own(
+            self.roster,
+            replace(
+                self.fake_record("w2"),
+                sessions=("w2",),
+                ctl=("ensemble-session",),
+                resume=("ensemble-session", "resume", "w2"),
+            ),
+        )
+        reply = 'Done.\n```ensemble-outcome\n{"status": "done"}\n```\n'
+        answer = mock.Mock(returncode=0, stdout=reply, stderr="")
+        with mock.patch("subprocess.run", return_value=answer) as run:
+            result = self.invoke("read", "--manager", "mgr", "w2", "--outcome")
+        self.assertEqual(result, (0, '{"status":"done"}\n', ""))
+        self.assertEqual(
+            run.call_args.args[0], ("ensemble-session", "reply", "w2", "--sid", worker.sid)
+        )
+        self.execvpe.assert_not_called()
 
-    def test_an_ended_holder_is_refused(self):
-        with self.roster.hold("mgr") as lease:
-            pass
-        with self.under(lease):
-            result, _, stderr = self.invoke("resume-commander")
-        self.assertEqual(result, 1)
-        self.assertIn("holder", stderr)
-        self.execvp.assert_not_called()
+    def test_views_are_exclusive_and_lines_positive(self):
+        for options, message in (
+            (("--reply", "--outcome"), "not allowed with argument"),
+            (("--lines", "3", "--reply"), "not allowed with argument"),
+            (("--lines", "0"), "want a positive integer"),
+            (("--lines", "x"), "want a positive integer"),
+        ):
+            with self.subTest(options=options):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(["read", "--manager", "mgr", "w1", *options])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(message, stderr.getvalue())
+        self.execvpe.assert_not_called()
 
-    def test_a_refused_target_execs_nothing(self):
-        Path(self.directory, "session.json").unlink()
-        with self.roster.hold("mgr") as lease, self.under(lease):
-            result, _, stderr = self.invoke("resume-commander")
-        self.assertEqual(result, 1)
-        self.assertIn("no session record", stderr)
-        self.chdir.assert_not_called()
-        self.execvp.assert_not_called()
+    def test_refusals_exit_with_crews_codes_and_run_nothing(self):
+        self.roster.begin(Spec("pending", ("start",), None), sid=str(uuid.uuid4()))
+        for name, options, code, message in (
+            ("nobody", (), 2, "crew: not in roster: nobody\n"),
+            ("pending", (), 1, "crew: pending: starting: no Record\n"),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.invoke("read", "--manager", "mgr", name, *options), (code, "", message)
+                )
+        self.execvpe.assert_not_called()
+
+
+class Send(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.record = own(self.roster, replace(self.fake_record("w1"), sessions=("w1",)))
+        self.execvpe = self.enterContext(mock.patch("os.execvpe"))
+
+    def test_send_hands_off_keys(self):
+        self.assertEqual(
+            self.invoke("send", "--manager", "mgr", "w1", "--key", "Down", "Enter"), (None, "", "")
+        )
+        self.assertEqual(
+            self.execvpe.call_args.args[1],
+            ("ensemble-session", "send", "w1", "--sid", self.record.sid, "--key", "Down", "Enter"),
+        )
+
+    def test_send_prints_the_delivery_of_text(self):
+        argv = (
+            "ensemble-session",
+            "send",
+            "--sid",
+            self.record.sid,
+            "--wait",
+            str(SEND_WAIT),
+            "w1",
+        )
+        for given, stdout, code, line, exit_code in (
+            (("w1", "answer"), "delivered\n", 0, "已送达 (delivered)", 0),
+            (("w1", "--", "-x"), "queued\n", 0, "排队中 (queued)", 0),
+            (("w1", "answer"), "undelivered\n", 1, "未送达 (undelivered)", 1),
+            (("w1", "answer"), "", 2, "未送达 (undelivered)", 2),
+            (("w1", "answer"), "", 0, "未送达 (undelivered)", 1),
+        ):
+            with (
+                self.subTest(stdout=stdout, code=code),
+                mock.patch(
+                    "subprocess.run",
+                    return_value=CompletedProcess((), code, stdout=stdout),
+                ) as run,
+            ):
+                found = self.invoke("send", "--manager", "mgr", *given)
+                self.assertEqual(found, (exit_code, line + "\n", ""))
+                self.assertEqual(run.call_args.args[0], (*argv, "--", given[-1]))
+        self.execvpe.assert_not_called()
+
+    def test_send_help_states_its_outputs_and_wait(self):
+        text = help_text(self, main, ["send", "--help"])
+        for part in ("已送达", "排队中", "未送达", f"{SEND_WAIT} seconds", "--key prints nothing"):
+            self.assertIn(part, text)
+
+    def test_send_takes_text_or_keys_not_both(self):
+        for argv in (("w1",), ("w1", "answer", "--key", "Enter")):
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(["send", "--manager", "mgr", *argv])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("send takes TEXT or --key K…, not both", stderr.getvalue())
+        self.execvpe.assert_not_called()
 
 
 class InsideAnAgentSession(CliCase):
-    def test_run_hold_and_resume_exit_2_and_write_nothing(self):
+    def test_starts_resumes_and_restarts_exit_2_and_write_nothing(self):
         for argv in (
-            ("run", "--manager", "mgr", "w1", "--", "true"),
-            ("hold", "--manager", "mgr", "--", "true"),
+            ("start", "command", "--manager", "mgr", "w1", "--", "true"),
             ("resume", "--manager", "mgr", "w1"),
-            ("worker", "--manager", "mgr", "w1", "--client", "claude"),
-            ("reopen", "--manager", "mgr", "TASK-12"),
-            ("issue", "--manager", "mgr", "TASK-12"),
-            ("role", "--manager", "mgr", "pm", "--input", "x"),
-            ("resume-commander", "--manager", "mgr"),
+            ("restart", "--manager", "mgr", "w1"),
+            ("start", "worker", "--manager", "mgr", "w1", "--client", "claude"),
+            ("start", "reopen", "--manager", "mgr", "TASK-12"),
+            ("start", "issue", "--manager", "mgr", "TASK-12"),
+            ("start", "role", "--manager", "mgr", "pm", "--input", "x"),
         ):
             with (
                 self.subTest(argv=argv),
@@ -1876,36 +1986,38 @@ class InsideAnAgentSession(CliCase):
             self.assertNotIn("refused", self.invoke("status", "--manager", "mgr")[2])
 
 
+START_KINDS = ["worker", "role", "issue", "reopen", "command"]
+START_PAGES = [f"start {kind}" for kind in START_KINDS]
 HELP_COMMANDS = [
-    "hold",
-    "run",
-    "worker",
-    "reopen",
-    "issue",
-    "role",
+    "start",
     "attach",
     "status",
     "report",
+    "read",
+    "send",
     "resume",
+    "restart",
     "hide",
     "show",
     "close",
-    "forget",
-    "close-all",
     "note",
     "release",
     "pending",
     "ack",
     "next-event",
-    "list",
-    "resume-commander",
 ]
 
 
 class HelpContracts(Case):
+    def setUp(self):
+        super().setUp()
+        unlisted = SimpleNamespace(returncode=1, stdout="", stderr="")
+        self.enterContext(mock.patch("subprocess.run", return_value=unlisted))
+
     def test_role_options_are_owned_before_role_and_remainder_is_opaque(self):
         parsed = cli._parser().parse_args(
             [
+                "start",
                 "role",
                 "--task=build",
                 "--credentials",
@@ -1918,7 +2030,7 @@ class HelpContracts(Case):
         )
         self.assertEqual((parsed.key, parsed.task, parsed.credentials), ("engineer", "build", ""))
         self.assertEqual(parsed.arguments, ["--future-switch", "--input", "--task wrong"])
-        text = self.help("role")
+        text = self.help("start role")
         self.assertIn("--task TASK", text)
         self.assertIn("--credentials JSON", text)
         self.assertIn("before ROLE", text)
@@ -1933,12 +2045,12 @@ class HelpContracts(Case):
         check_examples(
             self,
             self.help,
-            [None, *HELP_COMMANDS],
+            [None, *HELP_COMMANDS, *START_PAGES],
             check=lambda command: parse_only(cli.main, command[1:]),
         )
 
     def help(self, command=None, flag="--help"):
-        return help_text(self, cli.main, ([] if command is None else [command]) + [flag])
+        return help_text(self, cli.main, ([] if command is None else command.split()) + [flag])
 
     def test_every_surface_has_purpose_and_safe_help_under_invalid_runtime_context(self):
         before = sorted(Path(self.home).rglob("*"))
@@ -1953,7 +2065,7 @@ class HelpContracts(Case):
             mock.patch("subprocess.run") as run,
             mock.patch("subprocess.Popen") as popen,
         ):
-            for command in [None, *HELP_COMMANDS]:
+            for command in [None, *HELP_COMMANDS, *START_PAGES]:
                 for flag in ("--help", "-h"):
                     with self.subTest(command=command, flag=flag):
                         text = self.help(command, flag)
@@ -1961,29 +2073,105 @@ class HelpContracts(Case):
                         if command is not None:
                             self.assertIn("Examples:", text)
                             self.assertIn("ensemble-crew --help", text)
-            run.assert_not_called()
+            # start's help alone reads each configured Host's display form from session's help
+            self.assertEqual(
+                [call.args[0] for call in run.call_args_list], [("ensemble-session", "--help")] * 2
+            )
             popen.assert_not_called()
         self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+
+    def test_acquiring_a_holder_points_at_ensemble(self):
+        for command in (None, "attach", "release"):
+            with self.subTest(command=command):
+                text = self.help(command)
+                self.assertIn("ensemble --help", text)
 
     def test_root_lists_each_command_with_a_purpose(self):
         text = self.help()
         self.assertEqual(text.split("{")[1].split("}")[0].split(","), HELP_COMMANDS)
         self.assertEqual(re.findall(r"^    (\S+) +\S", text, re.MULTILINE), HELP_COMMANDS)
 
+    def test_start_help_copies_each_host_display_line_from_session_help(self):
+        session_help = (
+            "usage: ensemble-session [-h] COMMAND ...\n\n"
+            "display (--display D), per configured Host:\n"
+            "  tmux: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+            "    OPENER: tmux session name; empty means caller.\n"
+            "  docker: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+            "    SPLIT: right or below.\n"
+            "  remote: as given\n"
+        )
+        answer = SimpleNamespace(returncode=0, stdout=session_help, stderr="")
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag), mock.patch("subprocess.run", return_value=answer) as run:
+                text = self.help("start", flag)
+            self.assertEqual(run.call_args.args[0], ("ensemble-session", "--help"))
+            self.assertEqual(run.call_args.kwargs["stdin"], cli.subprocess.DEVNULL)
+            self.assertTrue(
+                text.endswith(
+                    "Placement (--display D), per configured Host, from ensemble-session --help:\n"
+                    "  tmux: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+                    "  docker: [OPENER][/SPLIT[/ANCHOR]] or none\n"
+                    "  remote: as given\n"
+                ),
+                text,
+            )
+            self.assertNotIn("<opener>", text)
+            self.assertNotIn("OPENER: tmux session name", text)
+
+    def test_start_help_without_session_host_lines_points_at_session_help(self):
+        failed = SimpleNamespace(returncode=2, stdout="", stderr="config error\n")
+        unreadable = SimpleNamespace(
+            returncode=0,
+            stdout="display (--display D): the session config could not be read.\n",
+            stderr="",
+        )
+        for outcome in (
+            OSError(2, "No such file or directory"),
+            cli.subprocess.TimeoutExpired(("ensemble-session", "--help"), 20),
+            failed,
+            unreadable,
+        ):
+            effect = (
+                {"side_effect": outcome}
+                if isinstance(outcome, Exception)
+                else {"return_value": outcome}
+            )
+            with self.subTest(outcome=outcome), mock.patch("subprocess.run", **effect):
+                text = self.help("start")
+            self.assertTrue(
+                text.endswith(
+                    "Placement (--display D): ensemble-session --help could not list the configured\n"
+                    "Hosts; run it for each Host's form.\n"
+                ),
+                text,
+            )
+
+    def test_start_lists_each_kind_and_its_pages_use_the_start_form(self):
+        text = self.help("start")
+        listed = re.findall(r"^    (\S+) +\S", text, re.MULTILINE)
+        self.assertEqual(listed, START_KINDS)
+        for page in START_PAGES:
+            with self.subTest(page=page):
+                examples = [
+                    line for line in self.help(page).splitlines() if "ensemble-crew" in line
+                ]
+                self.assertIn(f"ensemble-crew {page} --help", "\n".join(examples))
+                self.assertIn(f"  ensemble-crew {page} --manager demo", "\n".join(examples))
+
     def test_boundary_help_and_recovery_are_explicit(self):
         for verb, owner in (
-            ("worker", "ensemble-session start --help"),
-            ("reopen", "ensemble-session start --help"),
-            ("issue", "ensemble-orchestrator router --help"),
-            ("role", "ensemble-delegate run --help"),
+            ("start worker", "ensemble-session start --help"),
+            ("start reopen", "ensemble-session start --help"),
+            ("start issue", "ensemble-orchestrator router --help"),
+            ("start role", "ensemble-delegate run --help"),
         ):
             with self.subTest(verb=verb):
                 text = self.help(verb)
                 self.assertIn(owner, text)
                 self.assertIn("before", text)
                 self.assertIn("Forwarded --help", text)
-        self.assertIn("-- COMMAND [ARG ...]", self.help("hold"))
-        self.assertIn("-- COMMAND [ARG ...]", self.help("run"))
+        self.assertIn("-- COMMAND [ARG ...]", self.help("start command"))
         self.assertNotIn("--after", self.help("attach"))
         self.assertIn("does not acknowledge events", self.help("attach"))
         self.assertIn("monitor expired", self.help("next-event"))
@@ -1995,17 +2183,13 @@ class HelpContracts(Case):
     def test_published_worker_example_keeps_session_and_client_tokens(self):
         parser = cli._parser()
         argv = shlex.split(
-            "worker --manager demo helper --client codex --display none -- --model 'a b'"
+            "start worker --manager demo helper --client codex --display none -- --model 'a b'"
         )
         parsed = parser.parse_args(argv)
         self.assertEqual((parsed.manager, parsed.key), ("demo", "helper"))
         self.assertEqual(
             parsed.arguments, ["--client", "codex", "--display", "none", "--", "--model", "a b"]
         )
-        self.assertEqual(parser.parse_args(["worker", "helper", "--help"]).arguments, ["--help"])
-
-    def test_command_tail_is_not_interpreted_as_outer_help(self):
-        with mock.patch("subprocess.Popen") as popen:
-            popen.return_value.wait.return_value = 0
-            self.assertEqual(cli.main(["hold", "--manager", "demo", "--", "codex", "--help"]), 0)
-        self.assertEqual(popen.call_args.args[0], ("codex", "--help"))
+        self.assertEqual(
+            parser.parse_args(["start", "worker", "helper", "--help"]).arguments, ["--help"]
+        )

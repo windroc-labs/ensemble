@@ -1,4 +1,4 @@
-"""skills/manage/SKILL.md as a commander reads them."""
+"""skills/manage/SKILL.md as a manager reads them."""
 
 import os
 import re
@@ -13,6 +13,12 @@ FLAG = re.compile(r"(?<![\w-])--[a-z][a-z-]*")
 REFERENCE = re.compile(r"\[([A-Z][a-z]+)\]\(#[a-z-]+\)")
 RULES = re.compile(r"^  - Bash\((.+)\)$", re.M)
 SKILL_DIR = "${CLAUDE_SKILL_DIR}"
+LAUNCHES = {
+    "worker": ("<name>", "ensemble-session", "start", "<name>"),
+    "reopen": ("<ID>", "ensemble-session", "start", "<ID>"),
+    "issue": ("<ID>", "ensemble-orchestrator", "router", "--issue", "<ID>", "--tui"),
+    "role": ("<role>", "ensemble-delegate", "run", "--role", "<role>", "--detach"),
+}
 PATH = re.compile(
     r"`((?:\$\{CLAUDE_SKILL_DIR\}/)?[\w.-]+(?:/[\w.-]+)*\.(?:md|toml|py)|\$\{CLAUDE_SKILL_DIR\}/[\w./-]+)`"
 )
@@ -55,18 +61,15 @@ def spans(source: str) -> list[list[list[str]]]:
         for start, end in zip(starts, [*starts[1:], len(words)], strict=True):
             command = words[start:end]
             command = command[: command.index("--")] if "--" in command else command
-            verb = command[1] if len(command) > 1 else ""
-            key = {"worker": "<name>", "issue": "<ID>", "role": "<role>"}.get(verb)
-            if command[0] == "ensemble-crew" and key in command:
+            kind = (
+                command[2] if command[:2] == ["ensemble-crew", "start"] and len(command) > 2 else ""
+            )
+            key = LAUNCHES.get(kind, ("",))[0]
+            if key in command:
                 at = command.index(key)
                 tail = command[at + 1 :]
                 commands.append(command[: at + 1])
-                prefix = {
-                    "worker": ["ensemble-session", "start", key],
-                    "issue": ["ensemble-orchestrator", "router", "--issue", key, "--tui"],
-                    "role": ["ensemble-delegate", "run", "--role", key, "--detach"],
-                }[verb]
-                commands.append([*prefix, *tail])
+                commands.append([*LAUNCHES[kind][1:], *tail])
             else:
                 commands.append(command)
         found.append(commands)
@@ -77,8 +80,19 @@ def examples(source: str) -> list[list[str]]:
     return [command for commands in spans(source) for command in commands]
 
 
+def written(source: str) -> list[list[str]]:
+    """Each backticked command up to a bare `--`."""
+    found = []
+    for span in COMMAND.findall(source):
+        words = span.split()
+        found.append(words[: words.index("--")] if "--" in words else words)
+    return found
+
+
 def subcommand(command: list[str]) -> tuple[str, ...]:
-    depth = 3 if command[:2] == ["ensemble-orchestrator", "issue"] else 1
+    depth = {("ensemble-orchestrator", "issue"): 3, ("ensemble-crew", "start"): 2}.get(
+        tuple(command[:2]), 1
+    )
     found = []
     for word in command[1 : depth + 1]:
         if not re.fullmatch(r"[a-z][a-z-]*", word):
@@ -103,8 +117,10 @@ def paths(skill: str) -> list[str]:
 
 
 def example(skill: str, prefix: str, *having: str) -> str:
-    """skill's one backticked command starting with prefix and holding each of having."""
+    """skill's command prefix, else its one starting with prefix and holding having."""
     spans = COMMAND.findall(body(skill))
+    if not having and prefix in spans:
+        return prefix
     [found] = sorted({s for s in spans if s.startswith(prefix) and all(h in s for h in having)})
     return found
 

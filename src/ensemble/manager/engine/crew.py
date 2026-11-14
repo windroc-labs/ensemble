@@ -10,8 +10,9 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
+from typing import NoReturn
 
 from ensemble.manager.engine.pr import NO_PR, VIEW_FIELDS, cells, pr_url, unknown
 from ensemble.manager.engine.roster import LOCK_TIMEOUT, Roster
@@ -39,11 +40,13 @@ from ensemble.utils import (
     Status,
     StatusState,
     one_line,
+    outcome_block,
     printable,
     read_reply,
 )
 
 TIMEOUT = 30
+SEND_WAIT = 20  # seconds an idle client has to start a turn
 # A start's or resume's: a Docker one may first rebuild its image, which its broker allows 1800 s.
 START_TIMEOUT = 1920
 GRACE = 60  # from SIGTERM to SIGKILL: a Docker start in flight removes its container
@@ -56,6 +59,7 @@ DESCENDANTS = (*HERE, "--descendants")
 HEADER = "name\tkind\tsid\tstate\tview\tnote\tcwd\tattach"
 REPORT_HEADER = "name\tkind\tstate\tnote\treply\tpr\tchecks\tmergeable\treview"
 REPLY_WIDTH = 80
+WORKER = "worker"  # the kind of Record ensemble-session start prints
 
 
 def _owner(session: str, entries: dict[str, Entry]) -> str | None:
@@ -67,6 +71,31 @@ def _owner(session: str, entries: dict[str, Entry]) -> str | None:
         ),
         None,
     )
+
+
+def child_env() -> dict[str, str]:
+    """The caller's environment without crew's sid, events and lease variables."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {SID_ENV, EVENTS_ENV, *LEASE_ENV}
+    }
+
+
+def hand_off(argv: tuple[str, ...]) -> NoReturn:
+    """Become argv, so its output and exit status are the caller's."""
+    os.execvpe(argv[0], argv, child_env())
+
+
+def _one_session(name: str, record: Record) -> tuple[str, str]:
+    """The one session entry `name`'s Record names, with the sid that guards its identity."""
+    if len(record.sessions) != 1:
+        raise ValueError(
+            f"{name}: no single session to read or send to (sessions: {len(record.sessions)})"
+        )
+    if record.sid is None:
+        raise ValueError(f"{name}: no sid to guard its session")
+    return record.sessions[0], record.sid
 
 
 def _row(fields: Iterable[str]) -> str:
@@ -106,6 +135,28 @@ def _reconciled(entry: Entry, status: Status) -> State:
     return State.GONE
 
 
+def _written(reply: str) -> dict | None:
+    """The outcome block in `reply` when its body is a JSON object, else None."""
+    body = outcome_block(reply)
+    try:
+        found = None if body is None else json.loads(body)
+    except (ValueError, RecursionError):
+        found = None
+    return found if isinstance(found, dict) else None
+
+
+def _asked_again(written: dict, recorded: dict) -> bool:
+    """Whether `written` asks for input again with the questions the delegate recorded, normalized
+    as the delegate records them.
+    """
+    questions = written.get("questions") or []
+    return (
+        written.get("status") == OutcomeStatus.NEEDS_INPUT
+        and isinstance(questions, list)
+        and [str(q) for q in questions] == recorded.get("questions")
+    )
+
+
 def _closed_run(work_dir: str, issue: str) -> tuple[str, str, str, str, str, str]:
     """An issue run's role, client, session id, cwd, agent name and Host from its run record,
     `<work_dir>/work/<issue>/run/delegate.json`; never run.jsonl, which its
@@ -140,11 +191,7 @@ class Crew:
         roster.bind(lease)
 
     def _env(self, *, events: bool) -> dict[str, str]:
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if key not in {SID_ENV, EVENTS_ENV, *LEASE_ENV}
-        }
+        env = child_env()
         if events:
             env[EVENTS_ENV] = self.roster.events
         return env
@@ -628,13 +675,103 @@ class Crew:
         url = outcome.get("url") if isinstance(outcome, dict) else None
         return url if isinstance(url, str) else None
 
+    def _record(self, name: str) -> Record:
+        entries = self.roster.entries()
+        if name not in entries:
+            raise ValueError(f"not in roster: {name}")
+        entry = entries[name]
+        if entry.record is None:
+            raise RuntimeError(f"{name}: {entry.state}: no Record")
+        return entry.record
+
+    def _session(self, name: str) -> tuple[str, str]:
+        return _one_session(name, self._record(name))
+
+    def read_argv(
+        self, name: str, *, lines: int | None = None, reply: bool = False
+    ) -> tuple[str, ...]:
+        """The command printing the entry's screen (its last `lines`) or latest reply."""
+        session, sid = self._session(name)
+        if reply:
+            return (LayerCommand.SESSION, "reply", session, "--sid", sid)
+        shown = () if lines is None else ("--lines", str(lines))
+        return (LayerCommand.SESSION, "read", session, "--sid", sid, *shown)
+
+    def outcome(self, name: str) -> str:
+        """The entry's latest outcome as one JSON line, "null" without one. A role or issue run's
+        is the one its delegate recorded, unless that asks for input and its tui's latest reply
+        holds another outcome block: the run went on without its harness. A worker's, a reopened
+        run's included, is the outcome block in its latest reply. Only the latest reply is read.
+        An issue run's ctl has no outcome verb: its Record's workdir is its delegate's.
+        """
+        record = self._record(name)
+        if record.ctl[0] not in (LayerCommand.DELEGATE, LayerCommand.ORCHESTRATOR):
+            session, sid = self._session(name)
+            written = _written(
+                self._execute((LayerCommand.SESSION, "reply", session, "--sid", sid))
+            )
+            return json.dumps(written, separators=(",", ":"))
+        if record.workdir is None:
+            raise ValueError(f"{name}: no workdir to read its run outcome")
+        argv = (LayerCommand.DELEGATE, "outcome", record.workdir)
+        text = self._execute(argv).strip()
+        try:
+            recorded = json.loads(text)
+        except (ValueError, RecursionError):
+            recorded = text
+        if recorded is not None and not isinstance(recorded, dict):
+            raise RuntimeError(f"{shlex.join(argv)}: not an outcome: {text!r:.80}")
+        if (
+            recorded is None
+            or recorded.get("status") != OutcomeStatus.NEEDS_INPUT
+            or len(record.sessions) != 1
+            or record.sid is None
+        ):
+            return text
+        try:
+            reply = self._execute(
+                (LayerCommand.SESSION, "reply", record.sessions[0], "--sid", record.sid)
+            )
+        except RuntimeError:  # its tui gone, replaced or not answering: the recorded one stands
+            return text
+        written = _written(reply)
+        if written is None or _asked_again(written, recorded):
+            return text
+        return json.dumps(written, separators=(",", ":"))
+
+    def send_argv(
+        self, name: str, *, text: str | None = None, keys: Sequence[str] = ()
+    ) -> tuple[str, ...]:
+        """The command pasting text, then Enter, else pressing keys, in the entry's session."""
+        session, sid = self._session(name)
+        if text is None:
+            return (LayerCommand.SESSION, "send", session, "--sid", sid, "--key", *keys)
+        waited = ("--sid", sid, "--wait", str(SEND_WAIT))
+        return (LayerCommand.SESSION, "send", *waited, session, "--", text)
+
+    def send_text(self, name: str, text: str) -> tuple[str | None, int]:
+        """The session's delivery word, else None, and exit status."""
+        argv = self.send_argv(name, text=text)
+        try:
+            result = subprocess.run(
+                argv,
+                stdout=subprocess.PIPE,
+                text=True,
+                check=False,
+                env=self._env(events=False),
+            )
+        except OSError as error:
+            raise RuntimeError(f"{shlex.join(argv)}: {error}") from error
+        words = result.stdout.split()
+        return (words[0] if words else None), result.returncode
+
     def resume(self, name: str, *, input: str | None = None) -> Record | None:
         self._listed = None
         self.roster.check_lease()
         entries = self.roster.entries()
         if name not in entries:
             manager = os.path.basename(self.roster.directory)
-            reopen = ("ensemble-crew", "reopen", f"--manager={manager}", name)
+            reopen = ("ensemble-crew", "start", "reopen", f"--manager={manager}", name)
             raise ValueError(f"{name}: not in roster; a closed issue run: {shlex.join(reopen)}")
         entry = entries[name]
         status = None
@@ -678,6 +815,37 @@ class Crew:
                 error.add_note(f"{name}: could not mark gone: {mark_error}")
             raise
         return resumed
+
+    def restart(self, name: str) -> Record:
+        """Restart worker entry `name`'s session in place, as `ensemble-session restart` does;
+        its new Record. A failed restart leaves the entry gone, as a failed resume does.
+        """
+        self._listed = None
+        self.roster.check_lease()
+        entry = self.roster.entries().get(name)
+        if entry is None:
+            raise ValueError(f"{name}: not in roster")
+        record = entry.record
+        if record is None:
+            raise RuntimeError(f"{name}: {entry.state}: no Record")
+        if record.kind != WORKER or record.ctl != (LayerCommand.SESSION,):
+            raise ValueError(
+                f"{name}: restart restarts session workers only "
+                f"(kind {record.kind}, ctl {record.ctl[0]})"
+            )
+        session, _ = _one_session(name, record)
+        claimed = self.roster.claim_restart(name, entry)
+        assert claimed.sid is not None
+        try:
+            restarted = self._start((LayerCommand.SESSION, "restart", session), name, claimed.sid)
+            self.roster.commit(name, restarted)
+        except (RosterError, RuntimeError, ValueError) as error:
+            try:
+                self.roster.mark_if(name, claimed, State.GONE)
+            except RosterError as mark_error:
+                error.add_note(f"{name}: could not mark gone: {mark_error}")
+            raise
+        return restarted
 
     def _marked(self, name: str, entry: Entry, state: State) -> Entry:
         """`entry` marked `state`; the roster's entry when another writer changed it first."""
@@ -741,7 +909,7 @@ class Crew:
                     self._traced(name, entry, failures[ctl], error)
                 raise error
         if here is None:
-            raise RuntimeError("close-all partial: unlisted work may still be running")
+            raise RuntimeError("close --all partial: unlisted work may still be running")
         return names
 
     def forget(self, name: str, *, force: bool = False) -> None:

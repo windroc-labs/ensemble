@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 const steps = JSON.parse(readFileSync(0, "utf8"));
 const saved = {};
 const client = { session: { get: async ({ path }) => ({ data: saved[path.id] ?? { id: path.id } }) } };
-const hooks = await (await import(pathToFileURL(process.argv[2]).href)).EnsembleCommander({
+const hooks = await (await import(pathToFileURL(process.argv[2]).href)).EnsembleManager({
   client,
   directory: process.cwd(),
 });

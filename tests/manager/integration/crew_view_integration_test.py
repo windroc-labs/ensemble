@@ -25,7 +25,9 @@ class ViewTest(LivePipeline):
     def test_hide_all_then_show_all_over_three_kinds(self):
         self.ok(self.worker("w"))
         role = self.record(self.role("r", steps=[START]))
-        pipeline = self.record(self.crew("run", "p", "--", *ROUTER, **self.scene("p", [START])))
+        pipeline = self.record(
+            self.crew("start", "command", "p", "--", *ROUTER, **self.scene("p", [START]))
+        )
         tuis = {"w", f"{ROLE}-{role.sid[:8]}", f"engineer-{ID}-{pipeline.sid[:8]}"}
         self.until(lambda: self.shown() == tuis, f"{tuis} shown")
 

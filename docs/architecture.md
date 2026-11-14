@@ -7,7 +7,7 @@ run a role directly, or let a board advance work through roles. [CONTEXT.md](../
 
 | Layer | Owns |
 |---|---|
-| [Manager](../src/ensemble/manager/) | The commander's crew, launch records and event cursor; controls other layers through commands |
+| [Manager](../src/ensemble/manager/) | The manager's crew, launch records and event cursor; controls other layers through commands |
 | [Orchestrator](../src/ensemble/orchestrator/) | Board scheduling, handoffs and write-back through a Linear or local Markdown Tracker |
 | [Delegate](../src/ensemble/delegate/) | Role prompts, run policy and interpretation of progress and outcomes |
 | [Session](../src/ensemble/session/) | Client lifecycle and normalized events, independent of client and Host |
@@ -20,7 +20,7 @@ Orchestrator calls Delegate's public API; Delegate calls Session's. Import bound
 
 ```mermaid
 flowchart LR
-    U[User / commander] --> O[Orchestrator]
+    U[User / manager] --> O[Orchestrator]
     O --> D[Delegate]
     U -. direct role .-> D
     D --> H[Session harness]

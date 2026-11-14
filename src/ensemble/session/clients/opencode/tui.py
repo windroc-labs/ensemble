@@ -75,7 +75,7 @@ class OpenCodeTui(Homed, Tui):
 
     def _configure_hooks(self):
         auto = "--auto" in self.common.modes[self._context.permission]
-        # Both the commander's hook state and replay use this mapping.
+        # Both the manager's hook state and replay use this mapping.
         self.hooks = MappingProxyType(
             {
                 label: kind

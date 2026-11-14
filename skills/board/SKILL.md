@@ -1,13 +1,13 @@
 ---
 name: board
-description: "Read, find, create, edit, move, split and archive board issues with fixed ensemble-orchestrator issue commands: no hand-written tracker queries."
+description: "Read, find, create, edit, move, split and archive board issues with fixed ensemble-orchestrator issue commands, and promote a local board: no hand-written tracker queries."
 ---
 
 # board
 
-Every common issue operation is one `ensemble-orchestrator issue` command: use it, never a hand-written query or another tool. Splitting an issue is creating its parts with `create --parent`.
+Every common issue operation is one `ensemble-orchestrator issue` command: use it, never a hand-written query or another tool. Splitting an issue is creating its parts with `create --parent`. The one other command is a local board's `ensemble-orchestrator promote` ([Local board](#local-board)).
 
-Each command needs no run on the issue and prints one compact JSON object; diagnostics go to stderr. `<subcommand> --help` gives every option, default and output field. None is pre-approved: `read` and `list` write a file with `--full --output`. A client without this plugin's `bin/` on its PATH (Codex) runs `${CLAUDE_SKILL_DIR}/../../bin/ensemble-orchestrator`, writing `${CLAUDE_SKILL_DIR}` as this file's directory, an absolute path.
+Each command needs no run on the issue and prints one compact JSON object; diagnostics go to stderr. `<subcommand> --help` gives every option, default and output field. None is pre-approved: `read` and `list` write a file with `--full --output`. A client without this plugin's `bin/` on its PATH (Codex) runs `${CLAUDE_SKILL_DIR}/../../bin/<command>`, writing `${CLAUDE_SKILL_DIR}` as this file's directory, an absolute path.
 
 ## Commands
 
@@ -31,7 +31,7 @@ Exit 0: success, or `"result": "unchanged"` (already so; nothing written). Exit 
 
 - **States** (`STATE`, `--state`): `backlog`, `ready`, `running`, `review`, `approved`, `done`, `canceled`. `create` defaults to `backlog`.
 - **Assignment** (`--role`): a role (`researcher`, `pm`, `engineer`), `me` (the identity the commands run as) or `unassigned`; how the board records it: its section below.
-- **Task** (`--task`): usually unset. An issue without a task label: its role's run picks a task from its own list by the issue, its default when none fits better (a researcher's: `research`); `ensemble-delegate run --list` gives each role's tasks and when each is chosen. Set it only to force one task: a task name this board configures, which can be fewer than a role's tasks.
+- **Task** (`--task`): usually unset. An issue without a task label: its role's run picks a task from its own list by the issue, its default when none fits better (a researcher's: `research`); `ensemble-crew start --list` gives each role's tasks and when each is chosen. Set it only to force one task: a task name this board configures, which can be fewer than a role's tasks.
 - **Client** (`--client`): a configured name, such as `codex`.
 - An unknown task or client exits 2 listing the configured names.
 - **Priority** (`--priority`): `none`, `urgent`, `high`, `medium`, `low`.
@@ -105,6 +105,8 @@ Archiving takes every sub-issue with it. `archive` reads all of them, at every d
 ## Local board
 
 On a local board (`$ENSEMBLE_BOARD_DIR`), the commands write as `other`, a person, so your comments and moves count as the user's. `me` is the board's `me/` directory and a role its `<role>/` directory; ids are the board's (`LOC-1`); a task or client is the issue file's `task` or `client` (`--client` takes any name without whitespace). `lookup`, `label` (`swap`, `add`, `remove`), `--label`, `--project` and `--milestone` exit 2.
+
+No job runs promote on a local board: run `ensemble-orchestrator promote` (it prunes too) once an approved issue's 10-minute undo window has passed, or when the user asks.
 
 ## Linear
 

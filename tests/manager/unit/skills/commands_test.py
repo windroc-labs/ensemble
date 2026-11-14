@@ -1,6 +1,6 @@
-"""skills/manage/SKILL.md (/ensemble:manage): every layer command it writes is one of the four
-bin/ commands; it launches all three kinds through Crew, handles every event word,
-answers dialogs with keys and recovers one entry at a time, through no retired path.
+"""skills/manage/SKILL.md (/ensemble:manage): the manager runs only ensemble-crew commands and
+pre-approves only crew reads; it launches all three kinds through crew start, handles every
+event word, answers dialogs with keys and recovers one entry at a time, through no retired path.
 """
 
 import os
@@ -12,7 +12,6 @@ from tests.manager.skills.commands import (
     BIN,
     SKILLS,
     body,
-    example,
     examples,
     flags,
     paths,
@@ -21,7 +20,9 @@ from tests.manager.skills.commands import (
     sections,
     spans,
     subcommand,
+    written,
 )
+from tests.manager.skills.manage import rule
 
 RETIRED = (
     "crew.py",
@@ -46,24 +47,69 @@ class Commands(Case):
         )
         self.assertEqual(subcommand(["ensemble-session", "send", "worker", "text"]), ("send",))
         self.assertEqual(subcommand(["ensemble-orchestrator", "--help"]), ())
+        self.assertEqual(
+            subcommand(["ensemble-crew", "start", "worker", "<name>"]), ("start", "worker")
+        )
+        self.assertEqual(subcommand(["ensemble-crew", "start", "--list"]), ("start",))
 
-    def test_worker_examples_select_generic_or_codex_launch(self):
-        generic = example("manage", "ensemble-crew worker", "--client <client>")
-        codex = example("manage", "ensemble-crew worker", "--client codex")
-        self.assertIn("[--prompt '<text>']", generic)
-        self.assertIn("--cwd <work dir>/agent", codex)
+    def test_the_one_worker_launch_is_generic(self):
+        [launch] = [
+            " ".join(c)
+            for c in written(body("manage"))
+            if c[:3] == ["ensemble-crew", "start", "worker"] and "--client" in c
+        ]
+        self.assertIn("--client <client>", launch)
+        self.assertIn("[--prompt '<text>']", launch)
+        self.assertNotIn("--cwd <work dir>/agent", body("manage"))
 
-    def test_every_example_is_one_of_the_four_bin_commands(self):
-        commands = examples(body("manage"))
+    def test_the_manager_runs_only_crew_commands(self):
+        forwarded = rule("**Issue updates**")
+        own = body("manage").replace(forwarded, "")
+        commands = [c for c in written(own) if len(c) > 1]
         self.assertGreater(len(commands), 20)
         for command in commands:
+            self.assertEqual(command[0], "ensemble-crew", command)
+        for name in ("ensemble-delegate", "transcript.py", "ensemble-orchestrator", "hold --force"):
+            self.assertNotIn(name, own)
+        for name in ("ensemble-session", "ensemble-orchestrator"):
+            self.assertFalse([c for c in written(own) if c[0] == name and len(c) > 1], name)
+        [run] = [c for c in written(forwarded) if len(c) > 1]
+        self.assertEqual(run[:3], ["ensemble-orchestrator", "issue", "read"])
+        self.assertIn("tell its run to use", forwarded)
+        for command in examples(own):
             self.assertIn(command[0], sorted(os.listdir(BIN)), command)
 
+    def test_pre_approved_rules_are_crew_reads_and_the_role_listing(self):
+        for rule_ in rules("manage"):
+            self.assertTrue(rule_.startswith("ensemble-crew "), rule_)
+        self.assertIn("ensemble-crew read *", rules("manage"))
+        self.assertIn("ensemble-crew start --list", rules("manage"))
+
     def test_pre_approved_rules_are_read_only(self):
-        for rule in rules("manage"):
+        for rule_ in rules("manage"):
+            if rule_ == "ensemble-crew start --list":
+                continue
             self.assertNotRegex(
-                rule, r"\b(run(?! --list)|start|send|stop|forget|close|resume|restart|tile)\b"
+                rule_, r"\b(run|start|send|stop|forget|close|resume|restart|tile|hold)\b"
             )
+
+    def test_an_issue_launches_only_through_crew_start_issue(self):
+        launches = [
+            c for c in written(body("manage")) if c[:2] == ["ensemble-crew", "start"] and len(c) > 2
+        ]
+        issues = {c[2] for c in launches if "<ID>" in c}
+        self.assertEqual(issues, {"issue", "reopen"})
+        self.assertIn("`ensemble-crew start issue <ID>`", rule("**Board runs**"))
+        self.assertNotIn("An issue for Codex", body("manage"))
+        self.assertNotIn("prompt.md", body("manage"))
+
+    def test_delivery_is_crews_report_with_no_client_reader(self):
+        send = rule("Before sending text to a worker")
+        self.assertIn("`ensemble-crew read <name>`", send)
+        self.assertIn("`ensemble-crew send <name>`", send)
+        self.assertIn("never the screen", send)
+        self.assertNotIn("transcript.py", body("manage"))
+        self.assertNotIn("An OpenCode worker has no jsonl transcript", body("manage"))
 
     def test_a_client_without_bin_on_its_path_reaches_this_plugins_bin(self):
         fallback = "${CLAUDE_SKILL_DIR}/../../bin/<command>"
@@ -73,11 +119,7 @@ class Commands(Case):
 
     def test_crew_launches_take_no_session_id(self):
         for commands in spans(body("manage")):
-            outer = (
-                len(commands[0]) > 1
-                and commands[0][0] == "ensemble-crew"
-                and commands[0][1] in {"worker", "issue", "role"}
-            )
+            outer = commands[0][:2] == ["ensemble-crew", "start"] and len(commands[0]) > 2
             for command in commands[1:] if outer else commands:
                 if outer:
                     self.assertFalse({"--sid", "--resume"} & set(flags(command)), command)
@@ -89,7 +131,6 @@ class Commands(Case):
 
     def test_has_no_retired_launch_or_resume_forms(self):
         for retired in (
-            "ensemble-crew run <name> -- ensemble-session start",
             "--dry-run",
             "--resume --sid",
         ):
@@ -129,7 +170,7 @@ class Names(Case):
             self.assertIn(key, viewer)
             self.assertIn(f"`{key}`", body("manage"))
 
-    def test_only_the_commander_has_it_as_the_session_config_turns_it_off(self):
+    def test_only_the_manager_has_it_as_the_session_config_turns_it_off(self):
         self.assertIn("so a worker or role run starts no sessions of its own", body("manage"))
         self.assertIn(
             "refuse inside them (exit 2: each session's client gets `ENSEMBLE_AGENT_SESSION=1`)",
@@ -152,25 +193,27 @@ class Flows(Case):
     def test_each_kind_launches_through_its_crew_shorthand(self):
         launch = section("manage", "Launch")
         for command in (
-            "ensemble-crew worker",
-            "ensemble-crew role",
-            "ensemble-crew issue",
+            "ensemble-crew start worker",
+            "ensemble-crew start role",
+            "ensemble-crew start issue",
+            "ensemble-crew start --list",
         ):
             self.assertIn(command, launch)
-        self.assertNotIn("ensemble-crew run", launch)
+        self.assertNotIn("ensemble-crew start command", launch)
         self.assertIn("before", launch)
         self.assertIn("exit 2", launch)
         self.assertIn("--mode headless", launch)
         self.assertIn("the tui `<name>`; its harness `<name>-drive` is a local process", launch)
         self.assertIn("--display D", launch)
         self.assertIn("`--display none`", launch)
-        self.assertIn("ensemble-session --help", launch)
+        self.assertIn("ensemble-crew start --help", launch)
 
     def test_start_attaches_and_points_to_the_monitoring_contract(self):
         start = section("manage", "Start")
         for phrase in (
             "`ensemble <name>`",
-            "ensemble-crew hold --manager",
+            "`ensemble <manager> -- <client argv>`",
+            "`ensemble --help`: taking over a hung holder",
             "`ensemble-crew attach`",
             "lease",
             "`name kind sid state view note cwd attach`",
@@ -182,7 +225,7 @@ class Flows(Case):
             self.assertIn(phrase, start)
         self.assertIn("Monitoring mode", start)
         self.assertIn(
-            "qualifies only when its runtime contract promises a notification to this commander",
+            "qualifies only when its runtime contract promises a notification to this manager",
             start,
         )
         self.assertNotIn("marks each printed event handled", body("manage"))
@@ -190,10 +233,11 @@ class Flows(Case):
     def test_direct_names_every_daily_operation(self):
         direct = section("manage", "Direct")
         for phrase in (
-            "`ensemble-session send <name> '<text>'`",
-            "`ensemble-session read <name> [--lines <n>]`",
-            "`ensemble-session reply <name>`",
-            "`ensemble-session restart <name>`",
+            "`ensemble-crew send <name> '<text>'`",
+            "`ensemble-crew send <name> --key C-x C-s`",
+            "`ensemble-crew read <name> [--lines <n>]`",
+            "`ensemble-crew read <name> --reply`",
+            "`ensemble-crew restart <name>`",
             "`ensemble-crew hide <name>…`",
             "`ensemble-crew show <name>…`",
             "`--all`",
@@ -203,8 +247,8 @@ class Flows(Case):
             "`ensemble-crew report`",
             "PR's URL",
             "`ensemble-crew close <name>`",
-            "`ensemble-crew close-all`",
-            "`ensemble-crew forget <name>`",
+            "`ensemble-crew close --all`",
+            "`ensemble-crew close <name> --forget`",
             "`--force`",
             "`ensemble-crew release`",
         ):
@@ -246,7 +290,8 @@ class Flows(Case):
     def test_a_dialog_is_read_then_answered_with_keys_never_with_text(self):
         events = section("manage", "Events")
         blocked = re.search(r"\*\*blocked\*\*(.*?)(?=^- \*\*)", events, re.M | re.S)[1]
-        self.assertIn("ensemble-session read <name>", blocked)
+        self.assertIn("`ensemble-crew read <name>`", blocked)
+        self.assertIn("`ensemble-crew send <name> --key K…`", blocked)
         for keys in ("--key Down Enter", "--key 2", "--key Escape", "--key C-c"):
             self.assertIn(keys, blocked)
         self.assertRegex(blocked, r"send no text")
@@ -264,7 +309,7 @@ class Flows(Case):
 
     def test_grid_names_its_keys_and_the_public_retile(self):
         grid = section("manage", "Grid")
-        for word in ("workers_per_column", "grid_retile", "ensemble-session tile <window>"):
+        for word in ("workers_per_column", "grid_retile", "`ensemble-crew show --tile`"):
             self.assertIn(word, grid)
 
     def test_sections(self):

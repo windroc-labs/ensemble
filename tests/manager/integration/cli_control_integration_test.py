@@ -21,17 +21,29 @@ class CliTest(CliCase):
         command = self.setup_ctl()
         Crew(self.roster).run(Spec("worker", (command, "start", "worker")))
         with mock.patch("subprocess.run", side_effect=FileNotFoundError("missing ctl")):
-            result, _, stderr = self.invoke("forget", "worker", "--manager", "mgr")
+            result, _, stderr = self.invoke("close", "worker", "--forget", "--manager", "mgr")
             self.assertEqual(result, 1, stderr)
             self.assertIn("worker", self.roster.entries())
-            result, _, stderr = self.invoke("forget", "worker", "--manager", "mgr", "--force")
+            result, _, stderr = self.invoke(
+                "close", "worker", "--forget", "--manager", "mgr", "--force"
+            )
             self.assertEqual(result, 0, stderr)
         self.assertEqual(self.roster.entries(), {})
 
     def test_empty_run_note_and_note_command_store_null(self):
         command = self.setup_ctl()
         result, _, stderr = self.invoke(
-            "run", "worker", "--manager", "mgr", "--note", "", "--", command, "start", "worker"
+            "start",
+            "command",
+            "worker",
+            "--manager",
+            "mgr",
+            "--note",
+            "",
+            "--",
+            command,
+            "start",
+            "worker",
         )
         self.assertEqual(result, 0, stderr)
         self.assertIsNone(self.roster.entries()["worker"].note)
@@ -67,7 +79,15 @@ class CliTest(CliCase):
                 ),
             ):
                 result, stdout, stderr = self.invoke(
-                    "run", "worker", "--manager", "mgr", "--", command, "start", "worker"
+                    "start",
+                    "command",
+                    "worker",
+                    "--manager",
+                    "mgr",
+                    "--",
+                    command,
+                    "start",
+                    "worker",
                 )
             self.assertEqual(result, 1, stderr)
             self.assertEqual(stdout, "")
@@ -126,12 +146,12 @@ class CliTest(CliCase):
             with self.subTest(dry_run=dry_run):
                 with mock.patch("subprocess.run", side_effect=run):
                     result, stdout, stderr = self.invoke(
-                        "close-all", "--manager", "mgr", *(("--dry-run",) if dry_run else ())
+                        "close", "--all", "--manager", "mgr", *(("--dry-run",) if dry_run else ())
                     )
                 self.assertEqual(result, 1, stderr)
                 self.assertEqual(stdout, "")
                 self.assertIn("listing unavailable", stderr)
-                self.assertIn("close-all partial", stderr)
+                self.assertIn("close --all partial", stderr)
                 with Path(self.ctl_dir, ctl.SESSIONS).open(encoding="utf-8") as stream:
                     sessions = json.load(stream)
                 self.assertTrue(sessions["unknown"]["alive"])
