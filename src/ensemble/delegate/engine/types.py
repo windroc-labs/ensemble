@@ -101,7 +101,8 @@ class Layout:
 class Spec:
     """One run: workdir=Layout; resume uses sid. None: client=role, team=built-in,
     out=<run>/out.md for sessions, else unsaved. name/events: tui in plan(), all modes in
-    HarnessDelegate (agent name, harness <name>-drive, detached outcome events).
+    HarnessDelegate (agent name, harness <name>-drive, detached outcome events). files: agent-dir
+    relative path -> text, written there before a headless or tui session starts.
     """
 
     input: str
@@ -119,6 +120,7 @@ class Spec:
     team: Team | None = None
     credentials: str | None = None
     environment_credentials: str | None = None
+    files: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
