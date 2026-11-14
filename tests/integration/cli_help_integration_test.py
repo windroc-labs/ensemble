@@ -7,27 +7,26 @@ from pathlib import Path
 from tests.case import PY, REPO, Case, child_env
 
 SURFACES = {
+    # start's help also runs ensemble-session --help, a subprocess the probe forbids; the crew unit
+    # help test pins that it runs nothing else.
     "crew": (
         "manager",
         [
-            "hold",
-            "run",
-            "worker",
-            "issue",
-            "role",
             "attach",
             "status",
             "report",
+            "read",
+            "send",
             "resume",
+            "restart",
             "hide",
             "show",
             "close",
-            "forget",
-            "close-all",
             "note",
             "release",
+            "pending",
+            "ack",
             "next-event",
-            "resume-commander",
         ],
     ),
     "session": (
@@ -148,7 +147,7 @@ class HelpSafety(Case):
             self.assertIn("ensemble-", out)
 
     def matrix(self, root):
-        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 59)
+        self.assertEqual(sum(len(commands) + 1 for _, commands in SURFACES.values()), 56)
         before = self.snapshot()
         package, commands = SURFACES[root]
         for leaf in [None, *commands]:

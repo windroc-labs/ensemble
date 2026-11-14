@@ -47,7 +47,7 @@ class OrphanTest(LiveCrew):
                 self.assertFalse(os.path.exists(pwned))
         line = json.dumps({**json.loads(agent.to_line()), "ctl": shell, "resume": shell})
         self.ok(self.call("tmux", "set-option", "@record", line))
-        self.ok(self.crew("close-all"))
+        self.ok(self.crew("close", "--all"))
         self.assertFalse(os.path.exists(pwned))
 
 

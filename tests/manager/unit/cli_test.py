@@ -165,11 +165,11 @@ class CliTest(CliCase):
             result, _, stderr = self.invoke("attach", "--manager", "mgr")
         self.assertEqual(result, 1, stderr)
 
-    def test_removed_owner_and_missing_holder_command_are_usage_errors(self):
+    def test_removed_owner_and_missing_starter_command_are_usage_errors(self):
         for argv in (
             ("attach", "--manager", "mgr", "--owner", "label"),
-            ("hold", "--manager", "mgr"),
-            ("hold", "--manager", "mgr", "--"),
+            ("start", "command", "--manager", "mgr", "w1"),
+            ("start", "command", "--manager", "mgr", "w1", "--"),
             ("attach", "--manager", "mgr", "--", "unused"),
             ("hide", "--manager", "mgr"),
             ("show", "--manager", "mgr", "a", "--all"),
@@ -185,9 +185,7 @@ class CliTest(CliCase):
             for argv in (
                 ("close",),
                 ("status",),
-                ("forget",),
                 ("resume",),
-                ("forget", "--force"),
                 ("close", "--forget"),
                 ("close", "--forget", "--force"),
                 ("restart",),
@@ -211,12 +209,11 @@ class CliTest(CliCase):
         run.assert_not_called()
 
     def test_empty_close_all_reports_nothing_without_creating_a_manager(self):
-        for argv in (("close-all",), ("close", "--all")):
-            with self.subTest(argv=argv), self.listed():
-                result, stdout, stderr = self.invoke(*argv, "--manager", "mgr")
-            self.assertEqual(result, 0, stderr)
-            self.assertEqual(stdout, "nothing to close\n")
-            self.assertFalse(os.path.exists(self.directory))
+        with self.listed():
+            result, stdout, stderr = self.invoke("close", "--all", "--manager", "mgr")
+        self.assertEqual(result, 0, stderr)
+        self.assertEqual(stdout, "nothing to close\n")
+        self.assertFalse(os.path.exists(self.directory))
 
     def crew_run(self, *, alive):
         """subprocess.run for entries a and b: listing finds nothing more; ctl status answers
@@ -236,15 +233,13 @@ class CliTest(CliCase):
 
         return mock.patch("subprocess.run", side_effect=run)
 
-    def test_close_all_is_a_close_option_and_close_all_its_older_spelling(self):
+    def test_close_all_previews_then_closes_every_entry(self):
         for name in ("a", "b"):
             own(self.roster, self.fake_record(name))
         before = Path(self.roster.path).read_bytes()
         with self.crew_run(alive=True):
-            new = self.invoke("close", "--all", "--dry-run", "--manager", "mgr")
-            old = self.invoke("close-all", "--dry-run", "--manager", "mgr")
-        self.assertEqual(new, (0, "a\nb\n", ""))
-        self.assertEqual(old, new)
+            preview = self.invoke("close", "--all", "--dry-run", "--manager", "mgr")
+        self.assertEqual(preview, (0, "a\nb\n", ""))
         self.assertEqual(self.verbs, [])
         self.assertEqual(Path(self.roster.path).read_bytes(), before)
         with self.crew_run(alive=True):
@@ -252,25 +247,24 @@ class CliTest(CliCase):
         self.assertEqual(self.verbs, ["close"])
         self.assertEqual(self.roster.entries(), {})
 
-    def test_close_forget_is_a_close_option_and_forget_its_older_spelling(self):
-        for argv in (("close", "a", "--forget"), ("forget", "a")):
-            with self.subTest(argv=argv):
-                own(self.roster, self.fake_record("a"))
-                with self.crew_run(alive=True):
-                    result, stdout, stderr = self.invoke(*argv, "--manager", "mgr")
-                self.assertEqual((result, stdout), (1, ""))
-                self.assertIn("still alive; close it before forgetting", stderr)
-                self.assertIn("a", self.roster.entries())
-                with self.crew_run(alive=True):
-                    forced = self.invoke(*argv, "--force", "--manager", "mgr")
-                self.assertEqual(forced, (0, "", ""))
-                self.assertEqual(self.verbs, [])
-                self.assertEqual(self.roster.entries(), {})
-                own(self.roster, self.fake_record("a"))
-                with self.crew_run(alive=False):
-                    self.assertEqual(self.invoke(*argv, "--manager", "mgr"), (0, "", ""))
-                self.assertEqual(self.verbs, ["status"])
-                self.assertEqual(self.roster.entries(), {})
+    def test_close_forget_removes_a_stopped_entry_and_live_work_only_when_forced(self):
+        argv = ("close", "a", "--forget", "--manager", "mgr")
+        own(self.roster, self.fake_record("a"))
+        with self.crew_run(alive=True):
+            result, stdout, stderr = self.invoke(*argv)
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertIn("still alive; close it before forgetting", stderr)
+        self.assertIn("a", self.roster.entries())
+        with self.crew_run(alive=True):
+            forced = self.invoke(*argv, "--force")
+        self.assertEqual(forced, (0, "", ""))
+        self.assertEqual(self.verbs, [])
+        self.assertEqual(self.roster.entries(), {})
+        own(self.roster, self.fake_record("a"))
+        with self.crew_run(alive=False):
+            self.assertEqual(self.invoke(*argv), (0, "", ""))
+        self.assertEqual(self.verbs, ["status"])
+        self.assertEqual(self.roster.entries(), {})
 
     def test_close_option_combinations_are_usage_errors(self):
         for argv, message in (
@@ -293,18 +287,10 @@ class CliTest(CliCase):
             run.assert_not_called()
             self.assertFalse(os.path.exists(self.directory))
 
-    def test_close_help_names_its_options_and_old_pages_point_to_them(self):
+    def test_close_help_names_its_options(self):
         close = help_text(self, main, ["close", "--help"])
         for option in ("--all", "--dry-run", "--forget", "--force"):
             self.assertIn(option, close)
-        self.assertIn(
-            "older spelling of close --all", help_text(self, main, ["close-all", "--help"])
-        )
-        self.assertIn(
-            "older spelling of close NAME --forget", help_text(self, main, ["forget", "--help"])
-        )
-        source = Path(cli.__file__).read_text()
-        self.assertNotRegex(source, r"ensemble-crew (close-all|forget)\b")
 
 
 class Launch(CliCase):
@@ -442,7 +428,16 @@ class Launch(CliCase):
         ):
             with self.subTest(options=options), mock.patch("subprocess.run") as query:
                 code, _, err = self.start(
-                    "role", "--manager", "mgr", "--name", "r", *options, "engineer", "--input", "x"
+                    "start",
+                    "role",
+                    "--manager",
+                    "mgr",
+                    "--name",
+                    "r",
+                    *options,
+                    "engineer",
+                    "--input",
+                    "x",
                 )
                 self.assertEqual(code, 0, err)
                 query.assert_not_called()
@@ -759,7 +754,7 @@ class Launch(CliCase):
                 self.assertEqual((result, stdout, self.roster.entries()), (75, "", {}))
                 self.assertIn(busy, stderr)
                 result, stdout, stderr = self.start(
-                    "run", "--manager", "mgr", *resume, "dummy-1", "--", "starter"
+                    "start", "command", "--manager", "mgr", *resume, "dummy-1", "--", "starter"
                 )
                 self.assertEqual(result, 0, stderr)
                 self.assertEqual(self.roster.entries()["dummy-1"].record, Record.parse(stdout))
@@ -805,24 +800,12 @@ class Launch(CliCase):
 class StartForm(Launch):
     SID = "0f6b3e4c-2c1d-4f8a-9b7e-5d6c7b8a9e10"
 
-    def test_each_old_form_parses_like_its_start_kind(self):
-        sid = self.SID
-        for old, kind, tail in (
-            (
-                "worker",
-                "worker",
-                ("--note", "n", "--resume", sid, "w1", "--client", "c", "--", "-x"),
-            ),
-            ("role", "role", ("--task", "t", "--credentials", "{}", "--name", "r", "pm", "-i")),
-            ("issue", "issue", ("TASK-1", "--display", "none")),
-            ("reopen", "reopen", ("--work-dir", "/w", "TASK-1", "--account", "a")),
-            ("run", "command", ("--note", "n", "--resume", sid, "r1", "--", "starter")),
-        ):
-            with self.subTest(old=old):
-                before = vars(parse_only(cli.main, [old, "--manager", "m", *tail]))
-                after = vars(parse_only(cli.main, ["start", kind, "--manager", "m", *tail]))
-                self.assertEqual((after.pop("start_kind"), after.pop("list")), (kind, False))
-                self.assertEqual(before, after)
+    def test_command_tail_is_not_interpreted_as_outer_help(self):
+        result, _, stderr = self.start(
+            "start", "command", "--manager", "mgr", "c1", "--", "fake", "--help"
+        )
+        self.assertEqual(result, 0, stderr)
+        self.assertEqual(self.calls[0][0], ("fake", "--help"))
 
     def test_start_kinds_launch_their_layer_command(self):
         for kind, tail, name, argv in (
@@ -866,10 +849,7 @@ class StartForm(Launch):
                 with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
                     main(["start", "command", "--manager", "mgr", "c1", *tail])
                 self.assertEqual(raised.exception.code, 2)
-                self.assertIn(
-                    "start command, run and hold require -- followed by a command",
-                    stderr.getvalue(),
-                )
+                self.assertIn("start command requires -- followed by a command", stderr.getvalue())
                 self.assertFalse(os.path.exists(self.directory))
 
 
@@ -1494,7 +1474,6 @@ class StaleHolderRecovery(CliCase):
                 " --force mgr -- <client resume command> (ensemble --help)\n",
             ),
         )
-        self.assertNotIn("ensemble-crew hold", stderr)
 
     def test_notes_create_no_directory(self):
         result, _, stderr = self.invoke("attach", "--manager", "fresh")
@@ -1981,33 +1960,16 @@ class Send(CliCase):
         self.execvpe.assert_not_called()
 
 
-class CrewCommandsDelegate(CliCase):
-    """crew list and resume-commander run ensemble's manager side until they are removed."""
-
-    def test_list_prints_every_manager(self):
-        os.makedirs(os.path.join(self.ensemble, "managers", "demo"))
-        self.assertEqual(self.invoke("list"), (0, "demo\tnot-held\t-\t-\n  -\n", ""))
-
-    def test_resume_commander_without_a_holder_pair_is_a_usage_error(self):
-        result, stdout, stderr = self.invoke("resume-commander", "--manager", "mgr")
-        self.assertEqual((result, stdout), (2, ""))
-        self.assertEqual(
-            stderr, "crew: run ensemble resume under the manager's hold: ensemble list\n"
-        )
-
-
 class InsideAnAgentSession(CliCase):
-    def test_start_hold_and_resume_exit_2_and_write_nothing(self):
+    def test_starts_resumes_and_restarts_exit_2_and_write_nothing(self):
         for argv in (
             ("start", "command", "--manager", "mgr", "w1", "--", "true"),
-            ("hold", "--manager", "mgr", "--", "true"),
             ("resume", "--manager", "mgr", "w1"),
             ("restart", "--manager", "mgr", "w1"),
             ("start", "worker", "--manager", "mgr", "w1", "--client", "claude"),
             ("start", "reopen", "--manager", "mgr", "TASK-12"),
             ("start", "issue", "--manager", "mgr", "TASK-12"),
             ("start", "role", "--manager", "mgr", "pm", "--input", "x"),
-            ("resume-commander", "--manager", "mgr"),
         ):
             with (
                 self.subTest(argv=argv),
@@ -2024,22 +1986,10 @@ class InsideAnAgentSession(CliCase):
             self.assertNotIn("refused", self.invoke("status", "--manager", "mgr")[2])
 
 
-START_KINDS = {
-    "worker": "worker",
-    "role": "role",
-    "issue": "issue",
-    "reopen": "reopen",
-    "run": "command",
-}
-START_PAGES = [f"start {kind}" for kind in START_KINDS.values()]
+START_KINDS = ["worker", "role", "issue", "reopen", "command"]
+START_PAGES = [f"start {kind}" for kind in START_KINDS]
 HELP_COMMANDS = [
     "start",
-    "hold",
-    "worker",
-    "role",
-    "issue",
-    "reopen",
-    "run",
     "attach",
     "status",
     "report",
@@ -2050,15 +2000,11 @@ HELP_COMMANDS = [
     "hide",
     "show",
     "close",
-    "forget",
-    "close-all",
     "note",
     "release",
     "pending",
     "ack",
     "next-event",
-    "list",
-    "resume-commander",
 ]
 
 
@@ -2139,14 +2085,11 @@ class HelpContracts(Case):
             with self.subTest(command=command):
                 text = self.help(command)
                 self.assertIn("ensemble --help", text)
-                self.assertNotIn("ensemble-crew hold --help", text)
 
     def test_root_lists_each_command_with_a_purpose(self):
         text = self.help()
         self.assertEqual(text.split("{")[1].split("}")[0].split(","), HELP_COMMANDS)
         self.assertEqual(re.findall(r"^    (\S+) +\S", text, re.MULTILINE), HELP_COMMANDS)
-        for old, kind in START_KINDS.items():
-            self.assertRegex(text, rf"\n    {old} +old form of: start {kind}\n")
 
     def test_start_help_copies_each_host_display_line_from_session_help(self):
         session_help = (
@@ -2207,7 +2150,7 @@ class HelpContracts(Case):
     def test_start_lists_each_kind_and_its_pages_use_the_start_form(self):
         text = self.help("start")
         listed = re.findall(r"^    (\S+) +\S", text, re.MULTILINE)
-        self.assertEqual(listed, list(START_KINDS.values()))
+        self.assertEqual(listed, START_KINDS)
         for page in START_PAGES:
             with self.subTest(page=page):
                 examples = [
@@ -2228,7 +2171,6 @@ class HelpContracts(Case):
                 self.assertIn(owner, text)
                 self.assertIn("before", text)
                 self.assertIn("Forwarded --help", text)
-        self.assertIn("-- COMMAND [ARG ...]", self.help("hold"))
         self.assertIn("-- COMMAND [ARG ...]", self.help("start command"))
         self.assertNotIn("--after", self.help("attach"))
         self.assertIn("does not acknowledge events", self.help("attach"))
@@ -2251,9 +2193,3 @@ class HelpContracts(Case):
         self.assertEqual(
             parser.parse_args(["start", "worker", "helper", "--help"]).arguments, ["--help"]
         )
-
-    def test_command_tail_is_not_interpreted_as_outer_help(self):
-        with mock.patch("subprocess.Popen") as popen:
-            popen.return_value.wait.return_value = 0
-            self.assertEqual(cli.main(["hold", "--manager", "demo", "--", "codex", "--help"]), 0)
-        self.assertEqual(popen.call_args.args[0], ("codex", "--help"))

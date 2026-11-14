@@ -984,7 +984,7 @@ class PrivateServer(Case):
         self.assertEqual((cwd, args, manager, generation), (self.cwd, "-l", "s1", "1"))
         self.assertEqual(first, os.path.join(REPO, "bin"))
         self.assertEqual((str(uuid.UUID(holder)), uuid.UUID(holder).version), (holder, 4))
-        with self.assertRaisesRegex(Held, "held by s1"), self.roster("s1").hold(None):
+        with self.assertRaisesRegex(Held, "held by s1"), self.roster("s1").hold("contender"):
             pass
         self.server.tmux("send-keys", "-t", "=s1:", "C-d")
         live_tmux.wait(lambda: self.free(self.roster("s1")), what="the lease to end with the shell")
@@ -1033,7 +1033,10 @@ class PrivateServer(Case):
                 self.assertEqual(self.attaches()[-1], ["-CC", "attach", "-t", f"={name}"])
                 report = live_tmux.wait(self.shell_report, what="the held shell's report")
                 self.assertEqual((report[2], report[5]), (name, os.path.join(root, "bin")))
-                with self.assertRaisesRegex(Held, f"held by {name}"), self.roster(name).hold(None):
+                with (
+                    self.assertRaisesRegex(Held, f"held by {name}"),
+                    self.roster(name).hold("contender"),
+                ):
                     pass
                 done = self.run_ensemble(
                     "status", "--manager", name, script=os.path.join(installed, "ensemble-crew")
@@ -1098,7 +1101,7 @@ class PrivateServer(Case):
         starts = live_tmux.wait(self.starts, what="the resumed client")
         self.assertEqual(starts[0][:3], [work, "resume t-1 --no-daemon", "demo"])
         self.assertEqual(self.roster("demo").snapshot()[0], ActiveHolder(starts[0][3], "demo"))
-        with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold(None):
+        with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold("contender"):
             pass
         sessions = self.server.tmux("list-sessions", "-F", "#{session_name}").stdout.split()
         self.assertEqual(sessions, ["demo"])
@@ -1120,13 +1123,13 @@ class PrivateServer(Case):
         self.assertEqual(self.roster("demo").snapshot()[0], ActiveHolder(starts[0][3], "demo"))
         sessions = self.server.tmux("list-sessions", "-F", "#{session_name}").stdout.split()
         self.assertEqual(sessions, ["demo"])
-        with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold(None):
+        with self.assertRaisesRegex(Held, "held by demo"), self.roster("demo").hold("contender"):
             pass
 
     @staticmethod
     def free(roster):
         try:
-            with roster.hold(None):
+            with roster.hold("contender"):
                 return True
         except Held:
             return False

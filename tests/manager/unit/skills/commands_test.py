@@ -36,10 +36,6 @@ RETIRED = (
     "tmux ls",
     "ensemble-<role>-<ID>",
 )
-OLD_CREW = tuple(
-    f"ensemble-crew {verb}"
-    for verb in ("worker", "role", "issue", "reopen", "run", "close-all", "forget", "hold")
-)
 REPAIRS = ("rename-session", "/rename", "@grid-busy", "@opener", "@pane", "send-keys", "set-option")
 
 
@@ -135,10 +131,8 @@ class Commands(Case):
 
     def test_has_no_retired_launch_or_resume_forms(self):
         for retired in (
-            "ensemble-crew run <name> -- ensemble-session start",
             "--dry-run",
             "--resume --sid",
-            *OLD_CREW,
         ):
             self.assertNotIn(retired, body("manage"))
 

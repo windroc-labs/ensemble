@@ -352,7 +352,7 @@ class HolderTest(Case):
         signals = (signal.SIGINT, signal.SIGTERM, signal.SIGTTIN, signal.SIGTTOU)
         previous = {signum: signal.getsignal(signum) for signum in signals}
         with self.assertRaises(FileNotFoundError):
-            Holder(self.roster).run((os.path.join(self.home, "missing-manager"),))
+            Holder(self.roster).run((os.path.join(self.home, "missing-manager"),), session="mgr")
         for signum, handler in previous.items():
             self.assertEqual(signal.getsignal(signum), handler)
         with self.roster.hold("next") as lease:
@@ -493,7 +493,7 @@ class HolderTest(Case):
             "directory,result=sys.argv[1:3]\n"
             "try:\n"
             " with mock.patch('os.tcsetpgrp',side_effect=OSError(errno.EIO,'handoff unavailable')):\n"
-            "  Holder(Roster(directory)).run(tuple(sys.argv[3:-1]))\n"
+            "  Holder(Roster(directory)).run(tuple(sys.argv[3:-1]),session='mgr')\n"
             "except OSError as error:\n"
             " detail={'errno':error.errno,'trace':traceback.format_exc()}\n"
             " pathlib.Path(result).write_text(json.dumps(detail))"
@@ -521,5 +521,5 @@ class HolderTest(Case):
 
     def test_command_required_before_creating_roster(self):
         with self.assertRaises(ValueError):
-            Holder(self.roster).run(())
+            Holder(self.roster).run((), session="mgr")
         self.assertFalse(os.path.exists(self.directory))

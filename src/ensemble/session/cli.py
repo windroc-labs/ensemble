@@ -391,7 +391,7 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
     p.add_argument(
         "--descendants",
         action="store_true",
-        help="with --here --records: also those they opened, transitively (close-all)",
+        help="with --here --records: also those they opened, transitively (ensemble-crew close --all)",
     )
     p = sub.add_parser(
         "send",

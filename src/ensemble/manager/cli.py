@@ -14,7 +14,7 @@ from typing import NamedTuple
 from ensemble.manager import Crew, Roster, RosterError, Spec, State, commander
 from ensemble.manager.engine import managers
 from ensemble.manager.engine.crew import SEND_WAIT, hand_off
-from ensemble.manager.engine.holder import Holder, inherited
+from ensemble.manager.engine.holder import inherited
 from ensemble.manager.engine.types import (
     Held,
     StaleHolder,
@@ -130,18 +130,6 @@ def _add_recovery(error: StaleHolder, args, reader: tuple[int, int] | None = Non
 
 def _crew(args) -> Crew:
     return Crew(_roster(args), lease=inherited())
-
-
-def _list(args) -> int:
-    return commander.listing(select=args.select)
-
-
-def _hold(args) -> int:
-    return Holder(_roster(args)).run(args.command, session=args.session, force=args.force)
-
-
-def _resume_commander(args) -> int:
-    return commander.resume(args.manager)
 
 
 def _run(args) -> int:
@@ -385,10 +373,9 @@ def _ack(args) -> int:
 
 
 class StartKind(NamedTuple):
-    """A kind of work crew starts; old: its top-level subcommand; owner: its downstream help."""
+    """A kind of work crew starts; owner: its downstream help."""
 
     kind: str
-    old: str
     key: str
     purpose: str
     owner: str
@@ -397,7 +384,6 @@ class StartKind(NamedTuple):
 
 START_KINDS = (
     StartKind(
-        "worker",
         "worker",
         "NAME",
         "Start a named worker and track its Record",
@@ -418,7 +404,6 @@ Examples:
 """,
     ),
     StartKind(
-        "role",
         "role",
         "ROLE",
         "Start a detached role run and track its Record",
@@ -441,7 +426,6 @@ Examples:
     ),
     StartKind(
         "issue",
-        "issue",
         "ISSUE",
         "Start an attended issue run and track its Record",
         f"{LayerCommand.ORCHESTRATOR} router",
@@ -460,7 +444,6 @@ Examples:
 """,
     ),
     StartKind(
-        "reopen",
         "reopen",
         "ISSUE",
         "Resume a closed issue run's conversation as a worker and track its Record",
@@ -490,7 +473,6 @@ Examples:
     ),
     StartKind(
         "command",
-        "run",
         "NAME",
         "Run a Record-producing starter and track it as NAME",
         "",
@@ -523,27 +505,25 @@ def _parser() -> argparse.ArgumentParser:
         description="Start workers and role/issue runs; manage their persistent roster.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Manager: roster selected by --manager, else ENSEMBLE_MANAGER; required,
-but by list, which reads every manager without a lease.
+but by start --list.
 Names use [A-Za-z0-9_-]+. An Entry is a name tracked in that roster.
 Crew consumes names, not Records on stdin. A Record is the serialized control
 and identity line returned by a launch: ensemble-session --help.
 
 Prerequisites and effects:
   Install ensemble commands on PATH; configure the owning client/run layer.
-  hold gives its child ENSEMBLE_MANAGER, the paired ENSEMBLE_HOLDER_ID /
-  ENSEMBLE_HOLDER_GENERATION and ENSEMBLE_HOLDER_PID, its own pid: the
-  SessionStart re-arm prompt goes only to a client in its process tree.
+  A manager's hold (ensemble --help) gives its child ENSEMBLE_MANAGER, the
+  paired ENSEMBLE_HOLDER_ID / ENSEMBLE_HOLDER_GENERATION and
+  ENSEMBLE_HOLDER_PID, the hold's pid: the SessionStart re-arm prompt goes
+  only to a client in its process tree.
   Keep the pair together. An active holder fences ownership-sensitive roster
   updates; run those from its commander environment.
-  ENSEMBLE_AGENT_SESSION blocks hold/start/resume/restart, resume-commander and
-  the old start forms; use a user-started commander. Help and start --list
-  still work.
+  ENSEMBLE_AGENT_SESSION blocks start/resume/restart; use a user-started
+  commander. Help and start --list still work.
   State: ~/.ensemble/managers/NAME/.
   start gives starters empty stdin; supply literal input.
-  hold instead inherits the caller's input for its foreground command.
   Exit 0: success; 2: usage/invalid value; 1: operational/lease failure;
   75: start command/role starter busy, before any stdout.
-  hold instead propagates its child's status, signals as 128 + signal number.
   Scalar options use the last value; boolean flags may repeat.
 
 Examples:
@@ -562,11 +542,11 @@ Next help:
     )
     subs = parser.add_subparsers(required=True)
 
-    def page(name, purpose, details, *, manager=True, into=None, summary=None, **options):
+    def page(name, purpose, details, *, manager=True, into=None, **options):
         return (into or subs).add_parser(
             name,
             parents=[common] if manager else [],
-            help=summary or purpose,
+            help=purpose,
             description=purpose + ".",
             epilog=details + "\nRoster, environment and exits: ensemble-crew --help\n",
             formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -600,50 +580,20 @@ Examples:
     )
     start.set_defaults(func=_start_list)
     starts = start.add_subparsers(dest="start_kind", metavar="KIND")
-    hold = page(
-        "hold",
-        "Keep a manager's holder lease while COMMAND runs in the foreground",
-        """Prerequisites and effects:
-  COMMAND [ARG ...] is required after --, executed without a shell.
-  Outer help: ensemble-crew hold --help. After --, even --help belongs to
-  COMMAND; the holder lease is acquired before executing it.
-  The child inherits manager/lease identity; the lease ends when it exits.
-  --session labels the holder; it does not select a terminal to attach.
-  By default a holder conflict is refused. --force deliberately takes over.
 
-Examples:
-  With Codex on PATH, from a user-started terminal:
-  ensemble-crew hold --manager demo --session commander -- codex
-  Inside that commander's environment, reconcile its roster:
-  ensemble-crew attach --manager demo
-  Restart a commander whose holder ended, resuming its conversation
-  (Codex: codex resume --last):
-  ensemble-crew hold --manager demo --session demo -- claude --continue
-
-Recovery and next help:
-  Conflict: use the existing commander, or --force for deliberate takeover.
-  Reconciliation does not acquire a holder: ensemble-crew attach --help
-""",
-        usage="%(prog)s [--manager MANAGER] [--session LABEL] [--force] -- COMMAND [ARG ...]",
-    )
-    hold.add_argument("--session", metavar="LABEL", help="optional holder display label")
-    hold.add_argument("--force", action="store_true", help="take over and fence the old holder")
-    hold.set_defaults(func=_hold)
-
-    def start_page(into, kind: StartKind, name: str, summary: str | None = None):
+    def start_page(kind: StartKind):
         if kind.kind == "command":
             launch = page(
-                name,
+                kind.kind,
                 kind.purpose,
                 kind.details,
-                into=into,
-                summary=summary,
+                into=starts,
                 usage="%(prog)s [--manager MANAGER] [--note TEXT] [--resume SID] NAME -- COMMAND"
                 " [ARG ...]",
             )
         else:
             launch = page(
-                name,
+                kind.kind,
                 kind.purpose,
                 f"Crew options go before {kind.key}; downstream options go after it.\n"
                 f"Get outer help before supplying {kind.key}: ensemble-crew start {kind.kind} --help\n"
@@ -651,8 +601,7 @@ Recovery and next help:
                 "path, which records intent. Use the owning help directly.\n\n"
                 + kind.details
                 + f"\nDownstream options: {kind.owner} --help\n",
-                into=into,
-                summary=summary,
+                into=starts,
             )
         if kind.kind == "command":
             launch.add_argument("key", metavar="NAME", help="new roster entry name")
@@ -713,8 +662,7 @@ Recovery and next help:
         )
 
     for kind in START_KINDS:
-        start_page(starts, kind, kind.kind)
-        start_page(subs, kind, kind.old, f"old form of: start {kind.kind}")
+        start_page(kind)
     attach = page(
         "attach",
         "Reconcile a roster and print recovery/monitoring commands",
@@ -951,46 +899,6 @@ after a partial --all: ensemble-crew attach --help
         help="with --forget: drop bookkeeping without ctl; work may remain alive",
     )
     close.set_defaults(func=_close)
-    forget = page(
-        "forget",
-        "Remove a stopped entry's bookkeeping; older spelling of close NAME --forget",
-        """By default refuses live work. --force skips controller checks and removes
-bookkeeping only; work may remain alive. Requires lease access.
-
-Examples:
-  With helper stopped:
-  ensemble-crew close --manager demo helper --forget
-
-Recovery: inspect entries with ensemble-crew status --help
-""",
-    )
-    forget.add_argument("name", metavar="NAME", help="existing entry name")
-    forget.add_argument(
-        "--force",
-        action="store_true",
-        help="drop bookkeeping without ctl; work may remain alive",
-    )
-    forget.set_defaults(func=_forget)
-    close_all = page(
-        "close-all",
-        "Terminate roster entries and the caller's descendant work; older spelling of close --all",
-        """Requires lease access and ensemble-session listing. Also includes untracked
-descendants opened by this caller. Prints selected names or nothing to close.
-Without --dry-run closes work and removes successful entries; a failed one is
-kept and logged to close-failures.jsonl. Partial listing or controller failures
-exit 1 and may leave work running.
-
-Examples:
-  From the intended commander's terminal, preview first:
-  ensemble-crew close --manager demo --all --dry-run
-
-Recovery: ensemble-crew attach --help
-""",
-    )
-    close_all.add_argument(
-        "--dry-run", action="store_true", help="list targets without closing/removing"
-    )
-    close_all.set_defaults(func=_close_all)
     note = page(
         "note",
         "Set or clear an entry's roster note",
@@ -1100,72 +1008,22 @@ Handling confirmation: ensemble-crew ack --help
         "--follow", action="store_true", help="keep printing events until stopped or failing"
     )
     next_event.set_defaults(func=_next_event)
-    listing = page(
-        "list",
-        "Print every manager, its holder state, session record and entries",
-        """Reads each ~/.ensemble/managers/NAME/ without a lease; changes nothing and
-works while a manager is held. Takes no --manager and ignores ENSEMBLE_MANAGER.
-One row per manager: NAME, holder state (client-running, hold-only or
-not-held), client and cwd from its session record (- without one). Under it,
-one indented row per entry: name, kind, roster state; - for none.
-Exit 1 when a manager's roster, session record or locks cannot be read: its row
-ends with error and the reason; the others still print.
---select (ensemble list adds it on a terminal): the rows go to stderr, numbered,
-then a prompt reads a number or name from stdin; an empty line or EOF cancels.
-stdout gets the selection's plan, VERB NAME, VERB one of attach, resume-held,
-resume-new or open; a manager it must not open prints why and exits 1.
-
-Examples:
-  ensemble-crew list
-  ensemble-crew list --select
-""",
-        manager=False,
-    )
-    listing.add_argument(
-        "--select",
-        action="store_true",
-        help="list on stderr, prompt on stdin, print the selection's plan: VERB NAME",
-    )
-    listing.set_defaults(func=_list)
-    page(
-        "resume-commander",
-        "Resume the manager's recorded client session under this holder",
-        """Requires this environment's holder pair for the manager's live holder: run it
-in the shell its hold keeps; ensemble resume is the same command. Reads
-~/.ensemble/managers/NAME/session.json, refuses while its client still runs
-or when its cwd is gone, gets the client's resume command from
-ensemble-session resume-argv, records its own pid as the client's, then
-replaces itself with that client in the recorded cwd. Exit 2 without a holder
-pair; 1 when it cannot resume.
-
-Examples:
-  In tmux session demo's held shell:
-  ensemble-crew resume-commander
-
-Recovery and next help:
-  Not held here: ensemble list, then select the manager.
-  Client resume commands: ensemble-session resume-argv --help
-""",
-    ).set_defaults(func=_resume_commander)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     command = ()
-    takes_command = arguments[:1] in (["run"], ["hold"]) or arguments[:2] == ["start", "command"]
-    if takes_command and "--" in arguments:
+    if arguments[:2] == ["start", "command"] and "--" in arguments:
         delimiter = arguments.index("--")
         command = tuple(arguments[delimiter + 1 :])
         arguments = arguments[:delimiter]
     parser = _parser()
     args = parser.parse_args(arguments)
-    if args.func in {_run, _hold}:
+    if args.func is _run:
         if not command:
-            parser.error("start command, run and hold require -- followed by a command")
+            parser.error("start command requires -- followed by a command")
         args.command = command
-    elif command:
-        parser.error("only start command, run and hold accept a command after --")
     if getattr(args, "list", False) and args.start_kind is not None:
         parser.error("start takes a kind or --list, not both")
     if args.func is _start_list and not args.list:
@@ -1188,9 +1046,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error("close --force requires --forget")
     if args.func is _resume and args.input is not None and len(args.names) != 1:
         parser.error("resume --input requires exactly one name")
-    if args.func in {_run, _hold, _resume, _restart, _launch, _resume_commander} and (
-        refused := nested_start()
-    ):
+    if args.func in {_run, _resume, _restart, _launch} and (refused := nested_start()):
         print(f"crew: {refused}", file=sys.stderr)
         return 2
     try:

@@ -1083,9 +1083,9 @@ class CloseAllTest(Case):
     def test_failed_listing_empty_roster_reports_failure_without_creating_state(self):
         stderr = io.StringIO()
         with self.unavailable_listing(), contextlib.redirect_stderr(stderr):
-            with self.assertRaisesRegex(RuntimeError, "close-all partial"):
+            with self.assertRaisesRegex(RuntimeError, "close --all partial"):
                 self.crew.close_all()
-            with self.assertRaisesRegex(RuntimeError, "close-all partial"):
+            with self.assertRaisesRegex(RuntimeError, "close --all partial"):
                 self.crew.close_all(dry_run=True)
         self.assertEqual(stderr.getvalue().count("listing unavailable"), 2)
         self.assertFalse(Path(self.roster.directory).exists())
