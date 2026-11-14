@@ -1,13 +1,14 @@
 """ensemble (skills/manage/scripts/ensemble): its tmux calls through a fake tmux, its attach per
-terminal, its new session on a private tmux server with the shell under its plugin's ensemble-crew
-hold, and the launchers --install puts in ~/.ensemble/bin, run from a plain PATH before and after a
-plugin upgrade.
+terminal, its new session on a private tmux server with the shell under its own hold, a command
+held outside tmux, and the launchers --install puts in ~/.ensemble/bin, run from a plain PATH before
+and after a plugin upgrade.
 """
 
 import concurrent.futures
 import json
 import os
 import pty
+import re
 import shutil
 import signal
 import stat
@@ -23,7 +24,6 @@ from tests.session import live_tmux
 from tests.utils.jsonl import read_jsonl
 
 ENSEMBLE = os.path.join(REPO, "skills", "manage", "scripts", "ensemble")
-CREW = os.path.join(REPO, "bin", "ensemble-crew")
 LAUNCHER = os.path.join(REPO, "skills", "manage", "scripts", "launcher")
 COMMANDS = (
     "ensemble",
@@ -32,7 +32,7 @@ COMMANDS = (
     "ensemble-delegate",
     "ensemble-orchestrator",
 )
-USAGE = "usage: ensemble <session-name> | ensemble list | ensemble --install"
+USAGE = "usage: ensemble <name> | ensemble [--force] <name> -- <command> [<arg> ...]"
 FAKE = """#!{python} -I
 import json, os, sys
 with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
@@ -100,30 +100,29 @@ OPTIONS = (
 
 
 def created(name: str, cwd: str, shell: str, root: str = REPO) -> list[str]:
-    crew = os.path.join(root, "bin", "ensemble-crew")
-    hold = [crew, "hold", f"--manager={name}", f"--session={name}", "--", shell, "-l"]
+    hold = [os.path.join(root, "skills", "manage", "scripts", "ensemble"), name, "--", shell, "-l"]
     return [*START, name, "-c", cwd, *hold]
 
 
 def held(name: str) -> list[str]:
-    crew = os.path.join(REPO, "bin", "ensemble-crew")
-    resume = ["/bin/sh", "-c", '"$@"; exec "${SHELL:-/bin/sh}" -l', "ensemble", crew]
-    return [
-        crew,
-        "hold",
-        f"--manager={name}",
-        f"--session={name}",
-        "--",
-        *resume,
-        "resume-commander",
-    ]
+    resume = ["/bin/sh", "-c", '"$@"; exec "${SHELL:-/bin/sh}" -l', "ensemble", ENSEMBLE, "resume"]
+    return [ENSEMBLE, name, "--", *resume]
 
 
-def panes(command: str, name: str = "demo") -> str:
+def typed(script: str = ENSEMBLE) -> str:
+    """What ensemble list types into a hold's idle shell: the script by path, quoted if it must be."""
+    return (
+        f"{script} resume"
+        if re.fullmatch(r"[A-Za-z0-9_./:@,+-]+", script)
+        else f"'{script}' resume"
+    )
+
+
+def panes(command: str, name: str = "demo", script: str = ENSEMBLE) -> str:
     """list-panes rows: the hold pane of session `name` running `command`, and a worker's pane
     running its attach command.
     """
-    hold = f'"{REPO}/bin/ensemble-crew" hold --manager={name} --session={name} -- /bin/zsh -l'
+    hold = f'"{script}" {name} -- /bin/zsh -l'
     attach = "/usr/bin/python3 -I /x/guard.py --attach /tmp/eg-501/0123456789abcdef/g1/display"
     return f"%3 {command} {hold}\n%4 python3 {attach}\n"
 
@@ -138,12 +137,12 @@ LIST_PANES = [
 ]
 
 
-def on_terminal(cwd: str, env: dict, answer: bytes) -> tuple[int, str]:
+def on_terminal(cwd: str, env: dict, answer: bytes, script: str = ENSEMBLE) -> tuple[int, str]:
     """ensemble list with stdin and stdout on a terminal, answering its prompt: exit, stderr."""
     master, slave = pty.openpty()
     with os.fdopen(master, "r+b", buffering=0) as terminal:
         process = subprocess.Popen(
-            (ENSEMBLE, "list"),
+            (script, "list"),
             cwd=cwd,
             env=env,
             stdin=slave,
@@ -306,6 +305,14 @@ class FakeTmux(Case):
             ("a.b",),
             ("name\n",),
             ("--install", "extra"),
+            ("resume", "x"),
+            ("--force",),
+            ("--force", "s1"),
+            ("--force", "resume", "--", "x"),
+            ("--force", "list", "--", "x"),
+            ("--force", "--install"),
+            ("s1", "--"),
+            ("list", "x", "--", "y"),
         ):
             with self.subTest(args=args):
                 process, _, err, calls = self.run_ensemble(*args, TMUX="/tmp/fake,1,0")
@@ -313,6 +320,30 @@ class FakeTmux(Case):
                 self.assertIn(USAGE, err)
                 self.assertEqual(calls, [])
                 self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+
+    def test_resume_without_a_hold_exits_2_without_tmux(self):
+        before = sorted(Path(self.home).rglob("*"))
+        process, out, err, calls = self.run_ensemble("resume", has_rc=0)
+        self.assertEqual(
+            (process.returncode, out, err, calls),
+            (2, "", "ensemble: run ensemble resume under the manager's hold: ensemble list\n", []),
+        )
+        self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+
+    def test_help_after_the_delimiter_belongs_to_the_command(self):
+        process, out, err, calls = self.run_ensemble("s1", "--", "/bin/echo", "-h", "--help")
+        self.assertEqual((process.returncode, out, err, calls), (0, "-h --help\n", "", []))
+
+    def test_a_held_command_exits_with_its_status_and_a_held_place_is_refused(self):
+        process, _, err, calls = self.run_ensemble("s1", "--", "/bin/sh", "-c", "exit 3")
+        self.assertEqual((process.returncode, err, calls), (3, "", []))
+        roster = Roster(os.path.join(self.ensemble, "managers", "s1"))
+        with roster.hold("other"):
+            process, _, err, calls = self.run_ensemble("s1", "--", "/bin/sh", "-c", "exit 3")
+            self.assertEqual((process.returncode, calls), (1, []))
+            self.assertIn("ensemble --force s1 -- <client resume command>", err)
+            process, _, err, _ = self.run_ensemble("--force", "s1", "--", "/bin/sh", "-c", "exit 4")
+            self.assertEqual((process.returncode, err), (4, ""))
 
     def test_valid_names_start_and_attach(self):
         for name in ("s1", "A_9-z", "_leading", "trailing-"):
@@ -370,13 +401,13 @@ class FakeTmux(Case):
                 json.dump(fields, f)
         return roster
 
-    def select(self, answer=b"1\n", has_rc=1, **env):
+    def select(self, answer=b"1\n", has_rc=1, script=ENSEMBLE, **env):
         """ensemble list with stdin and stdout on a terminal, answering its prompt."""
         if os.path.exists(self.log):
             os.unlink(self.log)
         values = {"HAS_RC": has_rc, **env}
         result, err = on_terminal(
-            self.cwd, {**self.env, **{k: str(v) for k, v in values.items()}}, answer
+            self.cwd, {**self.env, **{k: str(v) for k, v in values.items()}}, answer, script
         )
         calls = []
         if os.path.exists(self.log):
@@ -509,12 +540,21 @@ class FakeTmux(Case):
             [
                 [
                     *("send-keys", "-t", "%3", "C-u", ";"),
-                    *("send-keys", "-t", "%3", "-l", f"'{CREW}' resume-commander", ";"),
+                    *("send-keys", "-t", "%3", "-l", typed(), ";"),
                     *("send-keys", "-t", "%3", "Enter"),
                 ],
                 ["-CC", "attach", "-t", "=demo"],
             ],
         )
+
+    def test_a_script_path_needing_quotes_is_typed_single_quoted(self):
+        script = os.path.join(plugin(os.path.join(self.home, "plug in")), ENSEMBLE[len(REPO) + 1 :])
+        roster = self.demo(cwd="/home/user/project")
+        with roster.hold("demo"):
+            result, _, calls = self.select(PANES=panes("zsh", script=script), script=script)
+        self.assertEqual(result, 0)
+        self.assertEqual(calls[1][8:10], ["-l", f"'{script}' resume"])
+        self.assertEqual(typed(script), f"'{script}' resume")
 
     def test_a_busy_hold_pane_is_attached_without_typing(self):
         roster = self.demo(cwd="/home/user/project")
@@ -522,7 +562,7 @@ class FakeTmux(Case):
             result, err, calls = self.select(PANES=panes("vim"))
         self.assertEqual((result, calls), (0, [LIST_PANES, ["-CC", "attach", "-t", "=demo"]]))
         self.assertIn(
-            f"ensemble: demo's pane runs vim; resume there with: '{CREW}' resume-commander\n",
+            f"ensemble: demo's pane runs vim; resume there with: {typed()}\n",
             err,
         )
 
@@ -544,7 +584,7 @@ class FakeTmux(Case):
         with roster.hold("work"):
             result, err, calls = self.select()
         self.assertEqual((result, calls), (1, []))
-        self.assertTrue(err.endswith("crew: manager demo: held by work; nothing opened\n"))
+        self.assertTrue(err.endswith("ensemble: manager demo: held by work; nothing opened\n"))
 
     def install(self, script=ENSEMBLE):
         process, out, err, calls = self.run_ensemble("--install", script=script)
@@ -847,7 +887,7 @@ class FakeTmux(Case):
         copy = shutil.copy2(ENSEMBLE, os.path.join(away, "ensemble"))
         process, out, err, calls = self.run_ensemble("s1", script=copy)
         self.assertEqual((process.returncode, out), (1, ""))
-        self.assertRegex(err, r"\Aensemble: no /.*/bin/ensemble-crew\n\Z")
+        self.assertRegex(err, r"\Aensemble: no /.*/src/ensemble/manager/commander.py\n\Z")
         self.assertEqual([call[2] for call in calls], ["has"])
 
     def test_with_no_install_a_launcher_fails_naming_where_it_looked(self):
@@ -1014,7 +1054,26 @@ class PrivateServer(Case):
         self.env["SHELL"] = "/bin/sh"
         self.assertEqual(self.run_ensemble("demo").returncode, 0)
         rows = self.server.tmux("list-panes", "-s", "-t", "=demo", "-F", "#{pane_start_command}")
-        self.assertIn(" hold --manager=demo --session=demo -- ", rows.stdout)
+        self.assertRegex(rows.stdout, "/ensemble[\"']? demo -- ")
+
+    def test_a_command_holds_its_place_outside_tmux(self):
+        done = subprocess.run(
+            (ENSEMBLE, "demo", "--", self.shell, "a b"),
+            cwd=self.cwd,
+            env=self.env,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
+        cwd, args, manager, holder, generation, first = self.shell_report()
+        self.assertEqual((cwd, args, manager, generation), (self.cwd, "a b", "demo", "1"))
+        self.assertEqual(first, os.path.join(REPO, "bin"))
+        self.assertEqual(str(uuid.UUID(holder)), holder)
+        self.assertFalse(os.path.exists(self.attach_log))
+        self.assertTrue(self.free(self.roster("demo")))
 
     def test_hold_only_resumes_the_recorded_client_under_the_same_hold(self):
         work = self.client()
