@@ -170,7 +170,8 @@ class Flows(Case):
         start = section("manage", "Start")
         for phrase in (
             "`ensemble <name>`",
-            "ensemble-crew hold --manager",
+            "`ensemble <manager> -- <client argv>`",
+            "`ensemble --help`: taking over a hung holder",
             "`ensemble-crew attach`",
             "lease",
             "`name kind sid state view note cwd attach`",
