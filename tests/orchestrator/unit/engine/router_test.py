@@ -2839,6 +2839,8 @@ class RunLaunching(OuterBase):
         spec = self.api.detached[-1][1]
         self.assertIn("# Router local PRD", spec.input)
         self.assertIn(path.as_uri(), spec.input)
+        self.assertEqual(spec.files, {"inputs/design.md": "# Router local PRD"})
+        self.assertIn("File: `<Workdir>/inputs/design.md`", spec.input)
 
     def test_build_detaches_its_linear_run_after_its_start_row(self):
         self.assertEqual(self.outer(), 0)

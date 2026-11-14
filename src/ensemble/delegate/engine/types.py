@@ -71,7 +71,7 @@ class Layout:
         return os.path.join(self.run, "out.md")
 
     def in_place(self) -> bool:
-        """agent is in place, without symlinks."""
+        """agent in place, no symlinks."""
         real = os.path.join(
             os.path.realpath(os.path.dirname(self.workdir)),
             os.path.relpath(self.agent, os.path.dirname(self.workdir)),
@@ -119,6 +119,7 @@ class Spec:
     team: Team | None = None
     credentials: str | None = None
     environment_credentials: str | None = None
+    files: Mapping[str, str] | None = None  # agent-dir path -> text
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ class Preview:
 
 @dataclass(frozen=True)
 class Limit:
-    """resets_at: epoch seconds or None."""
+    """resets_at: epoch s or None."""
 
     resets_at: float | None
 
@@ -221,7 +222,7 @@ Event = Begun | Progress | Finished
 
 
 class GateStatus(StrEnum):
-    """DRAFTED: failed/needs_input PR returned to draft."""
+    """DRAFTED: failed/needs_input PR back in draft."""
 
     SKIPPED = "skipped"
     PASSED = "passed"

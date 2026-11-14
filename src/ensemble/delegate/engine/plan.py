@@ -99,6 +99,12 @@ def plan(
         raise ConfigError("events: tui mode only")
     if spec.resume and spec.sid is None:
         raise ConfigError("resume: needs a sid")
+    files = dict(spec.files or {})
+    for key in files:
+        if not _inside(key):
+            raise ConfigError(f"files: {key!r} must be a relative path inside the agent dir")
+    if files and (not driver.session_based or spec.mode == Mode.IN_PROCESS):
+        raise ConfigError("files: needs a headless or tui session")
     tasks = composition.index(run.role)
     if spec.task:
         if spec.task not in tasks:
@@ -178,6 +184,7 @@ def plan(
         environment=environment_spec,
         credentials=spec.credentials,
         environment_credentials=spec.environment_credentials,
+        files={os.path.join(layout.agent, key): text for key, text in files.items()},
     )
     _check_team_dirs(
         composition, intent.writes, client=client, spec=session, layout=layout, driver=driver
@@ -185,6 +192,17 @@ def plan(
     planned = Plan(spec, session, run, repo, docker)
     return replace(
         planned, session=replace(session, prompt=composition.render(run, planned.params))
+    )
+
+
+def _inside(key) -> bool:
+    """A relative path that names no part outside, or above, the dir it is joined to."""
+    return (
+        isinstance(key, str)
+        and key.isprintable()
+        and not os.path.isabs(key)
+        and os.path.normpath(key) == key
+        and not {os.curdir, os.pardir} & set(key.split(os.sep))
     )
 
 

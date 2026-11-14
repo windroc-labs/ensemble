@@ -59,14 +59,14 @@ class EmbeddedPrograms(Sample):
             self.checked(self.docker_program("print('static fixture')", execute=False)), []
         )
 
-    def test_real_prompt_stage_has_one_exact_exception_and_changed_body_is_rejected(self):
+    def test_real_files_stage_has_one_exact_exception_and_changed_body_is_rejected(self):
         source = Path(REPO, HOST).read_text()
         program = next(
             ast.literal_eval(node.value)
             for node in ast.parse(source).body
             if isinstance(node, ast.Assign)
             and any(
-                isinstance(target, ast.Name) and target.id == "PROMPT_STAGE"
+                isinstance(target, ast.Name) and target.id == "FILES_STAGE"
                 for target in node.targets
             )
         )
