@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from ensemble.manager import Roster, Spec, State, cli
+from ensemble.manager import Crew, Roster, Spec, State, cli
 from ensemble.manager.cli import main
 from ensemble.manager.engine.pr import VIEW_FIELDS
 from ensemble.utils import Record, append_line
@@ -186,6 +186,9 @@ class CliTest(CliCase):
                 ("forget",),
                 ("resume",),
                 ("forget", "--force"),
+                ("close", "--forget"),
+                ("close", "--forget", "--force"),
+                ("restart",),
                 ("hide",),
                 ("show",),
             ):
@@ -206,11 +209,77 @@ class CliTest(CliCase):
         run.assert_not_called()
 
     def test_empty_close_all_reports_nothing_without_creating_a_manager(self):
-        with self.listed():
-            result, stdout, stderr = self.invoke("close-all", "--manager", "mgr")
-        self.assertEqual(result, 0, stderr)
-        self.assertEqual(stdout, "nothing to close\n")
-        self.assertFalse(os.path.exists(self.directory))
+        for argv in (("close-all",), ("close", "--all")):
+            with self.subTest(argv=argv), self.listed():
+                result, stdout, stderr = self.invoke(*argv, "--manager", "mgr")
+            self.assertEqual(result, 0, stderr)
+            self.assertEqual(stdout, "nothing to close\n")
+            self.assertFalse(os.path.exists(self.directory))
+
+    def test_close_all_and_forget_are_close_options_and_older_spellings(self):
+        for new, old, method, kwargs in (
+            (("close", "--all"), ("close-all",), "close_all", {"dry_run": False}),
+            (
+                ("close", "--all", "--dry-run"),
+                ("close-all", "--dry-run"),
+                "close_all",
+                {"dry_run": True},
+            ),
+            (("close", "w1", "--forget"), ("forget", "w1"), "forget", {"force": False}),
+            (
+                ("close", "w1", "--forget", "--force"),
+                ("forget", "w1", "--force"),
+                "forget",
+                {"force": True},
+            ),
+        ):
+            results = []
+            for argv in (new, old):
+                with (
+                    self.subTest(argv=argv),
+                    mock.patch.object(Crew, method, return_value=["a", "b"]) as called,
+                    mock.patch.object(Crew, "close") as close,
+                ):
+                    results.append(self.invoke(*argv, "--manager", "mgr"))
+                    called.assert_called_once_with(
+                        *(("w1",) if method == "forget" else ()), **kwargs
+                    )
+                    close.assert_not_called()
+            self.assertEqual(results[0], results[1])
+
+    def test_close_option_combinations_are_usage_errors(self):
+        for argv, message in (
+            (("close", "w1", "--all"), "close takes NAME or --all"),
+            (("close",), "close takes NAME or --all"),
+            (("close", "--all", "--forget"), "--forget takes NAME, not --all"),
+            (("close", "w1", "--dry-run"), "--dry-run requires --all"),
+            (("close", "w1", "--forget", "--dry-run"), "--dry-run requires --all"),
+            (("close", "w1", "--force"), "--force requires --forget"),
+        ):
+            with (
+                self.subTest(argv=argv),
+                mock.patch("subprocess.run") as run,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+                self.assertRaises(SystemExit) as error,
+            ):
+                main([*argv, "--manager", "mgr"])
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn(message, stderr.getvalue())
+            run.assert_not_called()
+            self.assertFalse(os.path.exists(self.directory))
+
+    def test_close_help_names_its_options_and_old_pages_point_to_them(self):
+        close = help_text(self, main, ["close", "--help"])
+        for option in ("--all", "--dry-run", "--forget", "--force"):
+            self.assertIn(option, close)
+        self.assertIn(
+            "older spelling of close --all", help_text(self, main, ["close-all", "--help"])
+        )
+        self.assertIn(
+            "older spelling of close NAME --forget", help_text(self, main, ["forget", "--help"])
+        )
+        source = Path(cli.__file__).read_text()
+        self.assertNotRegex(source, r"ensemble-crew (close-all|forget)\b")
 
 
 class Launch(CliCase):
