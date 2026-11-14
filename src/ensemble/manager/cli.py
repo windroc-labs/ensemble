@@ -1,26 +1,19 @@
 """ensemble-crew: command-based launches and a manager's persistent roster."""
 
 import argparse
-import contextlib
 import os
 import shlex
 import sys
 import uuid
 from collections.abc import Sequence
-from dataclasses import replace
 
-from ensemble.manager import Crew, Roster, RosterError, Spec, State
+from ensemble.manager import Crew, Roster, RosterError, Spec, State, commander
 from ensemble.manager.engine import managers
 from ensemble.manager.engine.holder import Holder, inherited
 from ensemble.manager.engine.types import (
-    Manager,
-    Refused,
-    SessionRecord,
     StaleHolder,
     StartBusy,
     StatusError,
-    Unread,
-    Unreadable,
 )
 from ensemble.utils import EXIT_BUSY, STATE, LayerCommand, nested_start, printable
 
@@ -126,86 +119,8 @@ def _crew(args) -> Crew:
     return Crew(_roster(args), lease=inherited())
 
 
-def _row(*fields: str) -> str:
-    return "\t".join(printable(field).replace("\t", " ") for field in fields)
-
-
-def _rows(found: list[Manager | Unreadable], out, *, numbered: bool) -> bool:
-    """Print each manager's rows to out; whether any could not be read."""
-    failed = False
-    for number, manager in enumerate(found, 1):
-        prefix = f"{number}) " if numbered else ""
-        if isinstance(manager, Unreadable):
-            print(prefix + _row(manager.name, "-", "-", "-", "error", manager.error), file=out)
-            failed = True
-            continue
-        record = manager.record
-        fields = [manager.name, manager.state]
-        fields += [record.client, record.cwd] if isinstance(record, SessionRecord) else ["-", "-"]
-        errors = [part.error for part in (record, manager.entries) if isinstance(part, Unread)]
-        if errors:
-            fields += ["error", "; ".join(errors)]
-            failed = True
-        print(prefix + _row(*fields), file=out)
-        if isinstance(manager.entries, Unread):
-            continue
-        for name, entry in sorted(manager.entries.items()):
-            kind = "-" if entry.record is None else entry.record.kind
-            print("  " + _row(name, kind, entry.state), file=out)
-        if not manager.entries:
-            print("  -", file=out)
-    return failed
-
-
-def _choose(found: list[Manager | Unreadable]) -> Manager | Unreadable | None:
-    names = [manager.name for manager in found]
-    prompt = f"select a manager [1-{len(found)}], Enter cancels: "
-    while True:
-        try:
-            print(prompt, end="", file=sys.stderr, flush=True)
-            answer = sys.stdin.readline().strip()
-        except KeyboardInterrupt:
-            print(file=sys.stderr)
-            return None
-        if not answer:
-            return None
-        if answer.isdecimal() and 1 <= int(answer) <= len(found):
-            return found[int(answer) - 1]
-        if answer in names:
-            return found[names.index(answer)]
-        print(
-            f"crew: no manager {printable(answer)}; give 1-{len(found)} or a name", file=sys.stderr
-        )
-
-
-def _select(manager: Manager | Unreadable) -> int:
-    record = manager.record if isinstance(manager, Manager) else None
-    if isinstance(record, Unread):
-        print(
-            f"crew: manager {manager.name}: {record.error}; its session is not resumed",
-            file=sys.stderr,
-        )
-    live = isinstance(record, SessionRecord) and managers.alive(record.pid)
-    plan = managers.plan(manager, live=live)
-    if isinstance(plan, Refused):
-        print(
-            f"crew: manager {manager.name}: {printable(plan.reason)}; nothing opened",
-            file=sys.stderr,
-        )
-        return 1
-    print(f"{plan.verb} {plan.name}")
-    return 0
-
-
 def _list(args) -> int:
-    out = sys.stderr if args.select else sys.stdout
-    found = managers.managers(os.path.expanduser(managers.ROOT))
-    if not found:
-        print("no managers yet; start one: ensemble <name>", file=out)
-        return 0
-    failed = _rows(found, out, numbered=args.select)
-    chosen = _choose(found) if args.select else None
-    return _select(chosen) if chosen is not None else 1 if failed else 0
+    return commander.listing(select=args.select)
 
 
 def _hold(args) -> int:
@@ -213,17 +128,7 @@ def _hold(args) -> int:
 
 
 def _resume_commander(args) -> int:
-    roster, lease = _roster(args), inherited()
-    if lease is None:
-        raise ValueError("run resume-commander under the manager's hold: ensemble list")
-    roster.bind(lease)
-    roster.check_lease()
-    record, argv = managers.resume_target(roster.directory)
-    os.chdir(record.cwd)
-    # exec keeps this pid: the record names the client from its start, not only from its first turn
-    with contextlib.suppress(OSError):
-        managers.write_record(roster.directory, replace(record, pid=os.getpid()))
-    os.execvp(argv[0], argv)
+    return commander.resume(args.manager)
 
 
 def _run(args) -> int:
