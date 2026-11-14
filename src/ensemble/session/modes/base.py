@@ -332,9 +332,7 @@ class BaseMode(ABC):
     def _staged(
         spec: Spec, prompt_file: tuple[str, str] | None, local_dir: str
     ) -> tuple[tuple[str, str, str], ...]:
-        """(root, path, text) of each file written before the worker starts: the prompt's below
-        local_dir, each of spec.files below its access root.
-        """
+        """(root, path, text) to write before the worker starts."""
         roots = (spec.access.cwd, *spec.access.dirs)
         staged = [
             (next(r for r in roots if path.startswith(r.rstrip("/") + "/")), path, text)
@@ -346,7 +344,6 @@ class BaseMode(ABC):
     def _contained(
         staged: Sequence[tuple[str, str, str]], metadata: Mapping[str, str] | None
     ) -> Mapping[str, str] | None:
-        """metadata for a container start, its Host writing `staged`."""
         if not staged:
             return metadata
         return {**(metadata or {}), STAGED: json.dumps({path: text for _, path, text in staged})}

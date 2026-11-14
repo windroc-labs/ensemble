@@ -101,8 +101,7 @@ class Layout:
 class Spec:
     """One run: workdir=Layout; resume uses sid. None: client=role, team=built-in,
     out=<run>/out.md for sessions, else unsaved. name/events: tui in plan(), all modes in
-    HarnessDelegate (agent name, harness <name>-drive, detached outcome events). files: agent-dir
-    relative path -> text, written there before a headless or tui session starts.
+    HarnessDelegate (agent name, harness <name>-drive, detached outcome events).
     """
 
     input: str

@@ -49,39 +49,6 @@ def open_beneath(root: str, path: str, *, directory: bool = False) -> int:
         os.close(fd)
 
 
-def write_beneath(root: str, path: str, text: str) -> None:
-    """Writes `text` to `path` below `root` (0o600), making missing dirs (0o700) part by part from
-    `root` without following a link, and renames a temp file over the leaf, so a link there is
-    replaced, never written through. OSError also for a path outside `root` (EXDEV).
-    """
-    parts = os.path.relpath(os.path.abspath(path), os.path.abspath(root)).split(os.sep)
-    if parts[0] in {os.curdir, os.pardir}:
-        raise OSError(errno.EXDEV, f"not below {root}", path)
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for part in parts[:-1]:
-            with contextlib.suppress(FileExistsError):
-                os.mkdir(part, 0o700, dir_fd=fd)
-            fd, parent = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd), fd
-            os.close(parent)
-        temp, here = f".tmp-{os.urandom(8).hex()}", _descriptor_path(fd)
-        # by path, not dir_fd: the unit-test write audit sees no dir_fd; the fd check below holds
-        out = os.open(here / temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        try:
-            with os.fdopen(out, "w", encoding="utf-8") as f:
-                if (made := _descriptor_path(f.fileno())).parent != here:
-                    os.unlink(made)
-                    raise OSError(errno.EXDEV, f"not below {root}", path)
-                f.write(text)
-            os.replace(temp, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(temp, dir_fd=fd)
-            raise
-    finally:
-        os.close(fd)
-
-
 def read_beneath(
     root: str, path: str, *, offset: int = 0, limit: int | None = None, tail: bool = False
 ) -> bytes | None:

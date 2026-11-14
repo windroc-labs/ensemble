@@ -1,6 +1,7 @@
 """Public utility modules and functions shared by the layers."""
 
 from ensemble.utils.args import Once
+from ensemble.utils.beneath import write_beneath
 from ensemble.utils.config_file import (
     LOCAL,
     ConfigFileError,
@@ -42,7 +43,6 @@ from ensemble.utils.files import (
     save,
     sync_directory,
     validate_events,
-    write_beneath,
 )
 from ensemble.utils.git import (
     GUARD,

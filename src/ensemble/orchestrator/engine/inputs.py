@@ -328,14 +328,15 @@ def clean(text: str) -> str:
 
 def _file_names(sources) -> dict[str, str]:
     """Each saved doc's path -> its file, relative to the agent dir: earlier version first."""
-    found = {}
+    found, taken = {}, set()
     for doc in (*((sources.earlier,) if sources.earlier else ()), *sources.docs):
         if doc.text is None or len(doc.text.encode("utf-8", "replace")) > MAX_LOCAL_DOC:
             continue
         base = UNSAFE.sub("-", os.path.basename(doc.path.rstrip("/"))).lstrip(".") or "doc.md"
         name, k = base, 2
-        while f"{INPUTS_DIR}/{name}" in found.values():
+        while name.casefold() in taken:  # a case-insensitive filesystem would merge them
             name, k = f"{k}-{base}", k + 1
+        taken.add(name.casefold())
         found[doc.path] = f"{INPUTS_DIR}/{name}"
     return found
 
