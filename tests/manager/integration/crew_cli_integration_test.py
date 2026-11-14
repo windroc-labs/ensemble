@@ -41,6 +41,26 @@ class Commands(InstalledCrewCase):
             with self.subTest(args=args):
                 self.assertEqual(self.invoke(*args).returncode, 2)
 
+    def test_start_list_prints_exactly_what_delegate_listing_prints(self):
+        seen = os.path.join(self.home, "delegate-argv")
+        fake = Path(os.path.dirname(self.crew_bin), "ensemble-delegate")
+        fake.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" > {shlex.quote(seen)}\n'
+            "printf 'pm\\n  product-design\\n'\n"
+            "printf 'listing note\\n' >&2\n"
+            "exit 3\n"
+        )
+        fake.chmod(0o755)
+        self.assertNotIn("ENSEMBLE_MANAGER", os.environ)
+        result = self.invoke("start", "--list")
+        self.assertEqual(
+            (result.returncode, result.stdout, result.stderr),
+            (3, "pm\n  product-design\n", "listing note\n"),
+        )
+        self.assertEqual(Path(seen).read_text(), "run --list\n")
+        self.assertFalse(Path(self.directory).exists())
+
     def test_an_invalid_manager_name_writes_nowhere(self):
         before = sorted(Path(self.home).rglob("*"))
         result = self.invoke("attach", "--manager=../outside")

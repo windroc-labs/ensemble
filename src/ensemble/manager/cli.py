@@ -249,6 +249,10 @@ def _run(args) -> int:
     return 0
 
 
+def _start_list(_args) -> int:
+    os.execvp(LayerCommand.DELEGATE, (LayerCommand.DELEGATE, "run", "--list"))
+
+
 def _launch(args) -> int:
     record = _crew(args).launch(
         args.kind,
@@ -449,7 +453,7 @@ Examples:
     --input 'Plan a feature'
   Form: start role [CREW_OPTIONS] ROLE [DELEGATE_OPTIONS]
   There is no client-flags delimiter at this boundary.
-  Discover roles/tasks: ensemble-delegate run --list
+  Discover roles/tasks: ensemble-crew start --list
   Placement: ensemble-crew start --help
 """,
     ),
@@ -550,7 +554,8 @@ Prerequisites and effects:
   Keep the pair together. An active holder fences ownership-sensitive roster
   updates; run those from its commander environment.
   ENSEMBLE_AGENT_SESSION blocks hold/start/resume and resume-commander and
-  the old start forms; use a user-started commander. Help still works.
+  the old start forms; use a user-started commander. Help and start --list
+  still work.
   State: ~/.ensemble/managers/NAME/.
   start gives starters empty stdin; supply literal input.
   hold instead inherits the caller's input for its foreground command.
@@ -565,7 +570,7 @@ Examples:
 
 Next help:
   ensemble-session --help          workers, clients, hosts and placement
-  ensemble-delegate run --help     roles and tasks
+  ensemble-crew start --list       roles and tasks
   ensemble-orchestrator router --help    issue runs
 """,
     )
@@ -591,14 +596,21 @@ Next help:
         "Start a worker, role run, issue run, reopened issue run or command; track it",
         """The first word is the kind; its options: ensemble-crew start KIND --help.
 Each kind prints the Record of what it started and tracks it as a roster entry.
+--list instead lists roles and their tasks, exactly as ensemble-delegate run
+--list does; it needs no manager and works inside an agent session.
 
 Examples:
   ensemble-crew start worker --manager demo helper --client codex --display none
+  ensemble-crew start --list
 """,
         manager=False,
-        usage="%(prog)s KIND [KIND_OPTIONS]",
+        usage="%(prog)s KIND [KIND_OPTIONS] | %(prog)s --list",
     )
-    starts = start.add_subparsers(dest="start_kind", metavar="KIND", required=True)
+    start.add_argument(
+        "--list", action="store_true", help="list roles and their tasks instead of starting"
+    )
+    start.set_defaults(func=_start_list)
+    starts = start.add_subparsers(dest="start_kind", metavar="KIND")
     hold = page(
         "hold",
         "Keep a manager's holder lease while COMMAND runs in the foreground",
@@ -1037,6 +1049,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.command = command
     elif command:
         parser.error("only start command, run and hold accept a command after --")
+    if getattr(args, "list", False) and args.start_kind is not None:
+        parser.error("start takes a kind or --list, not both")
+    if args.func is _start_list and not args.list:
+        parser.error("start takes a kind or --list")
     if args.func is _view and bool(args.names) == args.all:
         parser.error(f"{args.verb} takes entry names or --all")
     if args.func is _resume and args.input is not None and len(args.names) != 1:

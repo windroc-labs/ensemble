@@ -683,7 +683,7 @@ class StartForm(Launch):
             with self.subTest(old=old):
                 before = vars(parse_only(cli.main, [old, "--manager", "m", *tail]))
                 after = vars(parse_only(cli.main, ["start", kind, "--manager", "m", *tail]))
-                self.assertEqual(after.pop("start_kind"), kind)
+                self.assertEqual((after.pop("start_kind"), after.pop("list")), (kind, False))
                 self.assertEqual(before, after)
 
     def test_start_kinds_launch_their_layer_command(self):
@@ -733,6 +733,42 @@ class StartForm(Launch):
                     stderr.getvalue(),
                 )
                 self.assertFalse(os.path.exists(self.directory))
+
+
+class StartList(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.execvp = self.enterContext(mock.patch("os.execvp"))
+
+    def test_list_runs_delegate_listing_without_a_manager_even_in_an_agent_session(self):
+        for env in ({}, {"ENSEMBLE_AGENT_SESSION": "1"}):
+            with self.subTest(env=env), mock.patch.dict(os.environ, env):
+                self.execvp.reset_mock()
+                _, stdout, stderr = self.invoke("start", "--list")
+                self.assertEqual((stdout, stderr), ("", ""))
+                self.execvp.assert_called_once_with(
+                    "ensemble-delegate", ("ensemble-delegate", "run", "--list")
+                )
+        self.assertFalse(Path(self.ensemble, "managers").exists())
+
+    def test_list_takes_no_kind_and_start_needs_one_or_list(self):
+        for argv, message in (
+            (("start", "--list", "worker", "--manager", "mgr", "w1"), "a kind or --list, not both"),
+            (("start",), "start takes a kind or --list"),
+        ):
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(message, stderr.getvalue())
+        self.execvp.assert_not_called()
+
+    def test_a_missing_delegate_command_exits_one(self):
+        self.execvp.side_effect = FileNotFoundError(2, "No such file or directory")
+        result, stdout, stderr = self.invoke("start", "--list")
+        self.assertEqual((result, stdout), (1, ""))
+        self.assertTrue(stderr.startswith("crew: "), stderr)
 
 
 class Reopen(CliCase):
