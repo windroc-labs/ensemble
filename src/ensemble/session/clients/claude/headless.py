@@ -83,13 +83,11 @@ class ClaudeHeadless(JsonHeadless):
                 yield TurnFailed("permission_required", "headless permission denied")
             elif record.get("is_error") is True or subtype != "success":
                 errors = record.get("errors")
-                detail = (
-                    "\n".join(e for e in errors if isinstance(e, str))
-                    if isinstance(errors, list)
-                    else ""
+                errors = (
+                    [e for e in errors if isinstance(e, str)] if isinstance(errors, list) else []
                 )
-                detail = detail or (result if isinstance(result, str) else "")
-                if org_refused(result, *(errors if isinstance(errors, list) else ())):
+                detail = "\n".join(errors) or (result if isinstance(result, str) else "")
+                if org_refused(*errors, said=result):
                     yield TurnFailed(ACCOUNT_REJECTED, detail)
                 else:
                     yield TurnFailed(

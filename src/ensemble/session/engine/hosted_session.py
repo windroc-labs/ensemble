@@ -250,8 +250,9 @@ def _held(client: str, names: Iterable[str], now: float) -> dict[str, float]:
         except (ValueError, RecursionError):
             continue
         until = hold.get("until") if isinstance(hold, dict) else None
-        live = isinstance(until, (int, float)) and not isinstance(until, bool)
-        if live and math.isfinite(until) and now < until <= now + REJECTED_HOLD:
+        if isinstance(until, bool) or not isinstance(until, (int, float)):
+            continue
+        if math.isfinite(until) and now < until <= now + REJECTED_HOLD:
             found[name] = until
     return found
 
@@ -305,7 +306,7 @@ def _picked(setup: _Setup, spec: Spec, name: str, client: Client, host: Host) ->
     if conversation and not wanted:
         left = {conversation: left[conversation]}
     if (account := accounts.choose(left, wanted)) is None:
-        rejected = ", ".join(sorted(held.keys() & left.keys()))
+        rejected = ", ".join(sorted(held.keys() & ({wanted} if wanted else left.keys())))
         raise SessionError(
             "usage: no available account" + (f"; rejected: {rejected}" if rejected else "")
         )

@@ -636,6 +636,14 @@ class StopFailureTest(Base):
                     self.launched().hook_events("StopFailure", {"session_id": SID, **payload}),
                     [TurnFailed("account_rejected", detail)],
                 )
+        prose = "I fixed the oauth_org_not_allowed handling."
+        self.assertEqual(
+            self.launched().hook_events(
+                "StopFailure",
+                {"session_id": SID, "error": "server_error", "last_assistant_message": prose},
+            ),
+            [TurnFailed("server_error", prose)],
+        )
 
     def test_a_failure_is_not_sticky(self):
         run = self.launched()

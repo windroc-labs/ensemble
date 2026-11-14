@@ -311,7 +311,9 @@ class ClaudeTui(Tui):
         """StopFailure's error: an org refusal, the usage limit (rate_limit), else a failed turn."""
         detail = _first(payload, "error_details", "last_assistant_message")
         if org_refused(
-            *(payload.get(key) for key in ("error", "error_details", "last_assistant_message"))
+            payload.get("error"),
+            payload.get("error_details"),
+            said=payload.get("last_assistant_message"),
         ):
             return [TurnFailed(ACCOUNT_REJECTED, detail)]
         error = _first(payload, "error") or "unknown"

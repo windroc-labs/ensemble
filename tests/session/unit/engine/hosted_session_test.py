@@ -1953,6 +1953,8 @@ class StartCheckTest(ClaudeStartCase):
         self.assert_rejected(self.start(), "home")
         self.assert_rejected(self.start(**{ACCOUNT_ENV: "home"}), "home")
         self.assertEqual(self.start(**{ACCOUNT_ENV: "work"}), ("work", None))
+        self.read(home=panel(10), work=panel(100))
+        self.assert_usage_error(self.start(**{ACCOUNT_ENV: "work"}))
 
     def test_a_bad_or_stale_hold_is_no_hold(self):
         now = time.time()

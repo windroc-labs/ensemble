@@ -299,10 +299,13 @@ class ParseTest(Base):
                     self.parse({"type": "result", **fields}),
                     [TurnFailed("account_rejected", detail)],
                 )
-        self.assertEqual(
-            self.parse({"type": "result", "subtype": "success", "is_error": True, "result": "no"}),
-            [TurnFailed("success", "no")],
-        )
+        for said in ("no", "The oauth_org_not_allowed case is handled."):
+            self.assertEqual(
+                self.parse(
+                    {"type": "result", "subtype": "success", "is_error": True, "result": said}
+                ),
+                [TurnFailed("success", said)],
+            )
 
     def test_native_initialization_starts_one_accepted_headless_turn(self):
         self.assertEqual(self.parse(INIT), [ClientBound(SID), TurnStarted()])
