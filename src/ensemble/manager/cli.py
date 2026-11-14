@@ -3,19 +3,16 @@
 import argparse
 import contextlib
 import os
-import re
 import shlex
 import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import replace
-from pathlib import Path
 
 from ensemble.manager import Crew, Roster, RosterError, Spec, State
 from ensemble.manager.engine import managers
-from ensemble.manager.engine.holder import Holder
+from ensemble.manager.engine.holder import Holder, inherited
 from ensemble.manager.engine.types import (
-    Lease,
     Manager,
     Refused,
     SessionRecord,
@@ -56,11 +53,10 @@ def _after(value: str) -> int | None:
 
 
 def _roster(args) -> Roster:
-    manager = args.manager or os.environ.get("ENSEMBLE_MANAGER")
-    if not manager or not managers.NAME.fullmatch(manager):
-        raise ValueError("give --manager NAME or set ENSEMBLE_MANAGER to a manager name")
-    directory = Path(os.path.expanduser(managers.ROOT)) / manager
-    return Roster(str(directory))
+    return managers.roster(
+        args.manager or os.environ.get("ENSEMBLE_MANAGER"),
+        "give --manager NAME or set ENSEMBLE_MANAGER to a manager name",
+    )
 
 
 def _named(manager: str, option: str = "--manager") -> tuple[str, ...]:
@@ -126,21 +122,8 @@ def _add_recovery(error: StaleHolder, args, reader: tuple[int, int] | None = Non
         error.add_note(note)
 
 
-def _lease() -> Lease | None:
-    holder = os.environ.get("ENSEMBLE_HOLDER_ID")
-    generation = os.environ.get("ENSEMBLE_HOLDER_GENERATION")
-    if holder is None and generation is None:
-        return None
-    if not holder or generation is None or not re.fullmatch(r"[1-9][0-9]*", generation):
-        raise ValueError("ENSEMBLE_HOLDER_ID and ENSEMBLE_HOLDER_GENERATION must go together")
-    identity = uuid.UUID(holder)
-    if identity.version != 4 or str(identity) != holder:
-        raise ValueError("ENSEMBLE_HOLDER_ID must be a canonical UUID4")
-    return Lease(holder, int(generation))
-
-
 def _crew(args) -> Crew:
-    return Crew(_roster(args), lease=_lease())
+    return Crew(_roster(args), lease=inherited())
 
 
 def _row(*fields: str) -> str:
@@ -230,7 +213,7 @@ def _hold(args) -> int:
 
 
 def _resume_commander(args) -> int:
-    roster, lease = _roster(args), _lease()
+    roster, lease = _roster(args), inherited()
     if lease is None:
         raise ValueError("run resume-commander under the manager's hold: ensemble list")
     roster.bind(lease)

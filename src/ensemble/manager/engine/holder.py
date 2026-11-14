@@ -2,11 +2,28 @@
 
 import contextlib
 import os
+import re
 import signal
 import subprocess
+import uuid
 
 from ensemble.manager.engine.roster import Roster
+from ensemble.manager.engine.types import Lease
 from ensemble.utils import SID_ENV
+
+
+def inherited() -> Lease | None:
+    """The holder pair this process inherited from its hold; None without one."""
+    holder = os.environ.get("ENSEMBLE_HOLDER_ID")
+    generation = os.environ.get("ENSEMBLE_HOLDER_GENERATION")
+    if holder is None and generation is None:
+        return None
+    if not holder or generation is None or not re.fullmatch(r"[1-9][0-9]*", generation):
+        raise ValueError("ENSEMBLE_HOLDER_ID and ENSEMBLE_HOLDER_GENERATION must go together")
+    identity = uuid.UUID(holder)
+    if identity.version != 4 or str(identity) != holder:
+        raise ValueError("ENSEMBLE_HOLDER_ID must be a canonical UUID4")
+    return Lease(holder, int(generation))
 
 
 def _foreground(group: int) -> None:
