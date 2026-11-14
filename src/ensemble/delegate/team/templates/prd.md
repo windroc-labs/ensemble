@@ -14,7 +14,7 @@ Optional; omit when the brief and the user's later words describe none. The main
 ## Assumptions, open questions and risks
 Optional; omit when all three below are omitted.
 ### Assumptions
-Optional; omit when none. Inferences the PRD rests on; one resting on research cites the finding and its confidence.
+Optional; omit when the brief, the user's later words and the research give none. Inferences the PRD rests on; one resting on research cites the finding and its confidence.
 ### Open questions
 Optional; omit when none. What the user must decide, each with a suggested answer; until the user answers, the suggested answer holds. Its name, in both headings and every mention: Open questions; in Chinese 开放问题, no other rendering.
 ### Risks

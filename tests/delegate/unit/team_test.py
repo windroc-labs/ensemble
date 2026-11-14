@@ -501,12 +501,13 @@ class Shipped(Packaged):
             "at most 4",
             "each with its suggested answer",
             "The user's answers go into the PRD",
-            "questions still open → this step again",
+            "Then Open questions left → `needs_input`",
+            "None left → step 8.",
         ):
             self.assertIn(literal, ask)
         self.assertIn(
-            "`needs_input` written this session, with no answer in the input since → stop; "
-            "answers → step 7.",
+            "`needs_input` written this session, with no answer in the input since → stop. "
+            "Answers to step 2's question → step 2; to step 7's → step 7.",
             text.split("## Resume", 1)[1],
         )
 
