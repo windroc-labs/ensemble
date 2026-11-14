@@ -146,7 +146,7 @@ class ShowTest(Base):
                 self.assertIn(split_window("-h", "%3", ("/fake/attach", "w1")), self.runner.calls)
                 tagged = [c for c in self.runner.calls if c[1] == "set-option" and "-p" in c]
                 found = record(
-                    "mgr", "%20", name="w1", sid=sid, label=line, hook=bool(sid), printed=PRINTED
+                    "mgr", "%20", name="w1", sid=sid, label=line, hook=bool(sid), run=PRINTED
                 )
                 self.assertEqual(tagged, found[-1:])
 
@@ -275,7 +275,7 @@ class OpenerChainTest(Base):
         self.assertIn(split_window("-h", "%3", ("/fake/attach", "w1")), self.runner.calls)
         self.assertIn(["tmux", "list-clients", "-t", "=a", "-F", CLIENTS], self.runner.calls)
         tagged = next(c for c in self.runner.calls if c[1] == "set-option" and "-p" in c)
-        self.assertEqual(tagged, record("a", "%20", name="w1", sid=SID, printed=PRINTED)[-1])
+        self.assertEqual(tagged, record("a", "%20", name="w1", sid=SID, run=PRINTED)[-1])
 
 
 class HideTest(Base):

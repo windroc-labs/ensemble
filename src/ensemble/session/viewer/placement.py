@@ -21,6 +21,7 @@ from ensemble.session.engine.tmux_cli import (
     error,
     session_name,
 )
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer.grid import (
     GRID_BUSY,
     GRID_PANES,
@@ -118,6 +119,17 @@ def _close_hook(
     return f"if-shell -F '#{{m:* {pane} *,{LISTED}}}' '' \"{unset} ; {run}\""
 
 
+def shows(pane: WorkerPane, view: CommandView) -> bool:
+    """pane's @worker-attach is view's run, or an older version's attach command ending in it."""
+    if pane.attach == view.run:
+        return True
+    try:
+        words = shlex.split(pane.attach)
+    except ValueError:
+        return False
+    return len(words) > 1 and words[-1] == view.run
+
+
 class Placement:
     def __init__(self, *, tmux: TmuxCli, grid: Grid) -> None:
         self.tmux, self.grid = tmux, grid
@@ -125,8 +137,7 @@ class Placement:
     def open_pane(
         self,
         name: str,
-        argv: Sequence[str],
-        printed: str,
+        view: CommandView,
         *,
         sid: str | None = None,
         generation: str | None = None,
@@ -139,7 +150,7 @@ class Placement:
         badge: str = "",
         fallbacks: Sequence[str] = (),
     ) -> str | None:
-        """Keeps `name`'s worker pane, else splits one running argv at its spot; why it failed."""
+        """Keeps `name`'s pane of view's run, else splits one running view.argv; why it failed."""
         _layout(split, split_from, opener, fallbacks)
         validate_per_column(per_column)
         validate_retile(retile)
@@ -152,7 +163,7 @@ class Placement:
                     if split_from is None:
                         raise
             workers = self.workers()
-            if any(w.name == name and w.attach == printed for w in workers):
+            if any(w.name == name and shows(w, view) for w in workers):
                 return None  # an earlier run's pane, still closing, is not this run's
             spot = self._spot(
                 name,
@@ -169,7 +180,7 @@ class Placement:
                 # muted: an old mode's hook tile could land after a later drag; _grid_up unmutes
                 self.tmux.run(["set-option", "-w", "-t", spot.grid[0], GRID_BUSY, spot.grid[0]])
             try:
-                new, window, why = self._split(argv, spot.side, spot.pane)
+                new, window, why = self._split(view.argv, spot.side, spot.pane)
                 if new is not None and window is not None:
                     # tagged before any tile
                     self._record(
@@ -177,7 +188,7 @@ class Placement:
                         opener,
                         new,
                         window,
-                        printed=printed,
+                        run=view.run,
                         sid=sid,
                         generation=generation,
                         label=label,
@@ -188,7 +199,7 @@ class Placement:
                     with contextlib.suppress(TuiError):
                         self.tmux.run(["set-option", "-u", "-w", "-t", spot.grid[0], GRID_BUSY])
         except TuiError as e:
-            return f"{e}; watch it with {printed}"
+            return f"{e}; watch it with {view.printed}"
         if new is None or window is None:
             return why
         if spot.grid is None:
@@ -391,14 +402,14 @@ class Placement:
         pane: str,
         window: str,
         *,
-        printed: str,
+        run: str,
         sid: str | None,
         generation: str | None,
         label: bool,
         badge: str = "",
     ) -> None:
-        """Tags pane as name's worker pane running `printed`, labelled with badge before name
-        when label; a failure is only printed.
+        """Tags pane as name's worker pane showing `run`, labelled with badge before name when
+        label; a failure is only printed.
         """
         if not (
             PANE.fullmatch(pane)
@@ -413,7 +424,7 @@ class Placement:
             )
             return
         args = ["set-option", "-p", "-t", pane, WORKER, name]
-        args += [";", "set-option", "-p", "-t", pane, WORKER_ATTACH, printed]
+        args += [";", "set-option", "-p", "-t", pane, WORKER_ATTACH, run]
         if opener is not None:
             args += [";", "set-option", "-p", "-t", pane, WORKER_OPENER, opener]
         if label:

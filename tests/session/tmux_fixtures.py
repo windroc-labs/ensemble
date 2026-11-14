@@ -13,6 +13,7 @@ from contextlib import contextmanager, redirect_stderr
 from types import SimpleNamespace
 
 from ensemble.session.engine.tmux_cli import TmuxCli
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import grid as grids
 from ensemble.session.viewer import layout as layouts
 from ensemble.session.viewer import placement, types
@@ -28,6 +29,8 @@ SH_KW = {"stdin": DEVNULL, "timeout": 30}
 ARGV = ("/fake/attach", "s")  # the Host's CommandView.argv for worker s
 
 PRINTED = "/fake/attach s"  # its CommandView.printed
+
+VIEW = CommandView(PRINTED, ARGV)
 
 WATCH = f"; watch it with {PRINTED}"
 
@@ -109,14 +112,14 @@ def record(
     label=False,
     badge="",
     hook=True,
-    printed=PRINTED,
+    run=PRINTED,
     pruned=(),
     index=None,
     read=None,
 ):
     """_record's calls tagging `pane`."""
     args = ["tmux", "set-option", "-p", "-t", pane, "@worker", name]
-    args += [";", "set-option", "-p", "-t", pane, "@worker-attach", printed]
+    args += [";", "set-option", "-p", "-t", pane, "@worker-attach", run]
     if opener:
         args += [";", "set-option", "-p", "-t", pane, "@worker-opener", opener]
     reads = []
@@ -386,7 +389,7 @@ class PaneFixture(Case):
         self.stderr = io.StringIO()
         kw = {"sid": SID, "generation": GENERATION, **kw}
         with environ(**env), which(command), redirect_stderr(self.stderr):
-            return placed(fake).open_pane("s", ARGV, PRINTED, **kw)
+            return placed(fake).open_pane("s", kw.pop("view", VIEW), **kw)
 
 
 class GridFixture(Case):
@@ -431,7 +434,7 @@ class GridFixture(Case):
         self.stderr = io.StringIO()
         kw = {"sid": SID, "generation": GENERATION, **kw}
         with environ(**env), which(command), redirect_stderr(self.stderr):
-            return placed(fake).open_pane("s", argv, PRINTED, retile=retile, **kw)
+            return placed(fake).open_pane("s", CommandView(PRINTED, argv), retile=retile, **kw)
 
     def split(self, flag, pane, window="@1"):
         """Hooks muted first, so a previous mode's hook starts no tile; grid_set unmutes."""

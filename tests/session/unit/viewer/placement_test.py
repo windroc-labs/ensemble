@@ -5,6 +5,7 @@ import re
 from contextlib import redirect_stderr
 
 from ensemble.session.engine import tmux_cli
+from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import placement, types
 from tests.session.case import SID, Case
 from tests.session.tmux_fixtures import (
@@ -17,6 +18,7 @@ from tests.session.tmux_fixtures import (
     OWN,
     PRINTED,
     SH_KW,
+    VIEW,
     WATCH,
     WORKERS,
     FakeTmux,
@@ -129,7 +131,7 @@ class SplitTest(Case):
         for split_ in (None, *types.Split, "below"):
             with self.subTest(split=split_), environ(), which():
                 self.assertEqual(
-                    placed(FakeTmux()).open_pane("s", ARGV, PRINTED, split=split_),
+                    placed(FakeTmux()).open_pane("s", VIEW, split=split_),
                     "no anchor pane: not in tmux" + WATCH,
                 )
         for bad in ("up", "", "RIGHT", 1, ["right"]):
@@ -141,7 +143,7 @@ class SplitTest(Case):
                     f"^split must be one of right, below, not {re.escape(repr(bad))}$",
                 ),
             ):
-                placed(fake).open_pane("s", ARGV, PRINTED, split=bad)
+                placed(fake).open_pane("s", VIEW, split=bad)
             self.assertEqual(fake.calls, [])
 
 
@@ -175,7 +177,7 @@ class RecordTest(Case):
     def record(self, *, name="w1", opener="mgr", pane="%20", window="@1", fake=None, **kw):
         fake = fake or FakeTmux()
         self.stderr = io.StringIO()
-        run = {"printed": PRINTED, "sid": SID, "generation": GENERATION, "label": False}
+        run = {"run": PRINTED, "sid": SID, "generation": GENERATION, "label": False}
         with which(kw.pop("command", COMMAND)), redirect_stderr(self.stderr):
             placed(fake)._record(name, opener, pane, window, **{**run, **kw})
         return fake.calls
@@ -394,7 +396,7 @@ class BorderTest(Case):
                 "mgr",
                 "%20",
                 "@1",
-                printed=PRINTED,
+                run=PRINTED,
                 sid=SID,
                 generation=GENERATION,
                 label=True,
@@ -681,6 +683,48 @@ class ReuseTest(PaneFixture):
         self.assertEqual(fake.commands().count("split-window"), 1)
         self.assertEqual(fake.calls[-2:], record("own", "%20"))
 
+    def reuse(self, attach, view):
+        """open_pane s with view while pane %5 of s carries @worker-attach `attach`."""
+        fake = FakeTmux(
+            results={
+                "display-message": (0, "own\n"),
+                "list-panes": lambda argv: (
+                    worker_rows(("%5", "s", "own", "@1", "mgr", attach)) if "-a" in argv else (1,)
+                ),
+                "list-clients": clients((5, "%9")),
+                "split-window": split(),
+            }
+        )
+        self.assertIsNone(self.open(fake, INSIDE, view=view))
+        return fake
+
+    def test_a_pane_of_this_run_is_reused_after_its_attach_program_moved(self):
+        """The run, not the attach command, names a pane's run: a pane tagged with it, or with a
+        whole attach command ending in it, is reused after the program moved."""
+        argv = ("/usr/bin/python3", "-I", "/plugin/2/guard.py", "--attach", "/run/g1/display")
+        view = CommandView(" ".join(argv), argv, "/run/g1/display")
+        old = "/usr/bin/python3 -I '/plugin 1/guard.py' --attach /run/g1/display"
+        for attach in ("/run/g1/display", old):
+            with self.subTest(attach=attach):
+                fake = self.reuse(attach, view)
+                self.assertEqual(fake.calls, [OWN, WORKERS])
+
+    def test_another_runs_pane_is_not_reused_however_tagged(self):
+        argv = ("/plugin/2/guard.py", "--attach", "/run/g2/display")
+        view = CommandView(" ".join(argv), argv, "/run/g2/display")
+        for attach in (
+            "/run/g1/display",
+            "/plugin/1/guard.py --attach /run/g1/display",
+            "/plugin/1/guard.py --attach /run/g2/display/x",
+            "/run/g2/display x",
+            "unbalanced ' /run/g2/display",
+            "",
+        ):
+            with self.subTest(attach=attach):
+                fake = self.reuse(attach, view)
+                self.assertEqual(fake.commands().count("split-window"), 1)
+                self.assertEqual(fake.calls[-1], record("own", "%20", run="/run/g2/display")[-1])
+
     def test_a_dead_pane_or_another_workers_does_not_count(self):
         for rows in (
             ["1\t%5\ts\town\t@1\tmgr\t"],
@@ -780,7 +824,8 @@ class PanePlacementTest(PaneFixture):
         fake = self.fake()
         self.stderr = io.StringIO()
         with environ(), which(), redirect_stderr(self.stderr):
-            why = placed(fake).open_pane("s", ("/a#b",), "docker exec -it c1 x", split_from="b")
+            view = CommandView("docker exec -it c1 x", ("/a#b",))
+            why = placed(fake).open_pane("s", view, split_from="b")
         self.assertEqual(why, "tmux would misread '/a#b'; watch it with docker exec -it c1 x")
         self.assertNotIn("split-window", fake.commands())
 

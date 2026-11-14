@@ -31,7 +31,7 @@ from ensemble.session.hosts.base import Host, worker_state
 from ensemble.session.hosts.types import CommandView
 from ensemble.session.viewer import hidden as hidden_store
 from ensemble.session.viewer.grid import Grid
-from ensemble.session.viewer.placement import Placement
+from ensemble.session.viewer.placement import Placement, shows
 from ensemble.session.viewer.types import Retile, Split
 from ensemble.utils import Display, thaw
 
@@ -148,8 +148,7 @@ class Viewer:
                 tui = host.tui_settings()
                 why = self._placement.open_pane(
                     name,
-                    target.argv,
-                    target.printed,
+                    target,
                     sid=None if state is None else state.sid,
                     generation=None if state is None else state.generation,
                     opener=opener,
@@ -168,7 +167,7 @@ class Viewer:
         placed = why is None
         if not placed and command is None:
             with contextlib.suppress(TuiError):
-                placed = any(w.attach == target.printed for w in self._placement.panes(name))
+                placed = any(shows(w, target) for w in self._placement.panes(name))
         if placed:
             self._mark(name, host, hidden=False)
         if why is None:
