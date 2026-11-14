@@ -297,7 +297,7 @@ class Acceptance(Packaged):
                     self.assertIn(
                         WRITE_ONCE, output_rules(destined("researcher", output, docker=docker))
                     )
-        step = task_text("product-design").split("7. **Review.**", 1)[1].split("\n8.", 1)[0]
+        step = task_text("product-design").split("6. **Review.**", 1)[1].split("\n7.", 1)[0]
         self.assertIn("`<Workdir>/tmp/prd.md`", step)
         self.assertIn("copies that file", step)
 
@@ -462,51 +462,87 @@ class Shipped(Packaged):
                     self.assertLessEqual(set(prefix.findall(text)), whitelist)
         self.assertEqual(prefix.findall(task_text("verify")), [])
 
-    def test_product_design_reviews_the_prd_with_updraft_review_to_its_default_cap(self):
+    def test_product_design_reviews_the_prd_with_spec_fitness_alone_to_its_default_cap(self):
         text = task_text("product-design")
-        step = text.split("7. **Review.**", 1)[1].split("\n8.", 1)[0]
+        step = text.split("6. **Review.**", 1)[1].split("\n7.", 1)[0]
         for literal in (
+            "updraft's `agents/spec-fitness-reviewer.md`",
+            "alone into `<Workdir>/tmp/prd-lenses/`",
+            "`lenses=` that folder",
             "`/updraft:review`",
             "`doc=` the PRD's file",
             "`requirement=` the brief and the user's later words, verbatim, with the documents they name",
             "asking no more rigor or scope than the brief does",
-            "`capped` or `needs-author` → the PRD still ships; its open blockers and `needs-author`'s "
-            "questions go under Open questions, and the outcome's `summary` gives the blockers' count.",
+            "a blocker whose fix changes requirements or scope is the author's (`needs-author`)",
+            "`needs-author` → its questions go under Open questions, its open blockers under Risks.",
+            "it settles every other fork alone, consulting no one.",
+            "`capped` → the PRD still ships; its open blockers go under Risks, and the outcome's "
+            "`summary` gives the blockers' count.",
         ):
             self.assertIn(literal, step)
         self.assertNotIn("cap=", step)
-        self.assertNotIn("fresh subagent", step)
+        self.assertNotIn("architecture", text)
         self.assertNotRegex(text, r"(?<!/)updraft:")
-        self.assertIn("`/updraft:review` again with the same `doc`", text.split("## Resume", 1)[1])
+        self.assertIn(
+            "`/updraft:review` again with the same `doc` and `lenses=`",
+            text.split("## Resume", 1)[1],
+        )
 
-    def test_product_design_self_grills_by_updraft_grilling_skill_for_at_most_3_rounds(self):
+    def test_product_design_has_no_self_grill_or_council(self):
+        text = task_text("product-design").lower()
+        for word in ("grill", "council"):
+            self.assertNotIn(word, text)
+
+    def test_product_design_asks_the_user_what_existing_behaviour_cannot_answer(self):
         text = task_text("product-design")
-        step = text.split("5. **Self-grill**", 1)[1].split("\n6.", 1)[0]
+        write = text.split("5. **Write**", 1)[1].split("\n6.", 1)[0]
         for literal in (
-            "updraft's `skills/grilling/SKILL.md`",
-            "at most 3 rounds",
-            "minor details",
-            "what you can't settle → Open questions",
+            "the existing behaviour answers one → follow it, unasked",
+            "one that changes requirements or scope → Open questions, with a suggested answer",
+            "Else decide it yourself.",
         ):
-            self.assertIn(literal, step)
-        self.assertNotIn("in one round", step)
-        self.assertIn("never rerun", text.split("## Resume", 1)[1])
-
-    def test_product_design_settles_open_questions_with_updraft_council_before_finishing(self):
-        text = task_text("product-design")
-        step = text.split("8. **Council.**", 1)[1].split("\n9.", 1)[0]
-        self.assertIn("\n9. **Finish.**", text)
+            self.assertIn(literal, write)
+        ask = text.split("7. **Ask.**", 1)[1].split("\n8.", 1)[0]
+        self.assertIn("\n8. **Finish.**", text)
         for literal in (
-            "`/updraft:council`",
-            "changes external state or can't be undone",
-            "stays there, for the user",
-            "write each decision into the PRD",
-            "the author's call",
             "`needs_input`",
+            "at most 4",
+            "each with its suggested answer",
+            "The user's answers go into the PRD",
+            "Then Open questions left → `needs_input`",
+            "None left → step 8.",
         ):
-            self.assertIn(literal, step)
-        self.assertIn("what you can't settle → Open questions", text.split("5. **Self-grill**")[1])
-        self.assertIn("never run it again", text.split("## Resume", 1)[1])
+            self.assertIn(literal, ask)
+        self.assertIn(
+            "`needs_input` written this session, with no answer in the input since → stop. "
+            "Answers to step 2's question → step 2; to step 7's → step 7.",
+            text.split("## Resume", 1)[1],
+        )
+
+    def test_product_design_writes_only_sourced_requirements(self):
+        write = task_text("product-design").split("5. **Write**", 1)[1].split("\n6.", 1)[0]
+        self.assertIn(
+            "each requirement comes from the user's words, the existing code or the user's answer "
+            "to a question. A point with none of the three is no requirement.",
+            write,
+        )
+
+    def test_prd_template_requires_only_problem_requirements_and_scenarios(self):
+        template = team_texts()["templates/prd.md"]
+        required = {
+            "Problem and goals",
+            "Requirements",
+            "Functional requirements",
+            "Acceptance scenarios",
+        }
+        headings = re.findall(r"^#{2,3} (.+)\n(?=(.*))", template, re.M)
+        self.assertLessEqual(required, {name for name, _ in headings})
+        for name, first in headings:
+            with self.subTest(heading=name):
+                if name in required:
+                    self.assertNotIn("Optional", first)
+                else:
+                    self.assertTrue(first.startswith("Optional; omit when "), first)
 
     def test_prd_acceptance_is_gherkin_scenarios_the_pm_writes(self):
         pm = composed("pm", "product-design")[0]
@@ -529,7 +565,7 @@ class Shipped(Packaged):
         # verify runs `@ops` scenarios, so the template never claims none runs
         self.assertNotIn("nothing executes", pm)
         # the template is the acceptance rule's one home; the pm's task only points to it
-        write = re.search(r"^6\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
+        write = re.search(r"^5\. \*\*Write\*\*.*$", task_text("product-design"), re.M)[0]
         self.assertIn("per the Template, its Acceptance scenarios included;", write)
         self.assertNotIn("acceptance", write)
 
@@ -823,8 +859,12 @@ class Real(RealConfig):
         requirements = section(pm, "Requirements")
         self.assertIn("Functional and non-functional requirements are each one table", requirements)
         self.assertIn("fills the Module cell of its first row only", requirements)
-        for row in ("`| FR-<n> | <module> | <the requirement> |`", "`| NFR-<n> | <module> | "):
+        for row in (
+            "`| FR-<n> | <module> | <the requirement> | <its source> |`",
+            "`| NFR-<n> | <module> | ",
+        ):
             self.assertIn(row, pm)
+        self.assertIn("| <Source, translated> |`", pm)
         self.assertIn("> **<one-sentence answer>** (<overall confidence>)", light)
         self.assertIn(point, section(light, "Comparison table"))
         findings = section(light, "Findings")
