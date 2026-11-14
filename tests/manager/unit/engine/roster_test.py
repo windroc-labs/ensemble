@@ -1344,7 +1344,7 @@ class SnapshotTest(RosterCase):
             self.assertEqual(
                 (holder, entries), (ActiveHolder(lease.id, "owner"), self.roster.entries())
             )
-            with self.assertRaises(Held), Roster(self.directory).hold(None):
+            with self.assertRaises(Held), Roster(self.directory).hold("contender"):
                 pass
 
     def test_two_snapshots_while_held_both_see_the_holder(self):
@@ -1367,9 +1367,12 @@ class SnapshotTest(RosterCase):
             self.assertEqual(self.roster.snapshot()[0], ActiveHolder(lease.id, "owner"))
         self.assertIsNone(self.roster.snapshot()[0])
 
-    def test_a_holder_without_a_session_is_known_by_its_id(self):
+    def test_a_recorded_holder_without_a_session_is_known_by_its_id(self):
         self.live()
-        with Roster(self.directory).hold(None) as lease:
+        with Roster(self.directory).hold("owner") as lease:
+            data = self.content()
+            data["holder"]["session"] = None
+            Path(self.roster.path).write_text(json.dumps(data))
             holder = self.roster.snapshot()[0]
         self.assertEqual(holder, ActiveHolder(lease.id, None))
         self.assertEqual(holder.label, lease.id)

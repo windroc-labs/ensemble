@@ -323,9 +323,8 @@ class Roster:
         return True
 
     @contextlib.contextmanager
-    def hold(self, session: str | None, *, force: bool = False) -> Iterator[Lease]:
-        if session is not None:
-            _name(session)
+    def hold(self, session: str, *, force: bool = False) -> Iterator[Lease]:
+        _name(session)
         previous = self._lease_token
         fd = None
         try:

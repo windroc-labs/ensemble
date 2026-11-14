@@ -39,7 +39,7 @@ class Holder:
         self.roster = roster
 
     def run(
-        self, argv: tuple[str, ...], *, session: str | None = None, force: bool = False
+        self, argv: tuple[str, ...], *, session: str, force: bool = False
     ) -> int:  # pragma: no cover
         if not argv or not all(isinstance(word, str) for word in argv) or not argv[0]:
             raise ValueError("hold requires a nonempty manager command")
