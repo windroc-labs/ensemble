@@ -1108,8 +1108,8 @@ class StaleHolderRecovery(CliCase):
                 "crew: this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an"
                 " ended holder; no holder is active; handled N=0 GEN=0",
                 "crew: lasting fix: restart the commander's client under a new holder, then"
-                " attach and arm its monitor: command: ensemble-crew hold --manager mgr"
-                " --session mgr -- <client resume command> (ensemble-crew hold --help)",
+                " attach and arm its monitor: command: ensemble mgr -- <client resume command>"
+                " (ensemble --help)",
                 f"crew: handled events after N=0? first: {LEASE_FREE} ack --manager mgr"
                 " --through <line> --gen 0, then attach; unacknowledged events replay",
                 "crew: until then, attach without a lease, keeping the prefix on the commands it"
@@ -1118,10 +1118,6 @@ class StaleHolderRecovery(CliCase):
                 f" {LEASE_FREE} next-event --manager mgr --after 0 --gen 0 --content --follow",
             ],
         )
-        with self.assertRaises(SystemExit), contextlib.redirect_stdout(io.StringIO()) as help:
-            main(["hold", "--help"])
-        self.assertIn("-- claude --continue", help.getvalue())
-        self.assertIn("codex resume --last", help.getvalue())
 
     def test_printed_lease_free_commands_run(self):
         _, _, stderr = self.invoke("attach", "--manager", "mgr")
@@ -1221,9 +1217,8 @@ class StaleHolderRecovery(CliCase):
             [
                 "crew: this environment's ENSEMBLE_HOLDER_ID/ENSEMBLE_HOLDER_GENERATION name an"
                 " ended holder; new holds manager mgr now; handled N=0 GEN=0",
-                "crew: use new's commander; take over only on purpose: ensemble-crew hold --force"
-                " --manager mgr --session mgr -- <client resume command> (ensemble-crew hold"
-                " --help)",
+                "crew: use new's commander; only the user takes over, on purpose: ensemble"
+                " --force mgr -- <client resume command> (ensemble --help)",
             ],
         )
 
@@ -1245,7 +1240,16 @@ class StaleHolderRecovery(CliCase):
         self.assertIn("lasting fix", stderr)
         with self.lease_free(), Roster(self.directory).hold("new"):
             result, _, stderr = self.invoke("attach", "--manager", "mgr")
-        self.assertEqual((result, stderr), (1, f"crew: {self.directory}: held by new\n"))
+        self.assertEqual(
+            (result, stderr),
+            (
+                1,
+                f"crew: {self.directory}: held by new\n"
+                "crew: use new's commander; only the user takes over, on purpose: ensemble"
+                " --force mgr -- <client resume command> (ensemble --help)\n",
+            ),
+        )
+        self.assertNotIn("ensemble-crew hold", stderr)
 
     def test_notes_create_no_directory(self):
         result, _, stderr = self.invoke("attach", "--manager", "fresh")
@@ -1634,6 +1638,13 @@ class HelpContracts(Case):
             run.assert_not_called()
             popen.assert_not_called()
         self.assertEqual(sorted(Path(self.home).rglob("*")), before)
+
+    def test_acquiring_a_holder_points_at_ensemble(self):
+        for command in (None, "attach", "release"):
+            with self.subTest(command=command):
+                text = self.help(command)
+                self.assertIn("ensemble --help", text)
+                self.assertNotIn("ensemble-crew hold --help", text)
 
     def test_root_lists_each_command_with_a_purpose(self):
         text = self.help()

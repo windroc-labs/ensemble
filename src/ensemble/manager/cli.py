@@ -1,6 +1,7 @@
 """ensemble-crew: command-based launches and a manager's persistent roster."""
 
 import argparse
+import contextlib
 import os
 import shlex
 import sys
@@ -11,6 +12,7 @@ from ensemble.manager import Crew, Roster, RosterError, Spec, State, commander
 from ensemble.manager.engine import managers
 from ensemble.manager.engine.holder import Holder, inherited
 from ensemble.manager.engine.types import (
+    Held,
     StaleHolder,
     StartBusy,
     StatusError,
@@ -56,11 +58,6 @@ def _named(manager: str, option: str = "--manager") -> tuple[str, ...]:
     return (f"{option}={manager}",) if manager.startswith("-") else (option, manager)
 
 
-def _restart(manager: str, *force: str) -> str:
-    hold = ("ensemble-crew", "hold", *force, *_named(manager), *_named(manager, "--session"), "--")
-    return f"{shlex.join(hold)} <client resume command> (ensemble-crew hold --help)"
-
-
 def _lease_free(*words: str) -> str:
     return shlex.join((*LEASE_FREE, "ensemble-crew", *words))
 
@@ -78,7 +75,7 @@ def _lease_free_recovery(
     monitor = ("--after", str(cursor), "--gen", str(generation), "--content", "--follow")
     return [
         "lasting fix: restart the commander's client under a new holder, then attach and arm its"
-        f" monitor: command: {_restart(manager)}",
+        f" monitor: command: {commander.recovery(manager)}",
         ack,
         "until then, attach without a lease, keeping the prefix on the commands it prints:"
         f" {_lease_free('attach', *named)}",
@@ -96,7 +93,7 @@ def _stale_holder_notes(args, reader: tuple[int, int] | None = None) -> list[str
     if holder is not None:
         return [
             f"{ENDED}; {holder} holds manager {manager} now; {state}",
-            f"use {holder}'s commander; take over only on purpose: {_restart(manager, '--force')}",
+            commander.takeover(manager, holder),
         ]
     return [
         f"{ENDED}; no holder is active; {state}",
@@ -314,9 +311,9 @@ Prerequisites and effects:
 
 Examples:
   ensemble-crew worker --help
-  ensemble-crew hold --help
 
 Next help:
+  ensemble --help                  manager sessions, holding and takeover
   ensemble-session --help          workers, clients, hosts and placement
   ensemble-delegate run --help     roles and tasks
   ensemble-orchestrator router --help    issue runs
@@ -563,7 +560,7 @@ Recovery and next help:
   does not verify notification delivery to a commander.
   On monitor expiry, use its printed monitor expired command, then rearm
   from the returned handled N and GEN. Confirm handling with ack.
-  Acquire a holder: ensemble-crew hold --help
+  Acquire a holder: ensemble --help
   Event reading: ensemble-crew next-event --help
 """,
     )
@@ -720,7 +717,7 @@ Examples:
   Inside demo's current holder environment:
   ensemble-crew release --manager demo
 
-Acquire ownership again: ensemble-crew hold --help
+Acquire ownership again: ensemble --help
 """,
     ).set_defaults(func=_release)
     pending = page(
@@ -886,6 +883,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     except StaleHolder as error:
         _add_recovery(error, args)
+        _report_error(error)
+        return 1
+    except Held as error:
+        with contextlib.suppress(OSError, RosterError, ValueError):
+            roster = _roster(args)
+            manager = os.path.basename(roster.directory)
+            error.add_note(commander.takeover(manager, roster.lease_state()[2]))
         _report_error(error)
         return 1
     except (OSError, RosterError, RuntimeError) as error:
