@@ -116,6 +116,14 @@ class Resumable(StrEnum):
     UNKNOWN = "unknown"
 
 
+class Delivery(StrEnum):
+    """A sent text's fate: a turn started with it, an open turn holds it, or neither."""
+
+    DELIVERED = "delivered"
+    QUEUED = "queued"
+    UNDELIVERED = "undelivered"
+
+
 class HookKind(StrEnum):
     """TURN_STARTED: one TurnStarted per accepted turn, never a replayed record."""
 

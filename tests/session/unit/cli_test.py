@@ -11,7 +11,7 @@ from unittest import mock
 
 from ensemble.session import EnvironmentSpec, SessionBusy, cli
 from ensemble.session.engine.hosted_session import HostedSession
-from ensemble.session.engine.types import ConfigError, Hosts, Liveness, SessionError
+from ensemble.session.engine.types import ConfigError, Delivery, Hosts, Liveness, SessionError
 from ensemble.session.harness.channel import Channel
 from ensemble.session.harness.types import Op
 from ensemble.session.hosts.tmux import TmuxHost
@@ -502,6 +502,42 @@ class RecordControl(ControlBase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("turn interruption", err)
 
+    def test_send_wait_prints_the_delivery_word(self):
+        self.tui(name="w1", sid=SID)
+        for word, reason, code, err in (
+            (Delivery.DELIVERED, None, 0, ""),
+            (Delivery.QUEUED, None, 0, ""),
+            (
+                Delivery.UNDELIVERED,
+                "session w1: client not running",
+                1,
+                "session w1: client not running\n",
+            ),
+        ):
+            with (
+                self.subTest(word=word),
+                mock.patch.object(cli, "deliver", return_value=(word, reason)) as deliver,
+            ):
+                found = self.invoke("send", "--sid", SID, "--wait", "20", "w1", "--", "-text")
+                self.assertEqual(found, (code, f"{word}\n", err))
+                deliver.assert_called_once_with(
+                    "w1", sid=SID, host=mock.ANY, text="-text", wait=20.0
+                )
+
+    def test_send_wait_failure_prints_no_word(self):
+        self.tui(name="w1", sid=SID)
+        failure = SessionError("session w1: expected sid 'x'")
+        with mock.patch.object(cli, "deliver", side_effect=failure):
+            code, out, err = self.invoke("send", "--wait", "5", "w1", "hello")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("expected sid", err)
+
+    def test_send_without_wait_prints_nothing(self):
+        self.tui(name="w1", sid=SID)
+        with mock.patch.object(cli, "deliver") as deliver:
+            self.assertEqual(self.invoke("send", "w1", "hello")[:2], (0, ""))
+        deliver.assert_not_called()
+
     def test_malformed_record_is_usage_error(self):
         self.assertEqual(self.invoke("status", stdin="{}\n")[:2], (2, ""))
 
@@ -922,10 +958,16 @@ class HelpTest(Case):
             (["ls", "--descendants"], cli._ls),
             (["send", "helper"], cli._send),
             (["send", "helper", "hello", "--key", "Enter"], cli._send),
+            (["send", "helper", "--key", "Enter", "--wait", "5"], cli._send),
         ):
             with self.subTest(argv=argv), self.assertRaises(cli.UsageError):
                 operation(parser.parse_args(argv), mock.Mock())
-        for argv in (["ls", "--here", "--display", "none"], ["read", "helper", "--lines", "0"]):
+        for argv in (
+            ["ls", "--here", "--display", "none"],
+            ["read", "helper", "--lines", "0"],
+            ["send", "helper", "hello", "--wait", "0"],
+            ["send", "helper", "hello", "--wait", "soon"],
+        ):
             with (
                 self.subTest(argv=argv),
                 contextlib.redirect_stderr(io.StringIO()),
