@@ -49,8 +49,10 @@
 #   max_usage        the percent of each usage window (five-hour and weekly alike) it may reach, 0 < max_usage
 #                    <= 100; absent → 100. Before launching, a start on an account reads each registered one once, live,
 #                    and runs only on one below it in every window, else fails (usage: no available account);
-#                    nothing is cached or held. A /usage probe printing only a cost summary (an API key or gateway
-#                    login) has no limit
+#                    nothing is cached. One whose turn was refused with oauth_org_not_allowed is held unusable for
+#                    24 h (~/.ensemble/rejected/claude/<name>.json; delete it to lift the hold) and its run resumes
+#                    on another. A /usage probe printing only a cost summary (an API key or gateway login) has no
+#                    limit
 [clients.claude]
 implementation = "ensemble.session.clients.claude:ClaudeClient"
 max_runs = 0
