@@ -43,7 +43,8 @@ class PathsAndArguments(InstalledCrewCase):
         home = Path(self.home, "it's a home")
         home.mkdir()
         started = self.invoke(
-            "run",
+            "start",
+            "command",
             "fixture",
             "--manager",
             "mgr",
@@ -107,7 +108,8 @@ class PathsAndArguments(InstalledCrewCase):
         home = Path(self.home).resolve() / relative
         home.mkdir()
         started = self.invoke(
-            "run",
+            "start",
+            "command",
             "fixture",
             "--manager",
             "mgr",
