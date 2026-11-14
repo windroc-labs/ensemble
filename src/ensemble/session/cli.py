@@ -442,15 +442,20 @@ def _parser(hosts: Hosts | None) -> argparse.ArgumentParser:
         description="Specialist/automation: retile a window on the default Host.",
         epilog="Prerequisites and effects\n"
         "  Requires a showable default Host and an existing Host window. Changes\n"
-        "  window layout, prints nothing; normally waits for another tile to finish.\n\n"
-        "Examples: invocation form (substitute an existing Host window)\n"
-        "  ensemble-session tile WINDOW [--no-wait] [--if-panes-changed]\n\n"
+        "  window layout, prints nothing; normally waits for another tile to finish.\n"
+        "  Without WINDOW, lays out the caller's own window.\n\n"
+        "Examples: invocation form (substitute an existing Host window, or omit it)\n"
+        "  ensemble-session tile [WINDOW] [--no-wait] [--if-panes-changed]\n\n"
         "Recovery and Next help\n"
         "  Host syntax and configuration: ensemble-session --help\n"
         "  Open saved views: ensemble-session show --help",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("window", help="the window, as its Host names it")
+    p.add_argument(
+        "window",
+        nargs="?",
+        help="the window, as its Host names it (default: the caller's own window)",
+    )
     p.add_argument(
         "--no-wait",
         action="store_true",
@@ -884,7 +889,8 @@ def _run(args, flags: list[str], hosts: Hosts, start_sid: str | None, worker_cls
     else:
         host = Session.host()
         if not host.attachable:
-            raise NotShowable(f"session {args.window}: host {host.name} cannot show")
+            shown = "tile" if args.window is None else f"session {args.window}"
+            raise NotShowable(f"{shown}: host {host.name} cannot show")
         displays.tile(
             hosted_viewer(),
             args.window,

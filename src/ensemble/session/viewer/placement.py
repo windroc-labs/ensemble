@@ -536,6 +536,20 @@ class Placement:
             raise TuiError(f"own tmux session {name!r}: want [A-Za-z0-9_-]+")
         return name
 
+    def own_window(self) -> str | None:
+        """$TMUX_PANE's window id; None outside tmux."""
+        if not os.environ.get("TMUX"):
+            return None
+        pane = os.environ.get("TMUX_PANE", "")
+        if not PANE.fullmatch(pane):
+            raise TuiError(f"bad $TMUX_PANE {pane!r}")
+        window = self.tmux.checked(
+            ["display-message", "-p", "-t", pane, "#{window_id}"]
+        ).stdout.strip()
+        if not WINDOW.fullmatch(window):
+            raise TuiError(f"own tmux window {window!r}: want {WINDOW.pattern}")
+        return window
+
     def opener(self) -> str:
         """The caller's tmux session; TuiError outside tmux."""
         own = self.own_session()
