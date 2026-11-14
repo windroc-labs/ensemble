@@ -1966,6 +1966,7 @@ class StartCheckTest(ClaudeStartCase):
             json.dumps([now + 60]),
             '{"until": NaN}',
             '{"until": Infinity}',
+            '{"until": 1' + "0" * 400 + "}",
             "not json",
             json.dumps({"until": now + 60, "pad": "x" * 5000}),
         ):

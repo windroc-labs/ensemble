@@ -247,10 +247,11 @@ def _held(client: str, names: Iterable[str], now: float) -> dict[str, float]:
             continue
         try:
             hold = json.loads(data)
-        except (ValueError, RecursionError):
-            continue
-        until = hold.get("until") if isinstance(hold, dict) else None
-        if isinstance(until, bool) or not isinstance(until, (int, float)):
+            until = hold.get("until") if isinstance(hold, dict) else None
+            if isinstance(until, bool) or not isinstance(until, (int, float)):
+                continue
+            until = float(until)
+        except (ValueError, RecursionError, OverflowError):
             continue
         if math.isfinite(until) and now < until <= now + REJECTED_HOLD:
             found[name] = until
