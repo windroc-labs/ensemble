@@ -215,6 +215,7 @@ class AttachTargetTest(Base):
         target = self.host.attach_target("w1")
         self.assertIsInstance(target, CommandView)
         self.assertEqual(target.argv[-2:], ("--attach", directory + "/" + "a" * 32 + "/display"))
+        self.assertEqual(target.run, target.argv[-1])
         self.assertEqual(shlex.split(target.printed), list(target.argv))
         self.assertEqual(self.tmux.mock_calls, [])
 

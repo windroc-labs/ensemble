@@ -18,7 +18,7 @@ class Retile(StrEnum):
 
 
 class WorkerPane(NamedTuple):
-    """A pane showing worker `name`; attach (@worker-attach) tells its run from an older run."""
+    """A pane showing worker `name`; attach (@worker-attach): the CommandView.run it shows."""
 
     pane: str
     name: str

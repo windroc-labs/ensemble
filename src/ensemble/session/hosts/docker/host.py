@@ -1245,14 +1245,16 @@ class DockerHost(Host):
         found = self._containers().get(name)
         if found is None:
             raise SessionError(f"no docker session {name}")
+        display = guard.run_paths(found.generation)["display"]
         argv = docker_call(
             self.docker,
             *("exec", "-it", found.container, IMAGE_PYTHON, "-I", GUARD),
-            *("--attach", guard.run_paths(found.generation)["display"]),
+            *("--attach", display),
         )[0]
         return CommandView(
             printed=shlex.join(argv),
             argv=("/usr/bin/env", *(arg for key in CLEARED for arg in ("-u", key)), *argv),
+            run=display,
         )
 
 

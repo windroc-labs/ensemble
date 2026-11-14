@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import uuid
@@ -14,6 +15,7 @@ from unittest import mock
 
 from ensemble.session import Viewer
 from ensemble.session.engine.types import Launch, Liveness, SessionBusy, SessionError
+from ensemble.session.harness import guard
 from ensemble.session.hosts.base import worker_dir
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.hosts.tmux import TmuxHost
@@ -193,6 +195,23 @@ class GuardDisplayTest(LiveCase):
         self.assertEqual(self.started_by(shown), list(target.argv))
         self.assert_worker_unchanged()
 
+    def test_a_show_after_the_plugin_moved_reuses_the_pane(self):
+        """An upgrade moves guard.py, so the attach command changes; the worker keeps one pane."""
+        pane = self.shown()
+        moved = Path(self.home, "plugin-next", "guard.py")
+        moved.parent.mkdir()
+        shutil.copy(guard.__file__, moved)
+        with mock.patch.object(guard, "__file__", str(moved)):
+            self.assertNotEqual(
+                self.host.attach_target(self.NAME).argv, tuple(self.started_by(pane))
+            )
+            self.assertEqual(self.shown(), pane)
+        panes = self.tmux("list-panes", "-a", "-F", "#{pane_id}\t#{@worker}").splitlines()
+        self.assertEqual(
+            [p for p in panes if p.endswith(f"\t{self.NAME}")], [f"{pane}\t{self.NAME}"]
+        )
+        self.assert_worker_unchanged()
+
     def test_worker_exit_closes_its_pane_and_leaves_no_session(self):
         """A worker's exit closes its pane; the next kill-pane removes its close hook."""
         pane = self.shown()
@@ -313,8 +332,7 @@ class ShowTest(LiveCase):
         with redirect_stderr(self.stderr):
             return placed(self.transport).open_pane(
                 "worker",
-                self.target.argv,
-                self.target.printed,
+                self.target,
                 sid=SID,
                 generation=self.worker.generation,
                 split="below",

@@ -2263,7 +2263,11 @@ class AttachTargetTest(Base):
         self.assertTrue(DockerHost.attachable)
         self.assertEqual(
             self.host.attach_target("w"),
-            CommandView(printed=shlex.join(argv), argv=("/usr/bin/env", *cleared, *argv)),
+            CommandView(
+                printed=shlex.join(argv),
+                argv=("/usr/bin/env", *cleared, *argv),
+                run=f"/run/ensemble/guard/{GEN}/display",
+            ),
         )
         with self.assertRaisesRegex(SessionError, "^no docker session x$"):
             self.host.attach_target("x")

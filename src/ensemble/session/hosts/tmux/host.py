@@ -79,14 +79,9 @@ class TmuxHost(Host):
             raise SessionError(f"no tmux worker {name}")
         if live == Liveness.UNKNOWN:
             raise Unanswered(f"worker {name}: guard unknown")
-        argv = (
-            sys.executable,
-            "-I",
-            guard.__file__,
-            "--attach",
-            os.path.join(directory, generation, "display"),
-        )
-        return CommandView(printed=shlex.join(argv), argv=argv)
+        display = os.path.join(directory, generation, "display")
+        argv = (sys.executable, "-I", guard.__file__, "--attach", display)
+        return CommandView(printed=shlex.join(argv), argv=argv, run=display)
 
     def worker(
         self,

@@ -104,7 +104,8 @@ class HostDefaults(Case):
         host = MinimalHost("m")
         self.assertFalse(host.attachable)
         self.assertIsNone(host.attach_target("a"))
-        self.assertEqual(CommandView("p", ("x",)), CommandView(printed="p", argv=("x",)))
+        self.assertEqual(CommandView("p", ("x",)), CommandView(printed="p", argv=("x",), run="p"))
+        self.assertEqual(CommandView("p", ("x",), "r").run, "r")
 
     def test_name_and_a_copy_of_settings(self):
         settings = {"root": "/x"}
