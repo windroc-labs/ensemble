@@ -466,7 +466,8 @@ class Shipped(Packaged):
             "`requirement=` the brief and the user's later words, verbatim, with the documents they name",
             "asking no more rigor or scope than the brief does",
             "a blocker whose fix changes requirements or scope is the author's (`needs-author`)",
-            "`needs-author` → its questions go under Open questions.",
+            "`needs-author` → its questions go under Open questions, its open blockers under Risks.",
+            "it settles every other fork alone, consulting no one.",
             "`capped` → the PRD still ships; its open blockers go under Risks, and the outcome's "
             "`summary` gives the blockers' count.",
         ):
@@ -500,8 +501,14 @@ class Shipped(Packaged):
             "at most 4",
             "each with its suggested answer",
             "The user's answers go into the PRD",
+            "questions still open → this step again",
         ):
             self.assertIn(literal, ask)
+        self.assertIn(
+            "`needs_input` written this session, with no answer in the input since → stop; "
+            "answers → step 7.",
+            text.split("## Resume", 1)[1],
+        )
 
     def test_product_design_writes_only_sourced_requirements(self):
         write = task_text("product-design").split("5. **Write**", 1)[1].split("\n6.", 1)[0]
