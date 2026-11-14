@@ -1,5 +1,28 @@
 # Upgrading
 
+## ensemble-crew keeps only the manager's commands
+
+`ensemble-crew` now has only `start`, `attach`, `status`, `report`, `read`, `send`, `show`, `hide`, `resume`,
+`restart`, `close`, `note`, `next-event`, `pending`, `ack` and `release`. The removed subcommands fail as unknown
+commands (exit 2). Use the new forms:
+
+| Was | Now |
+|---|---|
+| `ensemble-crew worker\|role\|issue\|reopen …` | `ensemble-crew start worker\|role\|issue\|reopen …` |
+| `ensemble-crew run NAME -- COMMAND` | `ensemble-crew start command NAME -- COMMAND` |
+| `ensemble-crew close-all [--dry-run]` | `ensemble-crew close --all [--dry-run]` |
+| `ensemble-crew forget NAME [--force]` | `ensemble-crew close NAME --forget [--force]` |
+| `ensemble-crew hold --manager NAME [--force] -- COMMAND` | `ensemble [--force] NAME -- COMMAND` |
+| `ensemble-crew hold --session LABEL …` | gone: the hold is labelled with the manager's name |
+| `ensemble-crew list` | `ensemble list` |
+| `ensemble-crew list --select` | `ensemble list --select`; on a terminal, `ensemble list` asks and opens the selection |
+| `ensemble-crew resume-commander` | `ensemble resume` |
+
+1. Reopen each manager started before this upgrade. It runs under `ensemble-crew hold`, which `ensemble list` no
+   longer recognises as its hold, so it can neither attach to it nor resume it there. Quit its client, `exit` its held
+   shell, then run `ensemble list` and select it: its conversation resumes under a new hold.
+2. Change scripts outside this repo that use the removed subcommands, per the table.
+
 ## PRDs: no self-grill
 
 The `pm` role's `product-design` task no longer self-grills. v0.9.8 also dropped the council, cut review to one reviewer, asked the user directly and changed the PRD template; this release restores v0.9.7's behaviour for all of those:
