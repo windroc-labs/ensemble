@@ -1679,6 +1679,26 @@ class Read(CliCase):
                 file, argv, _ = self.execvpe.call_args.args
                 self.assertEqual((file, argv), ("ensemble-session", ("ensemble-session", *tail)))
 
+    def test_outcome_prints_crews_line_and_exits_0(self):
+        worker = own(
+            self.roster,
+            replace(
+                self.fake_record("w2"),
+                sessions=("w2",),
+                ctl=("ensemble-session",),
+                resume=("ensemble-session", "resume", "w2"),
+            ),
+        )
+        reply = 'Done.\n```ensemble-outcome\n{"status": "done"}\n```\n'
+        answer = mock.Mock(returncode=0, stdout=reply, stderr="")
+        with mock.patch("subprocess.run", return_value=answer) as run:
+            result = self.invoke("read", "--manager", "mgr", "w2", "--outcome")
+        self.assertEqual(result, (0, '{"status":"done"}\n', ""))
+        self.assertEqual(
+            run.call_args.args[0], ("ensemble-session", "reply", "w2", "--sid", worker.sid)
+        )
+        self.execvpe.assert_not_called()
+
     def test_views_are_exclusive_and_lines_positive(self):
         for options, message in (
             (("--reply", "--outcome"), "not allowed with argument"),
@@ -1699,12 +1719,6 @@ class Read(CliCase):
         for name, options, code, message in (
             ("nobody", (), 2, "crew: not in roster: nobody\n"),
             ("pending", (), 1, "crew: pending: starting: no Record\n"),
-            (
-                "w1",
-                ("--outcome",),
-                2,
-                "crew: w1: no run outcome; --outcome reads role and issue runs\n",
-            ),
         ):
             with self.subTest(name=name):
                 self.assertEqual(

@@ -266,9 +266,10 @@ def _report(args) -> int:
 
 def _read(args) -> int:
     crew = _crew(args)
-    crew.hand_off(
-        crew.read_argv(args.name, lines=args.lines, reply=args.reply, outcome=args.outcome)
-    )
+    if args.outcome:
+        print(crew.outcome(args.name))
+        return 0
+    crew.hand_off(crew.read_argv(args.name, lines=args.lines, reply=args.reply))
 
 
 def _send(args) -> int:
@@ -751,9 +752,12 @@ ensemble-crew status --help for individual status queries.
         """Reads the one session the entry's Record names: a worker's own; a role
 run's tui; an issue run's tui, ROLE-ID-<sid8>. A headless run has none.
 Session commands carry the Record's sid, so a session that reused the name
-is refused. --outcome prints a role or issue run's outcome
-JSON, null without one. Output and exit status are the session's or the
-delegate's own. Needs no holder lease and changes nothing.
+is refused. --outcome prints an outcome JSON line, null without one: a role
+or issue run's recorded outcome, or, after one asking for input, a
+different outcome block in its tui's latest reply; a worker's (a reopened
+run's included) is the outcome block in its latest reply. Only the latest
+reply is read. Screen and reply output and exit status are the session's
+own. Needs no holder lease and changes nothing.
 
 Examples:
   ensemble-crew read --manager demo helper --lines 20
@@ -775,9 +779,7 @@ Recovery and next help:
         help="the screen's last N lines, history included; default: the visible screen",
     )
     shown.add_argument("--reply", action="store_true", help="the latest reply, not the screen")
-    shown.add_argument(
-        "--outcome", action="store_true", help="a role or issue run's outcome JSON, or null"
-    )
+    shown.add_argument("--outcome", action="store_true", help="the latest outcome JSON, or null")
     read.set_defaults(func=_read)
     send = page(
         "send",
