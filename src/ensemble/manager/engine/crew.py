@@ -10,8 +10,9 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import replace
+from typing import NoReturn
 
 from ensemble.manager.engine.pr import NO_PR, VIEW_FIELDS, cells, pr_url, unknown
 from ensemble.manager.engine.roster import LOCK_TIMEOUT, Roster
@@ -627,6 +628,56 @@ class Crew:
             return None
         url = outcome.get("url") if isinstance(outcome, dict) else None
         return url if isinstance(url, str) else None
+
+    def _record(self, name: str) -> Record:
+        entries = self.roster.entries()
+        if name not in entries:
+            raise ValueError(f"not in roster: {name}")
+        entry = entries[name]
+        if entry.record is None:
+            raise RuntimeError(f"{name}: {entry.state}: no Record")
+        return entry.record
+
+    def _session(self, name: str) -> tuple[str, str]:
+        """The one session the entry's Record names, with the sid that guards its identity."""
+        record = self._record(name)
+        if len(record.sessions) != 1:
+            raise ValueError(
+                f"{name}: no single session to read or send to (sessions: {len(record.sessions)})"
+            )
+        if record.sid is None:
+            raise ValueError(f"{name}: no sid to guard its session")
+        return record.sessions[0], record.sid
+
+    def read_argv(
+        self, name: str, *, lines: int | None = None, reply: bool = False, outcome: bool = False
+    ) -> tuple[str, ...]:
+        """The command printing the entry's screen (its last `lines`), latest reply or outcome.
+        An issue run's ctl has no outcome verb: its Record's workdir is its delegate's.
+        """
+        if outcome:
+            record = self._record(name)
+            delegated = record.ctl[0] in (LayerCommand.DELEGATE, LayerCommand.ORCHESTRATOR)
+            if not delegated or record.workdir is None:
+                raise ValueError(f"{name}: no run outcome; --outcome reads role and issue runs")
+            return (LayerCommand.DELEGATE, "outcome", record.workdir)
+        session, sid = self._session(name)
+        if reply:
+            return (LayerCommand.SESSION, "reply", session, "--sid", sid)
+        shown = () if lines is None else ("--lines", str(lines))
+        return (LayerCommand.SESSION, "read", session, "--sid", sid, *shown)
+
+    def send_argv(
+        self, name: str, *, text: str | None = None, keys: Sequence[str] = ()
+    ) -> tuple[str, ...]:
+        """The command pasting text, then Enter, else pressing keys, in the entry's session."""
+        session, sid = self._session(name)
+        sent = ("--key", *keys) if text is None else ("--", text)
+        return (LayerCommand.SESSION, "send", session, "--sid", sid, *sent)
+
+    def hand_off(self, argv: tuple[str, ...]) -> NoReturn:
+        """Become argv, so its output and exit status are the caller's."""
+        os.execvpe(argv[0], argv, self._env(events=False))
 
     def resume(self, name: str, *, input: str | None = None) -> Record | None:
         self._listed = None

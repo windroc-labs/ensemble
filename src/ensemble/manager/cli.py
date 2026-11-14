@@ -38,6 +38,16 @@ def _number(value: str) -> int:
     return number
 
 
+def _positive(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("want a positive integer") from error
+    if number < 1:
+        raise argparse.ArgumentTypeError("want a positive integer")
+    return number
+
+
 def _sid(value: str) -> str:
     try:
         identity = uuid.UUID(value)
@@ -252,6 +262,18 @@ def _report_error(error: Exception) -> None:
 def _report(args) -> int:
     print(_crew(args).report(), end="")
     return 0
+
+
+def _read(args) -> int:
+    crew = _crew(args)
+    crew.hand_off(
+        crew.read_argv(args.name, lines=args.lines, reply=args.reply, outcome=args.outcome)
+    )
+
+
+def _send(args) -> int:
+    crew = _crew(args)
+    crew.hand_off(crew.send_argv(args.name, text=args.text, keys=args.key or ()))
 
 
 def _resume(args) -> int:
@@ -723,6 +745,61 @@ ensemble-crew status --help for individual status queries.
 """,
     )
     report.set_defaults(func=_report)
+    read = page(
+        "read",
+        "Print an entry's screen, latest reply or outcome",
+        """Reads the one session the entry's Record names: a worker's own; a role
+run's tui; an issue run's tui, ROLE-ID-<sid8>. A headless run has none.
+Session commands carry the Record's sid, so a session that reused the name
+is refused. --outcome prints a role or issue run's outcome
+JSON, null without one. Output and exit status are the session's or the
+delegate's own. Needs no holder lease and changes nothing.
+
+Examples:
+  ensemble-crew read --manager demo helper --lines 20
+  ensemble-crew read --manager demo helper --reply
+  ensemble-crew read --manager demo TASK-1 --outcome
+
+Recovery and next help:
+  Entry names and states: ensemble-crew status --help
+  Screen and reply: ensemble-session read --help, ensemble-session reply --help
+  Outcome: ensemble-delegate outcome --help
+""",
+    )
+    read.add_argument("name", metavar="NAME", help="entry name")
+    shown = read.add_mutually_exclusive_group()
+    shown.add_argument(
+        "--lines",
+        type=_positive,
+        metavar="N",
+        help="the screen's last N lines, history included; default: the visible screen",
+    )
+    shown.add_argument("--reply", action="store_true", help="the latest reply, not the screen")
+    shown.add_argument(
+        "--outcome", action="store_true", help="a role or issue run's outcome JSON, or null"
+    )
+    read.set_defaults(func=_read)
+    send = page(
+        "send",
+        "Paste text then Enter, or press keys, in an entry's session",
+        """Sends to the one session the entry's Record names, as ensemble-crew read
+--help says, guarded by the Record's sid. Give TEXT or --key K…, not both;
+TEXT starting with - goes after --. Key names: ensemble-session send --help.
+Prints nothing; exit status is the session's. Needs no holder lease.
+
+Examples:
+  ensemble-crew send --manager demo helper 'Run the tests again'
+  ensemble-crew send --manager demo TASK-1 --key Down Enter
+
+Recovery and next help:
+  Check the screen before and after: ensemble-crew read --help
+  Entry names and states: ensemble-crew status --help
+""",
+    )
+    send.add_argument("name", metavar="NAME", help="entry name")
+    send.add_argument("text", nargs="?", metavar="TEXT", help="text to paste; then Enter")
+    send.add_argument("--key", nargs="+", metavar="K", help="one or more keys instead of TEXT")
+    send.set_defaults(func=_send)
     resume = page(
         "resume",
         "Recover gone entries or answer one waiting entry; print Records",
@@ -995,6 +1072,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("start takes a kind or --list, not both")
     if args.func is _start_list and not args.list:
         parser.error("start takes a kind or --list")
+    if args.func is _send and (args.text is None) == (args.key is None):
+        parser.error("send takes TEXT or --key K…, not both")
     if args.func is _view and bool(args.names) == args.all:
         parser.error(f"{args.verb} takes entry names or --all")
     if args.func is _resume and args.input is not None and len(args.names) != 1:

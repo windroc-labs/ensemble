@@ -1659,6 +1659,89 @@ class View(CliCase):
         self.assertEqual(stderr, f"crew: a: {ctl.COMMAND} hide: exit 1\n")
 
 
+class Read(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.record = own(self.roster, replace(self.fake_record("w1"), sessions=("w1",)))
+        self.execvpe = self.enterContext(mock.patch("os.execvpe"))
+
+    def test_read_hands_off_to_the_session_of_the_entry(self):
+        for options, tail in (
+            ((), ("read", "w1", "--sid", self.record.sid)),
+            (("--lines", "5"), ("read", "w1", "--sid", self.record.sid, "--lines", "5")),
+            (("--reply",), ("reply", "w1", "--sid", self.record.sid)),
+        ):
+            with self.subTest(options=options):
+                self.execvpe.reset_mock()
+                self.assertEqual(
+                    self.invoke("read", "--manager", "mgr", "w1", *options), (None, "", "")
+                )
+                file, argv, _ = self.execvpe.call_args.args
+                self.assertEqual((file, argv), ("ensemble-session", ("ensemble-session", *tail)))
+
+    def test_views_are_exclusive_and_lines_positive(self):
+        for options, message in (
+            (("--reply", "--outcome"), "not allowed with argument"),
+            (("--lines", "3", "--reply"), "not allowed with argument"),
+            (("--lines", "0"), "want a positive integer"),
+            (("--lines", "x"), "want a positive integer"),
+        ):
+            with self.subTest(options=options):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(["read", "--manager", "mgr", "w1", *options])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn(message, stderr.getvalue())
+        self.execvpe.assert_not_called()
+
+    def test_refusals_exit_with_crews_codes_and_run_nothing(self):
+        self.roster.begin(Spec("pending", ("start",), None), sid=str(uuid.uuid4()))
+        for name, options, code, message in (
+            ("nobody", (), 2, "crew: not in roster: nobody\n"),
+            ("pending", (), 1, "crew: pending: starting: no Record\n"),
+            (
+                "w1",
+                ("--outcome",),
+                2,
+                "crew: w1: no run outcome; --outcome reads role and issue runs\n",
+            ),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.invoke("read", "--manager", "mgr", name, *options), (code, "", message)
+                )
+        self.execvpe.assert_not_called()
+
+
+class Send(CliCase):
+    def setUp(self):
+        super().setUp()
+        self.record = own(self.roster, replace(self.fake_record("w1"), sessions=("w1",)))
+        self.execvpe = self.enterContext(mock.patch("os.execvpe"))
+
+    def test_send_hands_off_text_or_keys(self):
+        guard = ("ensemble-session", "send", "w1", "--sid", self.record.sid)
+        for argv, tail in (
+            (("w1", "answer"), ("--", "answer")),
+            (("w1", "--", "-x"), ("--", "-x")),
+            (("w1", "--key", "Down", "Enter"), ("--key", "Down", "Enter")),
+        ):
+            with self.subTest(argv=argv):
+                self.execvpe.reset_mock()
+                self.assertEqual(self.invoke("send", "--manager", "mgr", *argv), (None, "", ""))
+                self.assertEqual(self.execvpe.call_args.args[1], (*guard, *tail))
+
+    def test_send_takes_text_or_keys_not_both(self):
+        for argv in (("w1",), ("w1", "answer", "--key", "Enter")):
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    main(["send", "--manager", "mgr", *argv])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("send takes TEXT or --key K…, not both", stderr.getvalue())
+        self.execvpe.assert_not_called()
+
+
 class CrewCommandsDelegate(CliCase):
     """crew list and resume-commander run ensemble's manager side until they are removed."""
 
@@ -1720,6 +1803,8 @@ HELP_COMMANDS = [
     "attach",
     "status",
     "report",
+    "read",
+    "send",
     "resume",
     "hide",
     "show",
