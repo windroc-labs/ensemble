@@ -61,7 +61,7 @@ from ensemble.utils.git import (
     resolve,
 )
 from ensemble.utils.git import git as run_git
-from ensemble.utils.markdown import fenced, unfenced
+from ensemble.utils.markdown import OUTCOME, fenced, outcome_block, unfenced
 from ensemble.utils.paths import (
     DOCKER_STATE,
     STATE,
@@ -141,6 +141,7 @@ __all__ = [
     "LONG",
     "LayerCommand",
     "NAME",
+    "OUTCOME",
     "OWNER",
     "Once",
     "OutcomeStatus",
@@ -190,6 +191,7 @@ __all__ = [
     "one_line",
     "open_beneath",
     "origin",
+    "outcome_block",
     "over_argv",
     "overlaps",
     "parse_time",
