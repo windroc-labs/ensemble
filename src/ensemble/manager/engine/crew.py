@@ -46,7 +46,7 @@ from ensemble.utils import (
 )
 
 TIMEOUT = 30
-SEND_WAIT = 20  # seconds an idle client has to start a turn with sent text
+SEND_WAIT = 20  # seconds an idle client has to start a turn
 # A start's or resume's: a Docker one may first rebuild its image, which its broker allows 1800 s.
 START_TIMEOUT = 1920
 GRACE = 60  # from SIGTERM to SIGKILL: a Docker start in flight removes its container
@@ -746,15 +746,11 @@ class Crew:
         session, sid = self._session(name)
         if text is None:
             return (LayerCommand.SESSION, "send", session, "--sid", sid, "--key", *keys)
-        # options before the session name: argparse takes no option between it and TEXT
         waited = ("--sid", sid, "--wait", str(SEND_WAIT))
         return (LayerCommand.SESSION, "send", *waited, session, "--", text)
 
     def send_text(self, name: str, text: str) -> tuple[str | None, int]:
-        """Pastes `text` in the entry's session and waits for its delivery: the session's word
-        (delivered, queued, undelivered; None without one) and exit status. Its stderr passes
-        through. No timeout: the session bounds its own wait.
-        """
+        """The session's delivery word, else None, and exit status."""
         argv = self.send_argv(name, text=text)
         try:
             result = subprocess.run(
