@@ -67,7 +67,7 @@ class HostGhChild(Case):
             self.assertLess(time.monotonic(), deadline, "gh never started")
             time.sleep(0.05)
 
-    def test_the_childs_exit_code_and_stdio_are_the_wrappers(self):
+    def test_the_wrapper_exits_and_reads_and_writes_as_its_gh_child(self):
         for mode, stdin, code, out in (("exit:3", "", 3, ""), ("echo", "hi\n", 0, "hi\n")):
             with self.subTest(mode):
                 proc = self.start("pr", "view", FAKE_GH_MODE=mode)

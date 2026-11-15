@@ -36,6 +36,7 @@ COMMANDS = (
     "ensemble-orchestrator",
     "gh",
 )
+REAL_GH = '#!/bin/sh\nprintf "real gh %s\\n" "$*"\n'
 USAGE = "usage: ensemble <name> | ensemble [--force] <name> -- <command> [<arg> ...]"
 FAKE = """#!{python} -I
 import json, os, sys
@@ -754,9 +755,15 @@ class FakeTmux(Case):
                     process, _, err, calls = self.run_ensemble("s1", script=self.dst)
                     self.assertEqual((process.returncode, err), (0, ""))
                     self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
+                elif name == "gh":
+                    # skills/ links this checkout: its wrapper, switched off, runs the next gh
+                    executable(os.path.join(self.bin, "gh"), REAL_GH)
+                    process, out, err, _ = self.run_ensemble(
+                        "pr", script=os.path.join(self.installed, name)
+                    )
+                    self.assertEqual((process.returncode, out, err), (0, "real gh pr\n", ""))
                 else:
-                    home = ("skills", "manage", "scripts") if name == "gh" else ("bin",)
-                    target = os.path.join(selected, *home, name)
+                    target = os.path.join(selected, "bin", name)
                     executable(target, '#!/bin/sh\nprintf "%s\\n" "$0"\n')
                     process, out, err, _ = self.run_ensemble(
                         script=os.path.join(self.installed, name)
@@ -1042,6 +1049,18 @@ class FakeTmux(Case):
         self.assertIn(os.path.join(self.home, ".claude", "plugins", "installed_plugins.json"), err)
         self.assertIn(self.codex, err)
         self.assertIn(self.opencode, err)
+
+    def test_a_gh_launcher_without_a_plugin_runs_the_next_gh_else_fails(self):
+        self.legacy_install()
+        gh = os.path.join(self.installed, "gh")
+        self.env["PATH"] = self.bin
+        process, out, err, _ = self.run_ensemble("pr", script=gh)
+        self.assertEqual((process.returncode, out), (1, ""))
+        self.assertIn("gh: no installed ensemble plugin has skills/manage/scripts/gh", err)
+        real = executable(os.path.join(self.bin, "gh"), REAL_GH)
+        process, out, err, _ = self.run_ensemble("pr", script=gh)
+        self.assertEqual((process.returncode, out), (0, "real gh pr\n"))
+        self.assertTrue(err.endswith(f"; running {real}\n"), err)
 
     def test_an_install_failure_exits_nonzero_without_a_path(self):
         os.rmdir(self.ensemble)

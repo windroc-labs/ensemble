@@ -8,7 +8,13 @@ import sys
 import time
 from datetime import UTC, datetime
 
-with open(os.environ["FAKE_BROKER_LOG"], "a", encoding="utf-8") as f:
-    f.write(json.dumps(sys.argv[1:]) + "\n")
-expires = datetime.fromtimestamp(time.time() + 3600, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-print(json.dumps({"version": 1, "account": "windroc-labs", "expires_at": expires}))
+
+def main():
+    with open(os.environ["FAKE_BROKER_LOG"], "a", encoding="utf-8") as f:
+        f.write(json.dumps(sys.argv[1:]) + "\n")
+    expires = datetime.fromtimestamp(time.time() + 3600, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(json.dumps({"version": 1, "account": "windroc-labs", "expires_at": expires}))
+
+
+if __name__ == "__main__":
+    main()
