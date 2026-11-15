@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from unittest import mock
 
 from ensemble.utils import host_gh
-from tests.utils.case import Case
+from tests.utils.case import REPO, Case
 from tests.utils.sandbox import scratch
 
 
@@ -323,3 +323,14 @@ class Main(Base):
             self.assertEqual(self.main("run", "watch", "7"), 0)
         self.popen.assert_called_once_with(["gh", "run", "watch", "7"], executable=self.real)
         self.assertEqual(self.broker_calls(calls), [])
+
+
+class Verified(Case):
+    def test_the_verified_gh_is_the_one_the_live_runbook_checks(self):
+        """The live runbook pins no version of its own: it checks the one host_gh names."""
+        with open(
+            os.path.join(REPO, ".mini-op/runbooks/host-gh-refresh.md"), encoding="utf-8"
+        ) as f:
+            runbook = f.read()
+        self.assertIn("the version `VERIFIED_GH` names in `src/ensemble/utils/host_gh.py`", runbook)
+        self.assertRegex(host_gh.VERIFIED_GH, r"^[0-9]+\.[0-9]+\.[0-9]+$")

@@ -1,5 +1,11 @@
 # Upgrading
 
+## gh on PATH is ensemble's wrapper
+
+The installer now also puts `gh` in `~/.ensemble/bin`, and the board jobs' PATH holds `~/.ensemble/bin` ahead of
+Homebrew. It runs your gh unchanged until you switch on the [host GitHub App](../README.md#host-github-app). No step
+is needed. If it ever cannot find its plugin, it says so and runs the next gh on PATH.
+
 ## ensemble-crew keeps only the manager's commands
 
 `ensemble-crew` now has only `start`, `attach`, `status`, `report`, `read`, `send`, `show`, `hide`, `resume`,
@@ -260,6 +266,7 @@ Broker [command usage](../src/broker/main.go) owns login syntax; replacing a sto
 | Credential | External action |
 |---|---|
 | Host `gh` login | Revoke GitHub CLI access in GitHub Settings › Applications; `gh auth logout` only removes local access |
+| Host GitHub App key | As the GitHub App key, then `ensemble-broker login github ensemble-broker-host-bot --key-file KEY.pem --app-id APP_ID`; the host's current token expires within the hour |
 | GitHub App key | Generate a replacement and delete the old key in the App settings, then import the replacement |
 | OpenCode provider key / environment secret | Revoke or rotate at its source, then import the new value; close existing containers to replace their static copies |
 | Claude setup-token / broker Codex login | Neither has a documented upstream revocation route; obtain a new token/login after suspected exposure |
@@ -798,6 +805,8 @@ Mac; the `tests/session/live_docker.py` checks: [Docker acceptance entry](../tes
 - [ ] Before cutover: the manager app creates and edits issues, comments (`user` is the manager app user) and moves an
   issue (the move's actor is recognisable by its app user id).
 - [ ] Before cutover: the harness and manager apps both fail to read or write another team's issue.
+- [ ] [Host GitHub App](../README.md#host-github-app): `.mini-op/runbooks/host-gh-refresh.md` passes with the gh
+  `src/ensemble/utils/host_gh.py` names as verified; rerun it before raising that version.
 - [ ] After cutover: each role app fails on another team's issue and runs one round: claim, write-back, Handoff, next
   role's claim.
 - [ ] After cutover: [Linear apps](#linear-apps) step 7 is done: the old credentials revoked in Linear and every

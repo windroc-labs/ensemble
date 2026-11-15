@@ -81,6 +81,44 @@ Generate a private key, note the App ID and import them:
 
 Delete the PEM after import. [Credential rotation](docs/upgrading.md#credential-rotation) covers replacement and revocation.
 
+### Host GitHub App
+
+The manager, harness, local workers and board jobs on your Mac can call `gh`, and git over https, as a GitHub App
+of their own instead of your user. That App's API quota is separate from your user's and the Docker workers' App.
+`~/.ensemble/bin/gh`, which the installer puts ahead of Homebrew's gh, runs gh unchanged until you switch it on.
+Once on, it runs the real gh as a child and has the broker put a new App token into gh's keyring before the last
+is 50 minutes old, before and while gh runs, so a long `gh pr checks --watch` keeps working. It refuses to run
+with `GH_TOKEN` or `GITHUB_TOKEN` set, with a token in gh's plain-text `hosts.yml`, or with a gh other than the
+version its keyring behaviour was verified with (`brew pin gh` keeps Homebrew from upgrading it).
+
+One-time steps, by hand:
+
+1. Keep every repository the host works on under one owner, so one installation serves them all: transfer
+   documentation repositories there, and update output settings that name the old owner.
+2. Create a private App as for Docker workers, with repository permissions Contents read and write, Pull
+   requests read and write, Workflows write, Checks read, Actions read, Commit statuses read and Metadata read.
+   Install it on all repositories of that owner. Add it to the bypass list of the `main` ruleset of each
+   repository you merge with `--admin`.
+3. Import its key: `/usr/local/libexec/ensemble/ensemble-broker login github ensemble-broker-host-bot --key-file KEY.pem --app-id APP_ID`.
+4. Send git's GitHub credentials through the wrapper; gh's own setup wrote its absolute path:
+
+   ```sh
+   for url in https://github.com https://gist.github.com; do
+     git config --global --replace-all "credential.$url.helper" ''
+     git config --global --add "credential.$url.helper" '!gh auth git-credential'
+   done
+   ```
+
+5. `brew pin gh`. In `~/.ensemble/config.local.toml`, set `[delegate] users` to your GitHub login: the gh login
+   is now the App's bot, which never counts as you.
+6. Switch on: `mkdir -m 700 ~/.ensemble/host-gh`, run `gh api rate_limit` (the first refresh logs gh in as the App),
+   then `gh auth logout --hostname github.com --user <your user>` to drop the old login.
+7. Check: in a new login shell `command -v gh` prints `~/.ensemble/bin/gh`, and
+   `git config --global --get-all credential.https://github.com.helper` prints an empty line and
+   `!gh auth git-credential`.
+
+Switch off with `rm -r ~/.ensemble/host-gh`, then `gh auth login`. PRs and pushes then come from your user again.
+
 <a id="quick-start"></a>
 ## Quick start
 
