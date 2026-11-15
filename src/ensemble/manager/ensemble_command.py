@@ -147,7 +147,7 @@ def _show(prompt: str, text: str) -> None:
     except (OSError, ValueError):
         columns = 0
     if columns:  # 0: the width is unknown
-        text = text[len(text) - max(columns - len(prompt) - 1, 0) :]
+        text = text[max(len(text) - max(columns - len(prompt) - 1, 0), 0) :]
     print(f"\r\x1b[K{prompt}{text}", end="", file=sys.stderr, flush=True)
 
 

@@ -487,6 +487,15 @@ class MenuTest(ListCase):
         self.assertIn("\r\x1b[K" + self.PROMPT.format(3) + "demo", shown)
         self.assertNotIn("^[", shown)
 
+    def test_a_name_that_fits_shows_whole(self):
+        prompt = self.PROMPT.format(3)
+        for spare in (0, 2):
+            with self.subTest(spare=spare):
+                columns = len(prompt) + 1 + len("alpha") + spare
+                result, _, shown = self.menu(b"\x1b[B", b"\r", columns=columns)
+                self.assertEqual(result, 0)
+                self.assertIn(f"\r\x1b[K{prompt}alpha\r\n", shown)
+
     def test_a_narrow_terminal_shows_the_end_of_the_line_that_fits(self):
         prompt = self.PROMPT.format(3)
         result, _, shown = self.menu(b"\x1b[A", b"\r", columns=len(prompt) + 3)
