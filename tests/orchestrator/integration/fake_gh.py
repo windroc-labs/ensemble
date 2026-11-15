@@ -150,7 +150,7 @@ def entries(files: dict, path: str) -> list[dict] | None:
 def login() -> None:
     if not (name := scenario()["login"]):
         sys.exit("fake_gh.py: the scenario has no login")
-    print(json.dumps({"login": name}))
+    print(json.dumps({"data": {"viewer": {"login": name}}}))
 
 
 def thread(m: re.Match) -> None:
@@ -247,7 +247,7 @@ def main(argv: list[str]) -> None:
         return print("[]")
     if argv[:3] == ["api", "--hostname", HOST]:
         rest = argv[3:]
-        if rest == ["user"]:
+        if rest == ["graphql", "-f", "query={viewer{login}}"]:
             return login()
         if rest[:2] == ["--paginate", "--slurp"] and (m := THREAD.fullmatch(" ".join(rest[2:]))):
             return thread(m)
