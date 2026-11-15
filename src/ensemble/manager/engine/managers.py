@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import asdict
 
 from ensemble.manager.engine.roster import Roster
@@ -28,6 +29,9 @@ RECORD_MAX = 1 << 16
 NAME = re.compile(r"[A-Za-z0-9_-]+")
 CLIENT = re.compile(r"[a-z][a-z0-9-]*")
 RESUME_TIMEOUT = 30
+PS_TIMEOUT = 2
+ELAPSED = re.compile(r"(?:(?:([0-9]+)-)?([0-9]+):)?([0-9]+):([0-9]+)")  # ps etime: [[dd-]hh:]mm:ss
+START_SLACK = 2  # seconds: ps and file times round to whole seconds
 
 
 def roster(name: str | None, error: str) -> Roster:
@@ -68,14 +72,42 @@ def write_record(directory: str, record: SessionRecord) -> None:
     save(os.path.join(directory, RECORD), json.dumps(asdict(record)) + "\n")
 
 
-def alive(pid: int) -> bool:
+def _started(pid: int) -> float | None:
+    """When pid's process started, by ps; None when ps cannot tell."""
     try:
-        os.kill(pid, 0)
+        done = subprocess.run(
+            ("ps", "-o", "etime=", "-p", str(pid)),
+            capture_output=True,
+            text=True,
+            timeout=PS_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    elapsed = ELAPSED.fullmatch(done.stdout.strip()) if done.returncode == 0 else None
+    if elapsed is None:
+        return None
+    days, hours, minutes, seconds = (int(part or 0) for part in elapsed.groups())
+    return time.time() - (((days * 24 + hours) * 60 + minutes) * 60 + seconds)
+
+
+def running(directory: str, record: SessionRecord) -> bool:
+    """Whether directory's record names a running client: a process has its pid and started
+    before the record was written, as every client does; one that started later reuses the pid.
+    """
+    try:
+        os.kill(record.pid, 0)
     except (ProcessLookupError, OverflowError):  # OverflowError: a pid no process can have
         return False
     except PermissionError:
+        pass
+    started = _started(record.pid)
+    try:
+        written = os.stat(os.path.join(directory, RECORD)).st_mtime
+    except OSError:
         return True
-    return True
+    return started is None or started <= written + START_SLACK
 
 
 def read(directory: str) -> Manager | Unreadable:
@@ -90,7 +122,7 @@ def read(directory: str) -> Manager | Unreadable:
         record = Unread(str(error))
     if holder is None:
         state = HolderState.NOT_HELD
-    elif isinstance(record, SessionRecord) and alive(record.pid):
+    elif isinstance(record, SessionRecord) and running(directory, record):
         state = HolderState.CLIENT_RUNNING
     else:
         state = HolderState.HOLD_ONLY
@@ -142,7 +174,7 @@ def resume_target(directory: str) -> tuple[SessionRecord, tuple[str, ...]]:
         raise RosterError(str(error)) from None
     if record is None:
         raise RosterError(f"{directory}: no session record to resume")
-    if alive(record.pid):
+    if running(directory, record):
         raise RosterError(f"its client {record.pid} still runs; exit it first")
     if not os.path.isdir(record.cwd):
         raise RosterError(f"recorded cwd {record.cwd!r} is not a directory")

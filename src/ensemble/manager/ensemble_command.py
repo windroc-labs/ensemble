@@ -204,7 +204,8 @@ def _select(manager: Manager | Unreadable) -> int:
             f"ensemble: manager {manager.name}: {record.error}; its session is not resumed",
             file=sys.stderr,
         )
-    live = isinstance(record, SessionRecord) and managers.alive(record.pid)
+    directory = os.path.join(os.path.expanduser(managers.ROOT), manager.name)
+    live = isinstance(record, SessionRecord) and managers.running(directory, record)
     plan = managers.plan(manager, live=live)
     if isinstance(plan, Refused):
         print(
