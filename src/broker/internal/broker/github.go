@@ -32,6 +32,14 @@ const (
 	tokenDir     = docker.GitHubDir
 )
 
+// HostContainer is host-gh-login's audit consumer: the host's gh, not a container.
+const HostContainer = "host/gh"
+
+// hostPermissions are all the host's gh may do: push, open and merge pull requests, change workflows, and read checks,
+// runs and statuses.
+var hostPermissions = map[string]string{"contents": "write", "pull_requests": "write", "workflows": "write",
+	"checks": "read", "actions": "read", "statuses": "read", "metadata": "read"}
+
 // revocationTimeout bounds each in-command step that must end whatever the caller's context: a rollback's or close's
 // revocations, all on one context, and close's read of the token files.
 var revocationTimeout = 30 * time.Second
@@ -301,6 +309,48 @@ func (g GitHub) Refresh(ctx context.Context, _ string, permissions map[string]st
 		renewed = append(renewed, m)
 	}
 	return expiries(renewed), nil
+}
+
+// HostLogin issues a token of the host App's only installation, limited to hostPermissions, and gives it to login, the
+// host gh's login, which reads it from the slice; the slice is erased once login returns. A failed login's token is
+// revoked, and the error says whether that failed. The audit gets one refresh line. A replaced host token is never
+// revoked: it expires, as Refresh's do.
+func (g GitHub) HostLogin(ctx context.Context, login func(token []byte) error) (protocol.Expiry, error) {
+	g.Audit.Renewing("")
+	jwt, err := g.jwt(HostAppKeyService)
+	if err != nil {
+		return protocol.Expiry{}, err
+	}
+	installs, err := g.API.Installations(ctx, jwt)
+	if err != nil {
+		return protocol.Expiry{}, redacted(apiError(err), jwt)
+	}
+	if len(installs) != 1 {
+		return protocol.Expiry{}, protocol.New(protocol.GitHubFailed, fmt.Sprintf(
+			"GitHub App %s has %d installations; the host App must have exactly one installation.", HostAppKeyService, len(installs)))
+	}
+	m, err := g.issue(ctx, jwt, installs[0], hostPermissions, HostContainer, audit.Issued)
+	if err != nil {
+		return protocol.Expiry{}, redacted(err, jwt)
+	}
+	token := []byte(m.Token)
+	err = login(token)
+	clear(token)
+	if err == nil {
+		return protocol.Expiry{Account: m.Account, ExpiresAt: m.ExpiresAt}, nil
+	}
+	rctx, cancel := detached(ctx)
+	defer cancel()
+	revoked := "it was revoked"
+	switch rerr := g.API.Revoke(rctx, m.Token); {
+	case rerr == nil, errors.Is(rerr, github.ErrAlreadyInvalid):
+		g.note(HostContainer, audit.Revoked, "", m, nil)
+	default:
+		g.note(HostContainer, audit.Unrevoked, github.Redact(rerr.Error(), m.Token), m, nil)
+		revoked = "it was not revoked and expires at " + m.ExpiresAt
+	}
+	return protocol.Expiry{}, redacted(protocol.New(protocol.GitHubFailed,
+		"Logging the host gh in failed: "+err.Error()+"; "+revoked+"."), m.Token, jwt)
 }
 
 func tokens(list []credential.Material) []string {

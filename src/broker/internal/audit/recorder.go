@@ -72,7 +72,7 @@ func (r *Recorder) Flush(err error) error {
 	at := now()
 	var lines []Line
 	event := r.Command
-	if (r.Command == maintainCommand || r.Command == "linear-maintain") && r.renewing {
+	if (r.Command == maintainCommand || r.Command == "linear-maintain" || r.Command == "host-gh-login") && r.renewing {
 		event = refreshEvent
 	}
 	switch event {
