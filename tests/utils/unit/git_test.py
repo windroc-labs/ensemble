@@ -220,10 +220,6 @@ class CheckRef(Case):
                 self.assertEqual(str(caught.exception), f"unsafe ref {ref[:80]!r}: {why}")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class GhDenied(Case):
     PRIMARY = (
         "gh: API rate limit exceeded for user ID 1234. If you reach out to GitHub Support for"
@@ -281,3 +277,7 @@ class GhDenied(Case):
         for stderr in ("error connecting to api.github.com", "gh: Bad Gateway (HTTP 502)", ""):
             with self.subTest(stderr=stderr):
                 self.assertEqual(self.denied(stderr), (None, []))
+
+
+if __name__ == "__main__":
+    unittest.main()

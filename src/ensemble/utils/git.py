@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import time
 from dataclasses import dataclass
 
@@ -125,10 +126,9 @@ class Repo:
         return f"{self.host}/{self.owner}/{self.name}"
 
 
-def gh_denied(res, *, run: Runner, host: str) -> str | None:
-    """The HTTP code ("403", "404") when GitHub refused the resource of failed `gh api` call
-    `res`, else None: a rate limit (429, a 403 naming one or with no core requests left) or no
-    HTTP answer is transient."""
+def gh_denied(res: subprocess.CompletedProcess, *, run: Runner, host: str) -> str | None:
+    """The HTTP code ("403" or "404") when GitHub refused failed `gh api` call `res`, else None:
+    a rate limit (429, a 403 naming one or with no core requests left) or no HTTP answer."""
     code = HTTP.search(res.stderr or "")
     if not code or code.group(1) not in ("403", "404"):
         return None
