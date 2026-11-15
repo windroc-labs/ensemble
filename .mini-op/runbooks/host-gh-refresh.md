@@ -34,7 +34,7 @@ stamp=~/.ensemble/host-gh/refreshed
    repo=<test-owner>/<test-repo>
    dir=$(mktemp -d)
    gh repo clone "$repo" "$dir" -- --depth 1
-   git -C "$dir" -c user.name=refresh-check -c user.email=refresh-check@example.invalid commit --allow-empty -m 'refresh check'
+   git -C "$dir" -c user.name=refresh-check -c user.email=refresh-check commit --allow-empty -m 'refresh check'
    git -C "$dir" push origin HEAD:refs/heads/refresh-check
    sha=$(git -C "$dir" rev-parse HEAD)
    until id=$(gh run list -R "$repo" --workflow sleep.yml --branch refresh-check --event push --json databaseId,headSha --jq ".[] | select(.headSha == \"$sha\") | .databaseId") && [ -n "$id" ]; do sleep 5; done
