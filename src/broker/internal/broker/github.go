@@ -132,7 +132,7 @@ func apiError(err error) *protocol.Error {
 }
 
 func loginError(app string) *protocol.Error {
-	return protocol.New(protocol.LoginRequired, "No usable GitHub App private key "+app+": run ensemble-broker login github "+AppKeyService+".")
+	return protocol.New(protocol.LoginRequired, "No usable GitHub App private key "+app+": run ensemble-broker login github "+app+".")
 }
 
 // writeError is the protocol's account of a token file write that failed, never Docker's stderr.
@@ -425,17 +425,17 @@ func installError(repo string, err error) *protocol.Error {
 	return apiError(err)
 }
 
-// SaveUser asks GitHub which App the AppKeyService key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps
-// both, for start to check and report; out gets its one line.
-func (g GitHub) SaveUser(ctx context.Context, out io.Writer) error {
-	rerun := "; rerun ensemble-broker login github " + AppKeyService
-	jwt, err := g.jwt(AppKeyService)
+// SaveUser asks GitHub which App key item app's key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps
+// both under app, for start to check and report; out gets its one line.
+func (g GitHub) SaveUser(ctx context.Context, app string, out io.Writer) error {
+	rerun := "; rerun ensemble-broker login github " + app
+	jwt, err := g.jwt(app)
 	if err != nil {
 		return err
 	}
 	slug, err := g.API.AppSlug(ctx, jwt)
 	if err != nil {
-		return fmt.Errorf("looking up the GitHub App of the %s key failed: %w%s", AppKeyService, err, rerun)
+		return fmt.Errorf("looking up the GitHub App of the %s key failed: %w%s", app, err, rerun)
 	}
 	login := slug + "[bot]"
 	id, err := g.API.BotUser(ctx, login)
@@ -443,7 +443,7 @@ func (g GitHub) SaveUser(ctx context.Context, out io.Writer) error {
 		return fmt.Errorf("looking up GitHub user %s failed: %w%s", login, err, rerun)
 	}
 	data, _ := json.Marshal(botUser{slug, id})
-	if err := g.Keychain.PutSecret(usersService, AppKeyService, data); err != nil {
+	if err := g.Keychain.PutSecret(usersService, app, data); err != nil {
 		return fmt.Errorf("saving the bot user ID of %s failed: %w", slug, err)
 	}
 	_, err = fmt.Fprintf(out, "GitHub App %s bot user %s has ID %d\n", slug, login, id)

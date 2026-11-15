@@ -26,7 +26,7 @@ import (
 	"ensemble/broker/internal/protocol"
 )
 
-const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
+const usage = "usage: ensemble-broker version | install-codex VERSION | update-codex VERSION | login codex | login claude NAME | login github ensemble-broker-bot|ensemble-broker-host-bot [--key-file PEM --app-id ID] | login opencode PROVIDER [--auth-file FILE] | login env NAME | build --ensemble DIR [--base-image IMAGE] [--plugin NAME@OWNER/REPO#COMMIT[::MARKETPLACE/REPO#COMMIT]]... [--image-plugin NAME]... [--max-age SECONDS] | start --manifest FILE | maintain --container NAME --manifest FILE [--renew] | close --container NAME | status | probe-provider --provider NAME --base-url URL | workspace-rm --volume NAME [--force] | check-clients | login linear | linear-maintain (public identity JSON on stdin) | retrust"
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
@@ -151,6 +151,11 @@ func accountHome() (string, error) {
 	return u.HomeDir, nil
 }
 
+// githubApp is whether name is a GitHub App key item login github takes.
+func githubApp(name string) bool {
+	return name == broker.AppKeyService || name == broker.HostAppKeyService
+}
+
 func isPath(s string) bool {
 	return strings.HasPrefix(s, "/") && utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
 }
@@ -204,9 +209,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, a app) (c
 				login = func(k keys) error { return a.loginCodex(ctx, k, stdout) }
 			case len(args) == 3 && args[1] == "claude" && launcher.ValidClaudeAccount(args[2]):
 				login = func(k keys) error { return a.login(k, args[2], stdout) }
-			case len(args) == 3 && args[1] == "github" && args[2] == broker.AppKeyService:
+			case len(args) == 3 && args[1] == "github" && githubApp(args[2]):
 				login = func(k keys) error { return a.loginGitHub(ctx, k, args[2], nil, stdout) }
-			case len(args) == 7 && args[1] == "github" && args[2] == broker.AppKeyService && args[3] == "--key-file" && args[5] == "--app-id":
+			case len(args) == 7 && args[1] == "github" && githubApp(args[2]) && args[3] == "--key-file" && args[5] == "--app-id":
 				login = func(k keys) error {
 					pem, err := readKeyFile(args[4])
 					if err != nil {
@@ -453,7 +458,7 @@ func system() app {
 			}, out); err != nil {
 				return err
 			}
-			return tokens(k, nil).SaveUser(ctx, out)
+			return tokens(k, nil).SaveUser(ctx, app, out)
 		},
 		loginOpencode: func(k keys, provider, authFile string, out io.Writer) error {
 			return loginOpencode(k, provider, authFile, out)

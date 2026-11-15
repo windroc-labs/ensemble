@@ -71,12 +71,17 @@ func ownershipError(service, account string, err error) error {
 // the App's own slug, whatever it is, comes from GitHub at login.
 const AppKeyService = "ensemble-broker-bot"
 
+// HostAppKeyService is the item of the host's own GitHub App's private key, the App whose token host-gh-login gives
+// the host's gh; stored and secured as AppKeyService's.
+const HostAppKeyService = "ensemble-broker-host-bot"
+
 // KeychainServices are every keychain service the broker reads or writes, one literal each. Declare each service as a
 // package-level `...Service` string constant, and each prefix item, an entry ending in "/" that stands for every service
 // starting with it, as a `...ServicePrefix` one: TestKeychainServices pins this list to exactly those.
 var KeychainServices = []string{
 	"ensemble-broker-claude",
 	"ensemble-broker-bot",
+	"ensemble-broker-host-bot",
 	"ensemble-broker-github-users",
 	"ensemble-broker-codex",
 	"ensemble-broker-opencode",

@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -89,14 +90,16 @@ func (s *secrets) DeleteSecret(service, account string) error {
 	return nil
 }
 
+// keys holds one App key item: app's ("": AppKeyService's).
 type keys struct {
+	app     string
 	account string
 	key     []byte
 	err     error
 }
 
 func (k keys) AppAccount(app string) (string, error) {
-	if app != "ensemble-broker-bot" || k.err != nil {
+	if app != cmp.Or(k.app, AppKeyService) || k.err != nil {
 		return "", errors.Join(ErrNotFound, k.err)
 	}
 	return k.account, nil
@@ -375,7 +378,7 @@ func TestSaveUserSavesTheAppSlugAndBotUserID(t *testing.T) {
 	r := newRig(t)
 	r.api.slug, r.api.user = slug, botUserJSON
 	var out strings.Builder
-	if err := r.g.SaveUser(context.Background(), &out); err != nil {
+	if err := r.g.SaveUser(context.Background(), AppKeyService, &out); err != nil {
 		t.Fatal(err)
 	}
 	if got := string(r.keys.items[usersService+"/"+AppKeyService]); got != savedUser {
@@ -389,6 +392,30 @@ func TestSaveUserSavesTheAppSlugAndBotUserID(t *testing.T) {
 	}
 	if len(r.api.appAuth) != 1 || !strings.HasPrefix(r.api.appAuth[0], "Bearer ey") {
 		t.Fatalf("GET /app sent %q, want the App JWT", r.api.appAuth)
+	}
+}
+
+// The host App's login keeps its own bot user, under its own key item's name, beside the Docker App's.
+func TestSaveUserKeepsEachAppsBotUserApart(t *testing.T) {
+	r := newRig(t)
+	r.api.slug, r.api.user = slug, botUserJSON
+	r.g.Apps = keys{app: HostAppKeyService, account: "1234567", key: testAppKey(t)}
+	var out strings.Builder
+	if err := r.g.SaveUser(context.Background(), HostAppKeyService, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(r.keys.items[usersService+"/"+HostAppKeyService]); got != savedUser {
+		t.Fatalf("saved %q", got)
+	}
+	if _, ok := r.keys.items[usersService+"/"+AppKeyService]; ok {
+		t.Fatal("saved under the Docker App's item")
+	}
+	r = newRig(t)
+	r.g.Apps = keys{err: ErrNotFound}
+	err := r.g.SaveUser(context.Background(), HostAppKeyService, &strings.Builder{})
+	wantCode(t, err, protocol.LoginRequired)
+	if !strings.Contains(err.Error(), "ensemble-broker login github ensemble-broker-host-bot") {
+		t.Fatalf("message %v", err)
 	}
 }
 
@@ -413,7 +440,7 @@ func TestSaveUserRejects(t *testing.T) {
 			r.srv.Close()
 		}
 		var out strings.Builder
-		err := r.g.SaveUser(context.Background(), &out)
+		err := r.g.SaveUser(context.Background(), AppKeyService, &out)
 		if err == nil || err.Error() != c.want {
 			t.Errorf("%s: %v", name, err)
 		}
@@ -423,7 +450,7 @@ func TestSaveUserRejects(t *testing.T) {
 	}
 	r := newRig(t)
 	r.g.Apps = keys{err: ErrNotFound}
-	wantCode(t, r.g.SaveUser(context.Background(), &strings.Builder{}), protocol.LoginRequired)
+	wantCode(t, r.g.SaveUser(context.Background(), AppKeyService, &strings.Builder{}), protocol.LoginRequired)
 }
 
 func TestBotUserID(t *testing.T) {
