@@ -220,5 +220,64 @@ class CheckRef(Case):
                 self.assertEqual(str(caught.exception), f"unsafe ref {ref[:80]!r}: {why}")
 
 
+class GhDenied(Case):
+    PRIMARY = (
+        "gh: API rate limit exceeded for user ID 1234. If you reach out to GitHub Support for"
+        " help, please include the request ID ABCD and timestamp 2026-11-15 15:38:00 UTC."
+        " (HTTP 403)"
+    )
+    SECONDARY = (
+        "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try"
+        " again. (HTTP 403)"
+    )
+
+    @staticmethod
+    def limits(remaining):
+        return ok(f'{{"resources": {{"core": {{"limit": 5000, "remaining": {remaining}}}}}}}')
+
+    def denied(self, stderr, limits=None):
+        """(gh_denied's answer, the argvs it ran)."""
+        calls = []
+
+        def run(argv, _timeout):
+            calls.append(tuple(argv))
+            return limits
+
+        return repos.gh_denied(fail(stderr), run=run, host="ghe.io"), calls
+
+    def test_github_refusing_the_repository_is_a_denial(self):
+        self.assertEqual(self.denied("gh: Not Found (HTTP 404)"), ("404", []))
+        self.assertEqual(
+            self.denied("gh: Forbidden (HTTP 403)", self.limits(4999)),
+            ("403", [("gh", "api", "--hostname", "ghe.io", "rate_limit")]),
+        )
+
+    def test_a_rate_limit_message_or_429_is_no_denial_and_asks_nothing_more(self):
+        for stderr in (self.PRIMARY, self.SECONDARY, "gh: Too Many Requests (HTTP 429)"):
+            with self.subTest(stderr=stderr):
+                self.assertEqual(self.denied(stderr), (None, []))
+
+    def test_a_403_with_no_core_requests_left_is_no_denial(self):
+        got, calls = self.denied("gh: Forbidden (HTTP 403)", self.limits(0))
+        self.assertIsNone(got)
+        self.assertEqual(calls, [("gh", "api", "--hostname", "ghe.io", "rate_limit")])
+
+    def test_an_unreadable_rate_limit_answer_leaves_a_403_a_denial(self):
+        """GitHub Enterprise with rate limiting off answers 404 there."""
+        for limits in (
+            fail("gh: Rate limiting is not enabled. (HTTP 404)"),
+            ok("<html>"),
+            ok("[]"),
+            ok('{"resources": {"core": {"remaining": "0"}}}'),
+        ):
+            with self.subTest(limits=limits):
+                self.assertEqual(self.denied("gh: Forbidden (HTTP 403)", limits)[0], "403")
+
+    def test_failures_without_an_http_answer_are_no_denial(self):
+        for stderr in ("error connecting to api.github.com", "gh: Bad Gateway (HTTP 502)", ""):
+            with self.subTest(stderr=stderr):
+                self.assertEqual(self.denied(stderr), (None, []))
+
+
 if __name__ == "__main__":
     unittest.main()

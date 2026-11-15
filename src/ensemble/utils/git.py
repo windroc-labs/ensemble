@@ -1,11 +1,13 @@
 """GUARD: git options disabling fsmonitor and hooks; git: retries lock failures; common_dir: a
 worktree's clone. Repository specs, origin URLs and checkout paths identify and locate repos;
-check_ref vets branch and tag names.
+check_ref vets branch and tag names; gh_denied tells GitHub refusing a repo from rate limiting.
 """
 
+import json
 import os
 import re
 import stat
+import subprocess
 import time
 from dataclasses import dataclass
 
@@ -87,6 +89,8 @@ URL = re.compile(
 SLUG = re.compile(r"[A-Za-z0-9._-]{1,100}")
 REF_CHARS = re.compile(r"[A-Za-z0-9._/-]+")
 SHA = re.compile(r"[0-9a-fA-F]{7,64}")
+HTTP = re.compile(r"HTTP (\d{3})")
+RATE_LIMIT = re.compile(r"rate limit", re.I)
 
 
 def repo_slug(value) -> tuple[str, str] | None:
@@ -120,6 +124,32 @@ class Repo:
     @property
     def slug(self) -> str:
         return f"{self.host}/{self.owner}/{self.name}"
+
+
+def gh_denied(res: subprocess.CompletedProcess, *, run: Runner, host: str) -> str | None:
+    """The HTTP code ("403" or "404") when GitHub refused failed `gh api` call `res`, else None:
+    a rate limit (429, a 403 naming one or with no core requests left) or no HTTP answer."""
+    code = HTTP.search(res.stderr or "")
+    if not code or code.group(1) not in ("403", "404"):
+        return None
+    if code.group(1) == "403" and (
+        RATE_LIMIT.search(res.stderr) or _core_remaining(run, host) == 0
+    ):
+        return None
+    return code.group(1)
+
+
+def _core_remaining(run: Runner, host: str) -> int | None:
+    # GitHub does not count this endpoint against the limit; Enterprise with rate limiting off
+    # answers 404
+    res = run(["gh", "api", "--hostname", host, "rate_limit"], SHORT)
+    if res.returncode != 0:
+        return None
+    try:
+        remaining = json.loads(res.stdout)["resources"]["core"]["remaining"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return remaining if type(remaining) is int else None
 
 
 def url_slug(url: str) -> str | None:

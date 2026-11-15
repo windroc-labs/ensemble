@@ -12,7 +12,17 @@ from ensemble.orchestrator.engine import config
 from ensemble.orchestrator.engine.config import REF, TASKS
 from ensemble.orchestrator.engine.flow import handoff
 from ensemble.orchestrator.engine.types import Invalid, Target, Transient
-from ensemble.utils import GUARD, SHORT, Repo, check_ref, common_dir, err_text, repo_slug, under
+from ensemble.utils import (
+    GUARD,
+    SHORT,
+    Repo,
+    check_ref,
+    common_dir,
+    err_text,
+    gh_denied,
+    repo_slug,
+    under,
+)
 from ensemble.utils import Invalid as RepoInvalid
 from ensemble.utils import checkout as clone_checkout
 
@@ -126,9 +136,8 @@ def _repo_info(o, n, run, host):
         SHORT,
     )
     if res.returncode != 0:
-        code = re.search(r"HTTP (\d{3})", res.stderr or "")
-        if code and code.group(1) in ("403", "404"):
-            return Invalid(f"{o}/{n}: not found or no access (HTTP {code.group(1)})")
+        if code := gh_denied(res, run=run, host=host):
+            return Invalid(f"{o}/{n}: not found or no access (HTTP {code})")
         return Transient(f"gh api repos/{o}/{n}: {err_text(res)}")
     try:
         data = json.loads(res.stdout)

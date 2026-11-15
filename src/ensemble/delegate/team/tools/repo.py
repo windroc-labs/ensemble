@@ -1,33 +1,22 @@
 #!/usr/bin/env python3
-"""Target repos for agent runs: one checkout per repo at DIR/<owner>/<name>-<SLUG>, on the run's
-branch.
+"""One checkout per target repo at DIR/<owner>/<name>-<SLUG>, on branch B.
 
-    repo.py worktree --dir DIR --branch B [--name SLUG] [--base BASE] REPO
-    repo.py status --dir DIR --branch B [--name SLUG] [--base BASE] REPO
+    repo.py worktree|status --dir DIR --branch B [--name SLUG] [--base BASE] REPO
 
 worktree prints {"repo", "host", "default", "branch", "commit", "worktree", "permalink_base",
-"push"}; no push permission is no error. status, after worktree with the same SLUG, prints {"pr",
-"base", "plan_docs", "since", "user", "others"}. `pr` is B's PR {"number", "url", "state",
-"baseRefName", "isDraft"} or null; `base` is the PR's baseRefName, else BASE, else the default
-branch. `user` and `others` are PR comments and reviews by the user (core config's `users`, else the
-gh login) and by anyone else since B's latest own commit (no merge; not on origin/<base>, as it was
-before a merged PR's merge), all when none. `plan_docs` are B's updraft plan docs in
-<worktree>/.updraft/ {"path", "phase"}, phase `S<n>` or `done`, newest (last modified) last.
+"push"}. status prints {"pr", "base", "plan_docs", "since", "user", "others"}: `pr` B's PR
+{"number", "url", "state", "baseRefName", "isDraft"} or null; `base` its baseRefName, else BASE,
+else the default branch; `user` and `others` PR comments and reviews by the user (`users`, else the
+gh login) and by others since B's latest own commit not on origin/<base>, all when none;
+`plan_docs` B's updraft plan docs {"path", "phase"}, newest last.
 
-ENSEMBLE_USERS, a JSON array of strings, replaces `users`. ENSEMBLE_PR_AUTHOR (a Docker session's
-App bot, e.g. windroc-bot[bot]) replaces the gh login as B's PR author; `user` then holds only
-`users` other than it and any [bot], never the gh login; and `push` is whether a dry-run push of B
-reaches origin with git's credentials, permissions unread (an App token gets them all false).
+ENSEMBLE_USERS replaces `users`. ENSEMBLE_PR_AUTHOR (an App bot) replaces the gh login as B's PR
+author; `push` is then whether a dry-run push succeeds.
 
-SLUG: 1-100 of [A-Za-z0-9._-], default B with / → -. REPO is `owner/name`, `host/owner/name`,
-`https://host/owner/name` or a local clone's path (/ or ~), named by its origin and outside the temp
-dirs. A local clone gets a git worktree after a fetch that moves only `origin/*`; any other REPO a
-blobless clone. Symlinks: the core config's trusted_dirs comment. B: the local B, else tracking
-origin/B, else new from origin/BASE (origin/<default> when BASE is omitted). Each option may be
-given once, so a command pre-approved by its `--dir` prefix can't be redirected elsewhere by a
-second `--dir`. Exits 2 when REPO, B or SLUG is invalid or unusable (B the default branch or checked
-out elsewhere), or BASE syntax is invalid. Exits 1 on other failures, including a missing
-origin/BASE. Errors mask URL userinfo.
+SLUG: 1-100 of [A-Za-z0-9._-], default B with / → -. REPO: owner/name, host/owner/name,
+https://host/owner/name, or a local clone's path outside the temp dirs (a worktree; else a blobless
+clone). B: local B, else origin/B, else new from origin/BASE. Each option once. Exit 2: REPO, B,
+SLUG or BASE invalid or unusable; 1: other failures.
 """
 
 import argparse
@@ -53,6 +42,7 @@ from ensemble.utils import (
     check_slug,
     checkout,
     err_text,
+    gh_denied,
     origin,
     redact,
     resolve,
@@ -89,9 +79,8 @@ def gh_json(run: Runner, argv: list[str]):
 def info(repo: Repo, *, run: Runner, app: bool = False) -> tuple[bool | None, str]:
     res = run(["gh", "api", "--hostname", repo.host, f"repos/{repo.owner}/{repo.name}"], SHORT)
     if res.returncode != 0:
-        code = re.search(r"HTTP (\d{3})", res.stderr or "")
-        if code and code.group(1) in ("403", "404"):
-            raise Invalid(f"{repo.slug}: not found or no access (HTTP {code.group(1)})")
+        if code := gh_denied(res, run=run, host=repo.host):
+            raise Invalid(f"{repo.slug}: not found or no access (HTTP {code})")
         raise RepoCommandError(f"gh api: {err_text(res)}")
     try:
         data = json.loads(res.stdout)
@@ -132,7 +121,7 @@ def place(repo: Repo, base: str, clone: str | None, slug: str, *, run: Runner) -
 
 def clone_repo(repo: Repo, wt: str, *, run: Runner) -> None:
     os.makedirs(os.path.dirname(wt), exist_ok=True)
-    # The repo is untrusted: no symlinks that could point outside the checkout.
+    # untrusted repo: no symlinks out of the checkout
     res = run(
         [
             "gh",
@@ -157,7 +146,7 @@ def check_branch(branch: str) -> None:
 
 
 def app_push(wt: str, branch: str, *, run: Runner) -> bool:
-    """Whether a dry-run push connects; GitHub refuses it without the App installed."""
+    """Whether a dry-run push connects; GitHub refuses it without the App."""
     refspec = f"HEAD:refs/heads/{branch}"
     res = run(
         ["git", "-C", wt, "push", "--dry-run", "--no-verify", "--porcelain", "origin", refspec],
@@ -194,7 +183,7 @@ def worktree(
     base_branch: str | None = None,
     author: str | None = None,
 ) -> dict:
-    # A local clone in a temp dir is refused: prune treats clones there as untrusted.
+    # prune treats clones in temp dirs as untrusted
     check_branch(branch)
     slug = check_slug(slug, branch)
     repo, clone = resolve(spec, run=run)
@@ -227,8 +216,7 @@ def worktree(
     if not isinstance(onto, str) or not BRANCH.fullmatch(onto):
         raise Invalid(f"unsafe base branch name {str(onto)[:80]!r}")
     add = clone is not None and not exists
-    # An explicit refspec without the configured map: a mirror-style remote.origin.fetch can't move
-    # local branches.
+    # explicit refspec: a mirror-style remote.origin.fetch can't move local branches
     if exists:
         git(wt, *FETCH, run=run, timeout=LONG)
     elif clone is not None:
@@ -249,8 +237,8 @@ def worktree(
             opts, start = ["--no-track", "-b", branch], f"origin/{onto}"
         if clone is not None and not exists:
             os.makedirs(os.path.dirname(wt), exist_ok=True)
-            # core.symlinks per worktree, so the clone's own checkout keeps its config. --force re-adds
-            # our own path when it was deleted by hand but is still registered.
+            # core.symlinks per worktree keeps the clone's config; --force re-adds a hand-deleted,
+            # still-registered path
             if (
                 run(
                     ["git", "-C", clone, "config", "--get", "extensions.worktreeConfig"], SHORT
@@ -392,7 +380,7 @@ def status(
     if pr:
         merged = mine[0].get("mergeCommit")
         oid = merged.get("oid") if isinstance(merged, dict) else None
-        # merging puts B's commits on origin/<base>: exclude <base> only as it was before the merge
+        # merging puts B's commits on origin/<base>: exclude the pre-merge <base>
         off = f"{oid}^1" if isinstance(oid, str) and SHA.fullmatch(oid) else f"origin/{onto}"
         since = git(
             wt,

@@ -22,6 +22,11 @@ from tests.orchestrator.unit.target_fixtures import FakeRun, api, ok
 PROJ = "121166b1-191a-4461-bec4-42f1c2dc0ddd"
 
 NO_LINE = target.Invalid("no Repo: line in the description or its ## Instructions")
+LIMITS = ("gh", "api", "--hostname", "github.com", "rate_limit")
+
+
+def limits(remaining):
+    return ok(json.dumps({"resources": {"core": {"limit": 5000, "remaining": remaining}}}))
 
 
 def roles():
@@ -237,10 +242,11 @@ class TargetValidation(Case):
         title="ENG: Session Registry",
         **over,
     ):
-        t = {"api": api(), "local": ok(""), "remote": ok("")}
+        t = {"api": api(), "limits": limits(4999), "local": ok(""), "remote": ok("")}
         t.update(over)
         self.run_ = FakeRun(
             [
+                (LIMITS, t["limits"]),
                 (("gh", "api"), t["api"]),
                 (LOCAL, t["local"]),
                 (("git", "-c", "credential.helper="), t["remote"]),
@@ -483,6 +489,13 @@ class TargetValidation(Case):
             return api(default=name, push=True)
 
         unsafe = target.Invalid("acme/ensemble: unsafe default branch name")
+        primary = (
+            "gh: API rate limit exceeded for user ID 1234. If you reach out to GitHub Support for"
+            " help, please include the request ID ABCD and timestamp 2026-11-15 15:38:00 UTC."
+            " (HTTP 403)"
+        )
+        secondary = "gh: You have exceeded a secondary rate limit. Please wait. (HTTP 403)"
+        asked_limits = ("HTTP 403", "HTTP 403, no core requests left")
         for label, res, want, tagged in (
             (
                 "HTTP 404",
@@ -495,6 +508,30 @@ class TargetValidation(Case):
                 ok(code=1, stderr="gh: Forbidden (HTTP 403)"),
                 target.Invalid("acme/ensemble: not found or no access (HTTP 403)"),
                 True,
+            ),
+            (
+                "HTTP 403, no core requests left",
+                ok(code=1, stderr="gh: Forbidden (HTTP 403)"),
+                target.Transient("gh api repos/acme/ensemble: gh: Forbidden (HTTP 403)"),
+                False,
+            ),
+            (
+                "primary rate limit",
+                ok(code=1, stderr=primary),
+                target.Transient(f"gh api repos/acme/ensemble: {primary}"),
+                False,
+            ),
+            (
+                "secondary rate limit",
+                ok(code=1, stderr=secondary),
+                target.Transient(f"gh api repos/acme/ensemble: {secondary}"),
+                False,
+            ),
+            (
+                "HTTP 429",
+                ok(code=1, stderr="gh: Too Many Requests (HTTP 429)"),
+                target.Transient("gh api repos/acme/ensemble: gh: Too Many Requests (HTTP 429)"),
+                False,
             ),
             (
                 "HTTP 502",
@@ -536,12 +573,18 @@ class TargetValidation(Case):
             for issue_label, extra, prefix in self.ISSUES:
                 with self.subTest(label, issue=issue_label):
                     self.assertEqual(
-                        self.check(api=res, **extra),
+                        self.check(
+                            api=res, limits=limits(0 if "no core" in label else 4999), **extra
+                        ),
                         target.Invalid(prefix + want.reason, mapped=bool(prefix))
                         if tagged
                         else want,
                     )
-                    self.assertEqual(self.argvs(), [("gh", "api", "repos/acme/ensemble")])
+                    self.assertEqual(
+                        self.argvs(),
+                        [("gh", "api", "repos/acme/ensemble")]
+                        + ([LIMITS] if label in asked_limits else []),
+                    )
 
     def test_unusable_response_is_transient(self):
         good = {
