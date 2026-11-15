@@ -7,12 +7,11 @@ worktree prints {"repo", "host", "default", "branch", "commit", "worktree", "per
 "push"}. status prints {"pr", "base", "plan_docs", "since", "user", "others"}: `pr` B's PR
 {"number", "url", "state", "baseRefName", "isDraft"} or null; `base` its baseRefName, else BASE,
 else the default branch; `user` and `others` PR comments and reviews by the user (`users`, else the
-gh login unless it is a bot) and by others since B's latest own commit not on origin/<base>, all when none;
+gh login) and by others since B's latest own commit not on origin/<base>, all when none;
 `plan_docs` B's updraft plan docs {"path", "phase"}, newest last.
 
 ENSEMBLE_USERS replaces `users`. ENSEMBLE_PR_AUTHOR (an App bot) replaces the gh login as B's PR
-author. Under an App bot, given or a gh login, `users` never holds bots and [] names no one; under an
-App installation token or ENSEMBLE_PR_AUTHOR, `push` is whether a dry-run push succeeds.
+author. A bot drops bots from `users`, [] is no one; an App token's `push` is a dry-run push's.
 
 SLUG: 1-100 of [A-Za-z0-9._-], default B with / → -. REPO: owner/name, host/owner/name,
 https://host/owner/name, or a local clone's path outside the temp dirs (a worktree; else a blobless
@@ -95,8 +94,6 @@ def info(repo: Repo, *, run: Runner, app: bool = False) -> tuple[bool | None, st
 
 
 def _installation(permissions) -> bool:
-    """Whether a token gets the repo as a GitHub App installation does: every permission false, pull
-    included, which no user who can read the repo gets."""
     return isinstance(permissions, dict) and "pull" in permissions and not any(permissions.values())
 
 
@@ -332,7 +329,6 @@ def status(
         raise Invalid(f"{wt} missing: run worktree first")
     docs = plan_docs(wt, branch)
     if author is None:
-        # GraphQL viewer, unlike REST /user, also answers an App installation token: with its bot
         login = gh_json(
             run, ["api", "--hostname", repo.host, "graphql", "-f", "query={viewer{login}}"]
         )
