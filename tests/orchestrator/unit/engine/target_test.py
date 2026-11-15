@@ -23,6 +23,15 @@ PROJ = "121166b1-191a-4461-bec4-42f1c2dc0ddd"
 
 NO_LINE = target.Invalid("no Repo: line in the description or its ## Instructions")
 LIMITS = ("gh", "api", "--hostname", "github.com", "rate_limit")
+INSTALLED = (
+    "gh",
+    "api",
+    "--paginate",
+    "installation/repositories",
+    "--jq",
+    ".repositories[].full_name",
+)
+APP = dict.fromkeys(("admin", "maintain", "pull", "push", "triage"), False)
 
 
 def limits(remaining):
@@ -242,11 +251,18 @@ class TargetValidation(Case):
         title="ENG: Session Registry",
         **over,
     ):
-        t = {"api": api(), "limits": limits(4999), "local": ok(""), "remote": ok("")}
+        t = {
+            "api": api(),
+            "limits": limits(4999),
+            "installed": ok(""),
+            "local": ok(""),
+            "remote": ok(""),
+        }
         t.update(over)
         self.run_ = FakeRun(
             [
                 (LIMITS, t["limits"]),
+                (INSTALLED, t["installed"]),
                 (("gh", "api"), t["api"]),
                 (LOCAL, t["local"]),
                 (("git", "-c", "credential.helper="), t["remote"]),
@@ -585,6 +601,42 @@ class TargetValidation(Case):
                         [("gh", "api", "repos/acme/ensemble")]
                         + ([LIMITS] if label in asked_limits else []),
                     )
+
+    def test_an_installation_token_pushes_where_its_installation_lists_the_repo(self):
+        """An App installation token gets every permission false, on repos outside its
+        installation too; its installation's repository list decides."""
+        app = ok(
+            json.dumps({"full_name": "acme/ensemble", "default_branch": "main", "permissions": APP})
+        )
+        no_push = target.Invalid("acme/ensemble: no push permission")
+        for label, installed, accepted in (
+            ("listed", ok("acme/other\nACME/Ensemble\n"), True),
+            ("not listed", ok("acme/other\n"), False),
+            ("none listed", ok(""), False),
+        ):
+            with self.subTest(label):
+                r = self.check(api=app, installed=installed)
+                if accepted:
+                    self.assertIsInstance(r, target.Target, r)
+                else:
+                    self.assertEqual(r, no_push)
+                self.assertIn(INSTALLED, self.argvs())
+
+    def test_an_installation_listing_failure_is_transient(self):
+        app = ok(
+            json.dumps({"full_name": "acme/ensemble", "default_branch": "main", "permissions": APP})
+        )
+        failed = ok(code=1, stderr="gh: Bad Gateway (HTTP 502)")
+        r = self.check(api=app, installed=failed)
+        self.assertEqual(
+            r, target.Transient("gh api installation/repositories: gh: Bad Gateway (HTTP 502)")
+        )
+
+    def test_a_user_token_never_lists_installation_repositories(self):
+        for push in (True, False):
+            with self.subTest(push=push):
+                self.check(api=api(push=push))
+                self.assertNotIn(INSTALLED, self.argvs())
 
     def test_unusable_response_is_transient(self):
         good = {
