@@ -34,6 +34,7 @@ COMMANDS = (
     "ensemble-session",
     "ensemble-delegate",
     "ensemble-orchestrator",
+    "gh",
 )
 USAGE = "usage: ensemble <name> | ensemble [--force] <name> -- <command> [<arg> ...]"
 FAKE = """#!{python} -I
@@ -754,7 +755,8 @@ class FakeTmux(Case):
                     self.assertEqual((process.returncode, err), (0, ""))
                     self.assertEqual(calls[1][2:], created("s1", self.cwd, "/bin/zsh", selected))
                 else:
-                    target = os.path.join(selected, "bin", name)
+                    home = ("skills", "manage", "scripts") if name == "gh" else ("bin",)
+                    target = os.path.join(selected, *home, name)
                     executable(target, '#!/bin/sh\nprintf "%s\\n" "$0"\n')
                     process, out, err, _ = self.run_ensemble(
                         script=os.path.join(self.installed, name)

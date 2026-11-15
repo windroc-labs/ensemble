@@ -1515,12 +1515,13 @@ class ExecutablePath(Case):
         with mock.patch.dict(os.environ, {**rest, "HOME": home, **env}, clear=True):
             return config.path()
 
-    def test_ensemble_path_then_this_installations_bin_then_the_default(self):
+    def test_ensemble_path_this_installations_bin_the_launchers_then_the_default(self):
         installed = os.path.join(REPO, "bin")
         self.assertTrue(os.path.isfile(os.path.join(installed, "ensemble-orchestrator")))
         for home in (self.home, os.path.join(self.home, "other")):
             default = (
-                f"{installed}:/opt/homebrew/bin:{home}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+                f"{installed}:{home}/.ensemble/bin:/opt/homebrew/bin:{home}/.local/bin:"
+                "/usr/local/bin:/usr/bin:/bin"
             )
             for env, front in (
                 ({"ENSEMBLE_PATH": "/fakes/bin:/more"}, "/fakes/bin:/more:"),
