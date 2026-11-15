@@ -864,6 +864,26 @@ class Worktree(Base):
         self.assertIn("HTTP 404", err)
         self.assertFalse(run.ran("gh", "repo", "clone"))
 
+    def test_a_rate_limit_fails_and_leaves_the_repo_valid(self):
+        limits = ["gh", "api", "--hostname", "github.com", "rate_limit"]
+
+        def core(remaining):
+            return (limits, ok(json.dumps({"resources": {"core": {"remaining": remaining}}})))
+
+        forbidden = "gh: Forbidden (HTTP 403)"
+        for stderr, left, want, shown in (
+            ("gh: API rate limit exceeded for user ID 1. (HTTP 403)", 0, 1, "rate limit exceeded"),
+            ("gh: You have exceeded a secondary rate limit. (HTTP 403)", 4999, 1, "secondary"),
+            ("gh: Too Many Requests (HTTP 429)", 4999, 1, "Too Many Requests"),
+            (forbidden, 0, 1, forbidden),
+            (forbidden, 4999, 2, "not found or no access (HTTP 403)"),
+        ):
+            with self.subTest(stderr=stderr, left=left):
+                (code, _, err), run = self.worktree(core(left), ([*REPO_API], fail(stderr)))
+                self.assertEqual(code, want, err)
+                self.assertIn(shown, err)
+                self.assertFalse(run.ran("gh", "repo", "clone"))
+
     def test_a_token_in_git_output_is_redacted(self):
         token = fail("fatal: could not read Password for 'https://TOK@github.com'")
         (code, _, err), _ = self.worktree(self.existing(), info(), (lambda a: "fetch" in a, token))

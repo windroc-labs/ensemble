@@ -53,6 +53,7 @@ from ensemble.utils import (
     check_slug,
     checkout,
     err_text,
+    gh_denied,
     origin,
     redact,
     resolve,
@@ -89,9 +90,8 @@ def gh_json(run: Runner, argv: list[str]):
 def info(repo: Repo, *, run: Runner, app: bool = False) -> tuple[bool | None, str]:
     res = run(["gh", "api", "--hostname", repo.host, f"repos/{repo.owner}/{repo.name}"], SHORT)
     if res.returncode != 0:
-        code = re.search(r"HTTP (\d{3})", res.stderr or "")
-        if code and code.group(1) in ("403", "404"):
-            raise Invalid(f"{repo.slug}: not found or no access (HTTP {code.group(1)})")
+        if code := gh_denied(res, run=run, host=repo.host):
+            raise Invalid(f"{repo.slug}: not found or no access (HTTP {code})")
         raise RepoCommandError(f"gh api: {err_text(res)}")
     try:
         data = json.loads(res.stdout)
