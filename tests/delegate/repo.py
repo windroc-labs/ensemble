@@ -77,7 +77,14 @@ def info(*, push=True, default="main"):
 HEAD = (lambda a: a[3:] == ["rev-parse", "HEAD"], ok(SHA + "\n"))
 
 
-LOGIN = (["gh", "api", "--hostname", "github.com", "user"], ok('{"login": "me"}'))
+VIEWER = ("gh", "api", "--hostname", "github.com", "graphql", "-f", "query={viewer{login}}")
+
+
+def viewer(login):
+    return ([*VIEWER], ok(json.dumps({"data": {"viewer": {"login": login}}})))
+
+
+LOGIN = viewer("me")
 
 
 NO_FEEDBACK = (lambda a: "--paginate" in a, ok("[[]]"))

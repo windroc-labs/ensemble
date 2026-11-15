@@ -17,6 +17,7 @@ from tests.delegate.repo import (
     PROCESS_ERRORS,
     REPO_API,
     SHA,
+    VIEWER,
     Base,
     Fake,
     done,
@@ -26,6 +27,7 @@ from tests.delegate.repo import (
     pr,
     pr_list,
     repo,
+    viewer,
 )
 from tests.utils.sandbox import scratch
 
@@ -324,6 +326,40 @@ class Status(Base):
                     [e["body"] for e in r["others"]],
                     [c["body"] for c in comments[0] if c["body"] not in want],
                 )
+                self.assertFalse(run.ran(*VIEWER))
+
+    def test_a_bot_gh_login_is_the_pr_author_and_never_the_user(self):
+        """A GitHub App installation token's gh login is its bot; users = [] then names no one."""
+        comments = [
+            [
+                {"created_at": f"2026-10-03T0{i}:00:00Z", "user": {"login": login}, "body": login}
+                for i, login in enumerate(("host-bot[bot]", "alice", "helper[bot]"))
+            ]
+        ]
+        bot = {**pr(), "author": {"is_bot": True, "login": "app/host-bot"}}
+        for users, want in (
+            ('users = ["alice", "host-bot[bot]"]\n', ["alice"]),
+            ("users = []\n", []),
+        ):
+            with self.subTest(users=users):
+                run = Fake(
+                    [
+                        self.existing(),
+                        viewer("host-bot[bot]"),
+                        pr_list([{**pr(), "number": 9, "url": "u9"}, bot]),
+                        (lambda a: a[-1].endswith("/issues/7/comments"), ok(json.dumps(comments))),
+                        NO_FEEDBACK,
+                    ]
+                )
+                code, out, err = self.main(
+                    ["status", "o/n", "--branch", "TASK-1-x", "--dir", self.dir],
+                    run,
+                    self.config(users),
+                )
+                self.assertEqual(code, 0, err)
+                r = json.loads(out)
+                self.assertEqual(r["pr"]["number"], 7, r)
+                self.assertEqual([e["body"] for e in r["user"]], want)
                 self.assertFalse(run.ran("gh", "api", "--hostname", "github.com", "user"))
 
     def test_without_a_pr_the_app_reads_the_default_branch_without_permissions(self):
@@ -350,7 +386,7 @@ class Status(Base):
         self.assertEqual((code, r["pr"]["number"]), (0, 7), r)
         self.assertEqual([e["body"] for e in r["user"]], ["alice"])
         self.assertEqual([e["body"] for e in r["others"]], ["bob"])
-        self.assertTrue(run.ran("gh", "api", "--hostname", "github.com", "user"))
+        self.assertTrue(run.ran(*VIEWER))
 
     def test_other_branches_plan_docs_and_no_pr(self):
         self.plan_doc(branch="other")
@@ -724,6 +760,14 @@ class Worktree(Base):
                 )
                 self.assertEqual(run.timeout("git", "-C", self.wt, "push"), repo.SHORT)
                 shutil.rmtree(self.wt)
+
+    def test_an_installation_token_without_the_pr_author_pushes_by_dry_run(self):
+        """Every permission false, pull included, is an App installation token on the host."""
+        none = dict.fromkeys(("admin", "maintain", "pull", "push", "triage"), False)
+        data = {"permissions": none, "default_branch": "main"}
+        (code, out, err), run = self.worktree(([*REPO_API], ok(json.dumps(data))))
+        self.assertEqual((code, json.loads(out)["push"]), (0, True), err)
+        self.assertTrue(any(dry_push(c) for c in run.calls))
 
     def test_a_rejected_ref_still_shows_the_app_can_push(self):
         rejected = done(

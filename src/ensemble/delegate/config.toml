@@ -31,7 +31,7 @@
 #                   session is not shown at its start or on resume. A worker has no tmux session, so
 #                   `tmux attach -t {{session}}` no longer works; run its status's attach command instead:
 #                   tmux split-window "$(ensemble-session status {{session}} | jq -r .attach)"
-#   users           local, global only: GitHub logins whose PR comments are the user's; [] → the gh login
+#   users           local, global only: GitHub logins whose PR comments are the user's; [] → the gh login unless it is a bot
 #                   (ENSEMBLE_USERS replaces it; with ENSEMBLE_PR_AUTHOR set, [] → no one: team/tools/repo.py)
 #   trusted_dirs    local, global only: dirs you trust (absolute or ~ path, matched by real path); [] → none. A cwd
 #                   that is one or under one loads its project settings; any other, user settings only, with a stderr
