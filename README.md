@@ -85,13 +85,10 @@ Delete the PEM after import. [Credential rotation](docs/upgrading.md#credential-
 
 The manager, harness, local workers and board jobs on your Mac can call `gh`, and git over https, as a GitHub App
 of their own instead of your user. That App's API quota is separate from your user's and the Docker workers' App.
-`~/.ensemble/bin/gh`, which the installer puts ahead of Homebrew's gh, runs gh unchanged until you switch it on.
-Once on, it runs the real gh as a child and has the broker put a new App token into gh's keyring before the last
-is 50 minutes old, before and while gh runs, so a long `gh pr checks --watch` keeps working. It refuses to run
-with `GH_TOKEN` or `GITHUB_TOKEN` set, with a token in gh's plain-text `hosts.yml`, or with a gh other than the
-version its keyring behaviour was verified with (`brew pin gh` keeps Homebrew from upgrading it).
+The installer puts `~/.ensemble/bin/gh` ahead of Homebrew's gh. The switch is the directory `~/.ensemble/host-gh`:
+while it is missing, host App mode is off and that gh runs the real one unchanged, as whoever gh is logged in as.
 
-One-time steps, by hand:
+One-time setup, by hand:
 
 1. Keep every repository the host works on under one owner, so one installation serves them all: transfer
    documentation repositories there, and update output settings that name the old owner.
@@ -109,15 +106,32 @@ One-time steps, by hand:
    done
    ```
 
-5. `brew pin gh`. In `~/.ensemble/config.local.toml`, set `[delegate] users` to your GitHub login: the gh login
-   is now the App's bot, which never counts as you.
-6. Switch on: `mkdir -m 700 ~/.ensemble/host-gh`, run `gh api rate_limit` (the first refresh logs gh in as the App),
-   then `gh auth logout --hostname github.com --user <your user>` to drop the old login.
-7. Check: in a new login shell `command -v gh` prints `~/.ensemble/bin/gh`, and
+5. `brew pin gh`. In `~/.ensemble/config.local.toml`, set `[delegate] users` to your GitHub login: while host App
+   mode is on, the gh login is the App's bot, which never counts as you.
+6. Check: in a new login shell `command -v gh` prints `~/.ensemble/bin/gh`, and
    `git config --global --get-all credential.https://github.com.helper` prints an empty line and
    `!gh auth git-credential`.
 
-Switch off with `rm -r ~/.ensemble/host-gh`, then `gh auth login`. PRs and pushes then come from your user again.
+**Switch on**: `mkdir -m 700 ~/.ensemble/host-gh`, then run `gh api rate_limit`: its first refresh logs gh in as
+the App. Then drop your own login, so nothing falls back to it:
+`gh auth logout --hostname github.com --user <your user>`.
+
+**While on**, for every gh call that finds `~/.ensemble/bin/gh` first on PATH, and git over https to GitHub:
+
+- They act as the App's bot (`<app>[bot]`), which opens the PRs, pushes and comments. Docker workers keep their
+  own App.
+- The wrapper runs the real gh as a child. Before the call, and every minute while it runs, it has the broker put a
+  new App token into gh's keyring over stdin once the last is 50 minutes old; a token lasts an hour. gh rereads the
+  keyring on every request, so a long `gh pr checks --watch` keeps working.
+- A failed refresh prints a `gh (ensemble):` warning, and gh goes on with the current token; once that has expired,
+  the call fails instead.
+- The wrapper refuses to run with `GH_TOKEN` or `GITHUB_TOKEN` set, with a token in gh's plain-text `hosts.yml`, or
+  with a gh other than the version its keyring behaviour was verified with.
+- Calls that need a user fail: `gh api user` returns 403.
+
+**Switch off**: `rm -r ~/.ensemble/host-gh`, then `gh auth login` as your user. From the next call the wrapper runs
+gh unchanged on whatever account gh is logged in as; until you log in, that is the App with its last token, which
+expires within the hour. PRs and pushes then come from your user again.
 
 <a id="quick-start"></a>
 ## Quick start
