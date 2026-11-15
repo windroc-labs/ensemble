@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -9,13 +10,13 @@ import jsonschema
 
 from ensemble.manager import rearm
 from ensemble.manager.engine.managers import (
-    alive,
     managers,
     plan,
     read,
     read_record,
     resume_target,
     roster,
+    running,
     write_record,
 )
 from ensemble.manager.engine.roster import Roster
@@ -41,6 +42,16 @@ LIVE, DEAD = 4101, 4102
 def _kill(pid: int, _signal: int) -> None:
     if pid != LIVE:
         raise ProcessLookupError(pid)
+
+
+def _ps(etime: str | None) -> CompletedProcess:
+    """ps -o etime= for a process running etime ([[dd-]hh:]mm:ss); None: ps finds none."""
+    return CompletedProcess((), 1, "", "") if etime is None else CompletedProcess((), 0, etime, "")
+
+
+def _age(path: str, seconds: int) -> None:
+    then = time.time() - seconds
+    os.utime(path, (then, then))
 
 
 class RosterLookupTest(RosterCase):
@@ -119,19 +130,66 @@ class ReadTest(RosterCase):
         super().setUp()
         self.live()
         self.enterContext(mock.patch("os.kill", side_effect=_kill))
+        self.ps = self.enterContext(mock.patch("subprocess.run", return_value=_ps(None)))
+        self.path = os.path.join(self.directory, "session.json")
 
     def write_record(self, pid: int) -> SessionRecord:
         record = {**session_records.VALID["claude"], "pid": pid}
-        Path(self.directory, "session.json").write_text(json.dumps(record))
+        Path(self.path).write_text(json.dumps(record))
         return SessionRecord(**record)
 
-    def test_alive(self):
-        self.assertTrue(alive(LIVE))
-        self.assertFalse(alive(DEAD))
+    def test_running_needs_a_live_pid(self):
+        self.ps.return_value = _ps("05:00:00")
+        self.assertTrue(running(self.directory, self.write_record(LIVE)))
+        self.assertFalse(running(self.directory, self.write_record(DEAD)))
         with mock.patch("os.kill", side_effect=PermissionError):
-            self.assertTrue(alive(1))
+            self.assertTrue(running(self.directory, self.write_record(1)))
         with mock.patch("os.kill", side_effect=OverflowError):
-            self.assertFalse(alive(1 << 31))
+            self.assertFalse(running(self.directory, self.write_record(1 << 31)))
+        probes = [call.args[0] for call in self.ps.call_args_list]
+        self.assertEqual(probes, [("ps", "-o", "etime=", "-p", str(pid)) for pid in (LIVE, 1)])
+
+    def test_a_process_started_after_the_record_was_written_is_not_its_client(self):
+        record = self.write_record(LIVE)
+        _age(self.path, 3600)
+        for etime in ("10:00", "59:30", "00:00"):
+            with self.subTest(etime=etime):
+                self.ps.return_value = _ps(etime)
+                self.assertFalse(running(self.directory, record))
+        for etime in ("59:59", "01:00:00", "1-00:00:00", "12-03:04:05", "01:00:02"):
+            with self.subTest(etime=etime):
+                self.ps.return_value = _ps(etime)
+                self.assertTrue(running(self.directory, record))
+
+    def test_an_unknown_start_keeps_a_live_pid_running(self):
+        record = self.write_record(LIVE)
+        _age(self.path, 3600)
+        answers = (
+            _ps(None),
+            _ps(""),
+            _ps("garbage"),
+            _ps("1:2:3:4"),
+            OSError("no ps"),
+            TimeoutExpired("ps", 2),
+        )
+        for answer in answers:
+            with self.subTest(answer=answer):
+                self.ps.side_effect = answer if isinstance(answer, Exception) else None
+                self.ps.return_value = answer
+                self.assertTrue(running(self.directory, record))
+        self.ps.side_effect = None
+        self.ps.return_value = _ps("10:00")
+        os.unlink(self.path)
+        self.assertTrue(running(self.directory, record))
+
+    def test_a_reused_pid_leaves_its_manager_hold_only(self):
+        self.write_record(LIVE)
+        _age(self.path, 3600)
+        self.ps.return_value = _ps("10:00")
+        with Roster(self.directory).hold("owner"):
+            self.assertEqual(read(self.directory).state, HolderState.HOLD_ONLY)
+            self.ps.return_value = _ps("02:00:00")
+            self.assertEqual(read(self.directory).state, HolderState.CLIENT_RUNNING)
 
     def test_a_pid_beyond_any_process_is_hold_only(self):
         self.write_record(1 << 31)
@@ -304,11 +362,22 @@ class ResumeTargetTest(RosterCase):
         self.cwd = os.path.join(self.home, "pro'ject \x15 $x")
         os.mkdir(self.cwd)
         self.enterContext(mock.patch("os.kill", side_effect=_kill))
-        self.run = self.enterContext(mock.patch("subprocess.run"))
+        self.ps = _ps(None)
+        self.run = self.enterContext(mock.patch("subprocess.run", side_effect=self.dispatch))
         self.answer('["kind-a", "--resume", "s-1"]')
 
+    def dispatch(self, command, **_options):
+        if command[0] == "ps":
+            return self.ps
+        if isinstance(self.resumed, Exception):
+            raise self.resumed
+        return self.resumed
+
     def answer(self, stdout, returncode=0, stderr=""):
-        self.run.return_value = CompletedProcess((), returncode, stdout, stderr)
+        self.resumed = CompletedProcess((), returncode, stdout, stderr)
+
+    def resume_calls(self):
+        return [call for call in self.run.call_args_list if call.args[0][0] != "ps"]
 
     def write(self, **fields):
         record = {"client": "kind-a", "sid": "s-1", "pid": DEAD, "cwd": self.cwd, **fields}
@@ -338,7 +407,15 @@ class ResumeTargetTest(RosterCase):
     def test_a_live_recorded_client_is_refused(self):
         self.write(pid=LIVE)
         self.refused(f"its client {LIVE} still runs")
-        self.run.assert_not_called()
+        self.assertEqual(self.resume_calls(), [])
+
+    def test_a_process_that_reused_the_recorded_pid_is_resumed_past(self):
+        self.write(pid=LIVE)
+        _age(os.path.join(self.directory, "session.json"), 3600)
+        self.ps = _ps("10:00")
+        self.assertEqual(resume_target(self.directory)[1], ("kind-a", "--resume", "s-1"))
+        self.ps = _ps("02:00:00")
+        self.refused(f"its client {LIVE} still runs")
 
     def test_a_cwd_that_is_no_directory_is_refused_printably(self):
         self.write(cwd="/absent/\x1b[2Jdir")
@@ -360,7 +437,7 @@ class ResumeTargetTest(RosterCase):
                 self.refused(f"cannot resume its kind-a session: .*{pattern}")
         for error in (TimeoutExpired((), 30), OSError("no ensemble-session")):
             with self.subTest(error=error):
-                self.run.side_effect = error
+                self.resumed = error
                 self.refused("cannot resume its kind-a session")
 
 

@@ -22,6 +22,7 @@ from ensemble.manager.ensemble_command import main
 from ensemble.utils import Record
 from tests.manager.cli_case import CliCase
 from tests.manager.roster_case import mark
+from tests.utils.process_fixtures import CompletedProcess
 
 TAKEOVER = (
     "only the user takes over, on purpose:"
@@ -200,7 +201,11 @@ class ListTest(ListCase):
     def test_a_held_manager_shows_its_state(self):
         roster = self.manager("demo")
         self.session("demo", pid=4101)
-        with roster.hold("owner"), mock.patch("os.kill"):
+        with (
+            roster.hold("owner"),
+            mock.patch("os.kill"),
+            mock.patch("subprocess.run", return_value=CompletedProcess((), 0, "1-00:00:00", "")),
+        ):
             self.assertEqual(
                 self.invoke("list")[1].splitlines()[0],
                 "demo\tclient-running\tkind-a\t/home/user/project",
@@ -289,10 +294,12 @@ class _InterruptedFlush(io.StringIO):
 class SelectTest(ListCase):
     PROMPT = "select a manager [1-{}], Enter cancels: "
 
-    def select(self, answers, *, kill=_dead):
+    def select(self, answers, *, kill=_dead, etime=""):
+        """etime: ps's elapsed time of the process at the recorded pid; empty: ps finds none."""
         with (
             mock.patch("sys.stdin", io.StringIO(answers)),
             mock.patch("os.kill", side_effect=kill),
+            mock.patch("subprocess.run", return_value=CompletedProcess((), 0, etime, "")),
         ):
             return self.invoke("list", "--select")
 
@@ -379,6 +386,15 @@ class SelectTest(ListCase):
         result, stdout, stderr = self.select("1\n")
         self.assertEqual((result, stdout), (1, ""))
         self.assertTrue(stderr.endswith(refused.format(f"{lock}: not a regular file")))
+
+    def test_a_process_that_reused_the_recorded_pid_is_not_its_client(self):
+        self.manager("demo")
+        self.session("demo")
+        path = os.path.join(self.root, "demo", "session.json")
+        then = time.time() - 3600
+        os.utime(path, (then, then))
+        self.assertEqual(self.select("1\n", kill=None, etime="10:00")[:2], (0, "resume-new demo\n"))
+        self.assertEqual(self.select("1\n", kill=None, etime="02:00:00")[:2][0], 1)
 
     def test_an_unreadable_record_warns_and_opens_without_resuming(self):
         self.manager("demo")
@@ -486,6 +502,15 @@ class MenuTest(ListCase):
         self.assertIn("\r\x1b[K" + self.PROMPT.format(3) + "alpha", shown)
         self.assertIn("\r\x1b[K" + self.PROMPT.format(3) + "demo", shown)
         self.assertNotIn("^[", shown)
+
+    def test_a_name_that_fits_shows_whole(self):
+        prompt = self.PROMPT.format(3)
+        for spare in (0, 2):
+            with self.subTest(spare=spare):
+                columns = len(prompt) + 1 + len("alpha") + spare
+                result, _, shown = self.menu(b"\x1b[B", b"\r", columns=columns)
+                self.assertEqual(result, 0)
+                self.assertIn(f"\r\x1b[K{prompt}alpha\r\n", shown)
 
     def test_a_narrow_terminal_shows_the_end_of_the_line_that_fits(self):
         prompt = self.PROMPT.format(3)

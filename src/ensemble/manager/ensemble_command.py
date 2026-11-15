@@ -147,7 +147,7 @@ def _show(prompt: str, text: str) -> None:
     except (OSError, ValueError):
         columns = 0
     if columns:  # 0: the width is unknown
-        text = text[len(text) - max(columns - len(prompt) - 1, 0) :]
+        text = text[max(len(text) - max(columns - len(prompt) - 1, 0), 0) :]
     print(f"\r\x1b[K{prompt}{text}", end="", file=sys.stderr, flush=True)
 
 
@@ -204,7 +204,8 @@ def _select(manager: Manager | Unreadable) -> int:
             f"ensemble: manager {manager.name}: {record.error}; its session is not resumed",
             file=sys.stderr,
         )
-    live = isinstance(record, SessionRecord) and managers.alive(record.pid)
+    directory = os.path.join(os.path.expanduser(managers.ROOT), manager.name)
+    live = isinstance(record, SessionRecord) and managers.running(directory, record)
     plan = managers.plan(manager, live=live)
     if isinstance(plan, Refused):
         print(
