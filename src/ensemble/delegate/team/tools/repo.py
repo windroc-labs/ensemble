@@ -11,7 +11,7 @@ gh login) and by others since B's latest own commit not on origin/<base>, all wh
 `plan_docs` B's updraft plan docs {"path", "phase"}, newest last.
 
 ENSEMBLE_USERS replaces `users`. ENSEMBLE_PR_AUTHOR (an App bot) replaces the gh login as B's PR
-author; `push` is then whether a dry-run push succeeds.
+author. A bot drops bots from `users`, [] is no one; an App token's `push` is a dry-run push's.
 
 SLUG: 1-100 of [A-Za-z0-9._-], default B with / → -. REPO: owner/name, host/owner/name,
 https://host/owner/name, or a local clone's path outside the temp dirs (a worktree; else a blobless
@@ -84,13 +84,17 @@ def info(repo: Repo, *, run: Runner, app: bool = False) -> tuple[bool | None, st
         raise RepoCommandError(f"gh api: {err_text(res)}")
     try:
         data = json.loads(res.stdout)
-        push = None if app else data["permissions"]["push"]
+        push = None if app or _installation(data["permissions"]) else data["permissions"]["push"]
         default = data["default_branch"]
     except (ValueError, KeyError, TypeError) as e:
         raise RepoCommandError(f"gh api repos/{repo.owner}/{repo.name}: {e!r}") from None
-    if not (app or isinstance(push, bool)) or not isinstance(default, str):
+    if not (push is None or isinstance(push, bool)) or not isinstance(default, str):
         raise RepoCommandError(f"gh api repos/{repo.owner}/{repo.name}: invalid repository fields")
     return push, default
+
+
+def _installation(permissions) -> bool:
+    return isinstance(permissions, dict) and "pull" in permissions and not any(permissions.values())
 
 
 def place(repo: Repo, base: str, clone: str | None, slug: str, *, run: Runner) -> tuple[str, bool]:
@@ -325,16 +329,16 @@ def status(
         raise Invalid(f"{wt} missing: run worktree first")
     docs = plan_docs(wt, branch)
     if author is None:
-        account = gh_json(run, ["api", "--hostname", repo.host, "user"])
-        if (
-            not isinstance(account, dict)
-            or not isinstance(account.get("login"), str)
-            or not account["login"]
-        ):
-            raise RepoCommandError("gh api user: expected a login")
-        login = account["login"]
+        login = gh_json(
+            run, ["api", "--hostname", repo.host, "graphql", "-f", "query={viewer{login}}"]
+        )
+        for key in ("data", "viewer", "login"):
+            login = login.get(key) if isinstance(login, dict) else None
+        if not isinstance(login, str) or not login:
+            raise RepoCommandError("gh api graphql viewer: expected a login")
     else:
         login = author
+    bot = login.endswith("[bot]")
     # gh names a bot author app/<slug>; the REST API, as ENSEMBLE_PR_AUTHOR does, <slug>[bot]
     by = f"app/{login.removesuffix('[bot]')}" if login.endswith("[bot]") else login
     rows = gh_json(
@@ -357,7 +361,7 @@ def status(
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise RepoCommandError("gh pr list: expected pull request objects")
     mine = [r for r in rows if r.get("isCrossRepository") is False and _author(r, "author") == by]
-    if author is not None:
+    if bot:
         named = {u.lower() for u in users or ()}
         by_user = {u for u in named if not u.endswith("[bot]")} - {login.lower()}
     else:

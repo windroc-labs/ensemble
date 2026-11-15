@@ -177,11 +177,14 @@ def tui_name(role, issue, sid):
 
 def path():
     """The PATH the router, promote and their tools and runs get, read at call: ENSEMBLE_PATH (if
-    set), this installation's bin/ (ensemble-orchestrator, the harness's write-back callback), then the
-    default dirs.
+    set), this installation's bin/ (ensemble-orchestrator, the harness's write-back callback), the
+    launchers in ~/.ensemble/bin (its gh ahead of Homebrew's), then the default dirs.
     """
     [root] = utils.module_roots(types)
-    default = f"/opt/homebrew/bin:{os.path.expanduser('~/.local/bin')}:/usr/local/bin:/usr/bin:/bin"
+    home = os.path.expanduser("~")
+    default = (
+        f"{home}/.ensemble/bin:/opt/homebrew/bin:{home}/.local/bin:/usr/local/bin:/usr/bin:/bin"
+    )
     found = os.path.join(os.path.dirname(root), "bin")
     return ":".join(p for p in (os.environ.get("ENSEMBLE_PATH"), found, default) if p)
 

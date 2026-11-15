@@ -15,7 +15,7 @@ const RetrustCommand = InstalledPath + " retrust"
 
 // retrustServices are the services retrust covers, every KeychainServices entry in its order; envServicePrefix
 // stands for each ensemble-broker-env/<name> service. Orchestrator-configured Linear services are not among them.
-var retrustServices = []string{tokenService, AppKeyService, usersService, codexService, opencodeService, envServicePrefix,
+var retrustServices = []string{tokenService, AppKeyService, HostAppKeyService, usersService, codexService, opencodeService, envServicePrefix,
 	linearService, linearGrantsService}
 
 // RetrustKeychain is retrust's side of the login keychain: each item's access, its change, and the items by
@@ -146,8 +146,8 @@ func retrustRepair(item retrustItem) string {
 		return "run " + ClaudeLogin(item.account)
 	case item.service == codexService:
 		return "run " + codexLoginCommand
-	case item.service == AppKeyService:
-		return "run ensemble-broker login github " + AppKeyService
+	case item.service == AppKeyService, item.service == HostAppKeyService:
+		return "run ensemble-broker login github " + item.service
 	case item.service == opencodeService:
 		return "run " + opencodeLogin(item.account)
 	case strings.HasPrefix(item.service, envServicePrefix):

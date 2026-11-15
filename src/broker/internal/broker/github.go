@@ -32,6 +32,14 @@ const (
 	tokenDir     = docker.GitHubDir
 )
 
+// HostContainer is host-gh-login's audit consumer: the host's gh, not a container.
+const HostContainer = "host/gh"
+
+// hostPermissions are all the host's gh may do: push, open and merge pull requests, change workflows, and read checks,
+// runs and statuses.
+var hostPermissions = map[string]string{"contents": "write", "pull_requests": "write", "workflows": "write",
+	"checks": "read", "actions": "read", "statuses": "read", "metadata": "read"}
+
 // revocationTimeout bounds each in-command step that must end whatever the caller's context: a rollback's or close's
 // revocations, all on one context, and close's read of the token files.
 var revocationTimeout = 30 * time.Second
@@ -132,7 +140,7 @@ func apiError(err error) *protocol.Error {
 }
 
 func loginError(app string) *protocol.Error {
-	return protocol.New(protocol.LoginRequired, "No usable GitHub App private key "+app+": run ensemble-broker login github "+AppKeyService+".")
+	return protocol.New(protocol.LoginRequired, "No usable GitHub App private key "+app+": run ensemble-broker login github "+app+".")
 }
 
 // writeError is the protocol's account of a token file write that failed, never Docker's stderr.
@@ -303,6 +311,48 @@ func (g GitHub) Refresh(ctx context.Context, _ string, permissions map[string]st
 	return expiries(renewed), nil
 }
 
+// HostLogin issues a token of the host App's only installation, limited to hostPermissions, and gives it to login, the
+// host gh's login, which reads it from the slice; the slice is erased once login returns. A failed login's token is
+// revoked, and the error says whether that failed. The audit gets one refresh line. A replaced host token is never
+// revoked: it expires, as Refresh's do.
+func (g GitHub) HostLogin(ctx context.Context, login func(token []byte) error) (protocol.Expiry, error) {
+	g.Audit.Renewing("")
+	jwt, err := g.jwt(HostAppKeyService)
+	if err != nil {
+		return protocol.Expiry{}, err
+	}
+	installs, err := g.API.Installations(ctx, jwt)
+	if err != nil {
+		return protocol.Expiry{}, redacted(apiError(err), jwt)
+	}
+	if len(installs) != 1 {
+		return protocol.Expiry{}, protocol.New(protocol.GitHubFailed, fmt.Sprintf(
+			"GitHub App %s has %d installations; the host App must have exactly one installation.", HostAppKeyService, len(installs)))
+	}
+	m, err := g.issue(ctx, jwt, installs[0], hostPermissions, HostContainer, audit.Issued)
+	if err != nil {
+		return protocol.Expiry{}, redacted(err, jwt)
+	}
+	token := []byte(m.Token)
+	err = login(token)
+	clear(token)
+	if err == nil {
+		return protocol.Expiry{Account: m.Account, ExpiresAt: m.ExpiresAt}, nil
+	}
+	rctx, cancel := detached(ctx)
+	defer cancel()
+	revoked := "it was revoked"
+	switch rerr := g.API.Revoke(rctx, m.Token); {
+	case rerr == nil, errors.Is(rerr, github.ErrAlreadyInvalid):
+		g.note(HostContainer, audit.Revoked, "", m, nil)
+	default:
+		g.note(HostContainer, audit.Unrevoked, github.Redact(rerr.Error(), m.Token), m, nil)
+		revoked = "it was not revoked and expires at " + m.ExpiresAt
+	}
+	return protocol.Expiry{}, redacted(protocol.New(protocol.GitHubFailed,
+		"Logging the host gh in failed: "+err.Error()+"; "+revoked+"."), m.Token, jwt)
+}
+
 func tokens(list []credential.Material) []string {
 	out := make([]string, 0, len(list))
 	for _, m := range list {
@@ -425,17 +475,17 @@ func installError(repo string, err error) *protocol.Error {
 	return apiError(err)
 }
 
-// SaveUser asks GitHub which App the AppKeyService key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps
-// both, for start to check and report; out gets its one line.
-func (g GitHub) SaveUser(ctx context.Context, out io.Writer) error {
-	rerun := "; rerun ensemble-broker login github " + AppKeyService
-	jwt, err := g.jwt(AppKeyService)
+// SaveUser asks GitHub which App key item app's key is (its slug), looks up its bot user (`<slug>[bot]`) and keeps
+// both under app, for start to check and report; out gets its one line.
+func (g GitHub) SaveUser(ctx context.Context, app string, out io.Writer) error {
+	rerun := "; rerun ensemble-broker login github " + app
+	jwt, err := g.jwt(app)
 	if err != nil {
 		return err
 	}
 	slug, err := g.API.AppSlug(ctx, jwt)
 	if err != nil {
-		return fmt.Errorf("looking up the GitHub App of the %s key failed: %w%s", AppKeyService, err, rerun)
+		return fmt.Errorf("looking up the GitHub App of the %s key failed: %w%s", app, err, rerun)
 	}
 	login := slug + "[bot]"
 	id, err := g.API.BotUser(ctx, login)
@@ -443,7 +493,7 @@ func (g GitHub) SaveUser(ctx context.Context, out io.Writer) error {
 		return fmt.Errorf("looking up GitHub user %s failed: %w%s", login, err, rerun)
 	}
 	data, _ := json.Marshal(botUser{slug, id})
-	if err := g.Keychain.PutSecret(usersService, AppKeyService, data); err != nil {
+	if err := g.Keychain.PutSecret(usersService, app, data); err != nil {
 		return fmt.Errorf("saving the bot user ID of %s failed: %w", slug, err)
 	}
 	_, err = fmt.Fprintf(out, "GitHub App %s bot user %s has ID %d\n", slug, login, id)

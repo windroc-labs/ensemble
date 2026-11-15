@@ -287,6 +287,7 @@ PR = {
     "baseRefName": "main",
     "headRefName": "TASK-7-x",
 }
+VIEWER = ("graphql", "-f", "query={viewer{login}}")
 COMMENT = {"created_at": "2026-10-14T00:00:00Z", "user": {"login": "me"}, "body": "Rename it."}
 LIST = ("--state", "all", "--json", "number,url,headRefName", "--limit", "100")
 
@@ -308,10 +309,13 @@ class Pulls(Case):
         self.assertEqual((res.returncode, res.stderr), (0, ""))
         return json.loads(res.stdout)
 
-    def test_user_is_the_scenarios_login_and_hostname_keeps_the_repo_api(self):
-        for path, want in (("user", {"login": "me"}), ("repos/acme/widgets", REPO)):
+    def test_the_viewer_is_the_scenarios_login_and_hostname_keeps_the_repo_api(self):
+        for path, want in (
+            (VIEWER, {"data": {"viewer": {"login": "me"}}}),
+            (("repos/acme/widgets",), REPO),
+        ):
             with self.subTest(path):
-                self.assertEqual(self.ok("api", "--hostname", "github.com", path), want)
+                self.assertEqual(self.ok("api", "--hostname", "github.com", *path), want)
 
     def test_pr_list_gives_the_branch_prs_with_the_asked_fields(self):
         for repo in ("acme/widgets", "github.com/acme/widgets"):
@@ -369,7 +373,7 @@ class Pulls(Case):
                 self.refused(self.gh("pr", *argv), "no pull requests found")
 
     def test_no_login_and_bad_login_pulls_or_threads_are_errors(self):
-        repo_api, user_api = ("repos/acme/widgets",), ("--hostname", "github.com", "user")
+        repo_api, user_api = ("repos/acme/widgets",), ("--hostname", "github.com", *VIEWER)
         for name, scenario, argv in (
             ("no login", {}, user_api),
             ("a login not a string", {"login": 1}, repo_api),

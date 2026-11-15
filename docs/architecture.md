@@ -52,7 +52,9 @@ and the worker have separate lifetimes; an outcome does not itself close a TUI.
 The macOS [broker](../src/broker/) builds images and provisions Docker workers. It keeps long-lived logins
 in Keychain and delivers runtime copies on container tmpfs: Claude setup-tokens, Codex access tokens,
 OpenCode provider keys, GitHub installation tokens, environment secrets and requested Linear tokens.
-App private keys, Codex refresh tokens and enrolled Linear client secrets stay broker-side. Docker access
+App private keys, Codex refresh tokens and enrolled Linear client secrets stay broker-side. On the host, the broker
+gives its own App's installation token only to gh's keyring, through `gh auth login --with-token` on stdin, when
+[`~/.ensemble/bin/gh`](../src/ensemble/utils/host_gh.py) asks ([README](../README.md#host-github-app)). Docker access
 and processes running as you remain trusted; a container separates the worker from the host, not its tools from its client.
 
 Orchestrated Docker workers re-read current descriptions and comments with `ensemble-orchestrator issue read`,

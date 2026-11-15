@@ -141,16 +141,39 @@ def _repo_info(o, n, run, host):
         return Transient(f"gh api repos/{o}/{n}: {err_text(res)}")
     try:
         data = json.loads(res.stdout)
-        full, push, default = (
+        full, permissions, default = (
             repo_slug(data["full_name"]),
-            data["permissions"]["push"],
+            data["permissions"],
             data["default_branch"],
         )
+        push = permissions["push"]
     except (ValueError, KeyError, TypeError):
         full = None
     if not full:
         return Transient(f"gh api repos/{o}/{n}: unusable response")
-    return full, push is True, default
+    # every permission false, pull included, is an App installation token: it reads public repos
+    # outside its installation too, so only its installation's list says it can push
+    installation = "pull" in permissions and not any(permissions.values())
+    return full, None if installation else push is True, default
+
+
+def _installed(o, n, run, host) -> bool | Transient:
+    """Whether the installation of the App token gh holds lists o/n."""
+    res = run(
+        [
+            "gh",
+            "api",
+            *(["--hostname", host] if host != "github.com" else []),
+            "--paginate",
+            "installation/repositories",
+            "--jq",
+            ".repositories[].full_name",
+        ],
+        SHORT,
+    )
+    if res.returncode != 0:
+        return Transient(f"gh api installation/repositories: {err_text(res)}")
+    return f"{o}/{n}".lower() in {line.strip().lower() for line in res.stdout.splitlines()}
 
 
 def checkout(ident, owner, name, *, delegate, workdir) -> str | None:
@@ -275,6 +298,10 @@ def check(
     if isinstance(info, Transient):
         return info
     (o, n), can_push, default = info
+    if can_push is None:
+        can_push = _installed(o, n, run, host)
+        if isinstance(can_push, Transient):
+            return can_push
     if not can_push:
         return Invalid(f"{asked}: no push permission", mapped=mapped)
     if not isinstance(default, str) or not REF.fullmatch(default):

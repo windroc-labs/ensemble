@@ -283,6 +283,7 @@ func TestUsageErrors(t *testing.T) {
 		{"unknown", []string{"login"}},
 		{"unknown", []string{"login", "github"}},
 		{"unknown", []string{"login", "github", "ensemble-other"}},
+		{"unknown", []string{"login", "github", "ensemble-broker-host-bot", "x"}},
 		{"unknown", []string{"login", "github", "ensemble-engineer"}},
 		{"unknown", []string{"login", "github", "ensemble-docs"}},
 		{"unknown", []string{"login", "github", "ensemble-broker-bot", "x"}},
@@ -318,7 +319,7 @@ func TestUsageErrors(t *testing.T) {
 }
 
 func TestLoginGitHubDispatch(t *testing.T) {
-	for _, name := range []string{"ensemble-broker-bot"} {
+	for _, name := range []string{"ensemble-broker-bot", "ensemble-broker-host-bot"} {
 		var got string
 		a := app{loginGitHub: func(ctx context.Context, _ keys, app string, key *keyFile, out io.Writer) error {
 			if ctx == nil {
