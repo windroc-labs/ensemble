@@ -5,6 +5,7 @@ and after a plugin upgrade.
 """
 
 import concurrent.futures
+import contextlib
 import json
 import os
 import pty
@@ -38,6 +39,10 @@ COMMANDS = (
 )
 REAL_GH = '#!/bin/sh\nprintf "real gh %s\\n" "$*"\n'
 USAGE = "usage: ensemble <name> | ensemble [--force] <name> -- <command> [<arg> ...]"
+NOT_HELD = (
+    "ensemble: run ensemble resume in the manager's held shell,"
+    " or on a terminal to select a manager\n"
+)
 FAKE = """#!{python} -I
 import json, os, sys
 with open(os.environ["FAKE_TMUX_LOG"], "a") as f:
@@ -118,7 +123,7 @@ def held(name: str) -> list[str]:
 
 
 def typed(script: str = ENSEMBLE) -> str:
-    """What ensemble list types into a hold's idle shell: the script by path, quoted if it must be."""
+    """What ensemble resume types into a hold's idle shell: the script by path, quoted if it must be."""
     return (
         f"{script} resume"
         if re.fullmatch(r"[A-Za-z0-9_./:@,+-]+", script)
@@ -190,11 +195,11 @@ def _mode(fd: int) -> list:
 
 
 def on_terminal(cwd: str, env: dict, answer: bytes, script: str = ENSEMBLE) -> tuple[int, str]:
-    """ensemble list with stdin and stdout on a terminal, answering its prompt: exit, stderr."""
+    """ensemble resume with stdin and stdout on a terminal, answering its prompt: exit, stderr."""
     master, slave = pty.openpty()
     with os.fdopen(master, "r+b", buffering=0) as terminal:
         process = subprocess.Popen(
-            (script, "list"),
+            (script, "resume"),
             cwd=cwd,
             env=env,
             stdin=slave,
@@ -412,7 +417,7 @@ class FakeTmux(Case):
         process, out, err, calls = self.run_ensemble("resume", has_rc=0)
         self.assertEqual(
             (process.returncode, out, err, calls),
-            (2, "", "ensemble: run ensemble resume under the manager's hold: ensemble list\n", []),
+            (2, "", NOT_HELD, []),
         )
         self.assertEqual(sorted(Path(self.home).rglob("*")), before)
 
@@ -488,7 +493,7 @@ class FakeTmux(Case):
         return roster
 
     def select(self, answer=b"1\n", has_rc=1, script=ENSEMBLE, **env):
-        """ensemble list with stdin and stdout on a terminal, answering its prompt."""
+        """ensemble resume with stdin and stdout on a terminal, answering its prompt."""
         if os.path.exists(self.log):
             os.unlink(self.log)
         values = {"HAS_RC": has_rc, **env}
@@ -501,7 +506,7 @@ class FakeTmux(Case):
                 calls = [json.loads(line)[2:] for line in f]
         return result, err, calls
 
-    def test_list_on_a_terminal_cancels_without_tmux(self):
+    def test_resume_on_a_terminal_cancels_without_tmux(self):
         self.demo()
         result, err, calls = self.select(b"\n")
         self.assertEqual((result, calls), (0, []))
@@ -512,7 +517,7 @@ class FakeTmux(Case):
         master, slave = pty.openpty()
         errors, error_end = os.pipe()
         process = subprocess.Popen(
-            (ENSEMBLE, "list"),
+            (ENSEMBLE, "resume"),
             cwd=self.cwd,
             env=self.env,
             stdin=slave,
@@ -544,7 +549,7 @@ class FakeTmux(Case):
         before = _mode(slave)
         try:
             process = subprocess.Popen(
-                (ENSEMBLE, "list"),
+                (ENSEMBLE, "resume"),
                 cwd=self.cwd,
                 env={**self.env, "HAS_RC": "1"},
                 stdin=slave,
@@ -578,12 +583,38 @@ class FakeTmux(Case):
             ],
         )
 
-    def test_list_with_stdout_piped_prints_without_a_prompt(self):
+    def test_list_on_a_terminal_prints_without_a_prompt(self):
+        self.demo()
+        master, slave = pty.openpty()
+        try:
+            process = subprocess.Popen(
+                (ENSEMBLE, "list"),
+                cwd=self.cwd,
+                env=self.env,
+                stdin=slave,
+                stdout=slave,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            os.close(slave)
+            err = process.communicate(timeout=30)[1]
+            shown = b""
+            with contextlib.suppress(OSError):  # EIO once the slave end is closed
+                while chunk := os.read(master, 4096):
+                    shown += chunk
+        finally:
+            os.close(master)
+        self.assertEqual(
+            (process.returncode, shown, err), (0, b"demo\tnot-held\t-\t-\r\n  -\r\n", "")
+        )
+        self.assertFalse(os.path.exists(self.log))
+
+    def test_resume_with_stdout_piped_exits_2_without_a_prompt(self):
         self.demo()
         master, slave = pty.openpty()
         try:
             done = subprocess.run(
-                (ENSEMBLE, "list"),
+                (ENSEMBLE, "resume"),
                 cwd=self.cwd,
                 env=self.env,
                 stdin=slave,
@@ -595,10 +626,16 @@ class FakeTmux(Case):
         finally:
             os.close(slave)
             os.close(master)
-        self.assertEqual(
-            (done.returncode, done.stdout, done.stderr), (0, "demo\tnot-held\t-\t-\n  -\n", "")
-        )
+        self.assertEqual((done.returncode, done.stdout, done.stderr), (2, "", NOT_HELD))
         self.assertFalse(os.path.exists(self.log))
+
+    def test_resume_in_a_held_shell_on_a_terminal_does_not_prompt(self):
+        self.demo()
+        for name in ("ENSEMBLE_MANAGER", "ENSEMBLE_HOLDER_ID", "ENSEMBLE_HOLDER_GENERATION"):
+            with self.subTest(name=name):
+                result, err, calls = self.select(b"1\n", **{name: "demo"})
+                self.assertEqual((result, calls), (2, []))
+                self.assertNotIn("Enter cancels", err)
 
     def test_an_unheld_manager_without_a_record_opens_like_ensemble_name(self):
         self.demo()

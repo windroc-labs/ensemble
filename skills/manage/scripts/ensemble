@@ -2,9 +2,9 @@
 # A manager's place. ensemble <name> opens tmux session <name>, whose shell holds manager <name>'s
 # place while it lives (this script's <name> -- form); start the client there. The holding, listing
 # and resuming run in this plugin's ensemble.manager.ensemble_command, so no manager can be named
-# list or resume here. On a terminal list then opens the selected manager: attach to its session,
-# resume its recorded client under its hold (ensemble resume typed into the hold's idle shell, or as
-# a new hold's command), or ensemble <name>.
+# list or resume here. Outside a held shell, on a terminal, resume opens the selected manager: attach
+# to its session, resume its recorded client under its hold (ensemble resume typed into the hold's
+# idle shell, or as a new hold's command), or ensemble <name>.
 # --install (re)writes ~/.ensemble/bin's launchers and selects this plugin for every command.
 usage() {
   printf '%s\n' \
@@ -17,8 +17,9 @@ usage() {
     '                     hold <name>'"'"'s place while <command> runs in this terminal, in or' \
     '                     outside tmux; a place another holder keeps is refused' \
     '  --force            take that place over and fence its holder, e.g. a stuck one' \
-    'ensemble list        print every manager; on a terminal, select one to attach or resume' \
-    'ensemble resume      in a held shell, resume the manager'"'"'s recorded client; exit 2 unheld' \
+    'ensemble list        print every manager' \
+    'ensemble resume      in a held shell, resume the manager'"'"'s recorded client; elsewhere, on a' \
+    '                     terminal, select a manager to attach or resume; exit 2 otherwise' \
     'examples:' \
     '  ensemble demo -- <client> [<arg> ...]        start a client holding demo, outside tmux too' \
     '  ensemble --force demo -- <client resume command>' \
@@ -85,13 +86,21 @@ openable() {
   echo "ensemble: manager $1 cannot be opened by ensemble; nothing opened" >&2
   exit 1
 }
-if [ $# -gt 1 ] && [ "$1" != list ]; then
+if [ "$1" = list ]; then
+  require_side
+  shift
+  exec "${manager[@]}" list "$@"
+fi
+if [ $# -gt 1 ]; then
   require_side
   s=$1
   shift 2
   exec "${manager[@]}" hold ${force:+"$force"} "$s" -- "$@"
 fi
-if [ "$1" = resume ]; then
+# The hold exports all three to its shell, so with any one set, or off a terminal,
+# ensemble_command resume decides.
+holding=${ENSEMBLE_MANAGER+x}${ENSEMBLE_HOLDER_ID+x}${ENSEMBLE_HOLDER_GENERATION+x}
+if [ "$1" = resume ] && { [ -n "$holding" ] || [ ! -t 0 ] || [ ! -t 1 ]; }; then
   require_side
   exec "${manager[@]}" resume
 fi
@@ -137,13 +146,11 @@ attach() {
   fi
   exec tmux attach -t "=$1"
 }
-if [ "$1" = list ]; then
+if [ "$1" = resume ]; then
   require_side
-  shift
-  [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] || exec "${manager[@]}" list "$@"
-  # Ctrl-C at the prompt cancels: the list exits 0, and bash must not die of the SIGINT meanwhile.
+  # Ctrl-C at the prompt cancels: the selection exits 0, and bash must not die of the SIGINT meanwhile.
   trap : INT
-  plan=$("${manager[@]}" list --select) || exit
+  plan=$("${manager[@]}" resume --select) || exit
   trap - INT
   [ -n "$plan" ] || exit 0
   read -r verb s <<<"$plan"

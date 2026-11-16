@@ -1,5 +1,6 @@
 """The manager side of skills/manage/scripts/ensemble, whose --help is its usage: hold a manager's
-place while a command runs, list every manager, and resume a held manager's recorded client.
+place while a command runs, list every manager, resume a held manager's recorded client, and
+select a manager to open.
 """
 
 import argparse
@@ -28,7 +29,7 @@ from ensemble.manager.engine.types import (
 )
 from ensemble.utils import nested_start, printable
 
-NOT_HELD = "run ensemble resume under the manager's hold: ensemble list"
+NOT_HELD = "run ensemble resume in the manager's held shell, or on a terminal to select a manager"
 UP, DOWN = "up", "down"
 ARROWS = {b"A": UP, b"B": DOWN}
 ESCAPE_WAIT = 0.25  # seconds a sequence may trail its Esc
@@ -252,8 +253,8 @@ def _parser() -> argparse.ArgumentParser:
     holding = subs.add_parser("hold", usage="%(prog)s [--force] NAME -- COMMAND [ARG ...]")
     holding.add_argument("--force", action="store_true")
     holding.add_argument("name", metavar="NAME")
-    subs.add_parser("list").add_argument("--select", action="store_true")
-    subs.add_parser("resume")
+    subs.add_parser("list")
+    subs.add_parser("resume").add_argument("--select", action="store_true")
     return parser
 
 
@@ -273,14 +274,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(arguments)
     if args.verb == "hold" and not command:
         parser.error("hold requires -- followed by a command")
-    if args.verb != "list" and (refused := nested_start()):
+    selecting = args.verb == "resume" and args.select
+    if args.verb != "list" and not selecting and (refused := nested_start()):
         print(f"ensemble: {refused}", file=sys.stderr)
         return 2
     try:
         if args.verb == "hold":
             return hold(args.name, command, force=args.force)
-        if args.verb == "list":
-            return listing(select=args.select)
+        if args.verb == "list" or selecting:
+            return listing(select=selecting)
         return resume()
     except ValueError as error:
         _report(error)

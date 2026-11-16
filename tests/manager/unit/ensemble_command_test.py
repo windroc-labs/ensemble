@@ -119,6 +119,16 @@ class HoldTest(EnsembleCommandCase):
                     self.assertTrue(stderr.startswith("ensemble: refused inside an agent session"))
         self.assertFalse(os.path.exists(self.directory))
 
+    def test_selecting_a_manager_is_not_refused_inside_an_agent_session(self):
+        with (
+            mock.patch.dict(os.environ, {"ENSEMBLE_AGENT_SESSION": "1"}),
+            mock.patch("sys.stdin", io.StringIO("")),
+        ):
+            self.assertEqual(
+                self.invoke("resume", "--select"),
+                (0, "", "no managers yet; start one: ensemble <name>\n"),
+            )
+
 
 def _record(kind: str, name: str) -> Record:
     return Record(
@@ -254,7 +264,7 @@ class ListTest(ListCase):
         self.assertEqual(self.invoke("list"), usage)
 
     def test_list_takes_no_arguments_or_manager(self):
-        for argv in (("list", "extra"), ("list", "--manager", "demo")):
+        for argv in (("list", "extra"), ("list", "--manager", "demo"), ("list", "--select")):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as caught:
                     main(argv)
@@ -301,7 +311,7 @@ class SelectTest(ListCase):
             mock.patch("os.kill", side_effect=kill),
             mock.patch("subprocess.run", return_value=CompletedProcess((), 0, etime, "")),
         ):
-            return self.invoke("list", "--select")
+            return self.invoke("resume", "--select")
 
     def test_rows_are_numbered_on_stderr_and_a_number_selects(self):
         self.manager("alpha", ("w1", "worker", State.LIVE))
@@ -327,7 +337,7 @@ class SelectTest(ListCase):
             with self.subTest(answers=answers):
                 self.assertEqual(self.select(answers)[:2], (0, ""))
         with mock.patch("sys.stdin", mock.Mock(readline=mock.Mock(side_effect=KeyboardInterrupt))):
-            self.assertEqual(self.invoke("list", "--select")[:2], (0, ""))
+            self.assertEqual(self.invoke("resume", "--select")[:2], (0, ""))
 
     def test_an_interrupt_while_the_prompt_is_written_cancels(self):
         self.manager("demo")
@@ -337,7 +347,7 @@ class SelectTest(ListCase):
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
-            result = main(("list", "--select"))
+            result = main(("resume", "--select"))
         self.assertEqual((result, stdout.getvalue()), (0, ""))
         self.assertTrue(stderr.getvalue().endswith(self.PROMPT.format(1) + "\n"), stderr.getvalue())
 
@@ -411,7 +421,7 @@ class SelectTest(ListCase):
 
 
 class MenuTest(ListCase):
-    """list --select with stdin and stderr on a terminal and stdout captured, as ensemble runs it."""
+    """resume --select with stdin and stderr on a terminal and stdout captured, as ensemble runs it."""
 
     PROMPT = "select a manager [1-{}] or up/down, Enter cancels: "
 
@@ -468,7 +478,7 @@ class MenuTest(ListCase):
                 contextlib.redirect_stdout(stdout),
             ):
                 typist.start()
-                result = main(("list", "--select"))
+                result = main(("resume", "--select"))
                 self.assertEqual(_mode(slave), before, "terminal mode restored")
         finally:
             signal.signal(signal.SIGINT, handler)
@@ -615,7 +625,10 @@ class ResumeTest(EnsembleCommandCase):
         self.assertEqual(Path(self.directory, "session.json").read_text(), before)
 
     def test_without_a_manager_or_holder_pair_it_is_a_usage_error(self):
-        message = "ensemble: run ensemble resume under the manager's hold: ensemble list\n"
+        message = (
+            "ensemble: run ensemble resume in the manager's held shell,"
+            " or on a terminal to select a manager\n"
+        )
         for env in ({}, {"ENSEMBLE_MANAGER": "mgr"}, {"ENSEMBLE_MANAGER": "../x"}):
             with self.subTest(env=env), mock.patch.dict(os.environ, env):
                 self.assertEqual(self.invoke("resume"), (2, "", message))
