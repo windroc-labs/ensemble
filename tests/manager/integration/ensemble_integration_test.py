@@ -595,14 +595,15 @@ class FakeTmux(Case):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            # The slave stays open here: macOS drops a terminal's unread output once none is.
-            shown, deadline = b"", time.monotonic() + 30
-            while time.monotonic() < deadline:
-                if select.select([master], [], [], 0.1)[0]:
-                    shown += os.read(master, 4096)
-                elif process.poll() is not None:
-                    break
-            err = process.communicate(timeout=30)[1]
+            try:
+                err = process.communicate(timeout=30)[1]
+            finally:
+                process.kill()  # a no-op once it has exited
+            # Read only now, with the slave still open: macOS drops a terminal's unread output
+            # once no slave end is open.
+            shown = b""
+            while select.select([master], [], [], 0)[0]:
+                shown += os.read(master, 4096)
         finally:
             os.close(slave)
             os.close(master)
@@ -628,7 +629,9 @@ class FakeTmux(Case):
                         timeout=30,
                         check=False,
                     )
-                    self.assertEqual((done.returncode, done.stderr), (2, NOT_HELD))
+                    self.assertEqual(
+                        (done.returncode, done.stdout or "", done.stderr), (2, "", NOT_HELD)
+                    )
         finally:
             os.close(slave)
             os.close(master)
