@@ -864,8 +864,9 @@ def processes(required: dict[int, str] | None = None) -> dict[int, tuple[int, st
             if (info := process_info(pid, library)) is not None:
                 rows[pid] = info
         except PermissionError:
+            # EPERM, not ESRCH: alive, but it exec'd a setuid program.
             if required is not None and pid in required:
-                raise
+                rows[pid] = (0, required[pid], False)
     return rows
 
 
@@ -890,17 +891,24 @@ def close_signal(elapsed: float) -> signal.Signals:
     return signal.SIGKILL if elapsed >= 1.5 else signal.SIGTERM if elapsed >= 0.5 else signal.SIGHUP
 
 
+def is_process(pid: int, token: str) -> bool:
+    try:
+        info = process_info(pid)
+    except PermissionError:
+        return True
+    return info is not None and info[1] == token
+
+
 def signal_process(pid: int, token: str, sig: signal.Signals) -> None:
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         if sys.platform == "linux":
             descriptor = os.pidfd_open(pid)
             try:
-                info = process_info(pid)
-                if info is not None and info[1] == token:
+                if is_process(pid, token):
                     signal.pidfd_send_signal(descriptor, sig)
             finally:
                 os.close(descriptor)
-        elif (info := process_info(pid)) is not None and info[1] == token:
+        elif is_process(pid, token):
             os.kill(pid, sig)
 
 

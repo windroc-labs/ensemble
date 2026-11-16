@@ -1382,14 +1382,83 @@ class GuardTest(Base):
             runtime.reap()
         self.assertEqual(runtime.proc.returncode, 7)
 
-    def test_uninspectable_tracked_child_cannot_be_confirmed_dead(self):
+    def test_uninspectable_tracked_child_stays_alive_as_itself(self):
         with (
             mock.patch.object(os, "listdir", return_value=["12"]),
             mock.patch.object(Path, "read_text", side_effect=PermissionError),
         ):
             self.assertEqual(guard.processes(), {})
-            with self.assertRaises(PermissionError):
-                guard.processes({12: "original"})
+            self.assertEqual(guard.processes({12: "original"}), {12: (0, "original", False)})
+
+    def test_setuid_exec_in_the_tree_neither_fails_the_guard_nor_escapes_its_close(self):
+        """A tracked child execs a setuid program; the kernel then refuses its info (EPERM)."""
+        runtime = self.runtime()
+        runtime.proc = mock.Mock(pid=20, returncode=None)
+        setuid, gone = set(), set()
+
+        def info(pid, _kind, _arg, data, _size):
+            if pid in setuid:
+                return 0
+            struct.pack_into("=I", data, 4, 2)
+            struct.pack_into("=I", data, 16, {1: 0, 20: os.getpid(), 21: 20}[pid])
+            struct.pack_into("=QQ", data, 120, 1, pid)
+            return 136
+
+        def listing(_kind, _arg, slots, _size):
+            live = [pid for pid in (1, 20, 21) if pid not in gone]
+            if slots is None:
+                return 4 * len(live)
+            for slot, pid in enumerate(live):
+                slots[slot] = pid
+            return 4 * len(live)
+
+        library = mock.Mock()
+        library.proc_pidinfo.side_effect = info
+        library.proc_listpids.side_effect = listing
+        with (
+            mock.patch.object(sys, "platform", "darwin"),
+            mock.patch.object(guard.ctypes, "CDLL", return_value=library),
+            mock.patch.object(guard.ctypes, "get_errno", return_value=errno.EPERM),
+            mock.patch.object(os, "waitpid", return_value=(0, 0)),
+            mock.patch.object(guard.time, "monotonic", return_value=5.0),
+            mock.patch.object(os, "kill") as killed,
+        ):
+            self.assertFalse(runtime.tick())
+            self.assertEqual(runtime.known, {20: "1:20", 21: "1:21"})
+            setuid.add(20)
+            self.assertFalse(runtime.tick())
+            self.assertEqual(runtime.known, {20: "1:20", 21: "1:21"}, "child and grandchild kept")
+            runtime.closing = 5.0
+            self.assertFalse(runtime.tick(), "an unreadable child is not confirmed dead")
+            killed.assert_any_call(20, signal.SIGHUP)
+            killed.assert_any_call(21, signal.SIGHUP)
+            gone.update((20, 21))
+            runtime.tick()
+            self.assertEqual(runtime.known, {})
+
+    def test_unreadable_tracked_process_is_still_signalled(self):
+        with (
+            mock.patch.object(sys, "platform", "darwin"),
+            mock.patch.object(guard.ctypes, "CDLL") as library,
+            mock.patch.object(guard.ctypes, "get_errno", return_value=errno.EPERM),
+            mock.patch.object(os, "kill", side_effect=[None, PermissionError]) as killed,
+        ):
+            library.return_value.proc_pidinfo.return_value = 0
+            guard.signal_process(9, "token", signal.SIGTERM)
+            guard.signal_process(9, "token", signal.SIGKILL)
+        self.assertEqual(
+            killed.call_args_list,
+            [mock.call(9, signal.SIGTERM), mock.call(9, signal.SIGKILL)],
+        )
+        with (
+            mock.patch.object(os, "pidfd_open", return_value=7),
+            mock.patch.object(os, "close") as closed,
+            mock.patch.object(Path, "read_text", side_effect=PermissionError),
+            mock.patch.object(signal, "pidfd_send_signal") as sent,
+        ):
+            guard.signal_process(9, "token", signal.SIGTERM)
+        sent.assert_called_once_with(7, signal.SIGTERM)
+        closed.assert_called_once_with(7)
 
     def test_late_adoption_after_snapshot_prevents_false_tree_exit(self):
         runtime = self.runtime()
