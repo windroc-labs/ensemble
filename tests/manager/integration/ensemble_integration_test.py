@@ -5,7 +5,6 @@ and after a plugin upgrade.
 """
 
 import concurrent.futures
-import contextlib
 import json
 import os
 import pty
@@ -596,37 +595,43 @@ class FakeTmux(Case):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            os.close(slave)
+            # The slave stays open here: macOS drops a terminal's unread output once none is.
+            shown, deadline = b"", time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if select.select([master], [], [], 0.1)[0]:
+                    shown += os.read(master, 4096)
+                elif process.poll() is not None:
+                    break
             err = process.communicate(timeout=30)[1]
-            shown = b""
-            with contextlib.suppress(OSError):  # EIO once the slave end is closed
-                while chunk := os.read(master, 4096):
-                    shown += chunk
         finally:
+            os.close(slave)
             os.close(master)
         self.assertEqual(
             (process.returncode, shown, err), (0, b"demo\tnot-held\t-\t-\r\n  -\r\n", "")
         )
         self.assertFalse(os.path.exists(self.log))
 
-    def test_resume_with_stdout_piped_exits_2_without_a_prompt(self):
+    def test_resume_with_stdin_or_stdout_off_a_terminal_exits_2_without_a_prompt(self):
         self.demo()
         master, slave = pty.openpty()
         try:
-            done = subprocess.run(
-                (ENSEMBLE, "resume"),
-                cwd=self.cwd,
-                env=self.env,
-                stdin=slave,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
+            for stdin, stdout in ((slave, subprocess.PIPE), (subprocess.DEVNULL, slave)):
+                with self.subTest(stdin=stdin, stdout=stdout):
+                    done = subprocess.run(
+                        (ENSEMBLE, "resume"),
+                        cwd=self.cwd,
+                        env=self.env,
+                        stdin=stdin,
+                        stdout=stdout,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual((done.returncode, done.stderr), (2, NOT_HELD))
         finally:
             os.close(slave)
             os.close(master)
-        self.assertEqual((done.returncode, done.stdout, done.stderr), (2, "", NOT_HELD))
         self.assertFalse(os.path.exists(self.log))
 
     def test_resume_in_a_held_shell_on_a_terminal_does_not_prompt(self):
