@@ -1,5 +1,11 @@
 # Upgrading
 
+## ensemble resume opens a manager; ensemble list only lists
+
+`ensemble list` now only prints the managers; it no longer asks which one to open. To open one, run `ensemble resume`
+in a terminal outside a held shell: it lists the managers and asks, as `ensemble list` did. In a manager's held shell,
+`ensemble resume` still resumes that manager's recorded client. Off a terminal, outside a held shell, it exits 2.
+
 ## gh on PATH is ensemble's wrapper
 
 The installer now also puts `gh` in `~/.ensemble/bin`, and the board jobs' PATH holds `~/.ensemble/bin` ahead of
@@ -21,12 +27,12 @@ commands (exit 2). Use the new forms:
 | `ensemble-crew hold --manager NAME [--force] -- COMMAND` | `ensemble [--force] NAME -- COMMAND` |
 | `ensemble-crew hold --session LABEL …` | gone: the hold is labelled with the manager's name |
 | `ensemble-crew list` | `ensemble list` |
-| `ensemble-crew list --select` | `ensemble list --select`; on a terminal, `ensemble list` asks and opens the selection |
+| `ensemble-crew list --select` | `ensemble resume` on a terminal, outside a held shell: it asks and opens the selection |
 | `ensemble-crew resume-commander` | `ensemble resume` |
 
-1. Reopen each manager started before this upgrade. It runs under `ensemble-crew hold`, which `ensemble list` no
+1. Reopen each manager started before this upgrade. It runs under `ensemble-crew hold`, which `ensemble resume` no
    longer recognises as its hold, so it can neither attach to it nor resume it there. Quit its client, `exit` its held
-   shell, then run `ensemble list` and select it: its conversation resumes under a new hold.
+   shell, then run `ensemble resume` and select it: its conversation resumes under a new hold.
 2. Change scripts outside this repo that use the removed subcommands, per the table.
 
 ## PRDs: no self-grill
@@ -315,11 +321,11 @@ scrollback, and from then on its pane attaches directly.
 
 ## ensemble list
 
-`ensemble list` prints every manager in `~/.ensemble/managers/`, with its holder state, client, cwd and entries. On a
-terminal it then asks which manager to open (the up and down arrow keys step through the managers, or type a number or
-name; Enter opens it, Enter on an empty line or Ctrl-C cancels), and attaches to its session or resumes its recorded
-conversation under its hold. A manager named `list` can no longer be opened with `ensemble list`: attach to its session
-with `tmux attach -t =list`, or start it under another name.
+`ensemble list` prints every manager in `~/.ensemble/managers/`, with its holder state, client, cwd and entries.
+`ensemble resume`, on a terminal outside a held shell, asks which manager to open (the up and down arrow keys step
+through the managers, or type a number or name; Enter opens it, Enter on an empty line or Ctrl-C cancels), and attaches
+to its session or resumes its recorded conversation under its hold. A manager named `list` cannot be opened that way:
+attach to its session with `tmux attach -t =list`, or start it under another name.
 
 ## ctmux is now ensemble
 

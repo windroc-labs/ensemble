@@ -104,7 +104,7 @@ Use `codex --no-daemon` ou `opencode` em vez de `claude` se esse for seu cliente
 ```
 
 Descreva o trabalho e a entrega desejada. O manager coordena trabalhadores e execuções de papéis por meio de Crew.
-Para voltar a `work` depois, execute `ensemble list` em um terminal e escolha-o: você volta à sessão e à conversa dele.
+Para voltar a `work` depois, execute `ensemble resume` em um terminal e escolha-o: você volta à sessão e à conversa dele.
 Para trabalhar com um quadro, `/ensemble:board` opera sobre as issues; a [personalização do fluxo de trabalho](../customizing-roles-and-tasks.md#on-the-board)
 explica como escolher as etapas.
 

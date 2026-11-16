@@ -104,7 +104,7 @@ Usa `codex --no-daemon` u `opencode` en lugar de `claude` si ese es tu cliente. 
 ```
 
 Describe el trabajo y el entregable deseado. El manager coordina los trabajadores y las ejecuciones de roles mediante Crew.
-Para volver a `work` más tarde, ejecuta `ensemble list` en una terminal y elígelo: vuelves a su sesión y su conversación.
+Para volver a `work` más tarde, ejecuta `ensemble resume` en una terminal y elígelo: vuelves a su sesión y su conversación.
 Para trabajar con un tablero, `/ensemble:board` opera sobre las incidencias; la [personalización del flujo de trabajo](../customizing-roles-and-tasks.md#on-the-board)
 explica cómo elegir las etapas.
 

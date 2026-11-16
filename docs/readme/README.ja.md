@@ -103,7 +103,7 @@ claude
 ```
 
 作業内容と希望する成果物を伝えてください。manager は Crew を通じて、ワーカーとロールの実行を調整します。
-後で `work` に戻るときは、ターミナルで `ensemble list` を実行して選びます。そのセッションと会話に戻れます。
+後で `work` に戻るときは、ターミナルで `ensemble resume` を実行して選びます。そのセッションと会話に戻れます。
 ボードで作業する場合、`/ensemble:board` で issue を操作します。ステージの選び方は、
 [ワークフローのカスタマイズ](../customizing-roles-and-tasks.md#on-the-board)で説明しています。
 
