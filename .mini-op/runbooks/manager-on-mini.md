@@ -24,7 +24,7 @@ flowchart TD
     N --> P["Own interface pids; both client-running"]
     P --> Q["m1: /quit"]
     Q --> H["m1 hold-only; m2 client-running"]
-    H --> R["ensemble list: select m1"]
+    H --> R["New terminal: ensemble resume, select m1"]
     R --> S["Same conversation; resumed interface pid"]
     S --> B["m2: /quit, then plain codex"]
     B --> W["No record write; restart hint only"]
