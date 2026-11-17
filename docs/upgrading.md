@@ -20,8 +20,11 @@ the file. The broker and the session then send every docker call there, whatever
   with the reason: connection failed, authentication failed, host key unknown or mismatch, no docker CLI, daemon not
   running, or an Engine older than 26.
 
-A remote target cannot run a worker end to end yet: the worker's client state is still a bind mount of a Mac
-directory.
+A worker's client state (Claude config dir, Codex `sessions` and `config`, OpenCode data) now lives in its state
+volume `ensemble-state-<name>` on the Docker target, local or remote, never in a Mac directory; reclaiming a session
+deletes it with the workspace volume. A Docker session started before this upgrade keeps its state in
+`~/.ensemble/docker-state/<name>/<client>`, which is no longer read: give it a new start (its resume reports no native
+history), then delete that directory.
 
 ## ensemble resume opens a manager; ensemble list only lists
 

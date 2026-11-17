@@ -6,7 +6,7 @@ a PASS line per check and a timing line per generation, and exits 1 at the first
       from a manager session: build once, start a worker on the default Host, check its
       container's security baseline and isolation, restart, close and resume, `docker rm -f` and
       resume, each generation answering a prompt and its close reclaiming its credentials; for
-      opencode its opencode.db in the Docker home, Ollama on 127.0.0.1 only, only GitHub secrets
+      opencode its opencode.db in its state volume, Ollama on 127.0.0.1 only, only GitHub secrets
       and the listed providers' keys in the container, each resume continuing one OpenCode session
   python3 tests/session/live_docker.py role --repo OWNER/NAME [--timeout S] [NAME]
       a headless engineer run on OWNER/NAME, an authorized test repo: one forced token refresh,
@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+from ensemble.session.engine import client_state
 from ensemble.session.engine.config import read_config
 from ensemble.session.engine.types import SessionError
 from ensemble.session.hosts.base import Host
@@ -719,9 +720,10 @@ class OpenCodeChecks(Checks):
     def after_start(self, start: Start) -> None:
         w = self.worker
         db = os.path.join(docker_home(w.name, "opencode"), "opencode", "opencode.db")
-        if not os.path.isfile(db):
-            raise SystemExit(f"FAIL no opencode.db at {db}")
-        print(f"PASS opencode.db at {db}", flush=True)
+        found = client_state.locate(db)
+        if found is None or client_state.stat(found) is None:
+            raise SystemExit(f"FAIL no opencode.db at {db} in ensemble-state-{w.name}")
+        print(f"PASS opencode.db at {db} in ensemble-state-{w.name}", flush=True)
         argv = ["lsof", "-nP", f"-iTCP:{OLLAMA_PORT}", "-sTCP:LISTEN"]
         try:
             listeners = subprocess.run(
