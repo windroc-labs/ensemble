@@ -322,6 +322,16 @@ class ResponseTest(Case):
         with self.assertRaisesRegex(SessionError, "bad response to workspace-rm"):
             Broker(FakeBroker(other)).workspace_rm(VOLUME)
 
+    def test_broker_env_adds_only_a_set_ssh_agent_socket(self):
+        for sock, env in (
+            ("/private/agent.sock", {"PATH": os.defpath, "SSH_AUTH_SOCK": "/private/agent.sock"}),
+            ("", {"PATH": os.defpath}),
+        ):
+            fake = FakeBroker(success("close-absent"))
+            with mock.patch.dict(os.environ, {"SSH_AUTH_SOCK": sock, "SSH_AGENT_PID": "1"}):
+                Broker(fake).close(CONTAINER)
+            self.assertEqual(fake.kwargs[0]["env"], env)
+
     def test_endpoint_pattern_is_the_schemas(self):
         with open(os.path.join(REPO, broker.SCHEMA)) as f:
             pattern = json.load(f)["$defs"]["endpoint"]["pattern"]

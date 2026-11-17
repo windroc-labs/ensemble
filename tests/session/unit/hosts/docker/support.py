@@ -1,9 +1,12 @@
 """The broker protocol's shared fixtures and a fake broker runner."""
 
+import contextlib
 import json
 import os
 from types import SimpleNamespace
+from unittest import mock
 
+from ensemble.session.hosts.docker.daemon import SSH_DIR
 from tests.session.case import PLUGIN_BIN, REPO
 
 FIXTURES = os.path.join(REPO, "src", "broker", "protocol", "docker-broker", "fixtures")
@@ -107,3 +110,17 @@ class FakePopen:
         self.calls.append((argv, kw, stdin.read() if hasattr(stdin, "read") else stdin))
         self.procs.append(FakeProc(argv, *self.results.pop(0)))
         return self.procs[-1]
+
+
+@contextlib.contextmanager
+def ssh_wrapper(*, present=True):
+    wrapper = os.path.join(SSH_DIR, "ssh")
+    isfile, access = os.path.isfile, os.access
+
+    def found(path, mode=None, **kw):
+        if path == wrapper:
+            return present
+        return isfile(path) if mode is None else access(path, mode, **kw)
+
+    with mock.patch("os.path.isfile", found), mock.patch("os.access", found):
+        yield wrapper

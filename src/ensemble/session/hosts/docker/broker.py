@@ -16,6 +16,7 @@ from dataclasses import fields
 from datetime import datetime
 
 from ensemble.session.engine.types import ConfigError, SessionError
+from ensemble.session.hosts.docker.daemon import TARGET, ssh_agent
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
@@ -34,8 +35,7 @@ IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 CONTAINER = re.compile(r"ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}")
 ENDPOINT = re.compile(
-    r"^(unix:///[^\u0000-\u001f\u007f]+/\.docker/run/docker\.sock"
-    r"|ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?)$"
+    r"^(unix:///[^\u0000-\u001f\u007f]+/\.docker/run/docker\.sock|" + TARGET.pattern + ")$"
 )
 TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 CREDENTIAL = re.compile(r"[a-z][a-z0-9-]{0,31}")
@@ -286,7 +286,7 @@ class Broker:
             res = self.runner(
                 [BROKER, command, *args],
                 stdin=subprocess.DEVNULL,
-                env={"PATH": os.defpath},
+                env={"PATH": os.defpath, **ssh_agent()},
                 timeout=TIMEOUT,
             )
         except subprocess.TimeoutExpired:
