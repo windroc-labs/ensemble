@@ -143,6 +143,10 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 		return StartResult{}, taken(c)
 	}
+	// The reply names the daemon the volumes are on, which the caller checks.
+	if h, err = h.onDaemon(ctx, protocol.StartFailed); err != nil {
+		return StartResult{}, err
+	}
 	lostName := false
 	created, err := h.ensureVolume(ctx, m, info)
 	if err != nil {
@@ -451,7 +455,7 @@ func (h Host) create(ctx context.Context, c string, m Manifest, info imageInfo, 
 	if codexExpiry != nil {
 		delivered.Expires[credential.Codex] = []string{*codexExpiry}
 	}
-	return StartResult{Container: c, Endpoint: h.Endpoint, ImageDigest: info.ID,
+	return StartResult{Container: c, Endpoint: h.Endpoint, Daemon: h.daemon, ImageDigest: info.ID,
 			Clients:  Clients{Claude: clients.Claude + " (Claude Code)", Codex: "codex-cli " + clients.Codex, Opencode: clients.Opencode},
 			Deadline: deadlineOf(delivered, heldKinds(m))},
 		held, nil

@@ -55,6 +55,8 @@ func goodLabels() map[string]string {
 
 // world is a scripted Docker Desktop: each field steers one kind of call.
 type world struct {
+	daemon          string // docker info's whole output; "": testDaemon's ID
+	daemonErr       error
 	batchReply      *string
 	labels          map[string]string
 	imageMissing    bool
@@ -107,7 +109,10 @@ func (w *world) docker() *fakeDocker {
 		}
 		switch strings.Join(args[:2], " ") {
 		case "info --format":
-			return []byte(`"` + testDaemon + `"` + "\n"), nil
+			if w.daemon != "" {
+				return []byte(w.daemon + "\n"), w.daemonErr
+			}
+			return []byte(`"` + testDaemon + `"` + "\n"), w.daemonErr
 		case "ps --all":
 			if w.proxies != nil {
 				return []byte(*w.proxies), w.egressErr
@@ -509,8 +514,8 @@ func TestStartOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
-		Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
+	want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", Daemon: testDaemon,
+		ImageDigest: digest, Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v", got)
 	}
@@ -530,7 +535,7 @@ func TestStartOrder(t *testing.T) {
 		}
 		steps = append(steps, step)
 	}
-	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm",
+	wantSteps := []string{"ps --all", "container inspect", "network inspect", "image inspect", "container inspect", "info --format", "volume inspect", "volume create", "volume inspect", "ps --filter", "run --rm",
 		"volume inspect", "volume create", "volume inspect", "run --rm", "run --rm", "run --detach", "bootstrap", "hook", "credentials"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Fatalf("steps\n got %q\nwant %q", steps, wantSteps)
@@ -538,7 +543,7 @@ func TestStartOrder(t *testing.T) {
 	if inject := d.calls[len(d.calls)-1]; !slices.Equal(inject, []string{"exec", "--interactive", "--user", "agent", container, Python, "-I", credentialBatch}) {
 		t.Fatalf("inject %q", inject)
 	}
-	boot := d.calls[16]
+	boot := d.calls[17]
 	if !slices.Equal(boot[8:11], []string{"claude", home + "/.ensemble/docker-state/worker_1/claude", home + "/src/project"}) {
 		t.Fatalf("bootstrap %q", boot)
 	}
@@ -893,5 +898,34 @@ func TestStartRollbackRevokesIssuedGitHubTokens(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(parent, tokensGeneration+".tokens.json")); !os.IsNotExist(err) {
 		t.Fatalf("record left behind: %v", err)
+	}
+}
+
+func TestStartDaemonLookupFailureCreatesNoVolume(t *testing.T) {
+	for _, tc := range []struct {
+		name, out string
+		err       error
+		code      protocol.Code
+	}{
+		{"unreachable", "", unreachableErr, protocol.DockerUnreachable},
+		{"unusable", `"../x"`, nil, protocol.StartFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &world{labels: goodLabels(), daemon: tc.out, daemonErr: tc.err}
+			if tc.out == "" {
+				w.daemon = " "
+			}
+			h, d := startHost(w, &fakeCreds{})
+			_, err := h.Start(context.Background(), validManifest(t))
+			var pe *protocol.Error
+			if !errors.As(err, &pe) || pe.Code != tc.code {
+				t.Fatalf("%v, want %s", err, tc.code)
+			}
+			for _, c := range d.calls {
+				if c[0] == "volume" || c[0] == "run" {
+					t.Fatalf("%q after a failed daemon lookup", c)
+				}
+			}
+		})
 	}
 }

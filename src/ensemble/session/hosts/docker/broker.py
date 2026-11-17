@@ -15,13 +15,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from datetime import datetime
 
-from ensemble.session.engine.daemon import TARGET, ssh_agent
+from ensemble.session.engine.daemon import DAEMON, TARGET, ssh_agent
 from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "40"
+PROTOCOL = "41"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -370,6 +370,7 @@ class Broker:
         if not (
             _matches(CONTAINER, started.container)
             and _matches(ENDPOINT, started.endpoint)
+            and _matches(DAEMON, started.daemon)
             and _matches(DIGEST, started.image_digest)
             and isinstance(started.clients, dict)
             and started.clients.keys() == clients

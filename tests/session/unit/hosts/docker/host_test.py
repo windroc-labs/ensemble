@@ -213,6 +213,7 @@ class Base(Case):
         started = Started(
             CONTAINER,
             self.ep,
+            LOCAL_DAEMON,
             "sha256:" + "b" * 64,
             {},
             env={},
@@ -1061,6 +1062,7 @@ class StartTest(StartBase):
         self.broker.started = Started(
             CONTAINER,
             self.ep,
+            LOCAL_DAEMON,
             "sha256:" + "b" * 64,
             {"claude": "2.1.0"},
             env={},
@@ -1268,10 +1270,17 @@ class StartTest(StartBase):
             found = json.load(f)
         self.assertEqual((found["cwd"], found["workspace"]), (cwd, "ensemble-ws-w"))
 
-    def test_a_foreign_container_or_endpoint_rolls_back(self):
+    def test_a_reply_at_another_address_of_the_same_daemon_is_accepted(self):
+        self.broker.started = Started(
+            **{**vars(self.broker.started), "endpoint": "ssh://u@pc.tail1234.ts.net"}
+        )
+        self.start()
+        self.assertIn("guard", self.order)
+
+    def test_a_foreign_container_or_daemon_rolls_back(self):
         for changes in (
             {"container": f"ensemble-x-{GEN}"},
-            {"endpoint": "unix:///x/.docker/run/docker.sock"},
+            {"daemon": "ABCD:EFGH:IJKL"},
         ):
             with self.subTest(changes=changes):
                 self.broker.started = Started(**{**vars(self.broker.started), **changes})

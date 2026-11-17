@@ -169,6 +169,7 @@ type Clients struct {
 type StartResult struct {
 	Container   string            `json:"container"`
 	Endpoint    string            `json:"endpoint"`
+	Daemon      string            `json:"daemon"`
 	ImageDigest string            `json:"image_digest"`
 	Clients     Clients           `json:"clients"`
 	Env         map[string]string `json:"env"`

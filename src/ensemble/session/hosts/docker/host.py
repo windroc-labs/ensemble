@@ -354,12 +354,16 @@ class _Laps:
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
 
 
-def _accept_started(name: str, generation: str, started: Started, container: str) -> None:
-    """Checks the broker's start reply; saves its deadline for the credential tick."""
-    if (started.endpoint, started.container) != (endpoint(), container):
+def _accept_started(
+    name: str, generation: str, started: Started, container: str, daemon: str
+) -> None:
+    """Checks the broker's start reply, by daemon ID, not address; saves its deadline for the
+    credential tick.
+    """
+    if (started.daemon, started.container) != (daemon, container):
         raise SessionError(
-            f"broker: started {started.container} at {started.endpoint},"
-            f" want {container} at {endpoint()}"
+            f"broker: started {started.container} at {started.endpoint} (daemon"
+            f" {started.daemon}), want {container} on daemon {daemon}"
         )
     save(
         maintenance.deadline_file(state_dir(name), generation),
@@ -876,7 +880,7 @@ class DockerHost(Host):
         began = timestamp()
         try:
             started = self.broker.start(manifest, clients=clients)
-            _accept_started(name, generation, started, container)
+            _accept_started(name, generation, started, container, current.daemon)
             ended = timestamp()
             laps("start")
             created = _Container(

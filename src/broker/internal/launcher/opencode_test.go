@@ -235,7 +235,7 @@ func TestStartOpencode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", ImageDigest: digest,
+		want := StartResult{Env: map[string]string{}, Container: container, Endpoint: "unix://" + home + "/.docker/run/docker.sock", Daemon: testDaemon, ImageDigest: digest,
 			Clients: Clients{Claude: "2.1.0 (Claude Code)", Codex: "codex-cli 0.163.0", Opencode: "1.19.3"}}
 		if github {
 			want.Env = map[string]string{"ENSEMBLE_PR_AUTHOR": "ensemble-broker-bot[bot]", "GIT_AUTHOR_NAME": "ensemble-broker-bot[bot]", "GIT_AUTHOR_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com", "GIT_COMMITTER_NAME": "ensemble-broker-bot[bot]", "GIT_COMMITTER_EMAIL": "343764394+ensemble-broker-bot[bot]@users.noreply.github.com"}

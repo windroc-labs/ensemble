@@ -7,6 +7,7 @@ import os
 import tempfile
 from unittest import mock
 
+from ensemble.session.engine.daemon import DAEMON
 from ensemble.session.engine.types import ConfigError, SessionError
 from ensemble.session.hosts.docker import broker
 from ensemble.session.hosts.docker.broker import BROKER, Broker, BrokerError
@@ -306,6 +307,7 @@ class ResponseTest(Case):
             Started(
                 container=CONTAINER,
                 endpoint="unix:///Users/example/.docker/run/docker.sock",
+                daemon="8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6",
                 image_digest="sha256:" + "b" * 64,
                 clients={"claude": "2.1.0", "codex": "codex-cli 0.100.0", "opencode": "1.19.3"},
                 env=data("start-output")["env"],
@@ -340,6 +342,15 @@ class ResponseTest(Case):
             MANIFEST, clients=KEYS
         )
         self.assertEqual(started.endpoint, "ssh://agent@pc.tail1234.ts.net:2222")
+
+    def test_daemon_pattern_is_the_schemas(self):
+        with open(os.path.join(REPO, broker.SCHEMA)) as f:
+            pattern = json.load(f)["$defs"]["daemon"]["pattern"]
+        self.assertEqual(f"^{DAEMON.pattern}$", pattern)
+        started = Broker(FakeBroker(success("start-output-old-style-daemon"))).start(
+            MANIFEST, clients=KEYS
+        )
+        self.assertEqual(started.daemon, data("start-output-old-style-daemon")["daemon"])
 
     def test_build_passes_only_the_package(self):
         fake = FakeBroker(success("build-cached"))
