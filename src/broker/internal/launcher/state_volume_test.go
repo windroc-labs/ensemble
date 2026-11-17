@@ -44,7 +44,7 @@ func TestStateVolumeCreatedWithAgentDirs(t *testing.T) {
 			if _, err := h.Start(context.Background(), tc.path(t)); err != nil {
 				t.Fatal(err)
 			}
-			create := []string{"volume", "create", "--label", "ensemble.state=worker_1", stateVol}
+			create := []string{"volume", "create", "--label", "ensemble.state=worker_1", "--label", "ensemble.state-owner=1001:1002", stateVol}
 			if !called(d, create) {
 				t.Fatalf("no state volume create: %q", d.calls)
 			}
@@ -128,5 +128,16 @@ func TestNoBindMountForAnyClient(t *testing.T) {
 				t.Fatalf("%s: audit %+v", client, mount)
 			}
 		}
+	}
+}
+
+func TestAPrefetchingStartWhoseStateVolumeFailsRemovesItsNewWorkspace(t *testing.T) {
+	w := &world{labels: goodLabels(), stateHelperErr: errors.New("boom")}
+	h, d, _ := prefetchHost(t, w)
+	if _, err := h.Start(context.Background(), prefetchManifest(t, h, nil)); err == nil {
+		t.Fatal("started")
+	}
+	if !called(d, []string{"volume", "rm", volume}) || !called(d, []string{"volume", "rm", stateVol}) {
+		t.Fatalf("volumes kept: %q", d.calls)
 	}
 }

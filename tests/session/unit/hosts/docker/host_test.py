@@ -769,12 +769,13 @@ class StartTest(StartBase):
             self.start()
         self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
 
-    def test_no_daemon_leaves_the_failure_to_the_broker_start(self):
-        self.docker.readers = ["r1"]
+    def test_no_daemon_fails_a_new_start_before_the_broker(self):
         self.docker.down = True
-        self.start()
-        self.assertNotIn(["volume", "rm", "ensemble-state-w"], self.order)
-        self.assertIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
+        with self.assertRaisesRegex(
+            SessionError, "^docker session w: cannot reset its client state: Cannot connect"
+        ):
+            self.start()
+        self.assertNotIn("start", [o[0] for o in self.order if isinstance(o, tuple)])
 
     def test_a_resume_keeps_the_state_volume(self):
         self.history()
@@ -972,6 +973,26 @@ class StartTest(StartBase):
                 )
                 if keep:
                     self.assertEqual(os.listdir(self.home_dir), ["keep"])
+
+    def test_a_resume_check_docker_cannot_answer_names_its_reason(self):
+        self.history()
+        self.state_volumes.inspect_error = "error during connect: ssh: connect to host pc: refused"
+        self.refused_untouched(
+            ConfigError,
+            f"^docker session w: no native history to resume in {re.escape(self.home_dir)}: "
+            "docker volume inspect: error during connect: ssh: connect to host pc: refused$",
+        )
+
+    def test_a_transcript_in_another_sessions_home_is_no_history(self):
+        other = os.path.join(os.path.dirname(self.state), "v", "agent", "s1.jsonl")
+        os.makedirs(os.path.dirname(other))
+        with open(other, "w") as f:
+            f.write("{}\n")
+        self.launch = replace(self.launch, transcript=other)
+        self.refused_untouched(
+            ConfigError,
+            f"^docker session w: no native history to resume in {re.escape(self.home_dir)}$",
+        )
 
     def test_resume_through_a_link_fails_before_the_broker(self):
         secret = os.path.join(self.account, "secret.jsonl")

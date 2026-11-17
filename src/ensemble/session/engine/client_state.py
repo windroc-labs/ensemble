@@ -38,6 +38,7 @@ ARCHIVE_SLACK = 64 << 10  # tar headers and padding
 REPLY_TIMEOUT = 10
 READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state_reader.py")
 IMAGE = re.compile(r"ensemble-worker:[0-9a-f]{64}")
+OWNER = re.compile(r"[0-9]{1,10}:[0-9]{1,10}")
 IMAGE_PYTHON = "/opt/ensemble/venv/bin/python"
 HEADER_KEYS = {"errno", "message", "size", "mtime", "entries", "length"}
 ARCHIVE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE)
@@ -218,29 +219,28 @@ class _Reader:
         self.session = session
         self.lock = threading.Lock()
         self.proc: subprocess.Popen | None = None
-        self.buffer = b""
+        self.buffer = bytearray()
 
     def ask(self, request: dict, bound: int) -> tuple[dict, bytes]:
         line = json.dumps(request).encode() + b"\n"
         with self.lock:
             for attempt in (1, 2):
+                fresh = self.proc is None
                 proc = self.proc or self._start()
                 try:
                     _send(proc, line)
-                except OSError:
-                    self.close()
-                    if attempt == 1:
-                        continue
-                    raise OSError(errno.EPIPE, "state reader gone") from None
-                try:
                     return self._reply(proc, bound)
+                except BrokenPipeError:
+                    self.close()
+                    if attempt == 2 or fresh:  # a reached reader that left: removed with its volume
+                        raise OSError(errno.EPIPE, "state reader gone") from None
                 except BaseException:
                     self.close()
                     raise
         raise AssertionError("unreachable")
 
     def close(self) -> None:
-        proc, self.proc, self.buffer = self.proc, None, b""
+        proc, self.proc, self.buffer = self.proc, None, bytearray()
         if proc is None:
             return
         with contextlib.suppress(OSError):
@@ -260,11 +260,15 @@ class _Reader:
         if labels is None:
             raise FileNotFoundError(errno.ENOENT, "no state volume", volume)
         try:
-            owner = json.loads(labels).get("ensemble.state")
-        except (ValueError, AttributeError):
-            owner = None
-        if owner != self.session:
+            found = json.loads(labels)
+        except ValueError:
+            found = None
+        found = found if isinstance(found, dict) else {}
+        if found.get("ensemble.state") != self.session:
             raise FileNotFoundError(errno.ENOENT, "not this session's state volume", volume)
+        user = found.get("ensemble.state-owner")
+        if not isinstance(user, str) or not OWNER.fullmatch(user):
+            raise OSError(errno.EIO, "state volume has no owner", volume)
         listed = self._run(
             access,
             *("image", "ls", "--filter", "reference=ensemble-worker"),
@@ -280,19 +284,15 @@ class _Reader:
             *("run", "--rm", "--interactive", "--name", f"ensemble-reader-{secrets.token_hex(8)}"),
             *("--label", f"{daemon.STATE_READER_LABEL}={self.session}", "--log-driver", "none"),
             *("--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"),
-            *("--user", "agent", "--read-only"),
+            *("--user", user, "--read-only"),
             *("--mount", f"type=volume,source={volume},target=/state,readonly,volume-nocopy"),
             *("--entrypoint", IMAGE_PYTHON, image, "-I", "-c", program, "/state"),
             host=access.host,
         )
         try:
+            pipe, quiet = subprocess.PIPE, subprocess.DEVNULL
             self.proc = subprocess.Popen(
-                argv,
-                env=env,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                argv, env=env, stdin=pipe, stdout=pipe, stderr=quiet, start_new_session=True
             )
         except OSError as error:
             raise OSError(errno.EIO, f"state reader: {error}") from None
@@ -313,33 +313,34 @@ class _Reader:
         raise OSError(errno.EIO, f"docker {args[0]} {args[1]}: {lines[-1] if lines else 'failed'}")
 
     def _reply(self, proc: subprocess.Popen, bound: int) -> tuple[dict, bytes]:
-        deadline = time.monotonic() + REPLY_TIMEOUT
-        header = _header(self._take(proc, deadline, until_newline=HEADER_MAX))
+        header = _header(self._take(proc, until_newline=HEADER_MAX))
         if header["length"] > bound:
             raise OSError(errno.EPROTO, "state reader reply: over its bound")
-        return header, self._take(proc, deadline, size=header["length"])
+        return header, self._take(proc, size=header["length"])
 
-    def _take(
-        self, proc: subprocess.Popen, deadline: float, *, until_newline: int = 0, size: int = 0
-    ) -> bytes:
+    def _take(self, proc: subprocess.Popen, *, until_newline: int = 0, size: int = 0) -> bytes:
+        """The next line or `size` bytes; ETIMEDOUT after REPLY_TIMEOUT with no byte."""
         fd = proc.stdout.fileno() if proc.stdout else -1
         while True:
             if until_newline:
                 end = self.buffer.find(b"\n")
                 if end >= 0:
-                    found, self.buffer = self.buffer[:end], self.buffer[end + 1 :]
+                    found = bytes(self.buffer[:end])
+                    del self.buffer[: end + 1]
                     return found
                 if len(self.buffer) > until_newline:
                     raise OSError(errno.EPROTO, "state reader reply: header over its bound")
             elif len(self.buffer) >= size:
-                found, self.buffer = self.buffer[:size], self.buffer[size:]
+                found = bytes(self.buffer[:size])
+                del self.buffer[:size]
                 return found
+            deadline = time.monotonic() + REPLY_TIMEOUT
             left = deadline - time.monotonic()
             if left <= 0 or not select.select([fd], [], [], left)[0]:
                 raise OSError(errno.ETIMEDOUT, "state reader: no reply")
             chunk = os.read(fd, 1 << 20)
             if not chunk:
-                raise OSError(errno.EPIPE, "state reader exited")
+                raise BrokenPipeError(errno.EPIPE, "state reader exited")
             self.buffer += chunk
 
 

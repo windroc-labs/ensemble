@@ -154,16 +154,6 @@ def removed_tokens(lines: list[dict], generation: str) -> str:
     )
 
 
-def _related(a: str, b: str) -> bool:
-    a, b = os.path.normpath(a), os.path.normpath(b)
-    return os.path.commonpath([a, b]) in (a, b)
-
-
-def _host_path(source: str) -> str:
-    prefix = "/host_mnt/"
-    return source[len(prefix) - 1 :] if source.startswith(prefix) else source
-
-
 def egress_proxy(docker: str) -> tuple[dict, str]:
     """By its label contract (src/broker/internal/launcher/egress.go)."""
     ids = call(
@@ -200,20 +190,19 @@ def baseline(inspect: dict, name: str, cwd: str, plan_mounts: list[str], network
         problems.append(f"HostConfig.ExtraHosts is set: {host['ExtraHosts']}")
     problems += [f"HostConfig.{k} is host" for k in ("PidMode", "IpcMode") if host.get(k) == "host"]
     mounts = inspect.get("Mounts") or []
-    volumes = [m for m in mounts if m.get("Type") == "volume"]
-    if [(v.get("Name"), v.get("Destination")) for v in volumes] != [(f"ensemble-ws-{name}", cwd)]:
-        problems.append(f"want one volume, ensemble-ws-{name} at {cwd}")
-    binds = [m for m in mounts if m.get("Type") == "bind"]
-    risky = []
-    for m in binds:
-        source, target = _host_path(m.get("Source", "")), m.get("Destination", "")
-        if _related(source, cwd):
-            risky.append(f"bind {source} overlaps the cwd {cwd}")
-        elif "docker.sock" in source or "docker.sock" in target:
-            risky.append(f"bind {source} mounts docker.sock")
-    if not risky and sorted(_host_path(m.get("Source", "")) for m in binds) != sorted(plan_mounts):
-        problems.append("bind mounts differ from the plan's mounts")
-    return problems + risky
+    volumes = sorted(
+        (m.get("Name"), m.get("Destination")) for m in mounts if m.get("Type") == "volume"
+    )
+    want = sorted(
+        [(f"ensemble-ws-{name}", cwd), *((f"ensemble-state-{name}", p) for p in plan_mounts)]
+    )
+    if volumes != want:
+        problems.append(f"want volumes {want}, have {volumes}")
+    return problems + [
+        f"bind mount {m.get('Source', '')} at {m.get('Destination', '')}"
+        for m in mounts
+        if m.get("Type") == "bind"
+    ]
 
 
 def proxy_baseline(egress: dict, network: dict, worker: dict) -> list[str]:

@@ -12,6 +12,7 @@ import stat as stat_module
 import tarfile
 import tempfile
 import threading
+import time
 from unittest import mock
 
 from ensemble.session.engine import client_state, daemon
@@ -410,7 +411,7 @@ class ReaderTest(StateCase):
             ["--network", "none"],
             ["--cap-drop", "ALL"],
             ["--security-opt", "no-new-privileges"],
-            ["--user", "agent"],
+            ["--user", "1001:1002"],
             ["--label", "ensemble.state-reader=s1"],
             [
                 "--mount",
@@ -478,6 +479,29 @@ class ReaderTest(StateCase):
         self.volumes.readers[0].kill()
         self.assertEqual(client_state.read(file), b"abc")
         self.assertEqual(len(self.volumes.readers), 2)
+
+    def test_a_reader_that_leaves_mid_request_is_replaced_and_asked_again(self):
+        self.put("a/t", b"abc")
+        file = StateFile("s1", HOME_DIR, "a/t")
+        self.assertEqual(client_state.read(file), b"abc")
+        self.volumes.readers[0].leave = True
+        self.assertEqual(client_state.read(file), b"abc")
+        self.assertEqual(len(self.volumes.readers), 2)
+
+    def test_a_volume_with_no_owner_is_refused(self):
+        self.volumes.owner = ""
+        self.put("a/t")
+        self.assertEqual(self.refused("read", StateFile("s1", HOME_DIR, "a/t")).errno, errno.EIO)
+        self.assertFalse(self.volumes.readers)
+
+    def test_a_large_read_streams_within_its_time(self):
+        path = self.put("big")
+        os.truncate(path, client_state.READ_MAX)
+        started = time.monotonic()
+        self.assertEqual(
+            len(client_state.read(StateFile("s1", HOME_DIR, "big")) or b""), client_state.READ_MAX
+        )
+        self.assertLess(time.monotonic() - started, client_state.REPLY_TIMEOUT)
 
     def test_a_silent_reader_times_out_and_is_stopped(self):
         self.put("a/t", b"abc")

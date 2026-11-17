@@ -19,6 +19,7 @@ from tests.session.unit.hosts.docker.support import FakeProc
 DOCKER = "/usr/local/bin/docker"
 HOST = "unix:///var/run/docker.sock"
 IMAGE = "ensemble-worker:" + "a" * 64
+OWNER = "1001:1002"
 
 
 class ReaderProc:
@@ -29,13 +30,17 @@ class ReaderProc:
         stdout_read, sink = os.pipe()
         self.stdout = os.fdopen(stdout_read, "rb")
         self.stdin = _Stdin(self)
-        self.killed = False
+        self.killed, self.leave = False, False
         self.replies: queue.Queue = queue.Queue()
         self.thread = threading.Thread(target=self._write, args=(sink,))
         self.thread.daemon = True
         self.thread.start()
 
     def request(self, line: bytes) -> None:
+        if self.leave:  # exits: its stdout ends, a later write breaks
+            self.killed = True
+            self.replies.put(None)
+            return
         if self.hang:
             return
         if self.reply is not None:
@@ -94,7 +99,7 @@ class Volumes:
         self.volumes: set[str] | None = None
         self.images = IMAGE + "\n"
         self.reply: bytes | None = None
-        self.hang, self.inspect_error = False, ""
+        self.hang, self.inspect_error, self.owner = False, "", OWNER
 
     def root(self, session):
         return os.path.join(os.path.expanduser(DOCKER_STATE), session)
@@ -113,7 +118,8 @@ class Volumes:
                 return FakeProc(argv, b"", self.inspect_error.encode(), 1)
             if not self.exists(session):
                 return FakeProc(argv, b"", f"Error: no such volume: {args[-1]}".encode(), 1)
-            return FakeProc(argv, json.dumps({"ensemble.state": session}).encode() + b"\n")
+            labels = {"ensemble.state": session, "ensemble.state-owner": self.owner}
+            return FakeProc(argv, json.dumps(labels).encode() + b"\n")
         if args[:2] == ["image", "ls"]:
             return FakeProc(argv, self.images.encode())
         if args[:1] == ["run"]:

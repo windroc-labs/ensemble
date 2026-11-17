@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	stateLabel  = "ensemble.state"        // a state volume's session
-	readerLabel = "ensemble.state-reader" // a session's state reader containers, which mount its state volume
+	stateLabel      = "ensemble.state"        // a state volume's session
+	stateOwnerLabel = "ensemble.state-owner"  // its client dirs' uid:gid, which its readers run as
+	readerLabel     = "ensemble.state-reader" // a session's state reader containers, which mount its state volume
 )
 
 var (
@@ -254,8 +255,11 @@ func (h Host) ensureStateVolume(ctx context.Context, m Manifest, info imageInfo)
 	v := stateVolume(m.Name)
 	labels, err := h.volumeLabels(ctx, v)
 	created = docker.Absent(err)
+	l := info.Config.Labels
+	owner := l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"]
 	if created {
-		if _, err := h.Docker.Run(ctx, []string{"volume", "create", "--label", stateLabel + "=" + m.Name, v}, nil); err != nil {
+		create := []string{"volume", "create", "--label", stateLabel + "=" + m.Name, "--label", stateOwnerLabel + "=" + owner, v}
+		if _, err := h.Docker.Run(ctx, create, nil); err != nil {
 			return false, failure(err, protocol.StartFailed, "Creating state volume "+v+" failed.")
 		}
 		labels, err = h.volumeLabels(ctx, v)
@@ -275,8 +279,6 @@ func (h Host) ensureStateVolume(ctx context.Context, m Manifest, info imageInfo)
 	if !created {
 		return false, nil
 	}
-	l := info.Config.Labels
-	owner := l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"]
 	helper := []string{"run", "--rm", "--log-driver", "none", "--network", "none", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"}
 	chown := append(slices.Clone(helper), "--cap-add", "CHOWN", "--user", "0:0", "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/chown",
 		info.ID, owner, "/state")

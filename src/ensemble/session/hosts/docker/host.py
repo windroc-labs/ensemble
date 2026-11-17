@@ -230,7 +230,7 @@ def _check_history(name: str, home: str, client: str, transcript: str) -> None:
         found = client_state.locate(os.path.join(home, transcript))
         present = (
             found is not None
-            and found.client == client
+            and (found.session, found.client) == (name, client)
             and client_state.read(found, limit=0) is not None
         )
     except OSError as error:
@@ -721,21 +721,16 @@ class DockerHost(Host):
         listed = self._state_call(
             why, "ps", "--all", "--quiet", "--filter", f"label={STATE_READER_LABEL}={name}"
         )
-        if listed is None:
-            return  # no daemon: the broker start fails on it, naming the target, before any write
         if readers := listed.split():
             self._state_call(why, "rm", "--force", *readers)
         self._state_call(why, "volume", "rm", state_volume(name), absent_ok=True)
 
-    def _state_call(self, why: str, *args: str, absent_ok: bool = False) -> str | None:
-        """`docker <args>`'s stdout; None: no reachable daemon."""
+    def _state_call(self, why: str, *args: str, absent_ok: bool = False) -> str:
         argv, env = docker_call(self.docker, *args)
         try:
             result = self.run(argv, env, timeout=RUN_TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise SessionError(f"{why}: {error}") from None
-        if result.returncode and unreachable(result.stderr):
-            return None
         if result.returncode and not (absent_ok and "no such volume" in result.stderr.lower()):
             lines = (result.stderr or "").strip().splitlines()
             raise SessionError(

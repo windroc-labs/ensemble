@@ -148,12 +148,20 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
+	// A start that lost the container name to another leaves its volumes to that one.
+	if created && m.Prefetch != nil {
+		defer func() {
+			var e *protocol.Error
+			if errors.As(retErr, &e) && !lostName {
+				h.removeVolume(ctx, m.Workspace, e)
+			}
+		}()
+	}
 	stateCreated, err := h.ensureStateVolume(ctx, m, info)
 	if err != nil {
 		return StartResult{}, err
 	}
 	if stateCreated {
-		// A start that lost the container name to another leaves the state volume to that one.
 		defer func() {
 			var e *protocol.Error
 			if errors.As(retErr, &e) && !lostName {
@@ -163,13 +171,6 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	}
 	lap("checks")
 	if created && m.Prefetch != nil {
-		// A start that lost the container name to another leaves the workspace to that one.
-		defer func() {
-			var e *protocol.Error
-			if errors.As(retErr, &e) && !lostName {
-				h.removeVolume(ctx, m.Workspace, e)
-			}
-		}()
 		if err := h.prefetch(ctx, c, m, info, px); err != nil {
 			return StartResult{}, err
 		}
