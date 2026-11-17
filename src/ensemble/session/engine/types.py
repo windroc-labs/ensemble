@@ -216,40 +216,26 @@ class StateEntry(NamedTuple):
 
 
 class HomePath(NamedTuple):
-    """A file in a client home: `root` the home as the client's env names it, `rel` the POSIX path
-    below it.
-    """
-
     root: str
     rel: str
 
 
 class HomeStore(Protocol):
-    """A session's client home, picked once by its Host. Absent: None; refused: OSError (ELOOP a
-    link below the root, EINVAL a wrong type or path, EFBIG past a limit).
-    """
+    """A client home its Host picked once: None absent, OSError refused."""
 
     def read(
         self, path: HomePath, *, offset: int = 0, limit: int | None = None, tail: bool = False
-    ) -> bytes | None:
-        """At most its cap from `offset`; `tail`: the last `limit` bytes."""
-        ...
+    ) -> bytes | None: ...
 
     def stat(self, path: HomePath) -> StateStat | None: ...
 
-    def entries(self, path: HomePath, *, limit: int = ...) -> tuple[StateEntry, ...] | None:
-        """A dir's entries by lstat, sorted; EFBIG past `limit`."""
-        ...
+    def entries(self, path: HomePath, *, limit: int = ...) -> tuple[StateEntry, ...] | None: ...
 
     def snapshot(
         self, path: HomePath, *, limit: int, siblings: tuple[str, ...] = ()
-    ) -> AbstractContextManager[str | None]:
-        """A path to read `path` and its present `siblings` from while the context lasts."""
-        ...
+    ) -> AbstractContextManager[str | None]: ...
 
-    def persisted(self) -> dict[str, str]:
-        """The fields that rebuild it in another process."""
-        ...
+    def persisted(self) -> dict[str, str]: ...
 
 
 @dataclass(frozen=True)
@@ -289,7 +275,7 @@ class ClientContext:
     host_address: str
     permission: Permission
     container: Container | None = None
-    home: HomeStore | None = None  # set by the mode from its Host's pick
+    home: HomeStore | None = None
 
 
 LOCAL_CONTEXT = ClientContext("127.0.0.1", Permission.AUTO)

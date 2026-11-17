@@ -390,7 +390,6 @@ class Host(ABC):
         return {}
 
     def _home_store(self, name: str, home: ClientHome | None) -> HomeStore:
-        """Where session `name`'s client reads its home, picked once at its start."""
         return LocalHome()
 
     def _resume_argv(self, name: str) -> tuple[str, ...] | None:
