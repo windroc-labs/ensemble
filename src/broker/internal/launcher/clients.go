@@ -259,7 +259,8 @@ func (h Host) checkLock() (unlock func(), held bool, err error) {
 }
 
 // CheckClients rebuilds, under its own key, every recorded variant a build used within variantLease whose image's
-// clients differ from the latest releases, then prunes. Another check running: it does nothing.
+// clients differ from the latest releases, then prunes: on the target, then on Local. A daemon's failure does not stop
+// the other's check; the first failure is the result's error. Another check running: it does nothing.
 func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 	unlock, held, err := h.checkLock()
 	if err != nil {
@@ -269,7 +270,25 @@ func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 		return CheckResult{Rebuilt: []string{}}, nil
 	}
 	defer unlock()
-	if h, err = h.onDaemon(ctx, protocol.BuildFailed); err != nil {
+	result, err := h.checkDaemon(ctx)
+	if h.Local == nil {
+		return result, err
+	}
+	local, localErr := h.OnLocal().checkDaemon(ctx)
+	if result.Latest == (ClientVersions{}) {
+		result.Latest = local.Latest
+	}
+	result.Rebuilt = append(append([]string{}, result.Rebuilt...), local.Rebuilt...)
+	if err == nil {
+		err = localErr
+	}
+	return result, err
+}
+
+// checkDaemon is CheckClients on h's daemon alone.
+func (h Host) checkDaemon(ctx context.Context) (CheckResult, error) {
+	h, err := h.onDaemon(ctx, protocol.BuildFailed)
+	if err != nil {
 		return CheckResult{}, err
 	}
 	defer h.prune(ctx, "")
