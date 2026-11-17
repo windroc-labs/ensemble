@@ -379,6 +379,12 @@ class DockerDatabaseTest(Case):
         with self.assertRaisesRegex(ConfigError, "^opencode session lookup: "):
             self.client.common.session(self.cwd, "run-1", self.state_db)
 
+    def test_a_bound_session_needs_no_db(self):
+        os.makedirs(os.path.dirname(self.state_db))
+        os.symlink(os.path.join(self.home, "missing.db"), self.state_db)
+        self.client.common.bind(self.cwd, "run-1", SES)
+        self.assertEqual(self.client.common.session(self.cwd, "run-1", self.state_db), SES)
+
 
 EXTRA = ("--prompt", "--pure")
 

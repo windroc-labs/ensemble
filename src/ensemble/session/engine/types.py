@@ -182,8 +182,6 @@ def _no_files() -> Mapping[str, str]:
 
 
 class StateFile(NamedTuple):
-    """A file or dir in a Docker session's client home: `rel` is "/"-separated below it."""
-
     session: str
     client: str
     rel: str
@@ -196,8 +194,8 @@ class StateStat(NamedTuple):
 
 class StateKind(StrEnum):
     DIR = "dir"
-    FILE = "file"  # a regular file
-    OTHER = "other"  # a link included
+    FILE = "file"
+    OTHER = "other"
 
 
 class StateEntry(NamedTuple):

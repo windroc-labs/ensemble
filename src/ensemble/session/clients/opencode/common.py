@@ -57,7 +57,7 @@ HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOCKER_CONFIG_FILE = "opencode.json"
 STORE = f"{STATE}/sessions/opencode"
-DB_MAX = 1 << 30  # bytes of a Docker session's opencode.db, -wal and -shm, in all
+DB_MAX = 1 << 30
 IMAGE_PLUGINS = "/opt/ensemble/plugins"
 # Under XDG_CACHE_HOME: where `opencode plugin -g` puts updraft at any commit.
 HOST_UPDRAFT = "opencode/packages/updraft@git+https:"
@@ -539,22 +539,24 @@ class OpenCodeCommon:
 
     def session(self, cwd: str, sid: str, db: str) -> str | None:
         """(cwd, sid)'s bound session, else its headless run's TITLE one in `db`, bound then."""
+        native = self.native(cwd, sid)
+        if native is not None:
+            return native
         try:
             with _database(db) as path:
-                return self._session(cwd, sid, path)
+                return self._titled(cwd, sid, path)
         except OSError as error:
             raise ConfigError(f"opencode session lookup: {error}") from None
 
-    def _session(self, cwd: str, sid: str, path: str | None) -> str | None:
-        """session, `path` the db to open, None when there is none."""
-        native = self.native(cwd, sid)
-        if native is None and path is not None:
-            try:
-                native = titled(path, TITLE.format(sid=sid))
-            except Refused as error:
-                raise ConfigError(f"opencode session lookup: {error}") from None
-            if native is not None:
-                self.bind(cwd, sid, native)
+    def _titled(self, cwd: str, sid: str, path: str | None) -> str | None:
+        if path is None:
+            return None
+        try:
+            native = titled(path, TITLE.format(sid=sid))
+        except Refused as error:
+            raise ConfigError(f"opencode session lookup: {error}") from None
+        if native is not None:
+            self.bind(cwd, sid, native)
         return native
 
     def session_status(
@@ -565,34 +567,30 @@ class OpenCodeCommon:
         """
         db = transcript or database({**os.environ, **self.env, **env})
         try:
+            native = self.native(cwd, sid)
             with _database(db) as path:
-                return self._status(cwd, sid, path)
-        except OSError:
+                return _status(native or self._titled(cwd, sid, path), path)
+        except (ConfigError, OSError):
             return SessionStatus(Resumable.UNKNOWN, None, "")
 
-    def _status(self, cwd: str, sid: str, path: str | None) -> SessionStatus:
-        try:
-            native = self._session(cwd, sid, path)
-        except ConfigError:
-            return SessionStatus(Resumable.UNKNOWN, None, "")
-        if native is None:
-            return SessionStatus(Resumable.NO if path is None else Resumable.YES, None, "")
-        if path is None:
-            return SessionStatus(Resumable.UNKNOWN, None, "")
-        try:
-            updated = session_updated(path, native)
-        except Refused:
-            return SessionStatus(Resumable.UNKNOWN, None, "")
-        if updated is None:
-            return SessionStatus(Resumable.NO, None, "")
-        return SessionStatus(Resumable.YES, updated, "")
+
+def _status(native: str | None, path: str | None) -> SessionStatus:
+    if native is None:
+        return SessionStatus(Resumable.NO if path is None else Resumable.YES, None, "")
+    if path is None:
+        return SessionStatus(Resumable.UNKNOWN, None, "")
+    try:
+        updated = session_updated(path, native)
+    except Refused:
+        return SessionStatus(Resumable.UNKNOWN, None, "")
+    if updated is None:
+        return SessionStatus(Resumable.NO, None, "")
+    return SessionStatus(Resumable.YES, updated, "")
 
 
 @contextlib.contextmanager
 def _database(db: str) -> Iterator[str | None]:
-    """The opencode.db to open for `db`: a Docker session home's as a snapshot of it, its -wal and
-    -shm; None when there is none.
-    """
+    """`db`, a Docker session's as a snapshot; None: no db."""
     found = located(db, HOME.dir)
     if found is None:
         yield db if os.path.isfile(db) else None

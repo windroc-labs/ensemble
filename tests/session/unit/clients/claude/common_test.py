@@ -1179,6 +1179,13 @@ class DockerStateStatusTest(Base):
         os.symlink(outside, self.path)
         self.assertEqual(self.status(), SessionStatus("unknown", None, self.resume))
 
+    def test_a_linked_project_dir_is_unknown(self):
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, f"{SID}.jsonl"), 9000)
+        os.makedirs(os.path.dirname(os.path.dirname(self.path)))
+        os.symlink(outside, os.path.dirname(self.path))
+        self.assertEqual(self.status(), SessionStatus("unknown", None, self.resume))
+
     def test_a_recorded_transcript_counts_only_in_the_same_project_folder(self):
         self.write(self.path, 1000)
         sibling = os.path.join(os.path.dirname(self.path), "other.jsonl")
@@ -1420,3 +1427,30 @@ class ContinuationTest(Base):
                 self.common.session_status(SID, self.work, transcript=recorded),
                 SessionStatus("yes", 1000.0, reference(self.work)),
             )
+
+
+class DockerContinuationTest(ContinuationTest):
+    """ContinuationTest's walks over a Docker session's Claude home, read through client_state."""
+
+    def setUp(self):
+        super().setUp()
+        self.config_dir = docker_home("w", "claude")
+        self.env({"CLAUDE_CONFIG_DIR": self.config_dir})
+        self.path = self.common.transcript(self.work, SID)
+        self.target = os.path.join(self.config_dir, "projects", "elsewhere", f"{NEXT}.jsonl")
+
+    def test_only_real_project_dirs_are_searched(self):
+        self.write(self.path, self.marker())
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, f"{NEXT}.jsonl"), {})
+        projects = os.path.join(self.config_dir, "projects")
+        os.symlink(outside, os.path.join(projects, "linked"))
+        self.write(os.path.join(projects, "file"))
+        self.assertEqual(
+            self.common.walk(self.path, SID, self.config_dir),
+            [(SID, self.path, None), (NEXT, None, "2026-10-15T12:00:00Z")],
+        )
+        self.write(self.target)
+        self.assertEqual(
+            self.common.walk(self.path, SID, self.config_dir)[-1][:2], (NEXT, self.target)
+        )

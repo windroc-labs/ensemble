@@ -81,7 +81,7 @@ UNATTENDED = MappingProxyType(
         "promptSuggestionEnabled": False,
     }
 )
-WALK_DEPTH = 16  # dirs below a Docker transcript's folder searched for activity
+WALK_DEPTH = 16
 WALK_ENTRIES = 4096
 # Off: the alternate screen keeps a hidden worker's output out of scrollback.
 TUI_ENV = MappingProxyType(
@@ -333,9 +333,7 @@ def texts(content) -> list[str]:
 
 
 def read(path: str, *, offset: int = 0, limit: int | None = None, tail: bool = False):
-    """read_regular; a Docker session's home through client_state; None too for a Docker state
-    path outside its Claude home.
-    """
+    """read_regular; a Docker session's Claude home through client_state."""
     path = os.path.abspath(path)
     try:
         found = located(path, HOME.dir)
@@ -347,7 +345,6 @@ def read(path: str, *, offset: int = 0, limit: int | None = None, tail: bool = F
 
 
 def _subdirs(path: str) -> list[str]:
-    """Names in dir `path`: a Docker session home's subdirs only."""
     found = located(path, HOME.dir)
     if found is not None:
         listed = client_state.entries(found) or ()
@@ -357,7 +354,6 @@ def _subdirs(path: str) -> list[str]:
 
 
 def _contained(path: str, root: str) -> bool:
-    """Read `path` below `root`: a Docker session home's by its text, as no link is read there."""
     if located(path, HOME.dir) is not None:
         return True
     real = os.path.realpath(root)
@@ -365,7 +361,6 @@ def _contained(path: str, root: str) -> bool:
 
 
 def _recorded(transcript: str, path: str) -> str | None:
-    """`transcript`, a regular file in `path`'s folder; None otherwise."""
     if not printable_abs(transcript):
         return None
     with contextlib.suppress(OSError):
@@ -381,7 +376,7 @@ def _recorded(transcript: str, path: str) -> str | None:
         other = located(transcript, HOME.dir)
         if (
             other is not None
-            and other[:2] == found[:2]
+            and (other.session, other.client) == (found.session, found.client)
             and posixpath.dirname(other.rel) == posixpath.dirname(found.rel)
             and client_state.stat(other) is not None
         ):
@@ -403,7 +398,7 @@ def _resumable(path: str) -> Resumable:
 
 
 def _activity(path: str) -> float | None:
-    """The newest mtime of `path` and of the files in its folder (`path` less its suffix)."""
+    """The newest mtime of `path` and the files in its folder."""
     try:
         found = located(path, HOME.dir)
     except OSError:
@@ -424,7 +419,6 @@ def _activity(path: str) -> float | None:
 
 
 def _state_activity(file: StateFile) -> float | None:
-    """_activity in a Docker session home: links skipped, WALK_DEPTH dirs and WALK_ENTRIES deep."""
     times = []
     with contextlib.suppress(OSError):
         if (found := client_state.stat(file)) is not None:

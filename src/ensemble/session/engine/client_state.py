@@ -1,5 +1,5 @@
-"""Reads of a Docker session's client home, the state its worker writes: through no link, nothing
-outside the home, each bounded. Absent: None; refused: an OSError other than FileNotFoundError.
+"""Reads of a Docker session's client home, which its worker writes: through no link, never outside
+it, bounded. Absent: None; refused: OSError, EINVAL for a wrong file type or name.
 """
 
 import contextlib
@@ -22,9 +22,7 @@ DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
 
 
 def locate(path: str) -> StateFile | None:
-    """Absolute `path`'s StateFile, by its text alone; None below no state root; EXDEV below one
-    but not below a client home.
-    """
+    """`path`'s StateFile by its text; None outside the state root; EXDEV outside a client home."""
     path = os.path.abspath(path)
     for root in _roots():
         if os.path.commonpath((path, root)) != root:
@@ -39,7 +37,7 @@ def locate(path: str) -> StateFile | None:
 def read(
     file: StateFile, *, offset: int = 0, limit: int | None = None, tail: bool = False
 ) -> bytes | None:
-    """From byte `offset`: the first `limit` bytes (the last with `tail`), at most READ_MAX."""
+    """At most READ_MAX bytes from `offset`; `tail`: the last `limit`."""
     cap = READ_MAX if limit is None else min(limit, READ_MAX)
     try:
         fd, _ = _open(file)
@@ -62,7 +60,7 @@ def stat(file: StateFile) -> StateStat | None:
 
 
 def entries(file: StateFile, *, limit: int = ENTRIES_MAX) -> tuple[StateEntry, ...] | None:
-    """A directory's entries by name, each as its lstat shows it; EFBIG past `limit` of them."""
+    """A dir's entries, by lstat; EFBIG past `limit`."""
     try:
         fd, _ = _open(file, directory=True)
     except FileNotFoundError:
@@ -89,8 +87,8 @@ def entries(file: StateFile, *, limit: int = ENTRIES_MAX) -> tuple[StateEntry, .
 def snapshot(
     file: StateFile, *, limit: int, siblings: tuple[str, ...] = ()
 ) -> Iterator[str | None]:
-    """A private copy of `file` and of each `rel + suffix` sibling present, `limit` bytes in all,
-    unchanged across the copy; its path while open, then removed. None: no `file`.
+    """A private copy of `file` and its present siblings, `limit` bytes in all, unchanged while
+    copied, removed on exit.
     """
     names = [file, *(file._replace(rel=file.rel + suffix) for suffix in siblings)]
     for name in names:
@@ -113,7 +111,6 @@ def _stable_copy(names: list[StateFile], limit: int, folder: str) -> str | None:
 
 
 def _copy(names: list[StateFile], limit: int, folder: str) -> list[tuple[int, int] | None]:
-    """Each name's (size, mtime_ns) as copied, None when absent; a missing main copies nothing."""
     copied: list[tuple[int, int] | None] = []
     total = 0
     for name in names:
@@ -153,14 +150,12 @@ def _identity(name: StateFile) -> tuple[int, int] | None:
 
 
 def _open(file: StateFile, *, directory: bool = False) -> tuple[int, os.stat_result]:
-    """An fd of `file` (`directory`: a dir, else a regular file) and its fstat, opened part by part
-    from the state root, no part below it a link; FileNotFoundError: a part is missing.
-    """
+    """`file`'s fd and fstat, opened part by part from the state root through no link."""
     parts = _parts(file)
     fd = os.open(_roots()[0], DIR_FLAGS)
     try:
         for part in parts[:-1]:
-            fd, parent = os.open(part, DIR_FLAGS | os.O_NOFOLLOW, dir_fd=fd), fd
+            fd, parent = _subdir(part, fd), fd
             os.close(parent)
         _check(os.lstat(parts[-1], dir_fd=fd).st_mode, file, directory=directory)
         flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -174,6 +169,15 @@ def _open(file: StateFile, *, directory: bool = False) -> tuple[int, os.stat_res
         os.close(opened)
         raise
     return opened, info
+
+
+def _subdir(part: str, fd: int) -> int:
+    try:
+        return os.open(part, DIR_FLAGS | os.O_NOFOLLOW, dir_fd=fd)
+    except NotADirectoryError:  # Linux, for a link
+        if stat_module.S_ISLNK(os.lstat(part, dir_fd=fd).st_mode):
+            raise OSError(errno.ELOOP, "a link", part) from None
+        raise
 
 
 def _check(mode: int, file: StateFile, *, directory: bool) -> None:
@@ -203,6 +207,5 @@ def _kind(mode: int) -> StateKind:
 
 
 def _roots() -> tuple[str, ...]:
-    """The state root as named, then its real path when that differs."""
     named = os.path.abspath(os.path.expanduser(DOCKER_STATE))
     return tuple(dict.fromkeys((named, os.path.realpath(named))))

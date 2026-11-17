@@ -1,4 +1,4 @@
-"""The state root STATE, its Docker session homes, path normalization, containment and writable temp roots."""
+"""STATE, Docker session homes, path normalization, containment and temp roots."""
 
 import contextlib
 import os
@@ -19,7 +19,6 @@ def docker_home(name: str, dir: str) -> str:
 
 
 def module_roots(*packages: ModuleType) -> tuple[str, ...]:
-    """Source roots of already-imported modules or packages, retaining their order."""
     roots = []
     for package in packages:
         path = package.__file__
@@ -53,7 +52,6 @@ def source_path(roots: Sequence[str]) -> dict[str, str]:
 
 
 def _installed() -> set[str]:
-    """The interpreter's purelib and platlib that are on its sys.path."""
     paths = sysconfig.get_paths()
     installed = {os.path.realpath(paths[name]) for name in ("purelib", "platlib")}
     return installed & {os.path.realpath(path) for path in sys.path if path}
