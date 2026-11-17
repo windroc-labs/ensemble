@@ -207,7 +207,7 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 		}
 	}
 	if err != nil {
-		return h.undo(ctx, d, v, created, failure(err, protocol.StartFailed, "Cannot inspect workspace volume "+v+"."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot inspect workspace volume "+v+"."))
 	}
 	if labels[kindLabel] != kind || labels[workspaceLabel] != m.CWD {
 		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the workspace for %s (%s %q, %s %q).",
@@ -215,7 +215,7 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 	}
 	out, err := d.Runner.Run(ctx, []string{"ps", "--filter", "volume=" + v, "--format", "{{.Names}}"}, nil)
 	if err != nil {
-		return h.undo(ctx, d, v, created, failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot list the containers using "+v+"."))
 	}
 	if users := strings.Fields(string(out)); len(users) > 0 {
 		return false, protocol.Newf(protocol.MountRejected, "Workspace volume %s is mounted by running container %s; close it first.", v, users[0])
@@ -227,7 +227,7 @@ func (h Host) ensureVolume(ctx context.Context, d Daemon, m Manifest, info image
 	chown := []string{"run", "--rm", "--network", "none", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--security-opt", "no-new-privileges", "--user", "0:0",
 		"--mount", volumeMount(v, "/workspace", false), "--entrypoint", "/bin/chown", info.ID, l["ensemble.agent-uid"] + ":" + l["ensemble.agent-gid"], "/workspace"}
 	if _, err := d.Runner.Run(ctx, chown, nil); err != nil {
-		return h.undo(ctx, d, v, created, failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Giving workspace volume "+v+" to agent failed."))
 	}
 	return true, nil
 }
@@ -246,7 +246,7 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 		labels, err = h.volumeLabels(ctx, d, v)
 	}
 	if err != nil {
-		return h.undo(ctx, d, v, created, failure(err, protocol.StartFailed, "Cannot inspect state volume "+v+"."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Cannot inspect state volume "+v+"."))
 	}
 	if labels[stateLabel] != m.Name {
 		return false, protocol.Newf(protocol.MountRejected, "Volume %s is not the client state of %s (%s %q).", v, m.Name, stateLabel, labels[stateLabel])
@@ -258,7 +258,7 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 	chown := append(slices.Clone(helper), "--cap-add", "CHOWN", "--user", "0:0", "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/chown",
 		info.ID, owner, "/state")
 	if _, err := d.Runner.Run(ctx, chown, nil); err != nil {
-		return h.undo(ctx, d, v, created, failure(err, protocol.StartFailed, "Giving state volume "+v+" to agent failed."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Giving state volume "+v+" to agent failed."))
 	}
 	mkdir := append(slices.Clone(helper), "--user", owner, "--mount", volumeMount(v, "/state", false), "--entrypoint", "/bin/mkdir",
 		info.ID, "-p", "-m", "0700")
@@ -266,7 +266,7 @@ func (h Host) ensureStateVolume(ctx context.Context, d Daemon, m Manifest, info 
 		mkdir = append(mkdir, "/state/"+dir)
 	}
 	if _, err := d.Runner.Run(ctx, mkdir, nil); err != nil {
-		return h.undo(ctx, d, v, created, failure(err, protocol.StartFailed, "Making the client dirs in state volume "+v+" failed."))
+		return h.undo(ctx, startVolume{d, v, created}, failure(err, protocol.StartFailed, "Making the client dirs in state volume "+v+" failed."))
 	}
 	return true, nil
 }
@@ -289,11 +289,18 @@ func (h Host) removeStateVolume(ctx context.Context, d Daemon, name string) erro
 	return nil
 }
 
-// undo fails a start with e, first removing volume v when this start created it: until its root is the agent's, a later
+// startVolume is a volume a start ensures on d; one it created goes on failure until its root is the agent's, as a later
 // start would skip the chown.
-func (h Host) undo(ctx context.Context, d Daemon, v string, created bool, e *protocol.Error) (bool, error) {
-	if created {
-		h.removeVolume(ctx, d, v, e)
+type startVolume struct {
+	d       Daemon
+	name    string
+	created bool
+}
+
+// undo fails a start with e.
+func (h Host) undo(ctx context.Context, sv startVolume, e *protocol.Error) (bool, error) {
+	if sv.created {
+		h.removeVolume(ctx, sv.d, sv.name, e)
 	}
 	return false, e
 }
