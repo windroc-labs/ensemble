@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import signal
 import threading
 import time
 from datetime import UTC, datetime
@@ -266,17 +267,28 @@ class Refresh(Base):
 
 
 class Main(Base):
-    def main(self, *argv, state=None, environ=None):
-        """main's exit code or message; `self.popen` is the faked child's Popen."""
+    def main(self, *argv, state=None, environ=None, polls=(0,)):
+        """main's exit code or message. `self.popen` is the faked child's Popen; its poll gives
+        `polls` in turn, a signal's byte reaching the wakeup fd before each None."""
         env = {
             "PATH": os.pathsep.join([os.path.dirname(self.wrapper), self.bin]),
             "HOME": self.home,
         }
-        self.popen = mock.Mock(return_value=mock.Mock(wait=mock.Mock(return_value=0)))
+        self.wakeup = mock.Mock()
+        codes = iter(polls)
+
+        def poll():
+            if (code := next(codes)) is None:
+                os.write(self.wakeup.call_args.args[0], bytes([signal.SIGTERM]))
+            return code
+
+        self.popen = mock.Mock(return_value=mock.Mock(poll=poll))
         with (
             mock.patch.dict(os.environ, environ or env, clear=True),
             mock.patch.object(host_gh.subprocess, "Popen", self.popen),
-            mock.patch.object(host_gh.signal, "signal"),
+            mock.patch.object(host_gh.signal, "signal") as self.signal,
+            mock.patch.object(host_gh.signal, "set_wakeup_fd", self.wakeup),
+            mock.patch.object(host_gh.os, "kill") as self.kill,
             self.assertRaises(SystemExit) as raised,
         ):
             host_gh.main(
@@ -324,6 +336,26 @@ class Main(Base):
             self.assertEqual(self.main("run", "watch", "7"), 0)
         self.popen.assert_called_once_with(["gh", "run", "watch", "7"], executable=self.real)
         self.assertEqual(self.broker_calls(calls), [])
+
+    def test_each_wakeup_polls_gh_again_until_it_exits(self):
+        self.stamp(10)
+        _, run = self.runs()
+        with run:
+            self.assertEqual(self.main("run", "watch", polls=(None, None, 3)), 3)
+        self.assertFalse(os.get_blocking(self.wakeup.call_args.args[0]))
+
+    def test_a_child_killed_by_a_signal_kills_the_wrapper_by_it(self):
+        self.stamp(10)
+        for signum, reset in ((signal.SIGTERM, [signal.SIGTERM]), (signal.SIGKILL, [])):
+            with self.subTest(signum.name):
+                _, run = self.runs()
+                with run:
+                    self.assertEqual(self.main("api", polls=(-signum,)), 128 + signum)
+                self.kill.assert_called_once_with(os.getpid(), signum)
+                defaults = [
+                    c.args[0] for c in self.signal.call_args_list if c.args[1] == signal.SIG_DFL
+                ]
+                self.assertEqual(defaults, reset)
 
 
 class Verified(Case):
