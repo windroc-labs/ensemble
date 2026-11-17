@@ -181,7 +181,7 @@ class TargetTest(Case):
             with self.subTest(case=case["name"]):
                 self.assertEqual(daemon.env_items(case["fields"]), tuple(case["items"]))
 
-    def test_unparseable_credentials_have_no_env_items(self):
+    def test_unparsable_credentials_have_no_env_items(self):
         for text in ("", "[]", "{", '{"env": 1}', '{"env": [1]}', '{"env": [{"item": 2}]}'):
             with self.subTest(text=text):
                 self.assertEqual(daemon.env_items({"credentials": text}), ())

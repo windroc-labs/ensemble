@@ -27,6 +27,7 @@
     "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/Mini\"]}",
     "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/a\", \"ensemble-broker-env/a\"]}",
     "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/a\", \"ensemble-broker-env/b\", \"ensemble-broker-env/c\", \"ensemble-broker-env/d\", \"ensemble-broker-env/e\", \"ensemble-broker-env/f\", \"ensemble-broker-env/g\", \"ensemble-broker-env/h\", \"ensemble-broker-env/i\", \"ensemble-broker-env/j\", \"ensemble-broker-env/k\", \"ensemble-broker-env/l\", \"ensemble-broker-env/m\", \"ensemble-broker-env/n\", \"ensemble-broker-env/o\", \"ensemble-broker-env/p\", \"ensemble-broker-env/q\"]}",
-    "{\"host\": \"ssh://pc\", \"local_secrets\": [], \"extra\": 1}"
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [], \"extra\": 1}",
+    "{\"host\": \"ssh://pc\", \"local_secrets\": [\"ensemble-broker-env/a\"], \"LOCAL_SECRETS\": []}"
   ]
 }

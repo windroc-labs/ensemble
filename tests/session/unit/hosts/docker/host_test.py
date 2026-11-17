@@ -2675,6 +2675,33 @@ class TwoDaemonsTest(Base):
             [(f"ensemble-mini-{GEN}", self.ep), (f"ensemble-w-{GEN}", REMOTE)],
         )
 
+    def test_a_daemon_that_times_out_is_down_and_the_other_still_answers(self):
+        self.worker(self.docker, "mini")
+        self.worker(self.remote, "w")
+        self.remote.replies = {}
+        run = self.host.run
+
+        def timing_out(argv, env, **kw):
+            if argv[2] == REMOTE and argv[3:5] == ["ps", "-a"]:
+                raise TimeoutExpired(argv, RUN_TIMEOUT)
+            return run(argv, env, **kw)
+
+        self.host.run = timing_out
+        with (
+            contextlib.redirect_stderr(io.StringIO()) as err,
+            self.assertLogs("session", "WARNING"),
+        ):
+            self.assertEqual([row.name for row in self.host.rows()], ["mini"])
+            self.assertEqual([row.name for row in self.host._capacity_rows()], ["mini"])
+            self.host.sweep("other")
+        self.assertIn(f"{REMOTE} unreachable", err.getvalue())
+        self.assertEqual(self.broker.closed, [f"ensemble-mini-{GEN}"])
+
+    def test_a_worker_on_an_unreachable_daemon_is_not_taken_as_ended(self):
+        self.worker(self.remote, "w")
+        self.remote.down = True
+        self.assertEqual(self.host.worker_liveness("w", GEN), Liveness.UNKNOWN)
+
     def test_sweep_leaves_an_unreachable_daemon_alone(self):
         self.worker(self.docker, "mini")
         self.worker(self.remote, "w")
@@ -2748,6 +2775,15 @@ class LocalPlacementTest(StartBase):
         self.start(resume="1", environment_credentials=MINI_CREDENTIALS)
         self.assertIn("guard", self.order)
         self.assertEqual(self.remote_work(), [])
+
+    def test_a_local_session_whose_secrets_are_no_longer_local_is_refused(self):
+        self.start(environment_credentials=MINI_CREDENTIALS)
+        self.close_quietly(self.handle)
+        self.handle = None
+        with open(os.path.join(self.account, daemon.TARGET_FILE), "w") as f:
+            json.dump({"host": REMOTE, "local_secrets": []}, f)
+        with self.assertRaisesRegex(ConfigError, "cannot resume it here: its Docker target is the"):
+            self.start(resume="1", environment_credentials=MINI_CREDENTIALS)
 
     def test_a_reply_from_another_daemon_rolls_back_there(self):
         self.broker.started = replace(self.broker.started, endpoint=REMOTE, daemon=REMOTE_DAEMON)

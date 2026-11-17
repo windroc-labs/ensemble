@@ -124,6 +124,14 @@ func LoadTarget(home string) (Target, error) {
 	if v.Host == nil {
 		return invalid("no host")
 	}
+	// The decoder matches keys case-insensitively, so a case variant could override a key.
+	var keys map[string]json.RawMessage
+	_ = json.Unmarshal(data, &keys)
+	for key := range keys {
+		if key != "host" && key != "local_secrets" {
+			return invalid("unknown key %q", key)
+		}
+	}
 	host := *v.Host
 	if !targetHost.MatchString(host) {
 		return invalid("host %q is not ssh://[user@]host[:port]", host)

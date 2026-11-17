@@ -437,6 +437,11 @@ def _no_daemon(hosts: Iterable[str]) -> str:
     return f"no Docker CLI, or Docker target {', '.join(hosts)} unreachable"
 
 
+def _beside(down: tuple[str, ...]) -> tuple[str, ...]:
+    """The unreachable daemons of two: with one, it stays silent as before."""
+    return down if len(daemons()) > 1 else ()
+
+
 def _session_rows(listed: Iterable[tuple[str, list[str]]]) -> list[Row]:
     """(daemon, ps row)s as Rows."""
     return [
@@ -515,9 +520,15 @@ class DockerHost(Host):
         listed: list[tuple[str, list[str]]] = []
         down = []
         for host in hosts:
-            rows = self._listed(
-                "ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT, host=host
-            )
+            try:
+                rows = self._listed(
+                    "ps", "-a", "--filter", f"label={LABEL}", "--format", PS_FORMAT, host=host
+                )
+            except Unanswered as error:
+                if len(hosts) == 1:
+                    raise
+                LOG.warning("docker %s: %s", host, error)
+                rows = None
             if rows is None:
                 down.append(host)
             else:
@@ -555,11 +566,13 @@ class DockerHost(Host):
         lock, untaken if busy (`own`'s caller holds its).
         """
         try:
-            rows = self._rows()
+            listed, down = self._inventory()
         except SessionError as error:
             LOG.warning("docker sweep: %s", error)
             return
-        for row in rows:
+        for host in _beside(down):
+            LOG.warning("docker sweep: %s unreachable; its containers stay", describe(host))
+        for row in _session_rows(listed):
             try:
                 if row.name == own:
                     self._sweep_row(row, own=True)
@@ -1341,10 +1354,13 @@ class DockerHost(Host):
     def _row_liveness(self, name: str, generation: str) -> Liveness:
         """By docker; ABSENT permits only that container's removal."""
         try:
-            rows = self._rows()
+            listed, down = self._inventory()
         except SessionError:
             return Liveness.UNKNOWN
+        rows = _session_rows(listed)
         row = next((r for r in rows if r.name == name and r.generation == generation), None)
+        if row is None and _beside(down):
+            return Liveness.UNKNOWN
         if row is None or row.state != "running":
             return Liveness.ABSENT
         return self._guard_liveness(row)
@@ -1459,7 +1475,7 @@ class DockerHost(Host):
         except SessionError as error:
             LOG.warning("docker rows: %s", error)
             return []
-        for host in down:
+        for host in _beside(down):
             print(
                 f"ensemble-session: docker: {describe(host)} unreachable; its workers are not"
                 " listed",

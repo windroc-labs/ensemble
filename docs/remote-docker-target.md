@@ -12,7 +12,8 @@ flowchart LR
 ```
 
 Do the steps in this order. The rules for `~/.ensemble/docker/target.json` (address form, SSH options, the check
-before each start) are in [Upgrading › Broker protocol 40](upgrading.md#broker-protocol-40-docker-target). A session
+before each start) are in [Upgrading › Broker protocol 40](upgrading.md#broker-protocol-40-docker-target), and its
+`local_secrets` key in [Broker protocol 42](upgrading.md#broker-protocol-42-mini-op-workers-stay-on-the-mac). A session
 stays on the daemon that made it: switching the target to another machine leaves earlier sessions there, to resume or
 reclaim after switching back ([Upgrading › Broker protocol 41](upgrading.md#broker-protocol-41-a-docker-target-is-its-daemon)).
 
