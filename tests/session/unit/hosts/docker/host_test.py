@@ -109,6 +109,7 @@ class FakeDocker:
         self.readers, self.volume_rm, self.calls = [], (0, "", ""), []
         self.daemons, self.infos = {ep: LOCAL_DAEMON}, []
         self.elsewhere = {}  # another daemon's host: the volumes it holds
+        self.elsewhere_failing = {}  # another daemon's host: its volume inspect's failure
 
     def __call__(self, argv, env, *, input=None, timeout):
         assert not set(CLEARED) & env.keys() and timeout <= RUN_TIMEOUT
@@ -119,6 +120,10 @@ class FakeDocker:
             return done(0, json.dumps(self.daemons[argv[2]]) + "\n")
         if argv[:2] == [DOCKER, "--host"] and argv[2] != self.ep:
             assert argv[3:5] == ["volume", "inspect"], argv
+            if (failing := self.elsewhere_failing.get(argv[2])) is not None:
+                if isinstance(failing, BaseException):
+                    raise failing
+                return failing
             if argv[5] in self.elsewhere.get(argv[2], ()):
                 return done(0, "[]\n")
             return done(1, "", f"Error response from daemon: get {argv[5]}: no such volume\n")
@@ -2371,6 +2376,27 @@ class RemoveWorkspacesTest(Base):
         )
         self.docker.daemons["ssh://u@pc"] = "ANOTHER"
         self.refused(r"\(ensemble-ws-reviewer-bbbb unchecked: daemon PC is not at ssh://u@pc\)$")
+
+    def test_reclaim_refuses_when_another_daemon_s_volume_check_fails(self):
+        self.session("reviewer-bbbb", self.agent, DockerAccess(DOCKER, "ssh://u@pc", "PC"))
+        self.pc_holds()
+        self.nothing_here()
+        for failure, why in (
+            (
+                done(1, "", "warning: x\npermission denied while trying to connect\n"),
+                "permission denied",
+            ),
+            (done(1, "", ""), "1"),
+            (OSError("no docker CLI"), "no docker CLI"),
+            (TimeoutExpired(["docker"], 10), "timed out"),
+        ):
+            with self.subTest(why=why):
+                self.docker.elsewhere_failing["ssh://u@pc"] = failure
+                self.refused(
+                    "^docker session reviewer-bbbb: cannot reclaim it here: .* ssh://u@pc to reclaim"
+                    rf" it \(ensemble-ws-reviewer-bbbb unchecked: .*{why}"
+                )
+                self.assertEqual(self.removals(), [])
 
     def test_reclaim_on_the_same_daemon_removes(self):
         self.session("pm-TASK-1-1a2b3c4d", self.agent, DockerAccess(DOCKER, self.ep, LOCAL_DAEMON))
