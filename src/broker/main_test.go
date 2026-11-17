@@ -77,7 +77,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"40"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"41"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -603,6 +603,8 @@ func (s *scripted) Run(_ context.Context, args []string, stdin []byte) ([]byte, 
 	switch {
 	case args[0] == "exec" && args[len(args)-1] == docker.SecretsDir+"/github":
 		return []byte(s.tokens), nil
+	case args[0] == "info":
+		return []byte(`"8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"` + "\n"), nil
 	case strings.HasPrefix(joined, "ps --all") && strings.Contains(joined, "--filter label=windroc.egress.contract "):
 		return []byte(proxyID + "\n"), nil
 	case joined == "container inspect "+proxyID:

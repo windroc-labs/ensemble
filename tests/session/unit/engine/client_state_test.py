@@ -524,7 +524,7 @@ class AccessRecordTest(Case):
         self.volumes = self.enterContext(serve(sessions=()))
 
     def test_calls_use_the_sessions_recorded_docker_and_daemon(self):
-        daemon.save_access("s1", DockerAccess("/opt/docker", "ssh://pc"))
+        daemon.save_access("s1", DockerAccess("/opt/docker", "ssh://pc", "daemon-a"))
         with ssh_wrapper():
             self.assertEqual(client_state.read(StateFile("s1", HOME_DIR, "t")), b"ok")
         self.assertTrue(self.volumes.calls)

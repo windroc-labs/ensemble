@@ -571,6 +571,8 @@ class VerifierDockerTest(HarnessCase):
         program = os.path.basename(argv[0])
         if program == "docker" and argv[1] == "--host":  # the packaged Docker Host: an empty daemon
             self.docker.append(argv[3])
+            if argv[3] == "info":
+                return support.FakeProc(argv, out=b'"8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"\n')
             return support.FakeProc(argv)
         self.programs.append(program)
         if program == "claude":  # the start's usage probe: a login with no usage panel
@@ -634,7 +636,7 @@ class VerifierDockerTest(HarnessCase):
         )
         self.assertIn("ensemble-broker-env/mini-op-ssh-key", self.failure())
         self.assertEqual(self.calls.count("start"), 1)
-        self.assertLessEqual(set(self.docker), {"ps", "volume"})
+        self.assertLessEqual(set(self.docker), {"info", "ps", "volume"})
 
 
 class IdentityTest(HarnessCase):

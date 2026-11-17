@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -98,13 +99,13 @@ type CheckResult struct {
 	Rebuilt []string       `json:"rebuilt"`
 }
 
-// checkState is ~/.ensemble/docker/clients-check.json, written only by check-clients.
+// checkState is a daemon's clients-check.json in its image records, written only by check-clients.
 type checkState struct {
 	CheckedAt time.Time `json:"checked_at"`
 	Failure   string    `json:"failure"`
 }
 
-// variant is a variant record, images/<key>.json: the build inputs that reproduce key.
+// variant is a variant record, <key>.json in a daemon's image records: the build inputs that reproduce key.
 type variant struct {
 	Package      string   `json:"package"`
 	BaseImage    string   `json:"base_image"`
@@ -112,11 +113,49 @@ type variant struct {
 	ImagePlugins []string `json:"image_plugins"`
 }
 
-// variantFile matches a key's variant record (json) and replaced list (replaced) in images/.
+// variantFile matches a key's variant record (json) and replaced list (replaced) in a daemon's image records.
 var variantFile = regexp.MustCompile(`^([0-9a-f]{64})\.(json|replaced)$`)
+
+// daemonPattern is a usable Docker daemon ID: docker info prints untrusted text, and the ID names a Mac directory.
+var daemonPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$`)
 
 func (h Host) dockerPath(name string) string {
 	return filepath.Join(h.Home, ".ensemble/docker", name)
+}
+
+// daemonID is the target daemon's ID; failures are code, an unreachable target docker_unreachable.
+func (h Host) daemonID(ctx context.Context, code protocol.Code) (string, error) {
+	out, err := h.Docker.Run(ctx, []string{"info", "--format", "{{json .ID}}"}, nil)
+	if err != nil {
+		return "", failure(err, code, "Cannot read the Docker daemon's ID.")
+	}
+	var id string
+	if json.Unmarshal(bytes.TrimSpace(out), &id) != nil || !daemonPattern.MatchString(id) {
+		return "", protocol.Newf(code, "The Docker daemon's ID %.80q is not usable.", strings.TrimSpace(string(out)))
+	}
+	return id, nil
+}
+
+// onDaemon is h with the target daemon's ID and its image records' dir, images/<ID>: an image exists only on the
+// daemon that built it. h already has them: h.
+func (h Host) onDaemon(ctx context.Context, code protocol.Code) (Host, error) {
+	if h.images != "" {
+		return h, nil
+	}
+	id, err := h.daemonID(ctx, code)
+	if err != nil {
+		return h, err
+	}
+	h.daemon, h.images = id, filepath.Join(h.dockerPath("images"), id)
+	return h, nil
+}
+
+// imagePath is name in the daemon's image records; only after onDaemon.
+func (h Host) imagePath(name string) string {
+	if h.images == "" {
+		panic("launcher: image records used before onDaemon")
+	}
+	return filepath.Join(h.images, name)
 }
 
 func (h Host) recordPath(key string) string {
@@ -166,7 +205,7 @@ func (h Host) record(key, pkg string, spec BuildSpec) {
 
 func (h Host) readCheckState() (checkState, bool) {
 	var state checkState
-	data, err := os.ReadFile(h.dockerPath("clients-check.json"))
+	data, err := os.ReadFile(h.imagePath("clients-check.json"))
 	return state, err == nil && json.Unmarshal(data, &state) == nil
 }
 
@@ -175,14 +214,14 @@ func (h Host) writeCheckState(state checkState) error {
 	if err != nil {
 		return err
 	}
-	return writePrivate(h.dockerPath("clients-check.json"), data)
+	return writePrivate(h.imagePath("clients-check.json"), data)
 }
 
 // afterBuild reports the last check's failure once, then spawns check-clients when one is due; neither fails the build.
 func (h Host) afterBuild() {
 	state, ok := h.readCheckState()
 	if ok {
-		marker := h.dockerPath("clients-check.reported")
+		marker := h.imagePath("clients-check.reported")
 		reported, _ := os.ReadFile(marker)
 		switch {
 		case state.Failure != "" && state.Failure != string(reported):
@@ -230,8 +269,11 @@ func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 		return CheckResult{Rebuilt: []string{}}, nil
 	}
 	defer unlock()
+	if h, err = h.onDaemon(ctx, protocol.BuildFailed); err != nil {
+		return CheckResult{}, err
+	}
 	defer h.prune(ctx, "")
-	stateFailed := protocol.New(protocol.BuildFailed, "Cannot write the client check state ~/.ensemble/docker/clients-check.json.")
+	stateFailed := protocol.New(protocol.BuildFailed, "Cannot write the client check state ~/.ensemble/docker/images/"+h.daemon+"/clients-check.json.")
 	state, _ := h.readCheckState()
 	state.CheckedAt = h.now()
 	if err := h.writeCheckState(state); err != nil {
@@ -247,7 +289,7 @@ func (h Host) CheckClients(ctx context.Context) (CheckResult, error) {
 	}
 	result := CheckResult{Latest: latest, Rebuilt: []string{}}
 	var failures []string
-	entries, _ := os.ReadDir(h.dockerPath("images"))
+	entries, _ := os.ReadDir(h.images)
 	for _, entry := range entries {
 		m := variantFile.FindStringSubmatch(entry.Name())
 		if m == nil || m[2] != "json" {

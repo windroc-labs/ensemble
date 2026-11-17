@@ -300,6 +300,17 @@ type buildEnv struct {
 	releases        *fakeReleases
 	// ids, when set, gives each image build its own ID, the tag's inspected ID; nil: every image is sha256:a….
 	ids map[string]string
+	// daemon answers docker info's ID (default testDaemon); info, when set, replaces its whole output, infoErr fails it.
+	daemon, info string
+	infoErr      error
+}
+
+const testDaemon = "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"
+
+// onTestDaemon is h with testDaemon's image records under its Home, as onDaemon leaves it.
+func onTestDaemon(h Host) Host {
+	h.daemon, h.images = testDaemon, filepath.Join(h.Home, ".ensemble/docker/images", testDaemon)
+	return h
 }
 
 // fakeReleases answers Latest from latest, failing with err; it records each package asked.
@@ -322,7 +333,8 @@ func newReleases() *fakeReleases {
 var clientArgs = map[string]string{"CLAUDE_VERSION": "ensemble.claude-version", "CODEX_VERSION": "ensemble.codex-version", "OPENCODE_VERSION": "ensemble.opencode-version"}
 
 func newBuildEnv(t *testing.T) *buildEnv {
-	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseAgent: "agent 1000 1000\n", releases: newReleases()}
+	e := &buildEnv{home: t.TempDir(), pkg: t.TempDir(), built: map[string]map[string]string{}, probe: "1001\n1002\n", baseAgent: "agent 1000 1000\n", releases: newReleases(),
+		daemon: testDaemon}
 	putFile(t, filepath.Join(e.home, ".ensemble/docker/worker/Dockerfile"), "FROM base")
 	putFile(t, filepath.Join(e.pkg, ".claude-plugin/plugin.json"), `{"version":"1.2.3"}`)
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/session/sample.py"), "session")
@@ -331,6 +343,11 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	putFile(t, filepath.Join(e.pkg, "src/ensemble/orchestrator/sample.py"), "orchestrator")
 	e.fake = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		switch args[0] {
+		case "info":
+			if e.info != "" {
+				return []byte(e.info), e.infoErr
+			}
+			return []byte(`"` + e.daemon + `"` + "\n"), e.infoErr
 		case "build":
 			tag := args[slices.Index(args, "--tag")+1]
 			if strings.HasPrefix(tag, e.failStage+":") && e.failStage != "" {
@@ -411,7 +428,14 @@ func newBuildEnv(t *testing.T) *buildEnv {
 	return e
 }
 
+// host is e's Host on e.daemon, its ID already looked up as a start's is; lookupHost looks it up.
 func (e *buildEnv) host() Host {
+	h := e.lookupHost()
+	h.daemon, h.images = e.daemon, e.imagesDir()
+	return h
+}
+
+func (e *buildEnv) lookupHost() Host {
 	return Host{Home: e.home, Docker: e.fake, Progress: &e.progress, Lock: e.lock, Releases: e.releases}
 }
 
@@ -430,7 +454,12 @@ func (e *buildEnv) lock() (func(), error) {
 }
 
 func (e *buildEnv) leasePath(key string) string {
-	return filepath.Join(e.home, ".ensemble/docker/images", key)
+	return filepath.Join(e.imagesDir(), key)
+}
+
+// imagesDir is the current daemon's image records.
+func (e *buildEnv) imagesDir() string {
+	return filepath.Join(e.home, ".ensemble/docker/images", e.daemon)
 }
 
 func TestBuildCacheAndStages(t *testing.T) {
@@ -1351,7 +1380,7 @@ func (e *buildEnv) writeCheckState(t *testing.T, checkedAt time.Time, failure st
 	if err != nil {
 		t.Fatal(err)
 	}
-	putFile(t, filepath.Join(e.home, ".ensemble/docker/clients-check.json"), string(data))
+	putFile(t, filepath.Join(e.imagesDir(), "clients-check.json"), string(data))
 }
 
 // private reads path, failing unless it is a 0600 file.
@@ -1386,7 +1415,7 @@ func TestBuildSpawnsClientCheckWhenDue(t *testing.T) {
 			case "ok":
 				e.writeCheckState(t, time.Now().Add(-tc.age), "")
 			case "{":
-				putFile(t, filepath.Join(e.home, ".ensemble/docker/clients-check.json"), "{")
+				putFile(t, filepath.Join(e.imagesDir(), "clients-check.json"), "{")
 			}
 			spawns := 0
 			h := e.host()
@@ -1429,7 +1458,7 @@ func TestBuildReportsCheckFailureOnce(t *testing.T) {
 	if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(e.home, ".ensemble/docker/clients-check.reported")
+	marker := filepath.Join(e.imagesDir(), "clients-check.reported")
 	build := func() string {
 		t.Helper()
 		e.progress.Reset()
@@ -1473,7 +1502,7 @@ func TestBuildReportsCheckFailureOnce(t *testing.T) {
 		if _, err := e.host().Build(ctx, e.pkg, BuildSpec{}, -1); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(filepath.Join(e.home, ".ensemble/docker/clients-check.reported")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(e.imagesDir(), "clients-check.reported")); !os.IsNotExist(err) {
 			t.Fatalf("marker written: %v", err)
 		}
 	})
@@ -1487,7 +1516,7 @@ func TestBuildRecordsVariant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
+	record := filepath.Join(e.imagesDir(), strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
 	want := `{"package":"` + e.pkg + `","base_image":"dummy-env:test","plugins":["` + plugin + `"],"image_plugins":["alpha","beta"]}`
 	if data := private(t, record); !fixtures.SameJSON(t, []byte(data), []byte(want)) {
 		t.Fatalf("%s", data)
@@ -1497,7 +1526,7 @@ func TestBuildRecordsVariant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record = filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
+	record = filepath.Join(e.imagesDir(), strings.TrimPrefix(got.Image, "ensemble-worker:")+".json")
 	if data := private(t, record); !fixtures.SameJSON(t, []byte(data), []byte(`{"package":"`+e.pkg+`","base_image":"","plugins":[],"image_plugins":[]}`)) {
 		t.Fatalf("%s", data)
 	}
@@ -1561,7 +1590,7 @@ func TestRebuildRecordsReplacedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replaced := filepath.Join(e.home, ".ensemble/docker/images", strings.TrimPrefix(first.Image, "ensemble-worker:")+".replaced")
+	replaced := filepath.Join(e.imagesDir(), strings.TrimPrefix(first.Image, "ensemble-worker:")+".replaced")
 	if _, err := os.Stat(replaced); !os.IsNotExist(err) {
 		t.Fatalf("a first build replaced nothing: %v", err)
 	}
@@ -1613,8 +1642,8 @@ func TestPruneKeepsReplacedImageForGrace(t *testing.T) {
 	clock := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	h := e.host()
 	h.Now = func() time.Time { return clock }
-	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"), `[{"id":"`+young+`","at":"2026-10-26T11:51:00Z"}]`)
-	putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("2", 64)+".replaced"), `[{"id":"`+old+`","at":"2026-10-26T11:50:00Z"}]`)
+	putFile(t, filepath.Join(e.imagesDir(), strings.Repeat("1", 64)+".replaced"), `[{"id":"`+young+`","at":"2026-10-26T11:51:00Z"}]`)
+	putFile(t, filepath.Join(e.imagesDir(), strings.Repeat("2", 64)+".replaced"), `[{"id":"`+old+`","at":"2026-10-26T11:50:00Z"}]`)
 	h.prune(context.Background(), "")
 	if got := e.fake.removed(); !slices.Equal(got, []string{old}) {
 		t.Fatalf("%q", got)
@@ -1625,7 +1654,7 @@ func TestPruneKeepsReplacedImageForGrace(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 	t.Run("an entry whose rebuild still runs outlives the grace", func(t *testing.T) {
-		putFile(t, filepath.Join(e.home, ".ensemble/docker/images", strings.Repeat("1", 64)+".replaced"),
+		putFile(t, filepath.Join(e.imagesDir(), strings.Repeat("1", 64)+".replaced"),
 			`[{"id":"`+young+`","at":"2026-10-26T11:00:00Z","pending":true}]`)
 		h.prune(context.Background(), "")
 		if got := e.fake.removed(); !slices.Equal(got, []string{old}) {

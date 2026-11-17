@@ -124,7 +124,7 @@ func (e *buildEnv) checkState(t *testing.T) (time.Time, string) {
 		CheckedAt time.Time `json:"checked_at"`
 		Failure   *string   `json:"failure"`
 	}
-	if err := json.Unmarshal([]byte(private(t, filepath.Join(e.home, ".ensemble/docker/clients-check.json"))), &state); err != nil || state.Failure == nil {
+	if err := json.Unmarshal([]byte(private(t, filepath.Join(e.imagesDir(), "clients-check.json"))), &state); err != nil || state.Failure == nil {
 		t.Fatalf("%v", err)
 	}
 	return state.CheckedAt, *state.Failure
@@ -321,7 +321,7 @@ func TestCheckClientsSingleFlight(t *testing.T) {
 	if err != nil || string(data) != `{"rebuilt":[]}` || len(e.fake.calls) != calls || e.releases.asked != nil {
 		t.Fatalf("%s %v %q", data, err, e.fake.verbs()[calls:])
 	}
-	if _, err := os.Stat(filepath.Join(e.home, ".ensemble/docker/clients-check.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(e.imagesDir(), "clients-check.json")); !os.IsNotExist(err) {
 		t.Fatalf("state written: %v", err)
 	}
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Docker broker protocol 40",
+  "title": "Docker broker protocol 41",
   "$comment": "Changes to the protocol format defined by this schema require bumping Version in src/broker/internal/protocol/protocol.go.",
   "$ref": "#/$defs/manifest",
   "$defs": {
@@ -184,6 +184,10 @@
         }
       ],
       "pattern": "^(unix:///[^\\u0000-\\u001f\\u007f]+/\\.docker/run/docker\\.sock|ssh://([A-Za-z0-9._-]{1,64}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?)$"
+    },
+    "daemon": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$"
     },
     "labels": {
       "type": "object",
@@ -446,7 +450,7 @@
       "type": "object",
       "properties": {
         "protocol_version": {
-          "const": "40"
+          "const": "41"
         }
       },
       "required": [
@@ -566,6 +570,9 @@
         "endpoint": {
           "$ref": "#/$defs/endpoint"
         },
+        "daemon": {
+          "$ref": "#/$defs/daemon"
+        },
         "image_digest": {
           "$ref": "#/$defs/digest"
         },
@@ -612,6 +619,7 @@
       "required": [
         "container",
         "endpoint",
+        "daemon",
         "image_digest",
         "clients",
         "env",

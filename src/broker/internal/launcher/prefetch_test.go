@@ -5,7 +5,6 @@ import (
 	"errors"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +19,7 @@ func prefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *fakeTokens) {
 	t.Helper()
 	h, d, _, tokens, _, _, _ := credentialHost(w)
 	h.Home = t.TempDir()
+	h = onTestDaemon(h)
 	putFile(t, h.recordPath(imageKey), `{"package":"/p","base_image":"","plugins":[],"image_plugins":[]}`)
 	return h, d, tokens
 }
@@ -239,6 +239,7 @@ func buildingPrefetchHost(t *testing.T, w *world) (Host, *fakeDocker, *buildEnv)
 	h, base, _ := prefetchHost(t, w)
 	e := newBuildEnv(t)
 	h.Home, h.Lock, h.Releases = e.home, e.lock, e.releases
+	h = onTestDaemon(h)
 	putFile(t, h.recordPath(imageKey), `{"package":"`+e.pkg+`","base_image":"dummy-env:test","plugins":[],"image_plugins":[]}`)
 	d := &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		if args[0] == "build" || args[0] == "tag" || args[0] == "container" && args[1] == "ls" ||
@@ -454,7 +455,7 @@ func TestDefaultImageNewest(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A newer variant on a base image never counts.
-	putFile(t, filepath.Join(h.Home, ".ensemble/docker/images", strings.Repeat("e", 64)+".json"), `{"package":"/p","base_image":"x:y"}`)
+	putFile(t, h.recordPath(strings.Repeat("e", 64)), `{"package":"/p","base_image":"x:y"}`)
 	h.Docker = &fakeDocker{respond: func(args []string, stdin []byte) ([]byte, error) {
 		ref := args[len(args)-1]
 		key := strings.TrimPrefix(ref, "ensemble-worker:")

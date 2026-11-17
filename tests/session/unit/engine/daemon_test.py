@@ -1,17 +1,25 @@
 """engine/daemon.py: the capped run, over fake processes; the Docker target and its docker command line."""
 
 import contextlib
+import errno
+import json
 import os
 import re
 import threading
+from types import SimpleNamespace
 from unittest import mock
 
 from ensemble.session.engine import daemon
 from ensemble.session.engine.daemon import OUT_MAX, Overflow, capped
-from ensemble.session.engine.types import ConfigError, SessionError
+from ensemble.session.engine.types import ConfigError, DockerAccess, SessionError
+from ensemble.utils import DOCKER_STATE
 from tests.session.case import Case
 from tests.session.unit.hosts.docker.support import FakePopen, FakeProc, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
+
+
+def _done(returncode, stdout, stderr):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
 class CappedTest(Case):
@@ -145,3 +153,83 @@ class TargetTest(Case):
             ("Error: No such container: c", False),
         ):
             self.assertEqual(daemon.unreachable(stderr), want, stderr)
+
+
+class DaemonIdentityTest(Case):
+    def setUp(self):
+        wrapper = ssh_wrapper()
+        wrapper.__enter__()
+        self.addCleanup(wrapper.__exit__, None, None, None)
+        self.calls = []
+        self.result = _done(0, '"8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6"\n', "")
+
+    def run_docker(self, argv, env, *, timeout):
+        self.calls.append(argv)
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+    def test_daemon_id_is_docker_info_s_id(self):
+        found = daemon.daemon_id("/bin/docker", "unix:///d.sock", run=self.run_docker)
+        self.assertEqual(found, "8f1c2d3e-0a4b-4c5d-9e6f-a1b2c3d4e5f6")
+        self.assertEqual(
+            self.calls,
+            [["/bin/docker", "--host", "unix:///d.sock", "info", "--format", "{{json .ID}}"]],
+        )
+
+    def test_an_old_style_id_is_usable(self):
+        self.result = _done(0, '"ABCD:EFGH:IJKL:MNOP"\n', "")
+        self.assertEqual(
+            daemon.daemon_id("/bin/docker", "ssh://pc", run=self.run_docker), "ABCD:EFGH:IJKL:MNOP"
+        )
+
+    def test_daemon_id_failures_name_the_target(self):
+        for result, why in (
+            (
+                _done(1, "", "error during connect: refused\n"),
+                "unreachable",
+            ),
+            (_done(1, "", "permission denied\n"), "permission denied"),
+            (_done(0, "ABCD\n", ""), "no usable daemon ID"),
+            (_done(0, '"../x"\n', ""), "no usable daemon ID"),
+            (_done(0, '""\n', ""), "no usable daemon ID"),
+            (
+                _done(0, '"' + "a" * 129 + '"\n', ""),
+                "no usable daemon ID",
+            ),
+            (TimeoutExpired(["docker"], 10), "timed out"),
+            (OSError("no docker"), "no docker"),
+        ):
+            with self.subTest(why=why):
+                self.result = result
+                with self.assertRaisesRegex(SessionError, rf"^Docker target ssh://pc: .*{why}"):
+                    daemon.daemon_id("/bin/docker", "ssh://pc", run=self.run_docker)
+
+    def test_access_record_round_trips_its_daemon(self):
+        access = DockerAccess("/bin/docker", "ssh://u@pc", "ABCD:EFGH")
+        daemon.save_access("s1", access)
+        self.assertEqual(daemon.load_access("s1"), access)
+        self.assertIsNone(daemon.load_access("s2"))
+
+    def test_an_access_record_without_a_usable_daemon_is_malformed(self):
+        path = os.path.join(os.path.expanduser(DOCKER_STATE), "s1", daemon.ACCESS_FILE)
+        os.makedirs(os.path.dirname(path))
+        for record in (
+            {"docker": "/bin/docker", "host": "ssh://pc"},
+            {"docker": "/bin/docker", "host": "ssh://pc", "daemon": "../x"},
+            {"docker": "/bin/docker", "host": "ssh://pc", "daemon": 1},
+            {"docker": "/bin/docker", "host": "ssh://pc", "daemon": "A", "extra": "x"},
+        ):
+            with self.subTest(record=record):
+                with open(path, "w") as f:
+                    json.dump(record, f)
+                with self.assertRaises(OSError) as raised:
+                    daemon.load_access("s1")
+                self.assertEqual(raised.exception.errno, errno.EINVAL)
+
+    def test_describe_names_the_local_docker_desktop(self):
+        with mock.patch("pwd.getpwuid", return_value=mock.Mock(pw_dir="/Users/u")):
+            local = daemon.local_endpoint()
+            self.assertEqual(local, "unix:///Users/u/.docker/run/docker.sock")
+            self.assertEqual(daemon.describe(local), f"the local Docker Desktop ({local})")
+            self.assertEqual(daemon.describe("ssh://u@pc"), "ssh://u@pc")

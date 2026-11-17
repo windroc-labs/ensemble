@@ -24,12 +24,16 @@ const (
 // defaultImage is the newest default worker image: a broker-built image whose variant record names no base image,
 // newest by the record's mtime (a build's last use). With none, it builds one from run's package, as build does.
 func (h Host) defaultImage(ctx context.Context, run string) (imageInfo, error) {
+	h, err := h.onDaemon(ctx, protocol.StartFailed)
+	if err != nil {
+		return imageInfo{}, err
+	}
 	type candidate struct {
 		key string
 		at  time.Time
 	}
 	var found []candidate
-	entries, _ := os.ReadDir(h.dockerPath("images"))
+	entries, _ := os.ReadDir(h.images)
 	for _, entry := range entries {
 		m := variantFile.FindStringSubmatch(entry.Name())
 		if m == nil || m[2] != "json" {

@@ -1,5 +1,21 @@
 # Upgrading
 
+## Broker protocol 41: a Docker target is its daemon
+
+Upgrade the plugin and broker together with `scripts/install.sh --docker`. A Docker target is identified by its
+daemon's ID (`docker info`), not its address: a LAN address and a Tailscale address of one machine are one target.
+
+- Each session records the daemon its state is on in `~/.ensemble/docker-state/<name>/state-access.json`. Resuming
+  it while the target is another daemon fails before any volume is made, naming the session's target; set the target
+  back to it first. Reclaiming its workdir removes the current target's workspaces of it, then fails the same way
+  while the session's own daemon still holds its workspace, or cannot be asked. A session with no record belongs to the local Docker Desktop. A record from
+  protocol 40 has no daemon and fails as malformed: if that session was made on the local Docker Desktop, delete the
+  file; otherwise give it a new start.
+- The broker keeps its image records per daemon in `~/.ensemble/docker/images/<daemon ID>/`, so the first build after
+  a switch builds on the new target. The old files directly in `~/.ensemble/docker/images/` and
+  `~/.ensemble/docker/clients-check.json` and `clients-check.reported` are no longer read; delete them:
+  `find ~/.ensemble/docker/images -maxdepth 1 -type f -delete; rm -f ~/.ensemble/docker/clients-check.json ~/.ensemble/docker/clients-check.reported`.
+
 ## Broker protocol 40: Docker target
 
 Upgrade the plugin and broker together with `scripts/install.sh --docker`. The broker installer now also creates
@@ -23,8 +39,9 @@ the file. The broker and the session then send every docker call there, whatever
 A worker's client state (Claude config dir, Codex `sessions` and `config`, OpenCode data) now lives in its state
 volume `ensemble-state-<name>` on the Docker target, local or remote, never in a Mac directory; reclaiming a session
 deletes it with the workspace volume. A Docker session started before this upgrade keeps its state in
-`~/.ensemble/docker-state/<name>/<client>`, which is no longer read: give it a new start (its resume reports no native
-history), then delete that directory.
+`~/.ensemble/docker-state/<name>/<client>`, which is no longer read: to resume it, copy that directory into its state
+volume once by [Docker sessions from before state volumes](../README.md#docker-sessions-from-before-state-volumes),
+or give it a new start; then delete that directory.
 
 ## ensemble resume opens a manager; ensemble list only lists
 

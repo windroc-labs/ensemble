@@ -91,6 +91,8 @@ type Host struct {
 	Audit    *audit.Recorder                   // nil: none; start, maintain and close name their container and add the client credential
 	Now      func() time.Time                  // nil: host clock; replaced image and check state tests supply a clock
 	Spawn    func() error                      // nil: none; starts check-clients detached, for a build
+
+	daemon, images string // the target daemon's ID and its image records' dir, set by onDaemon
 }
 
 // NewHost wires the real filesystem; tests build Host with fakes. rec is the command's audit recorder, the one tokens
@@ -167,6 +169,7 @@ type Clients struct {
 type StartResult struct {
 	Container   string            `json:"container"`
 	Endpoint    string            `json:"endpoint"`
+	Daemon      string            `json:"daemon"`
 	ImageDigest string            `json:"image_digest"`
 	Clients     Clients           `json:"clients"`
 	Env         map[string]string `json:"env"`

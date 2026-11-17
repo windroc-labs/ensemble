@@ -31,8 +31,12 @@ from ensemble.session.engine.daemon import (
     attach_env,
     capped,
     container_name,
+    daemon_id,
+    describe,
     docker_call,
     endpoint,
+    load_access,
+    local_endpoint,
     save_access,
     ssh_agent,
     state_volume,
@@ -353,18 +357,52 @@ class _Laps:
             print(f"{head}: {phase} {seconds:.2f} s", file=sys.stderr)
 
 
-def _accept_started(name: str, generation: str, started: Started, container: str) -> None:
-    """Checks the broker's start reply; saves its deadline for the credential tick."""
-    if (started.endpoint, started.container) != (endpoint(), container):
+def _accept_started(
+    name: str, generation: str, started: Started, container: str, daemon: str
+) -> None:
+    """Checks the broker's start reply, by daemon ID, not address; saves its deadline for the
+    credential tick.
+    """
+    if (started.daemon, started.container) != (daemon, container):
         raise SessionError(
-            f"broker: started {started.container} at {started.endpoint},"
-            f" want {container} at {endpoint()}"
+            f"broker: started {started.container} at {started.endpoint} (daemon"
+            f" {started.daemon}), want {container} on daemon {daemon}"
         )
     save(
         maintenance.deadline_file(state_dir(name), generation),
         json.dumps(started.deadline),
         durable=True,
     )
+
+
+def _refusal(name: str, action: str, host: str, owner: str, current: DockerAccess) -> str:
+    return (
+        f"docker session {name}: cannot {action} it here: its Docker target is {describe(host)}"
+        f" (daemon {owner}), the current target is {describe(current.host)} (daemon"
+        f" {current.daemon}); set the Docker target back to {host} to {action} it"
+    )
+
+
+def _sessions_at(anchor: str) -> list[str]:
+    """The sessions whose latest generation's manifest has cwd `anchor`."""
+    root = os.path.expanduser(DOCKER_STATE)
+    try:
+        names = sorted(n for n in os.listdir(root) if SESSION_NAME.fullmatch(n))
+    except FileNotFoundError:
+        return []
+    found = []
+    for name in names:
+        generation = _record(name).get("generation")
+        if not isinstance(generation, str) or not GEN.fullmatch(generation):
+            continue
+        try:
+            with open(os.path.join(state_dir(name), f"{generation}.json"), encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, ValueError, RecursionError):
+            continue
+        if isinstance(manifest, dict) and manifest.get("cwd") == anchor:
+            found.append(name)
+    return found
 
 
 def _no_daemon() -> str:
@@ -535,7 +573,9 @@ class DockerHost(Host):
         return None if rows is None else [(row[0], row[1]) for row in rows if len(row) == 2]
 
     def remove_workspaces(self, cwd: str) -> list[str]:
-        """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept."""
+        """Every volume labelled realpath(cwd), unsaved work included; at a refusal, the rest kept.
+        Then a session at cwd whose workspace another daemon still holds, or may hold, refuses.
+        """
         rows = self._workspaces()
         if rows is None:
             raise SessionError(f"host {self.name}: workspaces unknown ({_no_daemon()})")
@@ -546,6 +586,13 @@ class DockerHost(Host):
                     removed.append(volume)
             except SessionError as error:
                 raise SessionError(f"docker workspace {volume} kept: {error}") from None
+        if sessions := _sessions_at(anchor):
+            current = self._current(f"host {self.name}")
+            for name in sessions:
+                if (owner := self._owner(name, current)) and (
+                    held := self._held(name, *owner)
+                ) is not None:
+                    raise SessionError(_refusal(name, "reclaim", *owner, current) + held)
         return removed
 
     def _reclaim(self) -> None:
@@ -616,6 +663,7 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; start does lock and credential checks."""
+        self._check_resume(name, metadata)
         self._credentials(name, metadata or {})
         environment = self._environment(name, metadata)
         if environment is None:
@@ -631,6 +679,7 @@ class DockerHost(Host):
         self, name: str, launch: Launch, metadata: Mapping[str, str] | None = None
     ) -> None:
         """With an environment: cwd and handshake; the start builds and locks."""
+        self._check_resume(name, metadata)
         self._credentials(name, metadata or {})
         if self._environment(name, metadata) is None:
             self.validate(name, launch)
@@ -715,6 +764,64 @@ class DockerHost(Host):
             )
         return hook, root, built
 
+    def _current(self, subject: str) -> DockerAccess:
+        """The current target and its daemon's ID, looked up now: an address may reach another
+        daemon later. A failure names `subject`, what the lookup is for.
+        """
+        host = endpoint()
+        try:
+            return DockerAccess(self.docker, host, daemon_id(self.docker, host, run=self.run))
+        except SessionError as error:
+            raise SessionError(f"{subject}: {error}") from None
+
+    def _owner(self, name: str, current: DockerAccess) -> tuple[str, str] | None:
+        """Session `name`'s target and daemon when not the current one: its access record's; with
+        none, the local Docker Desktop's.
+        """
+        try:
+            recorded = load_access(name)
+        except OSError as error:
+            raise SessionError(f"docker session {name}: state access: {error}") from None
+        host, owner = (recorded.host, recorded.daemon) if recorded else (local_endpoint(), None)
+        if owner is None:
+            if host == current.host:
+                return None
+            try:
+                owner = daemon_id(self.docker, host, run=self.run)
+            except SessionError as error:
+                owner = f"unknown: {error}"
+        return None if owner == current.daemon else (host, owner)
+
+    def _held(self, name: str, host: str, owner: str) -> str | None:
+        """None once daemon `owner` at `host` no longer has session `name`'s workspace, the volume
+        every reclaim removes last; else "", or why that could not be checked.
+        """
+        volume = workspace_volume(name)
+        try:
+            if daemon_id(self.docker, host, run=self.run) != owner:
+                return f" ({volume} unchecked: daemon {owner} is not at {host})"
+        except SessionError as error:
+            return f" ({volume} unchecked: {error})"
+        argv, env = docker_call(self.docker, "volume", "inspect", volume, host=host)
+        try:
+            result = self.run(argv, env, timeout=RUN_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return f" ({volume} unchecked: {error})"
+        if result.returncode == 0:
+            return ""
+        if "no such volume" in result.stderr.lower():
+            return None
+        lines = result.stderr.strip().splitlines()
+        return f" ({volume} unchecked: {lines[-1] if lines else result.returncode!r:.80})"
+
+    def _check_resume(self, name: str, metadata: Mapping[str, str] | None) -> None:
+        if (metadata or {}).get("resume") == "1":
+            self._check_target(name, self._current(f"docker session {name}"))
+
+    def _check_target(self, name: str, current: DockerAccess) -> None:
+        if owner := self._owner(name, current):
+            raise ConfigError(_refusal(name, "resume", *owner, current))
+
     def _drop_state(self, name: str) -> None:
         """A new start's empty client home: its readers and state volume go; the broker makes it."""
         why = f"docker session {name}: cannot reset its client state"
@@ -792,8 +899,11 @@ class DockerHost(Host):
                     f" as this Host names one; remove it: docker rm -f {row[0]}"
                 )
         home = docker_home(name, home_dir)
+        current = self._current(f"docker session {name}")
+        if resume == "1":
+            self._check_target(name, current)
         try:
-            save_access(name, DockerAccess(self.docker, endpoint()))
+            save_access(name, current)
         except OSError as error:
             raise SessionError(f"docker session {name}: state access: {error}") from None
         if resume == "1":
@@ -866,7 +976,7 @@ class DockerHost(Host):
         began = timestamp()
         try:
             started = self.broker.start(manifest, clients=clients)
-            _accept_started(name, generation, started, container)
+            _accept_started(name, generation, started, container, current.daemon)
             ended = timestamp()
             laps("start")
             created = _Container(
