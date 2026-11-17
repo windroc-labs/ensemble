@@ -1,5 +1,6 @@
 """OpenCode's config checks and each run's (cwd, sid) binding to its OpenCode session."""
 
+import contextlib
 import hashlib
 import itertools
 import json
@@ -7,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import replace
 
 from ensemble.session.clients.common import (
@@ -16,6 +17,7 @@ from ensemble.session.clients.common import (
     MODES,
     check_config,
     docker_config,
+    located,
     mode_flags,
     scan,
     strings,
@@ -23,6 +25,7 @@ from ensemble.session.clients.common import (
 from ensemble.session.clients.opencode import probe
 from ensemble.session.clients.opencode.transcript import NATIVE, Refused, database, titled
 from ensemble.session.clients.opencode.transcript import updated as session_updated
+from ensemble.session.engine import client_state
 from ensemble.session.engine.types import (
     ClientContext,
     ClientHome,
@@ -54,6 +57,7 @@ HOME = ClientHome("opencode_dir", "opencode", "XDG_DATA_HOME", "none")
 HERE = os.path.dirname(os.path.abspath(__file__))
 DOCKER_CONFIG_FILE = "opencode.json"
 STORE = f"{STATE}/sessions/opencode"
+DB_MAX = 1 << 30  # bytes of a Docker session's opencode.db, -wal and -shm, in all
 IMAGE_PLUGINS = "/opt/ensemble/plugins"
 # Under XDG_CACHE_HOME: where `opencode plugin -g` puts updraft at any commit.
 HOST_UPDRAFT = "opencode/packages/updraft@git+https:"
@@ -535,10 +539,18 @@ class OpenCodeCommon:
 
     def session(self, cwd: str, sid: str, db: str) -> str | None:
         """(cwd, sid)'s bound session, else its headless run's TITLE one in `db`, bound then."""
+        try:
+            with _database(db) as path:
+                return self._session(cwd, sid, path)
+        except OSError as error:
+            raise ConfigError(f"opencode session lookup: {error}") from None
+
+    def _session(self, cwd: str, sid: str, path: str | None) -> str | None:
+        """session, `path` the db to open, None when there is none."""
         native = self.native(cwd, sid)
-        if native is None and os.path.isfile(db):
+        if native is None and path is not None:
             try:
-                native = titled(db, TITLE.format(sid=sid))
+                native = titled(path, TITLE.format(sid=sid))
             except Refused as error:
                 raise ConfigError(f"opencode session lookup: {error}") from None
             if native is not None:
@@ -553,18 +565,40 @@ class OpenCodeCommon:
         """
         db = transcript or database({**os.environ, **self.env, **env})
         try:
-            native = self.session(cwd, sid, db)
+            with _database(db) as path:
+                return self._status(cwd, sid, path)
+        except OSError:
+            return SessionStatus(Resumable.UNKNOWN, None, "")
+
+    def _status(self, cwd: str, sid: str, path: str | None) -> SessionStatus:
+        try:
+            native = self._session(cwd, sid, path)
         except ConfigError:
             return SessionStatus(Resumable.UNKNOWN, None, "")
         if native is None:
-            return SessionStatus(Resumable.YES if os.path.isfile(db) else Resumable.NO, None, "")
+            return SessionStatus(Resumable.NO if path is None else Resumable.YES, None, "")
+        if path is None:
+            return SessionStatus(Resumable.UNKNOWN, None, "")
         try:
-            updated = session_updated(db, native)
+            updated = session_updated(path, native)
         except Refused:
             return SessionStatus(Resumable.UNKNOWN, None, "")
         if updated is None:
             return SessionStatus(Resumable.NO, None, "")
         return SessionStatus(Resumable.YES, updated, "")
+
+
+@contextlib.contextmanager
+def _database(db: str) -> Iterator[str | None]:
+    """The opencode.db to open for `db`: a Docker session home's as a snapshot of it, its -wal and
+    -shm; None when there is none.
+    """
+    found = located(db, HOME.dir)
+    if found is None:
+        yield db if os.path.isfile(db) else None
+        return
+    with client_state.snapshot(found, limit=DB_MAX, siblings=("-wal", "-shm")) as path:
+        yield path
 
 
 class Homed:

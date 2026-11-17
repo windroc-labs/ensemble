@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import sqlite3
 import sys
 from dataclasses import replace
 from types import SimpleNamespace
@@ -32,6 +33,7 @@ from ensemble.session.engine.types import (
 )
 from ensemble.session.hosts.docker.host import DockerHost
 from ensemble.session.modes.base import BaseMode
+from ensemble.utils import docker_home
 from tests.session.case import Case
 from tests.session.unit.clients.opencode.support import (
     DOCKER_CONTEXT,
@@ -323,6 +325,59 @@ class SessionStatusTest(Case):
         self.assertEqual(self.status(XDG_DATA_HOME=other).resumable, Resumable.YES)
         configured = OpenCodeClient({**packaged_table(), "env": {"XDG_DATA_HOME": other}})
         self.assertEqual(configured.session_status(self.info).resumable, Resumable.YES)
+
+
+class DockerDatabaseTest(Case):
+    """A Docker session's opencode.db is read from a snapshot, never opened where it lies."""
+
+    def setUp(self):
+        self.cwd = os.path.realpath(self.home)
+        self.state_db = os.path.join(docker_home("w", "opencode"), "opencode", "opencode.db")
+        self.client = OpenCodeClient(packaged_table())
+        self.info = SessionInfo(
+            "run-1", self.cwd, project=False, transcript=self.state_db, resume=""
+        )
+
+    def wal_db(self):
+        """make_db's layout, then rows only in the WAL: a writer holds it open, uncheckpointed."""
+        make_db(self.state_db)
+        writer = sqlite3.connect(self.state_db)
+        self.addCleanup(writer.close)
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute(
+            "INSERT INTO session VALUES (?, NULL, '/', 'ensemble-run-1', ?, ?)",
+            (SES, 1_760_000_000_250, 1_760_000_000_250),
+        )
+        writer.commit()
+        self.assertGreater(os.path.getsize(self.state_db + "-wal"), 0)
+
+    def test_wal_rows_are_seen_through_a_snapshot(self):
+        self.wal_db()
+        real = sqlite3.connect
+        with mock.patch.object(sqlite3, "connect", side_effect=real) as spy:
+            found = self.client.session_status(self.info)
+            native = self.client.common.session(self.cwd, "run-2", self.state_db)
+        self.assertEqual(found, SessionStatus(Resumable.YES, 1_760_000_000.25, ""))
+        self.assertEqual(self.client.common.native(self.cwd, "run-1"), SES)
+        self.assertIsNone(native)
+        self.assertTrue(spy.call_args_list)
+        state = os.path.dirname(docker_home("w", "opencode"))
+        for call in spy.call_args_list:
+            self.assertNotIn(state, str(call))
+
+    def test_an_absent_db(self):
+        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.NO)
+        self.client.common.bind(self.cwd, "run-1", SES)
+        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.UNKNOWN)
+
+    def test_a_linked_db_is_refused(self):
+        outside = make_db(os.path.join(self.home, "outside.db"), {SES: 1000})
+        os.makedirs(os.path.dirname(self.state_db))
+        os.symlink(outside, self.state_db)
+        self.assertEqual(self.client.session_status(self.info).resumable, Resumable.UNKNOWN)
+        with self.assertRaisesRegex(ConfigError, "^opencode session lookup: "):
+            self.client.common.session(self.cwd, "run-1", self.state_db)
 
 
 EXTRA = ("--prompt", "--pure")

@@ -858,7 +858,7 @@ def _docker_files() -> dict[str, str]:
     return {WORKER_CONFIG: text}
 
 
-def _docker_home(home: str) -> bool:
+def _container_home(home: str) -> bool:
     """Whether real path `home` is a Docker worker's Codex home itself, seen from the host."""
     try:
         found = located(os.path.join(home, WORKER_CONFIG), HOME_DIR)
@@ -874,7 +874,7 @@ def _config_layers(snapshot: Snapshot, *, resume: bool = False) -> list[str]:
     the host's system config never reaches it.
     """
     home = os.path.realpath(snapshot.codex_home)
-    if not _docker_home(home):
+    if not _container_home(home):
         layers = [SYSTEM_CONFIG, os.path.join(home, "config.toml")]
     elif resume:
         layers = [os.path.join(home, WORKER_CONFIG)]
