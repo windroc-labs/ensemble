@@ -1,0 +1,33 @@
+# Overrides of repo-guards' shared check settings; see repo-guards docs/ci-checks/README.md.
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "go-test"
+file = "src/broker/internal/broker/github_prefetch_test.go"
+rule = "Skip"
+function = "TestCloneScriptLeavesNoCredential"
+count = 1
+reason = "Needs a git binary; CI runners have one, so the test runs there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "go-build"
+file = "src/broker/internal/broker/keychain_other.go"
+rule = "!darwin"
+function = ""
+count = 1
+reason = "The broker ships for macOS; this file stubs the Keychain so the package builds and tests on Linux."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "go-test"
+file = "src/broker/internal/launcher/checks_test.go"
+rule = "Skip"
+function = "TestBaseCheckScript"
+count = 1
+reason = "Needs sh; CI runners have it, so the test runs there."
+
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "go-test"
+file = "src/broker/internal/launcher/checks_test.go"
+rule = "Skip"
+function = "TestPluginCheckScript"
+count = 2
+reason = "Needs node and a non-root user to test unreadable files; CI runners have node and run as a non-root user."

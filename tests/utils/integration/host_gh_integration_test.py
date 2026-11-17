@@ -78,9 +78,11 @@ class HostGhChild(Case):
         self.assertEqual(self.notes(self.broker_log), [])
 
     def test_a_child_killed_by_a_signal_ends_the_wrapper_by_it(self):
-        proc = self.start("api", "x", FAKE_GH_MODE=f"die:{int(signal.SIGTERM)}")
-        _, err = proc.communicate(timeout=30)
-        self.assertEqual(proc.returncode, -signal.SIGTERM, err)
+        for signum in (signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(signum.name):
+                proc = self.start("api", "x", FAKE_GH_MODE=f"die:{int(signum)}")
+                _, err = proc.communicate(timeout=30)
+                self.assertEqual(proc.returncode, -signum, err)
 
     def test_sigterm_is_forwarded_once_and_the_terminals_signals_are_left_to_the_group(self):
         proc = self.start("run", "watch", "7", FAKE_GH_MODE="wait:2")
@@ -92,6 +94,14 @@ class HostGhChild(Case):
         notes = self.notes(self.gh_log)
         self.assertEqual(notes[-1]["signals"], [signal.SIGTERM])
         self.assertEqual((notes[0]["int_ignored"], notes[0]["quit_ignored"]), (False, False))
+
+    def test_a_signal_another_thread_gets_is_still_forwarded_once(self):
+        proc = self.start(
+            "run", "watch", FAKE_GH_MODE="wait:2", DRIVE_OFF_MAIN_SIGNAL=str(int(signal.SIGTERM))
+        )
+        _, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 5, err)
+        self.assertEqual(self.notes(self.gh_log)[-1]["signals"], [signal.SIGTERM])
 
     def test_the_token_is_refreshed_beside_a_running_child_never_restarting_it(self):
         proc = self.start(

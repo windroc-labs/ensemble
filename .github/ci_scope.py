@@ -197,6 +197,12 @@ def selected(root: Path, directories: list[str]) -> list[str]:
     ]
 
 
+SUCCESS = frozenset({"success"})
+SKIPPED = frozenset({"skipped"})
+ANY = frozenset({"success", "failure", "cancelled", "skipped"})
+REPO_GUARDS = ("github-dir-pr", "go", "jscpd")
+
+
 def gate(needs: dict, event: str) -> list[str]:
     if not isinstance(needs, dict):
         return ["CI_NEEDS must be an object containing all required jobs"]
@@ -227,23 +233,33 @@ def gate(needs: dict, event: str) -> list[str]:
         failures.append("changes.outputs.version must be exactly true or false")
     if version == "true" and (full, docs, broker) != ("false", "false", "false"):
         failures.append("changes.outputs.version requires full, docs and broker false")
+    tests = SKIPPED if "true" in (docs, version) else SUCCESS
     expected = {
-        "changes": "success",
-        "lint": "success",
-        "repository": "skipped" if "true" in (docs, version) else "success",
-        "unit": "skipped" if "true" in (docs, version) else "success",
-        "coverage": "skipped" if "true" in (docs, version) else "success",
-        "integration": "skipped" if "true" in (docs, version) else "success",
-        "mini-op": "success",
-        "broker": "success" if broker == "true" else "skipped",
+        "changes": SUCCESS,
+        "lint": SUCCESS,
+        "repository": tests,
+        "unit": tests,
+        # Advisory on main: its data is a by-product, never a gate.
+        "coverage": ANY if event == "push" else tests,
+        "integration": tests,
+        "mini-op": SUCCESS,
+        "broker": SUCCESS if broker == "true" else SKIPPED,
+        # Its one job runs on pull requests only.
+        "github-dir-pr": SUCCESS if event == "pull_request" else SUCCESS | SKIPPED,
+        "go": SUCCESS,
+        "jscpd": SUCCESS,
     }
-    if event == "push":
-        del expected["coverage"]  # advisory on main: its data is a by-product, never a gate
+    if not any(job in needs for job in REPO_GUARDS):
+        # An org ruleset runs main's ci.yml for pull requests and queue groups, so until main calls
+        # repo-guards, the change that adds these jobs runs without them.
+        for job in REPO_GUARDS:
+            del expected[job]
     for job, wanted in expected.items():
         data = needs.get(job)
         actual = data.get("result") if isinstance(data, dict) else None
-        if actual != wanted:
-            failures.append(f"{job}: expected {wanted}, got {actual!r}")
+        if actual not in wanted:
+            failures.append(f"{job}: expected {' or '.join(sorted(wanted))}, got {actual!r}")
+    failures.extend(f"{job}: not gated" for job in needs if job not in expected)
     return failures
 
 
