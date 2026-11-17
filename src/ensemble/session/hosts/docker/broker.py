@@ -21,7 +21,7 @@ from ensemble.session.hosts.docker.types import Maintained, Started
 from ensemble.utils import save
 
 BROKER = "/usr/local/libexec/ensemble/ensemble-broker"
-PROTOCOL = "41"
+PROTOCOL = "42"
 SCHEMA = "src/broker/protocol/docker-broker/protocol.schema.json"
 INSTALL = (
     "install or upgrade it: sh <ensemble plugin>/src/broker/install.sh (Docker Desktop running,"
@@ -334,6 +334,7 @@ class Broker:
         plugins: Sequence[str] = (),
         base_image: str | None = None,
         image_plugins: Sequence[str] = (),
+        secrets: Sequence[str] = (),
     ) -> tuple[str, str]:
         """`package`'s image tag and digest on `base_image` (None: ~/.ensemble/docker/worker), with
         `plugins` installed from repository sources and `image_plugins` from the base image.
@@ -342,6 +343,7 @@ class Broker:
             *(("--base-image", base_image) if base_image else ()),
             *(arg for name in plugins for arg in ("--plugin", name)),
             *(arg for name in image_plugins for arg in ("--image-plugin", name)),
+            *(arg for item in secrets for arg in ("--secret", item)),
         ]
         found = self._parsed(
             "build",

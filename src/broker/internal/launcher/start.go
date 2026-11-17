@@ -65,6 +65,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 	if err != nil {
 		return StartResult{}, err
 	}
+	h = h.place(secretItems(m.Secrets))
 	c := "ensemble-" + m.Name + "-" + m.Generation
 	// Before Issue, so this start's own tokens land on its line.
 	facts := &audit.StartFacts{Image: m.Image}
@@ -117,11 +118,7 @@ func (h Host) Start(ctx context.Context, path string) (result StartResult, retEr
 		}
 	}
 	if len(m.Secrets) > 0 {
-		items := make([]string, len(m.Secrets))
-		for i, s := range m.Secrets {
-			items[i] = s.Item
-		}
-		if err := h.Env.Ready(items); err != nil {
+		if err := h.Env.Ready(secretItems(m.Secrets)); err != nil {
 			return StartResult{}, err
 		}
 	}

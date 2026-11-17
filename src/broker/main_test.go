@@ -77,7 +77,7 @@ func invoke(a app, args ...string) (int, string, string) {
 
 func TestVersion(t *testing.T) {
 	code, out, errOut := invoke(app{}, "version")
-	if code != 0 || out != `{"protocol_version":"41"}`+"\n" || errOut != "" {
+	if code != 0 || out != `{"protocol_version":"42"}`+"\n" || errOut != "" {
 		t.Fatalf("%d %q %q", code, out, errOut)
 	}
 	for _, c := range fixtures.Cases(t, "version_output") {
@@ -508,6 +508,7 @@ func TestBuildOptions(t *testing.T) {
 		{[]string{"--plugin", b, "--image-plugin", "z", "--image-plugin", "a.b_c-d", "--max-age", "0"}, launcher.BuildSpec{Plugins: []string{b}, ImagePlugins: []string{"z", "a.b_c-d"}}, 0},
 		{[]string{"--base-image", "dummy-env:test"}, launcher.BuildSpec{BaseImage: "dummy-env:test"}, -1},
 		{[]string{"--base-image", "sha256:" + strings.Repeat("c", 64), "--plugin", b, "--image-plugin", "z", "--max-age", "60"}, launcher.BuildSpec{BaseImage: "sha256:" + strings.Repeat("c", 64), Plugins: []string{b}, ImagePlugins: []string{"z"}}, time.Minute},
+		{[]string{"--image-plugin", "z", "--secret", "ensemble-broker-env/a", "--secret", "ensemble-broker-env/b", "--max-age", "0"}, launcher.BuildSpec{ImagePlugins: []string{"z"}, Secrets: []string{"ensemble-broker-env/a", "ensemble-broker-env/b"}}, 0},
 	} {
 		var spec launcher.BuildSpec
 		maxAge := time.Duration(-2)
@@ -516,8 +517,27 @@ func TestBuildOptions(t *testing.T) {
 			return map[string]string{}, nil
 		}}
 		if code, _, errOut := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, c.args...)...); code != 0 || !slices.Equal(spec.Plugins, c.spec.Plugins) ||
-			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge {
+			!slices.Equal(spec.ImagePlugins, c.spec.ImagePlugins) || spec.BaseImage != c.spec.BaseImage || maxAge != c.maxAge ||
+			!slices.Equal(spec.Secrets, c.spec.Secrets) {
 			t.Fatalf("%q: exit %d spec %+v max age %v: %s", c.args, code, spec, maxAge, errOut)
+		}
+	}
+	seventeen := []string{}
+	for i := range 17 {
+		seventeen = append(seventeen, "--secret", fmt.Sprintf("ensemble-broker-env/s%d", i))
+	}
+	for _, args := range [][]string{
+		{"--secret", "ensemble-broker-claude/work"},
+		{"--secret"},
+		{"--secret", "ensemble-broker-env/a", "--image-plugin", "z"},
+		seventeen,
+	} {
+		app := app{build: func(context.Context, keys, string, launcher.BuildSpec, time.Duration, io.Writer) (any, error) {
+			t.Fatalf("%q reached build", args)
+			return nil, nil
+		}}
+		if code, _, _ := invoke(app, append([]string{"build", "--ensemble", "/pkg"}, args...)...); code != protocol.Exit(protocol.Usage) {
+			t.Fatalf("%q: exit %d, want usage", args, code)
 		}
 	}
 }

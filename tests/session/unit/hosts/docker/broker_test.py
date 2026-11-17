@@ -382,6 +382,16 @@ class ResponseTest(Case):
         self.assertEqual(argv[-2:], ["--max-age", "604800"])
         self.assertEqual(fake.calls, [[BROKER, *argv[:-2]]])
 
+    def test_build_names_the_worker_s_secrets_after_its_plugins(self):
+        fake = FakeBroker(success("build-cached"))
+        Broker(fake).build(
+            "/opt/ensemble",
+            image_plugins=("mini-op",),
+            secrets=("ensemble-broker-env/mini-op-password", "ensemble-broker-env/mini-op-ssh-key"),
+        )
+        argv = data("build-input-secret")["argv"]
+        self.assertEqual(fake.calls, [[BROKER, *argv[:-2]]])
+
     def test_build_progress_before_the_error_object_is_not_the_error(self):
         progress = "#5 [2/3] RUN apt-get purge -y sudo\n#5 ERROR: process exited 1\n"
         rc, _, err = failure("error-build_failed")

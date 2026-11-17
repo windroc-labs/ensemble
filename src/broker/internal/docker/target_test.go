@@ -328,3 +328,23 @@ func TestRemoteEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalBesideARemoteTargetNeverProbes(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if fakeDocker(t, "true").Local() != nil {
+		t.Fatal("a local target has a second local CLI")
+	}
+	remote := remoteDocker(t, `echo "$*" >> calls; echo ok`)
+	remote.target.LocalSecrets = []string{"ensemble-broker-env/mini-op-password"}
+	local := remote.Local()
+	if local == nil || local.Endpoint() != "unix://"+filepath.Join(remote.home, ".docker/run/docker.sock") || local.Target().Remote() {
+		t.Fatalf("local CLI %+v", local)
+	}
+	if _, err := local.Run(context.Background(), []string{"ps"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := os.ReadFile("calls")
+	if strings.Contains(string(calls), "version") || !strings.Contains(string(calls), "--host unix://") {
+		t.Fatalf("local CLI calls %q", calls)
+	}
+}

@@ -30,6 +30,10 @@ const usage = "usage: ensemble-broker version | install-codex VERSION | update-c
 
 var containerPattern = regexp.MustCompile(`^ensemble-[A-Za-z0-9_-]+-[0-9a-f]{32}$`)
 var secondsPattern = regexp.MustCompile(`^[0-9]{1,9}$`)
+
+// maxBuildSecrets is the most environment secret items a build names, as a manifest's env request.
+const maxBuildSecrets = 16
+
 var volumePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$`)
 
 // step runs a command; progress is the broker's stderr, for build's Docker progress and start's phase times.
@@ -361,6 +365,9 @@ func buildOptions(args []string) *buildArgs {
 	for len(args) >= 2 && args[0] == "--image-plugin" && launcher.PluginNamePattern.MatchString(args[1]) {
 		o.spec.ImagePlugins, args = append(o.spec.ImagePlugins, args[1]), args[2:]
 	}
+	for len(args) >= 2 && args[0] == "--secret" && launcher.ValidEnvItem(args[1]) && len(o.spec.Secrets) < maxBuildSecrets {
+		o.spec.Secrets, args = append(o.spec.Secrets, args[1]), args[2:]
+	}
 	if len(args) == 2 && args[0] == "--max-age" && secondsPattern.MatchString(args[1]) {
 		n, _ := strconv.Atoi(args[1])
 		o.maxAge, args = time.Duration(n)*time.Second, nil
@@ -405,6 +412,10 @@ func withHost(command, container string, k keys, progress io.Writer, f func(laun
 		defer clean()
 		d.Progress = progress
 		h := launcher.NewHost(home, d.Endpoint(), d, broker.Credentials{Keychain: k}, tokens(k, rec), rec)
+		if local := d.Local(); local != nil {
+			h.Local = &launcher.Daemon{Docker: local, Endpoint: local.Endpoint()}
+		}
+		h.LocalSecrets = d.Target().LocalSecrets
 		h.Codex = broker.NewCodex(home, k, nil)
 		h.Opencode = broker.OpencodeKeys{Keychain: k}
 		h.Env = broker.EnvKeys{Keychain: k}

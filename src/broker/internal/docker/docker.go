@@ -134,6 +134,18 @@ func New(home string) (*CLI, func(), error) {
 		targetErr: targetErr, sshDir: SSHDir}, clean, nil
 }
 
+// Target is the Docker target setting c was made with.
+func (c *CLI) Target() Target { return c.target }
+
+// Local is a CLI for the local Docker Desktop beside c's remote target, with c's config and Progress; nil when c's
+// target is the local Docker Desktop.
+func (c *CLI) Local() *CLI {
+	if !c.target.Remote() {
+		return nil
+	}
+	return &CLI{path: c.path, buildx: c.buildx, home: c.home, config: c.config, Progress: c.Progress, sshDir: c.sshDir}
+}
+
 func (c *CLI) Endpoint() string {
 	if c.target.Remote() {
 		return c.target.Host
