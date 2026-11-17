@@ -102,7 +102,7 @@ class InstallTargetEgressTest(Case):
         return log.read_text().splitlines() if log.exists() else None
 
     def test_runs_egress_install_against_the_target(self):
-        self.target('{"host": "ssh://me@pc:2222"}')
+        self.target('{"host": "ssh://me@pc:2222", "local_secrets": []}')
         for code in (0, 11):
             with self.subTest(code=code):
                 done = self.run_script(
@@ -149,7 +149,9 @@ class InstallTargetEgressTest(Case):
 
     def test_invalid_target_files_exit_2(self):
         for text in (
-            '{"host": "ssh://pc", "extra": 1}',
+            '{"host": "ssh://pc", "local_secrets": [], "extra": 1}',
+            '{"host": "ssh://pc"}',
+            '{"host": "ssh://pc", "local_secrets": "x"}',
             '{"host": "ssh://pc:0"}',
             '{"host": "ssh://pc:70000"}',
             "not json",
@@ -165,7 +167,7 @@ class InstallTargetEgressTest(Case):
                 self.assertEqual(self.gh_calls(), [])
 
     def test_missing_ssh_wrapper_exits_1(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         (self.wrapper / "ssh").unlink()
         done = self.run_script("--version", VERSION, "--digest", DIGEST)
         self.assertEqual(done.returncode, 1, done.stderr)
@@ -173,7 +175,7 @@ class InstallTargetEgressTest(Case):
         self.assertEqual(self.gh_calls(), [])
 
     def test_without_flags_installs_the_pin_or_exits_2_while_unpinned(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         version, digest = pinned("egress_version"), pinned("egress_digest")
         done = self.run_script()
         if version:
@@ -188,13 +190,13 @@ class InstallTargetEgressTest(Case):
     def test_accepted_target_hosts(self):
         for host in ("ssh://pc", "ssh://u@h:65535", "ssh://me@pc.tailnet.ts.net"):
             with self.subTest(host=host):
-                self.target(json.dumps({"host": host}))
+                self.target(json.dumps({"host": host, "local_secrets": []}))
                 done = self.run_script("--version", VERSION, "--digest", DIGEST)
                 self.assertEqual(done.returncode, 0, done.stderr)
                 self.assertEqual(self.installed()[7], host)
 
     def test_missing_tools_exit_1_without_fetching(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         for tool in ("gh", "docker"):
             with self.subTest(tool=tool):
                 hidden = self.bin / tool
@@ -206,7 +208,7 @@ class InstallTargetEgressTest(Case):
                 self.assertEqual(self.gh_calls(), [])
 
     def test_missing_python3_is_not_blamed_on_the_target(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         (self.system / "python3").unlink()
         done = self.run_script("--version", VERSION, "--digest", DIGEST)
         self.assertEqual(done.returncode, 1, done.stderr)
@@ -215,7 +217,7 @@ class InstallTargetEgressTest(Case):
         self.assertEqual(self.gh_calls(), [])
 
     def test_version_and_digest_validation(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         for args in (
             ("--version", VERSION),
             ("--digest", DIGEST),
@@ -237,7 +239,7 @@ class InstallTargetEgressTest(Case):
         self.assertIn("usage: install-target-egress.sh", done.stdout)
 
     def test_fetch_failure_exits_1_and_cleans_up(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         for marker in ("gh_fails", "gh_empty"):
             with self.subTest(marker=marker):
                 (self.fakes / marker).write_text("")

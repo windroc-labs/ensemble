@@ -13,7 +13,7 @@ from ensemble.session.engine import daemon
 from ensemble.session.engine.daemon import OUT_MAX, Overflow, capped
 from ensemble.session.engine.types import ConfigError, DockerAccess, SessionError
 from ensemble.utils import DOCKER_STATE
-from tests.session.case import Case
+from tests.session.case import REPO, Case
 from tests.session.unit.hosts.docker.support import FakePopen, FakeProc, ssh_wrapper
 from tests.utils.process_fixtures import DEVNULL, PIPE, TimeoutExpired
 
@@ -87,7 +87,7 @@ class TargetTest(Case):
         self.assertEqual((argv, env["PATH"]), (["/bin/docker", "--host", local, "ps"], "/usr/bin"))
 
     def test_remote_target_ignores_hostile_docker_environment(self):
-        self.target('{"host": "ssh://u@pc:2222"}')
+        self.target('{"host": "ssh://u@pc:2222", "local_secrets": []}')
         hostile = {
             "DOCKER_HOST": "tcp://hostile:1234",
             "DOCKER_CONTEXT": "hostile",
@@ -124,8 +124,28 @@ class TargetTest(Case):
                 with self.assertRaisesRegex(ConfigError, f"^Docker target {re.escape(path)}: "):
                     daemon.docker_call("/bin/docker", "ps")
 
+    def test_target_files_shared_with_the_broker(self):
+        with open(
+            os.path.join(REPO, "src/broker/protocol/docker-broker/cases/target_files.json")
+        ) as f:
+            cases = json.load(f)
+        for case in cases["valid"]:
+            with self.subTest(content=case["content"][:60]):
+                self.target(case["content"])
+                self.assertEqual(
+                    daemon.target(), daemon.Target(case["host"], tuple(case["local_secrets"]))
+                )
+        for content in cases["invalid"]:
+            with self.subTest(content=content[:60]):
+                path = self.target(content)
+                with self.assertRaisesRegex(ConfigError, f"^Docker target {re.escape(path)}: "):
+                    daemon.target()
+
+    def test_no_target_file_has_no_local_secrets(self):
+        self.assertEqual(daemon.target(), daemon.Target(daemon.local_endpoint(), ()))
+
     def test_remote_target_without_the_wrapper_is_refused(self):
-        self.target('{"host": "ssh://pc"}')
+        self.target('{"host": "ssh://pc", "local_secrets": []}')
         with (
             ssh_wrapper(present=False) as wrapper,
             self.assertRaisesRegex(

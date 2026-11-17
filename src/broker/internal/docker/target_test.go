@@ -30,7 +30,7 @@ func TestLoadTarget(t *testing.T) {
 		t.Fatalf("no target file: %+v %v", target, err)
 	}
 	for _, host := range []string{"ssh://pc", "ssh://u@pc", "ssh://first.last@pc.tail1234.ts.net:2222", "ssh://u@192.168.1.20:22", "ssh://pc:65535"} {
-		writeTarget(t, home, `{"host": "`+host+`"}`)
+		writeTarget(t, home, `{"host": "`+host+`", "local_secrets": []}`)
 		if target, err := LoadTarget(home); err != nil || !target.Remote() || target.Host != host {
 			t.Fatalf("%s: %+v %v", host, target, err)
 		}
@@ -64,6 +64,41 @@ func TestLoadTarget(t *testing.T) {
 	writeTarget(t, home, `{"host": "ssh://pc", "pad": "`+strings.Repeat("x", 70000)+`"}`)
 	if _, err := LoadTarget(home); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("oversized file: %v", err)
+	}
+}
+
+// TestTargetFiles runs the target file cases the session's reader shares.
+func TestTargetFiles(t *testing.T) {
+	data, err := os.ReadFile("../../protocol/docker-broker/cases/target_files.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases struct {
+		Valid []struct {
+			Content      string   `json:"content"`
+			Host         string   `json:"host"`
+			LocalSecrets []string `json:"local_secrets"`
+		} `json:"valid"`
+		Invalid []string `json:"invalid"`
+	}
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	for _, c := range cases.Valid {
+		writeTarget(t, home, c.Content)
+		target, err := LoadTarget(home)
+		if err != nil || target.Host != c.Host || !slices.Equal(target.LocalSecrets, c.LocalSecrets) {
+			t.Errorf("%s: %+v %v", c.Content, target, err)
+		}
+	}
+	for _, content := range cases.Invalid {
+		writeTarget(t, home, content)
+		_, err := LoadTarget(home)
+		var u *Unreachable
+		if !errors.As(err, &u) || !strings.HasPrefix(u.Reason, "invalid target setting (") {
+			t.Errorf("%s: %v", content, err)
+		}
 	}
 }
 
@@ -130,7 +165,7 @@ func TestRemoteTargetIgnoresHostileEnvironment(t *testing.T) {
 	t.Setenv("DOCKER_CONTEXT", "hostile")
 	t.Setenv("DOCKER_CONFIG", hostile)
 	t.Setenv("SSH_AUTH_SOCK", "")
-	writeTarget(t, home, `{"host": "ssh://u@pc"}`)
+	writeTarget(t, home, `{"host": "ssh://u@pc", "local_secrets": []}`)
 	c, clean, err := New(home)
 	if err != nil {
 		t.Fatal(err)

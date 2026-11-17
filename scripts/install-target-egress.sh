@@ -83,7 +83,8 @@ parse_args() {
     || die 2 "no egress-proxy release with remote install is pinned yet; pass --version X.Y.Z --digest sha256:<digest>"
 }
 
-# The target's ssh:// host, by the broker's rule: the file holds exactly {"host": "ssh://[user@]host[:port]"}.
+# The target's ssh:// host, by the broker's rule: the file holds exactly {"host": "ssh://[user@]host[:port]",
+# "local_secrets": [...]}; the broker checks the items.
 # Exit 3: no file.
 target_host() {
   python3 -I -c '
@@ -101,10 +102,11 @@ try:
     found = json.loads(data) if len(data) <= 64 << 10 else None
 except ValueError:
     found = None
-host = found.get("host") if isinstance(found, dict) and set(found) == {"host"} else None
+shaped = isinstance(found, dict) and set(found) == {"host", "local_secrets"} and isinstance(found["local_secrets"], list)
+host = found.get("host") if shaped else None
 match = pattern.fullmatch(host) if isinstance(host, str) else None
 if match is None or match[2] is not None and not 1 <= int(match[2][1:]) <= 65535:
-    sys.exit("%s: want {\"host\": \"ssh://[user@]host[:port]\"}" % path)
+    sys.exit("%s: want {\"host\": \"ssh://[user@]host[:port]\", \"local_secrets\": [...]}" % path)
 print(host)
 ' "$root"
 }

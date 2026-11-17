@@ -1677,7 +1677,7 @@ class TargetIdentityTest(StartBase):
         else:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f:
-                json.dump({"host": host}, f)
+                json.dump({"host": host, "local_secrets": []}, f)
         self.docker.ep, self.docker.daemons[host] = host, daemon_id
         self.broker.started = Started(
             **{**vars(self.broker.started), "endpoint": host, "daemon": daemon_id}
@@ -2283,7 +2283,7 @@ class RemoveWorkspacesTest(Base):
         path = os.path.join(self.account, daemon.TARGET_FILE)
         os.makedirs(os.path.dirname(path))
         with open(path, "w") as f:
-            json.dump({"host": "ssh://u@pc"}, f)
+            json.dump({"host": "ssh://u@pc", "local_secrets": []}, f)
         self.docker.ep, self.docker.daemons["ssh://u@pc"] = "ssh://u@pc", "PC"
 
     def nothing_here(self):
@@ -2596,7 +2596,7 @@ class RemoteAttachTargetTest(Base):
         path = os.path.join(self.account, daemon.TARGET_FILE)
         os.makedirs(os.path.dirname(path))
         with open(path, "w") as f:
-            json.dump({"host": "ssh://u@pc"}, f)
+            json.dump({"host": "ssh://u@pc", "local_secrets": []}, f)
         wrapper = ssh_wrapper()
         wrapper.__enter__()
         self.addCleanup(wrapper.__exit__, None, None, None)

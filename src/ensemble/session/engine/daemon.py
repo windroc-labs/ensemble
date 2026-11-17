@@ -13,6 +13,7 @@ import select
 import subprocess
 import tempfile
 import time
+from typing import NamedTuple
 
 from ensemble.session.engine.types import ConfigError, DockerAccess, SessionError
 from ensemble.utils import DOCKER_STATE, read_regular, save
@@ -30,6 +31,17 @@ STATE_READER_LABEL = "ensemble.state-reader"
 ACCESS_FILE = "state-access.json"
 ACCESS_MAX = 4096
 DAEMON = re.compile(r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}")
+ENV_ITEM = re.compile(r"ensemble-broker-env/[a-z0-9][a-z0-9._-]{0,63}")
+LOCAL_SECRETS_MAX = 16
+
+
+class Target(NamedTuple):
+    """TARGET_FILE: the target's endpoint, and the env secret items whose workers stay on the
+    local Docker Desktop.
+    """
+
+    host: str
+    local_secrets: tuple[str, ...]
 
 
 class Overflow(OSError):
@@ -92,22 +104,39 @@ def describe(host: str) -> str:
 
 def endpoint() -> str:
     """TARGET_FILE's ssh:// host, else the local Docker Desktop."""
+    return target().host
+
+
+def target() -> Target:
+    """TARGET_FILE, by the broker's rule; no file: the local Docker Desktop, no local secrets."""
     path = os.path.join(account_home(), TARGET_FILE)
     try:
         with open(path, "rb") as f:
             data = f.read(TARGET_MAX + 1)
     except FileNotFoundError:
-        return local_endpoint()
+        return Target(local_endpoint(), ())
     except OSError as error:
         raise ConfigError(f"Docker target {path}: {error.strerror}") from None
     try:
         found = json.loads(data) if len(data) <= TARGET_MAX else None
     except ValueError:
         found = None
-    host = found.get("host") if isinstance(found, dict) and set(found) == {"host"} else None
-    if not isinstance(host, str) or not _remote(host):
-        raise ConfigError(f'Docker target {path}: want {{"host": "ssh://[user@]host[:port]"}}')
-    return host
+    host = items = None
+    if isinstance(found, dict) and set(found) == {"host", "local_secrets"}:
+        host, items = found["host"], found["local_secrets"]
+    if (
+        not isinstance(host, str)
+        or not _remote(host)
+        or not isinstance(items, list)
+        or len(items) > LOCAL_SECRETS_MAX
+        or not all(isinstance(item, str) and ENV_ITEM.fullmatch(item) for item in items)
+        or len(set(items)) != len(items)
+    ):
+        raise ConfigError(
+            f'Docker target {path}: want {{"host": "ssh://[user@]host[:port]", "local_secrets":'
+            f' [up to {LOCAL_SECRETS_MAX} distinct "ensemble-broker-env/<name>" items]}}'
+        )
+    return Target(host, tuple(items))
 
 
 def _remote(host: str) -> bool:
